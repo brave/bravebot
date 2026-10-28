@@ -50,6 +50,7 @@ fn take_turn(
             permission_mode: bravebot_agent::PermissionMode::Ask.into(),
             mcp_requested: Vec::new(),
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            last_request: Default::default(),
             model: None,
             addressing: None,
             prompt: if first {

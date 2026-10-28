@@ -673,3 +673,248 @@ fn a_fork_runs_under_the_rules_its_parent_opened_under() {
     );
     assert!(!run.reached_the_site());
 }
+
+/// CLI-30: a call is checked against the rules the session opened under, each named with its
+/// list and the file that wrote it, and nothing is fetched for it.
+#[test]
+fn a_permission_check_names_the_rule_that_decides_a_call() {
+    let mut run = fetching("bridge-rules-check", |scratch| {
+        scratch.the_person_writes(json!({"deny": ["Read(.env)"], "ask": ["Bash(git push *)"],
+            "allow": [THE_SITE]}));
+    });
+    let (session, _rules) = run.front.session(&run.scratch);
+    let person = run.scratch.home().join(".bravebot/settings.json");
+    let check = |front: &mut FrontEnd, family: &str, specifier: &str| {
+        front.call(
+            "permissions.check",
+            json!({"session": session, "family": family, "specifier": specifier}),
+        )
+    };
+
+    let denied = check(&mut run.front, "Read", ".env");
+    assert_eq!(denied["decision"], "deny", "{denied}");
+    assert_eq!(denied["rule"], "Read(.env)", "{denied}");
+    assert_eq!(denied["file"], person.display().to_string(), "{denied}");
+    assert_eq!(
+        check(&mut run.front, "Bash", "git push origin main")["decision"],
+        "ask"
+    );
+    let allowed = check(&mut run.front, "WebFetch", "http://127.0.0.1/docs");
+    assert_eq!(allowed["decision"], "allow", "{allowed}");
+    assert_eq!(allowed["rule"], THE_SITE, "{allowed}");
+    assert_eq!(
+        check(&mut run.front, "Bash", "git status"),
+        json!({"decision": null})
+    );
+    assert!(!run.reached_the_site(), "a check fetched the page");
+}
+
+/// PERM-14: a checkout's `allow` rule is not in force, so a check finds no rule for the call it
+/// would have allowed.
+#[test]
+fn a_permission_check_finds_no_rule_a_checkout_allowed() {
+    let mut run = fetching("bridge-rules-check-checkout", |scratch| {
+        scratch.the_checkout_writes(json!({"allow": [THE_SITE]}));
+    });
+    let (session, _rules) = run.front.session(&run.scratch);
+    assert_eq!(
+        run.front.call(
+            "permissions.check",
+            json!({"session": session, "family": "WebFetch", "specifier": "127.0.0.1"}),
+        ),
+        json!({"decision": null})
+    );
+}
+
+/// A family the rules do not know, and a line that is not one command of plain words, name no
+/// call to check and are refused rather than answered as matching nothing.
+#[test]
+fn a_permission_check_of_no_one_call_is_refused() {
+    let mut run = fetching("bridge-rules-check-bad", |_| {});
+    let (session, _rules) = run.front.session(&run.scratch);
+    for (family, specifier) in [
+        ("Shell", "ls"),
+        ("Bash", "git diff | less"),
+        ("Read", ""),
+        ("Read", "   "),
+        ("Mcp", "github:"),
+        ("Mcp", ":create_issue"),
+    ] {
+        let answered = run.front.answered(
+            "permissions.check",
+            json!({"session": session, "family": family, "specifier": specifier}),
+        );
+        assert_eq!(
+            answered["error"]["code"], "bad_request",
+            "{family} {specifier}: {answered}"
+        );
+    }
+}
+
+/// The last request is the one the planner was sent, each span labelled with where its words
+/// came from. The page a fetch brought back is held under a reference and is not in it, and both
+/// it and a check are answered while the turn waits on a question.
+#[test]
+fn the_last_request_is_the_planners_labelled_and_without_the_fetched_page() {
+    let mut run = fetching("bridge-rules-last-request", |_| {});
+    let (session, _rules) = run.front.session(&run.scratch);
+    assert_eq!(
+        run.front.call("request.last", json!({"session": session})),
+        Value::Null
+    );
+
+    let question = run.front.ask(&session);
+    assert_eq!(question["event"], "fetch.request", "{question}");
+    let waiting = run.front.call("request.last", json!({"session": session}));
+    assert_eq!(waiting["model"], "stub-model", "{waiting}");
+    assert_eq!(
+        run.front.call(
+            "permissions.check",
+            json!({"session": session, "family": "WebFetch", "specifier": "127.0.0.1"}),
+        ),
+        json!({"decision": null})
+    );
+    run.front
+        .reply("fetch.reply", &session, &question, "approve");
+    assert_eq!(run.front.question_or_the_end()["event"], "turn.done");
+    assert!(run.reached_the_site(), "the accepted fetch did not go out");
+
+    let last = run.front.call("request.last", json!({"session": session}));
+    let spans = last["spans"].as_array().expect("spans");
+    assert!(
+        spans.iter().all(|span| span["label"]
+            .as_str()
+            .is_some_and(|label| !label.is_empty())),
+        "{last}"
+    );
+    assert!(
+        spans
+            .iter()
+            .any(|span| span["kind"] == "typed" && span["text"] == "do the work"),
+        "{last}"
+    );
+    // The driver's own instructions say "a page" in prose of their own, so only what came back
+    // from the work is searched for the page.
+    let answered: Vec<_> = spans.iter().filter(|span| span["role"] == "tool").collect();
+    assert!(
+        answered.iter().any(|span| span["kind"] == "reference"),
+        "{last}"
+    );
+    assert!(
+        answered
+            .iter()
+            .all(|span| !span["text"].as_str().unwrap_or_default().contains("a page")),
+        "the fetched page reached the request view: {last}"
+    );
+    assert!(
+        last["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty()),
+        "{last}"
+    );
+}
+
+/// A rewound turn takes its request with it, so the view does not show what the conversation no
+/// longer holds.
+#[test]
+fn a_rewind_forgets_the_last_request() {
+    let mut run = fetching("bridge-rules-last-request-rewind", |scratch| {
+        scratch.the_person_writes(json!({"deny": [THE_SITE]}));
+    });
+    let (session, _rules) = run.front.session(&run.scratch);
+    assert_eq!(run.front.ask(&session)["event"], "turn.done");
+    assert_ne!(
+        run.front.call("request.last", json!({"session": session})),
+        Value::Null
+    );
+
+    run.front
+        .call("session.rewind", json!({"session": session, "steps": 1}));
+    assert_eq!(
+        run.front.call("request.last", json!({"session": session})),
+        Value::Null
+    );
+}
+
+/// A closed session takes its last request with it.
+#[test]
+fn a_closed_session_drops_its_last_request() {
+    let mut run = fetching("bridge-rules-last-request-close", |scratch| {
+        scratch.the_person_writes(json!({"deny": [THE_SITE]}));
+    });
+    let (session, _rules) = run.front.session(&run.scratch);
+    assert_eq!(run.front.ask(&session)["event"], "turn.done");
+    assert_ne!(
+        run.front.call("request.last", json!({"session": session})),
+        Value::Null
+    );
+
+    run.front.call("session.close", json!({"session": session}));
+    let answered = run
+        .front
+        .answered("request.last", json!({"session": session}));
+    assert_eq!(answered["error"]["code"], "no_such_session", "{answered}");
+}
+
+/// PERM-12: a check answers with the rules the session opened under, so a rule taken out of the
+/// file afterwards still decides, with no file named for it.
+#[test]
+fn a_rule_taken_out_of_its_file_after_opening_still_decides_the_check() {
+    let mut run = fetching("bridge-rules-check-edited", |scratch| {
+        scratch.the_person_writes(json!({"deny": ["Read(.env)"]}));
+    });
+    let (session, _rules) = run.front.session(&run.scratch);
+    run.scratch.the_person_writes(json!({}));
+    let checked = run.front.call(
+        "permissions.check",
+        json!({"session": session, "family": "Read", "specifier": ".env"}),
+    );
+    assert_eq!(checked["decision"], "deny", "{checked}");
+    assert_eq!(checked["file"], Value::Null, "{checked}");
+}
+
+/// The last request and a check are of an open session, and a handle that names none is refused.
+#[test]
+fn a_session_that_is_not_open_has_no_last_request_and_no_check() {
+    let mut run = fetching("bridge-rules-last-request-unknown", |_| {});
+    for (method, params) in [
+        ("request.last", json!({"session": "s-none"})),
+        (
+            "permissions.check",
+            json!({"session": "s-none", "family": "Read", "specifier": ".env"}),
+        ),
+    ] {
+        let answered = run.front.answered(method, params);
+        assert_eq!(
+            answered["error"]["code"], "no_such_session",
+            "{method}: {answered}"
+        );
+    }
+}
+
+/// An Edit is checked against the rules for writes, and an Mcp call by its server and tool.
+#[test]
+fn a_permission_check_covers_an_edit_and_a_tool() {
+    let mut run = fetching("bridge-rules-check-edit-mcp", |scratch| {
+        scratch.the_person_writes(
+            json!({"deny": ["Edit(Cargo.lock)"], "ask": ["Mcp(github:create_issue)"]}),
+        );
+    });
+    let (session, _rules) = run.front.session(&run.scratch);
+    let mut check = |family: &str, specifier: &str| {
+        run.front.call(
+            "permissions.check",
+            json!({"session": session, "family": family, "specifier": specifier}),
+        )
+    };
+    let edit = check("Edit", "Cargo.lock");
+    assert_eq!(edit["decision"], "deny", "{edit}");
+    assert_eq!(edit["rule"], "Edit(Cargo.lock)", "{edit}");
+    assert_eq!(check("Read", "Cargo.lock"), json!({"decision": null}));
+    let tool = check("Mcp", "github:create_issue");
+    assert_eq!(tool["decision"], "ask", "{tool}");
+    assert_eq!(
+        check("Mcp", "github:list_issues"),
+        json!({"decision": null})
+    );
+}

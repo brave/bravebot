@@ -1,6 +1,7 @@
 import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
+import { Diagnostics } from './Diagnostics'
 import { memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
@@ -341,6 +342,7 @@ export function Transcript({
   const scrollSave = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [watches, setWatches] = useState(false)
   const [permissions, setPermissions] = useState(false)
+  const [diagnosing, setDiagnosing] = useState(false)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   useEffect(() => {
     const preview = (event: Event) => setPreviewPath((event as CustomEvent<string>).detail)
@@ -618,6 +620,9 @@ export function Transcript({
             <leo-menu-item onClick={() => afterMenu(() => setWatches(true))}>
               <span className="menu-icon-row"><Icon name="eye-on" />File watches…</span>
             </leo-menu-item>
+            <leo-menu-item onClick={() => afterMenu(() => setDiagnosing(true))} data-test="diagnostics-open">
+              <span className="menu-icon-row"><Icon name="bug-search" />Diagnostics…</span>
+            </leo-menu-item>
           </IconMenu>
         </div>}
         {!contextless && <ColumnToggle side="right" collapsed={collapsed.right} onToggle={onToggle} />}
@@ -868,6 +873,7 @@ export function Transcript({
       <div className="composer-spacer" aria-hidden="true" />
       {watches && <Watches session={live.handle} onClose={() => setWatches(false)} />}
       {permissions && <Permissions session={live.handle} onClose={() => setPermissions(false)} onRemembered={(kept) => onTrustRemembered(live.handle, kept)} />}
+      {diagnosing && <Diagnostics session={live.handle} onClose={() => setDiagnosing(false)} />}
       {previewPath && <FilePreview session={live.handle} path={previewPath} onClose={() => setPreviewPath(null)} />}
     </main>
   )

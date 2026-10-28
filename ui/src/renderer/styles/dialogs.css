@@ -180,6 +180,37 @@
 .watch-add { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); margin-top: var(--leo-spacing-xl); }
 .watch-add leo-input { flex: 1; min-width: 0; }
 
+/* ------------------------------------------------------------ diagnostics */
+
+.diagnostics-check { display: flex; align-items: flex-end; gap: var(--leo-spacing-m); margin-bottom: var(--leo-spacing-m); }
+.diagnostics-check leo-input { flex: 1; min-width: 0; }
+.diagnostics-head { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-m); }
+.diagnostics-head h3 { margin-top: 0; }
+.grant-section .diagnostics-head { margin-top: var(--leo-spacing-xl); }
+.diagnostics-summary { margin: 0 0 var(--leo-spacing-m); font-variant-numeric: tabular-nums; }
+.diagnostics-spans {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+.diagnostics-span { padding: var(--leo-spacing-m) var(--leo-spacing-l); }
+.diagnostics-span + .diagnostics-span { border-top: 1px solid var(--border-hairline); }
+.diagnostics-span-head { display: flex; align-items: center; gap: var(--leo-spacing-m); }
+.diagnostics-span-head .diagnostics-copy { margin-left: auto; }
+.diagnostics-span-text {
+  margin: var(--leo-spacing-s) 0 0;
+  padding: var(--leo-spacing-m);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-control);
+  font: var(--type-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 /* ------------------------------------------------------------- previews */
 
 .preview-code { margin: 0; }
@@ -320,7 +351,7 @@
   .modal.about { animation: none; }
 }
 @media (forced-colors: active) {
-  .grant-list, .bot-details .bot-memory, .rewind-paths { border-color: CanvasText; }
+  .grant-list, .bot-details .bot-memory, .rewind-paths, .diagnostics-spans { border-color: CanvasText; }
 }
 
 .settings-rules h4 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-xs); font: var(--type-meta-strong); }

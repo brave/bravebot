@@ -181,6 +181,19 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
       else ux.grants.commands = []
       return { ok: ux.grants }
     }
+    if (method === 'permissions.check') {
+      if (p.family === 'Bash' && /^git push\b/.test(p.specifier)) {
+        return { ok: { decision: 'ask', rule: 'Bash(git push *)', file: '/home/someone/.bravebot/settings.json', grantedFrom: null, reason: 'ask me before a push' } }
+      }
+      return { ok: { decision: null } }
+    }
+    if (method === 'request.last') {
+      return { ok: { model: 'sample/fast', tools: ['read_file', 'fetch_url'], toolsBytes: 2048, spans: [
+        { role: 'system', label: 'driver', kind: 'driver', text: 'You are a careful assistant.' },
+        { role: 'user', label: 'typed', kind: 'typed', text: 'Review the sample project' },
+        { role: 'tool', label: 'ref:1', kind: 'reference', text: '[ref:1] what example.com returned. Quarantined: you will not be shown it.' },
+      ] } }
+    }
     return { ok: {} }
   })
   replace('bravebot:bots:send', (_, p) => {

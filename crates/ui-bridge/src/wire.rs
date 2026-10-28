@@ -270,6 +270,44 @@ pub fn cut_off(cut_off: Option<&CutOff>) -> Value {
     })
 }
 
+/// The request a turn last built for the planner, each span with the provenance the driver
+/// recorded for it. Read from the request itself, so content held under a reference is its token.
+pub fn request_view(view: &bravebot_agent::request_view::RequestView) -> Value {
+    use bravebot_agent::request_view::Provenance;
+    let spans: Vec<Value> = view
+        .spans
+        .iter()
+        .map(|span| {
+            let kind = match span.provenance {
+                Provenance::Typed => "typed",
+                Provenance::TypedWithFiles => "typed-with-files",
+                Provenance::Driver => "driver",
+                Provenance::Planner => "planner",
+                Provenance::TrustedFile(_) => "trusted-file",
+                Provenance::Trusted(_) => "trusted",
+                Provenance::Setting => "setting",
+                Provenance::Reference(_) => "reference",
+                Provenance::Released(_) => "released",
+                Provenance::Vetted(_) => "vetted",
+                Provenance::Summary => "summary",
+                Provenance::Unrecorded => "unrecorded",
+            };
+            json!({
+                "role": span.role,
+                "label": span.provenance.label(),
+                "kind": kind,
+                "text": span.text,
+            })
+        })
+        .collect();
+    json!({
+        "model": view.model,
+        "tools": view.tools,
+        "toolsBytes": view.tools_bytes,
+        "spans": spans,
+    })
+}
+
 /// One task from the plan a turn is working to.
 pub fn row(row: &Row) -> Value {
     json!({ "content": row.content, "status": status(row.status) })

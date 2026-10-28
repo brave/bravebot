@@ -514,6 +514,8 @@ const ALLOWED = new Set([
   'trust.reply',
   'permissions.list',
   'permissions.revoke',
+  'permissions.check',
+  'request.last',
   'doctor',
   'hooks.inspect',
   'connectors.list',

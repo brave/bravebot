@@ -365,6 +365,12 @@ key that exports the transcript is inert in it, and an incognito session is unch
 closing it puts the transcript back where it was. Before any turn has sent a request the command
 says so.
 
+The desktop app's Diagnostics dialog is a second view of the same request, asked for with
+`request.last`. The bridge keeps the view of each open session's last request in memory, from the
+same request value; it is empty before the session's first turn, emptied when a rewind takes the
+turn back, and gone when the session closes, so it never shows what the conversation no longer
+holds. Each span is drawn as plain text under its label, never as Markdown or HTML.
+
 **Why.** What the planner was sent is the question behind every "why did it do that", and a view
 reconstructed from the transcript would answer it with what the transcript says was sent. The
 label is a claim about authority, so it comes from where the text was composed.
@@ -373,6 +379,9 @@ label is a claim about authority, so it comes from where the text was composed.
 `verified-by: bravebot_agent::turn::the_view_of_the_request_labels_a_hidden_listing_by_its_references`
 `verified-by: bravebot_agent::turn::the_view_of_the_request_names_a_trusted_result_and_a_trusted_file`
 `verified-by: bravebot_agent::turn::the_view_of_the_request_labels_instruction_files_and_the_goal_and_is_the_system_prompt_sent`
+`verified-by: bravebot_ui_bridge::rules::the_last_request_is_the_planners_labelled_and_without_the_fetched_page`
+`verified-by: bravebot_ui_bridge::rules::a_rewind_forgets_the_last_request`
+`verified-by: bravebot_ui_bridge::rules::a_closed_session_drops_its_last_request`
 `verified-by: bravebot_agent::turn::the_view_of_the_request_holds_no_instruction_file_the_kernel_withheld`
 `verified-by: bravebot_agent::turn::the_view_of_the_request_does_not_call_a_prompt_the_driver_wrote_typed`
 `verified-by: bravebot_agent::turn::no_view_of_the_request_is_built_for_a_reporter_that_does_not_ask`

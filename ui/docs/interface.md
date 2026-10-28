@@ -113,9 +113,11 @@ toggle:
   button shows as pressed while the bar is open.
 - **Export** (a download icon) opens the export menu described under [Forking, and
   export](#forking). It is disabled until somebody has said something in the session.
-- **More** (vertical dots) holds the two dialogs that are seldom wanted mid-conversation:
+- **More** (vertical dots) holds the dialogs that are seldom wanted mid-conversation:
   **Permissions…** lists and revokes path and command grants after the current turn stops, and
-  **File watches…** opens the [watches](#agent-09-controls) list.
+  its **Forget** button takes back the trust kept for this directory, so the next session
+  started here asks again. **File watches…** opens the [watches](#agent-09-controls) list, and
+  **Diagnostics…** opens the [debugging views](#diagnostics).
 
 A bot's own page has a header of its face and its name, with a search over its conversations and
 the context panel's toggle.
@@ -840,6 +842,21 @@ A folded note at the top of the conversation says what a settings file wrote tha
 force: an entry that is not a rule, a project's `allow` rule, or a named directory.
 **Permissions…**, in the header's **More** menu, lists the rules in force. They cannot be
 revoked there, since they are changed in their file.
+
+### Diagnostics
+
+**Diagnostics…**, in the header's **More** menu, holds two views that work while a turn runs.
+
+- **Permission check** takes a kind (Read, Edit, Bash, WebFetch or Mcp) and a call, and says
+  which rule decides it, as `bravebot permissions check` does: refused, always asked, or not
+  asked, with the rule, the file that wrote it and your reason where you wrote one. It matches
+  against the rules this conversation opened under and reads, runs and fetches nothing. A Bash
+  call must be one command of plain words; a pipe, a redirection or a pattern is refused.
+- **Last request** shows what this conversation last sent to the model: the model, the tools
+  offered, and each part under a label saying where its words came from. A long part is
+  folded until opened, and each has its own copy button. Content the model was not shown
+  appears as its reference, never as its text. It is empty before the first turn, refreshes on
+  demand, and is forgotten when the conversation closes or is rewound.
 
 **File watches…**, in the header's **More** menu, lists up to eight live file watches, with their
 remaining lifetime and Stop controls. Add a project file or ask the agent to watch one.
