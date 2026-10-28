@@ -26,6 +26,7 @@ pub mod models;
 pub mod ollama;
 pub mod protocol;
 pub mod responses;
+pub mod roster;
 
 #[cfg(test)]
 mod local_servers;

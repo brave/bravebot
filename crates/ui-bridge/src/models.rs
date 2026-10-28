@@ -1,11 +1,8 @@
 //! Model discovery uses the agent's clients and egress policy, never renderer-supplied URLs.
 
 use crate::account_words::{self, Said};
-use bravebot_aichat::models::{self, Advertised, Model};
-use bravebot_config::provider::Credential;
+use bravebot_aichat::models::{Advertised, Model};
 use bravebot_config::{Config, ModelRefusal, RosterScope};
-use bravebot_core::capability::{Capability, CapabilitySet};
-use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use serde_json::{Value, json};
 
 pub fn list(config: &Config) -> Value {
@@ -41,82 +38,36 @@ pub fn adopt_window(config: &mut Config, model: Option<&str>) {
 /// ([LOCALE-7](../../../docs/specs/localization.md#LOCALE-7)), so a person reads the same words from
 /// either.
 fn roster(config: &Config, scope: RosterScope<'_>) -> (Vec<Model>, Vec<Said>) {
-    // Where each group of rows and each warning goes, so the order the window lists them in does
-    // not depend on which request answered first.
-    enum Place<'config> {
-        Rows(Vec<Model>),
-        Warning(Said),
-        Asked(&'config bravebot_config::provider::Provider),
-    }
-    // What one request answered: `None` where it failed.
-    enum Answer {
-        Gateway(Option<Vec<Model>>),
-        Brave(Option<Vec<Model>>),
-    }
-    let mut places = Vec::new();
-    let mut asks: Vec<Box<dyn FnOnce() -> Answer + Send + '_>> = Vec::new();
-    if let Some(bedrock) = &config.bedrock {
-        places.push(Place::Rows(bedrock_rows(bedrock)));
-    }
-    for provider in &config.providers {
-        // An entry naming AWS is served by the Bedrock backend under the bare id it is keyed by,
-        // and there is no listing to ask, so a block that named no models offers none.
-        if let Some(bedrock) = &provider.bedrock {
-            places.push(Place::Rows(bedrock_rows(bedrock)));
-            continue;
-        }
-        if !provider.models.is_empty() {
-            places.push(Place::Rows(named_rows(provider)));
-            continue;
-        }
-        if !scope.asks_gateway(provider) {
-            continue;
-        }
-        let credential = provider.credential(|name| std::env::var(name).ok());
-        // A compiled list asks nothing, so a missing key is said when a turn is sent, as it is for
-        // a model a block names.
-        if matches!(credential, Credential::Absent) && provider.compiled_roster().is_none() {
-            places.push(Place::Warning(Said::plain(format!(
-                "No credential configured for {}.",
-                provider.display_name()
-            ))));
-            continue;
-        }
-        places.push(Place::Asked(provider));
-        asks.push(Box::new(move || {
-            Answer::Gateway(ask_gateway(provider, &credential))
-        }));
-    }
-    if scope.brave && config.serves_aichat() {
-        asks.push(Box::new(|| Answer::Brave(ask_brave(config))));
-    }
+    use bravebot_aichat::roster::Entry;
 
     // Every request goes out at once, so what the window waits for is the slowest service and not
-    // the sum ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)). The accounts are asked on
-    // this thread while they are in flight: a unit test scripts them per thread.
-    let (answers, (chatgpt, xai)) = models::concurrently(asks, || {
-        (
-            scope.accounts.chatgpt.then(|| ask_the_account(config)),
-            scope.accounts.xai.then(|| ask_the_xai_account(config)),
-        )
-    });
-
-    // Gateways were put before Brave, so the answers are met in the order the places were.
-    let mut answers = answers.into_iter();
+    // the sum, and the entries come back in the order the configuration lists them
+    // ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)). The accounts are asked on this
+    // thread while they are in flight: a unit test scripts them per thread.
+    let (roster, (chatgpt, xai)) =
+        bravebot_aichat::roster::ask(config, scope, &bravebot_session::audit::Trail::new, || {
+            (
+                scope.accounts.chatgpt.then(|| ask_the_account(config)),
+                scope.accounts.xai.then(|| ask_the_xai_account(config)),
+            )
+        });
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
-    for place in places {
-        match place {
-            Place::Rows(listed) => rows.extend(listed),
-            Place::Warning(said) => warnings.push(said),
-            Place::Asked(provider) => match answers.next() {
-                Some(Answer::Gateway(Some(listed))) => rows.extend(listed),
-                Some(Answer::Gateway(None)) => warnings.push(Said::plain(format!(
-                    "Could not load models from {}. Try again.",
-                    provider.display_name()
-                ))),
-                Some(Answer::Brave(_)) | None => {}
-            },
+    for entry in roster.entries {
+        match entry {
+            // An entry naming AWS is served by the Bedrock backend under the bare id it is keyed by,
+            // and there is no listing to ask, so a block that named no models offers none.
+            Entry::Bedrock(bedrock) => rows.extend(bedrock_rows(bedrock)),
+            Entry::Named(provider) => rows.extend(named_rows(provider)),
+            Entry::NoCredential(provider) => warnings.push(Said::plain(format!(
+                "No credential configured for {}.",
+                provider.display_name()
+            ))),
+            Entry::Asked(_, Ok(listed)) => rows.extend(listed),
+            Entry::Asked(provider, Err(_)) => warnings.push(Said::plain(format!(
+                "Could not load models from {}. Try again.",
+                provider.display_name()
+            ))),
         }
     }
     // Additive like a gateway: a stored ChatGPT sign-in adds its models and takes none away, and so
@@ -127,12 +78,9 @@ fn roster(config: &Config, scope: RosterScope<'_>) -> (Vec<Model>, Vec<Said>) {
     if let Some(account) = xai {
         with_xai_account(&mut rows, &mut warnings, account);
     }
-    match answers.find_map(|answer| match answer {
-        Answer::Brave(listed) => Some(listed),
-        Answer::Gateway(_) => None,
-    }) {
-        Some(Some(listed)) => rows.extend(listed),
-        Some(None) => warnings.push(Said::plain("Could not load Brave models. Try again.")),
+    match roster.brave {
+        Some(Ok(listed)) => rows.extend(listed),
+        Some(Err(_)) => warnings.push(Said::plain("Could not load Brave models. Try again.")),
         None => {}
     }
     (rows, warnings)
@@ -153,56 +101,6 @@ fn named_rows(provider: &bravebot_config::provider::Provider) -> Vec<Model> {
             advertised: Advertised::default(),
         })
         .collect()
-}
-
-/// Ask one gateway what it offers, or `None` where the request failed.
-///
-/// The agent's own roster request, not a second copy of it. It keeps the account-first fallback, the
-/// bearer header, the envelope decode, the tool filter and the key qualification in one place, and
-/// the decode stays a declassification site the agent owns rather than one this crate has to be
-/// pinned for.
-fn ask_gateway(
-    provider: &bravebot_config::provider::Provider,
-    credential: &Credential,
-) -> Option<Vec<Model>> {
-    let mut routing = Routing::new();
-    routing.insert_trusted("models", provider.models_url());
-    routing.insert_trusted("account-models", provider.account_models_url());
-    let mut sink = bravebot_session::audit::Trail::new();
-    let token = bearer(credential);
-    let headers = provider.request_headers(|name| std::env::var(name).ok());
-    Policy::begin(
-        routing,
-        ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch]),
-        &mut sink,
-    )
-    .ok()
-    .and_then(|mut policy| {
-        models::list_from_gateway(
-            &mut policy,
-            provider,
-            token,
-            &headers,
-            &models::listing_egress(),
-        )
-        .ok()
-    })
-}
-
-/// Ask Brave's endpoint what it offers, or `None` where the request failed.
-fn ask_brave(config: &Config) -> Option<Vec<Model>> {
-    let mut routing = Routing::new();
-    routing.insert_trusted("models", config.models_url());
-    let mut sink = bravebot_session::audit::Trail::new();
-    Policy::begin(
-        routing,
-        ReleasePlan::new(),
-        CapabilitySet::from_iter([Capability::WebFetch]),
-        &mut sink,
-    )
-    .ok()
-    .and_then(|mut policy| models::list(&mut policy, config, &models::listing_egress()).ok())
 }
 
 /// What the ChatGPT account offers, asked of the serving host with the stored sign-in
@@ -292,19 +190,6 @@ fn bedrock_rows(bedrock: &bravebot_config::bedrock::Bedrock) -> Vec<Model> {
             advertised: Advertised::default(),
         })
         .collect()
-}
-
-/// The token a roster request is made with, where the block named one.
-///
-/// `None` is not an error here: a gateway configured without a credential is asked without one,
-/// which is what a local Ollama wants. The shared listing reads `None` as a reason not to ask the
-/// account-scoped route at all, since there is no account to scope an answer to. `Absent` reaches
-/// this only for a service with a compiled list, which is offered without a request.
-fn bearer(credential: &Credential) -> Option<&str> {
-    match credential {
-        Credential::Token(token) => Some(token.expose()),
-        Credential::NotNeeded | Credential::Absent => None,
-    }
 }
 
 /// The badges a picker draws, from what the service said about the model.
@@ -491,22 +376,6 @@ mod scripted_account {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The one decision left here about a credential: which of the three states carries a bearer
-    /// token into the shared listing. The header itself, and the account-first fallback the
-    /// answer decides, belong to the agent.
-    #[test]
-    fn model_discovery_respects_all_three_credential_states() {
-        assert_eq!(
-            bearer(&Credential::Token(bravebot_config::Secret::new(
-                "test-token"
-            ))),
-            Some("test-token")
-        );
-        // Asked without one rather than not asked, which is what a local Ollama wants.
-        assert_eq!(bearer(&Credential::NotNeeded), None);
-        assert_eq!(bearer(&Credential::Absent), None);
-    }
 
     #[test]
     fn capabilities_distinguish_input_from_output() {

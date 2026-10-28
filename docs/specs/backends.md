@@ -46,6 +46,7 @@ governs:
   - crates/aichat/src/generate_content/protocol.rs
   - crates/aichat/src/conversation.rs
   - crates/aichat/src/models.rs
+  - crates/aichat/src/roster.rs
   - crates/config/src/provider.rs
   - crates/config/src/settings.rs
   - crates/ui-bridge/src/models.rs
@@ -4079,11 +4080,13 @@ that replaced that model brought a window of its own ([BACKEND-7](#BACKEND-7)). 
 frame and takes its one lookup before it begins.
 
 **Built:** `bravebot_config::Config::{serves, roster_scope_for_a_turn}` and `RosterScope`;
-`bravebot_aichat::models::{concurrently, listing_egress}`; the roster of the terminal
-(`bravebot_tui::app::models::roster`) and of the window (`bravebot_ui_bridge::models::roster`), which
-both ask through them; the listings of the two accounts (`bravebot_agent::chatgpt::account_models`
-and `bravebot_agent::xai::account_models`), which ask through the same egress;
-`ask_for_the_budget_of_the_model_in_force` and `adopt_the_awaited_budget` in the terminal.
+`bravebot_aichat::roster::ask`, which decides which gateways and whether Brave are asked, makes each
+request through `bravebot_aichat::models::{concurrently, listing_egress}` and gives the entries back in
+the configuration's order, and which the roster of the terminal (`bravebot_tui::app::models::roster`) and
+of the window (`bravebot_ui_bridge::models::roster`) both take their answers from; the listings of the
+two accounts (`bravebot_agent::chatgpt::account_models` and `bravebot_agent::xai::account_models`), which
+ask through the same egress; `ask_for_the_budget_of_the_model_in_force` and `adopt_the_awaited_budget`
+in the terminal.
 
 **Not built:** rows of a picker appearing as each service answers, and a roster kept from one opening of
 the picker to the next, so the picker still waits for its slowest service each time it opens. The
@@ -4108,6 +4111,10 @@ others.
 `verified-by: bravebot_tui::app::the_picker_asks_every_gateway_at_once_and_lists_them_in_the_configurations_order`
 `verified-by: bravebot_ui_bridge::models::the_window_asks_every_gateway_at_once_and_lists_them_in_the_configurations_order`
 `verified-by: bravebot_aichat::models::a_request_for_a_roster_is_given_up_on_in_seconds_and_not_minutes`
+`verified-by: bravebot_aichat::roster::a_roster_gives_up_on_a_gateway_that_takes_the_connection_and_never_answers`
+`verified-by: bravebot_aichat::roster::the_entries_are_in_the_configurations_order_and_each_kind_of_gateway_is_told_apart`
+`verified-by: bravebot_cli::window_lookup::a_session_draws_while_its_window_is_asked_for_and_takes_it_when_it_comes`
+`verified-by: bravebot_cli::window_lookup::a_turn_sent_before_the_window_arrives_waits_for_it`
 `verified-by: bravebot_tui::app::asking_for_the_window_at_start_adopts_it_only_when_the_answer_is_taken`
 `verified-by: bravebot_tui::app::a_pass_of_the_loop_takes_an_arrived_window_once_and_does_not_wait_for_one_that_has_not`
 `verified-by: bravebot_tui::app::a_lookup_about_a_model_that_is_no_longer_in_force_is_dropped_and_not_waited_for`
