@@ -145,17 +145,25 @@ keeps it small enough to reason about. A name read from a directory could never 
 itself: a definition's name is written by whoever wrote the definition, it can be composed to read
 like an instruction, and the rule that keeps a skill from being a command is exactly that.
 
-**What the alternatives cost.** `@name` is taken: `@` names a file and putting a second meaning on it
-would make one prefix mean two things at the moment a person is typing fastest. A bare
-`name: task` line would make every sentence containing a colon a dispatch. A word plus an argument
-is the shape every other command here already has, and the whole word is the command, so
-`/agents are useful` stays a prompt.
+**What the alternatives cost.** An `@name` written into the text of a prompt is taken: `@` names a
+file there, and a second meaning would make one prefix mean two things at the moment a person is
+typing fastest. A bare `name: task` line would make every sentence containing a colon a dispatch. A
+word plus an argument is the shape every other command here already has, and the whole word is the
+command, so `/agents are useful` stays a prompt.
 
-The desktop lists bots in the `@` list as rows of their own, above the files, and a bot picked
-there is staged beside the draft under a `[@Name]` marker rather than written as an `@` name
-([MEMORY-14](definition-memory.md#MEMORY-14)). In the text of a prompt `@` still names only a
-file, so the prefix has one meaning in what is sent. The row a person picks says which kind of
-thing it is, which is what the cost above is about.
+The `@` list is a second way to address a definition, and it costs the first alternative's
+ambiguity only in what the person sees. The terminal lists the definitions a message may be
+addressed to as rows above the files, each with its description, and the desktop lists its bots as
+rows of its own. The rows, how a typed word matches them and what Enter does on one are
+`bravebot-mentions`', and the bridge offers them to a client that asks, so a client that takes
+them cannot read a pick differently from the terminal
+([MEMORY-14](definition-memory.md#MEMORY-14)). A pick is never written as an `@` name. It writes a
+`[@Name]` marker and stages the definition beside the line, as a dropped file is staged
+([DROP-6](dropping.md#DROP-6)), so in the text of a prompt `@` still names only a file. Enter on a
+line whose marker is still in it addresses the definition exactly as `/agent <name> <task>` would,
+with the marker taken out of the task. The row a person picks says which kind of thing it is, and
+the list is the cost: a person typing `@` is offered names that a directory's files do not
+contain, and has to read which kind each row is.
 
 A turn stopped before it did anything puts the whole line back in the box, name and all, as a
 stopped prompt is put back. The task alone would be a prompt for the session's own planner, and
@@ -167,6 +175,11 @@ it already addresses the definition.
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_agent_is_a_prompt`
 `verified-by: bravebot_tui::app::a_stopped_addressed_turn_puts_the_whole_agent_line_back_in_the_box`
 `verified-by: bravebot_tui::app::a_stopped_turn_comes_back_naming_a_definition_only_where_the_session_would_not`
+`verified-by: bravebot_mentions::lib::a_typed_word_picks_the_definitions_whose_name_holds_it`
+`verified-by: bravebot_mentions::lib::the_marker_is_not_an_at_word_and_a_name_cannot_break_it`
+`verified-by: bravebot_ui_bridge::addressing::the_at_list_offers_the_definitions_ahead_of_the_files`
+`verified-by: bravebot_tui::app::tests::summoning::the_definitions_are_listed_ahead_of_the_files_with_what_each_is_for`
+`verified-by: bravebot_tui::app::tests::summoning::a_picked_definition_addresses_the_line_as_the_agent_command_does`
 
 <a id="ADDRESS-3"></a>
 ### ADDRESS-3: only a line a person typed into the box, or the command line that started the session
@@ -462,6 +475,15 @@ definition did not get the model it asked for.
 A reply produced by an addressed run is drawn under the definition's name, and the name is the one
 the driver resolved rather than anything the reply says about itself.
 
+The driver records the name beside the prompt it addressed. The session record's row for that
+prompt carries `address`, holding the definition and whether it is the one the session stands under
+(`standing`), as [MEMORY-10](definition-memory.md#MEMORY-10) makes a bot's conversation stand
+under its own. `turn.done` carries the same field for the turn that ended, and the rows of a
+reopened or recounted session carry it on the prompt's row. The terminal draws the reply's label
+from the field and from nothing the reply holds. A record written before the field existed has none
+and is drawn as it always was. The terminal sets the label on a resumed session from the field, so
+a resumed reply is drawn under the name it was given.
+
 [MEMORY-10](definition-memory.md#MEMORY-10) draws a desktop bot's reply
 under the name the bot is shown under instead. That name comes from the row the person opened, as
 the definition's name does, so no reply chooses it there either.
@@ -471,7 +493,15 @@ would be taking that decision from model output, which is the thing this reposit
 everywhere else. Which definition was addressed is a fact the driver already holds, because it is
 the one that matched the name.
 
+**Why the record and not the front end.** A front end that remembers which turns it addressed has
+to keep that beside the record and keep the two in step through a reopen, a fork and a rewind. The
+record is where the prompt is, and it already travels with them.
+
 `verified-by: bravebot_tui::render::a_reply_from_an_addressed_turn_is_drawn_under_the_name_the_driver_matched`
+`verified-by: bravebot_agent::turn::the_record_keeps_which_definition_each_prompt_was_addressed_to`
+`verified-by: bravebot_agent::turn::a_record_without_an_address_still_loads_and_one_with_it_round_trips`
+`verified-by: bravebot_ui_bridge::addressing::a_turn_and_a_reopened_session_say_which_definition_was_addressed_and_whether_it_stands`
+`verified-by: bravebot_tui::state::a_resumed_reply_is_drawn_under_the_definition_its_prompt_was_addressed_to`
 
 <a id="ADDRESS-13"></a>
 ### ADDRESS-13: the `agent` setting names the definition a session starts under, from the person's own file only

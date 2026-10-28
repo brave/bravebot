@@ -482,6 +482,13 @@ pub(super) fn run_turn_animated(
     // other turn carries the definition the session was started under, if any (CLI-17). Kept past
     // the turn as well, because a stop puts the line back as it was typed, name and all.
     let addressed = session.take_addressing();
+    // Whether the name is the one the session stands under and not one a `/agent` line named for
+    // this turn alone, which the record keeps beside the prompt (ADDRESS-12).
+    let addressing_standing = addressed.as_ref().is_some_and(|addressed| {
+        session
+            .standing_definition()
+            .is_some_and(|standing| standing.name == addressed.name)
+    });
 
     // Before the worker starts, because a sign-in needs the terminal and this is the thread that
     // has it. Left to the worker, the URL and code the AWS CLI prints would land in a frame this
@@ -562,6 +569,7 @@ pub(super) fn run_turn_animated(
         // outlives the session. A one-shot run says nothing here and reads no record.
         .remembering(Some(stored.id().to_string()))
         .addressing(addressed.as_ref().map(|addressed| addressed.name.clone()))
+        .addressing_standing(addressing_standing)
         // The words `--system-prompt` and `--append-system-prompt` named, on every turn the session
         // sends, ticks and goal rounds included (CLI-19).
         .with_system_prompts(session.system_prompts().clone())
@@ -1371,6 +1379,31 @@ pub(super) fn past_sessions_offered(root: &Path, current: &str) -> Vec<bravebot_
             )
         })
         .collect()
+}
+
+/// A row of the `@` list for each definition a message may be addressed to, in the order the
+/// planner is told about them.
+///
+/// The set `/agent` accepts and the turn resolves again, so a row names a definition the line
+/// can be addressed to (ADDRESS-2). The rows carry names and descriptions to be drawn, and the
+/// turn is asked about the name alone.
+pub(super) fn definitions_offered(
+    workspace: &Workspace,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+) -> Vec<bravebot_mentions::Entry> {
+    bravebot_agent::agents::resolved(
+        workspace,
+        bravebot_agent::home::directory().as_deref(),
+        trust,
+        permissions,
+        &mut Trail::new(),
+    )
+    .iter()
+    .map(|definition| {
+        bravebot_mentions::definition_entry(definition.name(), definition.description())
+    })
+    .collect()
 }
 
 /// Carry the prompt of an MCP server a line runs, which the turn fetches (CMD-26).

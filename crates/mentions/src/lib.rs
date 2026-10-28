@@ -1,5 +1,6 @@
 //! Naming a file with `@` in a prompt: what is offered while the name is typed, what Enter does
-//! with it, and which files a sent line names.
+//! with it, and which files a sent line names. The same list offers the definitions a message may
+//! be addressed to, ahead of the files, and the marker a pick of one leaves in the line.
 //!
 //! One implementation for every front end. The terminal calls it directly, and the desktop's
 //! bridge calls it for the window, so the two cannot disagree about what a line names.
@@ -33,15 +34,45 @@ use std::path::{Path, PathBuf};
 /// every keystroke. Narrowing is what finds a file; the cap only bounds the first look.
 pub const MAX_ENTRIES: usize = 40;
 
+/// What a row of the list is, which says what picking it does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A file, which a pick names in the line and Enter sends as trusted input.
+    File,
+    /// A directory, which a pick completes so the path can be typed further.
+    Directory,
+    /// A past session of the directory, named in the line as `@session:<id>`.
+    Session,
+    /// A definition a message may be addressed to. A pick writes its marker ([`marker`]) and
+    /// names nothing in the line: the definition travels beside the prompt, as `/agent` carries
+    /// it.
+    Definition,
+}
+
+impl Kind {
+    /// The word a client is sent for the kind.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Directory => "directory",
+            Self::Session => "session",
+            Self::Definition => "definition",
+        }
+    }
+}
+
 /// One thing in the workspace that a reference could name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    /// Workspace-relative, with a trailing slash for a directory so it reads as one.
+    /// Workspace-relative, with a trailing slash for a directory so it reads as one. A
+    /// definition's name for a [`Kind::Definition`] row.
     pub path: String,
+    /// What the row is.
+    pub kind: Kind,
     /// Whether it is a directory, which completes to a path that can be typed further.
     pub is_directory: bool,
     /// What to show beside the path where it is not a file: a past session's age and the most a
-    /// mention adds, then its title.
+    /// mention adds, then its title, or a definition's description.
     pub note: Option<String>,
     /// What a typed word is looked for in besides the reference itself: a past session's title.
     pub title: Option<String>,
@@ -57,10 +88,94 @@ pub const SESSION_PREFIX: &str = "session:";
 pub fn session_entry(id: &str, title: &str, note: String) -> Entry {
     Entry {
         path: format!("{SESSION_PREFIX}{id}"),
+        kind: Kind::Session,
         is_directory: false,
         note: Some(note),
         title: Some(title.to_string()),
     }
+}
+
+/// How many definitions are offered at once, ahead of the files.
+pub const MAX_DEFINITIONS: usize = 10;
+
+/// A row offering a definition a message may be addressed to ([ADDRESS-2], [MEMORY-14]).
+///
+/// `name` is a name the caller resolved, from the set `/agent` accepts, and `description` is what
+/// its file says it is for. Both are shown to a person and neither reaches a model from here. Not a
+/// file: a pick leaves the marker of [`marker`] in the line, and [`referenced`] never reads it as a
+/// path.
+///
+/// [ADDRESS-2]: ../../../docs/specs/addressing-a-definition.md#ADDRESS-2
+/// [MEMORY-14]: ../../../docs/specs/definition-memory.md#MEMORY-14
+pub fn definition_entry(name: &str, description: &str) -> Entry {
+    Entry {
+        path: name.to_string(),
+        kind: Kind::Definition,
+        is_directory: false,
+        note: Some(description.to_string()).filter(|note| !note.trim().is_empty()),
+        title: None,
+    }
+}
+
+/// The definitions among `held` that a half-typed reference could still become: those whose name
+/// starts with it or holds it, ignoring case, and every one when nothing is typed.
+///
+/// Decided here from the name alone, so both clients list the same rows for the same word. A word
+/// with a slash is a path being walked and matches none. At most [`MAX_DEFINITIONS`], in the order
+/// `held` is in, which is where a caller puts them ahead of the files.
+pub fn definitions_matching(typed: &str, held: &[Entry]) -> Vec<Entry> {
+    if typed.contains('/') {
+        return Vec::new();
+    }
+    let wanted = typed.to_lowercase();
+    held.iter()
+        .filter(|row| row.kind == Kind::Definition && row.path.to_lowercase().contains(&wanted))
+        .take(MAX_DEFINITIONS)
+        .cloned()
+        .collect()
+}
+
+/// The marker a definition picked from the list is written into a line as: `[@Name]`.
+///
+/// Never an `@` word, so [`referenced`] does not collect it as a file and the line carries no
+/// second meaning for `@`. `shown` is the name the person knows the definition by. Characters the
+/// marker is built from are taken out of it and runs of whitespace become one space, so a name
+/// cannot close the marker early or hold a second one. `fallback` stands in where nothing is left.
+pub fn marker(shown: &str, fallback: &str) -> String {
+    let cleaned: String = shown
+        .chars()
+        .filter(|c| !matches!(c, '@' | '[' | ']'))
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let name = if cleaned.is_empty() {
+        fallback
+    } else {
+        &cleaned
+    };
+    format!("[@{name}]")
+}
+
+/// Whether `marker` is still in `line`, which is how a pick is told to stand: deleting the marker
+/// takes the definition off the message.
+pub fn marker_in(line: &str, marker: &str) -> bool {
+    !marker.is_empty() && line.contains(marker)
+}
+
+/// `line` without the marker of a pick and the space written after it, which is the task the
+/// definition is addressed with.
+///
+/// Every copy of the marker is removed, since a person who copied it meant one definition. The line
+/// is trimmed, because the marker is written at the head or the end of a sentence.
+pub fn without_marker(line: &str, marker: &str) -> String {
+    if marker.is_empty() {
+        return line.trim().to_string();
+    }
+    line.replace(&format!("{marker} "), "")
+        .replace(marker, "")
+        .trim()
+        .to_string()
 }
 
 /// The directories the person's settings named as references, each with the alias it is written
@@ -285,6 +400,7 @@ fn in_one_directory(
                 } else {
                     path
                 },
+                kind: kind_of(named.is_directory),
                 is_directory: named.is_directory,
                 note: None,
                 title: None,
@@ -299,6 +415,7 @@ fn in_one_directory(
             if alias.starts_with(typed) && root.join(alias).symlink_metadata().is_err() {
                 entries.push(Entry {
                     path: format!("{alias}/"),
+                    kind: Kind::Directory,
                     is_directory: true,
                     note: None,
                     title: None,
@@ -316,6 +433,14 @@ fn in_one_directory(
     });
     entries.truncate(MAX_ENTRIES);
     entries
+}
+
+fn kind_of(is_directory: bool) -> Kind {
+    if is_directory {
+        Kind::Directory
+    } else {
+        Kind::File
+    }
 }
 
 /// How many names found by the walk are offered at most.
@@ -437,6 +562,7 @@ fn found_beneath(root: &Path, typed: &str, offered: &[Entry], most_read: usize) 
         .take(room)
         .map(|found| Entry {
             path: found.path,
+            kind: kind_of(found.is_directory),
             is_directory: found.is_directory,
             note: None,
             title: None,
@@ -701,9 +827,11 @@ pub fn enter_completes(
     if cursor == 0 && names_a_file(root, typed, sources) {
         return false;
     }
+    // A definition is picked and not completed: its name typed in full is still the row to pick,
+    // since sending the line would read the name as a file.
     offered
         .get(cursor.min(offered.len().saturating_sub(1)))
-        .is_some_and(|entry| typed != entry.path)
+        .is_some_and(|entry| entry.kind == Kind::Definition || typed != entry.path)
 }
 
 #[cfg(test)]
@@ -943,6 +1071,109 @@ mod tests {
         );
     }
 
+    fn held() -> Vec<Entry> {
+        vec![
+            definition_entry("reviewer", "Reviews a diff against the rules."),
+            definition_entry("lantern", "Keeps the lights."),
+            definition_entry("Ada-Reviews", ""),
+            session_entry("abc", "reviewer notes", "2 days ago".to_string()),
+        ]
+    }
+
+    /// A row for a definition says what it is, and one with no description has no note to draw.
+    #[test]
+    fn a_definition_row_is_a_definition_with_its_description() {
+        let row = definition_entry("reviewer", "Reviews a diff.");
+        assert_eq!(row.kind, Kind::Definition);
+        assert_eq!(row.path, "reviewer");
+        assert_eq!(row.note.as_deref(), Some("Reviews a diff."));
+        assert!(!row.is_directory);
+        assert_eq!(definition_entry("reviewer", "  ").note, None);
+    }
+
+    /// The typed word is matched in the crate, by name and without regard to case, so the two
+    /// clients list the same definitions. A row that is not a definition is never one of them, and
+    /// a word with a slash is a path being walked.
+    #[test]
+    fn a_typed_word_picks_the_definitions_whose_name_holds_it() {
+        let names = |typed: &str| -> Vec<String> {
+            definitions_matching(typed, &held())
+                .into_iter()
+                .map(|row| row.path)
+                .collect()
+        };
+        assert_eq!(names(""), ["reviewer", "lantern", "Ada-Reviews"]);
+        assert_eq!(names("rev"), ["reviewer", "Ada-Reviews"]);
+        assert_eq!(names("LANT"), ["lantern"]);
+        assert!(
+            names("notes").is_empty(),
+            "a session's title is no definition's name"
+        );
+        assert!(names("src/rev").is_empty());
+    }
+
+    /// At most `MAX_DEFINITIONS` are offered, in the order they were held.
+    #[test]
+    fn no_more_than_the_most_definitions_are_offered() {
+        let many: Vec<Entry> = (0..MAX_DEFINITIONS + 5)
+            .map(|n| definition_entry(&format!("bot-{n:02}"), ""))
+            .collect();
+        let offered = definitions_matching("bot", &many);
+        assert_eq!(offered.len(), MAX_DEFINITIONS);
+        assert_eq!(offered[0].path, "bot-00");
+    }
+
+    /// The marker is `[@Name]` and never an `@` word, so a line carrying it names no file and the
+    /// name cannot close the marker early or hold another.
+    #[test]
+    fn the_marker_is_not_an_at_word_and_a_name_cannot_break_it() {
+        assert_eq!(marker("Ada", "ada"), "[@Ada]");
+        assert_eq!(marker("Code  Reviewer", "x"), "[@Code Reviewer]");
+        assert_eq!(marker("A@[B]", "x"), "[@AB]");
+        assert_eq!(marker("@[]", "fallback"), "[@fallback]");
+        assert!(referenced(&format!("{} read @notes.md", marker("A B", "a"))) == ["notes.md"]);
+        assert!(typed_reference(&marker("Ada", "ada")).is_none());
+    }
+
+    /// A pick stands while its marker is in the line, and the task it is addressed with is the line
+    /// without the marker and the space after it.
+    #[test]
+    fn a_pick_stands_while_its_marker_is_in_the_line_and_the_task_is_the_rest() {
+        let marker = marker("Ada", "ada");
+        assert!(marker_in("[@Ada] what changed?", &marker));
+        assert!(!marker_in("what changed?", &marker));
+        assert!(
+            !marker_in("anything", ""),
+            "an empty marker is in every line"
+        );
+        assert_eq!(
+            without_marker("[@Ada] what changed?", &marker),
+            "what changed?"
+        );
+        assert_eq!(
+            without_marker("what changed? [@Ada]", &marker),
+            "what changed?"
+        );
+        assert_eq!(without_marker("a [@Ada] b [@Ada]", &marker), "a b");
+        assert_eq!(without_marker("[@Ada]", &marker), "");
+    }
+
+    /// Enter on a definition row picks it, whatever was typed. Its name typed in full sends the line
+    /// otherwise, naming a file nobody has, and a file of the same name at the untouched cursor is
+    /// still a finished name.
+    #[test]
+    fn enter_on_a_definition_picks_it_even_where_its_name_is_typed_in_full() {
+        let scratch = Scratch::new("enter-picks-a-definition");
+        let rows = definitions_matching("reviewer", &held());
+        assert!(enter_completes(&scratch.path, "reviewer", &rows, 0, &[]));
+        std::fs::write(scratch.path.join("reviewer"), "x").expect("a file");
+        assert!(
+            !enter_completes(&scratch.path, "reviewer", &rows, 0, &[]),
+            "a typed name that is a file is a finished sentence"
+        );
+        assert!(enter_completes(&scratch.path, "reviewer", &rows, 1, &[]));
+    }
+
     /// A finished name is decided from the workspace, so the cap that bounds what is displayed
     /// cannot change the answer, and a directory is still somewhere to type through.
     #[test]
@@ -980,6 +1211,7 @@ mod tests {
             matching(&scratch.path, "notes", &[]),
             vec![Entry {
                 path: "notes".to_string(),
+                kind: Kind::File,
                 is_directory: false,
                 note: None,
                 title: None,

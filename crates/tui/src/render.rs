@@ -10302,6 +10302,7 @@ mod tests {
         let rows = [
             bravebot_mentions::Entry {
                 path: "README.md".to_string(),
+                kind: bravebot_mentions::Kind::File,
                 is_directory: false,
                 note: None,
                 title: None,

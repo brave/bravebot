@@ -28,7 +28,7 @@ use bravebot_agent::confirm::{
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
     ToolListRequest, VetRequest, VouchRequest, WriteRequest,
 };
-use bravebot_agent::conversation::{Composed, Said};
+use bravebot_agent::conversation::{Address, Composed, Said};
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
 use bravebot_agent::servers::Question;
@@ -276,15 +276,30 @@ pub fn row(row: &Row) -> Value {
 }
 
 /// Project an accepted prompt through the same tag rules as saved history.
-pub fn submitted(text: &str, composed: Option<&Composed>) -> Value {
+pub fn submitted(text: &str, composed: Option<&Composed>, address: Option<&Address>) -> Value {
     let entry = match composed {
         Some(why) => Said::Composed {
             why: why.clone(),
             text: text.to_string(),
         },
-        None => Said::User(text.to_string()),
+        None => Said::User(text.to_string(), address.cloned()),
     };
     said(&entry)
+}
+
+/// The definition a turn was addressed to, as the driver recorded it, or `null` where it was
+/// addressed to none ([ADDRESS-12](../../../docs/specs/addressing-a-definition.md#ADDRESS-12)).
+///
+/// `standing` says whether it was the definition the session stands under, which a bot's
+/// conversation has for every turn, or one named for the turn alone.
+pub fn addressed_to(address: Option<&Address>) -> Value {
+    match address {
+        Some(address) => json!({
+            "definition": address.definition,
+            "standing": address.standing,
+        }),
+        None => Value::Null,
+    }
 }
 
 /// A whole transcript, each prompt carrying the ordinal `session.fork` cuts on.
@@ -303,7 +318,7 @@ pub fn recounted(said: &[Said]) -> Vec<Value> {
     said.iter()
         .map(|entry| {
             let mut value = self::said(entry);
-            if matches!(entry, Said::User(_)) {
+            if matches!(entry, Said::User(..)) {
                 value["prompt"] = json!(prompt);
                 prompt += 1;
             }
@@ -326,7 +341,13 @@ pub fn recounted(said: &[Said]) -> Vec<Value> {
 /// the one whose words came out of a file.
 fn said(said: &Said) -> Value {
     match said {
-        Said::User(text) => json!({ "kind": "user", "text": text }),
+        Said::User(text, address) => {
+            let mut row = json!({ "kind": "user", "text": text });
+            if address.is_some() {
+                row["address"] = addressed_to(address.as_ref());
+            }
+            row
+        }
         Said::Assistant(text) => json!({ "kind": "assistant", "text": text }),
         Said::Tool { line, why } => json!({ "kind": "tool", "text": line, "why": why }),
         Said::Composed {

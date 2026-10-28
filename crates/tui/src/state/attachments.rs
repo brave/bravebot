@@ -688,5 +688,9 @@ impl Session {
         self.attached.retain(|a| stashed.contains(&a.marker));
         self.pasted.retain(|p| stashed.contains(&p.marker));
         self.previews.retain(|(marker, _)| stashed.contains(marker));
+        self.pick = self
+            .pick
+            .take()
+            .filter(|pick| stashed.contains(&pick.marker));
     }
 }

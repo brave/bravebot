@@ -432,7 +432,10 @@ fn a_replayed_tool_line_carries_no_outcome() {
         "nothing to imply a result"
     );
 
-    let said = wire::recounted(&[Said::User("hi".into()), Said::Assistant("hello".into())]);
+    let said = wire::recounted(&[
+        Said::User("hi".into(), None),
+        Said::Assistant("hello".into()),
+    ]);
     assert_eq!(said[0]["kind"], json!("user"));
     assert_eq!(said[1]["kind"], json!("assistant"));
 }
@@ -452,7 +455,7 @@ fn a_replayed_tool_line_carries_no_outcome() {
 #[test]
 fn only_prompts_are_numbered_and_they_are_numbered_in_order() {
     let said = wire::recounted(&[
-        Said::User("first".into()),
+        Said::User("first".into(), None),
         Said::Assistant("a reply".into()),
         Said::Tool {
             line: "read(src/main.rs)".into(),
@@ -468,7 +471,7 @@ fn only_prompts_are_numbered_and_they_are_numbered_in_order() {
             why: Composed::Written,
             text: "I ran `ls` in the shell myself. It printed nothing.".into(),
         },
-        Said::User("second".into()),
+        Said::User("second".into(), None),
     ]);
     assert_eq!(said[0]["prompt"], json!(0));
     assert_eq!(said[5]["prompt"], json!(1));
@@ -525,12 +528,12 @@ fn a_message_the_agent_composed_crosses_as_a_tag_and_no_prose() {
 #[test]
 fn a_prompt_a_front_end_composed_crosses_as_a_tag_and_no_prose() {
     let said = wire::recounted(&[
-        Said::User("first".into()),
+        Said::User("first".into(), None),
         Said::Composed {
             why: Composed::Consolidation,
             text: "Look back over this conversation and bring the memory up to date".into(),
         },
-        Said::User("second".into()),
+        Said::User("second".into(), None),
     ]);
     assert_eq!(said[1]["kind"], json!("consolidation"));
     let keys: Vec<&String> = said[1].as_object().expect("an object").keys().collect();
@@ -2102,11 +2105,11 @@ fn the_mcp_questions_carry_what_a_card_draws() {
 fn accepted_composed_prompts_cross_without_their_text() {
     use bravebot_agent::conversation::Composed;
     assert_eq!(
-        wire::submitted("typed", None),
+        wire::submitted("typed", None, None),
         json!({"kind": "user", "text": "typed"})
     );
     assert_eq!(
-        wire::submitted("must not cross", Some(&Composed::Consolidation)),
+        wire::submitted("must not cross", Some(&Composed::Consolidation), None),
         json!({"kind": "consolidation"})
     );
 }

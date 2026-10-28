@@ -701,12 +701,24 @@ window cannot call.
 <a id="MEMORY-14"></a>
 ### MEMORY-14: a person may summon a bot for one turn, in a project's chat or in another bot's
 
-In the desktop, typing `@` in a chat's composer lists the person's bots above the project's files.
-The list leaves out bots that are archived and the bot whose conversation is open. Picking one writes
-a marker, `[@Name]`, into the draft and stages the bot beside it, as a dropped file is staged
-([DROP-6](dropping.md#DROP-6)). Deleting the marker takes the bot off. A message summons at most one
-bot, and picking a second replaces the first. A message that summons a bot is queued while a turn
-runs and is never sent into that turn.
+In both front ends, typing `@` lists the definitions a message may be addressed to above the files
+([ADDRESS-2](addressing-a-definition.md#ADDRESS-2)). The desktop's list is the person's bots, less
+the archived ones and the bot whose conversation is open. The terminal's is the set `/agent`
+accepts. Picking one writes a marker, `[@Name]`, into the draft and stages the definition beside it,
+as a dropped file is staged ([DROP-6](dropping.md#DROP-6)). Deleting the marker takes the
+definition off. A message addresses at most one, and picking a second replaces the first. A message
+that addresses one is queued while a turn runs and is never sent into that turn. In the terminal it
+queues as the `/agent` line it becomes.
+
+**One marker, decided once.** The marker is text in the draft and says that the pick stands. It is
+taken out of what is sent: the turn's prompt is the task alone, as it is after `/agent <name>`. The
+rows of the list, how a typed word matches them, the marker's text, whether the marker is still in
+the draft and the task left once it is removed are pure functions in `bravebot-mentions`. The
+terminal calls them directly. The bridge offers the rows to a client that asks for them with
+`definitions` on `mentions.offer`, so a client reads a pick as the terminal does. The desktop keeps
+its own bot rows and marker until it takes the bridge's.
+The marker is not an `@` name, so a line holding it names no file
+([NAME-9](naming-files.md#NAME-9)).
 
 That message's turn is addressed to the summoned bot's definition, and to it alone. The next turn is
 addressed as the conversation's turns were before the summon: to the bot's own definition in a
@@ -714,11 +726,17 @@ bot's conversation ([MEMORY-10](#MEMORY-10)), and to none in a project's chat. T
 conversation's folder, under the conversation's history, and the summoned bot's memory is the one
 [MEMORY-2](#MEMORY-2) names in that folder.
 
-The reply is drawn under a label with the summoned bot's face and the name it is shown under. The
-summoned bot's own conversation shows a card for each reply it gave elsewhere. The card says
-"Replied to" and names the bot whose conversation it was, or the project, and shows the reply's
-text. Pressing it opens that conversation at the summoned prompt. The card is drawn beside the
-summoned bot's conversation and is not part of it: nothing on the card reaches that bot's turns.
+The reply is drawn under a label with the summoned definition's name, and the desktop adds the
+bot's face. In the terminal the label comes from the `address` field of the prompt's row in the session record
+([ADDRESS-12](addressing-a-definition.md#ADDRESS-12)), which `turn.done` and the rows of a
+reopened session carry, so a label is the same in the turn that ended and in the session opened
+again, and the terminal keeps no copy of it. The desktop draws its label from its own record until
+it reads the field. The row's `standing` flag says whether the
+definition was the session's own, which is how a bot's own turn in its conversation is told from a
+summon in it. The summoned bot's own conversation shows a card for each reply it gave elsewhere. The
+card says "Replied to" and names the bot whose conversation it was, or the project, and shows the
+reply's text. Pressing it opens that conversation at the summoned prompt. The card is drawn beside
+the summoned bot's conversation and is not part of it: nothing on the card reaches that bot's turns.
 
 **Where the name comes from.** The person's pick in the list. The window sends the bot's slug, and
 the main process sends that bot's definition name, judged a slug when it was stored, as the
@@ -747,14 +765,14 @@ another conversation's history, which may hold content the summoned bot's conver
 Putting it into that bot's turns would carry it to a planner that has not seen it, under a label
 the main process cannot know.
 
-**What the main process records.** When the summoned turn ends, the main process writes down the
-conversation's id and folder, the prompt's ordinal the agent reported, the summoned bot's slug,
-whose conversation it was, the text the `reply` field of `turn.done` carried for display, and where
-the summoned bot's own conversation stood. It writes all of it from what the agent answered and from
-the pick, never from anything a window says afterwards. A later turn ending at the same ordinal
-without a summon removes the record, and deleting the conversation removes its records. The labels
-and the cards are drawn from these records and from the bot rows, and decide nothing from the
-reply's text.
+**What the main process records.** When the summoned turn ends, the main
+process still writes down the conversation's id and folder, the prompt's ordinal the agent
+reported, the summoned bot's slug, whose conversation it was, the text the `reply` field of
+`turn.done` carried for display, and where the summoned bot's own conversation stood, and the cards
+are drawn from those records. It writes all of it from what the agent answered and from the pick,
+never from anything a window says afterwards. A later turn ending at the same ordinal without a
+summon removes the record, and deleting the conversation removes its records. The cards decide
+nothing from the reply's text.
 
 The desktop opens a bot as one conversation in its home folder: its newest one there, or a new one
 when it has none. A bot is sent into a project by summoning it there rather than by choosing a
@@ -766,6 +784,11 @@ listed on a page of their own, reached from the conversation's header.
 `verified-by: bravebot_ui_bridge::addressing::a_summon_as_the_first_turn_of_a_bots_conversation_still_leaves_its_definition_standing`
 `verified-by: bravebot_ui_bridge::addressing::an_address_that_is_no_slug_is_refused_before_a_turn_starts`
 `verified-by: bravebot_mentions::lib::a_bot_marker_is_not_collected_as_a_reference`
+`verified-by: bravebot_mentions::lib::a_pick_stands_while_its_marker_is_in_the_line_and_the_task_is_the_rest`
+`verified-by: bravebot_tui::app::tests::summoning::picking_a_definition_writes_its_marker_and_names_no_file`
+`verified-by: bravebot_tui::app::tests::summoning::taking_the_marker_out_sends_an_ordinary_prompt`
+`verified-by: bravebot_tui::app::tests::summoning::a_picked_line_waits_as_an_agent_command_and_addresses_the_turn_after`
+`verified-by: bravebot_tui::app::tests::summoning::a_marker_typed_after_the_line_was_sent_addresses_nothing`
 `verified-by: by-construction (the desktop's main process and window are not crates this workspace compiles, so ui/scripts/sanitise.test.mjs pins that a window's address is stripped, ui/scripts/summons.test.mjs pins the record's shape, that a bot's conversation sends the bot's own definition beside the address and the conversation's model and not the summoned bot's, that a record is replaced at its ordinal and removed with its conversation, the marker and the one-summon rule of the staging, where a card is placed, and that the summoned send sets address from the bot row alone and refuses a bot's own conversation, a session that is not open, a stopped agent and a bot with no definition, and leaves nothing waiting when a send fails, and ui/scripts/drive-bot-summon.mjs drives the real app and bridge against a stub model: a bot summoned in a project and in another bot's conversation answers under its label, the next turn is not summoned, the summoned bot's conversation shows the card, which opens the reply, and a window that calls the channel itself is refused for an unknown or archived bot, a malformed request and its own bot, and a summoned turn that fails records nothing; make check-ui runs the tests)`
 
 ## Seeing it

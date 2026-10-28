@@ -1,6 +1,15 @@
-//! Completion of the word at the caret: skills, sessions and arguments.
+//! Completion of the word at the caret: skills, definitions, sessions and arguments.
 
 use super::*;
+
+/// A definition picked from the `@` list for the line in the box.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pick {
+    /// The definition's name, as the list offered it.
+    pub name: String,
+    /// What the pick wrote into the line, which is how the line says the pick stands.
+    pub marker: String,
+}
 
 /// What a half-typed line could still become.
 ///
@@ -78,6 +87,28 @@ impl Session {
             }
             (false, true) => {
                 self.past_sessions = None;
+                self.offered_epoch += 1;
+            }
+            _ => {}
+        }
+    }
+
+    /// Hold the definitions an `@` could address the line to while the line ends in a reference,
+    /// and let them go once it does not.
+    ///
+    /// `resolve` returns a row for each definition the session resolves, and is called once per
+    /// reference rather than once per key.
+    pub fn settle_definitions(&mut self, resolve: impl FnOnce() -> Vec<bravebot_mentions::Entry>) {
+        let typing = !self.shell
+            && self.status != Status::Working
+            && bravebot_mentions::typed_reference(&self.input).is_some();
+        match (typing, self.definitions_offered.is_some()) {
+            (true, false) => {
+                self.definitions_offered = Some(resolve());
+                self.offered_epoch += 1;
+            }
+            (false, true) => {
+                self.definitions_offered = None;
                 self.offered_epoch += 1;
             }
             _ => {}
@@ -188,8 +219,17 @@ impl Session {
         }
         match bravebot_mentions::typed_reference(&self.input) {
             Some(typed) => {
-                let mut entries =
-                    bravebot_mentions::matching(&self.workspace, &typed, &self.reference_sources);
+                // Ahead of the files, where `bravebot-mentions` puts them for both front ends: a
+                // person who types `@` is most often addressing somebody.
+                let mut entries = bravebot_mentions::definitions_matching(
+                    &typed,
+                    self.definitions_offered.as_deref().unwrap_or_default(),
+                );
+                entries.extend(bravebot_mentions::matching(
+                    &self.workspace,
+                    &typed,
+                    &self.reference_sources,
+                ));
                 // After the files: a session is named by a title or an id rather than walked
                 // into, and a path being typed towards is what a person most often means.
                 entries.extend(self.sessions_matching(&typed));
@@ -396,6 +436,10 @@ impl Session {
                 let Some(entry) = self.highlighted_entry() else {
                     return;
                 };
+                if entry.kind == bravebot_mentions::Kind::Definition {
+                    self.pick_definition(&entry.path);
+                    return;
+                }
                 // The `@` that opened the reference is the one at the head of the last word,
                 // not the last `@` in the line. A file may have one in its name, and cutting
                 // there rebuilds the line around a path nobody chose: `@logo@2` plus the
@@ -419,6 +463,70 @@ impl Session {
             inserting.change = None;
         }
         self.completion = 0;
+    }
+
+    /// Address the line to the definition `name`: the word being typed is replaced by the marker of
+    /// the pick, and the definition is staged beside the line (ADDRESS-2, MEMORY-14).
+    ///
+    /// Nothing is named in the line, so what the pick adds is the marker alone, written where the
+    /// word was and followed by a space. The name is one the list offered, taken from the set the
+    /// session resolved, and is checked against that set again when the line is sent.
+    fn pick_definition(&mut self, name: &str) {
+        let start = bravebot_mentions::last_word_starts_at(&self.input);
+        if !self.input[start..].starts_with('@') {
+            return;
+        }
+        let marker = bravebot_mentions::marker(name, name);
+        let kept = self.input[..start].to_string();
+        self.put_in_the_box(format!("{kept}{marker} "));
+        self.pick = Some(Pick {
+            name: name.to_string(),
+            marker,
+        });
+        if let Some(inserting) = &mut self.inserting {
+            inserting.change = None;
+        }
+    }
+
+    /// Whether the line in the box is addressed by a pick that still stands: the marker it wrote is
+    /// in the line. Taking the marker out is how a person changes their mind, as it is for a
+    /// dropped file (DROP-6).
+    pub fn pick_stands(&self) -> bool {
+        !self.shell
+            && self
+                .pick
+                .as_ref()
+                .is_some_and(|pick| bravebot_mentions::marker_in(&self.input, &pick.marker))
+    }
+
+    /// Take the line as the `/agent` argument its pick makes of it: the definition's name and the
+    /// line without the marker, with what the line carried.
+    ///
+    /// The same argument `/agent <name> <task>` carries, so the line takes the same road from here
+    /// and is settled against the same set. `None` where no pick stands.
+    pub fn take_summons(&mut self) -> Option<Commanded> {
+        if !self.pick_stands() {
+            return None;
+        }
+        let pick = self.pick.take()?;
+        let mut commanded = self.take_command();
+        let task = bravebot_mentions::without_marker(&commanded.line, &pick.marker);
+        commanded.line = format!("{} {task}", pick.name);
+        Some(commanded)
+    }
+
+    /// Put the line in the box as the `/agent` line its pick makes of it, for the queue, which
+    /// carries commands by their words. `false` where no pick stands.
+    pub fn pick_into_the_line(&mut self) -> bool {
+        if !self.pick_stands() {
+            return false;
+        }
+        let Some(pick) = self.pick.take() else {
+            return false;
+        };
+        let task = bravebot_mentions::without_marker(&self.input, &pick.marker);
+        self.put_in_the_box(format!("/agent {} {task}", pick.name));
+        true
     }
 
     /// What Tab would make of a level started after `/effort `, with the caret at the end of it.

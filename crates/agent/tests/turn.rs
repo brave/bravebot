@@ -685,7 +685,7 @@ fn a_file_the_turn_admits_is_recorded_as_a_message_the_agent_composed() {
     assert!(
         !said
             .iter()
-            .any(|entry| matches!(entry, Said::User(text) if text.contains("fn main()"))),
+            .any(|entry| matches!(entry, Said::User(text, _) if text.contains("fn main()"))),
         "a file's own bytes are reported as a prompt: {said:?}",
     );
 }
@@ -798,7 +798,7 @@ fn the_nudge_for_a_spent_tool_budget_is_not_a_prompt() {
     let said = conversation.recounted();
     assert_eq!(
         said.iter()
-            .filter(|entry| matches!(entry, Said::User(_)))
+            .filter(|entry| matches!(entry, Said::User(..)))
             .count(),
         1,
         "the nudge was counted as something a person said: {said:?}"
@@ -40170,6 +40170,111 @@ fn an_addressed_turn_runs_under_its_definitions_prompt_model_and_kind() {
     for tool in ["write_file", "edit_file", "run"] {
         assert!(!offered(tool), "a reader was offered {tool}: {request}");
     }
+}
+
+/// ADDRESS-12: the record keeps which definition a turn was addressed to, on the prompt, and
+/// whether it was the session's standing definition or one named for the turn alone. An unaddressed
+/// turn before and after it records none, so a surface drawing the session back labels the one
+/// reply and not its neighbours.
+#[test]
+fn the_record_keeps_which_definition_each_prompt_was_addressed_to() {
+    use bravebot_agent::conversation::{Address, Said};
+
+    let scratch = Scratch::new("address-recorded");
+    let home = Scratch::new("address-recorded-home");
+    define(
+        &home,
+        "rule-reviewer",
+        "kind: reader\n",
+        "REVIEW-BY-THE-RULES",
+    );
+    define(&home, "lantern", "kind: reader\n", "SWEEP-THE-LANTERN-ROOM");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![
+        ("PLAIN-BEFORE", vec![reply_with("done")]),
+        ("ONE-TURN-ONLY", vec![reply_with("done")]),
+        ("STANDING-TURN", vec![reply_with("done")]),
+        ("PLAIN-AFTER", vec![reply_with("done")]),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let mut ask = |task: Task| {
+        take_a_turn(
+            &config,
+            &workspace,
+            &mut conversation,
+            trusting_the_workspace(),
+            task,
+        )
+        .expect("turn runs");
+    };
+    ask(Task::new("PLAIN-BEFORE").with_home(Some(home.path.clone())));
+    ask(addressed("ONE-TURN-ONLY", &home, "rule-reviewer"));
+    ask(addressed("STANDING-TURN", &home, "lantern").addressing_standing(true));
+    ask(Task::new("PLAIN-AFTER").with_home(Some(home.path.clone())));
+
+    let recorded: Vec<(String, Option<Address>)> = conversation
+        .recounted()
+        .into_iter()
+        .filter_map(|said| match said {
+            Said::User(text, address) => Some((text, address)),
+            _ => None,
+        })
+        .collect();
+    let named = |definition: &str, standing| {
+        Some(Address {
+            definition: definition.to_string(),
+            standing,
+        })
+    };
+    assert_eq!(
+        recorded,
+        vec![
+            ("PLAIN-BEFORE".to_string(), None),
+            ("ONE-TURN-ONLY".to_string(), named("rule-reviewer", false)),
+            ("STANDING-TURN".to_string(), named("lantern", true)),
+            ("PLAIN-AFTER".to_string(), None),
+        ]
+    );
+}
+
+/// ADDRESS-12: a record written before the address was kept has no such field, and still loads, as
+/// a turn nobody addressed. One that has it comes back as it was written.
+#[test]
+fn a_record_without_an_address_still_loads_and_one_with_it_round_trips() {
+    use bravebot_agent::conversation::{Address, Said, Stored};
+
+    let old: Stored = serde_json::from_str(r#"{"role":"user","content":"written long ago"}"#)
+        .expect("an old record loads");
+    assert_eq!(old.address, None);
+    assert!(
+        !serde_json::to_string(&old).unwrap().contains("address"),
+        "an unaddressed message wrote a field for it"
+    );
+
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.push_from(
+        bravebot_aichat::protocol::Message::user("addressed"),
+        bravebot_agent::request_view::Provenance::Typed,
+    );
+    conversation.address_last(Address {
+        definition: "lantern".to_string(),
+        standing: false,
+    });
+    let written = serde_json::to_string(&conversation.snapshot()).expect("serialises");
+    let read: bravebot_agent::conversation::Snapshot =
+        serde_json::from_str(&written).expect("a written record loads");
+    assert_eq!(
+        bravebot_agent::Conversation::restored(read).recounted(),
+        vec![Said::User(
+            "addressed".to_string(),
+            Some(Address {
+                definition: "lantern".to_string(),
+                standing: false
+            })
+        )]
+    );
 }
 
 /// ADDRESS-1 and DELEGATE-23: a definition a person addresses supplies the skills it names as it

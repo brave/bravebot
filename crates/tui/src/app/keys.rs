@@ -1274,6 +1274,19 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
                 None => Action::None,
             }
         }
+        // A line addressed to a definition picked from the `@` list, which is the line `/agent` would
+        // have addressed (ADDRESS-2). Before the command arm, since a line that begins with a slash
+        // and holds a marker is still addressed, and before the arm that completes, since the
+        // marker is written with its space and a pick never leaves a half-typed word behind it.
+        // The marker is what says the pick stands: with it deleted the line is an ordinary prompt.
+        KeyCode::Enter if session.pick_stands() && !session.completion_would_change_the_line() => {
+            match session.take_summons() {
+                Some(commanded) => {
+                    Action::Address(commanded.line, commanded.pasted, commanded.attached)
+                }
+                None => Action::None,
+            }
+        }
         // Every command on one arm, reading the one table the set is written in, so a word the table
         // names is dispatched and never sent. Before the arm that completes a half-typed one, which
         // is what a whole word is not, and before the arm that submits, which is what the word must
@@ -1703,6 +1716,18 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     {
         let commanded = session.take_command();
         return session.answer_while_working(|session| dispatch_command(session, commanded));
+    }
+
+    // A line addressed to a picked definition waits as the `/agent` line it is, which is the form
+    // the queue carries addressing in. Made into that line here so the arm below queues it with the
+    // other commands, and never as a prompt the running turn could be given.
+    if key.code == KeyCode::Enter
+        && !session.shell
+        && session.pick_stands()
+        && session.pick_into_the_line()
+        && session.queue_command()
+    {
+        return queued(session, key);
     }
 
     // Before the arm that queues a prompt, because the two do the same thing to the box and differ

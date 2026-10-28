@@ -157,7 +157,7 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
     let text: Vec<&str> = said
         .iter()
         .filter_map(|entry| match entry {
-            bravebot_agent::conversation::Said::User(t)
+            bravebot_agent::conversation::Said::User(t, _)
             | bravebot_agent::conversation::Said::Assistant(t)
             | bravebot_agent::conversation::Said::Tool { line: t, .. } => Some(t.as_str()),
             // A message the agent composed reports the tag it was recorded with beside its words.
@@ -523,11 +523,13 @@ fn a_session_holding_imported_words_is_not_forked() {
         bravebot_agent::conversation::Stored {
             message: Message::user("a prompt typed elsewhere"),
             composed: Some(bravebot_agent::conversation::Composed::Imported),
+            address: None,
             source: None,
         },
         bravebot_agent::conversation::Stored {
             message: Message::assistant("an answer given elsewhere"),
             composed: Some(bravebot_agent::conversation::Composed::Imported),
+            address: None,
             source: None,
         },
     ];
