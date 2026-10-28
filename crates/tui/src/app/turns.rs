@@ -508,6 +508,11 @@ pub(super) fn run_turn_animated(
     let cancel = Cancel::new();
     let worker_cancel = cancel.clone();
 
+    // The window of the model the session opened on, if it was still being looked up when this turn
+    // was sent. A turn sized against the default compacts at the wrong place, so it waits for the
+    // answer, for as long as a request for a roster may take and no longer (BACKEND-64).
+    adopt_the_awaited_budget(session, config, Some(BUDGET_WAIT));
+
     // Cloned rather than borrowed so the worker owns everything it needs. Config and Workspace
     // are cheap handles; Egress builds its own connection pool.
     let worker_config = config.clone();

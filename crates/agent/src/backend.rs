@@ -24,6 +24,7 @@ pub use bravebot_bedrock::credentials::CredentialError;
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
 use bravebot_config::ModelRefusal;
+use bravebot_config::Serves;
 use bravebot_config::provider::{self, Credential, Protocol};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
@@ -998,43 +999,37 @@ impl<'a> Backend<'a> {
     /// configured default, or from a delegate definition loaded from a vouched-for source
     /// (DELEGATE-20), and that is the endorsement for the request field it lands in.
     pub fn select(config: &'a Config, egress: &'a Egress, model: &str) -> Self {
-        if let Some(bedrock) = config.bedrock_for(model) {
-            return Self::Bedrock {
+        match config.serves(model) {
+            Serves::Bedrock(bedrock) => Self::Bedrock {
                 config: bedrock,
                 egress,
                 cancel: None,
-            };
-        }
-        if let Some((provider, wire_model)) = config.provider_for(model) {
-            return Self::Gateway {
+            },
+            Serves::Gateway(provider, wire_model) => Self::Gateway {
                 config,
                 provider,
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
-            };
-        }
-        if let Some(wire_model) = config.chatgpt_model(model) {
-            return Self::Account {
+            },
+            Serves::Chatgpt(wire_model) => Self::Account {
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
                 session: None,
-            };
-        }
-        if let Some(wire_model) = config.xai_model(model) {
-            return Self::XaiAccount {
+            },
+            Serves::Xai(wire_model) => Self::XaiAccount {
                 config,
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
-            };
-        }
-        Self::Aichat {
-            config,
-            egress,
-            subscription: None,
-            cancel: None,
+            },
+            Serves::Aichat => Self::Aichat {
+                config,
+                egress,
+                subscription: None,
+                cancel: None,
+            },
         }
     }
 

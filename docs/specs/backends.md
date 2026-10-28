@@ -46,6 +46,7 @@ governs:
   - crates/aichat/src/generate_content/protocol.rs
   - crates/aichat/src/conversation.rs
   - crates/aichat/src/models.rs
+  - crates/aichat/src/roster.rs
   - crates/config/src/provider.rs
   - crates/config/src/settings.rs
   - crates/ui-bridge/src/models.rs
@@ -4042,6 +4043,85 @@ writes.
 `verified-by: bravebot_agent::bedrock_refusals::a_streamed_request_puts_back_what_was_kept_and_keeps_what_was_found`
 `verified-by: bravebot_agent::incognito::no_bedrock_refusal_is_written_down`
 `verified-by: bravebot_agent::incognito::a_bedrock_refusal_an_earlier_session_kept_is_still_honoured`
+
+<a id="BACKEND-64"></a>
+### BACKEND-64: a start waits on no service, a lookup for one model on the service that answers it, and a picker on the slowest service
+
+Nothing here changes which models are offered or which service answers one. It bounds how long a
+person waits on the services that say what is offered.
+
+**A lookup for one model's row asks the service that answers that model.** The window a session
+opens on, the window a one-shot run takes, the window of the model a `/agent` line names and the
+check that a model reads structured output each need one row. They ask the service
+[BACKEND-3](#BACKEND-3) says answers the model and no other: the gateway whose id a qualified name
+begins with, or whose block lists a bare name; the ChatGPT or xAI account; or Brave's endpoint for a
+name no other service claims. A model an AWS account serves asks no one, since its rows come from the
+configuration. `Config::serves` is the one function that says which, and the router takes its answer
+from it, so a lookup cannot leave out the service a turn on that model goes to. A picker is not a
+lookup for one model and asks every service.
+
+**A roster asks its services at once.** The gateways whose blocks name no models, Brave's endpoint and
+the two accounts are asked together, and a person waits for the slowest of them and not for all of
+them in turn. The rows are offered in the order [BACKEND-4](#BACKEND-4) gives, and the sentences about
+a listing that could not be read are said in the order [BACKEND-19](#BACKEND-19) gives, whichever
+service answered first.
+
+**A request for a roster is given up on in seconds.** Resolving takes at most 3 seconds, connecting 5,
+sending 5, the reply to begin and then to finish 10 each, and a gap in the reply 5, where a model's
+reply is allowed minutes. A service that does not answer in that time is a listing that could not be
+read, and is said as [BACKEND-19](#BACKEND-19) says.
+
+**The window of the model a session opened on does not hold the first frame.** It is asked for on a
+thread of its own when the session is begun, and adopted, with the note that says the budget moved,
+on the pass of the loop it arrives. A turn or a manifest run sent before it has arrived waits for it,
+for as long as a request for a roster may take, so that no turn is sized against the default budget
+for want of a lookup that was on its way. A turn waits for a lookup once: one it has waited out stays
+for the loop to take when it arrives, and the next turn does not wait for it again. A lookup about a
+model that is no longer the one in force is dropped before anything waits for it, because the pick
+that replaced that model brought a window of its own ([BACKEND-7](#BACKEND-7)). A one-shot run has no
+frame and takes its one lookup before it begins.
+
+**Built:** `bravebot_config::Config::{serves, roster_scope_for_a_turn}` and `RosterScope`;
+`bravebot_aichat::roster::ask`, which decides which gateways and whether Brave are asked, makes each
+request through `bravebot_aichat::models::{concurrently, listing_egress}` and gives the entries back in
+the configuration's order, and which the roster of the terminal (`bravebot_tui::app::models::roster`) and
+of the window (`bravebot_ui_bridge::models::roster`) both take their answers from; the listings of the
+two accounts (`bravebot_agent::chatgpt::account_models` and `bravebot_agent::xai::account_models`), which
+ask through the same egress; `ask_for_the_budget_of_the_model_in_force` and `adopt_the_awaited_budget`
+in the terminal.
+
+**Not built:** rows of a picker appearing as each service answers, and a roster kept from one opening of
+the picker to the next, so the picker still waits for its slowest service each time it opens. The
+window of the model a session opened on is still looked up on every start.
+
+**Why.** Each service that says what is offered is a network request, and a person waits on all of
+them. Measured on 2026-10-28 against stand-in gateways on this machine, with six gateways that name no
+models and four of them taking 0.5 s to answer, asking them one after the next takes 2.3 s for a start
+to draw and 2.3 s for `/model`, the sum of their latencies. Asking them at once takes 0.54 s for
+`/model`, the slowest gateway's 0.5 s, and a start on a model served by one gateway draws in 0.01 s
+because it asks only that one. A gateway that takes the connection and never answers holds a request
+for as long as a reply is allowed, 600 seconds unless the request states a bound. The model names the
+service ([BACKEND-3](#BACKEND-3)), so a lookup about one model has no use for the rosters of the
+others.
+
+`verified-by: bravebot_config::lib::a_roster_for_a_model_asks_the_service_that_answers_it_and_no_other`
+`verified-by: bravebot_tui::app::a_lookup_for_one_models_row_asks_only_the_gateway_that_serves_it`
+`verified-by: bravebot_tui::app::a_lookup_asks_brave_only_for_a_model_brave_answers`
+`verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_only_the_gateway_that_serves_its_model`
+`verified-by: bravebot_aichat::models::the_asks_of_a_roster_are_in_flight_together_and_answered_in_the_order_given`
+`verified-by: bravebot_aichat::models::a_panic_in_an_ask_is_raised_to_the_caller`
+`verified-by: bravebot_tui::app::the_picker_asks_every_gateway_at_once_and_lists_them_in_the_configurations_order`
+`verified-by: bravebot_ui_bridge::models::the_window_asks_every_gateway_at_once_and_lists_them_in_the_configurations_order`
+`verified-by: bravebot_aichat::models::a_request_for_a_roster_is_given_up_on_in_seconds_and_not_minutes`
+`verified-by: bravebot_aichat::roster::a_roster_gives_up_on_a_gateway_that_takes_the_connection_and_never_answers`
+`verified-by: bravebot_aichat::roster::the_entries_are_in_the_configurations_order_and_each_kind_of_gateway_is_told_apart`
+`verified-by: bravebot_cli::window_lookup::a_session_draws_while_its_window_is_asked_for_and_takes_it_when_it_comes`
+`verified-by: bravebot_cli::window_lookup::a_turn_sent_before_the_window_arrives_waits_for_it`
+`verified-by: bravebot_tui::app::asking_for_the_window_at_start_adopts_it_only_when_the_answer_is_taken`
+`verified-by: bravebot_tui::app::a_pass_of_the_loop_takes_an_arrived_window_once_and_does_not_wait_for_one_that_has_not`
+`verified-by: bravebot_tui::app::a_lookup_about_a_model_that_is_no_longer_in_force_is_dropped_and_not_waited_for`
+`verified-by: bravebot_tui::app::a_turn_waits_for_a_lookup_once_and_the_loop_still_takes_its_late_answer`
+`verified-by: bravebot_tui::app::a_turn_waits_for_the_window_it_is_sized_against_for_a_bounded_time`
 
 ## Known costs
 

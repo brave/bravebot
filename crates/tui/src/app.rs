@@ -1038,7 +1038,7 @@ fn work_under(
     session.note(t!(session_working_under, definition = name));
     session.work_under(definition);
     if names_a_model {
-        adopt_budget_for_current_model(session, config);
+        ask_for_the_budget_of_the_model_in_force(session, config);
     }
     Ok(())
 }
@@ -2380,7 +2380,9 @@ fn begin_session(
 
     // The model outlived the session that chose it, so the window that came with it has to be asked
     // for again: it is reported by the listing and nowhere else, and nothing on disk remembers it.
-    adopt_budget_for_current_model(&mut session, config);
+    // Asked on a thread of its own, so what the session opens on does not wait for a service: the
+    // loop adopts the answer on the pass it arrives, and a turn waits for it (BACKEND-64).
+    ask_for_the_budget_of_the_model_in_force(&mut session, config);
 
     // What the session begins holding, which is what decides whether the startup question is put
     // to its user at all. Read off `start` before the match below consumes it.
@@ -2727,6 +2729,9 @@ fn event_loop(
         needs_draw |= session.settle_previews();
         // The rows of a model picker still being listed are drawn on the pass they arrive.
         needs_draw |= session.settle_picking();
+        // The window of the model the session opened on, asked for while the first frame was drawn
+        // (BACKEND-64).
+        needs_draw |= adopt_the_awaited_budget(&mut session, config, None);
         // A target that was marked and is not now, as when a key or the terminal's being left ended
         // it with no other answer that draws (MOUSE-51).
         needs_draw |= session.take_the_hover_ended();
@@ -2972,6 +2977,8 @@ fn event_loop(
             Action::Recap => held.recap(terminal, config)?,
             Action::CommitMessage(asked) => held.commit_message(terminal, config, &asked)?,
             Action::Manifest(task, pasted, attached) => {
+                // Sized against the window of the model that answers it, as a turn is.
+                adopt_the_awaited_budget(held.session, config, Some(BUDGET_WAIT));
                 held.manifest(terminal, config, &task, &pasted, &attached)?
             }
             Action::Clear => {
@@ -4504,8 +4511,9 @@ mod tests {
 
     /// The rows `/model` offers for the Google Vertex service.
     fn google_vertex_rows(config: &Config) -> Vec<String> {
-        list_models(config, None)
+        list_models_for_picker(config, None)
             .expect("a roster")
+            .models
             .into_iter()
             .map(|model| model.key)
             .filter(|key| key.starts_with("google-vertex/"))
@@ -4650,8 +4658,9 @@ mod tests {
             config
         };
         let offered = |config: &Config| -> Vec<String> {
-            list_models(config, None)
+            list_models_for_picker(config, None)
                 .expect("a roster")
+                .models
                 .into_iter()
                 .map(|model| model.key)
                 .filter(|key| key.starts_with("local/"))
@@ -4664,6 +4673,378 @@ mod tests {
         );
         assert_eq!(offered(&with("")), ["local/llama3"]);
         assert_eq!(asked.try_iter().collect::<Vec<_>>(), ["/v1/models"]);
+    }
+
+    /// The AWS tier `a_config_with_a_named_roster` names, and a gateway for each of `bases`, keyed
+    /// `one`, `two` and `three` in the order given, that names no models.
+    fn a_config_with_gateways_naming_no_models(bases: &[&str]) -> Config {
+        let blocks: Vec<String> = bases
+            .iter()
+            .zip(["one", "two", "three"])
+            .map(|(base, id)| format!(r#""{id}": {{"options": {{"baseURL": "{base}/v1"}}}}"#))
+            .collect();
+        let mut config = a_config_with_a_named_roster();
+        config.providers = bravebot_config::Settings::parse(&format!(
+            r#"{{"provider": {{{}}}}}"#,
+            blocks.join(",")
+        ))
+        .providers()
+        .to_vec();
+        assert_eq!(
+            config.providers.len(),
+            bases.len(),
+            "a block configured no gateway"
+        );
+        config
+    }
+
+    fn keys_of(models: Vec<bravebot_aichat::models::Model>) -> Vec<String> {
+        models.into_iter().map(|model| model.key).collect()
+    }
+
+    /// BACKEND-64: a lookup for one model's row waits on the gateway that answers that model and on
+    /// no other. A lookup that asks every gateway makes a start take the sum of their latencies to
+    /// learn the window of a model only one of them serves.
+    ///
+    /// Each gateway is asked for a model of its own in turn, and a model of the AWS account and the
+    /// configured default, which is Brave's and unreachable in this build, ask neither. The faults it
+    /// rejects are a lookup that asks both, one that asks the first whatever is in force, and one
+    /// that asks a gateway for a model an account serves.
+    #[test]
+    fn a_lookup_for_one_models_row_asks_only_the_gateway_that_serves_it() {
+        let (one, asked_one) = a_listing_server(r#"{"data": [{"id": "llama3"}]}"#);
+        let (two, asked_two) = a_listing_server(r#"{"data": [{"id": "llama3"}]}"#);
+        let config = a_config_with_gateways_naming_no_models(&[&one, &two]);
+        let rows = |chosen: Option<&str>| keys_of(list_models(&config, chosen).expect("a roster"));
+        let requests = || {
+            (
+                asked_one.try_iter().collect::<Vec<_>>(),
+                asked_two.try_iter().collect::<Vec<_>>(),
+            )
+        };
+        let (listing, nothing) = (vec!["/v1/models".to_string()], Vec::<String>::new());
+
+        assert_eq!(rows(Some("one/llama3")), ["opus-arn", "one/llama3"]);
+        assert_eq!(requests(), (listing.clone(), nothing.clone()));
+        assert_eq!(rows(Some("two/llama3")), ["opus-arn", "two/llama3"]);
+        assert_eq!(requests(), (nothing.clone(), listing));
+        assert_eq!(rows(Some("opus-arn")), ["opus-arn"]);
+        assert_eq!(rows(None), ["opus-arn"]);
+        assert_eq!(requests(), (nothing.clone(), nothing));
+    }
+
+    /// BACKEND-64: Brave's roster is asked for the sake of a model Brave answers, and for no other. A
+    /// start on a gateway's model, or on an AWS account's, no longer waits on Brave's endpoint as well.
+    #[test]
+    fn a_lookup_asks_brave_only_for_a_model_brave_answers() {
+        use bravebot_config::env_var;
+
+        let (brave, asked_brave) = a_listing_server(
+            r#"[{"key": "brave-model", "display_name": "Brave Model",
+                "capabilities": ["chat", "tools"], "options": {"access": "basic_and_premium"}}]"#,
+        );
+        let (one, asked_one) = a_listing_server(r#"{"data": [{"id": "llama3"}]}"#);
+        let mut config = Config::from_lookup(|name| match name {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            env_var::ENDPOINT => Some(brave.clone()),
+            env_var::KEY_ID => Some("a-key-id".into()),
+            env_var::SIGNING_KEY => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("a configuration that can sign for Brave");
+        config.providers = a_config_with_gateways_naming_no_models(&[&one]).providers;
+        assert!(config.serves_aichat());
+        let rows = |chosen: Option<&str>| keys_of(list_models(&config, chosen).expect("a roster"));
+        let requests = || (asked_brave.try_iter().count(), asked_one.try_iter().count());
+
+        assert_eq!(
+            rows(Some("brave-model")),
+            ["opus-arn", bravebot_config::DEFAULT_MODEL, "brave-model"]
+        );
+        assert_eq!(requests(), (1, 0), "a Brave model asked a gateway");
+        assert_eq!(rows(Some("one/llama3")), ["opus-arn", "one/llama3"]);
+        assert_eq!(requests(), (0, 1), "a gateway's model asked Brave");
+        assert_eq!(rows(Some("opus-arn")), ["opus-arn"]);
+        assert_eq!(requests(), (0, 0), "an AWS account's model asked someone");
+    }
+
+    /// A loopback gateway listing the one model `id`. It answers only once `expected` requests to
+    /// the gateways sharing `gate` are in flight at once, or after five seconds, so asking them one
+    /// after the next fails a test and does not hang it. `met` says whether they were. `lag` is how
+    /// long it then waits to answer.
+    fn a_gateway_that_waits_for_its_peers(
+        id: &'static str,
+        gate: &std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>,
+        expected: usize,
+        met: &std::sync::mpsc::Sender<bool>,
+        lag: std::time::Duration,
+    ) -> String {
+        use std::io::{BufRead, BufReader, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let address = format!("http://{}", listener.local_addr().expect("an address"));
+        let (gate, met) = (gate.clone(), met.clone());
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let (gate, met) = (gate.clone(), met.clone());
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream);
+                    let mut header = String::new();
+                    while matches!(reader.read_line(&mut header), Ok(read) if read > 2) {
+                        header.clear();
+                    }
+                    let (arrived, signal) = &*gate;
+                    let mut here = arrived.lock().expect("the count");
+                    *here += 1;
+                    signal.notify_all();
+                    let (count, waited) = signal
+                        .wait_timeout_while(here, std::time::Duration::from_secs(5), |here| {
+                            *here < expected
+                        })
+                        .expect("the count");
+                    drop(count);
+                    let _ = met.send(!waited.timed_out());
+                    std::thread::sleep(lag);
+                    let body = format!(r#"{{"data": [{{"id": "{id}"}}]}}"#);
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = reader.into_inner().write_all(response.as_bytes());
+                });
+            }
+        });
+        address
+    }
+
+    /// BACKEND-64: the picker asks every gateway at once, and offers their rows in the order the
+    /// configuration lists them whichever answered first.
+    ///
+    /// Neither stand-in answers until the other has been asked, so a picker that asks them one after
+    /// the next fails by the first finding itself alone. The first lags, so the second answers
+    /// first. A picker that waited on the sum of its gateways' latencies is what made `/model`
+    /// slow as gateways were added.
+    #[test]
+    fn the_picker_asks_every_gateway_at_once_and_lists_them_in_the_configurations_order() {
+        let gate = std::sync::Arc::new((std::sync::Mutex::new(0), std::sync::Condvar::new()));
+        let (met, together) = std::sync::mpsc::channel();
+        let one = a_gateway_that_waits_for_its_peers(
+            "one-model",
+            &gate,
+            2,
+            &met,
+            std::time::Duration::from_millis(100),
+        );
+        let two = a_gateway_that_waits_for_its_peers(
+            "two-model",
+            &gate,
+            2,
+            &met,
+            std::time::Duration::ZERO,
+        );
+        let config = a_config_with_gateways_naming_no_models(&[&one, &two]);
+
+        let picker = list_models_for_picker(&config, None).expect("a roster");
+
+        assert_eq!(
+            together.try_iter().collect::<Vec<_>>(),
+            [true, true],
+            "the gateways were asked one after the next"
+        );
+        assert_eq!(
+            keys_of(picker.models),
+            ["opus-arn", "one/one-model", "two/two-model"]
+        );
+        assert!(picker.problems.is_empty(), "{:?}", picker.problems);
+    }
+
+    /// BACKEND-64: asking for the window of the model a session opened on adopts nothing by
+    /// itself, and the window is adopted when the answer is taken. A start that adopted while it
+    /// asked would be waiting for the service again.
+    #[test]
+    fn asking_for_the_window_at_start_adopts_it_only_when_the_answer_is_taken() {
+        let (base, _asked) =
+            a_listing_server(r#"{"data": [{"id": "llama3", "context_length": 65536}]}"#);
+        let mut config = a_config_with_gateways_naming_no_models(&[&base]);
+        let mut session = Session::new("none");
+        session.choose_model("one/llama3".to_string(), &config);
+
+        ask_for_the_budget_of_the_model_in_force(&mut session, &config);
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET,
+            "asking adopted the window"
+        );
+
+        assert!(adopt_the_awaited_budget(&mut session, &mut config, None));
+        assert_eq!(config.context_budget, 65_536);
+    }
+
+    /// BACKEND-64: the loop's pass takes the window if it has arrived and does not wait for it, and
+    /// takes it once.
+    #[test]
+    fn a_pass_of_the_loop_takes_an_arrived_window_once_and_does_not_wait_for_one_that_has_not() {
+        let mut config = a_config_with_a_named_roster();
+        let mut session = Session::new("none");
+        session.choose_model("opus-arn".to_string(), &config);
+        let (answer, arrival) = std::sync::mpsc::channel();
+        session.await_listing("opus-arn".to_string(), arrival);
+
+        let began = std::time::Instant::now();
+        assert!(!adopt_the_awaited_budget(&mut session, &mut config, None));
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(1),
+            "the pass waited for an answer that had not come"
+        );
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET
+        );
+
+        answer
+            .send(Ok(vec![listed("opus-arn", Some(65_536))]))
+            .expect("the lookup is awaited");
+        assert!(adopt_the_awaited_budget(&mut session, &mut config, None));
+        assert_eq!(config.context_budget, 65_536);
+        assert!(
+            !adopt_the_awaited_budget(&mut session, &mut config, None),
+            "an answer was taken twice"
+        );
+    }
+
+    /// BACKEND-64: the window of a model that is no longer the one in force is not adopted, and a
+    /// turn does not wait for it. The pick that replaced the model brought a window of its own, and
+    /// the answer about the one before it would overwrite that.
+    ///
+    /// The lookup is still unanswered when the turn is sent, so a turn that waited for it before
+    /// asking which model it is about would hold for the whole bound, and the answer that came after
+    /// would be dropped on the pass of the loop.
+    #[test]
+    fn a_lookup_about_a_model_that_is_no_longer_in_force_is_dropped_and_not_waited_for() {
+        let mut config = a_config_with_a_named_roster();
+        let mut session = Session::new("none");
+        session.choose_model("opus-arn".to_string(), &config);
+        let (answer, arrival) = std::sync::mpsc::channel();
+        session.await_listing("opus-arn".to_string(), arrival);
+        session.choose_model("another-model".to_string(), &config);
+
+        let began = std::time::Instant::now();
+        assert!(!adopt_the_awaited_budget(
+            &mut session,
+            &mut config,
+            Some(BUDGET_WAIT)
+        ));
+        assert!(
+            began.elapsed() < BUDGET_WAIT / 2,
+            "the turn waited for a lookup about a model no longer in force"
+        );
+
+        // The answer that arrives afterwards finds nothing awaiting it.
+        assert!(
+            answer
+                .send(Ok(vec![listed("opus-arn", Some(65_536))]))
+                .is_err()
+        );
+        assert!(!adopt_the_awaited_budget(&mut session, &mut config, None));
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET
+        );
+    }
+
+    /// BACKEND-64: a turn waits for a lookup once. One it has waited out stays for the loop to take,
+    /// and the next turn does not hold for the whole bound again.
+    #[test]
+    fn a_turn_waits_for_a_lookup_once_and_the_loop_still_takes_its_late_answer() {
+        let mut config = a_config_with_a_named_roster();
+        let mut session = Session::new("none");
+        session.choose_model("opus-arn".to_string(), &config);
+        let (answer, arrival) = std::sync::mpsc::channel();
+        session.await_listing("opus-arn".to_string(), arrival);
+
+        let first = std::time::Instant::now();
+        assert!(!adopt_the_awaited_budget(
+            &mut session,
+            &mut config,
+            Some(std::time::Duration::from_millis(300))
+        ));
+        assert!(
+            first.elapsed() >= std::time::Duration::from_millis(250),
+            "the first turn did not wait"
+        );
+
+        let second = std::time::Instant::now();
+        assert!(!adopt_the_awaited_budget(
+            &mut session,
+            &mut config,
+            Some(BUDGET_WAIT)
+        ));
+        assert!(
+            second.elapsed() < std::time::Duration::from_millis(250),
+            "the next turn waited for a lookup already waited out"
+        );
+
+        answer
+            .send(Ok(vec![listed("opus-arn", Some(65_536))]))
+            .expect("still awaited");
+        assert!(adopt_the_awaited_budget(&mut session, &mut config, None));
+        assert_eq!(config.context_budget, 65_536);
+    }
+
+    /// BACKEND-64: a turn waits for the window it is sized against, for a bounded time. An answer
+    /// that comes while it waits is adopted; a wait that runs out leaves the lookup awaited for the
+    /// loop to take; and a lookup whose thread ended without answering does not hold the turn for
+    /// the whole wait.
+    #[test]
+    fn a_turn_waits_for_the_window_it_is_sized_against_for_a_bounded_time() {
+        let rows = || Ok(vec![listed("opus-arn", Some(65_536))]);
+        let awaiting = || {
+            let mut session = Session::new("none");
+            let config = a_config_with_a_named_roster();
+            session.choose_model("opus-arn".to_string(), &config);
+            let (answer, arrival) = std::sync::mpsc::channel();
+            session.await_listing("opus-arn".to_string(), arrival);
+            (session, config, answer)
+        };
+
+        // Answered while the turn waits.
+        let (mut session, mut config, answer) = awaiting();
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            answer.send(rows()).expect("the lookup is awaited");
+        });
+        assert!(adopt_the_awaited_budget(
+            &mut session,
+            &mut config,
+            Some(BUDGET_WAIT)
+        ));
+        assert_eq!(config.context_budget, 65_536);
+        sender.join().expect("the sender");
+
+        // A wait that runs out leaves the lookup for the loop.
+        let (mut session, mut config, answer) = awaiting();
+        assert!(!adopt_the_awaited_budget(
+            &mut session,
+            &mut config,
+            Some(std::time::Duration::from_millis(50))
+        ));
+        answer.send(rows()).expect("still awaited");
+        assert!(adopt_the_awaited_budget(&mut session, &mut config, None));
+        assert_eq!(config.context_budget, 65_536);
+
+        // A lookup that ended without an answer is dropped without waiting out the bound.
+        let (mut session, mut config, answer) = awaiting();
+        drop(answer);
+        let began = std::time::Instant::now();
+        assert!(!adopt_the_awaited_budget(
+            &mut session,
+            &mut config,
+            Some(BUDGET_WAIT)
+        ));
+        assert!(began.elapsed() < BUDGET_WAIT / 2, "waited out the bound");
+        assert!(session.take_awaited_listing(None).is_none());
     }
 
     /// BACKEND-19: a gateway that names no models and whose listing could not be read is said in the
