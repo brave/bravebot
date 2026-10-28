@@ -4072,9 +4072,11 @@ read, and is said as [BACKEND-19](#BACKEND-19) says.
 thread of its own when the session is begun, and adopted, with the note that says the budget moved,
 on the pass of the loop it arrives. A turn or a manifest run sent before it has arrived waits for it,
 for as long as a request for a roster may take, so that no turn is sized against the default budget
-for want of a lookup that was on its way. An answer about a model that is no longer the one in force
-is dropped, because the pick that replaced it brought a window of its own
-([BACKEND-7](#BACKEND-7)). A one-shot run has no frame and takes its one lookup before it begins.
+for want of a lookup that was on its way. A turn waits for a lookup once: one it has waited out stays
+for the loop to take when it arrives, and the next turn does not wait for it again. A lookup about a
+model that is no longer the one in force is dropped before anything waits for it, because the pick
+that replaced that model brought a window of its own ([BACKEND-7](#BACKEND-7)). A one-shot run has no
+frame and takes its one lookup before it begins.
 
 **Built:** `bravebot_config::Config::{serves, roster_scope_for_a_turn}` and `RosterScope`;
 `bravebot_aichat::models::{concurrently, listing_egress}`; the roster of the terminal
@@ -4108,7 +4110,8 @@ others.
 `verified-by: bravebot_aichat::models::a_request_for_a_roster_is_given_up_on_in_seconds_and_not_minutes`
 `verified-by: bravebot_tui::app::asking_for_the_window_at_start_adopts_it_only_when_the_answer_is_taken`
 `verified-by: bravebot_tui::app::a_pass_of_the_loop_takes_an_arrived_window_once_and_does_not_wait_for_one_that_has_not`
-`verified-by: bravebot_tui::app::an_answer_about_a_model_that_is_no_longer_in_force_is_not_adopted`
+`verified-by: bravebot_tui::app::a_lookup_about_a_model_that_is_no_longer_in_force_is_dropped_and_not_waited_for`
+`verified-by: bravebot_tui::app::a_turn_waits_for_a_lookup_once_and_the_loop_still_takes_its_late_answer`
 `verified-by: bravebot_tui::app::a_turn_waits_for_the_window_it_is_sized_against_for_a_bounded_time`
 
 ## Known costs

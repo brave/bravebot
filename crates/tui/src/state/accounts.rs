@@ -35,6 +35,8 @@ pub type ListingAnswer = Result<Vec<bravebot_aichat::models::Model>, String>;
 pub struct AwaitedListing {
     model: String,
     arrival: mpsc::Receiver<ListingAnswer>,
+    /// Whether a turn has already waited for it for the whole of its bound.
+    waited_out: bool,
 }
 
 /// The sections `/context` divides a request into, as indexes into the byte counts.
@@ -274,20 +276,40 @@ impl Session {
     ///
     /// A lookup already awaited is dropped: it was about a model this one replaces.
     pub fn await_listing(&mut self, model: String, arrival: mpsc::Receiver<ListingAnswer>) {
-        self.awaited_listing = Some(AwaitedListing { model, arrival });
+        self.awaited_listing = Some(AwaitedListing {
+            model,
+            arrival,
+            waited_out: false,
+        });
     }
 
-    /// Take the answer to the awaited lookup and the model it was about, if it has come.
+    /// Whether a lookup is awaited that is about `model`. One about any other model is dropped
+    /// here, before anything waits on it: the pick that replaced that model brought a window of
+    /// its own, so its answer can no longer be adopted.
+    pub fn awaiting_listing_of(&mut self, model: &str) -> bool {
+        if self
+            .awaited_listing
+            .as_ref()
+            .is_some_and(|awaited| awaited.model != model)
+        {
+            self.awaited_listing = None;
+        }
+        self.awaited_listing.is_some()
+    }
+
+    /// Take the answer to the awaited lookup, if it has come.
     ///
     /// `wait` is how long to wait for it: `None` takes it only if it is there now, as the loop does
     /// on each pass, and a duration is for the start of a turn, which must not be sized against a
-    /// window nobody has looked up. A lookup that was not answered in time stays awaited, and one
+    /// window nobody has looked up. A turn waits for a lookup once. One that was not answered in
+    /// that time stays awaited for the loop to take, and no later turn waits for it again. A lookup
     /// whose thread ended without answering is dropped.
     pub fn take_awaited_listing(
         &mut self,
         wait: Option<std::time::Duration>,
-    ) -> Option<(String, ListingAnswer)> {
+    ) -> Option<ListingAnswer> {
         let awaited = self.awaited_listing.as_ref()?;
+        let wait = wait.filter(|_| !awaited.waited_out);
         let arrived = match wait {
             None => awaited.arrival.try_recv().map_err(|error| match error {
                 mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
@@ -296,11 +318,16 @@ impl Session {
             Some(wait) => awaited.arrival.recv_timeout(wait),
         };
         match arrived {
-            Ok(answer) => self
-                .awaited_listing
-                .take()
-                .map(|awaited| (awaited.model, answer)),
-            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Ok(answer) => {
+                self.awaited_listing = None;
+                Some(answer)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(awaited) = self.awaited_listing.as_mut() {
+                    awaited.waited_out |= wait.is_some();
+                }
+                None
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 self.awaited_listing = None;
                 None

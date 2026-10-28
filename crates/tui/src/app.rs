@@ -4914,11 +4914,15 @@ mod tests {
         );
     }
 
-    /// BACKEND-64: the window of a model that is no longer the one in force is not adopted. The pick
-    /// that replaced it brought a window of its own, and the answer about the one before it would
-    /// overwrite that.
+    /// BACKEND-64: the window of a model that is no longer the one in force is not adopted, and a
+    /// turn does not wait for it. The pick that replaced the model brought a window of its own, and
+    /// the answer about the one before it would overwrite that.
+    ///
+    /// The lookup is still unanswered when the turn is sent, so a turn that waited for it before
+    /// asking which model it is about would hold for the whole bound, and the answer that came after
+    /// would be dropped on the pass of the loop.
     #[test]
-    fn an_answer_about_a_model_that_is_no_longer_in_force_is_not_adopted() {
+    fn a_lookup_about_a_model_that_is_no_longer_in_force_is_dropped_and_not_waited_for() {
         let mut config = a_config_with_a_named_roster();
         let mut session = Session::new("none");
         session.choose_model("opus-arn".to_string(), &config);
@@ -4926,15 +4930,67 @@ mod tests {
         session.await_listing("opus-arn".to_string(), arrival);
         session.choose_model("another-model".to_string(), &config);
 
-        answer
-            .send(Ok(vec![listed("opus-arn", Some(65_536))]))
-            .expect("the lookup is awaited");
+        let began = std::time::Instant::now();
+        assert!(!adopt_the_awaited_budget(
+            &mut session,
+            &mut config,
+            Some(BUDGET_WAIT)
+        ));
+        assert!(
+            began.elapsed() < BUDGET_WAIT / 2,
+            "the turn waited for a lookup about a model no longer in force"
+        );
 
+        // The answer that arrives afterwards finds nothing awaiting it.
+        assert!(
+            answer
+                .send(Ok(vec![listed("opus-arn", Some(65_536))]))
+                .is_err()
+        );
         assert!(!adopt_the_awaited_budget(&mut session, &mut config, None));
         assert_eq!(
             config.context_budget,
             bravebot_config::DEFAULT_CONTEXT_BUDGET
         );
+    }
+
+    /// BACKEND-64: a turn waits for a lookup once. One it has waited out stays for the loop to take,
+    /// and the next turn does not hold for the whole bound again.
+    #[test]
+    fn a_turn_waits_for_a_lookup_once_and_the_loop_still_takes_its_late_answer() {
+        let mut config = a_config_with_a_named_roster();
+        let mut session = Session::new("none");
+        session.choose_model("opus-arn".to_string(), &config);
+        let (answer, arrival) = std::sync::mpsc::channel();
+        session.await_listing("opus-arn".to_string(), arrival);
+
+        let first = std::time::Instant::now();
+        assert!(!adopt_the_awaited_budget(
+            &mut session,
+            &mut config,
+            Some(std::time::Duration::from_millis(300))
+        ));
+        assert!(
+            first.elapsed() >= std::time::Duration::from_millis(250),
+            "the first turn did not wait"
+        );
+
+        let second = std::time::Instant::now();
+        assert!(!adopt_the_awaited_budget(
+            &mut session,
+            &mut config,
+            Some(BUDGET_WAIT)
+        ));
+        assert!(
+            second.elapsed() < std::time::Duration::from_millis(250),
+            "the next turn waited for a lookup already waited out"
+        );
+
+        answer
+            .send(Ok(vec![listed("opus-arn", Some(65_536))]))
+            .expect("still awaited");
+        assert!(adopt_the_awaited_budget(&mut session, &mut config, None));
+        assert_eq!(config.context_budget, 65_536);
     }
 
     /// BACKEND-64: a turn waits for the window it is sized against, for a bounded time. An answer

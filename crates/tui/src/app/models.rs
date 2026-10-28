@@ -695,21 +695,20 @@ pub(super) fn ask_for_the_budget_of_the_model_in_force(session: &mut Session, co
 /// there. A turn passes the bound a listing request has, since a turn sized against a window nobody
 /// has looked up compacts at the wrong place, which is worse than the pause.
 ///
-/// An answer about a model that is no longer the one in force is dropped. The pick that replaced it
-/// brought a window of its own ([`model_picked`]), and the window of the model before it is not the
-/// one in force.
+/// A lookup about a model that is no longer the one in force is dropped before anything waits for
+/// it. The pick that replaced that model brought a window of its own ([`model_picked`]), and the
+/// window of the model before it is not the one in force. A turn waits for a lookup once: one it
+/// has waited out stays for the loop to take and is not waited for again.
 pub(super) fn adopt_the_awaited_budget(
     session: &mut Session,
     config: &mut Config,
     wait: Option<std::time::Duration>,
 ) -> bool {
-    let Some((asked_about, answer)) = session.take_awaited_listing(wait) else {
-        return false;
-    };
-    if model_in_force(session.model(), config) != asked_about {
+    let in_force = model_in_force(session.model(), config).to_string();
+    if !session.awaiting_listing_of(&in_force) {
         return false;
     }
-    let Ok(models) = answer else {
+    let Some(Ok(models)) = session.take_awaited_listing(wait) else {
         return false;
     };
     adopt_listing(session, config, &models);
