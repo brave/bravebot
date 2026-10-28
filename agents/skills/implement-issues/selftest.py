@@ -136,8 +136,11 @@ class ImplementIssues(unittest.TestCase):
             FAKE_SESSION=str(self.session_path),
         )
 
-    def start(self, argument, tty=True, client=None):
-        command = [sys.executable, str(SCRIPT), *(["--bravebot", client] if client else []), "--", argument]
+    def start(self, argument, tty=True, client=None, notes=None):
+        command = [
+            sys.executable, str(SCRIPT), *(["--bravebot", client] if client else []),
+            *(["--notes", notes] if notes is not None else []), "--", argument,
+        ]
         return self.spawn(command, self.root, tty)
 
     def spawn(self, command, cwd, tty=True):
@@ -178,9 +181,12 @@ class ImplementIssues(unittest.TestCase):
         out = bytes(running.seen) + (piped or "").encode()
         return SimpleNamespace(code=running.process.returncode, out=out.decode(errors="replace"), err=err)
 
-    def run_script(self, argument, tty=True, client=None, **env):
+    def run_script(self, argument, tty=True, client=None, notes=None, **env):
         self.env.update(env)
-        return self.finish(self.start(argument, tty, client))
+        return self.finish(self.start(argument, tty, client, notes))
+
+    def searched(self):
+        return [call for call in self.calls() if "search/issues" in call]
 
     def state(self):
         return json.loads(self.world_path.read_text())["issues"]
@@ -231,6 +237,41 @@ class ImplementIssues(unittest.TestCase):
         argument = "  10,\n#12  \"quoted\" it's $HOME  "
         self.run_script(argument)
         self.assertEqual(self.session()["argv"], ["-i", f"/implement-issues {argument}"])
+
+    def test_notes_reach_the_skill_after_the_argument_and_name_no_issue(self):
+        """The commas and words of the notes would be searched if they were read as pieces of the list."""
+        notes = "do 4, group related ones\nand \"quote\" it's $HOME"
+        result = self.run_script("10", notes=notes)
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(self.session()["argv"], ["-i", f"/implement-issues 10\nNotes: {notes}"])
+        self.assertEqual(self.searched(), [])
+        self.assertEqual(self.state()["12"], issue())
+        self.assertEqual(self.session()["world"]["issues"]["10"], issue(assignees=["netzenbot"], labels=[LABEL]))
+
+    def test_notes_written_in_the_argument_are_not_read_as_issues_either(self):
+        argument = "10\nNotes: group them, 12 can wait"
+        result = self.run_script(argument)
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(self.session()["argv"], ["-i", f"/implement-issues {argument}"])
+        self.assertEqual(self.searched(), [])
+        self.assertEqual(self.state()["12"], issue())
+
+    def test_a_notes_word_in_the_middle_of_a_line_is_still_part_of_the_list(self):
+        self.world["search"] = {"repo:brave/bravebot Notes: x is:open": [12]}
+        result = self.run_script("10, Notes: x")
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(self.state()["12"]["assignees"], ["netzenbot"])
+
+    def test_notes_with_no_list_open_no_session(self):
+        for result in (self.run_script("  ", notes="do 4"), self.run_script("Notes: do 4")):
+            self.assertNotEqual(result.code, 0)
+            self.assertIn("name the issues to implement", result.err)
+        self.assertEqual(self.writes(), [])
+        self.assertIsNone(self.session())
+
+    def test_empty_notes_add_nothing_to_the_argument(self):
+        self.run_script("10", notes=" \n ")
+        self.assertEqual(self.session()["argv"], ["-i", "/implement-issues 10"])
 
     def test_the_label_is_removed_when_the_session_fails(self):
         result = self.run_script("10", FAKE_EXIT="3")
@@ -423,6 +464,24 @@ class ImplementIssues(unittest.TestCase):
         self.assertEqual(self.session()["client"], "other-client")
         self.assertEqual(self.session()["argv"], ["-i", "/implement-issues 10, it's \"a\" $HOME"])
         self.assertEqual(self.state()["10"]["assignees"], ["netzenbot"])
+
+    def test_the_make_target_passes_the_notes_through(self):
+        """The recipe takes NOTES from the environment, so a quote or a `$` in it is not the shell's, and
+        `--notes=` keeps a note that starts with a dash from being read as a flag."""
+        tree = self.root / "tree"
+        (tree / "agents/skills/implement-issues").mkdir(parents=True)
+        for name in ("Makefile", "agents/pr_worktree.py", "agents/issue_helper.py", "agents/skills/implement-issues/implement-issues.py"):
+            shutil.copy(HERE.parents[2] / name, tree / name)
+        for given, passed in (
+            ("group them, it's \"a\" $$HOME", "/implement-issues 10\nNotes: group them, it's \"a\" $HOME"),
+            ("-quickly", "/implement-issues 10\nNotes: -quickly"),
+            (None, "/implement-issues 10"),
+        ):
+            notes = [f"NOTES={given}"] if given is not None else []
+            running = self.spawn(["make", "--no-print-directory", "implement-issues", "ISSUES=10", *notes], tree)
+            result = self.finish(running)
+            self.assertEqual(result.code, 0, result.err)
+            self.assertEqual(self.session()["argv"], ["-i", passed])
 
     def test_a_word_that_is_no_ledger_is_a_query(self):
         self.world["search"] = {"repo:brave/bravebot fix-i18n-gaps is:open": [10]}

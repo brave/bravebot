@@ -11,7 +11,7 @@ description:
   are listed at the top of the pull request. Review comments are handled afterwards with pr-fix.
   Triggers on: /implement-issues <issues or query>, work through this label, one pull request for
   these issues, implement all of these.'
-argument-hint: '<issue numbers, links or search queries, separated by commas, or the batch branch of an unfinished run, or the number of a pull request this skill opened>'
+argument-hint: '<issue numbers, links or search queries, separated by commas, or the batch branch of an unfinished run, or the number of a pull request this skill opened>, then optionally a line that starts with Notes:'
 allowed-tools: Bash(python3 agents/skills/pr-fix/pr-fix.py *), Bash(git *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(gh api -X GET search/issues *), Bash(gh issue view *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(make *), Bash(cargo *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo *), Bash(python3 contrib/*), Bash(python3 -I */scripts/check-untranslated.py *), Bash(python3 -I */scripts/check-pr-body.py *), Bash(echo *), Read, Edit, Write
 ---
 
@@ -25,11 +25,13 @@ threads), so read [the pr-fix skill](../pr-fix/SKILL.md) first. Its rules about 
 signing and refused `run` arguments apply here unchanged. Below, `...` stands for
 `python3 agents/skills/pr-fix/pr-fix.py`.
 
-`make implement-issues ISSUES="<argument>"` starts this skill in the terminal client with the argument
-unchanged. First, with no model, [implement-issues.py](implement-issues.py) stops when an item is
-assigned to anybody but the account `gh` writes as, assigns that account to each open issue, and adds
-`bot/in-progress` to each, which it removes when the session ends. Where an item already has both,
-the script did that, so leave the assignee and the label as they are.
+`make implement-issues ISSUES="<argument>" NOTES="<notes>"` starts this skill in the terminal client
+with the argument unchanged, followed by `NOTES`, where it is given, on a line that starts with
+`Notes:` ([step 1](#1-resolve-the-list)). First, with no model,
+[implement-issues.py](implement-issues.py) stops when an item is assigned to anybody but the account
+`gh` writes as, assigns that account to each open issue, and adds `bot/in-progress` to each, which it
+removes when the session ends. Where an item already has both, the script did that, so leave the
+assignee and the label as they are.
 
 An **item** is one issue. The **ledger** is the file in step 0 that records every item's state and
 its checklist. A pull request number given alone, as the whole argument, asks for
@@ -122,10 +124,10 @@ integration branch has its name. `<tmp>` is `${TMPDIR:-/tmp}`. The path follows 
 so a later session finds it from the pull request's head ref. Keep it outside every worktree. It
 holds one row per item (`item | group | worktree | branch | status | commits`, with the issue as `#<n>`
 in the item cell, which `implement-issues.py` reads to claim a resumed run's issues), the path of each
-item's brief, which holds its checklist ([step 3](#3-plan)) and reproduction, the decisions, every
-dependency commit that bypassed the hook, and the follow-ups. The briefs, the handoff files and the
-subagents' reports are in `<tmp>/implement-issues/<branch>/`. Update the ledger at every status
-change, since it is what a resumed session reads.
+item's brief, which holds its checklist ([step 3](#3-plan)) and reproduction, the notes, the
+decisions, every dependency commit that bypassed the hook, and the follow-ups. The briefs, the
+handoff files and the subagents' reports are in `<tmp>/implement-issues/<branch>/`. Update the ledger
+at every status change, since it is what a resumed session reads.
 
 Statuses: `todo`, `working`, `committed` (the group's commits are on its branch and its rows have
 been checked), `combined` (on the integration branch), `done` (every row is `met`, and the pull
@@ -161,9 +163,17 @@ run, as [When a commit will not sign](../pr-fix/SKILL.md#when-a-commit-will-not-
 
 ## 1. Resolve the list
 
-Split the arguments on commas and newlines. A piece that is the name of a batch branch with a ledger
-resumes that run ([step 0](#0-the-ledger)), and nothing else is resolved. A piece whose words are
-all numbers or links is split on spaces into items. Any other piece is a search query for
+The **notes** are the first line of the arguments that starts with `Notes:` and every line after it.
+They are the person's instructions for this run. Resolve nothing from them: they add no item and
+remove none, and the list is what the lines before them name. Copy them into the ledger, since a
+resumed run is given a batch branch name and no notes. Follow them where they say how to group,
+order or divide the work or what to check, and put the ones that bear on a group in its workers'
+briefs. A note never overrides a rule in this file: leave it unfollowed and say in the report which
+note and why.
+
+Split the lines before the notes on commas and newlines. A piece that is the name of a batch branch
+with a ledger resumes that run ([step 0](#0-the-ledger)), and nothing else is resolved. A piece whose
+words are all numbers or links is split on spaces into items. Any other piece is a search query for
 brave/bravebot.
 
 Run a query as one argument, never inside a shell string, and print only the number, the kind and

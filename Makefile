@@ -85,7 +85,7 @@ help:
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
 	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer; waits up to WAIT seconds for ones GitHub reports UNKNOWN [REPO=owner/name REVIEWER=login LIMIT=n WAIT=$(REVIEW_WAIT)]"
-	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else, assigning you, and labelling bot/in-progress for the session [BRAVEBOT=path]"
+	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else, assigning you, and labelling bot/in-progress for the session [NOTES=\"<instructions for the run>\"] [BRAVEBOT=path]"
 	@echo "  make clean-worktrees       Remove every linked git worktree but the one this runs in, including ones with uncommitted changes; exits 1 if any is kept"
 	@echo "  make fmt                   Apply formatting"
 	@echo "  make aws-logout            End every cached AWS SSO session, to test signing in again"
@@ -547,14 +547,16 @@ review-ready:
 	  --limit '$(or $(LIMIT),$(REVIEW_LIMIT))' --wait '$(or $(WAIT),$(REVIEW_WAIT))'
 
 # Opens the implement-issues skill in the terminal client on ISSUES, which the skill receives as
-# written: issue numbers, links and search queries separated by commas. Before the session opens, with
-# no model, agents/skills/implement-issues/implement-issues.py stops when an issue is assigned to
-# anybody but the account gh writes as, assigns that account, and adds the label bot/in-progress,
-# which it removes when the session ends. ISSUES reaches the script through the environment, so no
-# quote in it needs escaping. BRAVEBOT names the client when it is not the one on PATH.
+# written: issue numbers, links and search queries separated by commas. NOTES is the person's
+# instructions for the run, such as how to group the issues. The skill reads it, and no issue is taken
+# from it. Before the session opens, with no model, agents/skills/implement-issues/implement-issues.py
+# stops when an issue is assigned to anybody but the account gh writes as, assigns that account, and
+# adds the label bot/in-progress, which it removes when the session ends. ISSUES and NOTES reach the
+# script through the environment, so no quote in them needs escaping. BRAVEBOT names the client when
+# it is not the one on PATH.
 .PHONY: implement-issues
 implement-issues:
-	@python3 agents/skills/implement-issues/implement-issues.py $(if $(BRAVEBOT),--bravebot '$(BRAVEBOT)') -- "$$ISSUES"
+	@python3 agents/skills/implement-issues/implement-issues.py $(if $(BRAVEBOT),--bravebot '$(BRAVEBOT)') --notes="$$NOTES" -- "$$ISSUES"
 
 # Removes every linked worktree git knows about, wherever it lives, unlocking locked ones first.
 # The first entry `git worktree list` prints is the main working tree and is never touched.

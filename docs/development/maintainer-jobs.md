@@ -24,6 +24,12 @@ opens it refuses the whole run when an issue is assigned to anybody but the acco
 assigns that account to each issue, and adds `bot/in-progress`, which it removes when the session
 ends. Fixing is a separate step from finding, and a run never does both.
 
+`ISSUES` is split on commas and newlines, and every piece that is not an issue number or a link is
+run as a search, so a sentence in it becomes a search for its words. Put instructions for the run in
+`NOTES`, for example `NOTES="group related issues, but do not require it"`. The skill reads them and
+no issue is taken from them. They add no issue and remove none, so the script claims every issue
+`ISSUES` names whatever the notes say. To work some of a search's results, pass their numbers.
+
 ## The jobs
 
 The schedules are how often to run each job. Only the peer-advisories schedule is checked by a tool
