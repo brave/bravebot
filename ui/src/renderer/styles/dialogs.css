@@ -58,8 +58,8 @@
 .import-session-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-body); color: var(--ink-primary); }
 .import-session-time { flex: none; font: var(--type-meta); color: var(--ink-tertiary); font-variant-numeric: tabular-nums; }
 
-/* The primary action at the right-hand end; a secondary one that should stand apart from it
-   carries `modal-leading` and goes to the other end. */
+/* The primary action at the right-hand end, Cancel or a refusal just left of it. An action that
+   is not an answer to the dialog carries `modal-leading` and goes to the other end. */
 .modal-actions {
   display: flex;
   flex-direction: row;

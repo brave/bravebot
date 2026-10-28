@@ -73,14 +73,17 @@ try {
     return before
   }
   // Cancel sits just left of the primary action, Nala's spacing-m apart, both at the right-hand end.
+  const button = (dialog, which) => typeof which === 'string' ? dialog.getByRole('button', { name: which, exact: true }) : which
+  const frameOf = dialog => dialog.evaluate(host => host.shadowRoot.querySelector('dialog').getBoundingClientRect().toJSON())
   const besidePrimary = async (dialog, cancel, primary) => {
-    const box = name => dialog.getByRole('button', { name, exact: true }).boundingBox()
-    const [left, right] = [await box(cancel), await box(primary)]
-    const frame = await dialog.evaluate(host => host.shadowRoot.querySelector('dialog').getBoundingClientRect().toJSON())
+    const [left, right] = [await button(dialog, cancel).boundingBox(), await button(dialog, primary).boundingBox()]
+    const frame = await frameOf(dialog)
     const gap = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--leo-spacing-m')))
-    assert.ok(Math.abs(left.y + left.height / 2 - (right.y + right.height / 2)) < 2, `${cancel} and ${primary} on one row`)
-    assert.ok(Math.abs(right.x - (left.x + left.width) - gap) < 1.5, `${cancel} is ${gap}px left of ${primary}`)
-    assert.ok(left.x > frame.x + frame.width / 2, `${cancel} is at the right-hand end, not the left`)
+    const named = typeof primary === 'string' ? primary : 'the primary action'
+    assert.ok(Math.abs(left.y + left.height / 2 - (right.y + right.height / 2)) < 2, `${cancel} and ${named} on one row`)
+    assert.ok(Math.abs(right.x - (left.x + left.width) - gap) < 1.5, `${cancel} is ${gap}px left of ${named}`)
+    const rightInset = frame.x + frame.width - (right.x + right.width)
+    assert.ok(left.x - frame.x > rightInset + gap, `${cancel} and ${named} are at the right-hand end, not the left`)
   }
   const turnEnded = async (before) => {
     await until(async () => (await ended()).length > before, 'turn end')
@@ -104,8 +107,12 @@ try {
 
   // 2. A note on a chat's record.
   await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  await page.locator(TRUST_APPROVE).click()
-  await page.getByRole('dialog', { name: 'Project trust', exact: true }).waitFor({ state: 'hidden' })
+  const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
+  await trust.waitFor()
+  await besidePrimary(trust, "Don't trust", trust.locator(TRUST_APPROVE))
+  await page.screenshot({ path: join(shots, 'trust-dialog.png') })
+  await trust.locator(TRUST_APPROVE).click()
+  await trust.waitFor({ state: 'hidden' })
   assert.equal((await menuItem('session.note')).label, 'Add Note…')
   await turnEnded(await turn('Say hello.', () => content('Hello.')))
   await page.getByText('Hello.', { exact: true }).waitFor()
@@ -128,6 +135,26 @@ try {
   assert.match(await listed.locator('.note-turn').innerText(), /Turn 1/)
   assert.equal(await page.locator('.bubble.user').filter({ hasText: 'Check' }).count(), 0, 'the note is not a message')
   console.log('PASS: Chat > Add Note keeps a note in the Notes panel, drawn as typed, and sends nothing')
+
+  // Cancel or a refusal beside the primary action in the shared dialogs too; Stop all stands apart.
+  await page.locator('[data-test="turn-undo"]').click()
+  const rewind = page.getByRole('dialog', { name: 'Undo turn', exact: true })
+  await rewind.waitFor()
+  await besidePrimary(rewind, 'Cancel', 'Undo')
+  await page.screenshot({ path: join(shots, 'rewind-dialog.png') })
+  await rewind.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await rewind.waitFor({ state: 'hidden' })
+  await page.getByRole('button', { name: 'More', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'File watches…', exact: true }).click()
+  const watches = page.getByRole('dialog', { name: 'File watches', exact: true })
+  await watches.waitFor()
+  const [stopAll, done, watchFrame] = [await button(watches, 'Stop all watches').boundingBox(), await button(watches, 'Done').boundingBox(), await frameOf(watches)]
+  assert.ok(stopAll.x < watchFrame.x + watchFrame.width / 2, 'Stop all watches is not an answer to the dialog, so it stands apart at the left')
+  assert.ok(done.x > watchFrame.x + watchFrame.width / 2, 'Done at the right-hand end')
+  await page.screenshot({ path: join(shots, 'watches-dialog.png') })
+  await watches.getByRole('button', { name: 'Done', exact: true }).click()
+  await watches.waitFor({ state: 'hidden' })
+  console.log("PASS: Don't trust and Undo's Cancel sit beside the primary action; Stop all watches stands apart")
 
   // 3. Keeping the computer awake: Cancel leaves it off, Enable turns it on, and it is held only during a turn.
   assert.equal((await menuItem('app.caffeinate')).checked, false, 'off at launch')

@@ -26,7 +26,7 @@ export function RewindConfirm({ plan, bot, running, busy, onCancel, onConfirm }:
     <Modal title={one ? 'Undo turn' : `Rewind ${plan.steps} turns`} size="md" className="rewind-confirm"
       subtitle={`Puts the files and the conversation back to before turn ${plan.turn}.`}
       onClose={busy ? undefined : onCancel} actions={<>
-        <Button kind="plain-faint" size="small" className="modal-leading" isDisabled={busy} onClick={onCancel} data-test="rewind-cancel">
+        <Button kind="plain-faint" size="small" isDisabled={busy} onClick={onCancel} data-test="rewind-cancel">
           Cancel
         </Button>
         <Button kind="filled" size="small" isDisabled={busy || running} onClick={onConfirm} data-test="rewind-confirm">
