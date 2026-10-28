@@ -29945,22 +29945,27 @@ fn sed_and_a_link_to_it(workspace: &Workspace) -> Option<(PathBuf, PathBuf)> {
     Some((sed, link))
 }
 
-/// RUN-2: a result names a program started through a link as the prompt does, by the link and the
-/// file it leads to. Naming the file alone reads as another program: `cargo` served by rustup would
-/// read `rustup test`. A stage started by its own file is named by that file, with no arrow drawn
-/// from a path to itself.
+/// RUN-2, TOOL-4, CMDLINE-4: a result names a program started through a link by the path the
+/// planner typed. The file the link leads to is a name whoever wrote the tree chose, so it is not
+/// spelled into a sentence the driver writes to the planner. A stage started by its own file is
+/// named by that file.
 ///
 /// Unix only, because making the link is: a symlink needs a privilege on Windows that a test cannot
 /// assume.
 #[cfg(unix)]
 #[test]
-fn a_result_names_a_program_started_through_a_link_by_the_link_and_its_file() {
+fn a_result_names_a_program_started_through_a_link_by_the_link_alone() {
     let scratch = Scratch::new("run-named-through-a-link");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
     let Some((sed, link)) = sed_and_a_link_to_it(&workspace) else {
         return;
     };
+    let landed = scratch.path.join("HOSTILE-landed-name");
+    std::fs::copy(&sed, &landed).unwrap();
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&landed, &link).unwrap();
+    let landed = std::fs::canonicalize(&landed).unwrap();
 
     let line = format!("./stream-edit -n p where.txt | '{}' -n p", sed.display());
     let (endpoint, received) = serve_sequence(vec![
@@ -29993,14 +29998,18 @@ fn a_result_names_a_program_started_through_a_link_by_the_link_and_its_file() {
     let second = received.recv().expect("the round after the run");
     let result = message_from(&second, "Result of run");
     let named = format!(
-        "what `{} -> {} -n p where.txt | {} -n p` printed",
+        "what `{} -n p where.txt | {} -n p` printed",
         link.display(),
-        sed.display(),
         sed.display()
     );
     assert!(
         result.contains(&named),
-        "the planner was not told the run by the link and the file it leads to: {result}"
+        "the planner was not told the run by the path it typed: {result}"
+    );
+    assert!(
+        !result.contains("HOSTILE-landed-name") && !result.contains(" -> "),
+        "the planner was told where the link landed ({}): {result}",
+        landed.display()
     );
 }
 
