@@ -242,20 +242,11 @@ impl ImportedSubscription {
 /// `None` for a host in neither camp, such as a local endpoint, so no credential is sent somewhere
 /// its issuer is unknown.
 fn is_production_endpoint(endpoint: &str) -> Option<bool> {
-    let authority = endpoint
-        .split_once("://")
-        .map_or(endpoint, |(_, rest)| rest)
-        .split('/')
-        .next()?;
-
-    // The authority carries a port where one was written, and a port is not part of the name: a
-    // host written with one is the same deployment as the same host written without, so a suffix
-    // test against the whole authority reads `ai-chat.bsg.brave.com:443` as somebody else's host.
-    // Only a trailing run of digits is taken, so nothing is cut off an address that has no port.
-    let host = match authority.rsplit_once(':') {
-        Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => name,
-        _ => authority,
-    };
+    // The host the transport connects to, which is where the credential goes. It ends at the first
+    // `/`, `?` or `#`, and a port or userinfo is not part of it: a suffix test against anything
+    // longer reads `ai-chat.bsg.brave.com:443` as somebody else's host, and reads
+    // `attacker.example#.brave.com` as Brave's while the request goes to `attacker.example`.
+    let host = bravebot_core::url::host_of(endpoint)?;
 
     // Checked before brave.com, since a careless suffix test would read brave.software as
     // production and send a live credential to a development host.
@@ -501,6 +492,41 @@ mod tests {
         // And nothing is cut off an authority whose last colon starts no port.
         assert_eq!(is_production_endpoint("https://example.invalid:"), None);
         assert!(!is_a_brave_endpoint("http://[::1]:8080"));
+    }
+
+    /// PREM-2: the host a credential is sent to is the one the transport connects to, which ends at
+    /// the first `/`, `?` or `#`. Read to the first `/` alone, `attacker.example#.brave.com` ends
+    /// with a Brave suffix while the request goes to `attacker.example`, so the suffix test would
+    /// pass for a host that is not Brave's.
+    #[test]
+    fn a_suffix_after_a_hash_or_a_question_mark_does_not_make_a_host_braves() {
+        for theirs in [
+            "https://attacker.example#.brave.com",
+            "https://attacker.example?.brave.com",
+            "https://attacker.example:8443#.brave.com",
+            "https://attacker.example:8443?.brave.com",
+            "https://attacker.example#.brave.com/v1",
+            "https://attacker.example?.brave.com/v1",
+            "https://attacker.example#.brave.software",
+            "https://attacker.example?.bravesoftware.com",
+        ] {
+            assert_eq!(is_production_endpoint(theirs), None, "{theirs}");
+            assert!(!is_a_brave_endpoint(theirs), "{theirs}");
+        }
+    }
+
+    /// Userinfo is not the host either: the host is what follows the last `@`, so a Brave name in
+    /// front of it does not make the endpoint Brave's, and one after it does.
+    #[test]
+    fn a_brave_name_in_the_userinfo_does_not_make_a_host_braves() {
+        assert_eq!(
+            is_production_endpoint("https://ai-chat.bsg.brave.com@attacker.example"),
+            None
+        );
+        assert_eq!(
+            is_production_endpoint("https://attacker.example@ai-chat.bsg.brave.com"),
+            Some(true)
+        );
     }
 
     /// Brave's own deployments are Brave's, whichever channel they are, and everything else is a

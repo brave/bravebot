@@ -40,7 +40,10 @@ A credential recorded as spent whose request was then abandoned is not offered a
 
 **A credential is never sent to the non-premium host.** The premium host and the credential travel
 together, because a credential belongs to a deployment. A build with no premium host configured stays
-on the free tier rather than sending one where it does not belong.
+on the free tier rather than sending one where it does not belong. Whether a host is Brave's is read
+from the host a request would connect to, so a Brave name after a `?` or a `#` in
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT` does not count, and a premium endpoint holding a query or a fragment
+is ignored.
 
 Nothing is written back unless a credential was actually spent, so a session that spends nothing never
 touches the store. A write that is interrupted leaves the last good batch in place rather than half of a

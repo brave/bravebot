@@ -58,8 +58,25 @@ The premium host and the credential travel together, because a credential belong
 deployment. A build with no premium host sends no credential rather than sending one where it
 does not belong.
 
+Whether a premium endpoint is one of Brave's deployments is decided from the host the transport
+connects to: the text after the scheme up to the first `/`, `?` or `#`, with any userinfo and port
+left out. A Brave suffix after a `?` or a `#` belongs to the query or the fragment, so
+`https://attacker.example#.brave.com` is `attacker.example`'s and is sent no credential. A premium
+endpoint holding a query or a fragment is dropped by the configuration the way a schemeless one
+is, so the string requests are sent to and the string the decision reads are never two different
+hosts.
+
+**Why.** The Brave suffix test is what keeps a credential off other hosts. On a build with nothing
+built in, a settings file in a checkout sets the premium endpoint ([BACKEND-35](backends.md#BACKEND-35)),
+so the test has to hold for every value that file can hold. A presentation that reaches a host
+other than Brave's stays usable by that host until its validity window ends.
+
 `verified-by: bravebot_aichat::client::a_subscribed_request_goes_to_the_premium_host_with_the_credential`
 `verified-by: bravebot_aichat::client::without_a_premium_host_no_credential_is_attached`
+`verified-by: bravebot_agent::subscription::a_suffix_after_a_hash_or_a_question_mark_does_not_make_a_host_braves`
+`verified-by: bravebot_agent::subscription::a_brave_name_in_the_userinfo_does_not_make_a_host_braves`
+`verified-by: bravebot_config::lib::a_premium_endpoint_with_a_query_or_a_fragment_is_discarded`
+`verified-by: bravebot_config::lib::a_premium_endpoint_with_a_port_and_a_path_is_kept`
 
 <a id="PREM-3"></a>
 ### PREM-3: an order is checked before anything is registered against it

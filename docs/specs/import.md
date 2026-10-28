@@ -26,11 +26,12 @@ documented-by:
 
 ## Scope
 
-What bravebot reads from Claude Code's and opencode's configuration, and asks a local Ollama, LM
-Studio or llama-server, when it starts with no service configured to answer. It also covers which
-of those settings may become bravebot's own configuration, how the person is asked, and what is
-written. Two of the five sources are files. The other three are servers running on this machine,
-each asked what it serves. The refusal a start gets with nothing configured, and the routes it names,
+What bravebot reads from Claude Code's and opencode's configuration and from the API keys exported
+in its own environment, and asks a local Ollama, LM Studio or llama-server, when it starts with no
+service configured to answer. It also covers which of those settings may become bravebot's own
+configuration, how the person is asked, and what is written. Of the six sources, two are files, one
+is the process environment, and the other three are servers running on this machine, each asked what
+it serves. The refusal a start gets with nothing configured, and the routes it names,
 are [backends.md](backends.md)'s.
 
 It covers model services only: the Bedrock account and the OpenAI-compatible gateways
@@ -49,7 +50,7 @@ run.
 ## Clauses
 
 <a id="IMPORT-1"></a>
-### IMPORT-1: a start with nothing configured offers what Claude Code and opencode configured, or a local Ollama, LM Studio or llama-server serves, where bravebot can use it
+### IMPORT-1: a start with nothing configured offers what Claude Code and opencode configured, a key exported for a known service, or what a local Ollama, LM Studio or llama-server serves, where bravebot can use it
 
 The start looks for the [IMPORT-2](#IMPORT-2) sources before the session opens when all of these
 hold:
@@ -78,6 +79,7 @@ The offer comes only where the answer is "configure a service", because a start 
 should not open with a question about another program.
 
 `verified-by: bravebot_cli::running::a_first_run_with_claude_code_configured_offers_to_import_it`
+`verified-by: bravebot_cli::running::a_first_run_with_an_exported_key_offers_an_entry_naming_the_variable`
 `verified-by: bravebot_cli::running::a_first_run_with_ollama_running_offers_to_import_it`
 `verified-by: bravebot_cli::running::a_first_run_with_nothing_importable_refuses_as_before`
 `verified-by: bravebot_cli::running::a_configured_service_with_a_brave_model_is_not_offered_an_import`
@@ -106,6 +108,13 @@ by the XDG rule and its default applies; a relative `CLAUDE_CONFIG_DIR` or `OPEN
 read nowhere, because the person pointed the tool somewhere other than the default. A checkout's
 `.claude/`, `opencode.json` and `.opencode/` are never opened. A machine whose platform names no
 profile directory reads nothing.
+
+**Exported keys.** The process environment is read for the variable [IMPORT-3](#IMPORT-3) names for
+each service whose endpoint is compiled in (`OPENROUTER_API_KEY`, `OPENAI_API_KEY` and
+`ANTHROPIC_API_KEY`), and for the variables that service's own tools read a host from
+(`OPENAI_BASE_URL`, `OPENAI_API_BASE` and `ANTHROPIC_BASE_URL`). Only whether one is set is read. The
+value is held as a secret for that check, cleared, and never kept, shown or written. A variable that
+is set and blank is not set. No file is opened for this source.
 
 **Ollama.** One server is asked, at the address `OLLAMA_HOST` names, read the way Ollama's own
 client reads it: `[scheme://]host[:port][/path]`. The defaults are `http` and port `11434`, or
@@ -149,6 +158,7 @@ A proxy the environment names carries this request as it carries every other
 `verified-by: bravebot_config::import::the_lm_studio_host_moves_where_lm_studio_is_asked`
 `verified-by: bravebot_config::import::llama_args_move_where_llama_server_is_asked`
 `verified-by: bravebot_config::import::a_server_address_off_this_machine_is_left_and_not_asked`
+`verified-by: bravebot_config::import::nothing_exported_offers_nothing_from_the_environment`
 
 <a id="IMPORT-3"></a>
 ### IMPORT-3: what is offered is what bravebot's own reading keeps, and of that only what speaks its protocol
@@ -163,6 +173,7 @@ A proxy the environment names carries this request as it carries every other
 | opencode | a `provider` entry bravebot's own reading keeps, whose `npm` is absent, `@ai-sdk/openai-compatible`, `@openrouter/ai-sdk-provider` for `openrouter`, `@ai-sdk/amazon-bedrock` for `amazon-bedrock`, `@ai-sdk/google-vertex` for `google-vertex`, `@ai-sdk/anthropic` for `anthropic`, or `@ai-sdk/openai` for `openai` where it states no `baseURL` or OpenAI's | that entry under `provider`, holding only the fields bravebot reads: `name`, `env`, `models`, `options.baseURL`, `options.region`, `options.profile`, `options.project`, `options.location`, and the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | an `auth.json` entry of `type: "api"` for an id whose endpoint is compiled in, with no config entry for that id | a `provider` entry for that id, with the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | a top-level `model` of the form `provider/model`, where the import writes that provider's entry | `model`, in the form that names the gateway; for `amazon-bedrock`, the model's own id, added to that entry's `models` |
+| Environment | `OPENROUTER_API_KEY`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` exported and not blank, with none of that service's host variables exported ([IMPORT-2](#IMPORT-2)) | `provider.<id>`, at the endpoint compiled in: `{"env": ["<variable>"]}` |
 | Ollama | a server answering [IMPORT-10](#IMPORT-10)'s request with a model it can serve | `provider.ollama`: `{"name": "Ollama (local)", "options": {"baseURL": "<address>/v1"}}`, with `"contextWindow": <tokens>` added to `options` where [IMPORT-5](#IMPORT-5) says, and `model: "ollama/<name>"` for the model [IMPORT-10](#IMPORT-10) chooses |
 | LM Studio | a server answering [IMPORT-12](#IMPORT-12)'s request with a language model trained for tool use | `provider.lmstudio`: `{"name": "LM Studio (local)", "options": {"baseURL": "<address>/v1"}}`, with `"contextWindow": <tokens>` added to `options` where [IMPORT-5](#IMPORT-5) says, and `model: "lmstudio/<key>"` for the model [IMPORT-12](#IMPORT-12) chooses |
 | llama-server | a server answering [IMPORT-12](#IMPORT-12)'s request with a listing it owns | `provider.llama-server`: `{"name": "llama-server (local)", "options": {"baseURL": "<address>/v1"}}`, and `model: "llama-server/<id>"` for the entry [IMPORT-12](#IMPORT-12) chooses |
@@ -219,6 +230,16 @@ or `managed.json` pins the `provider` block, the model is not written: it was ch
 opencode's entry, and a different one would answer it. The line naming the kept or pinned entry is
 the one said.
 
+**An exported key is offered for each service whose endpoint is compiled in.** The services are the
+ones a session reaches by name ([BACKEND-17](backends.md#BACKEND-17)), so one added there is offered
+with no change here, under the variable that table names for it. The entry holds `env` and nothing
+else: a key is never read into it, and no model is written, since the key names none.
+`GOOGLE_API_KEY` is not offered, because exported alone it already configures Vertex AI
+([BACKEND-50](backends.md#BACKEND-50)) and a start with it is not refused. An `anthropic` entry
+reads an exported key only where it names the variable ([BACKEND-57](backends.md#BACKEND-57)), so
+the entry shown before the question, which holds the variable and the host the key is sent to, is
+where the person writes that name down.
+
 **A running Ollama is written as the configuration guide's block.** It has no `env`, no `apiKey`
 and no `models`, so bravebot reads it as needing no credential and asks it for its roster
 ([backends.md](backends.md)). A model pulled after the import is then offered with nothing written
@@ -261,6 +282,10 @@ build reads it.
 `verified-by: bravebot_cli::import::a_claude_code_anthropic_key_is_asked_about_and_written_as_an_entry`
 `verified-by: bravebot_config::import::an_auth_json_key_for_openai_is_a_provider`
 `verified-by: bravebot_config::import::only_the_fields_bravebot_reads_are_written`
+`verified-by: bravebot_config::import::an_exported_key_is_a_provider_naming_the_variable`
+`verified-by: bravebot_config::import::every_known_service_is_offered_under_the_variable_its_table_row_names`
+`verified-by: bravebot_config::import::a_blank_variable_and_a_variable_that_is_no_known_services_are_not_offered`
+`verified-by: bravebot_cli::import::an_exported_key_is_asked_about_and_written_as_an_entry_naming_the_variable`
 `verified-by: bravebot_config::import::a_top_level_model_is_copied_where_its_provider_is`
 `verified-by: bravebot_config::import::a_limit_is_written_wherever_bravebot_reads_half_of_it`
 `verified-by: bravebot_config::import::a_running_ollama_is_offered_as_the_documented_block`
@@ -289,6 +314,9 @@ reason:
 - `CLAUDE_CODE_USE_VERTEX`, which serves Claude models through Google Cloud credentials, and an
   opencode `google-vertex` entry naming no project and no key, or a `baseURL` and no project, which
   this program has nothing to reach the service with ([IMPORT-3](#IMPORT-3));
+- a key exported beside a host variable of its own service ([IMPORT-2](#IMPORT-2)): it was issued for
+  that host, and an entry at the endpoint compiled in would send it elsewhere, so the line says to add
+  a `provider` block that states the host and names the variable;
 - `AWS_BEARER_TOKEN_BEDROCK`, and an opencode `auth.json` key for `amazon-bedrock`, which is the
   same bearer token, since bravebot signs Bedrock requests through the AWS credential chain;
 - Bedrock switched on with no region;
@@ -324,12 +352,15 @@ setup was looked at.
 `verified-by: bravebot_config::import::an_lm_studio_with_no_model_trained_for_tool_use_is_left_and_said`
 `verified-by: bravebot_cli::running::what_was_found_and_left_is_said_before_the_routes`
 `verified-by: bravebot_cli::running::a_claude_code_anthropic_key_is_importable_and_the_refusal_names_the_command`
+`verified-by: bravebot_config::import::a_key_exported_beside_a_host_of_its_own_is_left`
+`verified-by: bravebot_cli::import::a_key_exported_beside_a_host_is_said_to_be_left_and_not_asked_about`
+`verified-by: bravebot_cli::running::a_key_exported_beside_a_host_is_said_to_be_left_before_the_routes`
 
 <a id="IMPORT-5"></a>
 ### IMPORT-5: everything that would be written is shown before the question, and only the affirmative writes
 
-**One question per source.** Claude Code is asked about first, then opencode, then Ollama, LM
-Studio and llama-server.
+**One question per source.** Claude Code is asked about first, then opencode, then the keys exported
+in the environment, then Ollama, LM Studio and llama-server.
 
 **What is shown before each question:**
 
@@ -377,6 +408,7 @@ listing only such models reaches nothing.
 
 `verified-by: bravebot_cli::import::every_host_and_name_written_is_shown_before_the_question`
 `verified-by: bravebot_cli::import::only_the_affirmative_writes_and_the_end_of_input_declines`
+`verified-by: bravebot_cli::import::a_declined_exported_key_writes_nothing`
 `verified-by: bravebot_cli::import::a_name_the_first_answer_wrote_is_left_by_the_second`
 `verified-by: bravebot_cli::import::a_setup_found_only_in_the_environment_says_so`
 `verified-by: bravebot_cli::import::a_window_below_the_assumed_one_is_shown_with_what_the_server_drops`
@@ -465,6 +497,7 @@ with nothing configured gets. Incognito adds nothing to `~/.bravebot`
 
 `verified-by: bravebot_config::import::a_destination_adds_names_and_replaces_none`
 `verified-by: bravebot_cli::import::a_name_already_set_keeps_its_value`
+`verified-by: bravebot_cli::import::an_exported_key_for_an_entry_the_file_already_has_is_left_as_it_is`
 `verified-by: bravebot_cli::import::a_settings_file_that_does_not_parse_is_not_rewritten`
 `verified-by: bravebot_cli::import::a_file_changed_while_asking_is_not_written_over`
 `verified-by: bravebot_cli::import::the_written_file_is_readable_only_by_the_user`
@@ -491,6 +524,7 @@ Where nothing is left to import it says so, along with what [IMPORT-4](#IMPORT-4
 answers yes on their behalf.
 
 `verified-by: bravebot_cli::running::a_one_shot_first_run_names_the_import_command_and_asks_nothing`
+`verified-by: bravebot_cli::running::an_exported_key_is_importable_and_the_refusal_names_the_command`
 `verified-by: bravebot_cli::running::a_one_shot_first_run_with_ollama_running_names_the_import_command`
 `verified-by: bravebot_cli::running::a_one_shot_first_run_with_a_server_running_names_the_import_command`
 `verified-by: bravebot_cli::import::the_command_line_names_every_source_that_holds_something`
@@ -724,6 +758,14 @@ archive, which is drawn and never sent ([SESSION-32](#SESSION-32)). Putting them
 the owner's decision.
 
 ## Known costs
+
+- **An exported key may be scoped for another tool.** The import cannot tell, so it offers a key
+  exported under a known variable name as it offers any other, after showing the variable and the
+  host. A key exported beside its service's host variable is left. A key restricted to a project or a
+  model that this program does not use is offered all the same, and its requests fail.
+- **A start that imports an exported key ends in the refusal for a missing model.** The key names no
+  model, so the start that wrote the entry ends as [IMPORT-9](#IMPORT-9) says, and so does every start after it until `model` is set,
+  since nothing yet asks which model to use ([#3440](https://github.com/brave/bravebot/issues/3440)).
 
 - **Two copies of the configuration.** After an import the two tools drift apart, and bravebot does
   not follow later edits to the other tool's files. The alternative, reading them at every start,

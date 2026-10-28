@@ -1443,6 +1443,7 @@ whole tree out of somebody looking at a file, which is the largest grant this do
 ([TRUST-9](#TRUST-9)) issued for the smallest gesture. Writing there is the same: what a person
 edited themselves is theirs, and a turn reading it later is a read like any other.
 
+`verified-by: bravebot_cli::layering::the_ui_files_helper_starts_no_process`
 `verified-by: by-construction (the helper is a process of its own that runs no command and speaks to no turn, so a byte it read reaches a screen and has no road into a turn's context: it holds no labelled value, mints no witness, and writes nothing the map is consulted about)`
 
 ## Keeping the answer to the startup question

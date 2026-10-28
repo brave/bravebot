@@ -11,7 +11,8 @@ use crate::Secret;
 use crate::bedrock::{Bedrock, Tier};
 use crate::env_var;
 use crate::provider::{
-    self, ANTHROPIC_ID, AWS_PROVIDER_ID, GOOGLE_VERTEX_ID, Protocol, Provider, RESPONSES_SDK,
+    self, ANTHROPIC_ID, AWS_PROVIDER_ID, GOOGLE_VERTEX_ID, OPENAI_ID, Protocol, Provider,
+    RESPONSES_SDK,
 };
 use serde_json::{Map, Value};
 use std::net::IpAddr;
@@ -73,22 +74,27 @@ const LLAMA_SERVER_PORTS: [u16; 2] = [9931, 8080];
 /// in `bravebot-aichat` and the choice here agree on.
 pub const TOOLS: &str = "tools";
 
-/// The two programs whose configuration is read, and the servers that are asked.
+/// The two programs whose configuration is read, the keys exported in this process's environment,
+/// and the servers that are asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     ClaudeCode,
     Opencode,
+    /// An API key exported for a service whose endpoint is compiled in.
+    Environment,
     Ollama,
     LmStudio,
     LlamaServer,
 }
 
 impl Source {
-    /// The program's own name, which is not translated.
+    /// The program's own name, which is not translated. [`Source::Environment`] is no program, so
+    /// its name here is English and a front end that translates names says its own.
     pub fn name(self) -> &'static str {
         match self {
             Self::ClaudeCode => "Claude Code",
             Self::Opencode => "opencode",
+            Self::Environment => "your environment",
             Self::Ollama => "Ollama",
             Self::LmStudio => "LM Studio",
             Self::LlamaServer => "llama-server",
@@ -107,7 +113,7 @@ impl Source {
             Self::Ollama => Some("ollama"),
             Self::LmStudio => Some("lmstudio"),
             Self::LlamaServer => Some("llama-server"),
-            Self::ClaudeCode | Self::Opencode => None,
+            Self::ClaudeCode | Self::Opencode | Self::Environment => None,
         }
     }
 }
@@ -544,6 +550,9 @@ pub enum Reason {
     Elsewhere,
     /// A running server with no model that can call tools, which a session could not use.
     NoToolModel,
+    /// A key exported beside the host its service's own tools read from the environment: it was
+    /// issued for that host, and an entry at the endpoint compiled in would send it to another.
+    KeyForAnotherHost,
 }
 
 /// One model a running server lists, as its listing names it.
@@ -560,8 +569,8 @@ pub struct Installed {
     pub window: Option<u64>,
 }
 
-/// Everything the sources hold, Claude Code first, then opencode, then the servers in the order
-/// [`Places::servers`] lists them.
+/// Everything the sources hold, Claude Code first, then opencode, then the keys exported, then the
+/// servers in the order [`Places::servers`] lists them.
 ///
 /// `environment` is the process environment. A Claude Code Bedrock setup is often exported rather
 /// than written down, and a name already there is read from there at run time, so it is not copied.
@@ -581,6 +590,7 @@ pub fn found(
         found.extend(claude_code(path, &environment));
     }
     found.extend(opencode(&places.opencode, places.opencode_auth.as_deref()));
+    found.extend(exported_keys(&environment));
 
     let addresses: Vec<(Source, &str)> = places
         .servers
@@ -955,6 +965,71 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
         window: None,
         env,
         model,
+        model_gateway: None,
+        gateways,
+        left,
+    };
+    (found.importable() || !found.left.is_empty()).then_some(found)
+}
+
+/// The variables a service's own tools read a host from, other than the endpoint compiled in for it.
+///
+/// A key exported beside one was issued for that host. Per service, because a host named for one
+/// service says nothing about the key of another.
+fn host_variables(id: &str) -> &'static [&'static str] {
+    match id {
+        ANTHROPIC_ID => &[ANTHROPIC_BASE_URL],
+        OPENAI_ID => &["OPENAI_BASE_URL", "OPENAI_API_BASE"],
+        _ => &[],
+    }
+}
+
+/// The keys exported in the process environment for the services whose endpoint is compiled in.
+///
+/// Read from the same list a session reaches those services by ([`provider::known_ids`]), so a
+/// service added there is offered here with no change. Whether a variable is set is the only thing
+/// read about it: the value is held as a [`Secret`] for that check and cleared, and nothing of it is
+/// kept, shown or written. The entry names the variable, which is where an entry for these services
+/// reads a key from. `GOOGLE_API_KEY` is not here: exported alone it already configures Vertex AI,
+/// so a start with it is not one that is refused.
+fn exported_keys(environment: &dyn Fn(&str) -> Option<String>) -> Option<Found> {
+    let mut gateways = Vec::new();
+    let mut left = Vec::new();
+    for id in provider::known_ids() {
+        let (Some(variable), Some(endpoint)) =
+            (provider::known_variable(id), provider::known_endpoint(id))
+        else {
+            continue;
+        };
+        if environment(variable).map(Secret::new).is_none() {
+            continue;
+        }
+        if host_variables(id)
+            .iter()
+            .any(|host| environment(host).is_some())
+        {
+            left.push(Left {
+                name: variable.to_string(),
+                reason: Reason::KeyForAnotherHost,
+            });
+            continue;
+        }
+        let mut entry = Map::new();
+        entry.insert("env".to_string(), Value::from(vec![variable]));
+        gateways.push(Gateway {
+            id: id.to_string(),
+            endpoint: endpoint.to_string(),
+            entry,
+            key: Key::Named,
+        });
+    }
+    let found = Found {
+        source: Source::Environment,
+        read: Vec::new(),
+        running_at: None,
+        window: None,
+        env: Vec::new(),
+        model: None,
         model_gateway: None,
         gateways,
         left,
@@ -2591,6 +2666,144 @@ mod tests {
         );
     }
 
+    fn environment_source(set: &[(&str, &str)]) -> Option<Found> {
+        // No profile directory is named by `set`, so no file is read and only the keys can be found.
+        let lookup = |name: &str| {
+            set.iter()
+                .find(|(named, _)| *named == name)
+                .map(|(_, value)| value.to_string())
+        };
+        found(&Places::from_lookup(lookup), lookup, |_, _| None)
+            .into_iter()
+            .find(|found| found.source == Source::Environment)
+    }
+
+    /// IMPORT-3: a key exported for a service whose endpoint is compiled in is an entry at that
+    /// endpoint, naming the variable. The value is not read into the entry, a line or the model.
+    #[test]
+    fn an_exported_key_is_a_provider_naming_the_variable() {
+        let found = environment_source(&[("OPENAI_API_KEY", "sk-exported-nobody-may-see")])
+            .expect("the key was not found");
+
+        assert_eq!(ids(&found), ["openai"]);
+        let openai = gateway(&found, "openai");
+        assert_eq!(openai.endpoint, "https://api.openai.com/v1");
+        assert_eq!(openai.shown(), r#"{"env":["OPENAI_API_KEY"]}"#);
+        assert!(matches!(openai.key, Key::Named), "{:?}", openai.key);
+        assert!(found.read.is_empty());
+        assert_eq!(found.env, []);
+        assert_eq!(found.model, None);
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+        assert!(
+            !format!("{found:?}").contains("nobody-may-see"),
+            "the key reached {found:?}"
+        );
+    }
+
+    /// IMPORT-3: every service the endpoints table holds is offered under the variable that table
+    /// names, in the table's order, so a service added there is offered with no change here.
+    #[test]
+    fn every_known_service_is_offered_under_the_variable_its_table_row_names() {
+        let set: Vec<(&str, &str)> = provider::known_ids()
+            .map(|id| (provider::known_variable(id).expect("a variable"), "a-key"))
+            .collect();
+        assert!(set.len() >= 3, "{set:?}");
+
+        let found = environment_source(&set).expect("the keys were not found");
+
+        let wanted: Vec<&str> = provider::known_ids().collect();
+        assert_eq!(ids(&found), wanted);
+        for id in wanted {
+            let gateway = gateway(&found, id);
+            assert_eq!(
+                Some(gateway.endpoint.as_str()),
+                provider::known_endpoint(id)
+            );
+            assert_eq!(
+                gateway.variables(),
+                [provider::known_variable(id).expect("a variable")]
+            );
+        }
+    }
+
+    /// IMPORT-3: a variable that is set and holds nothing is not a key, and the variables of other
+    /// services, and `GOOGLE_API_KEY`, which configures Vertex AI on its own, offer nothing.
+    #[test]
+    fn a_blank_variable_and_a_variable_that_is_no_known_services_are_not_offered() {
+        for value in ["", "   ", "\t\n"] {
+            let found = environment_source(&[("OPENAI_API_KEY", value)]);
+            assert!(found.is_none(), "{value:?} was taken for a key");
+        }
+        for name in [
+            "GOOGLE_API_KEY",
+            "OPENAI_ORG_ID",
+            "AWS_ACCESS_KEY_ID",
+            "XAI_API_KEY",
+        ] {
+            let found = environment_source(&[(name, "a-key")]);
+            assert!(found.is_none(), "{name} was offered: {found:?}");
+        }
+    }
+
+    /// IMPORT-3, IMPORT-4: a key exported beside the host its own service's tools read was issued for
+    /// that host, so it is not offered at the endpoint compiled in and is said to be left. A host
+    /// named for another service says nothing about this one's key.
+    #[test]
+    fn a_key_exported_beside_a_host_of_its_own_is_left() {
+        let hosts = [
+            ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"),
+            ("OPENAI_API_KEY", "OPENAI_BASE_URL"),
+            ("OPENAI_API_KEY", "OPENAI_API_BASE"),
+        ];
+        for (key, host) in hosts {
+            let found = environment_source(&[(key, "a-key"), (host, "https://proxy.invalid")])
+                .unwrap_or_else(|| panic!("{key} beside {host} was not said"));
+
+            assert!(
+                ids(&found).is_empty(),
+                "{key} beside {host}: {:?}",
+                ids(&found)
+            );
+            assert_eq!(left(&found), [(key, Reason::KeyForAnotherHost)]);
+            let said = format!("{found:?}");
+            for value in ["a-key", "proxy.invalid"] {
+                assert!(!said.contains(value), "{value} is in {said}");
+            }
+        }
+
+        let found = environment_source(&[
+            ("OPENROUTER_API_KEY", "a-key"),
+            ("OPENAI_API_KEY", "a-key"),
+            ("OPENAI_BASE_URL", "https://proxy.invalid"),
+        ])
+        .expect("the keys were not found");
+        assert_eq!(ids(&found), ["openrouter"]);
+        assert_eq!(
+            left(&found),
+            [("OPENAI_API_KEY", Reason::KeyForAnotherHost)]
+        );
+    }
+
+    /// IMPORT-2: the keys are looked for in the environment of the process and nowhere on disk, so a
+    /// profile directory with files in it and nothing exported offers no entry from here.
+    #[test]
+    fn nothing_exported_offers_nothing_from_the_environment() {
+        let home = Scratch::new("import-nothing-exported");
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"OPENAI_API_KEY": "sk-in-a-file"}}"#,
+        );
+
+        let found = found_in(&home.path, &[]);
+
+        assert!(
+            found
+                .iter()
+                .all(|found| found.source != Source::Environment),
+            "{found:?}"
+        );
+    }
+
     /// IMPORT-6: `{env:VAR}` is opencode's substitution, and bravebot makes none, so copied as it is
     /// the reference would be sent as the token.
     #[test]
@@ -3576,7 +3789,7 @@ mod tests {
                 Source::Ollama => (three_pulled(), 200),
                 Source::LmStudio => (lm_studio_listing(), 100),
                 Source::LlamaServer => (llama_server_listing(), 0),
-                Source::ClaudeCode | Source::Opencode => return None,
+                Source::ClaudeCode | Source::Opencode | Source::Environment => return None,
             };
             std::thread::sleep(std::time::Duration::from_millis(after));
             Some(listed)
