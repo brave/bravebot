@@ -132,7 +132,9 @@ architecture, Linux a `.deb` and an `.rpm` per architecture from
 [the Linux packages](#the-linux-packages) below, and Windows an installer per architecture from
 [the Windows installers](#the-windows-installers).
 
-`app-release` runs on a Mac of either architecture and needs no Rust toolchain. It packages the
+`app-release` runs on a Mac of either architecture and needs no Rust toolchain. It does need
+macOS 26 and Xcode 26 or later, whose `actool` compiles the Icon Composer icon `ui/build/icon.icon`
+into each bundle; packaging fails without them. It packages the
 app once per architecture from what the cross-build left in `dist/`, and writes a disk image for
 each:
 
