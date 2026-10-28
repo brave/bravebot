@@ -84,7 +84,7 @@ help:
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
-	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer [REPO=owner/name REVIEWER=login]"
+	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer; waits up to WAIT seconds for ones GitHub reports UNKNOWN [REPO=owner/name REVIEWER=login LIMIT=n WAIT=$(REVIEW_WAIT)]"
 	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else, assigning you, and labelling bot/in-progress for the session [BRAVEBOT=path]"
 	@echo "  make clean-worktrees       Remove every linked git worktree but the one this runs in, including ones with uncommitted changes; exits 1 if any is kept"
 	@echo "  make fmt                   Apply formatting"
@@ -532,15 +532,19 @@ docs-updated-to-sha:
 # The pull requests a reviewer can pick up now: mergeable, not a draft, with every check passed
 # or skipped, whose latest review by REVIEWER is an approval, and with no latest review by anyone
 # that requests changes. REPO names another repository, REVIEWER another account and LIMIT raises
-# how many are read.
+# how many are read. GitHub reports mergeable as UNKNOWN for every open pull request after main
+# moves, until each has been read, so contrib/review-ready.py reads the list again every few seconds
+# while an approved, passing, non-draft pull request is UNKNOWN, for WAIT seconds in total, and
+# names on stderr any still UNKNOWN at the end. Each ready pull request is printed as soon as it is
+# seen.
 REVIEW_REPO = brave/bravebot
 REVIEW_REVIEWER = netzenbot-reviewer
 REVIEW_LIMIT = 500
+REVIEW_WAIT = 30
 .PHONY: review-ready
 review-ready:
-	@gh pr list --repo $(or $(REPO),$(REVIEW_REPO)) --limit $(or $(LIMIT),$(REVIEW_LIMIT)) \
-	  --json number,title,url,mergeable,latestReviews,isDraft,statusCheckRollup \
-	  --jq '.[] | select(.mergeable == "MERGEABLE" and .isDraft == false and any(.latestReviews[]; .author.login == "$(or $(REVIEWER),$(REVIEW_REVIEWER))" and .state == "APPROVED") and all(.latestReviews[]; .state != "CHANGES_REQUESTED") and all(.statusCheckRollup[]; (.conclusion // .state) | IN("SUCCESS", "NEUTRAL", "SKIPPED"))) | "\(.url)  \(.title)"'
+	@python3 contrib/review-ready.py --repo '$(or $(REPO),$(REVIEW_REPO))' --reviewer '$(or $(REVIEWER),$(REVIEW_REVIEWER))' \
+	  --limit '$(or $(LIMIT),$(REVIEW_LIMIT))' --wait '$(or $(WAIT),$(REVIEW_WAIT))'
 
 # Opens the implement-issues skill in the terminal client on ISSUES, which the skill receives as
 # written: issue numbers, links and search queries separated by commas. Before the session opens, with
@@ -589,10 +593,12 @@ check-affected-containers:
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
+	check-review-ready-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
+	check-review-ready-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -629,6 +635,9 @@ check-lint-increase-selftest:
 
 check-implement-issues-selftest:
 	python3 agents/skills/implement-issues/selftest.py
+
+check-review-ready-selftest:
+	python3 contrib/review-ready-selftest.py
 
 check-release-preflight-selftest:
 	python3 contrib/release-preflight.py --selftest

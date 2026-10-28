@@ -4,6 +4,30 @@ Tools that are useful for working on bravebot but are not part of it. Nothing he
 shipped, and nothing in `crates/` depends on any of it. One is run by CI: `measure-flakes.py`, on a
 weekly schedule, since what it measures takes many runs of an unchanged tree.
 
+## review-ready.py
+
+Lists the open pull requests a reviewer can pick up now, and waits for the ones GitHub has not yet
+computed as mergeable.
+
+A pull request is listed when it is mergeable, is not a draft, has every check passed, skipped or
+neutral, has an approval as the latest review by `REVIEWER`, and has no latest review by anyone that
+requests changes. After main moves, GitHub reports `mergeable` as `UNKNOWN` for every open pull
+request until each has been read, so a single read drops approved, passing pull requests without
+saying so. A pull request that would be listed if it were `MERGEABLE` is pending: the list is read
+again every 3 seconds for up to `WAIT` seconds (30 by default) while any is pending, and stderr
+names them (`waiting for 2 pull requests GitHub has not computed as mergeable (UNKNOWN): #3, #4`).
+A draft, unapproved, failing or conflicting pull request is never waited for. Each pull request is
+printed as `<url>  <title>` on stdout once, as soon as a read shows it mergeable. Any still
+`UNKNOWN` when the wait ends are named on stderr as missing from the list. A failure of `gh` exits 1.
+
+```sh
+make review-ready                            # or contrib/review-ready.py
+make review-ready REPO=owner/name REVIEWER=login LIMIT=1000 WAIT=60
+```
+
+`--interval` sets the seconds between reads. `make check-scripts` runs `review-ready-selftest.py`,
+which serves scripted reads from a stand-in `gh` and runs the script and the make target against it.
+
 ## check-toolchain.py
 
 Answers whether clippy on this machine knows the lints CI will fail on.
