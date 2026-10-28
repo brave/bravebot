@@ -319,8 +319,16 @@ async function consolidate(
   }
 }
 
+// An unpackaged run is Electron's own bundle, which carries Electron's icon. A packaged app has
+// its own, written by the packager, and `build/` is not shipped, so this is only for `pnpm run dev`
+// and `pnpm start`. macOS takes `icon.png`, the same rendering `icon.icns` holds at 1024, because
+// the dock cannot load an `.icns` from a path; Windows and Linux take a bitmap for the window.
+const DEV_ICON_DIR = join(__dirname, '../../build')
+const devIcon = app.isPackaged ? undefined : join(DEV_ICON_DIR, process.platform === 'win32' ? 'icon.ico' : 'icons/256x256.png')
+
 function createWindow(): void {
   window = new BrowserWindow({
+    ...(devIcon && process.platform !== 'darwin' ? { icon: devIcon } : {}),
     width: 1280,
     height: 820,
     minWidth: 900,
@@ -554,6 +562,7 @@ function noteOpenedRoot(method: string, params: unknown, ok: unknown): void {
 }
 
 app.whenReady().then(() => {
+  if (!app.isPackaged && process.platform === 'darwin') app.dock?.setIcon(join(DEV_ICON_DIR, 'icon.png'))
   ipcMain.handle('bravebot:request', async (_event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !ALLOWED.has(method)) {
       return { error: { code: 'bad_request', message: `not a permitted method: ${String(method)}` } }

@@ -220,8 +220,9 @@ async function main() {
     // Electron's own line, which names GitHub as the owner of a signed Brave product. No year,
     // because nothing here would move one on and a stale one is a worse claim than none.
     appCopyright: 'Copyright (c) Brave Software, Inc. All rights reserved.',
-    // The packager also looks for an Icon Composer `.icon` beside the `.icns` and warns that there
-    // is none. Without one macOS shows the `.icns`, so the warning is expected. Linux takes
+    // On macOS the packager also compiles the Icon Composer `build/icon.icon` beside the `.icns`
+    // into `Assets.car`, which macOS 26 and later show instead. Compiling it needs `actool` from
+    // Xcode 26 or later on macOS 26 or later, and the packager fails without them. Linux takes
     // neither: the packager writes no icon there, and a desktop entry is the installer's business.
     icon: platform === 'win32' ? 'build/icon.ico' : 'build/icon.icns',
     // What the properties dialog, Task Manager's description column and an installer reading the

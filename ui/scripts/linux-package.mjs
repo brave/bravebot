@@ -46,11 +46,11 @@ export const ICON = PACKAGE
 // drawing alone is one whose launcher entry shows a generic icon where it is missing, and that
 // entry is the whole of how a person starts the app.
 //
-// The set is what `build/icon.ico` holds, which is where a mascot with two eyes in it stops
-// surviving a scale down, plus 512 for a desktop drawing at 200%. They are rendered ahead of
-// time and committed beside the drawing, as the macOS and Windows icons are, so packaging
-// needs no rasteriser.
-export const ICON_SIZES = [16, 32, 48, 64, 128, 256, 512]
+// The set is what `build/icon.ico` holds, plus 512 for a desktop drawing at 200%. The drawing is
+// 8 by 9 cells, so each size is rendered with whole pixels per cell rather than scaled from
+// another, which would blur every cell edge. They are rendered ahead of time and committed beside
+// the drawing, as the macOS and Windows icons are, so packaging needs no rasteriser.
+export const ICON_SIZES = [16, 24, 32, 48, 64, 128, 256, 512]
 
 // The asset's name for an architecture, and what each package format calls the same one. Three
 // spellings of two architectures: a package built for `arm64` and declared `x64`, or an rpm

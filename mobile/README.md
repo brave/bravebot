@@ -27,11 +27,11 @@ A debug build asks for the network because it fetches its JavaScript from Metro,
 
 ## App icon
 
-Both apps use the desktop app's icon, the robot drawn in `ui/build/icon.svg`. `scripts/make-icons.sh` cuts it for each platform and writes the files under `android/` and `ios/`, so after the drawing changes run it again and commit the result. It needs macOS, because it renders with AppKit (`swiftc`) and flattens with `sips`. The desktop's own recipe in `ui/docs/development.md` uses Inkscape for the same drawing.
+Both apps use the desktop app's icon. The Android app's is cut from the drawing in `ui/build/icon.svg` by `scripts/make-icons.sh`, which writes the files under `android/`. It needs `python3` with Pillow. After the drawing changes, run it again and commit the result.
 
-- iOS: one 1024 point square with no alpha channel, in `ios/Bravebot/Images.xcassets/AppIcon.appiconset`. The system rounds it.
-- Android 8 and later: an adaptive icon. The drawing sits at two thirds of the foreground layer, over a background of the tile's own gradient, so any mask the launcher applies shows the whole robot.
-- Android before 8: the rounded tile and a round variant, in `mipmap-*dpi`.
+- iOS: the Icon Composer document `ios/Bravebot/AppIcon.icon`, a copy of `ui/build/icon.icon` that `scripts/make-ios-icon.sh` makes. Xcode 26 compiles it into `Assets.car` for iOS 26 and later and writes flat fallback images for earlier versions, so building the app needs Xcode 26 or later. The project's icon name stays `AppIcon`, which is why the copy has that name.
+- Android 8 and later: an adaptive icon. The mascot is the foreground layer, sized so that its whole figure fits inside the 66 dp circle every launcher mask shows, over a plain white background. It has a monochrome layer for themed icons on Android 13 and later: the mascot as one colour with the white of its eyes cut out. Each size draws the mascot with a whole number of pixels per square, so no edge is blurred.
+- Android 7, which the app still supports (`minSdkVersion` 24): the mascot on a white rounded tile, and on a white round one, in `mipmap-*dpi`.
 
 ## Consuming the client package
 
