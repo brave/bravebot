@@ -401,13 +401,12 @@ the files under the root does not change which names `/style` takes. `/forget-tr
 and the git worktree around it ([TRUST-24](trust-map.md#TRUST-24)). A prompt and a command line can
 run a program that makes the `.git` entry that moves which root is around the directory, a line that
 starts a session here reads the answer, and one that moves the directory or leaves the session
-changes what is withdrawn, so all of those hold it back, as do `/branch`, which replaces the
-session's record and its reach and has not been read against the answer, and `/mcp`, `/undo`,
+changes what is withdrawn, so all of those hold it back, as do `/mcp`, `/undo`,
 `/rewind` and `/hunks`, which have not been shown unable to make or remove the `.git` entry. A rewind
 removes what a file tool wrote, which may be a `.git` entry written into an added directory that
 holds the working directory, and a server `/mcp` starts may write the directory its declaration
 names. Behind
-`/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/after`, `/rename`, `/note`, `/style`,
+`/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/branch`, `/after`, `/rename`, `/note`, `/style`,
 `/issue`, `/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` it is carried out as it is typed:
 `/after` arms a prompt that goes out when its delay is up and runs nothing now, so the turn it sends
 runs under the answer as `/forget-trust` left it whichever of the two is carried out first.
@@ -415,7 +414,10 @@ runs under the answer as `/forget-trust` left it whichever of the two is carried
 opens or closes a directory and a rule in the session's own trust map, and the second writes the
 reach record or the workspace's list of paths programs may reach, and neither writes a file the
 answer is kept in or makes a `.git` entry, so `/forget-trust` withdraws the same answers before them
-as after them. A
+as after them. `/branch` copies the session's record and goes on in the copy, forgets the in-session
+answers no record keeps and ends the paths programs were let reach. It starts no program, leaves the
+working directory where it is and neither reads nor writes the file the answer is kept in or a `.git`
+entry, so it withdraws the same answers before it as after it. A
 command carried out as it is typed comes off the box and is not remembered, as at rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
 entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.

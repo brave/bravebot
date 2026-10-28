@@ -30245,9 +30245,9 @@ mod tests {
     /// changed by one that moves the directory or leaves the session, and a prompt or a command line
     /// can run a program that makes the `.git` entry that moves the root around the directory. A
     /// request that is not a turn, a write to the record or the session's own choices, a directory
-    /// opened or closed and a reach granted do none of those, so behind them `/forget-trust` is
-    /// carried out when it is typed. The regression it rejects is every line holding it back, which
-    /// leaves an answer a person withdrew in place until the turn ends.
+    /// opened or closed, a reach granted and a copy of the record do none of those, so behind them
+    /// `/forget-trust` is carried out when it is typed. The regression it rejects is every line
+    /// holding it back, which leaves an answer a person withdrew in place until the turn ends.
     #[test]
     fn a_forgotten_answer_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed() {
         if !crate::test_profile::in_isolated_profile() {
@@ -30262,6 +30262,8 @@ mod tests {
             "/add-dir close ../other",
             "/reach",
             "/reach docker -- docker build .",
+            "/branch",
+            "/branch try the other parser",
             "/after 5m check the deploy",
             "/rename deploy watch",
             "/note a thought",
@@ -30308,7 +30310,6 @@ mod tests {
             EXIT_COMMAND,
             "/cd crates/tui",
             "/mcp",
-            "/branch",
             "/undo",
             "/rewind",
             "/hunks",
@@ -35527,6 +35528,86 @@ mod tests {
                 "the root's answer survived when forgotten before step {forgotten_before}"
             );
             let _ = std::fs::remove_dir_all(&scratch);
+        }
+    }
+
+    /// `/forget-trust` withdraws the answers kept about the working directory and about the root of
+    /// the git worktree around it. `/branch` copies the record and goes on in the copy: it starts no
+    /// program, leaves the working directory and the root where they were, and neither reads nor
+    /// writes the answer, so the line says the same and withdraws the same whether it is carried out
+    /// before the branch or after it. That is what lets `/forget-trust` typed behind a waiting
+    /// `/branch` be carried out as it is typed. The regression it rejects is `/branch` taking the
+    /// kept answer back itself, or moving the session to another root, which leaves the answer
+    /// withdrawn by one order and not the other.
+    #[test]
+    fn branching_the_session_does_not_change_what_forgetting_trust_withdraws() {
+        use bravebot_agent::trusted::{Identity, Store};
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for branched_first in [false, true] {
+            let repo = crate::test_profile::project(&format!(
+                "bravebot-app-forget-trust-around-branch-{branched_first}"
+            ));
+            let package = repo.join("packages/api");
+            for directory in [repo.join(".git"), package.clone()] {
+                std::fs::create_dir_all(directory).expect("create");
+            }
+            let Some(identity) = Identity::of(&repo) else {
+                return;
+            };
+            let home = bravebot_agent::home::directory().expect("a state directory");
+            let store = Store::new(&home, &repo);
+            assert!(
+                store.keep(&identity, "1-2", 7, false),
+                "the answer was not kept"
+            );
+            let (workspace, mut session, mut stored, conversation, mut answers) =
+                a_session_to_branch(&package);
+            let working = workspace.root().to_path_buf();
+            let original = stored.id().to_string();
+            let forget = || forget_trust(Some(&home), workspace.root());
+            let branch = |session: &mut Session, stored: &mut _, answers: &mut Answers| {
+                assert!(
+                    branch_session(session, stored, &conversation, answers, &workspace, &[], ""),
+                    "the session was not branched"
+                );
+            };
+
+            let said = if branched_first {
+                branch(&mut session, &mut stored, &mut answers);
+                assert!(
+                    store.kept(&identity).is_some(),
+                    "branching took the kept answer back"
+                );
+                forget()
+            } else {
+                let said = forget();
+                branch(&mut session, &mut stored, &mut answers);
+                said
+            };
+
+            assert_ne!(stored.id(), original, "the session stayed on the original");
+            assert_eq!(
+                workspace.root(),
+                working,
+                "the working directory moved when branched first: {branched_first}"
+            );
+            assert_eq!(
+                said,
+                t!(
+                    session_trust_forgotten_root,
+                    directory = working.display(),
+                    root = repo.canonicalize().expect("resolved").display()
+                ),
+                "branched first: {branched_first}"
+            );
+            assert_eq!(
+                store.kept(&identity),
+                None,
+                "the root's answer survived when branched first: {branched_first}"
+            );
         }
     }
 
