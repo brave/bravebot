@@ -1341,7 +1341,7 @@ strip:
 checksums:
 	@cd dist && rm -f ./*.sha256 SHA256SUMS && \
 	for f in $(BINARY)-*; do \
-		case "$$f" in bravebot-rpc-*|bravebot-ui-files-*) continue;; esac; \
+		case "$$f" in bravebot-rpc-*|bravebot-ui-files-*|bravebot-app-*) continue;; esac; \
 		shasum -a 256 "$$f" | awk '{print $$1}' > "$$f.sha256"; \
 		shasum -a 256 "$$f" >> SHA256SUMS; \
 	done

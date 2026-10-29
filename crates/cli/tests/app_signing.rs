@@ -694,3 +694,30 @@ fn a_missing_image_gets_no_checksum_at_all() {
             .exists()
     );
 }
+
+/// `make checksums` leaves a disk image out of `SHA256SUMS` and gives it no `.sha256`.
+///
+/// The regression it rejects: the `bravebot-*` loop matching `bravebot-app-darwin-*.dmg`, which
+/// puts the digest of an image in the list before it is stapled, and `app-dmg-sha256` never
+/// rewrites that list.
+#[test]
+fn the_cli_checksums_leave_a_disk_image_out() {
+    if !tools_available() {
+        return;
+    }
+    let tree = Tree::new("checksums-skip-image");
+    for name in ["bravebot-darwin-arm64", "bravebot-app-darwin-arm64.dmg"] {
+        std::fs::write(tree.root.join("dist").join(name), "bytes\n").expect("write");
+    }
+    let output = tree.make("checksums", "Accepted", &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let sums = std::fs::read_to_string(tree.root.join("dist/SHA256SUMS")).expect("read sums");
+    assert!(sums.contains("bravebot-darwin-arm64"), "{sums}");
+    assert!(!sums.contains(".dmg"), "{sums}");
+    assert!(
+        !tree
+            .root
+            .join("dist/bravebot-app-darwin-arm64.dmg.sha256")
+            .exists()
+    );
+}

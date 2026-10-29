@@ -172,7 +172,7 @@ smaller release. It is a broken install for whoever is on the platform that went
 reads to them as the release existing but the tool not working. The same holds for the person
 who downloads the application.
 
-`verified-by: by-construction (this tree states only the names of the six assets, in releasing.md, and the targets that write the two disk images and their checksums. The publish job in devops is expected to download each of the six before it creates the GitHub release, so that a missing object fails the job. This tree does not contain that job and no test here shows that it does)`
+`verified-by: by-construction (this tree states the names of the six CLI assets, in releasing.md, and the targets that write the two disk images and their checksums. The publish job in devops is expected to download each of the six, and each disk image with its .sha256, before it takes the release out of draft, so that a missing object fails the job. The asset check in publish-npm.yml covers only the six CLI binaries and does not hold a release for a missing image. This tree does not contain the devops job and no test here shows that it does)`
 
 <a id="RELEASE-8"></a>
 ### RELEASE-8: every asset is published with a checksum of the bytes that were uploaded
@@ -189,6 +189,7 @@ image, so an image hashed before it is stapled is the case this describes.
 
 `verified-by: bravebot_cli::app_signing::the_checksum_of_each_image_covers_its_final_bytes`
 `verified-by: bravebot_cli::app_signing::a_missing_image_gets_no_checksum_at_all`
+`verified-by: bravebot_cli::app_signing::the_cli_checksums_leave_a_disk_image_out`
 `verified-by: by-construction (Jenkins attaches the .sha256 written after signing, covering the bytes that were uploaded, and for the disk images attaches the file make app-dmg-sha256 wrote)`
 
 <a id="RELEASE-9"></a>
