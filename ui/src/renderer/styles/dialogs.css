@@ -163,6 +163,9 @@
 .grant-row + .grant-row { border-top: 1px solid var(--border-hairline); }
 .grant-row > leo-icon { flex: none; color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
 .grant-row > code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-primary); }
+.grant-row > code:focus-visible,
+.grant-text > code:focus-visible,
+.grant-meta span:focus-visible { outline-offset: -2px; }
 .grant-row > leo-button { flex: none; margin-left: auto; }
 .grant-state { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; padding-right: var(--leo-spacing-m); font: var(--type-caption); color: var(--ink-tertiary); }
 .grant-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }

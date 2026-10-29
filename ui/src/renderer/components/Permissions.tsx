@@ -9,10 +9,11 @@ import { middleTruncate } from '../truncate'
 /** How many characters of a path fit a grant row before the middle gives way. */
 export const GRANT_PATH_WIDTH = 40
 
-/** A path in a grant row: shortened in the middle when it would wrap, full spelling on the tooltip. */
+/** A path in a grant row: shortened in the middle when it would wrap. The full spelling is the accessible name and the tooltip, on a control the keyboard can reach. */
 function GrantName({ name }: { name: string }): React.JSX.Element {
   const cut = middleTruncate(name, GRANT_PATH_WIDTH)
-  return <code data-tooltip={cut === name ? undefined : name}>{cut}</code>
+  const full = cut === name ? undefined : name
+  return <code tabIndex={full ? 0 : undefined} aria-label={full} data-tooltip={full}>{cut}</code>
 }
 
 interface Grants {
@@ -74,13 +75,14 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
  */
 export function RememberedHere({ kept, busy, onForget }: { kept: KeptTrust; busy: boolean; onForget: () => void }): React.JSX.Element {
   const root = kept.shownRoot ? middleTruncate(kept.shownRoot, GRANT_PATH_WIDTH) : null
+  const rootFull = root && kept.shownRoot && root !== kept.shownRoot ? kept.shownRoot : undefined
   return <ul className="grant-list"><li className="grant-row">
     <Icon name="pin" />
     <div className="grant-text">
       <GrantName name={kept.shownPath} />
       <span className="grant-meta">
         <span data-test="remembered-when">{`Trusted ${ago(kept.at)}`}</span>
-        {root && <span data-test="remembered-root" data-tooltip={root === kept.shownRoot ? undefined : kept.shownRoot}>{` · for ${root}`}</span>}
+        {root && <span data-test="remembered-root" tabIndex={rootFull ? 0 : undefined} aria-label={rootFull && `for ${rootFull}`} data-tooltip={rootFull}>{` · for ${root}`}</span>}
       </span>
     </div>
     <Button size="small" kind="plain-faint" isDisabled={busy} onClick={onForget}>Forget</Button>
