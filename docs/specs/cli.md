@@ -979,11 +979,10 @@ token is sent to one host alone ([XAI-9](xai-sign-in.md#XAI-9)). The credential 
 
 The answer is a number or a name, in any case. If nothing is typed, or the input ends, the command exits
 successfully having run nothing. An answer that names no listed way is refused with the argument
-status (CLI-6). The `leo` of earlier versions is no longer a way: an answer or an argument naming it is
-refused, as is any other word that names no way.
+status (CLI-6).
 
-`bravebot auth login <way>` runs that way without the list. Any word after `brave`, `bedrock`,
-`import`, `chatgpt` or `xai` is refused. The list needs a terminal on stdin and on stderr. Without one, the
+`bravebot auth login <way>` runs that way without the list. A word that names no way, `leo` among
+them, is refused, and so is any word after `brave`, `bedrock`, `import`, `chatgpt` or `xai`. The list needs a terminal on stdin and on stderr. Without one, the
 command is refused with the argument status and the forms a script can type instead.
 
 Each way is run by the function its own command runs, so `auth login import` prompts, refuses and

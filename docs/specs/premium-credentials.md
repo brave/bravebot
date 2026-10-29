@@ -43,8 +43,7 @@ bravebot auth logout brave   # forget it
 ```
 
 The premium host is compiled in, and `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is an optional override of it
-([PREM-11](#PREM-11)). `bravebot import-leo-creds`, which earlier versions used to import a
-subscription from a Brave profile, is retired ([PREM-15](#PREM-15)).
+([PREM-11](#PREM-11)). `bravebot import-leo-creds` is retired ([PREM-15](#PREM-15)).
 
 ## Clauses
 
@@ -328,10 +327,9 @@ bravebot no longer imports a Leo subscription from Brave and that premium reques
 with `bravebot auth login brave`. It exits with the argument status ([CLI-6](cli.md#CLI-6)) and
 starts no work: it prints nothing on standard output and writes nothing to the state directory.
 
-`~/.bravebot/leo-premium.json` and `leo-premium.lock`, which earlier versions wrote, are neither read
-nor written. A person can delete them. The sandbox still denies the programs it confines access to
-`leo-premium.json`, so a file left from an earlier version stays protected
-([SANDBOX-12](sandboxing.md#SANDBOX-12)).
+`~/.bravebot/leo-premium.json` and `leo-premium.lock` are neither read nor written. A person can
+delete them. The sandbox still denies the programs it confines access to `leo-premium.json`, so a
+file left there stays protected ([SANDBOX-12](sandboxing.md#SANDBOX-12)).
 
 **Why.** Left as a word nothing recognises, the command would be taken as the task a one-shot run was
 asked to do and sent to a model. A command that did nothing without saying so would leave somebody
