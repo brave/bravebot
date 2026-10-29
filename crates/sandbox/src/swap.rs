@@ -33,13 +33,13 @@ pub struct LockedText {
     locked: bool,
 }
 
-// The mapping is this value's alone and nothing writes to it between construction and drop, so it
-// may be read from any thread and moved to any other.
 #[cfg(unix)]
 #[allow(
     unsafe_code,
     reason = "the mapping is owned by this value alone, so moving the value to another thread is sound"
 )]
+// SAFETY: nothing writes to the mapping between construction and drop, and the mapping is this
+// value's alone, so it may be moved to any other thread.
 // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
 unsafe impl Send for LockedText {}
 #[cfg(unix)]
@@ -47,6 +47,8 @@ unsafe impl Send for LockedText {}
     unsafe_code,
     reason = "nothing writes to the mapping between construction and drop, so reads from any thread are sound"
 )]
+// SAFETY: nothing writes to the mapping between construction and drop, so it may be read from any
+// thread.
 // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
 unsafe impl Sync for LockedText {}
 
@@ -74,8 +76,8 @@ impl LockedText {
         // Locked before the text is written, so there is no moment at which the pages hold it and
         // may still be written out.
         let locked = lock(start, mapped);
-        // `mapped` is at least `text.len()`, and the pages are fresh, so nothing else refers to
-        // them.
+        // SAFETY: `mapped` is at least `text.len()`, and the pages are fresh, so nothing else refers
+        // to them.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), start.as_ptr(), text.len()) };
         Self {
@@ -91,8 +93,8 @@ impl LockedText {
         reason = "from_raw_parts and from_utf8_unchecked over len bytes copied from a str, which clearing leaves as UTF-8"
     )]
     pub fn as_str(&self) -> &str {
-        // The `len` bytes at `start` were copied from a `str`, and clearing overwrites them with
-        // zero bytes, each of which is still UTF-8. The borrow ends before the drop that unmaps
+        // SAFETY: the `len` bytes at `start` were copied from a `str`, and clearing overwrites them
+        // with zero bytes, each of which is still UTF-8. The borrow ends before the drop that unmaps
         // them.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe {
@@ -114,7 +116,7 @@ impl LockedText {
     )]
     fn clear(&mut self) {
         for offset in 0..self.len {
-            // Inside the `len` bytes `new` wrote.
+            // SAFETY: inside the `len` bytes `new` wrote.
             // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             unsafe { self.start.as_ptr().add(offset).write_volatile(0) };
         }
@@ -139,7 +141,7 @@ impl Drop for LockedText {
         self.clear();
         if self.mapped != 0 {
             // Unmapping releases the lock with the pages, so there is no separate unlock to forget.
-            // The mapping is the one `new` made, and a value is dropped once.
+            // SAFETY: the mapping is the one `new` made, and a value is dropped once.
             // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             unsafe { libc::munmap(self.start.as_ptr().cast(), self.mapped) };
         }
@@ -153,6 +155,7 @@ impl Drop for LockedText {
     reason = "sysconf(_SC_PAGESIZE) takes no pointers and reads a system constant"
 )]
 fn page_size() -> usize {
+    // SAFETY: `sysconf(_SC_PAGESIZE)` takes no pointers and reads a system constant.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     usize::try_from(size).expect("every Unix this builds for states its page size")
@@ -166,6 +169,8 @@ fn page_size() -> usize {
     reason = "mmap of fresh anonymous private pages, with a failed mapping turned into handle_alloc_error"
 )]
 fn map(len: usize) -> std::ptr::NonNull<u8> {
+    // SAFETY: `mmap` of fresh anonymous private pages, with a failed mapping turned into
+    // `handle_alloc_error`.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let start = unsafe {
         libc::mmap(
@@ -196,6 +201,8 @@ fn map(len: usize) -> std::ptr::NonNull<u8> {
     reason = "mlock on pages this process maps only requests residency, so any range is safe to pass"
 )]
 fn lock(start: std::ptr::NonNull<u8>, len: usize) -> bool {
+    // SAFETY: `mlock` on pages this process maps only requests residency, so any range is safe to
+    // pass.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let locked = unsafe { libc::mlock(start.as_ptr().cast(), len) };
     locked == 0
