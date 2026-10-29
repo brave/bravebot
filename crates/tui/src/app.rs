@@ -2288,6 +2288,9 @@ fn restore_resumed(
     if let Some(note) = record.restore_checkouts(workspace, &mut handle) {
         session.note(note);
     }
+    // The names the file tools had reached, so the nested instructions and path-scoped rules
+    // they loaded are in force again from the first turn (INSTR-14, INSTR-16).
+    workspace.restore_touched(&record.touched);
     // After the transcript rather than before it, because each point's place in that
     // transcript is worked out from it: a point is a turn number in the record and an
     // index in the session, and the list it indexes has to exist first.
@@ -36680,6 +36683,7 @@ mod tests {
                     manifest: None,
                     rewind: session.rewind.points(),
                     checkouts: &[],
+                    touched: None,
                 },
             );
         }
@@ -37196,6 +37200,7 @@ mod tests {
                 manifest: None,
                 rewind: session.rewind.points(),
                 checkouts: &[],
+                touched: None,
             },
         );
         session.start_goal("cargo test exits 0".to_string());
@@ -38148,6 +38153,7 @@ mod tests {
                 manifest: None,
                 rewind: session.rewind.points(),
                 checkouts: &workspace.session_checkouts(),
+                touched: None,
             },
         );
         assert_eq!(
@@ -41586,6 +41592,7 @@ mod tests {
                     manifest: None,
                     rewind: session.rewind.points(),
                     checkouts: &[],
+                    touched: None,
                 },
             );
         }

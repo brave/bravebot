@@ -349,6 +349,7 @@ fn save(handle: &mut Handle, root: &Path, prompt: &str) {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 }

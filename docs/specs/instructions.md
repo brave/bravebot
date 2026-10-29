@@ -539,8 +539,12 @@ file, or which skills directory with a count, and never what it holds ([SKILL-4]
 
 Composed per turn like every other source ([INSTR-7](#INSTR-7)): a file read in a turn takes effect
 from the next turn, and the turn that read it keeps the instructions it started with. The record is
-the session's, so it is empty again in a resumed session and after `/cd`. [INSTR-16](#INSTR-16)
-reads the files of the same record.
+the session's, so it is empty after `/cd`. The session's record keeps the directories as names, and a
+resumed session places each by its spelling under the root again, so a name that now lands outside
+the root adds nothing. The text of the files they name is read on the first turn of the resumed
+session as on any other, through the trust map. A fork carries the names with the conversation it
+copies ([SESSION-3](sessions.md#SESSION-3)). [INSTR-16](#INSTR-16) reads the files of the same
+record.
 
 **Why.** A package in a monorepo has conventions the project's root file cannot state without
 every turn carrying every package's. Reading downward only into directories the planner chose, and
@@ -562,6 +566,12 @@ which file is read.
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_and_not_named`
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_beside_a_shallower_one_of_its_name`
 `verified-by: bravebot_agent::skills::a_nested_skill_on_the_list_covers_a_distrusted_project_entry_of_its_name`
+`verified-by: bravebot_agent::preamble::a_workspace_restored_from_a_record_composes_the_nested_file_and_the_rule_of_the_run_before`
+`verified-by: bravebot_agent::workspace::a_workspace_restored_from_a_record_places_each_name_under_the_root_and_keeps_the_limits`
+`verified-by: bravebot_session::sessions::the_names_the_file_tools_reached_are_written_and_read_back`
+`verified-by: bravebot_session::sessions::a_record_from_before_touched_names_were_kept_reads_as_having_none`
+`verified-by: bravebot_session::sessions::a_fork_carries_the_names_the_file_tools_reached`
+`verified-by: bravebot_cli::running::a_continued_run_has_the_rule_the_earlier_runs_file_read_loaded`
 `verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_read`
 `verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_written`
 `verified-by: bravebot_agent::workspace::moving_the_working_directory_forgets_the_directories_worked_in`
@@ -675,8 +685,8 @@ during a turn takes effect on the next one. A rule in force on every turn, and a
 has already brought in when the turn begins, is measured by [INSTR-15](#INSTR-15) as an
 `AGENTS.md` is.
 
-The record of touched files is INSTR-14's, kept beside its directories: the session's, empty again
-in a resumed session and after `/cd`, and at most 1024 files, which are compared with a held rule's
+The record of touched files is INSTR-14's, kept beside its directories: the session's, empty after
+`/cd`, and at most 1024 files, which are compared with a held rule's
 globs once when a turn begins and once more for each file touched after. A front end that builds a
 workspace for each turn hands it on with the checkouts the session keeps
 ([CHECKOUT-16](checkouts.md#CHECKOUT-16)), so the record outlives a turn there too.
@@ -696,8 +706,11 @@ rule for the 1025th. A rule that arrives while a turn runs changes the system me
 where [BACKEND-27](backends.md#BACKEND-27) and [BACKEND-32](backends.md#BACKEND-32) put their first
 breakpoint, so the next request reads the system prompt and the history in front of it again at
 full price, once per request that adds a rule. A rule that arrives while a turn runs is not
-measured by [INSTR-15](#INSTR-15) until the next turn begins. A resumed session loads a path-scoped
-rule again only when a file it matches is touched again.
+measured by [INSTR-15](#INSTR-15) until the next turn begins. The session's record keeps the names
+of the files touched and of the rules told, so a resumed session has the rules its earlier turns
+loaded from its first turn, read again through the trust map and the `deny` rules. A name in a
+record is placed under the root by its spelling as a typed name is, and the 1024-file limit holds
+for a record as for a live session.
 
 `verified-by: bravebot_agent::preamble::a_rule_with_paths_is_in_the_prompt_only_after_a_file_it_matches_is_touched`
 `verified-by: bravebot_agent::preamble::a_loaded_rule_goes_after_everything_else_in_the_prompt`
@@ -710,6 +723,9 @@ rule again only when a file it matches is touched again.
 `verified-by: bravebot_agent::preamble::a_rule_whose_frontmatter_or_paths_list_never_closes_is_left_out_with_a_notice`
 `verified-by: bravebot_agent::preamble::the_persons_rules_are_not_read_by_a_way_that_goes_through_the_workspace`
 `verified-by: bravebot_agent::preamble::a_rule_stays_in_force_for_the_turns_after_the_file_that_loaded_it`
+`verified-by: bravebot_agent::preamble::a_workspace_restored_from_a_record_composes_the_nested_file_and_the_rule_of_the_run_before`
+`verified-by: bravebot_session::sessions::the_names_the_file_tools_reached_are_written_and_read_back`
+`verified-by: bravebot_cli::running::a_continued_run_has_the_rule_the_earlier_runs_file_read_loaded`
 `verified-by: bravebot_agent::preamble::a_long_rule_file_in_force_is_measured_like_an_instructions_file`
 `verified-by: bravebot_agent::preamble::a_rule_file_whose_name_is_not_text_is_not_read_as_the_one_its_lossy_spelling_names`
 `verified-by: bravebot_agent::rules::a_block_list_names_one_glob_a_line`

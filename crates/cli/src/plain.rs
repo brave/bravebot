@@ -316,6 +316,11 @@ fn run(
     let resumed = hosted_as
         .as_deref()
         .and_then(|id| bravebot_session::sessions::load(workspace.root(), id));
+    // The names the file tools had reached, so the nested instructions and path-scoped rules they
+    // loaded are in force from the first prompt (INSTR-14, INSTR-16).
+    if let Some(record) = resumed.as_ref() {
+        workspace.restore_touched(&record.touched);
+    }
     // The record is held from here for as long as the session runs, before anything is asked or
     // any server is reached: a session started again for a record a terminal holds is refused,
     // since two processes would write one record (SESSION-38).
@@ -927,6 +932,7 @@ impl Kept {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
             },
         );
     }
@@ -1023,6 +1029,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
         self.answers.adopt(completed.decisions);
         if let Some(kept) = &mut self.kept {
             kept.handle.set_injected_facts(self.injected_facts.clone());
+            kept.handle.set_touched(self.workspace.touched_record());
             match &completed.outcome {
                 Ok(outcome) => kept.after_a_turn(
                     prompt,

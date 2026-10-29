@@ -90,8 +90,9 @@ globs are the ones `list_files` takes: `*`, `**`, `?` and `{a,b}`, with no `[abc
 Only a name the planner typed to a file tool or you typed after `@` counts. A name a listing, a
 search or a command printed does not. Each rule file goes through the trust check and the `deny`
 rules like `AGENTS.md`: a project directory you have not vouched for is reported with a count, and
-no name or text. The session remembers up to 1024 touched files, and `/cd` and a resumed session
-start with none.
+no name or text. The session remembers up to 1024 touched files, and `/cd` starts with none. A
+resumed session has the touched files and the rules it was told of from the session's record, so the
+nested instructions and path-scoped rules an earlier turn loaded are in force from the first turn.
 
 **The project's file is looked for under three names, and the first that exists is the one.** Not all
 three: a repository holding two of them holds one set of instructions under two names, and reading

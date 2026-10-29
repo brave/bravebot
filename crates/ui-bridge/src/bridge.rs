@@ -497,7 +497,7 @@ impl Bridge {
         if let Some(open) = self
             .open
             .get(&handle)
-            .filter(|_| !record.checkouts.is_empty())
+            .filter(|_| !record.checkouts.is_empty() || !record.touched.is_empty())
         {
             let settings = crate::settings::layers(Some(&directory), self.settings.as_deref());
             take_back_checkouts(open, &record, &settings);
@@ -766,7 +766,7 @@ impl Bridge {
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
         // work is the habit that turns into a stall later.
-        let (snapshot, said, trust, programs, directories, todos, parent, inherited) = {
+        let (snapshot, said, trust, programs, directories, todos, parent, inherited, touched) = {
             let state = open
                 .state
                 .lock()
@@ -788,6 +788,13 @@ impl Bridge {
                 state.todos.clone(),
                 parent.clone(),
                 rules.clone(),
+                // The names the parent's file tools reached, which the record carries and a
+                // fork keeps with the conversation it copies (SESSION-18). A parent that has
+                // run no turn here and was not resumed holds none.
+                state
+                    .kept
+                    .as_ref()
+                    .map(bravebot_agent::workspace::KeptBetweenTurns::touched_record),
             )
         };
 
@@ -865,6 +872,12 @@ impl Bridge {
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
         // session it was cut from.
         let settings_rules = self.open_under_rules(&child, Some(inherited));
+        if let Some(touched) = touched.filter(|touched| !touched.is_empty())
+            && let Some(open) = self.open.get(&child)
+        {
+            let settings = crate::settings::layers(Some(&project), self.settings.as_deref());
+            take_back_touched(open, &touched, &settings);
+        }
 
         let title = if parent_title.is_empty() {
             store::load(&project, &parent_id).map(|record| record.title)
@@ -2594,6 +2607,25 @@ fn take_back_checkouts(open: &Open, record: &Record, settings: &Settings) {
         if let Some(handle) = state.handle.as_mut() {
             record.restore_checkouts(&workspace, handle);
         }
+        workspace.restore_touched(&record.touched);
+        state.kept = Some(workspace.kept_between_turns());
+    }
+}
+
+/// As a session is forked, place the names the parent's file tools reached as the child's, so the
+/// nested instructions and path-scoped rules the copied conversation was written under are in force
+/// from its first turn (SESSION-18, INSTR-14, INSTR-16). The checkouts are not carried
+/// (CHECKOUT-16): the child's workspace begins its own and takes the names only.
+fn take_back_touched(
+    open: &Open,
+    touched: &bravebot_agent::workspace::TouchedRecord,
+    settings: &Settings,
+) {
+    let Ok(workspace) = session_workspace(open, settings) else {
+        return;
+    };
+    if let Ok(mut state) = open.state.lock() {
+        workspace.restore_touched(touched);
         state.kept = Some(workspace.kept_between_turns());
     }
 }
@@ -3363,6 +3395,10 @@ pub(crate) fn save(
         .as_ref()
         .map(bravebot_agent::workspace::KeptBetweenTurns::checkouts)
         .unwrap_or_default();
+    let touched = state
+        .kept
+        .as_ref()
+        .map(bravebot_agent::workspace::KeptBetweenTurns::touched_record);
     let first = state.first_prompt.clone().unwrap_or_default();
     // Taken once and lent to both readers below. A snapshot copies the whole conversation, and
     // the archive count wanted for `turn.done` is a field of the one being written down anyway —
@@ -3391,6 +3427,7 @@ pub(crate) fn save(
             // marking one of ours would be a claim about a session nobody can resume.
             manifest: None,
             checkouts: &checkouts,
+            touched: touched.as_ref(),
         },
     );
     handle.append_audit(turn, trail.events());
@@ -3811,6 +3848,72 @@ mod coverage_tests {
             "forking took the parent's answers away"
         );
         assert!(parent_state.answers.servers.is_some());
+    }
+
+    /// SESSION-18, INSTR-14, INSTR-16: a desktop fork keeps the names of the files the parent's
+    /// file tools reached and the rules it was told, as the record a terminal fork copies does, so
+    /// the nested instructions and path-scoped rules the copied conversation was written under are
+    /// in force from the child's first turn. The parent keeps its own.
+    #[test]
+    fn a_desktop_fork_keeps_the_names_the_parents_file_tools_reached() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("fork-touched");
+        std::fs::create_dir_all(directory.join("pkg")).unwrap();
+        let root = directory.as_path();
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("work"));
+        let record: Record = serde_json::from_value(json!({
+            "id": "touched-parent", "directory": root, "title": "work",
+            "started": 1, "updated": 1,
+            "conversation": conversation.snapshot()
+        }))
+        .unwrap();
+        let mut parent_state =
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free");
+        let workspace = Workspace::new(root).unwrap();
+        workspace.record_touch("pkg/lib.rs");
+        assert!(workspace.take_telling("project"));
+        let touched = workspace.touched_record();
+        assert!(!touched.is_empty());
+        parent_state.kept = Some(workspace.kept_between_turns());
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let parent = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            parent_state,
+            true,
+            None,
+            false,
+        ));
+
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.fork", "params": {
+                "session": parent, "prompt": 0, "text": "work"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let forked = bridge.dispatch(&request).unwrap();
+
+        let child = bridge
+            .open
+            .get(forked["session"].as_str().unwrap())
+            .unwrap();
+        let state = child.state.lock().unwrap();
+        let carried = state
+            .kept
+            .as_ref()
+            .expect("the fork's workspace was begun without the names")
+            .touched_record();
+        assert_eq!(carried, touched, "the fork lost the names");
+        drop(state);
+        let parent_state = bridge.open.get(&parent).unwrap().state.lock().unwrap();
+        assert_eq!(
+            parent_state.kept.as_ref().unwrap().touched_record(),
+            touched,
+            "forking took the parent's names away"
+        );
     }
 
     /// A turn's workspace is new, so the server warning the record kept has to reach the point a

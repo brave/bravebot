@@ -68,6 +68,7 @@ use results::{
     MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
     MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES,
 };
+pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub use volume::{BACKSLASH_SEPARATES, key_of, trust_store, volume_folds_case};
 pub(crate) use volume::{on_disk, one_file};
@@ -332,6 +333,11 @@ impl KeptBetweenTurns {
     /// The checkouts the session made and has not removed (CHECKOUT-21).
     pub fn checkouts(&self) -> Vec<SessionCheckout> {
         listed(&self.session_checkouts)
+    }
+
+    /// What the session has touched, for its record to carry (INSTR-14, INSTR-16).
+    pub fn touched_record(&self) -> TouchedRecord {
+        locked(&self.touched).record()
     }
 }
 

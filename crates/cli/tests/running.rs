@@ -11110,6 +11110,54 @@ fn a_run_given_the_workspace_flag_reads_a_project_file_as_trusted_and_writes_no_
     );
 }
 
+/// INSTR-14, INSTR-16: a run carrying a session on has the path-scoped rule the earlier run's file
+/// read loaded in its first request, and a run carrying on a session that read nothing has not.
+/// A resume that dropped the names the record keeps would leave the rule out until the file was
+/// read again. The control is the second session, which makes the rule's absence mean something.
+#[test]
+fn a_continued_run_has_the_rule_the_earlier_runs_file_read_loaded() {
+    let (gateway, scratch, cwd) =
+        a_project_whose_notes_the_model_reads("cli-running-rule-continued");
+    std::fs::create_dir_all(cwd.join(".bravebot/rules")).expect("create the rules");
+    std::fs::write(
+        cwd.join(".bravebot/rules/notes.md"),
+        "---\npaths: [\"**/*.md\"]\n---\nTHE-RULE-FOR-NOTES\n",
+    )
+    .expect("write the rule");
+    let earlier = |prompt: &str| {
+        let run = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--trust-workspace", "--json", "-p", prompt],
+        );
+        let (stdout, stderr) = said(&run);
+        assert!(run.status.success(), "{stderr}");
+        session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"))
+    };
+    let read_it = earlier("read the notes");
+    let read_nothing = earlier("hello");
+    let _ = requests(&gateway);
+
+    for (session, expects_the_rule) in [(&read_nothing, false), (&read_it, true)] {
+        let run = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--trust-workspace", "--resume", session, "-p", "and again"],
+        );
+        let (_, stderr) = said(&run);
+        assert!(run.status.success(), "{stderr}");
+        let sent = requests(&gateway);
+        let first = sent.first().expect("the run sent a request");
+        assert_eq!(
+            first.contains("THE-RULE-FOR-NOTES"),
+            expects_the_rule,
+            "the first request of the run continuing {session}: {first}"
+        );
+    }
+}
+
 /// TRUST-26. A run carrying on an earlier session keeps the map that session recorded and adds the
 /// working directory to it, so the flag trusts a file the earlier session left untrusted. The
 /// continuation without the flag is the control: it reads the file quarantined. Each continues a

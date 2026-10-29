@@ -1889,6 +1889,12 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         .as_ref()
         .map(|record| bravebot_agent::Conversation::restored(record.conversation.clone()))
         .unwrap_or_default();
+    // The names the earlier run's file tools had reached, so the nested instructions and
+    // path-scoped rules they loaded are in force from this run's first request (INSTR-14,
+    // INSTR-16).
+    if let Some(record) = continued.as_ref() {
+        workspace.restore_touched(&record.touched);
+    }
     let begins = conversation.recounted().len();
     let started = bravebot_session::sessions::now();
     let mut rewind = continued.as_ref().map(|record| {
@@ -1965,6 +1971,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
                 agent,
                 started,
                 events: sink.stamped(),
+                touched: workspace.touched_record(),
             },
         );
     }
