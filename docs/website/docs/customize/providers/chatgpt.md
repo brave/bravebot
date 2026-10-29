@@ -261,8 +261,9 @@ token, the listing's fields, and the events of a text turn, a tool call and a re
 Read from OpenAI's own SDK or another program's source and not observed against the service.
 [What the documents state](#what-the-documents-state) says what OpenAI's own documents add to some of them:
 
-- that the authorization server accepts a redirect to any loopback port, where only two ports the operating
-  system chose have been tried. OpenAI's authorization endpoint answered every request that was not from a
+- that the authorization server accepts a redirect to a loopback port other than the two the operating
+  system chose. Two sign-ins on other ports were tried and not answered in time, and nothing is claimed of
+  those two. OpenAI's authorization endpoint answered every request that was not from a
   browser with 403, so this could not be tried another way. OpenAI's documentation says only the port may
   vary at later sign-ins, and RFC 8252 says an authorization server must allow any port for a loopback
   redirect, which shows nothing of this one. OpenAI's own SDK takes any port as a setting, and other programs

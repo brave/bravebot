@@ -2429,6 +2429,16 @@ These are the places where another spec states something about this service, eac
   system error or cause, so a full disk and a folder that cannot be written get the same advice.
 - A person on a machine with no browser forwards the listener's port, which changes at every sign-in, and
   no device-code route is available to this program.
+- The listener binds a port the operating system chooses, and the authorization server was seen to accept two
+  such ports. Two sign-ins on other ports were tried and not answered in time, and nothing is claimed of
+  those two ([CHATGPT-4](#CHATGPT-4)). Why they were not answered was not seen. If the server refused a
+  port, the sign-in would end at the time bound ([CHATGPT-13](#CHATGPT-13)) with no callback, which is also
+  what a sign-in that is not answered in time looks like. A fixed port with a fallback is not
+  built, because no observation shows that a port the operating system chooses fails. Codex uses port 1455
+  and falls back to 1457 for its own client, and nothing read says those ports apply to the clients this
+  program registers. Observing other ports, the ID token of the code exchange, a narrower scope, a proof at
+  the code exchange and the clients per host identifier needs a person with a browser and a ChatGPT account
+  (#3390).
 - Where the listing cannot be read the pickers list the compiled names ([CHATGPT-9](#CHATGPT-9)), and a
   person who wants another types `chatgpt/<name>`. The names are the eight one account's listing offered on
   2026-10-25 and 2026-10-26, so another account may be offered others and one may name a model the account
