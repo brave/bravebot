@@ -440,8 +440,10 @@ enum Switch {
 /// machine-level pin, then the export, then the settings files.
 ///
 /// An export of any other value turns Bedrock off, a blank one included: the name is not baked in,
-/// so a blank is not passed over for a value under it. A settings file that turns it on may be a
-/// checkout's, which a session started elsewhere does not read, so it leaves the switch recordable.
+/// so a blank is not passed over for a value under it. A settings file that turns it on leaves the
+/// switch recordable: it is the person's own file or the file `--settings` names, since a
+/// checkout's decides nothing (BACKEND-33), and [`record`] writes nothing where the person's own
+/// file holds it already.
 fn switch(pinned: Option<&str>, exported: Option<&str>, recorded: Option<&str>) -> Switch {
     let on = |value: &str| value.trim() == "1";
     match (pinned, exported, recorded) {

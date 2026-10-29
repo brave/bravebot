@@ -262,10 +262,14 @@ spelling: seven of the ten above, plus the six AWS ones. The three exceptions ar
 the file, except where an [administrator pinned it](managed-settings.md), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
-Six network names can go there as well: `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`, `HTTPS_PROXY`,
-`HTTP_PROXY` and `NO_PROXY`. They are read from your own file and a `--settings` file outside the
-project, and from no project or local file; see
-[certificates and proxies](../security/security.md#certificates-and-proxies).
+Nine names are read from your own file and a `--settings` file outside the project, and from no
+project or local file: the six network names `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`,
+`HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and the three Google names. So are the six Bedrock names
+`BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers,
+because they choose the AWS account a conversation is sent through. `bravebot doctor` reports one a
+project or local file names and the name decides nothing; see
+[certificates and proxies](../security/security.md#certificates-and-proxies) for the network names
+and [Bedrock](providers/bedrock.md) for the AWS ones.
 
 ## `settings.json`
 
