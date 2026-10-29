@@ -162,3 +162,34 @@ fn a_picked_line_waits_as_an_agent_command_and_addresses_the_turn_after() {
     );
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// A line holds one pick, so taking a second replaces the first. Rejects: the first marker staying
+/// in the line, or Enter sending the first name.
+#[test]
+fn a_second_definition_picked_replaces_the_first_and_only_it_is_sent() {
+    let (mut session, root) = typing(
+        "a_second_definition_picked_replaces_the_",
+        "review the diff @l",
+    );
+    handle_key(&mut session, key(KeyCode::Enter));
+    assert_eq!(session.input(), "review the diff [@lantern] ");
+
+    type_line(&mut session, "@rev");
+    session.settle_definitions(rows);
+    assert_eq!(
+        handle_key(&mut session, key(KeyCode::Enter)),
+        Action::Redraw,
+        "Enter on the second row sent the line the first pick stood for"
+    );
+    assert_eq!(session.input(), "review the diff [@reviewer] ");
+
+    assert_eq!(
+        handle_key(&mut session, key(KeyCode::Enter)),
+        Action::Address(
+            "reviewer review the diff".to_string(),
+            Vec::new(),
+            Vec::new()
+        )
+    );
+    std::fs::remove_dir_all(&root).ok();
+}

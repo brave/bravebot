@@ -161,7 +161,9 @@ them cannot read a pick differently from the terminal
 `[@Name]` marker and stages the definition beside the line, as a dropped file is staged
 ([DROP-6](dropping.md#DROP-6)), so in the text of a prompt `@` still names only a file. Enter on a
 line whose marker is still in it addresses the definition exactly as `/agent <name> <task>` would,
-with the marker taken out of the task. The row a person picks says which kind of thing it is, and
+with the marker taken out of the task. A line holds one pick: taking a second row takes the first
+marker out of the line, so the name sent is the second and the first marker is not left in the task.
+The row a person picks says which kind of thing it is, and
 the list is the cost: a person typing `@` is offered names that a directory's files do not
 contain, and has to read which kind each row is.
 
@@ -181,6 +183,7 @@ it already addresses the definition.
 `verified-by: bravebot_ui_bridge::mentions_running_tests::offering_definitions_during_a_turn_uses_the_last_list`
 `verified-by: bravebot_tui::app::tests::summoning::the_definitions_are_listed_ahead_of_the_files_with_what_each_is_for`
 `verified-by: bravebot_tui::app::tests::summoning::a_picked_definition_addresses_the_line_as_the_agent_command_does`
+`verified-by: bravebot_tui::app::tests::summoning::a_second_definition_picked_replaces_the_first_and_only_it_is_sent`
 
 <a id="ADDRESS-3"></a>
 ### ADDRESS-3: only a line a person typed into the box, or the command line that started the session
