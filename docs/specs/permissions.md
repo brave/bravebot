@@ -210,7 +210,7 @@ bytes. A backslash is a separator on the hosts that separate with one and an ord
 others, and a bracket class changes what `[` and `]` mean in every name that holds them. A quoted
 specifier changes the reading of only the rules whose specifier both begins and ends with a quote,
 which name a file whose name does, and the person respells those with one more pair. Leaving the
-names unspellable and reporting a rule for them was not enough, because a rule for a name holding
+names unspellable and reporting a rule for them is not enough, because a rule for a name holding
 `*` is a valid pattern and nothing can tell it from a wildcard on purpose.
 
 Segments are separated by `/`. A path pattern and the path it is matched against are both spelled
