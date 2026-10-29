@@ -1844,11 +1844,40 @@ impl Servers {
 /// under rust-analyzer) are its business and outlive it by however long they take to notice, so
 /// this narrows the window rather than closing it, and what loses the race is a directory left
 /// behind rather than anything read.
+///
+/// The servers are stopped beside each other ([`stop_together`]), so ending a session waits for the
+/// slowest server and not for the sum of them.
 impl Drop for Servers {
     fn drop(&mut self) {
-        self.running.clear();
+        stop_together(self.running.drain().map(|(_, server)| server));
         self.publish();
     }
+}
+
+/// Stop `servers`, each on a thread of its own, and return once every one has stopped.
+///
+/// A server that ignores `shutdown` is waited on for [`SHUTDOWN_GRACE`] twice before it is killed
+/// ([`Server`]'s `Drop`), so stopped one after another the servers of a session cost the sum of
+/// their waits. A server is stopped by nothing but its own `Drop`, so this changes when each one
+/// starts to stop and not how: none is left running when this returns. Where a thread cannot be
+/// started its server is dropped in the thread that asked, which is the same stop.
+fn stop_together(servers: impl IntoIterator<Item = Server>) {
+    let mut servers: Vec<Server> = servers.into_iter().collect();
+    // One needs no thread, and the last of several is stopped here while the others are being
+    // stopped beside it.
+    let Some(last) = servers.pop() else {
+        return;
+    };
+    std::thread::scope(|scope| {
+        for server in servers {
+            // Dropped with the closure if the thread cannot be started, which stops it here.
+            std::thread::Builder::new()
+                .name("lsp stop".into())
+                .spawn_scoped(scope, move || drop(server))
+                .ok();
+        }
+        drop(last);
+    });
 }
 
 /// What a person is being asked to approve.
@@ -3661,6 +3690,123 @@ done
             !a_process_is_running(pid),
             "a server that ignored shutdown outlived the set that started it"
         );
+    }
+
+    /// A language server that answers `shutdown` only once the set's other server has been asked to
+    /// shut down as well, and records that it saw that as `met.<pid>`. A server stopped before the
+    /// other is asked never sees it, is not answered, and is killed. It exits when told to, and
+    /// records its process id as `pid.<pid>` before anything else.
+    #[cfg(unix)]
+    const WAITS_FOR_THE_OTHER_SERVER_TO_BE_ASKED: &str = r#"#!/bin/sh
+here=$(dirname "$0")
+echo $$ > "$here/pid.$$"
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r _blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"rustAnalyzer/cachePriming","value":{"kind":"end"}}}'
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"gopls/loading","value":{"kind":"end"}}}'
+      ;;
+    *'"textDocument/definition"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[]}"
+      ;;
+    *'"shutdown"'*)
+      : > "$here/asked.$$"
+      tries=0
+      while [ $tries -lt 150 ]; do
+        set -- "$here"/asked.*
+        if [ $# -ge 2 ]; then
+          : > "$here/met.$$"
+          reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+          break
+        fi
+        sleep 0.02
+        tries=$((tries + 1))
+      done
+      ;;
+    *'"exit"'*) exit 0 ;;
+  esac
+done
+"#;
+
+    #[cfg(unix)]
+    const STOPS_TOGETHER: &str = "bravebot-lsp-stops-together";
+
+    #[cfg(unix)]
+    fn the_server_that_waits_for_the_other(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(STOPS_TOGETHER).join("server"))
+    }
+
+    /// The names in `directory` that start with `prefix`.
+    #[cfg(unix)]
+    fn recorded(directory: &Path, prefix: &str) -> Vec<String> {
+        std::fs::read_dir(directory)
+            .expect("read the directory")
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name.starts_with(prefix))
+            .collect()
+    }
+
+    /// LSP-8: the servers of a session are stopped beside each other, so leaving waits for the
+    /// slowest and not for the sum.
+    ///
+    /// Driven against two processes, a Rust server and a Go one, that each answer `shutdown` only
+    /// once both have been asked. Observed as an event and not as a duration: stopped one after
+    /// the other, the first is never answered because the second is not asked until it is gone, so
+    /// it records no meeting and is killed, and only the second meets the first's request. A time
+    /// limit would pass or fail with the load on the machine running it.
+    #[cfg(unix)]
+    #[test]
+    fn the_servers_of_a_set_are_stopped_beside_each_other() {
+        let (_launching, scratch, workspace, rust_file) =
+            a_workspace_with_a_reporting_server(STOPS_TOGETHER);
+        std::fs::write(
+            scratch.join("server"),
+            WAITS_FOR_THE_OTHER_SERVER_TO_BE_ASKED,
+        )
+        .expect("write the server");
+        let go_file = workspace.join("src").join("b.go");
+        std::fs::write(&go_file, "package b\n").expect("write the file");
+        let mut servers = Servers::new(
+            workspace,
+            None,
+            the_server_that_waits_for_the_other,
+            false,
+            Vec::new,
+        );
+        a_definition_in(&mut servers, &rust_file);
+        a_definition_in(&mut servers, &go_file);
+        assert_eq!(servers.running(), 2, "the set did not start both servers");
+        let pids: Vec<u32> = recorded(&scratch, "pid.")
+            .iter()
+            .map(|name| name["pid.".len()..].parse().expect("a process id"))
+            .collect();
+        assert_eq!(pids.len(), 2, "each server records its process id");
+
+        drop(servers);
+
+        assert_eq!(
+            recorded(&scratch, "met.").len(),
+            2,
+            "a server was stopped before the other was asked to stop, so it never saw it"
+        );
+        for pid in pids {
+            assert!(
+                !a_process_is_running(pid),
+                "a server outlived the set that started it"
+            );
+        }
     }
 
     /// LSP-10: an incognito session keeps no index under `~/.bravebot`, and what it does instead

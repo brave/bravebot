@@ -397,7 +397,8 @@ and shut down when the session ends. It is not started at launch, and a session 
 of a language starts nothing.
 
 The process is killed if it does not exit on request, so a server that ignores `shutdown` does not
-outlive the agent that started it.
+outlive the agent that started it. The servers of a session are stopped beside each other, so ending
+the session waits for the slowest of them and not for the sum of their waits.
 
 A delegate asks the servers of the session that spawned it, not a set of its own. A server one
 started answers the session's next turn, and a start a delegate causes is put to the person through
@@ -417,6 +418,7 @@ nobody asks about spends a person's CPU on nothing.
 `verified-by: bravebot_lsp::server::no_server_starts_until_a_request_needs_one`
 `verified-by: bravebot_lsp::server::a_server_that_ignores_shutdown_is_killed`
 `verified-by: bravebot_lsp::server::a_server_that_ignores_shutdown_does_not_outlive_its_set`
+`verified-by: bravebot_lsp::server::the_servers_of_a_set_are_stopped_beside_each_other`
 `verified-by: bravebot_lsp::server::dropping_the_set_stops_every_server`
 `verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
 `verified-by: bravebot_agent::lsp::a_turn_that_is_handed_no_set_starts_a_server_of_its_own`
