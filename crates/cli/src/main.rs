@@ -2,8 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+mod acp;
 mod auth;
 mod background;
+mod brave;
 mod bug_report;
 mod chatgpt;
 mod completion;
@@ -26,6 +28,7 @@ mod permissions_check;
 mod plain;
 mod progress;
 mod push_identity;
+mod reopen;
 mod sandbox_check;
 mod session_delete;
 mod session_import;
@@ -609,13 +612,22 @@ fn main() -> ExitCode {
                 stopped_before_the_turn(as_json, Ending::Argument, t!(cli_completion_needs_a_shell))
             }
         },
+        Some("acp") if skip_permissions => {
+            stopped_before_the_turn(as_json, Ending::Argument, t!(cli_acp_refuses_bypass))
+        }
+        Some("acp") => match acp::command(&args[1..]) {
+            Some(()) => ExitCode::SUCCESS,
+            None => {
+                stopped_before_the_turn(as_json, Ending::Argument, t!(cli_acp_takes_nothing_else))
+            }
+        },
         Some("shell-init") => match shell_init::command(&args[1..]) {
             Some(()) => ExitCode::SUCCESS,
             None => {
                 stopped_before_the_turn(as_json, Ending::Argument, t!(cli_shell_init_needs_a_shell))
             }
         },
-        Some("import-leo-creds") => auth::import_leo_creds(&args[1..]),
+        Some("import-leo-creds") => fail(Ending::Argument, t!(cli_import_leo_creds_retired)),
         Some("import-providers") => import::providers(&args[1..]),
         Some(flag) if flag.starts_with('-') => {
             refused_with_the_usage(as_json, t!(cli_unknown_option, flag = flag))
@@ -1152,6 +1164,7 @@ fn prepare_the_run(
         // was refused above, so this task is a turn's.
         .with_system_prompts(prompts)
         .addressing(agent.clone())
+        .addressing_standing(true)
         .model_outranks_a_definition(named_on_the_command_line)
         // Every round is told the condition it is judged against, the first one included (GOAL-14).
         .working_towards(goal.clone());
@@ -1857,6 +1870,9 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         cancel,
     } = run;
     let mut session: Option<String> = None;
+    // Taken before the task is given to the turn, which is where a mode that was bypass ends up
+    // readable only through the handle it holds.
+    let permission_mode = task.permission_mode.clone();
     // What a continued session vouched for comes back with it, as it does in a session
     // (SESSION-1). The programs it vouched for do not (CLI-1): the run is handed none, and
     // the record keeps the ones it holds.
@@ -1876,6 +1892,12 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         .as_ref()
         .map(|record| bravebot_agent::Conversation::restored(record.conversation.clone()))
         .unwrap_or_default();
+    // The names the earlier run's file tools had reached, so the nested instructions and
+    // path-scoped rules they loaded are in force from this run's first request (INSTR-14,
+    // INSTR-16).
+    if let Some(record) = continued.as_ref() {
+        workspace.restore_touched(&record.touched);
+    }
     let begins = conversation.recounted().len();
     let started = bravebot_session::sessions::now();
     let mut rewind = continued.as_ref().map(|record| {
@@ -1952,6 +1974,8 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
                 agent,
                 started,
                 events: sink.stamped(),
+                touched: workspace.touched_record(),
+                answered_by_mode: permission_mode.has_bypassed(),
             },
         );
     }
@@ -2365,6 +2389,9 @@ fn interactive(
         // the session never took a turn, and a one-shot run exits with the same status for the
         // same name (CLI-17).
         Ok(bravebot_tui::app::Ended::Refused(refused)) => fail(Ending::Argument, refused),
+        // After the terminal is handed back, like the rest, so the session it opens has the terminal
+        // to itself (SCREEN-8).
+        Ok(bravebot_tui::app::Ended::Open(opening)) => reopen::open(&opening),
         Err(err) => fail(Ending::Failed, t!(cli_interface_problem, problem = err)),
     }
 }
@@ -2461,6 +2488,7 @@ mod tests {
     #[test]
     fn the_commands_that_start_no_session_refuse_every_flag_that_shapes_one() {
         let commands = [
+            "acp",
             "doctor",
             "update",
             "bug-report",
@@ -4156,6 +4184,7 @@ mod tests {
     #[test]
     fn a_definition_is_refused_where_nothing_would_work_under_it() {
         for first in [
+            "acp",
             "doctor",
             "update",
             "bug-report",
@@ -4283,6 +4312,7 @@ mod tests {
     #[test]
     fn the_system_prompt_flags_are_refused_where_nothing_would_use_them() {
         for first in [
+            "acp",
             "doctor",
             "update",
             "bug-report",

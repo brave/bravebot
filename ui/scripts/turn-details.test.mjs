@@ -34,10 +34,9 @@ test('notices preserve wording and order; only identical consecutive groups defa
   turns = receiveTurn(turns, done(3, { notices }))
   assert.equal(turns[3].noticesOpen, true)
   assert.deepEqual(turns[3].notices, notices)
-  turns = { ...turns, 3: { ...turns[3], noticesOpen: false, statsOpen: true } }
+  turns = { ...turns, 3: { ...turns[3], noticesOpen: false } }
   turns = receiveTurn(turns, event('audit', 3, { event: { kind: 'future_event' } }))
   assert.equal(turns[3].noticesOpen, false)
-  assert.equal(turns[3].statsOpen, true)
 })
 
 test('unavailable metrics stay distinct from zero; cancellation never invents final usage', () => {

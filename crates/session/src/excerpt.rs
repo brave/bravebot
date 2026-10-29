@@ -101,7 +101,7 @@ impl Record {
             match said {
                 // A shell line's output is shown as it was recorded untagged, as a turn of the
                 // person's, and the tag leaves it so.
-                Said::User(text)
+                Said::User(text, _)
                 | Said::Composed {
                     why: Composed::Written,
                     text,

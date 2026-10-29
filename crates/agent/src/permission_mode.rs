@@ -226,6 +226,9 @@ impl PermissionMode {
 #[derive(Debug, Clone)]
 pub struct LiveMode {
     mode: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    /// Whether the mode was bypass at any moment since this handle was made, which a later
+    /// change of mode does not take back (MODE-4).
+    bypassed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     nobody_to_ask: bool,
 }
 
@@ -233,6 +236,9 @@ impl LiveMode {
     pub fn new(mode: PermissionMode) -> Self {
         Self {
             mode: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(mode as u8)),
+            bypassed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                mode == PermissionMode::Bypass,
+            )),
             nobody_to_ask: false,
         }
     }
@@ -255,7 +261,17 @@ impl LiveMode {
         }
     }
 
+    /// Whether bypass was the mode at any moment of this session's sitting, so that a rule the
+    /// map holds may be one the mode answered and not a person (MODE-4, TRUST-6).
+    pub fn has_bypassed(&self) -> bool {
+        self.bypassed.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     pub fn set(&self, mode: PermissionMode) {
+        if mode == PermissionMode::Bypass {
+            self.bypassed
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
         self.mode
             .store(mode as u8, std::sync::atomic::Ordering::Release);
     }

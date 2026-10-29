@@ -1,8 +1,8 @@
 //! The xAI sign-in kept in one file the account owns
 //! ([XAI-5](../../../../docs/specs/xai-sign-in.md#XAI-5)).
 //!
-//! `xai-account.json` sits beside the Leo credentials in the state directory and is made the way that
-//! file is, which [`crate::oauth`] does for every sign-in that keeps its tokens in a file. It holds a
+//! `xai-account.json` sits in the state directory and is made private to the account, which
+//! [`crate::oauth`] does for every sign-in that keeps its tokens in a file. It holds a
 //! version, the two tokens and the instant the access token expires. The client the sign-in presents
 //! is a constant of the program, and is not stored.
 
@@ -361,10 +361,9 @@ mod tests {
         assert!(left.is_empty(), "left behind: {left:?}");
     }
 
-    /// The sign-in has a file and a claim of its own, named for it and not for the ChatGPT account or
-    /// the Leo credentials. A write that waited on another sign-in's claim would be held up by it,
-    /// and one that took another's file name would write the tokens over a sign-in that is not this
-    /// one.
+    /// The sign-in has a file and a claim of its own, named for it and not for the ChatGPT account.
+    /// A write that waited on another sign-in's claim would be held up by it, and one that took
+    /// another's file name would write the tokens over a sign-in that is not this one.
     #[test]
     fn the_file_and_the_claim_are_this_sign_ins_own() {
         assert_eq!(<Xai as Kind>::FILE, "xai-account.json");
@@ -372,10 +371,9 @@ mod tests {
         let path = scratch("claim");
         std::fs::File::create(path.with_file_name("chatgpt-account.lock"))
             .expect("a ChatGPT claim");
-        std::fs::File::create(path.with_file_name("leo-premium.lock")).expect("a Leo claim");
 
         // The write ends well inside the minute after which a claim is judged abandoned, so a write
-        // that waited on either claim and then broke it is not one that passes.
+        // that waited on that claim and then broke it is not one that passes.
         let (done, finished) = std::sync::mpsc::channel();
         std::thread::spawn({
             let path = path.clone();

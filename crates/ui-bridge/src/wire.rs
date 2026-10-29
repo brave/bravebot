@@ -28,7 +28,7 @@ use bravebot_agent::confirm::{
     McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
     ToolListRequest, VetRequest, VouchRequest, WriteRequest,
 };
-use bravebot_agent::conversation::{Composed, Said};
+use bravebot_agent::conversation::{Address, Composed, Said};
 use bravebot_agent::diff::Change;
 use bravebot_agent::report::{Activity, Landing, Phase, Reach, Shown};
 use bravebot_agent::servers::Question;
@@ -276,15 +276,30 @@ pub fn row(row: &Row) -> Value {
 }
 
 /// Project an accepted prompt through the same tag rules as saved history.
-pub fn submitted(text: &str, composed: Option<&Composed>) -> Value {
+pub fn submitted(text: &str, composed: Option<&Composed>, address: Option<&Address>) -> Value {
     let entry = match composed {
         Some(why) => Said::Composed {
             why: why.clone(),
             text: text.to_string(),
         },
-        None => Said::User(text.to_string()),
+        None => Said::User(text.to_string(), address.cloned()),
     };
     said(&entry)
+}
+
+/// The definition a turn was addressed to, as the driver recorded it, or `null` where it was
+/// addressed to none ([ADDRESS-12](../../../docs/specs/addressing-a-definition.md#ADDRESS-12)).
+///
+/// `standing` says whether it was the definition the session stands under, which a bot's
+/// conversation has for every turn, or one named for the turn alone.
+pub fn addressed_to(address: Option<&Address>) -> Value {
+    match address {
+        Some(address) => json!({
+            "definition": address.definition,
+            "standing": address.standing,
+        }),
+        None => Value::Null,
+    }
 }
 
 /// A whole transcript, each prompt carrying the ordinal `session.fork` cuts on.
@@ -303,7 +318,7 @@ pub fn recounted(said: &[Said]) -> Vec<Value> {
     said.iter()
         .map(|entry| {
             let mut value = self::said(entry);
-            if matches!(entry, Said::User(_)) {
+            if matches!(entry, Said::User(..)) {
                 value["prompt"] = json!(prompt);
                 prompt += 1;
             }
@@ -326,7 +341,13 @@ pub fn recounted(said: &[Said]) -> Vec<Value> {
 /// the one whose words came out of a file.
 fn said(said: &Said) -> Value {
     match said {
-        Said::User(text) => json!({ "kind": "user", "text": text }),
+        Said::User(text, address) => {
+            let mut row = json!({ "kind": "user", "text": text });
+            if address.is_some() {
+                row["address"] = addressed_to(address.as_ref());
+            }
+            row
+        }
         Said::Assistant(text) => json!({ "kind": "assistant", "text": text }),
         Said::Tool { line, why } => json!({ "kind": "tool", "text": line, "why": why }),
         Said::Composed {
@@ -437,14 +458,31 @@ pub fn composed(value: Option<&Value>) -> Result<Option<Composed>, Failure> {
 /// kept under for a memory is taken. Anything else is refused and not ignored, because a turn that
 /// quietly went out unaddressed would hold the session's whole reach.
 pub fn definition(value: Option<&Value>) -> Result<Option<String>, Failure> {
+    slug_named(
+        value,
+        "`definition` may only be the name of a bot's definition",
+    )
+}
+
+/// The definition a `turn.send` addresses for that turn alone, if it names one
+/// ([MEMORY-14](../../../docs/specs/definition-memory.md#MEMORY-14)).
+///
+/// The desktop's main process sets it from the bot a person picked in the composer and strips it
+/// from anything a window sends. It is checked as `definition` is, for the same reasons.
+pub fn address(value: Option<&Value>) -> Result<Option<String>, Failure> {
+    slug_named(
+        value,
+        "`address` may only be the name of a bot's definition",
+    )
+}
+
+fn slug_named(value: Option<&Value>, refusal: &str) -> Result<Option<String>, Failure> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(name)) if bravebot_agent::memory::is_a_slug(name) => {
             Ok(Some(name.clone()))
         }
-        Some(_) => Err(Failure::bad_request(
-            "`definition` may only be the name of a bot's definition",
-        )),
+        Some(_) => Err(Failure::bad_request(refusal)),
     }
 }
 
@@ -483,6 +521,10 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
         // What the write does to the file's line terminators, which the changes below cannot
         // show: they are compared without them. Null where both sides end in `\n`.
         "lineEndings": request.line_endings_note(),
+        // How many characters in the lines added or removed draw as nothing, already written out
+        // in `changes`, and the sentence that says so in the catalog's words, or null where none do.
+        "hidden": diff.hidden(),
+        "hiddenNote": bravebot_approval::write_hidden_note(diff.hidden()),
         "existing": request.is_overwrite(),
         "added": diff.added(),
         "removed": diff.removed(),

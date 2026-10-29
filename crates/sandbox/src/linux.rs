@@ -1415,6 +1415,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
         let held_back = [
             ".bravebot/gateway-keys.json",
+            ".bravebot/brave-key.json",
             ".bravebot/leo-premium.json",
             ".bravebot/chatgpt-account.json",
             ".bravebot/xai-account.json",

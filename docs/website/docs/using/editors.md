@@ -6,7 +6,7 @@ description: Run a session from an editor that speaks the Agent Client Protocol,
 
 # Using Brave Bot in an editor
 
-`bravebot-acp` runs a session for an editor that speaks the
+`bravebot acp` runs a session for an editor that speaks the
 [Agent Client Protocol](https://agentclientprotocol.com), such as Zed. The editor starts the
 program, draws the conversation, and shows each question as an approval.
 
@@ -17,14 +17,20 @@ In Zed, declare it as a custom agent in your settings:
   "agent_servers": {
     "Brave Bot": {
       "type": "custom",
-      "command": "bravebot-acp",
-      "args": []
+      "command": "bravebot",
+      "args": ["acp"]
     }
   }
 }
 ```
 
-The program is built with the rest of the workspace and sits beside `bravebot-rpc`.
+This works with any installed copy of `bravebot`. The command reads the protocol on its standard
+input and writes it on its standard output, so it prints nothing else there. It takes `--settings
+<file>` and refuses `--dangerously-skip-permissions` and `--dangerously-bypass-approvals-and-sandbox`,
+because an editor is always asked.
+
+A build of the workspace also makes `bravebot-acp`, which runs the same server and takes the same
+`--settings` option. Use `"command": "bravebot-acp"` with `"args": []` to start it instead.
 
 ## What the editor can send
 

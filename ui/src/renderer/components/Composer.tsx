@@ -3,7 +3,7 @@ import type { FileAttachment } from '../../shared/files'
 import { projectLabel } from '../../shared/recents'
 import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
-import type { Staged } from '../staging'
+import type { Staged, SummonedBot } from '../staging'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
@@ -23,6 +23,18 @@ async function askOffer(session: string, line: string, cursor: number): Promise<
 
 /** How many lines the field grows to before it starts to scroll. */
 const FIELD_MAX_ROWS = 6
+
+/** How many bots the `@` list shows above the files. */
+const BOTS_OFFERED = 5
+
+const NO_BOTS: SummonedBot[] = []
+
+/** The bots whose name or slug holds what follows the `@`, in the order they were given. */
+function botsFor(bots: SummonedBot[], typed: string | null): SummonedBot[] {
+  if (typed === null || bots.length === 0) return NO_BOTS
+  const query = typed.toLowerCase()
+  return bots.filter((bot) => bot.name.toLowerCase().includes(query) || bot.slug.includes(query)).slice(0, BOTS_OFFERED)
+}
 
 export interface ComposerProps {
   /** The field, for the transcript to focus: ⌘L, a sent message, an answered card. */
@@ -63,6 +75,10 @@ export interface ComposerProps {
   staged: Staged[]
   /** Take a staged file or picture off, by taking its marker out of the draft. */
   onRemoveStaged: (marker: string) => void
+  /** The bots the `@` list offers to answer a message, which never includes this chat's own (MEMORY-14). */
+  summonable?: SummonedBot[]
+  /** Stage a bot picked from the list, replacing the half-typed `word`. */
+  onSummon?: (bot: SummonedBot, word: string | null) => void
   onPreview: (path: string) => void
   /** Lines sent into the running turn that it has not read yet. */
   interjected: string[]
@@ -167,7 +183,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
     draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
     interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
-    canAttach = true, footer, starting = false,
+    canAttach = true, footer, starting = false, summonable = NO_BOTS,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
   const latest = useRef(props)
@@ -222,15 +238,20 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   const [dismissed, setDismissed] = useState<string | null>(null)
   useEffect(() => {
     setCursor(0)
-    // A bot's page before its first conversation has no folder to list.
+    // A composer with no session yet has no folder to list.
     if (!session) return
     let current = true
     void askOffer(session, draft, 0).then((value) => { if (current) setOffer({ session, line: draft, value }) })
     return () => { current = false }
   }, [session, draft])
   const typed = offer?.session === session ? offer.value.typed : null
-  const offered = typed !== null && dismissed !== typed && offer ? offer.value.entries : []
-  const active = Math.max(0, Math.min(cursor, offered.length - 1))
+  // Escape closes the list for the name being typed, not for every later `@` with the same text.
+  useEffect(() => { if (typed === null) setDismissed(null) }, [typed])
+  const listing = typed !== null && dismissed !== typed && offer !== null
+  const offered = listing ? offer.value.entries : []
+  const offeredBots = listing ? botsFor(summonable, typed) : NO_BOTS
+  const rows = offeredBots.length + offered.length
+  const active = Math.max(0, Math.min(cursor, rows - 1))
 
   /** The offer for exactly this line and row, waiting for it unless the last answer was for it. */
   const freshOffer = async (line: string, at: number): Promise<MentionOffer> =>
@@ -244,12 +265,33 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     latest.current.onDraft(completed)
     return true
   }
+  /** Stages the bot to answer this message, in place of the half-typed name. */
+  const summon = (bot: SummonedBot, word: string | null): boolean => {
+    setCursor(0)
+    const draft = latest.current.draft
+    if (word === null || !draft.endsWith(word) || !latest.current.onSummon) return false
+    latest.current.onSummon(bot, word)
+    return true
+  }
+  /**
+   * The row `at` of the list for `line`: a bot, or a file with the bridge's answer for its row.
+   * Bots come first, so a file's row in the bridge's list is `at` less the bots shown.
+   */
+  const rowAt = async (line: string, at: number): Promise<{ value: MentionOffer; bot: SummonedBot | null; entry: MentionEntry | undefined }> => {
+    const first = await freshOffer(line, 0)
+    const bots = botsFor(latest.current.summonable ?? NO_BOTS, first.typed)
+    if (at < bots.length) return { value: first, bot: bots[at] ?? null, entry: undefined }
+    const fileRow = at - bots.length
+    const value = fileRow === 0 ? first : await freshOffer(line, fileRow)
+    return { value, bot: null, entry: value.entries[Math.min(fileRow, value.entries.length - 1)] }
+  }
   /** Enter: complete a half-typed name, or send a line whose last name is finished (NAME-7). */
   const enter = async (line: string, at: number) => {
     if (session) {
-      const value = await freshOffer(line, at)
-      const entry = value.entries[Math.min(at, value.entries.length - 1)]
-      if (value.typed !== null && dismissed !== value.typed && value.completes && entry && choose(entry, value.word)) return
+      const { value, bot, entry } = await rowAt(line, at)
+      const open = value.typed !== null && dismissed !== value.typed
+      if (open && bot && summon(bot, value.word)) return
+      if (open && value.completes && entry && choose(entry, value.word)) return
     }
     const props = latest.current
     if (props.askingTrust || props.starting || props.backendReady === false || !props.draft.trim()) return
@@ -258,8 +300,8 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   }
 
   // Read by the key handler for the reason `latest` is.
-  const mention = useRef({ typed, offered, active, dismissed, freshOffer, choose, enter })
-  mention.current = { typed, offered, active, dismissed, freshOffer, choose, enter }
+  const mention = useRef({ typed, rows, active, dismissed, rowAt, choose, summon, enter })
+  mention.current = { typed, rows, active, dismissed, rowAt, choose, summon, enter }
 
   const blocked = askingTrust || backendReady === false || starting
   const canSend = !blocked && draft.trim().length > 0
@@ -325,7 +367,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
         )}
         <div className={`composer-shell${footer ? ' with-footer' : ''}`}>
         <div className="composer-box">
-          {(attachments.length > 0 || staged.length > 0) && (
+          {(attachments.length > 0 || staged.some((item) => item.via !== 'summon')) && (
             <div className="attachment-chips">
               {attachments.map((file) => (
                 <span className="attachment-chip" key={file.id}>
@@ -337,6 +379,9 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 </span>
               ))}
               {staged.map((item) => {
+                // A summoned bot is not a chip: its marker stays in the message and is drawn as
+                // the bot's label once the message is sent.
+                if (item.via === 'summon') return null
                 const name = item.via === 'drop' ? item.file.name : 'Pasted image'
                 const thumbnail = item.via === 'drop' ? item.file.thumbnail : item.picture.thumbnail
                 return (
@@ -351,10 +396,12 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   </span>
                 )
               })}
-              <span className="attachment-trust" tabIndex={0}
-                data-tooltip="Attached files and pasted pictures are sent with your message as trusted context: the model reads them as you wrote them.">
-                <Icon name="warning-triangle-outline" />Sent as trusted context
-              </span>
+              {(attachments.length > 0 || staged.some((item) => item.via !== 'summon')) && (
+                <span className="attachment-trust" tabIndex={0}
+                  data-tooltip="Attached files and pasted pictures are sent with your message as trusted context: the model reads them as you wrote them.">
+                  <Icon name="warning-triangle-outline" />Sent as trusted context
+                </span>
+              )}
             </div>
           )}
           <TextArea ref={input} mode="plain" minRows={1} maxRows={FIELD_MAX_ROWS} value={draft} aria-label="Message the agent"
@@ -366,10 +413,10 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
               const composing = event.isComposing || event.keyCode === 229
               const list = mention.current
               const plain = !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey
-              if (!composing && plain && list.offered.length > 0) {
+              if (!composing && plain && list.rows > 0) {
                 if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                   event.preventDefault()
-                  setCursor(Math.max(0, Math.min(list.offered.length - 1, list.active + (event.key === 'ArrowDown' ? 1 : -1))))
+                  setCursor(Math.max(0, Math.min(list.rows - 1, list.active + (event.key === 'ArrowDown' ? 1 : -1))))
                   return
                 }
                 if (event.key === 'Escape') {
@@ -379,12 +426,12 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   return
                 }
               }
-              if (!composing && plain && event.key === 'Tab' && list.offered.length > 0) {
+              if (!composing && plain && event.key === 'Tab' && list.rows > 0) {
                 event.preventDefault()
-                const at = list.active
-                void list.freshOffer(now.draft, at).then((value) => {
-                  const entry = value.entries[Math.min(at, value.entries.length - 1)]
-                  if (value.typed !== null && entry) mention.current.choose(entry, value.word)
+                void list.rowAt(now.draft, list.active).then(({ value, bot, entry }) => {
+                  if (value.typed === null) return
+                  if (bot) mention.current.summon(bot, value.word)
+                  else if (entry) mention.current.choose(entry, value.word)
                 })
                 return
               }
@@ -432,7 +479,9 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
         </div>
         {footer && <ComposerFooter {...footer} disabled={running} />}
         </div>
-        {offered.length > 0 && <MentionList entries={offered} active={active} onActive={setCursor} onChoose={(entry) => { choose(entry, offer?.value.word ?? null) }} />}
+        {rows > 0 && <MentionList bots={offeredBots} entries={offered} active={active} onActive={setCursor}
+          onChoose={(entry) => { choose(entry, offer?.value.word ?? null) }}
+          onSummon={(bot) => { summon(bot, offer?.value.word ?? null) }} />}
       </div>
     </footer>
   )

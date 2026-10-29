@@ -30,19 +30,26 @@ try {
   await filter.press('Escape');
   assert.equal(await filter.inputValue(),'');
   await page.waitForFunction(()=>document.querySelectorAll('.session-row').length>1);
-  // Switching to Bots opens the first bot's own page.
+  // The chat open is one of Review Bot's, so switching to Bots keeps it. Opening the bot opens its
+  // conversation in its home folder.
   await page.getByRole('button',{name:'Bots',exact:true}).click();
-  await page.locator('[data-test="bot-conversations"]').waitFor();
+  await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();
+  await page.locator('[data-test="bot-greeting"]').waitFor();
   const bots=page.getByRole('searchbox',{name:'Search bots',exact:true});
   await bots.fill('no-such-bot');
   await page.getByText('No bots match this search.',{exact:true}).waitFor();
   await bots.press('Escape');
-  // A bot's page: its recent conversations, a composer that starts another, and its details.
+  // A bot's earlier conversations, reached from its conversation's header, and its details.
   const conversations=page.locator('[data-test="bot-conversations"] button.bot-history-row');
-  const overview=async()=>{
+  const openBot=async()=>{
     if(!(await page.locator('.bot-open').count())) await page.getByRole('button',{name:'Bots',exact:true}).click();
     await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();
-    await page.getByRole('heading',{name:'Recent conversations'}).waitFor()
+    await page.locator('[data-test="earlier-conversations"]').waitFor()
+  }
+  const overview=async()=>{
+    await openBot();
+    await page.locator('[data-test="earlier-conversations"]').click();
+    await page.getByRole('heading',{name:'Earlier conversations'}).waitFor()
   }
   const searchHistory=async(text)=>{
     const field=page.getByRole('searchbox',{name:'Search conversations'});
@@ -55,7 +62,8 @@ try {
   assert.equal(await conversations.count(),3);
   assert.equal(await page.locator('[data-test="bot-conversations"] .bot-history-row.unavailable').count(),1);
   await conversations.filter({hasText:'Review the sample project'}).getByText(/Archived/).waitFor();
-  assert.equal(await page.locator('[data-test="bot-details"]').count(),1,'the bot page shows its details beside the list');
+  assert.equal(await page.locator('[data-test="bot-details"]').count(),1,'the page shows the bot’s details beside the list');
+  assert.equal(await page.locator('[data-test="bot-page"] .composer').count(),0,'the page starts no conversation of its own');
   await snap('01-all-history');
   await searchHistory('next iteration');
   assert.equal(await conversations.count(),1);
@@ -86,32 +94,48 @@ try {
   assert.equal(await fileSearch.count(),0);
   assert.equal(await page.getByRole('button',{name:'Search files',exact:true}).evaluate(el => el === document.activeElement || el.getRootNode().host === document.activeElement),true);
 
-  // A new conversation is started from the bot's page by sending to it. With no project picked it
-  // runs in the bot's home folder, so there is no project chip and no context column.
+  // Opening the bot again goes back to the conversation in its home folder, which has no project
+  // chip and no context column, and the back button on its earlier conversations does the same.
   await overview();
-  assert.equal((await page.locator('[data-test="project-trigger"]').textContent())?.trim(),'No project');
+  // Playwright clicks bypass native window dragging; the arrow sits in the title row, over the drag strip.
+  assert.equal(await page.locator('[data-test="earlier-back"]').evaluate(e => getComputedStyle(e).getPropertyValue('-webkit-app-region')), 'no-drag', 'Back must receive native mouse clicks inside the draggable titlebar');
+  await page.locator('[data-test="earlier-back"]').click();
+  await page.locator('[data-test="bot-greeting"]').waitFor();
+  await openBot();
+  await page.locator('[data-test="bot-greeting"]').waitFor();
   const sent=(await app.evaluate(()=>globalThis.ux.sent.length));
   await page.getByRole('textbox',{name:COMPOSER_NAME}).fill('Start a newer conversation');
   await page.getByRole('button',{name:'Send',exact:true}).click();
-  await page.getByRole('button',{name:"Don't trust",exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
-  // The message waits in the queue for the trust question, then goes; polled, since it is sent on
-  // the main process's side.
+  // Polled, since it is sent on the main process's side.
   let delivered=[];
   for(let tries=0;tries<50&&!delivered.length;tries++){delivered=await app.evaluate((_,n)=>globalThis.ux.sent.slice(n),sent);if(!delivered.length)await page.waitForTimeout(100)}
   assert.equal(delivered.at(-1)?.slug,'review-bot','the first message goes to the bot');
   assert.equal(delivered.at(-1)?.prompt,'Start a newer conversation');
-  assert.equal(await page.locator('.app.no-context').count(),1,'a conversation with no project has no context column');
+  assert.equal(await page.locator('.app.no-context').count(),0,'a bot’s conversation keeps the context column');await page.getByRole('button',{name:/context panel/i}).first().waitFor();await page.locator('#context-column [data-test="bot-details"]').waitFor();assert.equal(await page.locator('[data-test="inspector-tabs"]').count(),0,'the column holds the bot, not the files and plan');
   assert.equal(await page.locator('.transcript-head .where').count(),0,'and no project chip');
   await page.getByRole('textbox',{name:COMPOSER_NAME}).fill('Keep this newer conversation draft');
   await snap('04-history-after-new');
+  // Opening the bot after a restart goes back to the same conversation, with the draft kept.
   await page.reload();
-  await page.getByRole('button',{name:'Chats',exact:true}).click();
-  await page.locator('.session').filter({hasText:'Keep this newer'}).click();
-  await page.getByRole('button',{name:"Don't trust",exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
+  await openBot();
   assert.equal(await page.getByRole('textbox',{name:COMPOSER_NAME}).inputValue(),'Keep this newer conversation draft');
   await snap('05-draft-restored-after-reload');
+  // With the home conversation archived, opening the bot makes a new one. The archived one stays
+  // open in the window, and reopening it would leave the bot with no conversation that is not archived.
+  const made=()=>app.evaluate(()=>globalThis.ux.created.length);
+  const before=await made();
+  await page.getByRole('button',{name:'Chats',exact:true}).click();
+  await page.getByRole('button',{name:'Actions for New Chat'}).click();
+  await page.getByRole('menuitem',{name:'Archive conversation'}).click();
+  const confirm=page.getByRole('button',{name:/^Archive$/});
+  if(await confirm.count()) await confirm.click();
+  await page.getByRole('button',{name:'Bots',exact:true}).click();
+  await openBot();
+  await page.locator('[data-test="bot-greeting"]').waitFor();
+  assert.equal(await made(),before+1,'opening the bot asked for a new conversation instead of reopening the archived one');
+  await snap('05-new-home-after-archive');
   await overview();await searchHistory('no-such-conversation');
   await page.getByText(/No conversation matches/).waitFor();await snap('06-no-results');
-  assert.deepEqual(errors,[]);console.log('PASS: full bot history on the bot page, archived navigation, search, a new no-project conversation and a draft kept across restart.');
+  assert.deepEqual(errors,[]);console.log('PASS: opening a bot opens its home conversation; its earlier conversations, archived navigation and search are a page reached from the header; a message in the home conversation goes to the bot, and a draft is kept across restart.');
 } catch(error) {if(page) await page.screenshot({path:join(output,'failure.png'),scale:'css'});throw error}
 finally {await app.close()}

@@ -2,7 +2,7 @@
 //! it reads effort or structured output.
 
 use super::*;
-use bravebot_config::RosterAccounts;
+use bravebot_config::{Gateways, RosterAccounts, RosterScope};
 
 /// The model a request names now: the pick where there is one, and otherwise the configured default,
 /// which a `model` key of the settings file sets.
@@ -27,16 +27,18 @@ pub(super) fn refused_level_in_force(
     refused(config, model_in_force(session.model(), config))
 }
 
-/// Ask the endpoint what it offers.
+/// Ask the service that answers the model in force what it offers, for the row of that model
+/// ([BACKEND-64](../../../../docs/specs/backends.md#BACKEND-64)).
 ///
-/// Shared by the picker and by the budget lookup a session does when it starts, because both want
-/// the same listing and a second copy of the policy setup would be a second place for the gate to
-/// be got wrong.
+/// The budget lookup a session does when it starts, and every other question about one model's row.
+/// It waits on that service alone: a person with several gateways configured would otherwise wait
+/// for each of them in turn to learn the window of a model only one of them serves. The picker asks
+/// all of them, through [`list_models_for_picker`].
 pub(super) fn list_models(
     config: &Config,
     chosen: Option<&str>,
 ) -> Result<Vec<bravebot_aichat::models::Model>, String> {
-    roster(config, chosen, config.roster_accounts_for_a_turn(chosen)).map(|roster| roster.models)
+    roster(config, chosen, config.roster_scope_for_a_turn(chosen)).map(|roster| roster.models)
 }
 
 /// The rows a picker offers, and what a person is told where the rows of a service they use are not
@@ -57,29 +59,42 @@ pub(super) fn list_models_for_picker(
     config: &Config,
     chosen: Option<&str>,
 ) -> Result<PickerRoster, String> {
-    roster(config, chosen, RosterAccounts::for_a_picker())
+    roster(config, chosen, RosterScope::for_a_picker())
 }
 
-/// The rosters of every service, with the accounts' where `accounts` says to ask them.
+/// The rosters of the services `scope` names, asked at once
+/// ([BACKEND-64](../../../../docs/specs/backends.md#BACKEND-64)).
+///
+/// The accounts are asked on this thread while the gateways and Brave are asked on threads of their
+/// own, so what is waited for is the slowest of them and not the sum. A unit test scripts the
+/// accounts per thread, which is the other reason they stay here.
 fn roster(
     config: &Config,
     chosen: Option<&str>,
-    accounts: RosterAccounts,
+    scope: RosterScope<'_>,
 ) -> Result<PickerRoster, String> {
-    let (mut configured, mut problems) = configured_rows(config, chosen);
+    let (gathered, (chatgpt, xai)) = gather(config, chosen, scope, || {
+        (
+            scope.accounts.chatgpt.then(|| ask_the_account(config)),
+            scope.accounts.xai.then(|| ask_the_xai_account(config)),
+        )
+    });
+    let Gathered {
+        mut configured,
+        mut problems,
+        brave,
+    } = gathered;
 
     // Additive like a gateway: a stored ChatGPT sign-in adds its models to the rows and takes none
     // away. Not asked where nothing is signed in, and a listing that cannot be had adds the compiled
     // names and is said, so a person who signed in does not take them for what the account reaches.
-    if accounts.chatgpt {
-        let asked = ask_the_account(config);
+    if let Some(asked) = chatgpt {
         problems.extend(account_problem_said(&asked));
         configured.extend(account_rows(asked, model_in_force(chosen, config)));
     }
     // The xAI account joins the same way, and is said in the same place where its listing could not
     // be had ([XAI-19](../../../../docs/specs/xai-sign-in.md#XAI-19)).
-    if accounts.xai {
-        let asked = ask_the_xai_account(config);
+    if let Some(asked) = xai {
         problems.extend(xai_problem_said(&asked));
         configured.extend(xai_rows(asked, model_in_force(chosen, config)));
     }
@@ -88,13 +103,77 @@ fn roster(
         problems,
     };
 
-    // A build from source pointed only at Bedrock has blank Brave credentials, and asking with them
-    // would list a roster whose every request then fails unsigned.
-    if !config.serves_aichat() {
-        return Ok(rostered(configured));
+    match brave {
+        Some(listed) => combined(configured, listed).map(rostered),
+        None => Ok(rostered(configured)),
     }
+}
 
-    combined(configured, fetch_models(config)).map(rostered)
+/// What the services of a roster answered, other than the accounts.
+struct Gathered {
+    /// The Bedrock account's rows and every gateway's, in the order the configuration lists them.
+    configured: Vec<bravebot_aichat::models::Model>,
+    /// What a person is told where a gateway's rows could not be had, in the order they were.
+    problems: Vec<String>,
+    /// Brave's listing, where it was asked.
+    brave: Option<Result<Vec<bravebot_aichat::models::Model>, String>>,
+}
+
+/// The Bedrock account's rows, every gateway's and Brave's, with each request that goes out made at
+/// once, and `meanwhile` run on this thread while they are in flight.
+///
+/// Which services are asked, how long each is waited for and the order the answers come back in are
+/// [`bravebot_aichat::roster::ask`]'s, which the window uses as well. What is done here is naming
+/// the rows and telling a person which gateway could not be read.
+fn gather<U>(
+    config: &Config,
+    chosen: Option<&str>,
+    scope: RosterScope<'_>,
+    meanwhile: impl FnOnce() -> U,
+) -> (Gathered, U) {
+    use bravebot_aichat::roster::Entry;
+
+    let (roster, meanwhile) = bravebot_aichat::roster::ask(config, scope, &Trail::new, meanwhile);
+    let mut configured = Vec::new();
+    let mut problems = Vec::new();
+    for entry in roster.entries {
+        match entry {
+            // Bedrock is additive: its tiers come from configuration rather than from a listing,
+            // since it has no listing endpoint and an ARN does not say which model it resolves to,
+            // but the Brave roster is what everyone has and a settings block adds to it rather than
+            // replacing it. The configured tiers come first: someone who named them went out of
+            // their way to, and the alternative buries them under a roster they did not ask about.
+            // An entry naming AWS reaches the Bedrock backend, so its rows are built the way that
+            // backend's are, and a block that named none offers none rather than being asked what
+            // it serves.
+            Entry::Bedrock(bedrock) => configured.extend(bedrock_models(bedrock)),
+            // A block that named its models is taken at its word and costs no round trip, which is
+            // what keeps a configured gateway working offline.
+            Entry::Named(provider) => configured.extend(provider_models(provider)),
+            // Said by `doctor`, and again when a turn is sent without one. A credential that is
+            // missing is not told in the words of a listing that failed, since trying again does
+            // not change it.
+            Entry::NoCredential(_) => {}
+            Entry::Asked(_, Ok(listed)) => {
+                configured.extend(in_reading_order(listed, model_in_force(chosen, config)));
+            }
+            // Why it could not be read is not told in the words of the error, which belong to the
+            // service and to this process and are not for a picker's note.
+            Entry::Asked(provider, Err(_)) => problems.push(t!(
+                session_gateway_models_unreadable,
+                gateway = provider.display_name(),
+                id = provider.id.as_str()
+            )),
+        }
+    }
+    (
+        Gathered {
+            configured,
+            problems,
+            brave: roster.brave,
+        },
+        meanwhile,
+    )
 }
 
 /// The rows of the Bedrock account and of every gateway the configuration names, in the order a
@@ -103,147 +182,16 @@ fn configured_rows(
     config: &Config,
     chosen: Option<&str>,
 ) -> (Vec<bravebot_aichat::models::Model>, Vec<String>) {
-    // Bedrock is additive. Its tiers come from configuration rather than from a listing, since it has
-    // no listing endpoint and an ARN does not say which model it resolves to, but the Brave roster is
-    // what everyone has and a settings block adds to it rather than replacing it.
-    //
-    // The configured tiers come first: someone who named them went out of their way to, and the
-    // alternative buries them under a roster they did not ask about.
-    let mut configured = config
-        .bedrock
-        .as_ref()
-        .map(bedrock_models)
-        .unwrap_or_default();
-    // What a person is told where a service they use could not be asked, in the order they were.
-    let mut problems = Vec::new();
-
-    // Additive on the same terms. A block that named its models is taken at its word and costs no
-    // round trip, which is what keeps a configured gateway working offline. One that named none is
-    // asked, because the alternative is a gateway configured exactly as the tool this block's shape
-    // came from configures it, offering nothing. A service with no listing to ask is offered the list
-    // compiled in instead.
-    for provider in &config.providers {
-        // An entry naming AWS reaches the Bedrock backend, so its rows are built the way that
-        // backend's are: the models the block named, and nothing fetched. There is no listing
-        // endpoint to ask, which is why a block that named none offers none rather than being
-        // asked what it serves.
-        if let Some(bedrock) = provider.bedrock.as_ref() {
-            configured.extend(bedrock_models(bedrock));
-            continue;
-        }
-        match provider.models.is_empty() {
-            false => configured.extend(provider_models(provider)),
-            true => {
-                let listed = match fetch_gateway_models(provider) {
-                    Ok(listed) => listed,
-                    // Said by `doctor`, and again when a turn is sent without one.
-                    Err(Unlisted::NoCredential) => Vec::new(),
-                    Err(Unlisted::Unreadable) => {
-                        problems.push(t!(
-                            session_gateway_models_unreadable,
-                            gateway = provider.display_name(),
-                            id = provider.id.as_str()
-                        ));
-                        Vec::new()
-                    }
-                };
-                configured.extend(in_reading_order(listed, model_in_force(chosen, config)));
-            }
-        }
-    }
-    (configured, problems)
-}
-
-/// Run a listing request under a policy that may fetch and nothing else.
-///
-/// A policy exists because `bravebot-net` is the only way out to the network and its gate takes one.
-/// Routing is the listing itself: this is not a turn, nothing is read from the workspace, and no
-/// model is involved, so there is no prompt to anchor it to. The caller names the destinations,
-/// which come from configuration, and `ask` makes the request under the policy.
-fn listing_under_policy<T, E: std::fmt::Display>(
-    routing: bravebot_core::policy::Routing,
-    ask: impl FnOnce(&mut bravebot_core::policy::Policy<'_, Trail>, &Egress) -> Result<T, E>,
-) -> Result<T, String> {
-    let mut sink = Trail::new();
-    let egress = Egress::new();
-
-    bravebot_core::policy::Policy::begin(
-        routing,
-        bravebot_core::policy::ReleasePlan::new(),
-        bravebot_core::capability::CapabilitySet::from_iter([
-            bravebot_core::capability::Capability::WebFetch,
-        ]),
-        &mut sink,
-    )
-    .map_err(|denial| denial.to_string())
-    .and_then(|mut policy| ask(&mut policy, &egress).map_err(|error| error.to_string()))
-}
-
-/// Ask the Brave endpoint what it offers.
-fn fetch_models(config: &Config) -> Result<Vec<bravebot_aichat::models::Model>, String> {
-    let mut routing = bravebot_core::policy::Routing::new();
-    routing.insert_trusted("models", config.models_url());
-
-    listing_under_policy(routing, |policy, egress| {
-        bravebot_aichat::models::list(policy, config, egress)
-    })
-}
-
-/// Ask one gateway what it offers, for a block that named no models.
-///
-/// What comes back names the gateway the same way a configured model from it does, so one service
-/// does not appear twice under two names in the same list.
-///
-/// A gateway whose block named a credential nothing holds is not asked. The listing would come back
-/// refused, and the useful thing to say about that gateway is what `doctor` already says: no
-/// credential found. A service with a compiled list is the exception: offering that list asks
-/// nothing, so it is offered with the key missing, and the missing key is said when a turn is sent,
-/// as it is for a model a block names.
-///
-/// A block naming no credential at all is asked, unauthenticated. That is somebody saying the gateway
-/// wants none, and it is the block a local Ollama is configured with. That block lists no models
-/// either, so not asking leaves it offering nothing.
-///
-/// Why there is no roster is not told in the words of the error that says so, which belong to the
-/// service and to this process and are not for a picker's note: a listing that could not be read is
-/// said to the person, and a credential that is missing is not, since `doctor` says it.
-fn fetch_gateway_models(
-    provider: &bravebot_config::provider::Provider,
-) -> Result<Vec<bravebot_aichat::models::Model>, Unlisted> {
-    let token = match provider.credential(|name| std::env::var(name).ok()) {
-        bravebot_config::provider::Credential::Token(token) => Some(token),
-        bravebot_config::provider::Credential::NotNeeded => None,
-        bravebot_config::provider::Credential::Absent if provider.compiled_roster().is_some() => {
-            None
-        }
-        bravebot_config::provider::Credential::Absent => return Err(Unlisted::NoCredential),
+    let scope = RosterScope {
+        accounts: RosterAccounts {
+            chatgpt: false,
+            xai: false,
+        },
+        gateways: Gateways::All,
+        brave: false,
     };
-
-    // Resolved beside the token, from the same environment, for the same reason: a value may name a
-    // variable, and one read at startup is stale once somebody exports another.
-    let headers = provider.request_headers(|name| std::env::var(name).ok());
-
-    // Both destinations are the gateway's own endpoint, which came from configuration. Nothing
-    // fetched decides either, which is what makes asking a service for a list of names safe at all.
-    let mut routing = bravebot_core::policy::Routing::new();
-    routing.insert_trusted("models", provider.models_url());
-    routing.insert_trusted("account-models", provider.account_models_url());
-
-    listing_under_policy(routing, |policy, egress| {
-        let token = token.as_ref().map(bravebot_config::Secret::expose);
-        bravebot_aichat::models::list_from_gateway(policy, provider, token, &headers, egress)
-    })
-    .map_err(|_| Unlisted::Unreadable)
-}
-
-/// Why a gateway that names no models has none among the rows.
-#[derive(Debug, PartialEq, Eq)]
-enum Unlisted {
-    /// The block names a credential nothing holds, so the gateway was not asked.
-    NoCredential,
-    /// The gateway was asked and its listing could not be read: the request failed, or what answered
-    /// was not a listing.
-    Unreadable,
+    let (gathered, ()) = gather(config, chosen, scope, || ());
+    (gathered.configured, gathered.problems)
 }
 
 /// What the ChatGPT account offers, asked of the serving host with the stored sign-in
@@ -488,7 +436,7 @@ pub(super) fn in_reading_order(
 /// request names one model and gets it or an error. The entry still reaches the picker, from the Brave
 /// half of the roster, where it is a choice that backend can honour.
 ///
-/// Every entry is marked free. Premium here means a Leo subscription, and reaching a model through
+/// Every entry is marked free. Premium here means the premium key, and reaching a model through
 /// somebody's own AWS account does not involve one.
 ///
 /// Every entry says whose account answers. Both rosters are offered together and a bare tier name
@@ -536,7 +484,7 @@ pub(super) fn bedrock_models(
 /// across upstreams most people will never use, so asking it would produce a listing nobody could
 /// pick from, and asking it at all would cost a round trip on a path that must still work offline.
 ///
-/// Every entry is marked free. Premium means a Leo subscription, and a gateway reached with somebody's
+/// Every entry is marked free. Premium means the premium key, and a gateway reached with somebody's
 /// own bearer token does not involve one. What it costs them is between them and the gateway.
 ///
 /// Every entry says which service answers it, because the same slug may be reachable more than one
@@ -571,37 +519,100 @@ pub(super) fn provider_models(
         .collect()
 }
 
-/// Take the budget for the model already in force, without asking anyone to choose it again.
+/// Ask for the budget of the model already in force, without asking anyone to choose it again, on
+/// a thread of its own so what a session opens on does not wait for a service
+/// ([BACKEND-64](../../../../docs/specs/backends.md#BACKEND-64)).
 ///
 /// A model chosen in an earlier session is read back off disk, and until this ran the window that
 /// came with it was not: the budget stayed at the default and a session with room for a hundred
 /// thousand tokens compacted at twenty-four, having said nothing about why.
 ///
+/// The answer is taken by [`adopt_the_awaited_budget`], on each pass of the loop and at the start
+/// of a turn.
+///
 /// A listing that cannot be fetched is not worth a word. The budget falls back to the default, which
 /// is what it was before this existed, and a session that is merely offline should not open with a
 /// complaint about a request nobody asked for.
-pub(super) fn adopt_budget_for_current_model(session: &mut Session, config: &mut Config) {
+pub(super) fn ask_for_the_budget_of_the_model_in_force(session: &mut Session, config: &Config) {
     note_whether_the_model_in_force_is_the_accounts(session, config);
-    let Ok(models) = list_models(config, session.model()) else {
-        return;
+    let (send, arrival) = mpsc::channel();
+    let asked = config.clone();
+    let chosen = session.model().map(str::to_string);
+    let ask = move || {
+        // The session ended before the answer came, so nobody is waiting for it.
+        send.send(list_models(&asked, chosen.as_deref())).ok();
     };
+    // A unit test asks before this returns, because the account it scripts is answered per thread.
+    #[cfg(test)]
+    ask();
+    #[cfg(not(test))]
+    drop(thread::spawn(ask));
+    session.await_listing(model_in_force(session.model(), config).to_string(), arrival);
+}
+
+/// Adopt the budget asked for by [`ask_for_the_budget_of_the_model_in_force`], if its answer has
+/// come, and say whether the screen changed.
+///
+/// `wait` is how long to wait for it. The loop passes none, and takes the answer on the pass it is
+/// there. A turn passes the bound a listing request has, since a turn sized against a window nobody
+/// has looked up compacts at the wrong place, which is worse than the pause.
+///
+/// A lookup about a model that is no longer the one in force is dropped before anything waits for
+/// it. The pick that replaced that model brought a window of its own ([`model_picked`]), and the
+/// window of the model before it is not the one in force. A turn waits for a lookup once: one it
+/// has waited out stays for the loop to take and is not waited for again.
+pub(super) fn adopt_the_awaited_budget(
+    session: &mut Session,
+    config: &mut Config,
+    wait: Option<std::time::Duration>,
+) -> bool {
+    let in_force = model_in_force(session.model(), config).to_string();
+    if !session.awaiting_listing_of(&in_force) {
+        return false;
+    }
+    let Some(Ok(models)) = session.take_awaited_listing(wait) else {
+        return false;
+    };
+    adopt_listing(session, config, &models);
+    true
+}
+
+/// A session's start as a unit test sees it: the budget asked for and its answer taken, which the
+/// test's own thread does in that order.
+#[cfg(test)]
+pub(super) fn adopt_budget_for_current_model(session: &mut Session, config: &mut Config) {
+    ask_for_the_budget_of_the_model_in_force(session, config);
+    adopt_the_awaited_budget(session, config, None);
+}
+
+/// How long a turn waits for the lookup that settles its budget: as long as a request for a
+/// roster is allowed to take, and no longer.
+pub(super) const BUDGET_WAIT: std::time::Duration = bravebot_aichat::models::LISTING_TIMEOUTS.reply;
+
+/// Take what a roster says about the model in force: its window, what it takes, and whether it
+/// reads an effort level.
+fn adopt_listing(
+    session: &mut Session,
+    config: &mut Config,
+    models: &[bravebot_aichat::models::Model],
+) {
     // The model in force, not the pick: with no pick the configured default is what a request names
     // (BACKEND-14, COMPACT-9). `automatic` is a roster row that states no window, so it still leaves
     // the default in place.
     if config.adopt_window_of_model_in_force(session.model(), |in_force| {
-        advertised_window(&models, Some(in_force))
+        advertised_window(models, Some(in_force))
     }) {
         session.note(t!(session_context_budget, budget = config.context_budget));
     }
     let in_force = model_in_force(session.model(), config).to_string();
-    config.adopt_inputs(&in_force, advertised_inputs(&models, Some(&in_force)));
+    config.adopt_inputs(&in_force, advertised_inputs(models, Some(&in_force)));
     // Outside the note, because a budget that did not move can still have stopped being one the
     // endpoint advertised: nothing changed for compaction, and what the hint line may claim did.
     session.update_budget(config.context_budget, config.budget_is_guessed());
     // The model in force, not the pick: with no pick the configured default is what a request names,
     // and it is the roster row for that one which says whether a level is read (BACKEND-22).
     session.note_model_reads_effort(reads_effort(
-        &models,
+        models,
         model_in_force(session.model(), config),
     ));
 }
@@ -833,11 +844,15 @@ pub(super) fn open_model_picker_awaiting(
     config: &Config,
     listing: mpsc::Receiver<crate::model_prompt::Listed>,
 ) {
+    // The model a prompt file named is where the cursor opens (CMD-17). Opening on it chooses
+    // nothing: the person still presses Enter on the row.
+    let wanted = session.take_model_to_offer();
     session.open_picking(crate::picking::Picking::Model(
         crate::model_prompt::Picker::loading(
             Some(model_in_force(session.model(), config)),
             listing,
-        ),
+        )
+        .wanting(wanted),
     ));
 }
 

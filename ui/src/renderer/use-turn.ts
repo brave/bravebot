@@ -5,8 +5,8 @@ import { canSend } from './can-send'
 import { declined, markersOf, mayGo, route, sentInto } from './interjecting'
 import { type Interjection, type Live, NEW_CHAT, liveKey } from './live'
 import { conversationPreferences, setConversation } from './experience'
-import { Unconfigurable, METHOD, call, callBot } from './rpc'
-import { grantsOf, named, sent, type Staged } from './staging'
+import { Unconfigurable, METHOD, call, callBot, callSummon } from './rpc'
+import { grantsOf, named, sent, summonOf, type Staged } from './staging'
 import * as t from './transcript'
 
 /** What `useTurn` takes from the component that owns the sessions and the composer. */
@@ -75,6 +75,8 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     // still names: a marker deleted before sending took its file or picture off.
     const staged = queuedStaged ?? named(sending?.staging, prompt)
     const grants = grantsOf(staged)
+    // The bot picked from the `@` list for this message, which answers this turn alone (MEMORY-14).
+    const summoned = summonOf(staged)
     // The files the prompt names with `@`, asked of the bridge before anything is drawn: a name
     // that cannot go stops the send here, with the message still where it was written. The bridge
     // reads the prompt again at `turn.send`, and that check is the one that decides what goes.
@@ -98,7 +100,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     const reads = [...new Set([...attachments.map((file) => file.path), ...mentionedFiles])]
     // Made here rather than inside the update so its id can be remembered: the agent says where
     // this prompt landed when the turn ends, and that answer has to find the row it belongs to.
-    const said = t.userSaid(prompt)
+    const said = t.userSaid(prompt, summoned?.slug)
     updateSession(handle, (old) =>
       old
         ? {
@@ -118,12 +120,16 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
             awaitingOrdinal: said.id,
             running: true,
             queuePaused: old.queued?.length ? old.queuePaused : false,
-            bot: old.bot ? { ...old.bot, grounded: true } : null,
+            // A summoned turn carries no briefing of this conversation's bot.
+            bot: old.bot ? { ...old.bot, grounded: summoned ? old.bot.grounded : true } : null,
           }
         : old,
     )
     try {
-      if (bot) {
+      if (summoned) {
+        // The main process names the summoned bot's definition and sends it for this turn alone.
+        await callSummon({ session: handle, slug: summoned.slug, prompt, model, attachments: attachments.map((file) => file.id), ...grants })
+      } else if (bot) {
         // A bot's turn never goes through `call`. It needs files attached, and the main process
         // strips those from anything a window sends — a window that could name a file to read
         // would be a window that could have the planner read any file on the machine. So this
@@ -306,7 +312,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     const handle = handleRef.current
     const text = draft.trim()
     if (!handle || !text || !live) return
-    if (route(live) === 'queue') { queueDraft(); return }
+    if (route(live, named(live.staging, draft)) === 'queue') { queueDraft(); return }
     const staged = named(live.staging, draft)
     const line = { id: crypto.randomUUID(), prompt: text, attachments: [], staged }
     updateSession(handle, (old) => old ? sentInto(old, line) : old)

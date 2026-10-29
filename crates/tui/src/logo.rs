@@ -220,13 +220,12 @@ fn mark_row(
 /// mode the next turn runs under and not the one the process started with (SANDBOX-22).
 ///
 /// `sockets_with_a_path_reachable` says this kernel leaves every unix socket that has a path open to
-/// a stage, which the screen says under `read-only` and `workspace-write` (SANDBOX-3).
+/// a stage, which the screen says under `workspace-write` (SANDBOX-3).
 ///
-/// `tier` says whether this build can reach the premium host, and is deliberately about the
-/// configuration rather than about the credentials: a batch on disk may be expired, exhausted, or
-/// issued for another environment, so finding one would not settle the tier either. What was
-/// actually spent is settled by the first turn, which says so if it could not spend anything, and by
-/// `/status` afterwards.
+/// `tier` says whether this build holds a premium key, and is deliberately about the configuration
+/// rather than about a request: a key that is held may still be refused, so holding one would not
+/// settle the tier either. What was actually sent is settled by the first turn, and by `/status`
+/// afterwards.
 ///
 /// Stops at the name because whatever the session has to report about starting up goes next, and
 /// [`invitation`] closes the screen underneath that.
@@ -514,9 +513,9 @@ mod tests {
     }
 
     /// SANDBOX-3: a session whose programs reach every unix socket that has a path says so on the
-    /// screen it opens on, under `read-only` and `workspace-write` alone. The regressions it rejects: no word on such a
-    /// kernel, the line on a kernel that governs the sockets, and the line under `strict`, which
-    /// refuses the stage, or under `off`, which confines nothing.
+    /// screen it opens on, under `workspace-write` alone. The regressions it rejects: no word on such a
+    /// kernel, the line on a kernel that governs the sockets, and the line under `strict` or
+    /// `read-only`, which refuse the stage, or under `off`, which confines nothing.
     #[test]
     fn reachable_sockets_with_a_path_are_named_on_the_opening_screen_under_workspace_write_alone() {
         use bravebot_sandbox::SandboxMode;
@@ -539,6 +538,7 @@ mod tests {
         assert!(open.contains(&said), "{open}");
         for (mode, reachable) in [
             (SandboxMode::WorkspaceWrite, false),
+            (SandboxMode::ReadOnly, true),
             (SandboxMode::Strict, true),
             (SandboxMode::Off, true),
         ] {

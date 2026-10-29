@@ -23,7 +23,13 @@ model in the app rewrites the description, the body and the model of that file a
 other line as it is, so a `tools` line you added stays. Every turn in the bot's conversation,
 including the one the app sends after a compaction and the one a watch you armed fires, is
 addressed to that definition, as if you had typed `/agent <name>` for it. The bot's memory is the
-definition's own, `.bravebot/memory/<name>.md` in the bot's folder. If the file is removed or no
+definition's own, `.bravebot/memory/<name>.md` in the bot's folder.
+
+A bot is brought into another chat by typing `@` and picking it from the list, where bots come
+before files. That one message is addressed to the bot's definition and runs in the chat's folder,
+a project or another bot's, so its memory there is `.bravebot/memory/<name>.md` in that folder. The
+next message is answered as before. The reply is labelled with the bot's face and name, and the
+bot's own conversation shows a **Replied to** card that opens it. If the file is removed or no
 longer loads, the bot runs nothing and says which definition it could not find. Editing the file by
 hand is how you narrow the bot's tools. Bots made before definitions existed keep working as they
 did until they are opened. Opening one gives it a definition, and when its first turn ends the app

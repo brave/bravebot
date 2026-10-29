@@ -207,9 +207,10 @@ test('an answer is open once measured with nothing left, and a standing one wait
 // mark dropped from one of the rows they draw would fail nothing there: no token sits in it.
 const CONDITIONAL = {
   confirm: {
-    request: { ...CASES.confirm.request, untrusted: true, exact: false, writtenSinceCheckout: true },
+    request: { ...CASES.confirm.request, untrusted: true, exact: false, writtenSinceCheckout: true, hiddenNote: '2 characters in the lines this changes draw as nothing' },
     phrases: [
       'Read it as you would a stranger’s patch',
+      '2 characters in the lines this changes draw as nothing',
       'too dissimilar to diff exactly',
       'after the checkout was made',
     ],
@@ -246,8 +247,8 @@ test('the warnings and closing sentences no case token sits in are rows the card
   }
 })
 
-test('an output or vetted read the agent sent no sentence for says nothing about characters that draw as nothing', () => {
-  for (const kind of ['output', 'vet']) {
+test('a write, an output or a vetted read the agent sent no sentence for says nothing about characters that draw as nothing', () => {
+  for (const kind of ['confirm', 'output', 'vet']) {
     for (const [hidden, hiddenNote] of [[undefined, undefined], [0, null]]) {
       const markup = draw(ENTRY[kind]({ ...CASES[kind].request, hidden, hiddenNote }))
       assert.ok(!markup.includes('draw as nothing') && !markup.includes('draws as nothing'), `${kind}: a count of ${hidden} drew the sentence\n${markup}`)
@@ -257,7 +258,7 @@ test('an output or vetted read the agent sent no sentence for says nothing about
 })
 
 test('the sentence the agent sent is drawn as sent, with no wording of the card’s own', () => {
-  for (const kind of ['output', 'vet']) {
+  for (const kind of ['confirm', 'output', 'vet']) {
     const note = 'Zq9 sentence the agent worded, in whatever language'
     const markup = draw(ENTRY[kind]({ ...CASES[kind].request, hiddenNote: note }))
     assert.equal(texts(markup).filter((run) => run.text === note && run.deciding === 'all').length, 1, `${kind}: the sentence is drawn once, as a deciding row\n${markup}`)

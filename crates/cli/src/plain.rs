@@ -316,12 +316,20 @@ fn run(
     let resumed = hosted_as
         .as_deref()
         .and_then(|id| bravebot_session::sessions::load(workspace.root(), id));
+    // The names the file tools had reached, so the nested instructions and path-scoped rules they
+    // loaded are in force from the first prompt (INSTR-14, INSTR-16).
+    if let Some(record) = resumed.as_ref() {
+        workspace.restore_touched(&record.touched);
+    }
     // The record is held from here for as long as the session runs, before anything is asked or
     // any server is reached: a session started again for a record a terminal holds is refused,
     // since two processes would write one record (SESSION-38).
     let mut kept = match hosted_as.as_deref() {
         Some(id) => match Kept::opening(workspace.root(), id, resumed.as_ref()) {
-            Ok(kept) => Some(kept),
+            Ok(mut kept) => {
+                kept.answered_by_mode = mode == PermissionMode::Bypass;
+                Some(kept)
+            }
             Err(held) => return fail(Ending::Failed, held.refusal()),
         },
         None => None,
@@ -799,6 +807,9 @@ struct Kept {
     timing: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
     /// The model that last answered, kept across a turn that failed before any server did.
     model: Option<String>,
+    /// Whether the mode that answers in the person's place is bypass, which the record says so a
+    /// resume without it asks again (MODE-4).
+    answered_by_mode: bool,
 }
 
 impl Kept {
@@ -818,6 +829,7 @@ impl Kept {
                 spend: record.spend.clone(),
                 timing: record.timing.clone(),
                 model: record.model.clone(),
+                answered_by_mode: false,
             },
             None => Self {
                 handle: Handle::begin_as(
@@ -832,6 +844,7 @@ impl Kept {
                 spend: std::collections::BTreeMap::new(),
                 timing: std::collections::BTreeMap::new(),
                 model: None,
+                answered_by_mode: false,
             },
         })
     }
@@ -927,6 +940,8 @@ impl Kept {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
+                answered_by_mode: self.answered_by_mode,
             },
         );
     }
@@ -968,6 +983,7 @@ impl Running<'_> {
             .with_inbox(self.inbox.clone())
             .with_courier(self.courier.clone())
             .addressing(self.agent.as_ref().map(|agent| agent.name.clone()))
+            .addressing_standing(true)
     }
 }
 
@@ -1022,6 +1038,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
         self.answers.adopt(completed.decisions);
         if let Some(kept) = &mut self.kept {
             kept.handle.set_injected_facts(self.injected_facts.clone());
+            kept.handle.set_touched(self.workspace.touched_record());
             match &completed.outcome {
                 Ok(outcome) => kept.after_a_turn(
                     prompt,
@@ -1306,8 +1323,13 @@ pub(crate) trait Watcher: Send {
     /// Called before the first line of a question is written, so that what is written from here
     /// to the answer can be kept whole for a terminal that attaches while it is held (BG-7).
     fn asking(&mut self);
-    /// Called before the read, which blocks, and before what asks for the line is written.
+    /// Called before the read, which blocks, and before what asks for the line is written (BG-9).
     fn waiting(&mut self, on: Waiting);
+    /// Called after what asks for the line has been written and flushed, so that nothing outside
+    /// this process is told a question is held until the backlog already holds the whole of it
+    /// (BG-7): a terminal attaching between [`Watcher::waiting`] and the write landing would
+    /// otherwise see a question missing its last line.
+    fn drawn(&mut self, on: Waiting);
     /// Called after it, with the line where one came.
     fn received(&mut self, on: Waiting, line: Option<&str>);
 }
@@ -1389,6 +1411,9 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         }
         let _ = write!(self.output, "{invitation}");
         let _ = self.output.flush();
+        if let Some(watch) = &mut self.watch {
+            watch.drawn(on);
+        }
         let mut line = String::new();
         let read = self.input.read_line(&mut line);
         let _ = writeln!(self.output);
@@ -1467,6 +1492,7 @@ fn change(request: &WriteRequest) -> Vec<String> {
         written_since_checkout: request.written_since_checkout,
         line_endings: line_endings.as_deref(),
         exact: request.diff.is_exact(),
+        hidden: request.diff.hidden(),
         added: request.diff.added(),
         removed: request.diff.removed(),
         changes: &changes,
@@ -3063,6 +3089,37 @@ mod tests {
         assert!(!asked(false).contains("after the checkout was made"));
     }
 
+    /// PROMPT-13, WRITE-4: the plain question for a write says how many characters of the lines it
+    /// changes draw as nothing, above the rows, and a write with none says nothing of them.
+    #[test]
+    fn the_plain_write_question_says_how_many_characters_draw_as_nothing() {
+        let asked = |body: &str, spelled: bool| {
+            let diff = bravebot_agent::diff::Diff::compute("", body);
+            change(&WriteRequest {
+                written_since_checkout: false,
+                path: "out.txt".to_string(),
+                contents: body.to_string(),
+                existing: None,
+                diff: if spelled { diff.spelled() } else { diff },
+                intent: bravebot_agent::confirm::Intent::Create,
+                untrusted: false,
+                remark: None,
+                protected: false,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+                may_edit: false,
+            })
+            .join("\n")
+        };
+        let said = t!(write_hidden_characters, count = 2usize).to_string();
+        let said = said.split('.').next().unwrap().to_string();
+        let hidden = asked("run(\"ok\") \u{200b}\u{e0069}\n", true);
+        assert!(hidden.contains(&said), "{hidden}");
+        assert!(hidden.contains("\u{2039}U+200B\u{203a}"), "{hidden}");
+        assert!(!asked("plain\n", true).contains(&said));
+    }
+
     /// The diff compares lines without their terminators, so an edit that keeps a file's CRLF
     /// endings looks the same as one that does not. The question says which it is.
     #[test]
@@ -3537,6 +3594,8 @@ mod tests {
             self.seen.lock().expect("the record").push(on);
         }
 
+        fn drawn(&mut self, _on: Waiting) {}
+
         fn received(&mut self, _on: Waiting, _line: Option<&str>) {
             self.announced = false;
         }
@@ -3576,6 +3635,8 @@ mod tests {
             let text = self.screen.text();
             self.at_each_wait.lock().expect("the record").push(text);
         }
+
+        fn drawn(&mut self, _on: Waiting) {}
 
         fn received(&mut self, _on: Waiting, _line: Option<&str>) {}
     }

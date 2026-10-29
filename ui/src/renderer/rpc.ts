@@ -41,3 +41,16 @@ export async function callBot(request: {
 }): Promise<void> {
   unwrap(await window.bravebot.sendBotTurn(request))
 }
+
+/** One turn addressed to a bot a person picked in the composer. See `bravebot:bots:summon`. */
+export async function callSummon(request: {
+  session: string
+  slug: string
+  prompt: string
+  model?: string | null
+  attachments?: string[]
+  drops?: string[]
+  pastes?: string[]
+}): Promise<void> {
+  unwrap(await window.bravebot.summonBot(request))
+}

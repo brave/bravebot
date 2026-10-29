@@ -439,7 +439,7 @@ mod tests {
         );
         assert_eq!(
             names.len(),
-            3,
+            crate::env_var::SCRUBBED.len() + 1,
             "a block naming no variable added to the set: {names:?}"
         );
     }

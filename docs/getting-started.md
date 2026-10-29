@@ -269,19 +269,19 @@ session is open, named `xai/<model>`, and
 one. A `provider` block named `xai` is a gateway and keeps the name, and the sign-in is refused until it is
 renamed. The design is [specs/xai-sign-in.md](specs/xai-sign-in.md).
 
-### Brave Leo Premium, if you already subscribe
+### Brave's premium service, if you have a key for it
 
 ```sh
-bravebot import-leo-creds        # or `import-leo-creds development` for a development channel
+bravebot auth login brave
 ```
 
-This registers as an additional device rather than taking the browser's credentials, so Brave keeps
-its own and nothing it holds is spent. Run it on a machine where Brave is signed in to the
-subscription.
+This asks for the key in a terminal and shows nothing as you type. It is kept in
+`~/.bravebot/brave-key.json`, readable by your account alone, and sent as a bearer token to Brave's
+premium service and nowhere else. `bravebot auth logout brave` removes it, and `bravebot doctor` says
+whether a key is stored and never prints it.
 
-These models are reached through Brave's AI gateway, which has problems of its own still being
-worked on, so prefer one of the other routes for now. It is the shortest route if you already
-subscribe.
+These models are reached through Brave's AI gateway, which is still in development, so prefer one of
+the other routes for now.
 
 ### Pointing it somewhere else entirely
 

@@ -120,15 +120,8 @@ test('forgetCheckoutSessions removes the mangled directory and no sibling', () =
   }
 })
 
-test('openBot stubs the folder dialog, writes the bot, finds its row and picks the project', async () => {
+test('openBot writes the bot, finds its row, opens its conversation and answers the trust question', async () => {
   const calls = []
-  const dialog = {}
-  const app = {
-    evaluate: async (fn, directory) => {
-      await fn({ dialog }, directory)
-      calls.push('dialog')
-    },
-  }
   const locator = (selector) => {
     const here = {
       filter: ({ has }) => {
@@ -139,6 +132,7 @@ test('openBot stubs the folder dialog, writes the bot, finds its row and picks t
       locator: (inner) => locator(inner),
       click: async () => calls.push(`click ${selector}`),
       waitFor: async () => calls.push(`waitFor ${selector}`),
+      isVisible: async () => true,
       selector,
       nth: (n) => ({ click: async () => calls.push(`click ${selector} #${n}`) }),
     }
@@ -146,42 +140,42 @@ test('openBot stubs the folder dialog, writes the bot, finds its row and picks t
   }
   const page = {
     evaluate: async (fn, args) => {
-      globalThis.window = { bravebot: { writeBot: (bot) => calls.push(`writeBot ${bot.name}: ${bot.purpose}`) } }
-      await fn(args)
-      delete globalThis.window
+      globalThis.window = { bravebot: { writeBot: (bot) => (calls.push(`writeBot ${bot.name}: ${bot.purpose}`), { home: '/profile/bot-homes/custodian' }) } }
+      try {
+        return await fn(args)
+      } finally {
+        delete globalThis.window
+      }
     },
     reload: async () => calls.push('reload'),
     waitForTimeout: async () => {},
     locator,
   }
   const checks = []
-  await openBot(app, page, {
+  const home = await openBot(page, {
     name: 'Custodian',
     row: /^Custodian$/,
     purpose: 'keep it',
-    checkout: '/tmp/checkout',
     check: (ok, what) => checks.push([ok, what]),
   })
-  assert.deepEqual(await dialog.showOpenDialog(), { canceled: false, filePaths: ['/tmp/checkout'] })
+  assert.equal(home, '/profile/bot-homes/custodian')
   assert.deepEqual(checks, [[true, 'the bot is in the list']])
   const order = (name) => calls.findIndex((call) => call.startsWith(name))
   assert.ok(order('writeBot Custodian: keep it') < order('reload'))
   assert.ok(order('reload') < order('click .sidebar-tabs [role="option"] #1'))
-  assert.ok(order('click .bot-open-button') < order('waitFor [data-test="bot-page"]'))
-  assert.ok(order('waitFor [data-test="bot-page"]') < order('click [data-test="project-trigger"]'))
-  assert.ok(order('click [data-test="project-trigger"]') < order('click [data-test="project-pick"]'))
+  assert.ok(order('click .bot-open-button') < order('waitFor [data-test="bot-greeting"]'))
+  assert.ok(order('waitFor [data-test="bot-greeting"]') < order('click [data-test="trust-approve"]'))
 })
 
 test('openBot records a failed check when the bot is not in the list exactly once', async () => {
-  const none = { filter: () => none, count: async () => 0, locator: () => none, click: async () => {}, waitFor: async () => {}, nth: () => none }
+  const none = { filter: () => none, count: async () => 0, locator: () => none, click: async () => {}, waitFor: async () => {}, isVisible: async () => false, nth: () => none }
   const page = {
     evaluate: async () => {},
     reload: async () => {},
     waitForTimeout: async () => {},
     locator: () => none,
   }
-  const app = { evaluate: async () => {} }
   const checks = []
-  await openBot(app, page, { name: 'X', row: /^X$/, purpose: 'p', checkout: '/c', check: (ok, what) => checks.push([ok, what]) })
+  await openBot(page, { name: 'X', row: /^X$/, purpose: 'p', check: (ok, what) => checks.push([ok, what]) })
   assert.deepEqual(checks, [[false, 'the bot is in the list']])
 })

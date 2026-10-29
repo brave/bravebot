@@ -20,6 +20,7 @@ import { parseView, type StoredView } from './view'
 import { parseRecents } from './recents'
 import { parseForks, type Fork } from './forks'
 import { parseBots, type Bot } from './bots'
+import { parseSummons, type Summon } from './summons'
 import { parseAppearance } from './theme'
 
 /** The panels in the context column, in the order they appear there. */
@@ -38,6 +39,8 @@ export interface StoredState {
   forks: Fork[]
   /** The bots somebody has defined, by slug. Half written here, half by the main process. */
   bots: Bot[]
+  /** Which bot answered which summoned turn, newest first. Written by the main process alone. */
+  summons: Summon[]
   /** Which appearance the window follows: `system`, `light`, or `dark`. */
   theme: string
 }
@@ -60,6 +63,7 @@ export function parseState(value: unknown, homeFor?: (slug: string) => string): 
     recents: parseRecents({ directories: held.recents }).directories,
     forks: parseForks({ forks: held.forks }).forks,
     bots: parseBots({ bots: held.bots }, homeFor).bots,
+    summons: parseSummons({ summons: held.summons }).summons,
     // Judged by `parseAppearance`, which lives beside the appearance names rather than here —
     // the same arrangement the four above have, where the validator sits with the shape it
     // understands. The key stays `theme` so existing `bravebot-ui.json` files keep working.

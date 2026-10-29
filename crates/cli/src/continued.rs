@@ -136,6 +136,11 @@ pub struct Finished<'a> {
     /// What the turn's gates decided, which goes into the session's trail beside the record, as a
     /// terminal or desktop session's does (SESSION-1, TRACE-5).
     pub events: &'a [bravebot_session::audit::Stamped],
+    /// What the run's file tools reached, which the record carries so a run that continues it has
+    /// the nested instructions and path-scoped rules they loaded (INSTR-14, INSTR-16).
+    pub touched: bravebot_agent::workspace::TouchedRecord,
+    /// Whether the run was in bypass, so the record can say the map may be the mode's (MODE-4).
+    pub answered_by_mode: bool,
 }
 
 /// Write the turn down, as a new session or as one more turn of the one it continued.
@@ -158,6 +163,7 @@ pub fn keep(
             let turn_number = record.turns + 1;
             handle.set_agent(turn.agent.map(str::to_string));
             handle.set_injected_facts(turn.injected_facts.clone());
+            handle.set_touched(turn.touched.clone());
             let written = handle.save_continuation(
                 record,
                 Continuation {
@@ -172,6 +178,7 @@ pub fn keep(
                     prompt_at: turn.prompt_at,
                     rewind: rewind.points(),
                     timing: turn.outcome.timing,
+                    answered_by_mode: turn.answered_by_mode,
                 },
             );
             if written {
@@ -210,6 +217,8 @@ pub fn keep(
                     manifest: None,
                     rewind: &[],
                     checkouts: &[],
+                    touched: Some(&turn.touched),
+                    answered_by_mode: turn.answered_by_mode,
                 },
             );
             let id = handle.resumable().map(str::to_string);

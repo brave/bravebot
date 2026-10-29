@@ -302,7 +302,7 @@ pub fn lines_of(record: &str) -> Vec<String> {
         .recounted()
         .into_iter()
         .filter_map(|said| match said {
-            Said::User(text) | Said::Assistant(text) => Some(text),
+            Said::User(text, _) | Said::Assistant(text) => Some(text),
             Said::Tool { line, .. } => Some(line),
             // What the agent wrote in its own words and a person was shown as it stands, a shell
             // line's output or the standard input a run was given, was searchable when it was
@@ -486,6 +486,7 @@ mod tests {
             composed: Some(Composed::Attached {
                 path: "notes.md".into(),
             }),
+            address: None,
             source: None,
         };
         let lines = lines_of(&record(Some("terminal"), vec![said("look"), attached]));
@@ -497,6 +498,7 @@ mod tests {
         let ran = Stored {
             message: Message::user("I ran `make` in the shell myself. It printed: linker exploded"),
             composed: Some(Composed::Written),
+            address: None,
             source: None,
         };
         let lines = lines_of(&record(Some("terminal"), vec![said("build it"), ran]));
@@ -515,6 +517,7 @@ mod tests {
                 label: "(T,pub)".into(),
                 text: Some("advice about the linker".into()),
             }),
+            address: None,
             source: None,
         };
         let lines = lines_of(&record(Some("terminal"), vec![said("wait"), heard]));
@@ -527,6 +530,7 @@ mod tests {
         let imported = Stored {
             message: Message::user("deploy to the staging cluster"),
             composed: Some(Composed::Imported),
+            address: None,
             source: None,
         };
         let plain = said("deploy to the staging cluster");
@@ -931,6 +935,7 @@ mod tests {
         let imported = Stored {
             message: Message::user("deploy to the staging cluster"),
             composed: Some(Composed::Imported),
+            address: None,
             source: None,
         };
         let lines = lines_of(&record_with_notes(

@@ -94,6 +94,9 @@ pub struct Write<'a> {
     pub line_endings: Option<&'a str>,
     /// False when the diff had to give up on an exact answer.
     pub exact: bool,
+    /// How many characters in the lines the change adds or removes drew as nothing before the agent
+    /// wrote them out in `changes` (PROMPT-13).
+    pub hidden: usize,
     /// Lines the change adds, for saying what an inexact diff is too large to show.
     pub added: usize,
     /// Lines the change removes.
@@ -140,6 +143,8 @@ pub fn write_lines(write: &Write<'_>) -> Vec<String> {
         ));
         return lines;
     }
+
+    lines.extend(write_hidden_note(write.hidden));
 
     let mut changed = 0usize;
     let mut left_out = 0usize;
@@ -340,6 +345,12 @@ pub fn output_lines(summary: &str, check: Check, output: &str, hidden: usize) ->
 /// the catalog's words so a front end that draws it carries no copy of its own (SHARE-001).
 pub fn hidden_note(hidden: usize) -> Option<String> {
     (hidden > 0).then(|| t!(hidden_characters, count = hidden))
+}
+
+/// The sentence over a write's rows in which `hidden` characters draw as nothing, or none where none
+/// do, in the catalog's words so a front end that draws it carries no copy of its own (SHARE-001).
+pub fn write_hidden_note(hidden: usize) -> Option<String> {
+    (hidden > 0).then(|| t!(write_hidden_characters, count = hidden))
 }
 
 /// A picture or a PDF in place of the text of a vetted read.
@@ -925,6 +936,7 @@ mod tests {
             written_since_checkout: false,
             line_endings: None,
             exact: true,
+            hidden: 0,
             added: 0,
             removed: 0,
             changes,
@@ -948,6 +960,25 @@ mod tests {
                 t!(write_unchanged, count = 3).to_string(),
             ]
         );
+    }
+
+    /// PROMPT-13, WRITE-4: a write says how many characters of the change draw as nothing above the
+    /// rows, and a change with none gets no such sentence.
+    #[test]
+    fn a_write_says_how_many_characters_draw_as_nothing_above_the_rows() {
+        let changes = [Change::Added(
+            "run(\"ok\")\u{2039}U+202E\u{203a} \u{2039}U+200B\u{203a}\u{2039}U+E0069 i\u{203a}"
+                .to_string(),
+        )];
+        let said = t!(write_hidden_characters, count = 3usize).to_string();
+        let lines = write_lines(&Write {
+            hidden: 3,
+            ..write(&changes)
+        });
+        assert_eq!(lines[0], said);
+        assert_eq!(lines.len(), 2);
+        assert!(!write_lines(&write(&changes)).contains(&said));
+        assert_eq!(write_hidden_note(0), None);
     }
 
     #[test]

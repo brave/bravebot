@@ -1,11 +1,11 @@
 ---
 id: PREM
-title: Leo Premium credentials
+title: The premium key
 status: normative
 governs:
-  - crates/skus/src/device.rs
-  - crates/skus/src/profile.rs
-  - crates/skus/src/store.rs
+  - crates/config/src/env_var.rs
+  - crates/config/src/lib.rs
+  - crates/config/src/brave_key.rs
   - crates/aichat/src/lib.rs
   - crates/agent/src/subscription.rs
   - crates/agent/src/backend.rs
@@ -20,6 +20,10 @@ governs:
   - crates/agent/src/turn/sentences.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/shared.rs
+  - crates/cli/src/brave.rs
+  - crates/cli/src/auth.rs
+  - crates/cli/src/doctor.rs
+  - crates/cli/src/main.rs
   - crates/tui/src/status.rs
   - crates/tui/src/logo.rs
 documented-by: docs/website/docs/customize/premium.md
@@ -27,303 +31,122 @@ documented-by: docs/website/docs/customize/premium.md
 
 ## Scope
 
-Importing a Leo Premium subscription and spending its credentials. This is an auth flow: it
+Authorising requests to Brave's premium service with a key a person stored. This is an auth flow: it
 carries no workspace content and no model output, so no labelled value passes through it. What it
-does carry is a user's subscription, which is why the rules below are about not spending or
-leaking something that is not ours to spend.
+does carry is a bearer key, which is why the rules below are about not sending it where it does not
+belong and not leaking it.
 
 ```
-bravebot import-leo-creds            # from Brave (stable)
-bravebot import-leo-creds nightly    # or beta, or development
-bravebot import-leo-creds --forget   # discard what was imported
+bravebot auth login brave    # type the key at a hidden prompt; it is kept in ~/.bravebot/brave-key.json
+bravebot auth status brave   # say whether one is stored
+bravebot auth logout brave   # forget it
 ```
+
+The premium host is compiled in, and `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is an optional override of it
+([PREM-11](#PREM-11)). `bravebot import-leo-creds` is retired ([PREM-15](#PREM-15)).
 
 ## Clauses
 
 <a id="PREM-1"></a>
-### PREM-1: this registers as a new device and never borrows the browser's credentials
+### PREM-1: withdrawn, this registers as a new device and never borrows the browser's credentials
 
-Only the subscription's **order id** is read from the browser profile. The credentials themselves
-are generated here and signed by Brave, exactly as a second browser on another machine would. The
-browser keeps its own, and nothing it holds is spent.
-
-`verified-by: bravebot_skus::profile::the_browsers_own_credentials_are_not_read`
-`verified-by: bravebot_skus::profile::an_order_id_that_is_not_a_uuid_is_refused_rather_than_used`
-`verified-by: bravebot_skus::profile::uuids_are_recognised_and_near_misses_are_not`
+Replaced by [PREM-10](#PREM-10). Bravebot no longer registers a device or reads a browser profile,
+and a premium request is authorised by a key the person stored with `bravebot auth login brave`.
 
 <a id="PREM-2"></a>
-### PREM-2: a credential is never sent to the non-premium host
+### PREM-2: the key is never sent to the free host or to a host that is not Brave's
 
-The premium host and the credential travel together, because a credential belongs to a
-deployment. A build with no premium host sends no credential rather than sending one where it
-does not belong.
+The premium host and the key travel together, because a key belongs to a deployment. A build with
+no premium host, which is one that reaches no Brave backend, sends no key rather than sending one
+where it does not belong, and a premium host that is not one of Brave's, which only an override can
+name, is sent none. A request that is not sent the key goes to the free endpoint, signed with the
+services key.
 
-Whether a premium endpoint is one of Brave's deployments is decided from the host the transport
-connects to: the text after the scheme up to the first `/`, `?` or `#`, with any userinfo and port
-left out. A Brave suffix after a `?` or a `#` belongs to the query or the fragment, so
-`https://attacker.example#.brave.com` is `attacker.example`'s and is sent no credential. A premium
-endpoint holding a query or a fragment is dropped by the configuration the way a schemeless one
-is, so the string requests are sent to and the string the decision reads are never two different
-hosts.
+A premium endpoint is one of Brave's deployments when its host ends in `.brave.com`,
+`.brave.software` or `.bravesoftware.com`. The host is the one the transport connects to: the text
+after the scheme up to the first `/`, `?` or `#`, with any userinfo and port left out. A Brave
+suffix after a `?` or a `#` belongs to the query or the fragment, so
+`https://attacker.example#.brave.com` is `attacker.example`'s and is sent no key, and a Brave name
+in front of an `@` is userinfo, not the host. An override holding a query or a fragment is not used
+by the configuration, which keeps the host compiled in ([PREM-11](#PREM-11)), so the string requests
+are sent to and the string the decision reads are never two different hosts.
 
-**Why.** The Brave suffix test is what keeps a credential off other hosts. On a build with nothing
-built in, a settings file in a checkout sets the premium endpoint ([BACKEND-35](backends.md#BACKEND-35)),
-so the test has to hold for every value that file can hold. A presentation that reaches a host
-other than Brave's stays usable by that host until its validity window ends.
+**Why.** The Brave suffix test is what keeps a key off other hosts. A settings file in a checkout
+can set the premium endpoint override ([BACKEND-35](backends.md#BACKEND-35)), so the test has to hold
+for every value that file can hold. A key that reaches a host other than Brave's can be read there,
+and it stays usable until Brave revokes it. A host that is not Brave's is a local model server or a
+private deployment somebody chose, and no key belongs near one.
 
-`verified-by: bravebot_aichat::client::a_subscribed_request_goes_to_the_premium_host_with_the_credential`
-`verified-by: bravebot_aichat::client::without_a_premium_host_no_credential_is_attached`
+`verified-by: bravebot_aichat::client::without_a_premium_host_no_key_is_attached`
+`verified-by: bravebot_agent::subscription::a_key_is_presented_only_to_a_premium_host_that_is_braves`
+`verified-by: bravebot_agent::subscription::braves_own_deployments_are_told_from_a_host_somebody_chose`
+`verified-by: bravebot_agent::subscription::a_port_is_not_part_of_the_host`
 `verified-by: bravebot_agent::subscription::a_suffix_after_a_hash_or_a_question_mark_does_not_make_a_host_braves`
 `verified-by: bravebot_agent::subscription::a_brave_name_in_the_userinfo_does_not_make_a_host_braves`
-`verified-by: bravebot_config::lib::a_premium_endpoint_with_a_query_or_a_fragment_is_discarded`
-`verified-by: bravebot_config::lib::a_premium_endpoint_with_a_port_and_a_path_is_kept`
 
 <a id="PREM-3"></a>
-### PREM-3: an order is checked before anything is registered against it
+### PREM-3: withdrawn, an order is checked before anything is registered against it
 
-An unpaid order, one asking for no credentials, one asking for an implausible number, and one
-without interval metadata are all refused. The Leo item is picked out of a multi-item order rather
-than assumed to be the only one.
-
-`verified-by: bravebot_skus::device::an_unpaid_order_cannot_be_registered_against`
-`verified-by: bravebot_skus::device::an_order_asking_for_no_credentials_is_refused`
-`verified-by: bravebot_skus::device::an_implausible_credential_count_is_refused`
-`verified-by: bravebot_skus::device::an_order_without_interval_metadata_is_refused`
-`verified-by: bravebot_skus::device::the_leo_item_is_picked_out_of_a_multi_item_order`
-`verified-by: bravebot_skus::device::an_order_says_how_many_credentials_to_ask_for`
+Replaced by [PREM-15](#PREM-15), which retires the command that registered against an order. No
+order is read or registered against, so nothing is checked first.
 
 <a id="PREM-4"></a>
-### PREM-4: a batch is verified against the issuer's key before it is stored
+### PREM-4: withdrawn, a batch is verified against the issuer's key before it is stored
 
-A batch signed by the wrong key does not verify, one without a proof is refused, and one with no
-signed credentials is an error. Tokens are matched by value, never by position, and a token echoed
-twice is matched once. A response holding only tokens that were never submitted matches nothing.
-
-Verification covers the pairs this device matched, so a response proved over the whole of what it
-lists does not verify when it lists anything that was not submitted, and the pairs that did match are
-not kept.
-
-`verified-by: bravebot_skus::device::a_batch_signed_by_the_wrong_key_does_not_verify`
-`verified-by: bravebot_skus::device::a_batch_without_a_proof_is_refused`
-`verified-by: bravebot_skus::device::a_response_with_no_signed_credentials_is_an_error`
-`verified-by: bravebot_skus::device::tokens_are_matched_by_value_not_by_position`
-`verified-by: bravebot_skus::device::a_batch_echoing_tokens_that_were_never_submitted_matches_nothing`
-`verified-by: bravebot_skus::device::a_batch_proved_over_more_tokens_than_were_submitted_does_not_verify`
-`verified-by: bravebot_skus::device::a_token_echoed_twice_is_matched_once_so_the_batch_does_not_verify`
-`verified-by: bravebot_skus::device::a_well_formed_batch_is_decoded`
+Replaced by [PREM-10](#PREM-10). No batch is minted or stored, so none is verified here, and the
+premium host checks the key it is sent.
 
 <a id="PREM-5"></a>
-### PREM-5: a credential is single-use and is never offered twice
+### PREM-5: withdrawn, a credential is single-use and is never offered twice
 
-Credentials arrive in batches covering a few days and are spent one per request. A spent one is
-never offered again, consecutive spends hand out different credentials, and spending past the end
-of a batch is refused. A moment outside every validity window yields no credential.
-
-**Never offered twice means never on this machine, not never in this process.** A run holds one
-wallet, which the turn opens and lends to every delegate it starts: a delegate opens none of its
-own and reads the store not at all. Between runs the file is where they agree. A spend is taken
-under an exclusive claim on the store, from what the file says at that moment, and recorded on the
-file before the credential leaves the wallet, so every other `bravebot` reads it as gone. A claim
-older than any live hold belongs to a process that died holding it and is broken rather than
-waited on. It is broken by moving it aside and judging it there, and a claim that turns out to be live is
-put back rather than deleted.
-
-**Why.** A spend held only in memory reaches the file when the wallet is written back, so a second
-wallet over the same batch would read every spend the first has made as unspent and offer the
-credential that one is presenting right now. Nothing bounds how many `bravebot` processes a person
-runs, and each is a wallet of its own over the one batch, so one wallet per run leaves the
-guarantee holding inside a process and failing between them.
-
-`verified-by: bravebot_skus::store::a_spent_credential_is_never_offered_again`
-`verified-by: bravebot_skus::store::consecutive_spends_hand_out_different_credentials`
-`verified-by: bravebot_skus::store::spending_past_the_end_of_the_batch_is_refused`
-`verified-by: bravebot_skus::store::the_next_usable_credential_is_the_one_valid_at_that_moment`
-`verified-by: bravebot_skus::store::a_moment_outside_every_window_yields_no_credential`
-`verified-by: bravebot_skus::store::a_window_does_not_include_its_own_end`
-`verified-by: bravebot_skus::store::two_wallets_over_one_file_are_never_offered_the_same_credential`
-`verified-by: bravebot_skus::store::wallets_spending_at_the_same_moment_hand_out_different_credentials`
-`verified-by: bravebot_skus::store::neither_of_two_wallets_erases_the_others_spend_markers`
-`verified-by: bravebot_skus::store::a_failed_spend_write_does_not_offer_what_another_wallet_has_spent_since`
-`verified-by: bravebot_skus::store::a_failed_spend_write_leaves_another_wallets_spends_on_the_file_when_the_session_ends`
-`verified-by: bravebot_skus::store::a_claim_left_by_a_dead_process_is_broken_rather_than_waited_on`
-`verified-by: bravebot_skus::store::a_claim_taken_a_moment_ago_is_not_treated_as_abandoned`
-`verified-by: bravebot_skus::store::breaking_a_claim_that_is_no_longer_abandoned_leaves_it_in_place`
-`verified-by: bravebot_skus::store::breaking_an_abandoned_claim_removes_it_and_leaves_nothing_beside_it`
-`verified-by: bravebot_agent::shared::two_runs_holding_one_wallet_are_never_offered_the_same_credential`
-`verified-by: bravebot_agent::turn::a_delegate_spends_the_wallet_the_turn_lent_it`
-`verified-by: bravebot_agent::home::a_delegate_does_not_open_a_wallet_of_its_own`
+Replaced by [PREM-12](#PREM-12). The key is not single-use: it is presented with every premium
+request, and what is counted is the number of times it is asked for.
 
 <a id="PREM-6"></a>
-### PREM-6: a spend is on the file before the credential is presented, and nothing else writes
+### PREM-6: withdrawn, a spend is on the file before the credential is presented, and nothing else writes
 
-A session that spends nothing never writes, and a detached batch has nowhere to write. A spend
-reaches the file as it is made, under the claim PREM-5 takes, before the credential leaves the
-wallet. What is left for a flush and for the end of a session is a batch a refill minted and
-nothing has been spent from yet.
-
-The write goes to a temporary beside the file and is renamed over it, so a write that dies partway
-leaves the last good batch rather than half of a new one. A batch imported for another environment
-while a session is spending is not written over: the session refuses the spend instead.
-
-**Why.** A whole batch is hundreds of credentials and one is spent per model request, so this
-rewrites a few hundred kilobytes beside a request that takes seconds. Holding the markers in memory
-instead saves that write and loses PREM-5 twice over: between processes, which cannot see each
-other's memory, and within one, since a process that dies has presented every credential it spent
-and recorded none of them. The cost the write does carry is a credential recorded as spent and then
-not presented, one per abandoned request, which a batch of hundreds valid for days can afford and
-offering one twice is not.
-
-**Why the temporary.** Opening the real path and truncating it leaves an empty file for the length
-of the write, which PREM-7 reports as unusable, and the batch is recoverable from nowhere else:
-the credentials were minted against the order and only this file holds them, so the cost of landing
-in that window is a re-import. The session record and the prompt history are written beside and
-renamed for less than this.
-
-`verified-by: bravebot_skus::store::a_session_that_spends_nothing_never_writes`
-`verified-by: bravebot_skus::store::a_spend_is_written_back_as_it_is_made`
-`verified-by: bravebot_skus::store::a_spend_is_written_back_when_the_session_ends`
-`verified-by: bravebot_skus::store::a_refilled_batch_is_written_back`
-`verified-by: bravebot_skus::store::a_spend_after_a_refill_comes_out_of_the_new_batch`
-`verified-by: bravebot_skus::store::a_batch_imported_for_another_environment_mid_session_is_not_spent`
-`verified-by: bravebot_skus::store::a_failed_spend_write_is_not_written_over_a_later_import`
-`verified-by: bravebot_skus::store::a_failed_spend_write_leaves_nothing_for_the_end_of_the_session_to_write`
-`verified-by: bravebot_skus::store::a_failed_spend_write_after_a_refill_takes_the_spend_back_and_keeps_the_new_batch`
-`verified-by: bravebot_skus::store::a_refilled_batch_is_not_written_over_another_environment`
-`verified-by: bravebot_skus::store::a_write_replaces_the_file_rather_than_truncating_it`
-`verified-by: bravebot_skus::store::a_write_leaves_neither_a_temporary_nor_a_claim_behind`
-`verified-by: bravebot_skus::store::a_detached_batch_has_nowhere_to_write`
+Replaced by [PREM-12](#PREM-12). Nothing is spent from a file, so nothing is written before a key is
+presented. The one file for the key is written only by `bravebot auth login brave`
+([PREM-14](#PREM-14), [PREM-16](#PREM-16)).
 
 <a id="PREM-7"></a>
-### PREM-7: credentials live in one file under `~/.bravebot` that no other account can read
+### PREM-7: withdrawn, credentials live in one file under `~/.bravebot` that no other account can read
 
-One file, not one per channel: a person has one subscription however many Brave builds they have
-installed, so importing from Nightly replaces what was imported from Stable rather than sitting
-beside it. The channel names where to read the order id from, which is a fact about the machine's
-browsers rather than about the agent. `--forget` therefore takes no channel.
-
-The file is created reachable by the account that runs the import and by no other, before anything is
-written to it, and it still is after a re-import over an existing file. On Unix that is mode 0600. On
-Windows, which has no mode, it is an access-control list granting that one account, protected so that
-an inheritable entry on the directory above is not added to it: a profile directory on a shared or a
-roaming volume can carry one for `Users`, and taking it would hand the token to every account on the
-machine. A platform with neither has the import refused rather than written unrestricted, since what
-is kept here is a bearer token. The files beside it are written either way, which
-[state-directory.md](state-directory.md) records as the cost it is. With no profile directory named
-there is nowhere a secret belongs, and that is reported rather than guessed at. `--forget` removes the
-file and is not an error when there is nothing to remove.
-
-A malformed or empty file is reported as such rather than treated as absent credentials, and a
-credential without a token is rejected on load. The claim PREM-5 takes and the temporary PREM-6
-renames sit in the same directory and are not a second store: the claim holds no bytes, and the
-temporary is a file being written that is either renamed over the credentials or removed.
-
-**Why not the keychain.** It was the keychain, and that was wrong on both halves of the trade. The
-browser these are imported from keeps the same secret unencrypted in `skus.state` and
-`brave.ai_chat.premium_credential_cache`, with no OSCrypt anywhere in brave-core's `components/skus`
-or `components/ai_chat`, so a keychain here guarded a copy of something already readable in the file
-the copy came from. Nor did it hold against the threat it was written for, a program `run` launches
-reading the file: those are deliberately unconfined ([RUN-10](tools/run.md#RUN-10)), and the AWS
-credentials that sign every model request are cached by the `aws` CLI in plain 0600 JSON, so anything
-that can read a file here can already take the larger secret. What it did cost was availability: the
-keychain crate builds one Linux backend, the D-Bus Secret Service, so a machine reached over SSH with
-no desktop session had no store to open and every such user was silently spending no subscription.
-
-`verified-by: bravebot_skus::store::importing_again_replaces_the_previous_batch`
-`verified-by: bravebot_skus::store::a_batch_written_to_the_file_is_read_back`
-`verified-by: bravebot_skus::store::the_file_is_not_readable_by_anyone_else`
-`verified-by: bravebot_skus::store::the_windows_list_grants_one_account_and_inherits_nothing`
-`verified-by: bravebot_skus::store::the_file_lives_in_the_users_own_directory`
-`verified-by: bravebot_skus::store::no_home_directory_is_reported_rather_than_guessed`
-`verified-by: bravebot_skus::store::forgetting_removes_the_file_and_is_repeatable`
-`verified-by: bravebot_skus::store::an_empty_file_is_reported_rather_than_read_as_absent`
-`verified-by: bravebot_skus::store::a_batch_that_is_not_json_is_reported_as_malformed`
-`verified-by: bravebot_skus::store::a_file_that_is_not_json_is_reported_when_loaded`
-`verified-by: bravebot_skus::store::a_credential_without_a_token_is_rejected_on_load`
-`verified-by: bravebot_skus::store::an_entry_missing_its_order_is_reported_as_malformed`
-`verified-by: bravebot_skus::store::a_batch_survives_a_round_trip_through_the_stored_form`
-`verified-by: bravebot_skus::store::a_write_that_fails_partway_removes_its_temporary_and_keeps_the_last_batch`
-`verified-by: bravebot_cli::running::forgetting_takes_no_channel`
+Replaced by [PREM-14](#PREM-14), which says where the key is held: one file under `~/.bravebot` that
+no other account can read.
 
 <a id="PREM-8"></a>
-### PREM-8: a stored subscription that cannot be used is reported rather than skipped
+### PREM-8: withdrawn, a stored subscription that cannot be used is reported rather than skipped
 
-Coming back empty has two causes and they are not the same fact. Nothing imported is not a fault
-and is said nothing about. A batch that **exists and cannot be spent** is reported
-to the person, with the reason and what to do about it. That covers a file that could not be read,
-one holding nothing, one another version wrote, and one imported for an environment this endpoint
-does not accept, since a credential only verifies against the deployment that signed it. An
-endpoint belonging to no environment, such as a local one, is the first case and not the second: no
-credential belongs near it by design. So is a machine with nowhere to keep credentials at all,
-which [STATE-2](state-directory.md#STATE-2) makes a state this program supports: the store answers
-that with the same error it gives a file that would not read, and reported as the second it told
-somebody who has never held a subscription that theirs could not be used.
-
-**Why.** The request then goes out with no credential, where the endpoint answers a premium model
-name by **substituting** a weaker model rather than by failing, with a 200 and an ordinary reply. So a
-request that silently lost its credential still returns something that reads like an answer, and
-nothing on screen connects that to the credential store. The downgrade has to be said out loud,
-because its only other symptom is the agent appearing to get worse for no reason.
-
-**Asked by the model, of a turn that could have spent one.** Which service answers is decided by the
-model ([BACKEND-3](backends.md#BACKEND-3)), and only Brave's endpoint has a notion of a subscription
-at all. A turn whose model is served by AWS Bedrock or by a gateway therefore reads the store for
-nothing and is told nothing about it, however unusable what is stored may be.
-
-**Why.** There is no downgrade to report: such a turn ran on the model that was chosen, and the
-credential it did not spend is one that service would not have accepted. The line said otherwise on
-both halves: that the turn had gone out without a subscription, which is not the story of a request
-signed for AWS, and that re-importing was the remedy, which would have changed nothing about the
-answer. That is the same reasoning [BACKEND-9](backends.md#BACKEND-9) applies to a sign-in, and a
-turn served entirely by one backend has no business acting on, or reporting on, the credentials of
-another it will never call.
-
-A batch that cannot be spent is never reported without the remedy: re-import with
-`bravebot auth login leo`, or forget it with `bravebot auth logout leo`. The store puts it in the
-text of every refusal, so the turn notice and the onboarding block both carry it. A batch that
-records a version other than the one this build writes is refused, since the same fields may mean
-something else.
-
-`bravebot auth status` ([CLI-23](cli.md#CLI-23)) prints the store's refusal text as it stands, and
-the same sentence for a batch imported for an environment the endpoint does not accept, so the
-remedy is the one a turn shows. Nothing imported is reported there as not signed in, because the
-person asked, where a turn says nothing about it.
-
-`verified-by: bravebot_skus::store::every_refusal_of_a_stored_batch_names_the_remedy`
-`verified-by: bravebot_skus::store::a_batch_of_another_version_is_refused`
-`verified-by: bravebot_agent::subscription::an_unreadable_batch_is_reported_and_an_absent_one_is_not`
-`verified-by: bravebot_agent::subscription::an_endpoint_in_no_environment_is_not_a_complaint`
-`verified-by: bravebot_cli::running::a_machine_with_no_profile_directory_has_nothing_imported`
-`verified-by: bravebot_agent::home::a_subscription_imported_for_another_environment_is_reported`
-`verified-by: bravebot_agent::home::an_empty_credentials_file_is_reported_rather_than_read_as_absent`
-`verified-by: bravebot_agent::home::a_turn_on_another_backend_is_not_told_about_an_unusable_batch`
-`verified-by: bravebot_agent::subscription::a_batch_for_the_wrong_environment_is_refused_with_its_remedy`
-`verified-by: bravebot_cli::running::auth_status_leo_for_another_environment_prints_the_remedy_a_turn_would`
-`verified-by: bravebot_cli::running::auth_status_leo_with_an_unreadable_batch_is_unusable_with_the_stores_remedy`
-`verified-by: bravebot_agent::backend::only_the_aichat_backend_spends_an_imported_subscription`
-`verified-by: bravebot_agent::home::a_machine_that_imported_nothing_is_not_told_its_subscription_cannot_be_used`
+Replaced by [PREM-10](#PREM-10), [PREM-13](#PREM-13) and [PREM-16](#PREM-16). There is no stored
+subscription to be unusable. A source that cannot present the key fails the request with the remedy
+named, a file of the key that cannot be read is said by `doctor`, and a configuration naming no model
+service says what to configure ([BACKEND-39](backends.md#BACKEND-39)).
 
 <a id="PREM-9"></a>
 ### PREM-9: the tier reported is the one the last turn ran on, not the one the build was compiled with
 
-What `/status` says about the tier is what the last turn actually did. Before the first turn it says
-premium is available rather than claiming it is or is not in use.
+What `/status` says about the tier is what the last turn actually did: that the premium key was sent
+or that it was not. Before the first turn it says premium is available, and that nothing has been
+sent yet, where a key is stored, and that no premium key is configured where none is. It does not
+claim the tier is or is not in use.
 
 The opening screen draws the tier beside the confinement, from the configuration, in the same words
-`/status` uses before a turn has run. It does **not** read the credential store: a stored batch may
-be expired, exhausted, or issued for another environment, so finding one would not settle the tier
-either. A pane too narrow for the wordmark still reports both.
+`/status` uses before a turn has run. It reads whether the configuration holds a key and sends
+nothing: a key that is stored may still be refused by the premium host, so holding one does not
+settle the tier either. A pane too narrow for the wordmark still reports both.
 
 Where the server reports using a model other than the one requested, both are shown: the choice that
 was made and the model that actually answered. Said once when it starts happening rather than every
 turn. `automatic-bravebot` resolving to a concrete model is not a substitution, since that is the
 server choosing per request, which is what the automatic entry means.
 
-**Why.** Every build that knows a premium host would otherwise report itself as premium, which is a
-fact about compilation and not about any request. A session reported "premium configured" while ten
-consecutive requests went out spending no subscription and were answered by a model a third the
-size, which then announced tool calls it never emitted and stalled the turn. A panel that cannot be trusted on
-this point is worse than one that omits it, and the substituted model is the half of PREM-8 a person
-is most likely to notice first.
+**Why.** A configuration that holds a key would otherwise report itself as premium, which is a fact
+about the configuration and not about any request. A session reported "premium configured" while ten
+consecutive requests went out without the key and were answered by a model a third the size, which
+then announced tool calls it never emitted and stalled the turn. A panel that cannot be trusted on
+this point is worse than one that omits it, and the substituted model is what a person is most
+likely to notice first when a request did not carry the key.
 
 `verified-by: bravebot_tui::status::the_tier_reported_is_the_one_the_last_turn_actually_ran_on`
 `verified-by: bravebot_tui::status::a_session_with_no_turn_yet_does_not_claim_a_tier`
@@ -341,24 +164,249 @@ is most likely to notice first.
 `verified-by: bravebot_tui::app::a_turn_on_a_definitions_model_records_its_tier_and_model`
 `verified-by: bravebot_tui::app::a_turn_on_a_skills_model_replaces_an_earlier_turns_tier`
 
+<a id="PREM-10"></a>
+### PREM-10: the key is presented as an unsigned bearer token to the premium host, and a redirect from it is a failure
+
+A request to the Brave backend made while a key is stored goes to the premium host's
+`/v1/chat/completions` with `Authorization: Bearer <key>`. The premium host authorises on the key
+alone, so that request is not signed: it carries no `digest` and no `Signature` authorization, and
+the key is not sent in a cookie. A request made without the key goes to the free endpoint, signed
+with the services key.
+
+A redirect in answer to a premium request is a failure, with the status it came with, and is not
+followed: nothing is sent to the address it names.
+
+A source that cannot present the key fails the request rather than sending it without. The failure
+reads "the premium key could not be used", gives the reason, and says to run
+`bravebot auth login brave` to replace the key or `bravebot auth logout brave` to send requests to
+the free endpoint instead. It does not mention an AWS sign-in.
+
+**Why.** The free endpoint answers a premium model name by substituting a weaker model rather than
+by failing, with a 200 and an ordinary reply. A request that silently lost its key would therefore
+still return something that reads like an answer, and the only other symptom of the downgrade is the
+agent appearing to get worse for no reason. A redirect would re-send the conversation to an address
+the premium host chose, and the key is a bearer secret meant for the host it was configured for.
+
+`verified-by: bravebot_aichat::client::a_premium_request_goes_to_the_premium_host_with_the_key_as_its_bearer_token`
+`verified-by: bravebot_aichat::client::an_unusable_premium_key_fails_rather_than_downgrading`
+`verified-by: bravebot_aichat::client::a_redirect_from_the_premium_host_is_a_failure_and_goes_nowhere`
+`verified-by: bravebot_agent::backend::each_backend_keeps_its_own_explanation`
+
+<a id="PREM-11"></a>
+### PREM-11: the premium host is compiled in, an override that is malformed is not used, and the key is held only with a host
+
+The premium host is compiled in, so no variable or settings file decides where a key a person typed
+is sent. A build whose free endpoint is under `brave.software` or `bravesoftware.com` has the
+development host, and every other build has the production host. The two are one value while the
+premium service is live only in development. Both are `https://ai-gateway-api.bsg.brave.software`,
+the host that accepts a key. `ai-chat-premium.bsg.brave.software` answers a request carrying one with
+a 401, so it is not used. A build that names no premium host has the one compiled in, and a build
+that reaches no Brave backend has none, since it has no free endpoint to say whose environment it is
+in.
+
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is an optional override of the host. It is resolved by the order
+every other name is ([BACKEND-35](backends.md#BACKEND-35)): an exported variable, then the build,
+then a settings file's `env` block. It is a base the request path is appended to. A value that is
+not an `http://` or `https://` address, or that holds a query or a fragment, is not used, and the
+host compiled in stands. A port and a path are part of the base and are kept.
+
+The configuration holds the stored key ([PREM-14](#PREM-14)) only together with a premium host. On a
+build with none, a key that is stored is dropped rather than held, and a build with a host and no key
+stored sends every request to the free endpoint.
+
+**Why.** Failing every run over a badly spelled override would punish everyone who never stored a
+key, and sending the key to an address nobody chose would be worse, so the override that cannot be
+used gives way to the host compiled in. A transport ends the host at the first `/`, `?` or `#`, so
+the text after either is not part of the host although a suffix test on the whole value reads it as
+one, and a path appended to a base holding either lands inside the query or the fragment. Not using
+such a value keeps the host a request is sent to and the host the decision about the key reads the
+same host. A key with no premium host would have to be sent to the free endpoint or to nothing, and
+the free endpoint is a deployment the key does not belong to.
+
+`verified-by: bravebot_config::lib::a_build_that_names_no_premium_host_has_the_one_compiled_in`
+`verified-by: bravebot_config::lib::the_compiled_in_premium_host_is_the_one_that_accepts_a_key`
+`verified-by: bravebot_config::lib::a_build_that_reaches_no_brave_backend_has_no_premium_host`
+`verified-by: bravebot_config::lib::a_stored_premium_key_is_held_with_the_host_compiled_in`
+`verified-by: bravebot_config::lib::a_stored_premium_key_is_dropped_where_there_is_no_brave_backend`
+`verified-by: bravebot_config::lib::a_malformed_premium_endpoint_is_not_used`
+`verified-by: bravebot_config::lib::a_premium_endpoint_with_a_query_or_a_fragment_is_discarded`
+`verified-by: bravebot_config::lib::a_premium_endpoint_with_a_port_and_a_path_is_kept`
+`verified-by: bravebot_config::lib::every_name_a_settings_block_may_set_reaches_the_configuration`
+`verified-by: bravebot_agent::subscription::a_key_is_presented_only_to_a_premium_host_that_is_braves`
+
+<a id="PREM-12"></a>
+### PREM-12: every premium request asks the key source once, so a limit in credits counts premium requests and a delegate's are counted with its turn's
+
+A premium request asks its key source for the key once, as it is made. A request that does not go to
+the premium host asks it nothing. Asking does not use the key up: the source gives the same key on
+every ask, so no request finds it spent.
+
+A session's `limit` in credits ([TURN-8](turns.md#TURN-8)) counts these asks, so it counts premium
+requests. A turn lends its source to the delegates it starts. A delegate presents the key through
+the source it was lent and takes none from the configuration, so its requests are counted with the
+turn's.
+
+**Why.** A person who sets a limit in credits is limiting premium requests, and the source is where
+they are counted. A delegate that took the key from the configuration itself would present it
+without being counted, and the limit would be passed without anyone being asked.
+
+`verified-by: bravebot_agent::subscription::the_key_is_presented_on_every_request`
+`verified-by: bravebot_agent::shared::two_runs_holding_one_source_both_ask_it`
+`verified-by: bravebot_agent::turn::a_delegate_spends_the_wallet_the_turn_lent_it`
+`verified-by: bravebot_aichat::client::without_a_premium_host_no_key_is_attached`
+
+<a id="PREM-13"></a>
+### PREM-13: a turn whose model another backend serves is not handed the key
+
+Which service answers is decided by the model ([BACKEND-3](backends.md#BACKEND-3)), and only Brave's
+aichat endpoint has a notion of a premium key. A turn whose model is served by AWS Bedrock, by a
+gateway or by a ChatGPT or xAI account is handed no key, and its client is given none to present. A
+stored key with a premium host that is Brave's is a configured service for a turn whose model Brave
+serves ([BACKEND-39](backends.md#BACKEND-39)).
+
+**Why.** Such a turn ran on the model that was chosen, and the key is not one the service that
+answered would accept. Handing it to that client would send a credential to a service that did not
+issue it. That is the same reasoning [BACKEND-9](backends.md#BACKEND-9) applies to a sign-in: a turn
+served entirely by one backend has no business acting on the credentials of another it will never
+call.
+
+`verified-by: bravebot_agent::subscription::a_turn_on_another_backend_is_not_handed_the_premium_key`
+`verified-by: bravebot_agent::backend::only_the_aichat_backend_spends_an_imported_subscription`
+`verified-by: bravebot_agent::backend::a_premium_key_with_a_braves_premium_host_is_a_service_configured`
+`verified-by: bravebot_agent::backend::the_account_answers_for_its_own_models_and_for_nothing_a_credential_of_another_service_is_for`
+
+<a id="PREM-14"></a>
+### PREM-14: the key is one file under `~/.bravebot` that no other account can read, and the programs a turn runs are refused it
+
+The key is kept in `brave-key.json` in the state directory ([STATE-2](state-directory.md#STATE-2)),
+a file of its own beside the gateway keys and not in them. It holds a version and the key, and
+nothing else. The file is created before anything is written to it, reachable by the account that
+stored the key and by no other: mode 0600 on Unix and an access-control list for one account on
+Windows, with nothing inherited. A platform with neither has the key refused. It is written beside
+the file and renamed over it, so a write that stops part way leaves the last good file. No settings
+layer, `provider` block or environment variable holds the key or names one, and where the key goes is
+not stored with it.
+
+The file is read with a bound of 16 KiB. One that has another field, another version, or a blank or
+non-text key is refused whole and not read in part, because the file is written whole and a field
+skipped when reading would be gone after the next write. The text it was read into and the document
+the parse made are overwritten before the read answers.
+
+The sandbox refuses the file to the programs a stage of `run` starts, as it refuses every file of the
+state directory that it does not lift ([SANDBOX-12](sandboxing.md#SANDBOX-12)). No variable carries
+the key, so there is none to take out of the environment of a program.
+
+Whenever the configuration holds a key ([PREM-11](#PREM-11)) and the Brave backend is reachable, the
+key is in the record of credentials this build holds ([CRED-2](credential-protection.md#CRED-2)).
+`bravebot doctor` lists it as "the premium key" with its tier and what would end it: signing out with
+`bravebot auth logout brave` ends this machine's custody and leaves the key working at Brave's
+premium service. It never prints the value. Its `premium` line reads `<url>, with a premium key`,
+`<url>, without a premium key, so requests go to the endpoint above`, or `not configured`.
+
+**Why.** A file of its own because every id in the gateway keys is a gateway that can be signed out of
+by name, and a Brave key kept there would be listed as a gateway no block names. A bearer key a
+person typed is kept as the other keys are: readable by the account alone, in the directory the
+sandbox already refuses to the programs a turn runs, which do not authenticate as this agent and have
+no use for a key that reaches Brave's service. The key is a bearer secret that nothing decides each
+use of and that only Brave's premium service revokes, which is the Held tier.
+
+`verified-by: bravebot_config::brave_key::a_stored_key_is_read_back`
+`verified-by: bravebot_config::brave_key::no_file_is_no_key_and_a_written_file_is_read`
+`verified-by: bravebot_config::brave_key::a_file_that_is_not_this_shape_is_refused`
+`verified-by: bravebot_config::brave_key::a_file_over_the_bound_is_refused_and_not_read_as_no_key`
+`verified-by: bravebot_config::brave_key::a_key_that_needs_escaping_round_trips`
+`verified-by: bravebot_cli::brave::a_typed_key_is_stored_private_and_never_said`
+`verified-by: bravebot_skus::store::the_file_is_not_readable_by_anyone_else`
+`verified-by: bravebot_skus::store::the_windows_list_grants_one_account_and_inherits_nothing`
+`verified-by: bravebot_sandbox::base::the_run_base_reads_the_session_records_and_no_other_file_in_the_state_directory`
+`verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
+`verified-by: bravebot_config::lib::a_premium_key_is_a_credential_this_configuration_holds`
+`verified-by: bravebot_cli::running::doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at`
+
+<a id="PREM-15"></a>
+### PREM-15: `import-leo-creds` is retired, says so, and starts no work
+
+`bravebot import-leo-creds`, with any arguments and in an incognito session or not, prints that
+bravebot no longer imports a Leo subscription from Brave and that premium requests use a key stored
+with `bravebot auth login brave`. It exits with the argument status ([CLI-6](cli.md#CLI-6)) and
+starts no work: it prints nothing on standard output and writes nothing to the state directory.
+
+`~/.bravebot/leo-premium.json` and `leo-premium.lock` are neither read nor written. A person can
+delete them. The sandbox still denies the programs it confines access to `leo-premium.json`, so a
+file left there stays protected ([SANDBOX-12](sandboxing.md#SANDBOX-12)).
+
+**Why.** Left as a word nothing recognises, the command would be taken as the task a one-shot run was
+asked to do and sent to a model. A command that did nothing without saying so would leave somebody
+with the old setup believing premium was still authorised by it.
+
+`verified-by: bravebot_cli::running::the_retired_import_command_says_so_and_starts_no_work`
+
+<a id="PREM-16"></a>
+### PREM-16: `auth login brave` stores a typed key on a terminal, `auth logout brave` forgets it, and `auth status brave` says whether one is stored
+
+`bravebot auth login brave` asks for the key at a prompt that draws nothing as it is typed, and stores
+it in the file of [PREM-14](#PREM-14). It needs a terminal on stdin and on stderr: where either is
+not one it is refused with the argument status, and nothing is stored. In an incognito session it is
+refused with the failure status before the key is asked for, because a premium key is kept on disk,
+which an incognito session will not do ([INCOG-7](incognito.md#INCOG-7)); where both apply, the
+incognito refusal is the one given. Where the machine has nowhere to keep a key, it is refused with
+the failure status.
+
+A key that is stored is replaced only on a yes. The question is asked first, anything but a yes
+(no, nothing typed, the end of the input) leaves the key as it is, and the key is asked for only
+after the yes. Nothing typed stores nothing and is not a failure. A file that cannot be read as a key
+is neither read as none nor written over: the login is refused with the failure status, naming the
+file, and leaves it. The line said after a store names the file and never the key.
+
+`bravebot auth logout brave` removes the file. It is allowed in an incognito session, since it
+leaves less behind, and is not an error where nothing is stored. It says the key still works at
+Brave's premium service until it is revoked there.
+
+`bravebot auth status brave` reads the file and writes nothing, so an incognito session may ask. It
+prints one line, never the key:
+
+- `brave: signed in: a premium key is stored and is sent to Brave's premium service alone`, with exit
+  status 0.
+- `brave: not signed in: no premium key is stored; run bravebot auth login brave`, or
+  `brave: not signed in: this machine has nowhere to keep a key, so none is stored`, with exit status 1.
+- `brave: unusable: ` and a sentence naming the file, where it cannot be read, with exit status 1.
+
+A turn reads a file that cannot be read as no key, so its premium requests go to the free endpoint.
+`bravebot doctor` says so on a `premium key` line that names the file and ends in failure.
+
+**Why.** The key is typed at a hidden prompt rather than passed as an argument or read from a
+variable, because an argument is readable by other programs on the machine and kept in the shell's
+history, and a variable is inherited by every program started. A key asked for on a redirected stream
+is one nobody typed, and a pipe on stdin would be answering for the person, so a terminal is
+required. A key is replaced only on a yes because the one replaced is gone once the file is written.
+A file that cannot be read is left because writing over it would lose a key the reader could not
+parse, which is a key somebody has to go back to Brave for. A turn does not fail on it, since a run
+that never used the premium tier has no use for the file, and `doctor` is where it is said.
+
+`verified-by: bravebot_cli::brave::a_typed_key_is_stored_private_and_never_said`
+`verified-by: bravebot_cli::brave::no_key_typed_stores_nothing`
+`verified-by: bravebot_cli::brave::a_stored_key_is_replaced_only_on_a_yes`
+`verified-by: bravebot_cli::brave::a_yes_and_no_key_typed_leaves_the_stored_key`
+`verified-by: bravebot_cli::brave::an_unreadable_file_is_refused_and_left`
+`verified-by: bravebot_cli::brave::the_sign_in_is_refused_where_a_key_cannot_be_asked_for_or_kept`
+`verified-by: bravebot_cli::brave::forgetting_removes_the_file_and_is_repeatable`
+`verified-by: bravebot_cli::brave::the_standing_follows_the_file`
+`verified-by: bravebot_cli::running::auth_login_brave_is_refused_where_a_key_cannot_be_typed_or_kept`
+`verified-by: bravebot_cli::running::auth_logout_brave_forgets_the_key_and_only_that_one`
+`verified-by: bravebot_cli::running::auth_status_brave_with_no_key_is_not_signed_in_and_exits_nonzero`
+`verified-by: bravebot_cli::running::auth_status_brave_reports_a_stored_key_without_the_key`
+`verified-by: bravebot_cli::running::doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at`
+
 ## Requirements and limits
 
-- **macOS and Linux**, including a machine with no desktop session, since nothing here needs one.
-  Importing on Windows is not supported, because no browser profile is located there and so there is
-  no order to read. The store itself is written and read on Windows, restricted to the account that
-  writes it (PREM-7), so a batch imported on another machine and copied in is spendable and has its
-  spends recorded. The list is asked for on the file and not on the directory holding it, so an
-  account that can write `~/.bravebot` there can still delete or replace what it cannot read, which
-  is the cost [state-directory.md](state-directory.md) records for a platform with no mode to set.
-  What a test running here pins of the Windows half is the list itself; the calls that apply it are
-  compiled and linted by the Windows lint job rather than run, since the suite runs on the platforms
-  named above.
-- The build must know the premium host. Without it premium is unavailable (PREM-2).
-- A credential only works against the deployment that issued it, so import from the Brave channel
-  matching the environment the binary is configured for. A mismatch is refused before a request is
-  made, rather than sent and answered with a 401 (PREM-8).
-- Sign in to Leo in that Brave install first: a subscription that is not in the profile cannot be
-  imported.
-- The stored batch is a bearer secret in a file the user owns (PREM-7). It is not encrypted at rest,
-  which is what the browser does with the same secret, and anything running as the user can read it.
-- `bravebot doctor` reports how much is left.
+- The build must reach a Brave backend, which gives it the premium host compiled in
+  ([PREM-11](#PREM-11)), and a key must be stored with `bravebot auth login brave`. Without both,
+  premium is unavailable and requests go to the free endpoint.
+- Storing a key needs a terminal and nothing else: no browser, no Brave profile and no desktop
+  session. A platform that has neither a file mode nor an access-control list to restrict the file
+  to the account has the key refused ([PREM-14](#PREM-14)).
+- The key is a bearer secret in a file the account owns. It is not encrypted at rest, and anything
+  running as the person can read it, as it can read the gateway keys.
+- The key is presented only to a premium host that is Brave's ([PREM-2](#PREM-2)).
+- `bravebot doctor` reports whether a key is held, on the `premium` line and among the credentials
+  held, never prints the value, and says so when the file cannot be read ([PREM-16](#PREM-16)).

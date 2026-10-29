@@ -7,14 +7,19 @@ governs:
   - crates/ui-bridge/src/account_words.rs
   - crates/ui-bridge/src/turn.rs
   - crates/ui-bridge/src/bin/bravebot-acp.rs
+  - crates/ui-bridge/src/acp_loop.rs
+  - crates/cli/src/acp.rs
 documented-by: docs/website/docs/using/editors.md
 ---
 
 ## Scope
 
 `bravebot-acp` is a program an editor starts and speaks the Agent Client Protocol to on its
-standard input and output, as newline-delimited JSON-RPC 2.0. The editor draws the conversation and
-the agent runs it. The program is a projection of the session the desktop window uses, so the turn
+standard input and output, as newline-delimited JSON-RPC 2.0. `bravebot acp` is the same server
+started from the command line ([CLI-39](cli.md#CLI-39)), for a copy installed without the program.
+Both call `acp_loop::serve`, so the loop is one function, and every clause below holds for both.
+The editor draws the conversation and the agent runs it. The program is a projection of the
+session the desktop window uses, so the turn
 engine, the trust map and every question are the ones described in [prompting.md](prompting.md),
 [trust-map.md](trust-map.md) and [layering.md](layering.md), and this spec decides only what the
 protocol adds: where each message comes from, and what an answer is allowed to grant.
@@ -39,6 +44,7 @@ a typed line has. A slash word in them is text for the model: no command runs, b
 a line typed at an interface that takes commands, and this one does not.
 
 `verified-by: bravebot_ui_bridge::acp::a_slash_word_in_a_prompt_is_text`
+`verified-by: bravebot_cli::acp::acp_reads_the_named_settings_and_sends_a_slash_word_to_the_model_as_text`
 
 <a id="ACP-2"></a>
 ### ACP-2: what an editor attaches is carried as a paste or a drop is
@@ -91,6 +97,7 @@ unreadable has the same effect as no answer.
 `verified-by: bravebot_ui_bridge::acp::a_question_it_cannot_show_is_refused_and_not_put_to_the_editor`
 `verified-by: bravebot_ui_bridge::acp::a_fence_is_longer_than_any_run_of_backticks_in_what_it_holds`
 `verified-by: bravebot_ui_bridge::acp::a_question_is_put_as_words_in_a_block_and_not_as_the_request_the_bridge_sent`
+`verified-by: bravebot_cli::acp::acp_treats_an_option_never_offered_as_a_refusal`
 
 <a id="ACP-4"></a>
 ### ACP-4: a question nobody answers is refused, and stopping a prompt refuses it
@@ -149,6 +156,8 @@ since drawing one loads nothing.
 `verified-by: bravebot_ui_bridge::acp::a_reply_that_would_make_an_editor_fetch_something_is_cut`
 `verified-by: bravebot_ui_bridge::acp::an_image_or_a_tag_that_loads_something_is_cut_and_a_link_is_not`
 `verified-by: bravebot_ui_bridge::acp::the_binary_writes_only_protocol_messages_to_stdout`
+`verified-by: bravebot_cli::acp::acp_answers_initialize_with_one_json_line_and_nothing_else`
+`verified-by: bravebot_cli::acp::acp_with_nothing_to_read_writes_nothing_to_standard_output`
 `verified-by: bravebot_ui_bridge::acp::the_agent_advertises_what_it_carries_and_nothing_more`
 
 <a id="ACP-7"></a>
@@ -163,6 +172,7 @@ question reaches the editor is [MODE-2](permission-modes.md#MODE-2) for acceptin
 [MODE-3](permission-modes.md#MODE-3) for planning.
 
 `verified-by: bravebot_ui_bridge::acp::an_editor_selects_three_modes_and_bypass_is_refused`
+`verified-by: bravebot_cli::acp::acp_refuses_the_flags_that_would_stop_the_editor_being_asked`
 
 <a id="ACP-9"></a>
 ### ACP-9: `additionalDirectories` is advertised and opened like `--add-dir`

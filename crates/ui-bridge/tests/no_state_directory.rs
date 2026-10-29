@@ -264,3 +264,36 @@ fn a_desktop_session_with_no_state_directory_runs_its_turn_and_writes_nothing() 
         "the session wrote something with no state directory to write into"
     );
 }
+
+/// With no state directory the window is told a bug report cannot be made and nothing of a newer
+/// release, and asking writes nothing: there is nowhere for a log or a record to be (DIAG-9).
+#[test]
+fn with_no_state_directory_there_is_no_bug_report_and_no_update_record() {
+    let scratch = Scratch::new("bridge-no-state-directory-report");
+    let before = scratch.contents();
+    let endpoint = stub_service();
+    let mut child = front_end(&scratch.path, &endpoint);
+    let said = lines(child.stdout.take().expect("the front end answers"));
+    until(&said, |message| message["event"] == "agent.ready");
+
+    send(
+        &mut child,
+        1,
+        "bug-report.compose",
+        json!({"interface": "0.19.0"}),
+    );
+    let report = until(&said, |message| message["id"] == 1);
+    send(&mut child, 2, "update.status", json!({}));
+    let status = until(&said, |message| message["id"] == 2);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_eq!(report["ok"]["available"], false, "{report}");
+    assert_eq!(report["ok"]["text"], "", "{report}");
+    assert!(status["ok"]["newer"].is_null(), "{status}");
+    assert_eq!(
+        scratch.contents(),
+        before,
+        "asking wrote something with no state directory to write into"
+    );
+}

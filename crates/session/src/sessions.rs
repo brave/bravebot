@@ -528,6 +528,13 @@ pub struct Record {
     /// Server descendants may outlive both their server and the last undo point.
     #[serde(default)]
     pub server_children_may_run: bool,
+    /// The sitting that wrote this record had bypass on at some point, so the trust map and the
+    /// opened directories may hold answers the mode gave and not a person (MODE-4, TRUST-6).
+    ///
+    /// A resume without the mode takes neither back, and puts the startup question. Not the mode
+    /// itself, which a record does not keep (MODE-10).
+    #[serde(default)]
+    pub trust_answered_by_mode: bool,
     /// The checkouts the session's delegates were given and it keeps (CHECKOUT-15).
     ///
     /// Beside the trust map, which holds the rules copied for them: a resume brings the checkouts
@@ -554,6 +561,17 @@ pub struct Record {
     /// `None` for a record written before this was kept, and for a session in no mode.
     #[serde(default)]
     pub skill_mode: Option<String>,
+    /// The names the session's file tools reached, with the rule files they brought into the
+    /// prompt and the ones the person was told of (INSTR-14, INSTR-16).
+    ///
+    /// Names the driver recorded from what the planner and the person typed, and nothing a file
+    /// holds. A resume places each by its spelling under the root again and the text of what they
+    /// name is read on the first turn as on any other, so a name that is gone or not vouched for
+    /// adds nothing. A fork carries it with the conversation it copies (SESSION-3).
+    ///
+    /// Empty for a record written before this was kept, and for a session that touched nothing.
+    #[serde(default)]
+    pub touched: bravebot_agent::workspace::TouchedRecord,
 }
 
 /// A kept checkout as it is written down.
@@ -1516,6 +1534,8 @@ pub fn record_manifest_run(
             rewind: &[],
             // None: a manifest run starts no delegate in a checkout of its own.
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
         },
     );
     Some(handle.id().to_string())
@@ -1662,7 +1682,13 @@ impl Record {
     /// relative, so re-prefixing here is what lets a record survive the checkout being moved or
     /// renamed: the rules still mean the same files. A rule outside the project is recorded in
     /// full and comes back as it was written.
+    ///
+    /// None where the sitting had bypass on: the flag answered for it, and a map that outlives the
+    /// flag would be a standing trust no person gave (MODE-4, TRUST-6).
     pub fn trust_map(&self, root: impl AsRef<std::path::Path>) -> Option<TrustStore> {
+        if self.trust_answered_by_mode {
+            return None;
+        }
         let rules = self.trust.as_ref()?;
         let mut trust = restored_rules(root.as_ref(), rules);
         trust.restore_confined_lines(self.confined_lines_in.as_deref());
@@ -1739,7 +1765,7 @@ impl Record {
     /// than as silence, because the rule about it does come back and a rule about files nothing
     /// can open is the failure this exists to rule out.
     pub fn reopen_added_directories(&self, workspace: &mut Workspace) -> Vec<String> {
-        self.directories
+        self.restorable_directories()
             .iter()
             .filter_map(|directory| match workspace.add_directory(directory) {
                 Ok(_) => None,
@@ -1750,6 +1776,18 @@ impl Record {
                 )),
             })
             .collect()
+    }
+
+    /// The added directories a resume gives back: none where the sitting had bypass on.
+    ///
+    /// The rule that vouched for them is not restored (see [`Record::trust_map`]), and a
+    /// directory opened with none refuses every path under it. Every client takes the list from
+    /// here, so the rule is written once.
+    pub fn restorable_directories(&self) -> &[String] {
+        match self.trust_answered_by_mode {
+            true => &[],
+            false => &self.directories,
+        }
     }
 
     /// The turns a rewind can go back to, oldest first.
@@ -1875,6 +1913,12 @@ pub struct Standing<'a> {
     pub rewind: &'a [RewindPoint],
     /// The checkouts the session keeps (CHECKOUT-15).
     pub checkouts: &'a [bravebot_agent::workspace::SessionCheckout],
+    /// What the session's file tools reached, for the record to carry (INSTR-14, INSTR-16). `None`
+    /// writes none, which is what a front end that keeps no workspace of its own has.
+    pub touched: Option<&'a bravebot_agent::workspace::TouchedRecord>,
+    /// Bypass was on at some point in this sitting, so `trust` and `directories` may hold what the
+    /// mode answered (MODE-4).
+    pub answered_by_mode: bool,
 }
 
 /// One turn, as it is added to a record that already exists.
@@ -1902,6 +1946,8 @@ pub struct Continuation<'a> {
     pub rewind: &'a [RewindPoint],
     /// Where this turn's time went, kept under the turn's number (SESSION-12).
     pub timing: bravebot_agent::timing::Timing,
+    /// Bypass was on at some point in this sitting, as [`Standing::answered_by_mode`] says.
+    pub answered_by_mode: bool,
 }
 
 /// A session worth picking up again, and where to pick it up.
@@ -1978,6 +2024,9 @@ pub struct Handle {
     agent: Option<String>,
     /// The skill `/mode` has in force, for the record to carry (SKILL-21).
     skill_mode: Option<String>,
+    /// What the session's file tools reached as of the last save that gave it, written again by a
+    /// save that gives none (INSTR-14, INSTR-16).
+    touched: bravebot_agent::workspace::TouchedRecord,
     /// Whether a record for this id is on disk yet.
     ///
     /// An id exists from the first moment, but a session that was opened and abandoned leaves
@@ -2088,7 +2137,13 @@ pub fn is_open_elsewhere(project: &Path, id: &str) -> bool {
     let Some(directory) = project_directory(project) else {
         return false;
     };
-    let Ok(file) = std::fs::File::open(lock_path(&directory, id)) else {
+    is_held_in(&directory, id)
+}
+
+/// [`is_open_elsewhere`] for the directory a project's records are in, which the caller has found.
+/// `id` is a session's name, which [`is_a_session_name`] settles before it is joined onto a path.
+pub fn is_held_in(directory: &Path, id: &str) -> bool {
+    let Ok(file) = std::fs::File::open(lock_path(directory, id)) else {
         return false;
     };
     // A lock this takes is dropped with `file`, when the function returns.
@@ -2151,6 +2206,7 @@ impl Handle {
             written: Vec::new(),
             agent: None,
             skill_mode: None,
+            touched: bravebot_agent::workspace::TouchedRecord::default(),
             wrote: false,
             server_children_may_run: false,
             build: build.to_string(),
@@ -2225,6 +2281,7 @@ impl Handle {
             written: record.written.clone(),
             agent: record.agent.clone(),
             skill_mode: record.skill_mode.clone(),
+            touched: record.touched.clone(),
             // The record it came from is the one being written back to.
             wrote: true,
             server_children_may_run: record.server_children_may_run(),
@@ -2398,6 +2455,12 @@ impl Handle {
         self.skill_mode = name;
     }
 
+    /// Record what the session's file tools have reached, for the next save to write when it
+    /// gives none of its own (INSTR-14, INSTR-16).
+    pub fn set_touched(&mut self, touched: bravebot_agent::workspace::TouchedRecord) {
+        self.touched = touched;
+    }
+
     /// Only a name: each turn resolves it again, so it can name a skill that has since gone.
     pub fn skill_mode(&self) -> Option<&str> {
         self.skill_mode.as_deref()
@@ -2561,6 +2624,7 @@ impl Handle {
 
         let mut record = Record {
             server_children_may_run: self.server_children_may_run,
+            trust_answered_by_mode: standing.answered_by_mode,
             id: self.id.clone(),
             directory: self.project.display().to_string(),
             branch: self.branch.clone(),
@@ -2619,6 +2683,10 @@ impl Handle {
                 .collect(),
             agent: self.agent.clone(),
             skill_mode: self.skill_mode.clone(),
+            touched: match standing.touched {
+                Some(touched) => touched.clone(),
+                None => self.touched.clone(),
+            },
         };
 
         self.write(&directory, &mut record);
@@ -2677,6 +2745,7 @@ impl Handle {
     ///
     /// `false` where nothing was written, which includes an incognito session.
     pub fn save_continuation(&mut self, mut record: Record, next: Continuation<'_>) -> bool {
+        record.trust_answered_by_mode |= next.answered_by_mode;
         let Some(directory) = self.directory() else {
             return false;
         };
@@ -2713,6 +2782,7 @@ impl Handle {
         record.front = Some(self.front.recorded().to_string());
         record.agent = self.agent.clone();
         record.skill_mode = self.skill_mode.clone();
+        record.touched = self.touched.clone();
         // The handle holds every note typed on this session, including ones added after the record
         // this continuation was read from.
         record.notes = self.notes.clone();
@@ -2960,6 +3030,55 @@ pub fn is_a_session_name(id: &str) -> bool {
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Why a stored session was not renamed.
+#[derive(Debug)]
+pub enum Renaming {
+    /// The name is empty once trimmed, or the id is not shaped like a session's name.
+    Refused,
+    /// No record of that name in that directory's store.
+    NotFound,
+    /// A process holds the record, so a second writer would fork it (SESSION-38).
+    Held,
+    /// The record could not be written.
+    Failed(std::io::Error),
+}
+
+/// Call the stored session `id` of `project` something else, as [`Handle::rename`] calls an open one
+/// (SCREEN-9).
+///
+/// The record is taken as a session takes it, so a process that holds it is refused and a record
+/// replaced since it was read is not written back over. Everything else in the record is left as it
+/// was written: the name is the one field this knows.
+pub fn rename_stored(project: &Path, id: &str, name: &str) -> Result<String, Renaming> {
+    if !is_a_session_name(id) || name.trim().is_empty() {
+        return Err(Renaming::Refused);
+    }
+    let directory = project_directory(project).ok_or(Renaming::NotFound)?;
+    rename_in(&directory, id, name)
+}
+
+/// [`rename_stored`] for the directory a project's records are in, which the caller has found. `id`
+/// is a session's name, which [`is_a_session_name`] settles before it is joined onto a path.
+pub(crate) fn rename_in(directory: &Path, id: &str, name: &str) -> Result<String, Renaming> {
+    let path = directory.join(format!("{id}.json"));
+    // Held for the read and the write, so no process begins writing the record between them.
+    let _claim = claim(directory, id).map_err(|_| Renaming::Held)?;
+    let mut record = read(&path).ok_or(Renaming::NotFound)?;
+    let title = title_from(name.trim());
+    record.title = title.clone();
+    // Given up with the old name, as `Handle::rename` gives them up (SESSION-19).
+    record.rewind.clear();
+    record.updated = now();
+    record.revision += 1;
+    let body = serde_json::to_vec_pretty(&record)
+        .map_err(|error| Renaming::Failed(std::io::Error::other(error)))?;
+    // Beside and renamed, as a save does, so an interrupted rename leaves the record it had.
+    let temporary = directory.join(format!("{id}.tmp"));
+    bravebot_agent::home::write_file(&temporary, &body).map_err(Renaming::Failed)?;
+    std::fs::rename(&temporary, &path).map_err(Renaming::Failed)?;
+    Ok(title)
 }
 
 /// Remove one session from disk: its record, the trail beside it, the index of what it said and the
@@ -3475,31 +3594,54 @@ fn read(path: &Path) -> Option<Record> {
 /// conversation and the bytes that turn wrote over. Every one of those would be parsed and
 /// allocated to draw one line of a list, once per session in the directory, before the interface
 /// has drawn anything at all. As fields nothing here names, they cost the scan over their text.
-#[derive(Deserialize)]
-struct Listed {
-    id: String,
-    title: String,
-    directory: String,
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Listed {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) directory: String,
     /// Absent from a record written before the front end was kept.
     #[serde(default)]
     front: Option<String>,
     #[serde(default)]
-    branch: Option<String>,
+    pub(crate) branch: Option<String>,
     /// Absent from a record written before the links were kept.
     #[serde(default)]
-    issue: Option<String>,
+    pub(crate) issue: Option<String>,
     #[serde(default)]
-    pull_request: Option<String>,
+    pub(crate) pull_request: Option<String>,
     #[serde(default)]
-    handed_off_from: Option<String>,
-    updated: u64,
+    pub(crate) handed_off_from: Option<String>,
+    /// The definition the person named with `--agent`, absent from a record written before it was
+    /// kept and from a session started without one.
+    #[serde(default)]
+    pub(crate) agent: Option<String>,
+    pub(crate) updated: u64,
+    /// Absent from a record written before it was kept, and then zero.
+    #[serde(default)]
+    pub(crate) started: u64,
+    /// What the server reported answering with, as of the last turn.
+    #[serde(default)]
+    pub(crate) model: Option<String>,
+    #[serde(default)]
+    pub(crate) turns: usize,
+    #[serde(default)]
+    pub(crate) tokens: u64,
+    #[serde(default)]
+    pub(crate) split: Split,
     /// Whether the record has one, which is what makes it a manifest run. What is in it is not
     /// read: the row says only that the session cannot be continued.
     #[serde(default)]
     manifest: Option<serde::de::IgnoredAny>,
 }
 
-fn read_listing(path: &Path) -> Option<Listed> {
+impl Listed {
+    /// Whether this is a manifest run, which can be read but not continued.
+    pub(crate) fn is_a_manifest_run(&self) -> bool {
+        self.manifest.is_some()
+    }
+}
+
+pub(crate) fn read_listing(path: &Path) -> Option<Listed> {
     let contents = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&contents).ok()
 }
@@ -3518,7 +3660,7 @@ pub fn now() -> u64 {
 
 /// Whether `text` is shaped like an id [`new_id`] makes, which is all the picker draws from a
 /// record: a field somebody edited by hand must not put an escape on the screen.
-fn is_session_id(text: &str) -> bool {
+pub(crate) fn is_session_id(text: &str) -> bool {
     text.len() <= 64 && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
@@ -5366,6 +5508,7 @@ mod tests {
             prompt_at: None,
             rewind: &[],
             timing: Default::default(),
+            answered_by_mode: false,
         };
         assert!(resumed.save_continuation(record.clone(), next()));
         assert_eq!(
@@ -5430,6 +5573,7 @@ mod tests {
                     prompt_at: None,
                     rewind: &[],
                     timing: Default::default(),
+                    answered_by_mode: false,
                 },
             ));
             load(&root, handle.id()).expect("written")
@@ -6195,6 +6339,7 @@ mod tests {
     fn a_record() -> Record {
         Record {
             server_children_may_run: false,
+            trust_answered_by_mode: false,
             history: None,
             id: "1-2".to_string(),
             directory: "/tmp/x".to_string(),
@@ -6236,6 +6381,7 @@ mod tests {
             manifest: None,
             rewind: Vec::new(),
             checkouts: Vec::new(),
+            touched: Default::default(),
             agent: None,
             skill_mode: None,
         }
@@ -6423,6 +6569,8 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
             },
         );
     }
@@ -6619,6 +6767,8 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
             },
         );
         source.append_audit(
@@ -6908,6 +7058,8 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
             },
         );
         handle.append_audit(
@@ -6964,6 +7116,8 @@ mod tests {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
         };
         let recorded = |handle: &Handle| load(&root, handle.id()).expect("the record").title;
 
@@ -7020,6 +7174,8 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
             },
         );
 
@@ -7071,6 +7227,8 @@ mod tests {
                     manifest: None,
                     rewind: &[],
                     checkouts: &[],
+                    touched: None,
+                    answered_by_mode: false,
                 },
             );
             handle.append_audit(
@@ -7479,6 +7637,8 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
             },
         );
         let record = load(&root, handle.id()).expect("the record was written");
@@ -7506,6 +7666,7 @@ mod tests {
                     wall_ms: 9,
                     ..Default::default()
                 },
+                answered_by_mode: false,
             },
         );
 
@@ -7573,6 +7734,7 @@ mod tests {
                 prompt_at: Some(0),
                 rewind: &[],
                 timing: Default::default(),
+                answered_by_mode: false,
             },
         ));
 
@@ -7628,6 +7790,7 @@ mod tests {
                 prompt_at: Some(0),
                 rewind: &replacing,
                 timing: Default::default(),
+                answered_by_mode: false,
             },
         ));
 
@@ -7685,6 +7848,7 @@ mod tests {
                 prompt_at: Some(0),
                 rewind: &[],
                 timing: Default::default(),
+                answered_by_mode: false,
             },
         )
     }
@@ -7896,6 +8060,107 @@ mod tests {
         assert!(record.notes.is_empty());
     }
 
+    /// A touched record with one of each kind of name.
+    fn a_touched_record() -> bravebot_agent::workspace::TouchedRecord {
+        bravebot_agent::workspace::TouchedRecord {
+            directories: vec!["pkg".to_string()],
+            files: vec!["pkg/a.rs".to_string()],
+            rules: vec![".bravebot/rules/rust.md".to_string()],
+            told: vec![".bravebot/rules/rust.md".to_string()],
+        }
+    }
+
+    /// INSTR-14, INSTR-16: a save that gives the names the file tools reached writes them, a resume
+    /// reads them back, and a later save that gives none writes the ones the handle holds. A
+    /// record that dropped them would put a resumed session back with no nested instructions and
+    /// no path-scoped rule until it touched the file again.
+    #[test]
+    fn the_names_the_file_tools_reached_are_written_and_read_back() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-touched");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        let touched = a_touched_record();
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        let trust = a_vouched_root(&root);
+        let (spend, timing, todos) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let programs = TrustedPrograms::default();
+        let standing = |touched| Standing {
+            history: None,
+            conversation: &snapshot,
+            turns: 1,
+            tokens: 0,
+            split: Default::default(),
+            spend: &spend,
+            timing: &timing,
+            model: None,
+            todos: &todos,
+            asides: &[],
+            trust: &trust,
+            programs: &programs,
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+            checkouts: &[],
+            touched,
+            answered_by_mode: false,
+        };
+
+        handle.save("first", standing(Some(&touched)));
+        assert_eq!(
+            load(&root, handle.id()).expect("the record").touched,
+            touched
+        );
+
+        let id = handle.id().to_string();
+        // The first handle holds the record's lock for as long as it lives (SESSION-38).
+        drop(handle);
+        let record = load(&root, &id).expect("the record");
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
+        resumed.save("second", standing(None));
+        assert_eq!(
+            load(&root, &id).expect("the record").touched,
+            touched,
+            "a save that gave none wrote over what the record held"
+        );
+    }
+
+    /// INSTR-14, INSTR-16: a record written before the names were kept has no field for them, and
+    /// reads as having touched nothing rather than failing.
+    #[test]
+    fn a_record_from_before_touched_names_were_kept_reads_as_having_none() {
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        written
+            .as_object_mut()
+            .expect("an object")
+            .remove("touched")
+            .expect("the touched names are written");
+
+        let record: Record = serde_json::from_value(written).expect("an older record reads");
+
+        assert!(record.touched.is_empty());
+    }
+
+    /// SESSION-18, INSTR-16: a fork carries the touched names with the conversation it copies. The
+    /// copy's first request is a continuation of that conversation, and the rules the original had
+    /// loaded are the ones that conversation was written under.
+    #[test]
+    fn a_fork_carries_the_names_the_file_tools_reached() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-touched-fork");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_touched(a_touched_record());
+        save_a_turn_session(&mut handle);
+
+        let copy = fork(&root, handle.id()).expect("a fork");
+
+        assert_eq!(copy.touched, a_touched_record());
+    }
+
     /// Save turn `turns` of `handle` with the trust map `trust`, as a turn of a resumed session does.
     fn save_a_turn_with(handle: &mut Handle, turns: usize, prompt: &str, trust: &TrustStore) {
         let snapshot = bravebot_agent::Conversation::new().snapshot();
@@ -7918,6 +8183,8 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
             },
         );
     }
@@ -8173,6 +8440,8 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
             },
         );
 
@@ -8248,6 +8517,75 @@ mod tests {
         let renamed = load(&root, &id).expect("the record is there");
         assert_eq!(renamed.title, "a name from the current copy");
         assert!(renamed.revision > after.revision);
+    }
+
+    /// SCREEN-9. A session nothing holds is renamed in its record, and nothing else in the record
+    /// changes but the points a rename gives up.
+    #[test]
+    fn a_stored_session_is_renamed_and_the_rest_of_its_record_is_left() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-rename-stored");
+        let before = a_record_left_by_a_session(&root);
+
+        let title = rename_stored(&root, &before.id, "  a longer name  ").expect("renamed");
+
+        assert_eq!(title, "a longer name");
+        let after = load(&root, &before.id).expect("the record is still there");
+        assert_eq!(after.title, "a longer name");
+        assert!(
+            after.revision > before.revision,
+            "the write was not counted"
+        );
+        assert_eq!(
+            (after.directory, after.turns, after.started),
+            (before.directory, before.turns, before.started),
+            "a field the rename does not know was changed"
+        );
+        assert!(
+            !project_directory(&root)
+                .expect("a sessions directory")
+                .join(format!("{}.tmp", before.id))
+                .exists(),
+            "the file the record was written beside is still there"
+        );
+    }
+
+    /// SCREEN-9. A record a process holds is not written by another, an empty name and an id that
+    /// is a path are refused, and a session that is not there is said not to be.
+    #[test]
+    fn a_stored_session_a_process_holds_is_not_renamed() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-rename-held");
+        let mut open = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_with(&mut open, 1, "seed", &a_vouched_root(&root));
+        let id = open.id().to_string();
+        let title = load(&root, &id).expect("written").title;
+
+        assert!(matches!(
+            rename_stored(&root, &id, "taken"),
+            Err(Renaming::Held)
+        ));
+        assert!(matches!(
+            rename_stored(&root, &id, "   "),
+            Err(Renaming::Refused)
+        ));
+        assert!(matches!(
+            rename_stored(&root, "../../escape", "taken"),
+            Err(Renaming::Refused)
+        ));
+        assert!(matches!(
+            rename_stored(&root, "0a1b2c3d-0000-4000-8000-0000000000aa", "taken"),
+            Err(Renaming::NotFound)
+        ));
+        assert_eq!(
+            load(&root, &id).expect("still there").title,
+            title,
+            "a held record was renamed"
+        );
     }
 
     /// RECALL-9: the keys already injected are kept in the record, so a resumed session does not

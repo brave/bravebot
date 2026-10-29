@@ -57,6 +57,7 @@ fn take_a_turn(state: &Arc<Mutex<State>>, workspace: &Workspace, turn: usize) {
         watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
         model: Some(ACCOUNT_MODEL.into()),
         addressing: None,
+        addressing_standing: false,
         prompt: "say hello".into(),
         composed: None,
         files: Vec::new(),

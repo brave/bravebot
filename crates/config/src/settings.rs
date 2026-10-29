@@ -152,6 +152,13 @@ const CRASH_REPORTS_KEY: &str = "crashReports";
 /// since [`Retention::Days`] cannot hold zero.
 pub const DEFAULT_RETENTION_DAYS: NonZeroU32 = NonZeroU32::new(30).unwrap();
 
+/// The key naming the other agents' skill directories in the person's home that this program may
+/// read (INSTR-17).
+///
+/// An entry is the person's answer to whether to read that directory, so a directory not named is
+/// not read, and only a file the person wrote or named can name one.
+const SHARED_SKILLS_KEY: &str = "sharedSkillDirectories";
+
 /// The block holding the rules and the two keys that refuse without naming what they refuse.
 ///
 /// Named as a constant for the reason [`VETTING_BLOCK`] is: the rule lists and [`narrowing_stated`]
@@ -198,6 +205,8 @@ const READ_KEYS: &[&str] = &[
     "run",
     SANDBOX_BLOCK,
     "search",
+    "sessionsKeys",
+    SHARED_SKILLS_KEY,
     "suggestions",
     "style",
     "summaryModel",
@@ -514,6 +523,15 @@ pub struct Settings {
     /// Kept because a style's words open the system prompt, so which one a session starts in is the
     /// person's to say and not a checkout's.
     style_ignored: Vec<PathBuf>,
+    /// The directories the `sharedSkillDirectories` key named, as the file spelled them.
+    ///
+    /// Which of them is one this program reads is settled where the skills are found (INSTR-17).
+    shared_skills: Vec<String>,
+    /// The layers that named `sharedSkillDirectories` and were not obeyed, weakest first.
+    ///
+    /// Kept because naming a directory puts every skill in it in front of the planner, so a
+    /// checkout's file would be choosing what the person's home contributes to the prompt.
+    shared_skills_ignored: Vec<PathBuf>,
     /// The catalog the person's own file asked the interface to be read in, as the file spelled it.
     language: Option<String>,
     /// The layers that named `language` and were not obeyed, weakest first.
@@ -578,6 +596,8 @@ pub struct Settings {
     /// A checkout's file that stated one of those names, and which, for `doctor`. Names only.
     network_ignored: Vec<(PathBuf, String)>,
     keybindings: BTreeMap<String, String>,
+    /// The `sessionsKeys` block: a key of the Sessions screen by the action it is to answer.
+    sessions_keys: BTreeMap<String, String>,
     attribution: Attribution,
     search: SearchCaps,
     /// What `run.maxOutput` said, if it said anything.
@@ -1067,6 +1087,7 @@ impl Settings {
         let mut processor_ignored = Vec::new();
         let mut agent_ignored = Vec::new();
         let mut style_ignored = Vec::new();
+        let mut shared_skills_ignored = Vec::new();
         let mut language_ignored = Vec::new();
         let mut ask_idle_ignored = Vec::new();
         // Settled per layer for the reason `model` is: how long the person's own records are kept is
@@ -1178,6 +1199,9 @@ impl Settings {
                 }
                 if root.remove("style") {
                     style_ignored.push(path.clone());
+                }
+                if root.remove(SHARED_SKILLS_KEY) {
+                    shared_skills_ignored.push(path.clone());
                 }
             }
             // Read before the command line is, so the file a flag names is not yet known to the
@@ -1321,7 +1345,11 @@ impl Settings {
             for value in misshapen_rule_lists(&root, &["deny", "ask", "allow"]) {
                 misshapen.push((path.clone(), value));
             }
-            for name in crate::env_var::NETWORK {
+            for name in crate::env_var::NETWORK
+                .into_iter()
+                .chain(crate::env_var::GOOGLE)
+                .chain(crate::env_var::BEDROCK)
+            {
                 let Some(value) = env_string(&root, name) else {
                     continue;
                 };
@@ -1336,6 +1364,11 @@ impl Settings {
                 }
             }
             for name in env_names(&root) {
+                // A layer that does not grant a name decides nothing for it, so it wins nothing the
+                // report could name.
+                if !granting && crate::env_var::is_person_only(&name) {
+                    continue;
+                }
                 // Whoever set it before lost it here, which is the only thing worth telling somebody:
                 // a name one file sets needs no explanation of where it came from.
                 if winner.insert(name.clone(), path.clone()).is_some() {
@@ -1418,7 +1451,11 @@ impl Settings {
         // Put back to what the entitled layers said, a checkout's value having been merged in above
         // under the same name. Scrubbed on the way, the values being a proxy address that may carry
         // a credential.
-        for name in crate::env_var::NETWORK {
+        for name in crate::env_var::NETWORK
+            .into_iter()
+            .chain(crate::env_var::GOOGLE)
+            .chain(crate::env_var::BEDROCK)
+        {
             if let Some(mut stale) = settings.env.remove(name) {
                 crate::scrub(&mut stale);
             }
@@ -1446,6 +1483,7 @@ impl Settings {
         settings.processor_ignored = processor_ignored;
         settings.agent_ignored = agent_ignored;
         settings.style_ignored = style_ignored;
+        settings.shared_skills_ignored = shared_skills_ignored;
         settings.language_ignored = language_ignored;
         settings.ask_idle_ignored = ask_idle_ignored;
         settings.retention_ignored = retention_ignored;
@@ -1602,6 +1640,7 @@ impl Settings {
             network_by: BTreeMap::new(),
             network_ignored: Vec::new(),
             keybindings: keybindings_block(root),
+            sessions_keys: strings_block(root, "sessionsKeys"),
             attribution: attribution_block(root),
             search: search_caps(root),
             run_output: run_output_cap(root),
@@ -1656,9 +1695,18 @@ impl Settings {
             agent_ignored: Vec::new(),
             style: word(root, "style"),
             style_ignored: Vec::new(),
+            shared_skills: strings(root, SHARED_SKILLS_KEY),
+            shared_skills_ignored: Vec::new(),
             language: word(root, "language"),
             language_ignored: Vec::new(),
         }
+    }
+
+    /// What the settings in force say about the keys of the Sessions screen.
+    ///
+    /// Maps an action name (e.g. "stop", "archive") to the key it is to answer (e.g. "ctrl-x").
+    pub fn sessions_keys(&self) -> &BTreeMap<String, String> {
+        &self.sessions_keys
     }
 
     /// What the settings in force say about keybindings.
@@ -2320,6 +2368,7 @@ impl Settings {
             && self.sandbox_unreadable.is_empty()
             && !self.sandbox_hold_back_temporary
             && self.keybindings.is_empty()
+            && self.sessions_keys.is_empty()
             && self.attribution.is_empty()
             && self.search.is_empty()
             && self.run_output.is_none()
@@ -2372,6 +2421,8 @@ impl Settings {
             && self.agent_ignored.is_empty()
             && self.style_ignored.is_empty()
             && self.style.is_none()
+            && self.shared_skills_ignored.is_empty()
+            && self.shared_skills.is_empty()
             && self.language_ignored.is_empty()
             && self.language.is_none()
             && self.ask_idle_ignored.is_empty()
@@ -2464,6 +2515,17 @@ impl Settings {
         self.style_ignored.iter().map(PathBuf::as_path)
     }
 
+    /// The directories the settings in force named as ones to read skills from, as the file spelled
+    /// them (INSTR-17).
+    pub fn shared_skill_directories(&self) -> &[String] {
+        &self.shared_skills
+    }
+
+    /// The files that named `sharedSkillDirectories` from a layer not entitled to, weakest first.
+    pub fn shared_skill_directories_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.shared_skills_ignored.iter().map(PathBuf::as_path)
+    }
+
     /// The language the person's own file asked the interface to be read in, as the file spelled it
     /// (LOCALE-8).
     ///
@@ -2534,11 +2596,16 @@ impl Settings {
     ///
     /// Never a name a checkout's file set (BACKEND-33): see [`Settings::network_ignored`].
     pub fn network_values(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.network_by.keys().filter_map(|name| {
-            self.env
-                .get(name)
-                .map(|value| (name.as_str(), value.as_str()))
-        })
+        // `network_by` also holds the Google names, which are the person's alone for the same reason
+        // and are not the transport's to be handed.
+        self.network_by
+            .keys()
+            .filter(|name| crate::env_var::NETWORK.contains(&name.as_str()))
+            .filter_map(|name| {
+                self.env
+                    .get(name)
+                    .map(|value| (name.as_str(), value.as_str()))
+            })
     }
 
     /// The file that stated `name`, for a name in [`Settings::network_values`].
@@ -2637,6 +2704,7 @@ impl Settings {
                     .then_some("sandbox.mode"),
             )
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
+            .chain((!self.sessions_keys.is_empty()).then_some("sessionsKeys"))
             .chain(
                 self.attribution
                     .commit
@@ -3232,6 +3300,7 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
                     || key == "provider"
                     || key == "attribution"
                     || key == "keybindings"
+                    || key == "sessionsKeys"
                     || key == "search"
                     || key == "download" =>
             {
@@ -3474,7 +3543,16 @@ fn attribution_block(root: &serde_json::Map<String, serde_json::Value>) -> Attri
 fn keybindings_block(
     root: &serde_json::Map<String, serde_json::Value>,
 ) -> BTreeMap<String, String> {
-    let Some(serde_json::Value::Object(block)) = root.get("keybindings") else {
+    strings_block(root, "keybindings")
+}
+
+/// A block of names and the strings they are given, read the way `keybindings` is: an entry that is
+/// not a string is dropped, and a name is lowercased.
+fn strings_block(
+    root: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> BTreeMap<String, String> {
+    let Some(serde_json::Value::Object(block)) = root.get(name) else {
         return BTreeMap::new();
     };
     block
@@ -3792,14 +3870,22 @@ fn anchor_slash_rule(rule: &str, anchor: &str) -> String {
         return rule.to_string();
     };
     let name = name.trim_end();
-    let mut characters = specifier.chars();
+    // A quoted name (PERM-3) is anchored by what is inside the quotes and stays quoted.
+    let (quote, inner) = match specifier
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    {
+        Some(inner) => ("\"", inner),
+        None => ("", specifier),
+    };
+    let mut characters = inner.chars();
     let single_slash =
         characters.next().is_some_and(separates) && !characters.next().is_some_and(separates);
     if !(name == "Read" || name == "Edit") || !single_slash {
         return rule.to_string();
     }
-    let below = specifier.trim_start_matches(separates);
-    format!("{name}({anchor}/{below})")
+    let below = inner.trim_start_matches(separates);
+    format!("{name}({quote}{anchor}/{below}{quote})")
 }
 
 /// What the managed file wrote of `permissions.deny` and `permissions.ask` (PERM-19).
@@ -5874,11 +5960,17 @@ mod tests {
     #[test]
     fn a_slash_rule_keeps_the_whitespace_at_an_end_of_its_specifier() {
         let settings = Layers::new("slash-rule-whitespace")
-            .project(r#"{"permissions": {"deny": ["Read(/secrets \t)", "Edit( /notes.md)"]}}"#)
+            .project(
+                r#"{"permissions": {"deny": ["Read(/secrets \t)", "Edit( /notes.md)", "Read(\"/a.md \")"]}}"#,
+            )
             .read();
         assert_eq!(
             settings.permissions().deny,
-            ["Read(./secrets \t)", "Edit( /notes.md)"]
+            [
+                "Read(./secrets \t)",
+                "Edit( /notes.md)",
+                "Read(\"./a.md \")"
+            ]
         );
     }
 
@@ -5915,15 +6007,16 @@ mod tests {
         assert_eq!(rules.allow, ["Read(./state/open/**)"]);
     }
 
-    /// The point of a project layer: a checkout says which gateway or profile the work in it uses,
-    /// and that beats what the person set for everything else they do.
+    /// The point of a project layer: a checkout says what the work in it uses, and that beats what
+    /// the person set for everything else they do. A name that picks the account or the host a
+    /// conversation goes to is not one of these (BACKEND-33).
     #[test]
     fn a_project_layer_overrides_a_name_the_global_one_set() {
         let settings = Layers::new("project-wins")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "this-checkout"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), Some("this-checkout"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("this-checkout"));
     }
 
     /// A name at a time, not a file at a time. A project file saying one thing must not discard the
@@ -5932,11 +6025,11 @@ mod tests {
     #[test]
     fn a_name_only_the_global_layer_set_survives_a_project_layer() {
         let settings = Layers::new("global-survives")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2", "AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2", "DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "this-checkout"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
-        assert_eq!(settings.get("AWS_PROFILE"), Some("this-checkout"));
+        assert_eq!(settings.get("DEPLOY_REGION"), Some("us-west-2"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("this-checkout"));
     }
 
     /// The reason the local layer exists: something true of this machine only, which would be wrong
@@ -5944,11 +6037,11 @@ mod tests {
     #[test]
     fn the_local_layer_beats_the_one_a_checkout_carries() {
         let settings = Layers::new("local-wins")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
-            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}}"#)
+            .local(r#"{"env": {"DEPLOY_TARGET": "just-this-machine"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), Some("just-this-machine"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("just-this-machine"));
     }
 
     /// The point of naming a file on the command line: a run configured differently from the last
@@ -5958,12 +6051,12 @@ mod tests {
     #[test]
     fn a_file_the_command_line_named_beats_every_layer_that_was_found() {
         let settings = Layers::new("named-wins")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
-            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
-            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}}"#)
+            .local(r#"{"env": {"DEPLOY_TARGET": "just-this-machine"}}"#)
+            .named(r#"{"env": {"DEPLOY_TARGET": "the-ci-account"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), Some("the-ci-account"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("the-ci-account"));
     }
 
     /// A fourth layer rather than a replacement for the three. A job that wants one value changed
@@ -5972,16 +6065,13 @@ mod tests {
     #[test]
     fn a_name_a_command_line_file_left_alone_keeps_the_answer_below_it() {
         let settings = Layers::new("named-leaves-the-rest")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn"}}"#)
-            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_NOTE": "a-note"}}"#)
+            .named(r#"{"env": {"DEPLOY_TARGET": "the-ci-account"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
-        assert_eq!(
-            settings.get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
-            Some("opus-arn")
-        );
-        assert_eq!(settings.get("AWS_PROFILE"), Some("the-ci-account"));
+        assert_eq!(settings.get("DEPLOY_REGION"), Some("us-west-2"));
+        assert_eq!(settings.get("DEPLOY_NOTE"), Some("a-note"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("the-ci-account"));
     }
 
     /// The lists are the exception for every layer, this one included: an entry only ever narrows
@@ -6004,8 +6094,8 @@ mod tests {
     #[test]
     fn a_command_line_file_is_reported_as_the_layer_that_won_a_name() {
         let layers = Layers::new("named-reported")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#);
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .named(r#"{"env": {"DEPLOY_TARGET": "the-ci-account"}}"#);
         let settings = layers.read();
         let file = layers.named.clone().expect("the file that was named");
 
@@ -6013,7 +6103,7 @@ mod tests {
         assert_eq!(reported, [layers.home.join(SETTINGS_FILE), file.clone()]);
         assert_eq!(
             settings.overridden().collect::<Vec<_>>(),
-            [("AWS_PROFILE", file.as_path())]
+            [("DEPLOY_TARGET", file.as_path())]
         );
     }
 
@@ -6038,16 +6128,16 @@ mod tests {
     #[test]
     fn a_command_line_file_that_is_already_a_layer_is_read_once() {
         let layers = Layers::new("named-twice")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
             .naming_the_project_layer();
         let settings = layers.read();
 
         assert_eq!(settings.layers().count(), 2);
         assert_eq!(settings.overridden().count(), 0);
         assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
-        assert_eq!(settings.get("AWS_PROFILE"), Some("shared"));
-        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("shared"));
+        assert_eq!(settings.get("DEPLOY_REGION"), Some("us-west-2"));
     }
 
     /// The clause is about the file and not the string: a relative name or a `..` reaches a found
@@ -6055,8 +6145,8 @@ mod tests {
     #[test]
     fn a_command_line_file_spelled_differently_from_a_layer_is_read_once() {
         let settings = Layers::new("named-twice-spelled")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
             .naming_the_project_layer_by_another_spelling()
             .read();
 
@@ -6074,8 +6164,8 @@ mod tests {
     #[test]
     fn a_command_line_link_to_a_layer_is_read_once() {
         let settings = Layers::new("named-twice-linked")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
             .naming_the_project_layer_by_a_link()
             .read();
 
@@ -6087,8 +6177,8 @@ mod tests {
     #[test]
     fn a_command_line_relative_name_for_a_layer_is_read_once() {
         let settings = Layers::new("named-twice-relative")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
             .naming_the_project_layer_by_a_relative_name()
             .read();
 
@@ -6102,12 +6192,12 @@ mod tests {
     #[test]
     fn a_named_file_that_is_a_found_layer_still_beats_the_layers_after_it() {
         let settings = Layers::new("named-project-wins")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
-            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}}"#)
+            .local(r#"{"env": {"DEPLOY_TARGET": "just-this-machine"}}"#)
             .naming_the_project_layer()
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), Some("shared"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("shared"));
         assert_eq!(settings.layers().count(), 3);
     }
 
@@ -6115,12 +6205,12 @@ mod tests {
     #[test]
     fn a_named_home_file_beats_the_project_and_local_layers() {
         let settings = Layers::new("named-home-wins")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
-            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}}"#)
+            .local(r#"{"env": {"DEPLOY_TARGET": "just-this-machine"}}"#)
             .naming_the_home_layer()
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("personal"));
     }
 
     /// Naming a variable here only ever takes it away from a subprocess, so the layers add up. An
@@ -6454,15 +6544,12 @@ mod tests {
     #[test]
     fn a_value_that_is_not_a_string_leaves_the_name_unset_in_every_layer() {
         let settings = Layers::new("not-a-string")
-            .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": 1, "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal", "DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": 1, "DEPLOY_NOTE": "a-note"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), None);
-        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
-        assert_eq!(
-            settings.get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
-            Some("opus-arn")
-        );
+        assert_eq!(settings.get("DEPLOY_TARGET"), None);
+        assert_eq!(settings.get("DEPLOY_REGION"), Some("us-west-2"));
+        assert_eq!(settings.get("DEPLOY_NOTE"), Some("a-note"));
     }
 
     /// The same rule one level up: a layer that spelled `env` as anything but a block answered for
@@ -6470,13 +6557,13 @@ mod tests {
     /// file parses, so this is not the failed-layer case, and the other keys are untouched.
     #[test]
     fn a_block_that_is_not_a_block_leaves_no_names_under_it() {
-        for spelling in ["null", "5", "\"AWS_PROFILE=personal\"", "[]"] {
+        for spelling in ["null", "5", "\"DEPLOY_TARGET=personal\"", "[]"] {
             let settings = Layers::new(&format!("not-a-block-{}", spelling.len()))
-                .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
+                .global(r#"{"env": {"DEPLOY_TARGET": "personal", "DEPLOY_REGION": "us-west-2"}}"#)
                 .project(&format!(r#"{{"env": {spelling}}}"#))
                 .read();
-            assert_eq!(settings.get("AWS_PROFILE"), None, "{spelling}");
-            assert_eq!(settings.get("AWS_REGION"), None, "{spelling}");
+            assert_eq!(settings.get("DEPLOY_TARGET"), None, "{spelling}");
+            assert_eq!(settings.get("DEPLOY_REGION"), None, "{spelling}");
             assert_eq!(settings.model(), None, "{spelling}");
         }
     }
@@ -8029,27 +8116,84 @@ mod tests {
     #[test]
     fn a_checkouts_proxy_alone_leaves_nothing_handed_over_and_its_other_names_alone() {
         let settings = Layers::new("proxy-checkout-only")
-            .project(r#"{"env": {"HTTPS_PROXY": "http://attacker.invalid:1", "AWS_REGION": "eu-west-1"}}"#)
+            .project(r#"{"env": {"HTTPS_PROXY": "http://attacker.invalid:1", "DEPLOY_REGION": "eu-west-1"}}"#)
             .read();
 
         assert_eq!(settings.network_values().count(), 0);
-        assert_eq!(settings.get("AWS_REGION"), Some("eu-west-1"));
+        assert_eq!(settings.get("DEPLOY_REGION"), Some("eu-west-1"));
     }
 
-    /// A checkout names the region of an account the person's own file turned on, and the region
-    /// is written into the host the signed request goes to. A value that would move the host
-    /// configures no account, and the same layers with a real region do, which is what tells the
-    /// two apart from a checkout whose region is never read.
+    /// BACKEND-33: which Google account receives a conversation is the person's to choose, so the
+    /// checkout's project and local files decide none of the three Google names. The same names in
+    /// the person's own file still configure the service, and `doctor` reports the checkout's.
     #[test]
-    fn a_checkouts_region_that_would_move_the_request_configures_no_account() {
-        let person = r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn"}}"#;
-        let account = |name: &str, checkout: &str| {
-            let settings = Layers::new(name).global(person).project(checkout).read();
+    fn a_checkouts_google_names_configure_no_service_and_the_persons_own_still_do() {
+        let vertex = |settings: &Settings| {
             crate::Config::from_sources(
-                &settings,
+                settings,
                 &crate::managed::Managed::default(),
                 &crate::keys::Keys::default(),
+                None,
+                |_| None,
+                |key| match key {
+                    crate::env_var::SIGNING_KEY => Some("test-signing-key".into()),
+                    crate::env_var::KEY_ID => Some("test-key-id".into()),
+                    crate::env_var::ENDPOINT => Some("https://example.invalid".into()),
+                    _ => None,
+                },
+            )
+            .expect("configured")
+            .providers
+            .into_iter()
+            .find(|provider| provider.id == crate::provider::GOOGLE_VERTEX_ID)
+        };
+        let block = r#"{"env": {"GOOGLE_API_KEY": "key-from-the-file",
+            "GOOGLE_CLOUD_PROJECT": "project-from-the-file", "VERTEX_LOCATION": "us-east5"}}"#;
+
+        let project = Layers::new("google-checkout-project").project(block).read();
+        assert!(
+            vertex(&project).is_none(),
+            "a project file chose the account"
+        );
+        let local = Layers::new("google-checkout-local").local(block).read();
+        assert!(vertex(&local).is_none(), "a local file chose the account");
+        let ignored: Vec<&str> = project.network_ignored().map(|(_, name)| name).collect();
+        assert_eq!(
+            ignored,
+            ["GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "VERTEX_LOCATION"]
+        );
+        assert_eq!(project.network_values().count(), 0);
+
+        let own = Layers::new("google-home").global(block).read();
+        assert!(
+            vertex(&own).is_some(),
+            "the person's own file configures nothing"
+        );
+        assert_eq!(own.network_values().count(), 0);
+
+        let both = Layers::new("google-home-and-checkout")
+            .global(r#"{"env": {"GOOGLE_API_KEY": "key-of-the-person"}}"#)
+            .project(block)
+            .read();
+        assert_eq!(both.get("GOOGLE_API_KEY"), Some("key-of-the-person"));
+        assert_eq!(both.get("GOOGLE_CLOUD_PROJECT"), None);
+        let service = vertex(&both).expect("the person's key configures the service");
+        assert!(!service.base_url.contains("project-from-the-file"));
+    }
+
+    /// BACKEND-33: which AWS account, region, profile and tier models receive a conversation is the
+    /// person's to choose, so a checkout's project and local files decide none of the six Bedrock
+    /// names. The region is written into the host the signed request goes to, so a checkout's
+    /// region configures no account and does not move the person's, whether it is a real one or
+    /// one that would move the host. `doctor` reports the checkout's names.
+    #[test]
+    fn a_checkouts_bedrock_names_configure_no_account_and_the_persons_own_still_do() {
+        let account = |settings: &Settings| {
+            crate::Config::from_sources(
+                settings,
+                &crate::managed::Managed::default(),
+                &crate::keys::Keys::default(),
+                None,
                 |_| None,
                 |key| match key {
                     crate::env_var::SIGNING_KEY => Some("test-signing-key".into()),
@@ -8061,40 +8205,108 @@ mod tests {
             .expect("configured")
             .bedrock
         };
+        let block = r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "eu-west-1",
+            "AWS_PROFILE": "checkout-profile",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-arn"}}"#;
 
-        let real = account(
-            "region-checkout-real",
-            r#"{"env": {"AWS_REGION": "eu-west-1"}}"#,
-        )
-        .expect("a checkout's real region reaches the account");
-        assert_eq!(real.host(), "bedrock-runtime.eu-west-1.amazonaws.com");
-
-        let moved = account(
-            "region-checkout-moves-the-host",
-            r#"{"env": {"AWS_REGION": "x.attacker.example/"}}"#,
+        let project = Layers::new("bedrock-checkout-project")
+            .project(block)
+            .read();
+        assert_eq!(account(&project), None, "a project file chose the account");
+        let local = Layers::new("bedrock-checkout-local").local(block).read();
+        assert_eq!(account(&local), None, "a local file chose the account");
+        let ignored: Vec<&str> = project.network_ignored().map(|(_, name)| name).collect();
+        assert_eq!(
+            ignored,
+            [
+                "BRAVEBOT_USE_BEDROCK",
+                "AWS_REGION",
+                "AWS_PROFILE",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL"
+            ]
         );
-        assert_eq!(moved, None, "a checkout chose the host the request goes to");
+        assert_eq!(project.network_values().count(), 0);
+
+        // Each of the six names alone, in each checkout file, decides nothing and is reported. The
+        // names are spelled here and not taken from the list under test, so a name left out of
+        // `env_var::BEDROCK` fails its own case.
+        for name in [
+            "BRAVEBOT_USE_BEDROCK",
+            "AWS_REGION",
+            "AWS_PROFILE",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        ] {
+            let text = format!(r#"{{"env": {{"{name}": "checkout-value"}}}}"#);
+            for (file, layers) in [
+                (
+                    "project",
+                    Layers::new(&format!("bedrock-only-project-{name}")).project(&text),
+                ),
+                (
+                    "local",
+                    Layers::new(&format!("bedrock-only-local-{name}")).local(&text),
+                ),
+            ] {
+                let settings = layers.read();
+                assert_eq!(settings.get(name), None, "a {file} file decided {name}");
+                let reported: Vec<&str> = settings.network_ignored().map(|(_, n)| n).collect();
+                assert_eq!(reported, [name], "a {file} file's {name} was not reported");
+            }
+        }
+
+        let own = Layers::new("bedrock-home").global(block).read();
+        let held = account(&own).expect("the person's own file configures the account");
+        assert_eq!(held.host(), "bedrock-runtime.eu-west-1.amazonaws.com");
+        assert_eq!(own.network_values().count(), 0);
+
+        for (name, checkout) in [
+            (
+                "bedrock-region-real",
+                r#"{"env": {"AWS_REGION": "eu-west-1"}}"#,
+            ),
+            (
+                "bedrock-region-moves-the-host",
+                r#"{"env": {"AWS_REGION": "x.attacker.example/"}}"#,
+            ),
+        ] {
+            let both = Layers::new(name)
+                .global(
+                    r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "us-west-2",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn"}}"#,
+                )
+                .project(checkout)
+                .read();
+            assert_eq!(both.get("AWS_REGION"), Some("us-west-2"), "{name}");
+            assert_eq!(
+                both.overridden().count(),
+                0,
+                "{name}: a checkout won a name"
+            );
+            let held = account(&both).expect("the person's region configures the account");
+            assert_eq!(
+                held.host(),
+                "bedrock-runtime.us-west-2.amazonaws.com",
+                "{name}"
+            );
+        }
     }
 
     /// The names of [`crate::managed::PINNABLE`] that a checkout's project or local file can state
-    /// today, which are all of them.
+    /// today.
     ///
-    /// BACKEND-24 merges `env` a name at a time and BACKEND-33 withholds only the six network names
-    /// from a checkout, so the endpoints and the AWS block resolve to the closest layer. BACKEND-35
-    /// says a project layer can name the endpoints on a source build, and BACKEND-33 says a
-    /// checkout's layer can write `AWS_REGION`. Moving a name out of this list means reading it
-    /// from the person's layers alone, which `brave/bravebot#2823` tracks for the six Bedrock
-    /// names, and the test below then fails until the name is taken off.
-    const CHECKOUT_SETTABLE: [&str; 8] = [
-        crate::env_var::ENDPOINT,
-        crate::env_var::PREMIUM_ENDPOINT,
-        crate::env_var::USE_BEDROCK,
-        crate::env_var::AWS_REGION,
-        crate::env_var::AWS_PROFILE,
-        crate::env_var::BEDROCK_OPUS_MODEL,
-        crate::env_var::BEDROCK_SONNET_MODEL,
-        crate::env_var::BEDROCK_HAIKU_MODEL,
-    ];
+    /// BACKEND-24 merges `env` a name at a time and BACKEND-33 withholds the six network names, the
+    /// three Google names and the six Bedrock names from a checkout, so the endpoints are the ones
+    /// that resolve to the closest layer. BACKEND-35 says a project layer can name the endpoints on
+    /// a source build. Moving a name out of this list means reading it from the person's layers
+    /// alone, and the test below then fails until the name is taken off.
+    const CHECKOUT_SETTABLE: [&str; 2] =
+        [crate::env_var::ENDPOINT, crate::env_var::PREMIUM_ENDPOINT];
 
     /// Whether the project layer, and then the local layer, alone decide `name` for a session.
     fn a_checkouts_files_decide(name: &str) -> (bool, bool) {
@@ -8121,7 +8333,11 @@ mod tests {
     fn every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it() {
         // The control: a name that is withheld from a checkout reads as withheld, so a helper that
         // answered `true` for every name would not pass for the list below.
-        for name in crate::env_var::NETWORK {
+        for name in crate::env_var::NETWORK
+            .into_iter()
+            .chain(crate::env_var::GOOGLE)
+            .chain(crate::env_var::BEDROCK)
+        {
             assert_eq!(a_checkouts_files_decide(name), (false, false), "{name}");
         }
         for name in crate::managed::PINNABLE {
@@ -8551,6 +8767,34 @@ mod tests {
             .read();
         assert_eq!(inside.ask_idle_seconds(), None);
         assert_eq!(inside.ask_idle_ignored().count(), 1);
+    }
+
+    /// INSTR-17: naming a directory to read skills from is the person's, so a checkout's layers
+    /// cannot name one.
+    #[test]
+    fn a_project_layer_cannot_name_a_shared_skill_directory() {
+        let settings = Layers::new("shared-skills-layers")
+            .global(r#"{"sharedSkillDirectories": ["~/.claude/skills", ""]}"#)
+            .project(r#"{"sharedSkillDirectories": ["~/.agents/skills"]}"#)
+            .local(r#"{"sharedSkillDirectories": ["~/.agents/skills"]}"#)
+            .read();
+        assert_eq!(settings.shared_skill_directories(), ["~/.claude/skills"]);
+        assert_eq!(settings.shared_skill_directories_ignored().count(), 2);
+
+        let only_project = Layers::new("shared-skills-only-project")
+            .project(r#"{"sharedSkillDirectories": ["~/.agents/skills"]}"#)
+            .read();
+        assert!(only_project.shared_skill_directories().is_empty());
+        assert_eq!(only_project.shared_skill_directories_ignored().count(), 1);
+
+        let named = Layers::new("shared-skills-named")
+            .named(r#"{"sharedSkillDirectories": ["~/.agents/skills"]}"#)
+            .read();
+        assert_eq!(named.shared_skill_directories(), ["~/.agents/skills"]);
+        assert_eq!(named.shared_skill_directories_ignored().count(), 0);
+
+        let nothing = Layers::new("shared-skills-unset").global("{}").read();
+        assert!(nothing.shared_skill_directories().is_empty());
     }
 
     /// INSTR-12: a style opens the system prompt, so a checkout's layers cannot pick one.
@@ -9047,8 +9291,8 @@ mod tests {
     #[test]
     fn a_name_more_than_one_layer_set_reports_the_file_that_won() {
         let layers = Layers::new("report-override")
-            .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#);
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal", "DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "this-checkout"}}"#);
         let settings = layers.read();
 
         let reported: Vec<(&str, PathBuf)> = settings
@@ -9058,7 +9302,7 @@ mod tests {
         assert_eq!(
             reported,
             [(
-                "AWS_PROFILE",
+                "DEPLOY_TARGET",
                 layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE)
             )]
         );
@@ -9069,8 +9313,8 @@ mod tests {
     #[test]
     fn a_name_a_single_layer_set_is_not_reported_as_overridden() {
         let settings = Layers::new("report-uncontested")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "this-checkout"}}"#)
             .read();
         assert_eq!(settings.overridden().count(), 0);
     }
@@ -9080,12 +9324,12 @@ mod tests {
     #[test]
     fn an_override_reports_the_name_and_the_file_and_never_the_value() {
         let settings = Layers::new("report-override-values")
-            .global(r#"{"env": {"AWS_PROFILE": "the-old-value"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "a-secret-looking-value"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "the-old-value"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "a-secret-looking-value"}}"#)
             .read();
 
         let reported = format!("{:?}", settings.overridden().collect::<Vec<_>>());
-        assert!(reported.contains("AWS_PROFILE"));
+        assert!(reported.contains("DEPLOY_TARGET"));
         assert!(!reported.contains("a-secret-looking-value"));
         assert!(!reported.contains("the-old-value"));
     }
@@ -9160,6 +9404,33 @@ mod tests {
             settings.keybindings().get("editor"),
             Some(&"alt-e".to_string())
         );
+    }
+
+    /// SCREEN-14. The `sessionsKeys` block is read as the keybindings are, an entry that is not a
+    /// string is dropped, and it layers per action so that a file moving one key says nothing about
+    /// the others.
+    #[test]
+    fn a_sessions_keys_block_is_read_and_layers_per_action() {
+        let settings =
+            Settings::parse(r#"{"sessionsKeys": {"Stop": " z ", "archive": 7, "pin": ""}}"#);
+        assert_eq!(settings.sessions_keys().get("stop"), Some(&"z".to_string()));
+        assert_eq!(settings.sessions_keys().get("archive"), None);
+        assert_eq!(settings.sessions_keys().get("pin"), None);
+
+        let settings = Layers::new("sessions-keys-override")
+            .global(r#"{"sessionsKeys": {"stop": "z", "archive": "ctrl-e"}}"#)
+            .project(r#"{"sessionsKeys": {"stop": "ctrl-x"}}"#)
+            .read();
+        assert_eq!(
+            settings.sessions_keys().get("stop"),
+            Some(&"ctrl-x".to_string())
+        );
+        assert_eq!(
+            settings.sessions_keys().get("archive"),
+            Some(&"ctrl-e".to_string()),
+            "a file moving one key replaced the block"
+        );
+        assert!(!settings.is_empty());
     }
 
     /// Only the two words the providers accept name a lifetime. Anything else is absence, so a

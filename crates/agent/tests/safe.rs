@@ -158,6 +158,41 @@ fn a_safe_session_reads_no_rule_file() {
     }
 }
 
+/// A safe session reads no skill from a shared directory the person named, as it reads none from
+/// `~/.bravebot/skills` (INSTR-17, INSTR-14). The failure this rejects is a shared root visited
+/// ahead of the safe-mode return.
+#[test]
+fn a_safe_session_reads_no_named_shared_skill_directory() {
+    bravebot_core::safe::engage();
+    let base =
+        std::env::temp_dir().join(format!("bravebot-agent-safe-shared-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let profile = base.join("home");
+    let skill = profile.join(".agents/skills/shared");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: shared\ndescription: kept for another agent\n---\n\nSHARED-BODY",
+    )
+    .unwrap();
+    let project = base.join("work");
+    std::fs::create_dir_all(&project).unwrap();
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_profile_directory(Some(profile))
+        .with_shared_skill_directories(&["~/.agents/skills".to_string()]);
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink);
+
+    let (catalogue, _) = skills::discover(&mut policy, &workspace, None);
+
+    assert!(
+        catalogue.iter().all(|skill| skill.origin == "built-in"),
+        "a safe session offered a skill from a shared directory"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A safe session reads no project `AGENTS.md`, so `/memory` lists none (RECALL-11).
 #[test]
 fn a_safe_session_lists_no_project_rules_file() {

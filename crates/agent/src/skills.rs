@@ -1020,6 +1020,41 @@ const WORKSPACE_SKILLS: &str = ".bravebot/skills";
 /// in this file rather than anything read from a disk.
 const WORKSPACE_SKILL_ROOTS: [&str; 3] = [".agents/skills", ".claude/skills", WORKSPACE_SKILLS];
 
+/// The other agents' skill directories in the person's home that are read once the person has
+/// named them in `sharedSkillDirectories`, least specific first (INSTR-17).
+///
+/// Spelled as the person writes them in that key, so a name is matched against this fixed set and a
+/// directory outside it cannot be reached through the key. Visited before `~/.bravebot/skills`, so
+/// a skill there shadows one of the same name here, and in the order of [`WORKSPACE_SKILL_ROOTS`].
+const SHARED_SKILL_ROOTS: [&str; 2] = ["~/.agents/skills", "~/.claude/skills"];
+
+/// The shared skill directories that exist in the person's home and that the person has not named,
+/// so that nothing is read from them (INSTR-17).
+///
+/// Decided from a fixed set of paths and the names the person's own settings gave, never from what
+/// a directory holds. `doctor` says so, since nothing else would tell a person who keeps skills for
+/// another agent that this program found a directory and left it alone.
+pub fn shared_directories_not_read(workspace: &Workspace) -> Vec<&'static str> {
+    let Some(profile) = workspace.profile_directory() else {
+        return Vec::new();
+    };
+    SHARED_SKILL_ROOTS
+        .into_iter()
+        .filter(|root| !named_by_the_person(workspace, root))
+        .filter(|root| {
+            root.strip_prefix("~/")
+                .is_some_and(|rest| profile.join(rest).is_dir())
+        })
+        .collect()
+}
+
+fn named_by_the_person(workspace: &Workspace, root: &str) -> bool {
+    workspace
+        .shared_skill_directories()
+        .iter()
+        .any(|named| named.trim().trim_end_matches('/') == root)
+}
+
 /// The one file that makes a directory a skill.
 const SKILL_FILE: &str = "SKILL.md";
 
@@ -1081,29 +1116,61 @@ fn discover_listing<S: Sink>(
     }
 
     let home_skills = home.map(|home| home.join(SKILLS));
-    let passed_over = match &home_skills {
-        Some(root) => discover_home(
+    // Below `~/.bravebot/skills` in precedence, so read first, and only the ones the person named.
+    // Not in a session without a home directory, which has nowhere for `~` to stand for.
+    let mut passed: Vec<(&str, PathBuf, usize)> = Vec::new();
+    if let Some(profile) = workspace.profile_directory() {
+        for label in SHARED_SKILL_ROOTS {
+            let Some(relative) = label.strip_prefix("~/") else {
+                continue;
+            };
+            if !named_by_the_person(workspace, label) {
+                continue;
+            }
+            let root = profile.join(relative);
+            let count = discover_home(
+                policy,
+                workspace,
+                &root,
+                label,
+                list_files,
+                &mut catalogue,
+                &mut notices,
+            );
+            passed.push((label, root, count));
+        }
+    }
+    if let Some(root) = &home_skills {
+        let count = discover_home(
             policy,
             workspace,
             root,
+            "~/.bravebot/skills",
             list_files,
             &mut catalogue,
             &mut notices,
-        ),
-        None => 0,
-    };
+        );
+        passed.push(("~/.bravebot/skills", root.clone(), count));
+    }
     let read = discover_workspace(policy, workspace, list_files, &mut catalogue, &mut notices);
     // Not where the project's pass read the same directory, as it does in a session started in the
     // home directory: that pass has already said what it did with each of them (SKILL-6). Compared
     // by the directories alone, so no entry's name is held or compared.
-    let read_as_the_projects = home_skills
-        .and_then(|root| std::fs::canonicalize(root).ok())
-        .is_some_and(|root| read.contains(&root));
-    if passed_over > 0 && !read_as_the_projects {
-        notices.push(Notice::new(t!(
-            home_skills_reached_through_the_workspace,
-            count = passed_over
-        )));
+    for (label, root, count) in passed {
+        let read_as_the_projects =
+            std::fs::canonicalize(root).is_ok_and(|root| read.contains(&root));
+        if count == 0 || read_as_the_projects {
+            continue;
+        }
+        notices.push(Notice::new(if label == "~/.bravebot/skills" {
+            t!(home_skills_reached_through_the_workspace, count = count)
+        } else {
+            t!(
+                shared_skills_reached_through_the_workspace,
+                count = count,
+                directory = label
+            )
+        }));
     }
 
     (catalogue, notices)
@@ -1168,7 +1235,11 @@ fn resolve<S: Sink>(
     discover_listing(&mut policy, workspace, home, list_files).0
 }
 
-/// Skills from `~/.bravebot/skills`, labelled from where they sit.
+/// Skills from a directory of the person's own, `~/.bravebot/skills` or a shared one they named,
+/// labelled from where they sit.
+///
+/// `label` is how the directory is spelled to the person and is one of a fixed set of strings, so
+/// the origin of each skill is that spelling and the name of its directory.
 ///
 /// Not a file the way to which goes through the workspace, as every one does where the working
 /// directory is or holds the home directory. A turn can write there, so the trust map labels that
@@ -1178,6 +1249,7 @@ fn discover_home<S: Sink>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
     root: &Path,
+    label: &str,
     list_files: bool,
     catalogue: &mut Catalogue,
     notices: &mut Vec<Notice>,
@@ -1193,7 +1265,7 @@ fn discover_home<S: Sink>(
             passed_over += 1;
             continue;
         }
-        let origin = format!("~/.bravebot/{SKILLS}/{name}/{SKILL_FILE}");
+        let origin = format!("{label}/{name}/{SKILL_FILE}");
 
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
@@ -1231,7 +1303,7 @@ fn discover_home<S: Sink>(
                     argument_hint: front.argument_hint,
                     body,
                     origin,
-                    directory: Some(format!("~/.bravebot/{SKILLS}/{name}")),
+                    directory: Some(format!("{label}/{name}")),
                     files,
                     landed: None,
                     reach: Some(directory),

@@ -134,8 +134,11 @@ alone carries.
 
 `TooltipLayer` is the only tooltip in the window: one Leo `Tooltip` laid over whichever
 `[data-tooltip]` element the pointer rests on or the keyboard reaches, with a 1s first delay
-and no delay while moving along a toolbar. Use `data-tooltip` on anything else that needs one
-rather than a native `title`, which would draw a second box. A tooltip supplements the accessible
+and no delay while moving along a toolbar. `data-tooltip-trigger="click"` opens that one
+from a click instead, and leaves it closed while the pointer rests on it. Use `data-tooltip`
+on anything else that needs one rather than a native `title`, which would draw a second box.
+A newline in the attribute is drawn
+as a line break; otherwise the text stays on one line. A tooltip supplements the accessible
 name and never replaces it, and a disabled control shows none.
 
 Hit targets are at least 28px (`--hit`), even when the glyph is 14px.
@@ -261,6 +264,9 @@ With a desktop display available, `pnpm run drive:smoke` checks that the window 
 main UI are visible and the Rust bridge responds, then saves a screenshot under
 `/tmp/bravebot-ui/`. To check a Linux package, run
 `pnpm run drive:smoke -- "./dist/Brave Bot-linux-x64/Brave Bot"`.
+
+`pnpm run playground` runs the renderer in a browser against a scripted bridge, with an example of
+every piece the conversation can show. See [playground](playground.md).
 
 `scripts/build-bridge.sh` builds the Rust bridge and secure-file helper. TypeScript
 then checks the code and electron-vite bundles the main process, preload and React

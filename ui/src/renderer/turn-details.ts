@@ -14,7 +14,6 @@ export interface TurnDetails {
   started: boolean
   notices: string[]
   noticesOpen: boolean
-  statsOpen: boolean
   model?: string
   /** The service the session's model is served by, as the bridge named it from configuration. */
   service?: string
@@ -29,14 +28,14 @@ export interface TurnDetails {
 }
 
 export type Turns = Record<number, TurnDetails>
-export type TurnDisclosure = 'noticesOpen' | 'statsOpen'
+export type TurnDisclosure = 'noticesOpen'
 export const AUDIT_EVENTS_PER_TURN = 1000
 export const AUDIT_BYTES_PER_TURN = 256 * 1024
 export const AUDIT_BYTES_PER_SESSION = 2 * 1024 * 1024
 
 function fresh(turn: number): TurnDetails {
   return { turn, status: 'running', started: false, notices: [], noticesOpen: true,
-    statsOpen: false, audit: [], received: 0, omitted: 0, bytes: 0 }
+    audit: [], received: 0, omitted: 0, bytes: 0 }
 }
 
 /** Numbers missing from older payloads are unavailable, not zero. */

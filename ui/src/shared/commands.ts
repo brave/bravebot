@@ -46,6 +46,8 @@ export type CommandId =
   | 'view.theme'
   | 'app.about'
   | 'help.doctor'
+  | 'help.update'
+  | 'help.bug-report'
 
 /**
  * What has to be true of the window before a command means anything.
@@ -196,6 +198,10 @@ export const COMMANDS: readonly Command[] = [
   { id: 'view.theme', label: 'Appearance…', requires: 'always' },
   { id: 'app.about', label: 'About Brave Bot', requires: 'always' },
   { id: 'help.doctor', label: 'Run Diagnostics…', requires: 'always' },
+  // Opens About, which says what the last check found. It asks nothing of the network: the check
+  // is at most hourly and never in front of anything (UPDATE-1, UPDATE-6).
+  { id: 'help.update', label: 'Update Status…', requires: 'always' },
+  { id: 'help.bug-report', label: 'Report a Bug…', requires: 'always' },
 ]
 
 const BY_ID = new Map<CommandId, Command>(COMMANDS.map((command) => [command.id, command]))

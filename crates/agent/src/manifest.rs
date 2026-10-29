@@ -693,7 +693,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     }
 
     let mut subscription =
-        crate::turn::discover_subscription(config, egress, task.model.as_deref(), reporter);
+        crate::turn::discover_subscription(config, egress, task.model.as_deref());
 
     // Owned here rather than inside either half, so a failure in either one still comes back
     // with everything that got as far as existing.
@@ -869,7 +869,7 @@ fn plan<S: Sink, R: Reporter>(
     dropped: &[crate::attached::Carried],
     reporter: &mut R,
     sink: &mut S,
-    mut subscription: Option<&mut crate::ImportedSubscription>,
+    mut subscription: Option<&mut crate::PremiumKey>,
     cancel: &Cancel,
     attempt: &mut Attempt,
     accounting: &mut Accounting,
@@ -1126,7 +1126,7 @@ fn ask<S: Sink, R: Reporter>(
     session: &crate::chatgpt::AccountSession,
     policy: &mut Policy<'_, S>,
     reporter: &mut R,
-    subscription: Option<&mut crate::ImportedSubscription>,
+    subscription: Option<&mut crate::PremiumKey>,
     cancel: &Cancel,
     chosen: &str,
     effort: Option<Effort>,
@@ -1204,7 +1204,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     reporter: &mut R,
     sink: &mut S,
     authority: bravebot_core::file_authority::FileAuthority,
-    subscription: Option<&mut crate::ImportedSubscription>,
+    subscription: Option<&mut crate::PremiumKey>,
     cancel: &Cancel,
     chosen_model: Option<&str>,
     task: &str,
@@ -2202,17 +2202,25 @@ fn write<S: Sink, C: Confirmer>(
     // The pre-image and the version it was read at, taken together, exactly as a turn's write
     // takes them: prior bytes a sibling effect left untrusted cannot answer for a credential in
     // this body, and the approval minted below is spent only on the version shown here.
-    let (existing, pre_image, replaces, approved_revision) =
+    let (existing, pre_image, other_encoding, replaces, approved_revision) =
         policy.capture_files(|policy, capture| {
             let key = workspace.trust_key(&path);
             let peeks = workspace.peek_labelled_for_write(policy, &path);
             (
                 peeks.0,
                 peeks.1,
+                peeks.2,
                 workspace.names_a_file(&path),
                 capture.revision_of(&key),
             )
         });
+    // The same refusal a turn's write makes (WRITE-8): a vouched file in another encoding is not
+    // replaced by a body that lands as UTF-8.
+    if replaces && crate::workspace::holds_another_encoding(policy, "write_file", &other_encoding) {
+        return Err(
+            crate::workspace::WorkspaceError::NotUtf8 { path: path.clone() }.describe(&path),
+        );
+    }
     // Taken from the one peek, as a turn's write does it, so the comparison below can be made
     // inside the kernel on a value the driver never holds as a string.
     let replaced = crate::workspace::peeked_for_review(&existing, replaces);

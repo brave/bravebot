@@ -338,13 +338,16 @@ pub enum AccountModels {
 /// One function for the terminal and the desktop pickers, so neither holds its own copy of when the
 /// account is asked about, which token it is asked with and what a failed listing offers. `sink` is the
 /// trail the listing's request is recorded in, as the other rosters are.
+///
+/// Asked through the egress a roster request has, which gives up on a host that does not answer in
+/// seconds ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)).
 pub fn account_models<S: Sink>(config: &Config, sink: &mut S) -> AccountModels {
     roster_from(
         config,
         &mut StoredSignIn,
         serving_provider(),
         sink,
-        &Egress::new(),
+        &bravebot_aichat::models::listing_egress(),
     )
 }
 
@@ -855,12 +858,15 @@ mod tests {
     /// nothing asked of the authorization server. A 403 is among the three: the host refused an access
     /// token it could not validate with one, so a first 403 asks for a new token. The regression it
     /// rejects is a first 403 that renews nothing, which ends a turn for a token a renewal would mend.
+    /// A 402 is among the failures that renew nothing and come back as they were, which is how it is
+    /// told as the status it is.
     #[test]
     fn only_a_400_a_401_or_a_403_asks_for_a_replacement_token() {
         type Make = fn() -> BackendError;
-        let cases: [(&str, Make, bool); 11] = [
+        let cases: [(&str, Make, bool); 12] = [
             ("400", || refused_with(400), true),
             ("401", || refused_with(401), true),
+            ("402", || refused_with(402), false),
             ("403", || refused_with(403), true),
             ("404", || refused_with(404), false),
             ("422", || refused_with(422), false),

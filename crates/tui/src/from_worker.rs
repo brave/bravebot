@@ -13,6 +13,7 @@ use crate::state::Session;
 pub(crate) fn show(session: &mut Session, message: ToMain) -> Option<ToMain> {
     match message {
         ToMain::RequestBuilt(view) => session.set_last_request(*view),
+        ToMain::Forked(fork) => session.set_fork(*fork),
         ToMain::Written(written) => session.set_written(written),
         ToMain::Phase(phase) => session.set_phase(phase),
         ToMain::Narration(text) => session.narrate(text),
@@ -70,6 +71,7 @@ pub(crate) fn show_in_a_turn(
             reported,
         } => session.delegate_finished(id, note, failed, reported),
         shown @ (ToMain::RequestBuilt(_)
+        | ToMain::Forked(_)
         | ToMain::Written(_)
         | ToMain::Phase(_)
         | ToMain::Narration(_)

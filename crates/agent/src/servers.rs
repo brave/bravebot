@@ -2588,7 +2588,7 @@ fn confinement(
     let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let own = canonical(own);
     policy = policy.allow_read(&own).allow_write(&own);
-    for directory in crate::confine::program_reads(program, searched, home) {
+    for directory in crate::confine::server_program_reads(program, searched, home) {
         policy = policy.allow_read(directory);
     }
     // A recorded read is resolved already, so one that resolves elsewhere now is a file replaced by

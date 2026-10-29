@@ -146,6 +146,10 @@ pub const DENIED: &[&str] = &[
     "bot.servers.read",
     "bot.servers.write",
     "doctor",
+    // Say where the machine keeps its state and what the host's settings name, for the person at
+    // the host to read and post.
+    "bug-report.compose",
+    "update.status",
     // Read files or attach them to a turn.
     "mentions.offer",
     "mentions.named",

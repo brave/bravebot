@@ -780,7 +780,7 @@ fn a_check_turned_off_leaves_the_record_as_it_was() {
         .expect("seed the installation");
         std::fs::write(&record, seeded).expect("seed the record");
 
-        assert!(bravebot_tui::update::at_startup(Some(false)).is_none());
+        assert!(bravebot_update::at_startup(Some(false)).is_none());
 
         // The stamp is written by a spawned thread, so give one that was wrongly started time to land.
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -815,7 +815,7 @@ fn a_session_that_records_asks_for_a_newer_version_when_the_record_is_old() {
         .expect("seed the record");
         let listener = proxy_listener();
 
-        assert!(bravebot_tui::update::at_startup(None).is_some());
+        assert!(bravebot_update::at_startup(None).is_some());
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut connected = false;
@@ -854,7 +854,7 @@ fn a_launch_whose_stamp_cannot_be_written_does_not_ask() {
         let listener = proxy_listener();
         while listener.accept().is_ok() {}
 
-        bravebot_tui::update::at_startup(None);
+        bravebot_update::at_startup(None);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !temporary.is_file() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -866,7 +866,7 @@ fn a_launch_whose_stamp_cannot_be_written_does_not_ask() {
         );
 
         std::fs::remove_dir(&record).expect("free the record's name");
-        bravebot_tui::update::at_startup(None);
+        bravebot_update::at_startup(None);
         assert!(
             connected_within(listener, std::time::Duration::from_secs(10)),
             "with the name free the same launch did not ask, so the silence above proves nothing"

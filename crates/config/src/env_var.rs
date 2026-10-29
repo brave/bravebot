@@ -6,11 +6,13 @@
 pub const SIGNING_KEY: &str = "SERVICES_KEY_AICHAT";
 pub const KEY_ID: &str = "BRAVE_SERVICES_KEY_ID";
 pub const ENDPOINT: &str = "BRAVE_AI_CHAT_ENDPOINT";
-/// Host for the premium tier, used once a subscription has been imported.
+/// Host for the premium tier, in place of the one compiled in.
 ///
-/// A separate variable rather than a prefix swap on ENDPOINT: the two are independent
-/// deployments, and deriving one host from another by string substitution would break
-/// the moment either name changed.
+/// Optional: with nothing set the host is [`crate::DEV_PREMIUM_ENDPOINT`] or
+/// [`crate::PROD_PREMIUM_ENDPOINT`], whichever the free endpoint's environment calls for. A
+/// separate variable rather than a prefix swap on ENDPOINT: the two are independent deployments,
+/// and deriving one host from another by string substitution would break the moment either name
+/// changed.
 pub const PREMIUM_ENDPOINT: &str = "BRAVE_AI_CHAT_PREMIUM_ENDPOINT";
 /// The model to request when the user has not chosen one.
 ///
@@ -97,6 +99,33 @@ pub const NETWORK: [&str; 6] = [
     "NO_PROXY",
 ];
 
+/// The three names that choose which Google account receives a conversation (BACKEND-33), read from
+/// the person's own layers alone as [`NETWORK`] is: a checkout that named them would choose the
+/// project and key a request to Vertex AI is made under.
+pub const GOOGLE: [&str; 3] = [GOOGLE_API_KEY, GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION];
+
+/// The six names that choose which AWS account, region, profile and tier models a conversation is
+/// sent through (BACKEND-33), read from the person's own layers alone as [`NETWORK`] is: a checkout
+/// that named them would choose the account the conversation goes to.
+pub const BEDROCK: [&str; 6] = [
+    USE_BEDROCK,
+    AWS_REGION,
+    AWS_PROFILE,
+    BEDROCK_OPUS_MODEL,
+    BEDROCK_SONNET_MODEL,
+    BEDROCK_HAIKU_MODEL,
+];
+
+/// Whether `name` is one of the network, Google or Bedrock names, which a checkout's files decide
+/// nothing for.
+pub fn is_person_only(name: &str) -> bool {
+    NETWORK
+        .iter()
+        .chain(&GOOGLE)
+        .chain(&BEDROCK)
+        .any(|listed| *listed == name)
+}
+
 /// Every name a build may bake in, in the order `doctor` reports them.
 ///
 /// CRASH_REPORT_URL is the one name no build needs: without it the build reports no crashes.
@@ -111,8 +140,8 @@ pub const ALL: [&str; 6] = [
 
 /// Names a build must have.
 ///
-/// DEFAULT_MODEL is absent because it has a default. PREMIUM_ENDPOINT is absent because a build
-/// without it still works for everyone who has not imported a subscription.
+/// DEFAULT_MODEL is absent because it has a default. PREMIUM_ENDPOINT is absent because the premium
+/// host is compiled in.
 pub const REQUIRED: [&str; 3] = [SIGNING_KEY, KEY_ID, ENDPOINT];
 
 /// Set to `1` to build without configuration, producing a binary that must be given
@@ -147,7 +176,9 @@ pub const SCRUBBED: [&str; 2] = [SIGNING_KEY, KEY_ID];
 /// The npm package's launcher sets it to `npm` before it starts the binary, which is the only way
 /// the binary could tell: what npm unpacked is an ordinary executable in an ordinary directory.
 /// It decides which update command a person is shown at startup and nothing else, so a value
-/// nothing here recognises leaves the startup screen as it would have been.
+/// nothing here recognises leaves the startup screen as it would have been. The packaged desktop
+/// app sets it to `desktop` before it starts `bravebot-rpc`, which then asks for the newest release
+/// (UPDATE-12).
 ///
 /// Absent from ALL: it describes one installation rather than the build.
 pub const INSTALLED_VIA: &str = "BRAVEBOT_INSTALLED_VIA";

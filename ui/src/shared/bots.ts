@@ -84,6 +84,12 @@ export interface Bot {
    */
   conversations: BotConversationRef[]
   /**
+   * The last turn that ended in a conversation in its home folder: the conversation's id and the
+   * prompt's ordinal, or `null` before one has. A summon elsewhere records it, so the "Replied to"
+   * card is drawn after that turn (MEMORY-14). Main-written, off what the agent answered.
+   */
+  lastHome: HomeTurn | null
+  /**
    * How much compaction had taken out of that session, last time anyone looked.
    *
    * The length of the conversation's archive, which the agent reports and which only ever rises.
@@ -175,6 +181,21 @@ export function isBotModel(value: unknown): value is string | null {
 export interface BotConversationRef {
   id: string
   directory: string
+}
+
+/** Where a conversation stood: its id and the ordinal of its last prompt. */
+export interface HomeTurn {
+  id: string
+  prompt: number
+}
+
+/** Where a conversation stood, or `null` for anything that is not that. */
+export function parseHomeTurn(value: unknown): HomeTurn | null {
+  if (typeof value !== 'object' || value === null) return null
+  const { id, prompt } = value as Record<string, unknown>
+  return isSessionId(id) && typeof prompt === 'number' && Number.isInteger(prompt) && prompt >= 0
+    ? { id, prompt }
+    : null
 }
 
 /** The folders a bot has worked in, home first. */
@@ -284,6 +305,7 @@ export function parseBots(value: unknown, homeFor?: (slug: string) => string): S
       definition,
       session,
       conversations,
+      lastHome,
       archived,
       remembered,
       quiet,
@@ -317,6 +339,8 @@ export function parseBots(value: unknown, homeFor?: (slug: string) => string): S
       definition: isSlug(definition) ? definition : null,
       session: isSessionId(session) ? session : null,
       conversations: parseConversations(conversations, isSessionId(session) ? session : null, legacy ?? placed),
+      // Absent from every bot written before summoning existed, which is a bot that has none.
+      lastHome: parseHomeTurn(lastHome),
       // Clamped rather than refused. It is a watermark, and a nonsense one costs one needless
       // re-grounding, where dropping the bot over it costs the bot.
       archived:

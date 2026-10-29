@@ -257,6 +257,37 @@ const UNDO_SPELLINGS: [KeyChord; 4] = [
     ),
 ];
 
+/// Settle which of the chords asked for stand, among actions that each have a default.
+///
+/// An action that asked for a chord some other action stands on gives the request up and stays on
+/// its default. So does the other, if it asked: neither asked for the chord with any more right
+/// than the other. Giving a chord up puts an action back on its default, which a third action may
+/// have been given, so this settles rather than deciding once. Every round drops at least one
+/// request or is the last, and with no requests left the defaults are what stand, which differ.
+///
+/// Shared by the chords of the input box and the keys of the Sessions screen (SCREEN-14), so one
+/// rule says what a contest is.
+pub(crate) fn settle(defaults: &[KeyChord], asked: &mut [Option<KeyChord>]) {
+    loop {
+        let standing: Vec<KeyChord> = defaults
+            .iter()
+            .zip(asked.iter())
+            .map(|(default, asked)| asked.unwrap_or(*default))
+            .collect();
+        let contested = |chord: KeyChord| standing.iter().filter(|on| **on == chord).count() > 1;
+        let mut given_up = false;
+        for i in 0..asked.len() {
+            if asked[i].is_some() && contested(standing[i]) {
+                asked[i] = None;
+                given_up = true;
+            }
+        }
+        if !given_up {
+            break;
+        }
+    }
+}
+
 impl Keybindings {
     /// What the undo step answers unless a settings file moves it.
     ///
@@ -306,25 +337,7 @@ impl Keybindings {
                 .filter(|chord| !chord.is_reserved())
         });
 
-        // Giving a chord up puts an action back on its default, which a third action may have been
-        // given, so this settles rather than deciding once. Every round drops at least one request
-        // or is the last, and with no requests left the defaults are what stand, which differ.
-        loop {
-            let standing: [KeyChord; MOVABLE] =
-                std::array::from_fn(|i| asked[i].unwrap_or(defaults[i]));
-            let contested =
-                |chord: KeyChord| standing.iter().filter(|on| **on == chord).count() > 1;
-            let mut given_up = false;
-            for i in 0..asked.len() {
-                if asked[i].is_some() && contested(standing[i]) {
-                    asked[i] = None;
-                    given_up = true;
-                }
-            }
-            if !given_up {
-                break;
-            }
-        }
+        settle(&defaults, &mut asked);
 
         for (i, (_, slot)) in slots.iter_mut().enumerate() {
             **slot = asked[i].unwrap_or(defaults[i]);

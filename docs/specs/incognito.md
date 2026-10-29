@@ -9,13 +9,13 @@ governs:
   - crates/agent/src/reach.rs
   - crates/agent/src/bedrock_refusals.rs
   - crates/agent/src/trusted.rs
-  - crates/agent/src/subscription.rs
   - crates/session/src/store.rs
   - crates/session/src/sessions.rs
   - crates/cli/src/main.rs
   - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/auth.rs
+  - crates/cli/src/brave.rs
 documented-by:
   - docs/website/docs/using/sessions.md
   - docs/website/docs/using/incognito.md
@@ -28,9 +28,8 @@ ordinarily kept there is [sessions.md](sessions.md): the record of a session and
 person typed. This is the mode that declines to keep it. The audit trail's contents are
 [trace.md](trace.md); this governs only whether it is written down.
 
-Four files in that directory are still written, and [INCOG-8](#INCOG-8) states them: the imported
-credentials, which a session spends and records as spent, the ChatGPT sign-in and the xAI sign-in, which a
-session rewrites when it replaces an access token, and the record
+Three files in that directory are still written, and [INCOG-8](#INCOG-8) states them: the ChatGPT
+sign-in and the xAI sign-in, which a session rewrites when it replaces an access token, and the record
 [MEMORY-5](definition-memory.md#MEMORY-5) keeps of a definition's memory the session left
 untrusted.
 
@@ -107,8 +106,8 @@ hold gate names and paths, which is a record of a session having happened and wh
 ### INCOG-5: reading is unchanged, apart from the one answer named here
 
 An incognito session reads the settings, the recorded model and theme, the standing instructions,
-the skills and the imported credentials, exactly as an ordinary one does. What is refused is
-writing, apart from the four files [INCOG-8](#INCOG-8) names, and one read, named below. The record of
+the skills, the stored premium key and the stored ChatGPT and xAI sign-ins, exactly as an ordinary one
+does. What is refused is writing, apart from the three files [INCOG-8](#INCOG-8) names, and one read, named below. The record of
 command lines somebody asked to be remembered past a session, which [tools/run.md](tools/run.md)
 governs, is read here on the same terms: a line already in it stops the asking as it does anywhere,
 and the key that would add one is not offered. The files in that record a write may create a
@@ -175,12 +174,15 @@ cleared and by what, and one missed ordering writes the thing the mode exists no
 `verified-by: bravebot_cli::running::the_mode_is_engaged_by_the_flag_wherever_it_stands_and_by_nothing_else`
 
 <a id="INCOG-7"></a>
-### INCOG-7: importing a subscription is refused rather than silently skipped
+### INCOG-7: signing in, storing a key and importing are refused rather than silently skipped
 
-`import-leo-creds` in an incognito session reports that it will not run and exits without
-registering a device. Forgetting an existing import is still allowed. Storing a gateway key with
+In an incognito session, storing a premium key with `bravebot auth login brave` is refused, before
+the key is asked for, and forgetting one with `bravebot auth logout brave` is allowed
+([PREM-16](premium-credentials.md#PREM-16)). Storing a gateway key with
 `bravebot auth login gateway` is refused the same way, before the key is asked for, and forgetting
-one with `bravebot auth logout gateway` is allowed. Signing in with a ChatGPT account with
+one with `bravebot auth logout gateway` is allowed. Importing
+model services from other tools with `bravebot import-providers` is refused the same way
+([IMPORT-8](import.md#IMPORT-8)). Signing in with a ChatGPT account with
 `bravebot auth login chatgpt` is refused the same way, before the listener binds and before a browser
 opens, and `bravebot auth logout chatgpt` is allowed
 ([CHATGPT-12](chatgpt-sign-in.md#CHATGPT-12)). Signing in to xAI with `bravebot auth login xai` is refused
@@ -189,14 +191,16 @@ the same way, before the code is asked for, and `bravebot auth logout xai` is al
 Deleting a stored session with `bravebot sessions delete` or `sessions purge` is allowed for the same
 reason ([CLI-33](cli.md#CLI-33)).
 
-**Why.** An import is a write by definition: a credential that did not outlive the session would not
-be an import. Doing it and discarding the result would mint a batch on Brave's service that nothing
-could ever spend, so the refusal comes before the device is registered. Forgetting is permitted
-because removing a stored secret leaves less behind rather than more, which is the direction this
-mode points.
+**Why.** Signing in, storing a key and importing are writes by definition: one that did not outlive
+the session would not have happened. Doing one and discarding the result would leave a person who
+was signed in once and never again, so the refusal comes before anything is asked or opened. Forgetting is permitted because
+removing a stored secret leaves less behind rather than more, which is the direction this mode
+points.
 
-`verified-by: bravebot_cli::running::an_import_is_refused_in_an_incognito_session`
-`verified-by: bravebot_cli::running::forgetting_an_import_is_allowed_in_an_incognito_session`
+`verified-by: bravebot_cli::running::import_providers_is_refused_while_incognito`
+`verified-by: bravebot_cli::running::auth_login_brave_is_refused_where_a_key_cannot_be_typed_or_kept`
+`verified-by: bravebot_cli::running::auth_logout_brave_forgets_the_key_and_only_that_one`
+`verified-by: bravebot_cli::brave::the_sign_in_is_refused_where_a_key_cannot_be_asked_for_or_kept`
 `verified-by: bravebot_cli::running::auth_login_gateway_is_refused_before_a_key_is_asked_for`
 `verified-by: bravebot_cli::running::auth_logout_gateway_forgets_the_key_named_in_an_incognito_session`
 `verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
@@ -207,7 +211,7 @@ mode points.
 <a id="INCOG-8"></a>
 ### INCOG-8: what the mode does not cover, and says so
 
-Eleven things still reach the filesystem in an incognito session, each because refusing it would cost
+Ten things still reach the filesystem in an incognito session, each because refusing it would cost
 more than what it leaves behind:
 
 - **The workspace.** `write_file` and `edit_file` go on editing the project. Those edits are the
@@ -235,17 +239,6 @@ more than what it leaves behind:
   write it does not start. It is not kept: it goes to a directory of its own in the system temporary
   directory, on the same terms as the three above, and goes once the server has stopped, so a runner
   fetches its package again each session. [SERVERS-10](mcp-servers.md#SERVERS-10) governs it.
-- **A credential that was spent.** An imported subscription is read and spent as in any session, and
-  the spent markers reach the file the import created under `~/.bravebot` when the session ends. A
-  credential is single use and presenting one to the service spends it there, so a marker that never
-  reached the file would leave a credential the service has already seen looking unspent: the next
-  session would offer it again, and the person would lose part of what they paid for. A batch that
-  runs out mid-session is renewed for the same order and written at once, on the same ground, since
-  those credentials cost a round trip to obtain and discarding them would waste them as surely. What
-  the file ends up holding is credentials for an order imported before the session and which of them
-  are spent, and nothing about which project or which prompts. Renewing an order is not importing
-  one, which [INCOG-7](#INCOG-7) refuses outright, and the file itself is governed by
-  [premium-credentials.md](premium-credentials.md).
 - **A ChatGPT sign-in whose access token was replaced.** A stored sign-in is used as in any session,
   and when its access token is replaced the new tokens are written to `chatgpt-account.json` under
   `~/.bravebot`, and a sign-in that OpenAI has ended is removed from it. The refresh token is replaced
@@ -274,7 +267,7 @@ more than what it leaves behind:
   recorded under `~/.bravebot`, naming its path and nothing else, so that no later session reads
   what this one left untrusted as trusted. [MEMORY-5](definition-memory.md#MEMORY-5) governs it.
 
-[CHECKOUT-6](checkouts.md#CHECKOUT-6), which nothing yet builds, would add a twelfth: a delegate's
+[CHECKOUT-6](checkouts.md#CHECKOUT-6), which nothing yet builds, would add an eleventh: a delegate's
 checkout, made in the system temporary directory and gone with the session, and its entry under
 the person's `.git/worktrees/`, which goes with it and which a session killed outright leaves.
 
@@ -284,7 +277,6 @@ own tool.
 
 `verified-by: bravebot_tui::editor::the_scratch_file_does_not_outlive_the_edit`
 `verified-by: bravebot_lsp::server::an_index_a_session_keeps_nothing_of_goes_with_the_session`
-`verified-by: bravebot_agent::incognito_credentials::a_spent_credential_is_written_back_in_a_private_session`
 `verified-by: bravebot_agent::incognito::a_memory_left_untrusted_is_still_recorded`
 `verified-by: bravebot_agent::servers::a_started_server_in_a_session_that_keeps_nothing_has_a_home_that_goes_with_it`
 `verified-by: bravebot_cli::chatgpt_account::an_incognito_session_writes_the_renewal_of_its_sign_in`

@@ -136,7 +136,7 @@ pub struct Facts<'a> {
     /// in force for the *next* turn: `/model` moves it and leaves the served name alone, so a panel
     /// that compares the two is comparing two different turns.
     pub substituted_model: Option<&'a str>,
-    /// Whether the last turn actually spent a subscription credential.
+    /// Whether the last turn actually presented the premium key.
     ///
     /// `None` before any turn has run. Three states rather than a bool because "not yet known" is
     /// not the same as "no", and reporting a guess as an observation is the bug this replaced.
@@ -319,11 +319,10 @@ fn network_line(
 }
 
 /// Whether a stage the next turn starts reaches every unix socket that has a path: where the kernel
-/// does not govern them and the mode is `read-only` or `workspace-write`. `strict` refuses such a
+/// does not govern them and the mode is `workspace-write`. `strict` and `read-only` refuse such a
 /// stage, and under `off` the confinement line already says nothing is confined (SANDBOX-3).
 pub fn sockets_with_a_path_open(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> bool {
-    use bravebot_sandbox::SandboxMode;
-    reachable && matches!(mode, SandboxMode::ReadOnly | SandboxMode::WorkspaceWrite)
+    reachable && mode == bravebot_sandbox::SandboxMode::WorkspaceWrite
 }
 
 /// The line for the unix sockets the programs `run` starts can reach, where every one that has a
@@ -731,12 +730,12 @@ fn choice_lines(facts: &Facts<'_>) -> Vec<Line> {
     //
     // The note says which tier the last turn actually ran on, not whether this build knows a premium
     // host. It used to say the latter, which is baked in at compile time and true of every build:
-    // a session whose subscription was never read still reported "premium configured" while every
-    // request went out spending no subscription and came back answered by a weaker model. What a
-    // person wants from this line is what they are getting, and that is a fact about a request.
+    // a session that never presented a key still reported "premium configured" while every
+    // request went out without one and came back answered by a weaker model. What a person wants
+    // from this line is what they are getting, and that is a fact about a request.
     lines.push(
         Line::new(t!(status_endpoint), environment(&facts.config.endpoint)).with_note(
-            match (facts.config.premium_endpoint.is_some(), facts.premium) {
+            match (facts.config.premium_key.is_some(), facts.premium) {
                 (true, Some(true)) => t!(status_premium_in_use),
                 (true, Some(false)) => t!(status_premium_not_spent),
                 // Nothing has run yet, so nothing has been observed. Saying which tier is in use
@@ -1194,15 +1193,14 @@ fn rows(heading: Line, rows: &[String]) -> Vec<Line> {
 
 /// What can be said about the tier before a request has settled it.
 ///
-/// The configuration and nothing else, which is why the premium wording stops short of claiming a
-/// credential will be spent. A stored batch may still be expired, exhausted, or issued for another
-/// environment, and which of those holds is settled by a request rather than by looking. Reading the
-/// file at startup would license a firmer claim than the file supports.
+/// The configuration and nothing else, which is why the premium wording stops short of claiming the
+/// key will be accepted. The premium host may still refuse it, and whether it does is settled by a
+/// request rather than by looking.
 ///
 /// Shared with the opening screen rather than written twice, so the line drawn at startup and the
 /// line `/status` shows an hour later cannot drift apart.
 pub fn configured_tier(config: &Config) -> &'static str {
-    match config.premium_endpoint {
+    match config.premium_key {
         Some(_) => t!(status_premium_available),
         None => t!(status_no_subscription),
     }
@@ -1342,15 +1340,20 @@ mod tests {
     use bravebot_agent::servers::{Access, PolicyEgress};
     use bravebot_config::DEFAULT_MODEL;
 
+    /// A configuration whose premium host is `premium` where one is named, with a key stored for it
+    /// as `bravebot auth login brave` leaves one. Without `premium` there is no key, so the build
+    /// has no premium tier to report.
     fn config_for(endpoint: &str, premium: Option<&str>) -> Config {
-        Config::from_lookup(|key| match key {
+        let mut config = Config::from_lookup(|key| match key {
             "SERVICES_KEY_AICHAT" => Some("a-signing-key".into()),
             "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
             "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.to_string()),
             "BRAVE_AI_CHAT_PREMIUM_ENDPOINT" => premium.map(str::to_string),
             _ => None,
         })
-        .expect("config")
+        .expect("config");
+        config.premium_key = premium.map(|_| bravebot_config::Secret::new("a-premium-key"));
+        config
     }
 
     /// Leaked once so a `Facts` built by the helper can borrow it for the test's lifetime.
@@ -1416,12 +1419,11 @@ mod tests {
     }
 
     /// SANDBOX-3: `/status` says a session's programs reach every unix socket that has a path where
-    /// the kernel leaves them open, under `read-only` and `workspace-write`, with why beside it. The
-    /// regressions it rejects: no line on such a kernel, a line under `read-only` that is missing
-    /// because only `workspace-write` was listed, a line where the kernel governs the sockets, and a
-    /// line under `strict`, which refuses the stage, or under `off`, which confines nothing.
+    /// the kernel leaves them open, under `workspace-write`, with why beside it. The regressions it
+    /// rejects: no line on such a kernel, a line where the kernel governs the sockets, and a line
+    /// under `strict` or `read-only`, which refuse the stage, or under `off`, which confines nothing.
     #[test]
-    fn reachable_sockets_with_a_path_are_reported_under_read_only_and_workspace_write() {
+    fn reachable_sockets_with_a_path_are_reported_under_workspace_write_alone() {
         use bravebot_sandbox::SandboxMode;
         let config = config_for("https://ai-chat.bsg.brave.com", None);
         let trust = TrustStore::new("/work");
@@ -1435,7 +1437,8 @@ mod tests {
                 .find(|line| line.label.trim() == t!(status_path_sockets))
         };
 
-        for mode in [SandboxMode::WorkspaceWrite, SandboxMode::ReadOnly] {
+        let mode = SandboxMode::WorkspaceWrite;
+        {
             let line = shown(mode, true)
                 .unwrap_or_else(|| panic!("{mode}: the sockets are on the report"));
             assert_eq!(line.value, t!(status_path_sockets_reachable), "{mode}");
@@ -1443,6 +1446,7 @@ mod tests {
         }
         for (mode, reachable) in [
             (SandboxMode::WorkspaceWrite, false),
+            (SandboxMode::ReadOnly, true),
             (SandboxMode::ReadOnly, false),
             (SandboxMode::Strict, true),
             (SandboxMode::Off, true),
@@ -2856,9 +2860,9 @@ mod tests {
     }
 
     /// The bug this replaced. Every build knows a premium host, so reporting premium from the
-    /// configuration said "premium" for a session whose credentials were never read, while every
-    /// request went out spending no subscription and came back answered by a weaker model. A panel
-    /// that cannot be trusted on this point is worse than one that omits it.
+    /// configuration said "premium" for a session that never presented a key, while every request
+    /// went out without one and came back answered by a weaker model. A panel that cannot be
+    /// trusted on this point is worse than one that omits it.
     #[test]
     fn the_tier_reported_is_the_one_the_last_turn_actually_ran_on() {
         let config = config_for(
@@ -2867,29 +2871,29 @@ mod tests {
         );
         let trust = trusting();
 
-        // A premium host is configured and a turn ran without spending anything. The old line said
+        // A premium host is configured and a turn ran without presenting the key. The old line said
         // "premium configured" here, which is the sentence that hid a whole broken session.
         let mut free = facts(&config, &trust);
         free.premium = Some(false);
         let shown = rendered(&report(&free));
-        assert!(shown.contains("no subscription was spent"), "{shown}");
+        assert!(shown.contains("the premium key was not sent"), "{shown}");
         assert!(
-            !shown.contains("premium, a credential"),
-            "a turn that spent no subscription was reported as premium: {shown}"
+            !shown.contains("premium, the premium key was sent"),
+            "a turn that sent no key was reported as premium: {shown}"
         );
 
         let mut premium = facts(&config, &trust);
         premium.premium = Some(true);
         let shown = rendered(&report(&premium));
-        assert!(shown.contains("a credential was spent"), "{shown}");
+        assert!(shown.contains("the premium key was sent"), "{shown}");
     }
 
     /// What the opening screen draws before anything has run is what `/status` says at that moment,
     /// because both take it from here. Two copies of this wording would be two things to keep true,
     /// and the one that drifted would be the one nobody re-reads.
     ///
-    /// Neither reads the store. A batch on disk may be expired, exhausted, or for the wrong
-    /// environment, so its presence is not the tier: only a request settles that.
+    /// Neither sends anything. A key that is held may still be refused, so holding one is not the
+    /// tier: only a request settles that.
     #[test]
     fn the_opening_line_and_the_panel_say_the_same_thing_before_a_turn_runs() {
         let premium = config_for(

@@ -1,6 +1,6 @@
 // What the main process forgets after the agent deletes conversations.
 //
-// The app keeps a conversation's preferences, its fork lineage and its bot's link beside the agent's
+// The app keeps a conversation's preferences, its fork lineage, its bot's link and the summons recorded in it beside the agent's
 // record. A delete or a purge that went through removes those too, for exactly the records the
 // agent says it removed among the ones the window named. The faults rejected here are forgetting a
 // record the agent kept, and forgetting one the window never named because the answer listed it.
@@ -45,9 +45,9 @@ test('a delete forgets the one record the window named, once the agent confirms 
   assert.deepEqual(deletedConversations('session.import', { directory: DIRECTORY, ids: ['a'] }, { copied: ['a'], deleted: ['a'] }), [])
 })
 
-test('the request handler forgets the preferences, the fork and the bot link of each, after the answer', () => {
+test('the request handler forgets the preferences, the fork, the bot link and the summons of each, after the answer', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
-  const loop = /for \(const \{ directory, id \} of deletedConversations\(method, params, ok\)\) \{\s*removeConversation\(conversationKey\(directory, id\)\)\s*forgetFork\(\{ directory, id \}\)\s*forgetBotConversation\(directory, id\)\s*\}/.exec(index)
-  assert.ok(loop, 'each deleted conversation is forgotten in all three places')
+  const loop = /for \(const \{ directory, id \} of deletedConversations\(method, params, ok\)\) \{\s*removeConversation\(conversationKey\(directory, id\)\)\s*forgetFork\(\{ directory, id \}\)\s*forgetBotConversation\(directory, id\)\s*forgetSummons\(\{ directory, id \}\)\s*\}/.exec(index)
+  assert.ok(loop, 'each deleted conversation is forgotten in all four places')
   assert.ok(index.lastIndexOf('bridge.request(method', loop.index) > 0, 'and only once the agent has answered')
 })

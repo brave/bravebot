@@ -342,6 +342,16 @@ test('bot history includes every saved, associated and draft conversation withou
   assert.equal(history.at(-1).session, null)
 })
 
+test('the home conversation is the newest unarchived one in the home folder that the list still has', () => {
+  const { homeConversation } = load('src/shared/bot-history.ts')
+  const bot = { slug: 'review', home: '/home/review' }
+  const summary = (id) => ({ id, directory: '/home/review', title: id, updated: 1, project: 'review', branch: null, bytes: 0 })
+  const row = (id, directory, { archived = false, listed = true } = {}) => ({ id, directory, session: listed ? summary(id) : null, archived })
+  const rows = [row('project-newest', '/project'), row('gone', '/home/review', { listed: false }), row('archived', '/home/review', { archived: true }), row('current', '/home/review'), row('older', '/home/review')]
+  assert.equal(homeConversation(bot, rows)?.id, 'current')
+  assert.equal(homeConversation(bot, rows.filter((each) => each.directory !== '/home/review' || each.archived)), null)
+})
+
 test('starting and revisiting bot conversations preserves all earlier IDs across restart', () => {
   const directory = mkdtempSync(join(tmpdir(), 'bravebot-history-'))
   const electron = { app: { getPath: () => directory } }

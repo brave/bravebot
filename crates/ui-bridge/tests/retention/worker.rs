@@ -12,6 +12,24 @@ fn take_turn(
     cancel: Cancel,
     first: bool,
 ) -> Vec<Event> {
+    take_turn_in(
+        state,
+        workspace,
+        config,
+        cancel,
+        first,
+        bravebot_agent::PermissionMode::Ask.into(),
+    )
+}
+
+fn take_turn_in(
+    state: Arc<Mutex<State>>,
+    workspace: &Workspace,
+    config: &Config,
+    cancel: Cancel,
+    first: bool,
+    permission_mode: bravebot_agent::LiveMode,
+) -> Vec<Event> {
     let (answers, receiver) = mpsc::channel();
     let (events, received) = mpsc::channel();
     let emitter = Emitter::new(Box::new(move |event| {
@@ -47,11 +65,12 @@ fn take_turn(
             deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
             auto_vetting: false,
             sandbox: bravebot_sandbox::SandboxMode::default(),
-            permission_mode: bravebot_agent::PermissionMode::Ask.into(),
+            permission_mode,
             mcp_requested: Vec::new(),
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
             addressing: None,
+            addressing_standing: false,
             prompt: if first {
                 "copy and run"
             } else {
@@ -86,6 +105,60 @@ fn take_turn(
     }
     worker.join().unwrap();
     seen
+}
+
+/// MODE-4, TRUST-6: the record a desktop turn writes says whether bypass answered for the person,
+/// whether the turn answered or failed. The faults this rejects: a save that writes `false`
+/// whatever the mode, so a resume restores a map bypass opened, and one that marks every turn, so
+/// a session that never bypassed puts the startup question on its resume for nothing.
+#[test]
+fn a_desktop_turn_records_whether_bypass_answered_for_the_person() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    for (name, ending) in [("answered", endpoint::answer()), ("failed", "fail".into())] {
+        for (mode, marked) in [
+            (bravebot_agent::PermissionMode::Ask, false),
+            (bravebot_agent::PermissionMode::Bypass, true),
+        ] {
+            let root = profile::project(&format!("bridge-bypass-mark-{name}-{marked}"));
+            std::fs::create_dir_all(&root).unwrap();
+            let workspace = Workspace::new(&root).unwrap();
+            let mut trust = TrustStore::new(workspace.root());
+            trust.trust(".");
+            let state = Arc::new(Mutex::new(State::fresh(trust)));
+            let (config, _requests, server) = endpoint::endpoint(vec![ending.clone()], None);
+            let events = take_turn_in(
+                state.clone(),
+                &workspace,
+                &config,
+                Cancel::new(),
+                true,
+                mode.into(),
+            );
+            server.join().unwrap();
+            let last = events.last().unwrap().name;
+            assert_eq!(
+                last,
+                if name == "answered" {
+                    "turn.done"
+                } else {
+                    "turn.error"
+                },
+                "{events:?}"
+            );
+            let held = state.lock().unwrap();
+            let record = bravebot_session::sessions::load(
+                workspace.root(),
+                held.handle.as_ref().unwrap().id(),
+            )
+            .expect("the turn kept a record");
+            assert_eq!(
+                record.trust_answered_by_mode, marked,
+                "a turn that {name} under {mode:?} recorded the wrong mark"
+            );
+        }
+    }
 }
 
 /// A leading `~` in a run line sent from the desktop window stands for the home directory, and

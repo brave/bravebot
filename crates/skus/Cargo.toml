@@ -1,6 +1,6 @@
 [package]
 name = "bravebot-skus"
-description = "Imports a Leo Premium subscription from a local Brave install by registering as a new device"
+description = "Signs in to the model services that sign in with an account, and keeps the sign-ins in a file only the account can read"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,7 +16,6 @@ workspace = true
 test-hosts = []
 
 [dependencies]
-challenge-bypass-ristretto = { workspace = true }
 hmac = { workspace = true }
 rand = { workspace = true }
 ring = { workspace = true }

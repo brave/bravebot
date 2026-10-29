@@ -39,7 +39,12 @@ export async function startModelService(reply) {
     }
     rounds.push(body)
     const round = rounds.length
-    const { content, tool } = await reply({ body, messages: JSON.parse(body).messages ?? [], round })
+    const { content, tool, status } = await reply({ body, messages: JSON.parse(body).messages ?? [], round })
+    // A status makes the service refuse the request, for a driver that needs a turn to fail.
+    if (status) {
+      response.writeHead(status, { 'Content-Type': 'application/json' })
+      return response.end(JSON.stringify({ error: { message: 'refused by the test service' } }))
+    }
     const delta = tool
       ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${round}`, type: 'function', function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] }
       : { role: 'assistant', content }

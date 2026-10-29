@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/agent", "crates/approval", "crates/backtrace", "crates/bedrock", "crates/browser", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/connector", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files"]
+members = ["crates/agent", "crates/approval", "crates/backtrace", "crates/bedrock", "crates/browser", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/connector", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files", "crates/update"]
 
 [workspace.package]
 version = "0.19.0"
@@ -31,25 +31,30 @@ allow_attributes_without_reason = "deny"
 
 [workspace.dependencies]
 base64 = "0.22"
-# The blinded-token scheme Brave's SKU SDK uses, at the version brave-core builds
-# against. Hand-rolling Ristretto VOPRF would be far worse than depending on the
-# implementation both ends of this protocol already agree on.
-challenge-bypass-ristretto = { version = "2.1.0", features = ["serde_base64"] }
 hmac = "0.12"
 # Secret storage for the imported subscription credentials. Default features only:
 # the sync-secret-service backend would pull in C libdbus and break the cross-builds,
 # whereas the default zbus backend is pure Rust on every target here.
 landlock = "0.4"
 libc = "0.2"
-# Pinned to the major version challenge-bypass-ristretto takes its RNG traits from, so
-# OsRng is the same type both crates expect.
+# At 0.8, the version ratatui-image also asks for, so the lock holds one copy of it.
 rand = "0.8"
+# Decrypts a PKCS#8 client key (`BEGIN ENCRYPTED PRIVATE KEY`) given its passphrase (NET-11). Only
+# the `encryption` feature (PBES2 with PBKDF2 or scrypt, AES-CBC) and `pem`; the crate does no I/O.
+# It brings RustCrypto's pkcs5, aes, cbc, pbkdf2, scrypt and their helpers, all pure Rust. The
+# alternative is shelling out to `openssl`, which is not on every machine this runs on.
+pkcs8 = { version = "0.10", default-features = false, features = ["encryption", "pem"] }
 # RSA PKCS#1 v1.5 with SHA-256, which verifies the ID token of a ChatGPT sign-in against the
 # authorization server's key set. Already in Cargo.lock at this version with these features
 # (alloc, dev_urandom_fallback), through rustls-webpki, so the lock gains the one line saying
 # bravebot-skus uses it and nothing is built twice.
 ring = "0.17.14"
 rustix = "1"
+# Compares a client certificate's public key with its private key (`CertifiedKey::keys_match`),
+# which returns an error where the stand-in connection NET-11 used to rely on panicked, and a panic
+# is an abort under `panic = "abort"` in the release profile. Already in Cargo.lock at this version
+# with exactly these features (`ring`, `std`), through ureq, so nothing new is built.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 # The zstd encoder for the body of a request to a ChatGPT account (CHATGPT-10). Pure Rust with no
 # build script and no native code, where the `zstd` crate compiles the C library for every
 # cross-build target. It encodes at one level, `Fastest`, which is roughly zstd level 1. `hash`
@@ -80,7 +85,7 @@ tempfile = "3"
 # bravebot-core's tests use it, and bravebot-core itself keeps no dependency at runtime.
 unicode-normalization = "0.1"
 unicode-width = "0.2"
-# The Win32 calls that keep the imported subscription file readable by one account, which is what
+# The Win32 calls that keep a sign-in file readable by one account, which is what
 # stands in for a mode on Windows. Microsoft's own generated bindings, one crate deep
 # (windows-link), and both are already entries in Cargo.lock at this version, since rustix, mio and
 # errno each declare them for their own Windows builds: the lock gains the one line that says this

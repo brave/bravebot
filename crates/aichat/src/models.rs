@@ -12,10 +12,60 @@ use bravebot_config::Config;
 use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
-use bravebot_net::{Egress, Request};
+use bravebot_net::{Egress, Request, Timeouts};
 use serde::Deserialize;
+use std::time::Duration;
 
 use crate::ChatError;
+
+/// How long a request for a roster may take
+/// ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)).
+///
+/// A person is waiting on a picker, and on a start that has not yet drawn anything, so a service
+/// that takes the connection and never answers costs them seconds rather than the minutes a
+/// model's reply is allowed. A listing is one request for a few hundred kilobytes at most, so these
+/// leave a remote gateway room for a TLS handshake and a slow link and no more.
+pub const LISTING_TIMEOUTS: Timeouts = Timeouts {
+    resolve: Duration::from_secs(3),
+    connect: Duration::from_secs(5),
+    send: Duration::from_secs(5),
+    reply: Duration::from_secs(10),
+    idle: Duration::from_secs(5),
+};
+
+/// The egress a roster request is made through, which gives up on a service far sooner than a
+/// reply does.
+pub fn listing_egress() -> Egress {
+    Egress::with_timeouts(LISTING_TIMEOUTS)
+}
+
+/// Run each of `asks` at once, on a thread of its own, while `meanwhile` runs on this one, and
+/// give back what each answered in the order they were given
+/// ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)).
+///
+/// For the requests of a roster, which are independent of one another: a person waits for the
+/// slowest service and not for all of them in turn. An ask owns everything it needs, including
+/// the policy it fetches under, so what one answers cannot reach another.
+///
+/// `meanwhile` is for the asks that have to stay on the calling thread. A panic in an ask is
+/// raised here once the rest have finished, as it would have been had it run in place.
+pub fn concurrently<'asks, T: Send, U>(
+    asks: Vec<Box<dyn FnOnce() -> T + Send + 'asks>>,
+    meanwhile: impl FnOnce() -> U,
+) -> (Vec<T>, U) {
+    std::thread::scope(|scope| {
+        let running: Vec<_> = asks.into_iter().map(|ask| scope.spawn(ask)).collect();
+        let meanwhile = meanwhile();
+        let answers = running
+            .into_iter()
+            .map(|ask| {
+                ask.join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect();
+        (answers, meanwhile)
+    })
+}
 
 /// What a service advertised about a model, in the words the service used.
 ///
@@ -165,8 +215,11 @@ pub fn list<S: Sink>(
     config: &Config,
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
-    let request =
-        crate::as_brave_bot(Request::get(config.models_url()).header("accept", "application/json"));
+    let request = crate::as_brave_bot(
+        Request::get(config.models_url())
+            .with_client_certificate()
+            .header("accept", "application/json"),
+    );
 
     // Through the egress gate like everything else, because that gate is the only way out to the
     // network. The label records where the bytes came from; nothing here branches on them beyond
@@ -360,7 +413,9 @@ fn fetch_listing<S: Sink>(
     headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<ListedByGateway>, ChatError> {
-    let mut request = Request::get(&url).header("accept", "application/json");
+    let mut request = Request::get(&url)
+        .with_client_certificate()
+        .header("accept", "application/json");
     for (name, value) in provider.fixed_headers() {
         request = request.header(*name, *value);
     }
@@ -466,6 +521,7 @@ pub fn list_from_account<S: Sink>(
     let url = provider.models_url();
     let (name, value) = provider.credential_header(token);
     let request = Request::get(&url)
+        .with_client_certificate()
         .header("accept", "application/json")
         .socket_header(name, value)
         .refusing_redirects()
@@ -667,6 +723,7 @@ pub fn list_from_xai_account<S: Sink>(
     let url = provider.models_url();
     let (name, value) = provider.credential_header(token);
     let request = Request::get(&url)
+        .with_client_certificate()
         .header("accept", "application/json")
         .socket_header(name, value)
         .refusing_redirects();
@@ -2173,5 +2230,77 @@ mod tests {
                 .iter()
                 .all(|model| model.advertised == Advertised::default())
         );
+    }
+
+    /// A meeting `expected` threads each reach, which says whether they were all there at once. It
+    /// gives up after a few seconds, so asks run one after the next fail the test and do not hang it.
+    fn meet(gate: &(std::sync::Mutex<usize>, std::sync::Condvar), expected: usize) -> bool {
+        let (arrived, signal) = gate;
+        let mut here = arrived.lock().expect("the count");
+        *here += 1;
+        signal.notify_all();
+        let (count, waited) = signal
+            .wait_timeout_while(here, Duration::from_secs(5), |here| *here < expected)
+            .expect("the count");
+        drop(count);
+        !waited.timed_out()
+    }
+
+    /// BACKEND-64: the asks of a roster are in flight together, are answered in the order they were
+    /// given, and leave the calling thread free to work while they are.
+    ///
+    /// Three asks and the caller each have to reach the meeting before any may leave it, so asks run
+    /// one after the next fail it. The first ask finishes last, so answers handed back in the order
+    /// the asks finished are not the order they were given.
+    #[test]
+    fn the_asks_of_a_roster_are_in_flight_together_and_answered_in_the_order_given() {
+        let gate = std::sync::Arc::new((std::sync::Mutex::new(0), std::sync::Condvar::new()));
+        let asks: Vec<Box<dyn FnOnce() -> (usize, bool) + Send>> = (0..3_usize)
+            .map(|index| {
+                let gate = gate.clone();
+                Box::new(move || {
+                    let together = meet(&gate, 4);
+                    if index == 0 {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    (index, together)
+                }) as Box<dyn FnOnce() -> (usize, bool) + Send>
+            })
+            .collect();
+
+        let (answers, meanwhile) = concurrently(asks, || meet(&gate, 4));
+
+        assert_eq!(answers, [(0, true), (1, true), (2, true)]);
+        assert!(
+            meanwhile,
+            "the calling thread was not working while the asks were in flight"
+        );
+    }
+
+    /// BACKEND-64: an ask that panics is raised to the caller as it would have been had it run in
+    /// place, and not turned into an answer from a service that said nothing.
+    #[test]
+    #[should_panic(expected = "the ask went wrong")]
+    fn a_panic_in_an_ask_is_raised_to_the_caller() {
+        let asks: Vec<Box<dyn FnOnce() -> u8 + Send>> =
+            vec![Box::new(|| 1), Box::new(|| panic!("the ask went wrong"))];
+        concurrently(asks, || ());
+    }
+
+    /// BACKEND-64: a request for a roster is given up on in seconds, where a model's reply is allowed
+    /// minutes. The figures are what is pinned: waiting on a service that takes the connection and
+    /// says nothing is what held a start for as long as a reply may take.
+    #[test]
+    fn a_request_for_a_roster_is_given_up_on_in_seconds_and_not_minutes() {
+        let ceiling = Duration::from_secs(30);
+        let bounds = [
+            LISTING_TIMEOUTS.resolve,
+            LISTING_TIMEOUTS.connect,
+            LISTING_TIMEOUTS.send,
+            LISTING_TIMEOUTS.reply,
+            LISTING_TIMEOUTS.idle,
+        ];
+        assert!(bounds.iter().all(|bound| *bound <= ceiling), "{bounds:?}");
+        assert!(LISTING_TIMEOUTS.reply < Timeouts::default().reply);
     }
 }

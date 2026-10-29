@@ -19,6 +19,7 @@ use crate::running::{Mcp, Running, State};
 use crate::turn::{BridgeConfirmer, BridgeReporter, BridgeSink, Kind, Reply};
 use crate::{store, wire};
 use bravebot_agent::confirm::Decision;
+use bravebot_agent::conversation::Address;
 use bravebot_agent::report::Reporter;
 use bravebot_agent::trusted;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
@@ -90,6 +91,10 @@ struct Open {
     /// (SANDBOX-22), so a resume and a fork start with none. Read when a turn or a run is accepted
     /// and copied into it, so a choice applies from the next turn.
     sandbox: Option<SandboxMode>,
+    /// The definitions the last list of `@` rows offered, kept for the list asked for while a turn
+    /// holds the session's state, which is when the set cannot be resolved again. A name from a
+    /// stale set is refused by the turn it is sent in, which resolves the set afresh.
+    offered_definitions: Mutex<Vec<bravebot_mentions::Entry>>,
 }
 
 impl Open {
@@ -114,6 +119,7 @@ impl Open {
             definition: None,
             permission_mode: LiveMode::default(),
             sandbox: None,
+            offered_definitions: Mutex::new(Vec::new()),
         }
     }
 
@@ -249,6 +255,15 @@ impl Bridge {
                             crate::settings::layers(Some(&open.project), self.settings.as_deref());
                         Ok(session_workspace_unless_running(open, &settings)?.reference_sources())
                     },
+                    || {
+                        // Only for a client that asks, so one that draws its own rows for them is
+                        // not offered the same definitions twice.
+                        if request.flag("definitions", false) {
+                            offered_definitions(open, self.settings.as_deref())
+                        } else {
+                            Vec::new()
+                        }
+                    },
                 )
             }
             "mentions.named" => {
@@ -337,8 +352,23 @@ impl Bridge {
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
             ),
+            "update.status" => Ok(self.update_status()),
+            "bug-report.compose" => Ok(crate::bug_report::compose(
+                request.optional_string("interface").as_deref(),
+                self.settings.as_deref(),
+            )),
             other => Err(Failure::bad_request(format!("unknown method `{other}`"))),
         }
+    }
+
+    /// Whether a newer release than this one is recorded, as a yes or no and never the version
+    /// the record names (UPDATE-5, UPDATE-12). `newer` is null where nothing is recorded.
+    fn update_status(&self) -> Value {
+        let setting = crate::settings::update_check(self.settings.as_deref());
+        crate::update_status::answer(
+            bravebot_update::desktop_status(setting),
+            env!("CARGO_PKG_VERSION"),
+        )
     }
 
     /// Which build of the agent is behind this.
@@ -467,7 +497,7 @@ impl Bridge {
         if let Some(open) = self
             .open
             .get(&handle)
-            .filter(|_| !record.checkouts.is_empty())
+            .filter(|_| !record.checkouts.is_empty() || !record.touched.is_empty())
         {
             let settings = crate::settings::layers(Some(&directory), self.settings.as_deref());
             take_back_checkouts(open, &record, &settings);
@@ -753,7 +783,18 @@ impl Bridge {
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
         // work is the habit that turns into a stall later.
-        let (snapshot, said, trust, programs, directories, todos, parent, inherited) = {
+        let (
+            snapshot,
+            said,
+            trust,
+            programs,
+            directories,
+            todos,
+            parent,
+            inherited,
+            touched,
+            by_mode,
+        ) = {
             let state = open
                 .state
                 .lock()
@@ -775,6 +816,14 @@ impl Bridge {
                 state.todos.clone(),
                 parent.clone(),
                 rules.clone(),
+                // The names the parent's file tools reached, which the record carries and a
+                // fork keeps with the conversation it copies (SESSION-18). A parent that has
+                // run no turn here and was not resumed holds none.
+                state
+                    .kept
+                    .as_ref()
+                    .map(bravebot_agent::workspace::KeptBetweenTurns::touched_record),
+                state.answered_by_mode,
             )
         };
 
@@ -830,16 +879,21 @@ impl Bridge {
 
         let child = self.mint(Open::opened(
             project.clone(),
-            State::forked(
-                begun,
-                cut.before,
-                opening.trust,
-                programs,
-                directories,
-                ordinal,
-                todos.clone(),
-                first_prompt,
-            ),
+            {
+                let mut forked = State::forked(
+                    begun,
+                    cut.before,
+                    opening.trust,
+                    programs,
+                    directories,
+                    ordinal,
+                    todos.clone(),
+                    first_prompt,
+                );
+                // The map is the parent's, so what the mode answered in it is still the mode's.
+                forked.answered_by_mode = by_mode;
+                forked
+            },
             // Inherited along with the map itself: the same person, in the same directory, in
             // the same window, so asking again would be asking somebody to answer twice.
             opening.answered,
@@ -852,6 +906,12 @@ impl Bridge {
         // The parent's, not read again, for the reason auto-vetting is: a fork carries on the
         // session it was cut from.
         let settings_rules = self.open_under_rules(&child, Some(inherited));
+        if let Some(touched) = touched.filter(|touched| !touched.is_empty())
+            && let Some(open) = self.open.get(&child)
+        {
+            let settings = crate::settings::layers(Some(&project), self.settings.as_deref());
+            take_back_touched(open, &touched, &settings);
+        }
 
         let title = if parent_title.is_empty() {
             store::load(&project, &parent_id).map(|record| record.title)
@@ -1290,6 +1350,10 @@ impl Bridge {
         // whole reach, wider than the bot's own, and the fire of a watch has no request to carry
         // one at all.
         let named = crate::wire::definition(request.params.get("definition"))?;
+        // The definition of a bot a person summoned for this turn alone (MEMORY-14). Named by the
+        // main process from the bot picked in the composer, and never kept on the session, so the
+        // next turn is addressed as the session's own are.
+        let summoned = crate::wire::address(request.params.get("address"))?;
         // Whether this prompt is one a person will want back when they press up.
         //
         // `~/.bravebot/history` is recall, shared with the terminal front-end, and what belongs in
@@ -1314,7 +1378,12 @@ impl Bridge {
         open.ready_for_work()?;
         // The name the session was given, kept so a turn with no request behind it is addressed
         // too.
-        let addressing = named.or_else(|| open.definition.clone());
+        let standing = named.or_else(|| open.definition.clone());
+        // Whether the definition the turn is addressed to is the one the session stands under,
+        // which is recorded beside the prompt so a client can tell a bot's own turn from a turn it
+        // was summoned for (ADDRESS-12).
+        let addressing_standing = summoned.is_none() || summoned == standing;
+        let addressing = summoned.or_else(|| standing.clone());
 
         // The layers the configuration below comes from, read here rather than in the worker so
         // what they say is what stood when the turn was asked for. Three answers come off them:
@@ -1388,7 +1457,17 @@ impl Bridge {
             &handle,
             turn_number as u64,
             target,
-            wire::submitted(&prompt, composed.as_ref()),
+            wire::submitted(
+                &prompt,
+                composed.as_ref(),
+                addressing
+                    .as_ref()
+                    .map(|definition| Address {
+                        definition: definition.clone(),
+                        standing: addressing_standing,
+                    })
+                    .as_ref(),
+            ),
         );
         self.emitter.send(Event::new(
             "turn.started",
@@ -1403,13 +1482,14 @@ impl Bridge {
         if let Some(open) = self.open.get_mut(&handle) {
             open.running = Some(running);
             open.model = model;
-            open.definition = addressing.clone();
+            open.definition = standing;
         }
         self.begun.insert(handle.clone());
         self.workers_of(&handle).spawn(move || {
             work(Work {
                 model: worker_model,
                 addressing,
+                addressing_standing,
                 watches,
                 emitter,
                 session,
@@ -2448,7 +2528,8 @@ pub fn turn_workspace(
     Ok(Workspace::new(project)?
         .with_search_caps(caps.files, caps.time)
         .with_reads_kept_inside(inside)
-        .with_references(settings.references(), settings.references_unread()))
+        .with_references(settings.references(), settings.references_unread())
+        .with_shared_skill_directories(settings.shared_skill_directories()))
 }
 
 /// The workspace a turn in this session reads through, as the session stands now.
@@ -2471,6 +2552,43 @@ fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Fail
 /// a request that waited would stop the bridge reading the `confirm.reply` or `turn.cancel` the
 /// turn is blocked on. A turn holding it leaves out the directories the session added and its
 /// scratch directory, the same fallback a poisoned lock gets.
+/// The definitions a message from this session may be addressed to, as rows for the `@` list: the
+/// set `/agent` accepts, resolved under the session's trust and permission rules.
+///
+/// While a turn holds the session's state the set is the one the last list was drawn from, since
+/// the trust map it resolves under is the turn's. Only names and descriptions are carried.
+fn offered_definitions(open: &Open, settings: Option<&Path>) -> Vec<bravebot_mentions::Entry> {
+    let Ok(state) = open.state.try_lock() else {
+        return open
+            .offered_definitions
+            .lock()
+            .map(|held| held.clone())
+            .unwrap_or_default();
+    };
+    let layered = crate::settings::layers(Some(&open.project), settings);
+    let Ok(workspace) = workspace_of(open, &layered, |_| None) else {
+        return Vec::new();
+    };
+    let resolved = bravebot_agent::agents::resolved(
+        &workspace,
+        bravebot_agent::home::directory().as_deref(),
+        state.answers.trust.clone(),
+        state.answers.rules.permissions.clone(),
+        &mut bravebot_session::audit::Trail::default(),
+    );
+    drop(state);
+    let rows: Vec<bravebot_mentions::Entry> = resolved
+        .iter()
+        .map(|definition| {
+            bravebot_mentions::definition_entry(definition.name(), definition.description())
+        })
+        .collect();
+    if let Ok(mut held) = open.offered_definitions.lock() {
+        held.clone_from(&rows);
+    }
+    rows
+}
+
 fn session_workspace_unless_running(
     open: &Open,
     settings: &Settings,
@@ -2524,6 +2642,25 @@ fn take_back_checkouts(open: &Open, record: &Record, settings: &Settings) {
         if let Some(handle) = state.handle.as_mut() {
             record.restore_checkouts(&workspace, handle);
         }
+        workspace.restore_touched(&record.touched);
+        state.kept = Some(workspace.kept_between_turns());
+    }
+}
+
+/// As a session is forked, place the names the parent's file tools reached as the child's, so the
+/// nested instructions and path-scoped rules the copied conversation was written under are in force
+/// from its first turn (SESSION-18, INSTR-14, INSTR-16). The checkouts are not carried
+/// (CHECKOUT-16): the child's workspace begins its own and takes the names only.
+fn take_back_touched(
+    open: &Open,
+    touched: &bravebot_agent::workspace::TouchedRecord,
+    settings: &Settings,
+) {
+    let Ok(workspace) = session_workspace(open, settings) else {
+        return;
+    };
+    if let Ok(mut state) = open.state.lock() {
+        workspace.restore_touched(touched);
         state.kept = Some(workspace.kept_between_turns());
     }
 }
@@ -2562,6 +2699,9 @@ struct Work {
     /// The definition this turn is addressed to, where it is a turn in a bot's conversation
     /// (MEMORY-10).
     addressing: Option<String>,
+    /// Whether [`Work::addressing`] is the definition the session stands under and not one named
+    /// for this turn alone.
+    addressing_standing: bool,
     workspace: Workspace,
     prompt: String,
     /// What this prompt was composed for, where nobody typed it.
@@ -2673,6 +2813,7 @@ fn work(work: Work) {
         watches,
         model,
         addressing,
+        addressing_standing,
         workspace,
         prompt,
         composed,
@@ -2790,7 +2931,8 @@ fn work(work: Work) {
         // A turn in a bot's conversation is addressed to the bot's definition whatever composed
         // it (MEMORY-10). The name is the session's, set from the bot's row, so nothing the turn
         // produced chooses it; the kernel compares it against the set this session resolved.
-        .addressing(addressing);
+        .addressing(addressing)
+        .addressing_standing(addressing_standing);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -2843,7 +2985,7 @@ fn work(work: Work) {
     // which no mode a window can choose answers: only bypassing does (SERVERS-13), and a window
     // cannot reach it. The screening value is the task's, so the confirmer and the tools that fill
     // in a verdict read the same answer.
-    let mut confining = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
+    let mut confining = Confining::new(&mut confirmer, permission_mode.clone(), task.auto_vetting);
     open_rewind_point(&mut state, &workspace, &prompt);
     #[cfg(test)]
     crate::running::built_in::record("turn", task.account_session().identifier());
@@ -2945,6 +3087,7 @@ fn work(work: Work) {
                 state.model = Some(outcome.model.clone());
             }
 
+            state.answered_by_mode |= permission_mode.has_bypassed();
             let archived = save(&project, &mut state, turn, sink.trail());
 
             let rules = rules_json(&state.answers.trust);
@@ -2972,6 +3115,18 @@ fn work(work: Work) {
                     "sessionModel": outcome.ran_on_the_sessions_model(),
                     "steps": outcome.steps,
                     "clean": outcome.clean,
+                    // The definition the driver matched for this turn, from the outcome and not
+                    // from the reply, and whether it was the session's own (ADDRESS-12).
+                    "address": wire::addressed_to(
+                        outcome
+                            .addressed
+                            .as_ref()
+                            .map(|addressed| Address {
+                                definition: addressed.name().to_string(),
+                                standing: addressing_standing,
+                            })
+                            .as_ref(),
+                    ),
                     "tokens": outcome.tokens,
                     "outputTokens": outcome.output_tokens,
                     "contextTokens": outcome.context_tokens,
@@ -3012,6 +3167,7 @@ fn work(work: Work) {
                 reporter.spent().unwrap_or_default(),
                 began_at.elapsed(),
             );
+            state.answered_by_mode |= permission_mode.has_bypassed();
             let _ = save(&project, &mut state, turn, sink.trail());
 
             let notices = [
@@ -3276,6 +3432,10 @@ pub(crate) fn save(
         .as_ref()
         .map(bravebot_agent::workspace::KeptBetweenTurns::checkouts)
         .unwrap_or_default();
+    let touched = state
+        .kept
+        .as_ref()
+        .map(bravebot_agent::workspace::KeptBetweenTurns::touched_record);
     let first = state.first_prompt.clone().unwrap_or_default();
     // Taken once and lent to both readers below. A snapshot copies the whole conversation, and
     // the archive count wanted for `turn.done` is a field of the one being written down anyway —
@@ -3304,6 +3464,8 @@ pub(crate) fn save(
             // marking one of ours would be a claim about a session nobody can resume.
             manifest: None,
             checkouts: &checkouts,
+            touched: touched.as_ref(),
+            answered_by_mode: state.answered_by_mode,
         },
     );
     handle.append_audit(turn, trail.events());
@@ -3724,6 +3886,126 @@ mod coverage_tests {
             "forking took the parent's answers away"
         );
         assert!(parent_state.answers.servers.is_some());
+    }
+
+    /// MODE-4, TRUST-6: a desktop fork copies its parent's map, so it also carries the mark that
+    /// bypass answered in it, and a parent that never bypassed gives the child no mark. The faults
+    /// this rejects: a fork that drops the mark, so the child's record restores a map bypass opened
+    /// without the startup question, and one that marks every child.
+    #[test]
+    fn a_desktop_fork_carries_the_mark_that_bypass_answered_in_its_parents_map() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        for marked in [false, true] {
+            let directory = test_profile::project(&format!("fork-mark-{marked}"));
+            std::fs::create_dir_all(&directory).unwrap();
+            let root = directory.as_path();
+            let mut conversation = bravebot_agent::Conversation::new();
+            conversation.push(bravebot_aichat::protocol::Message::user("work"));
+            let record: Record = serde_json::from_value(json!({
+                "id": "mark-parent", "directory": root, "title": "work",
+                "started": 1, "updated": 1,
+                "conversation": conversation.snapshot()
+            }))
+            .unwrap();
+            let mut parent_state =
+                State::resumed(root, &record, TrustStore::new(root)).expect("the record is free");
+            parent_state.answered_by_mode = marked;
+            let mut bridge = Bridge::new(Box::new(|_| {}));
+            let parent = bridge.mint(Open::opened(
+                root.to_path_buf(),
+                parent_state,
+                true,
+                None,
+                false,
+            ));
+
+            let request = Request::parse(
+                &json!({"id": 1, "method": "session.fork", "params": {
+                    "session": parent, "prompt": 0, "text": "work"
+                }})
+                .to_string(),
+            )
+            .unwrap();
+            let forked = bridge.dispatch(&request).unwrap();
+
+            let child = bridge
+                .open
+                .get(forked["session"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(
+                child.state.lock().unwrap().answered_by_mode,
+                marked,
+                "the fork of a parent with mark {marked} has the other"
+            );
+        }
+    }
+
+    /// SESSION-18, INSTR-14, INSTR-16: a desktop fork keeps the names of the files the parent's
+    /// file tools reached and the rules it was told, as the record a terminal fork copies does, so
+    /// the nested instructions and path-scoped rules the copied conversation was written under are
+    /// in force from the child's first turn. The parent keeps its own.
+    #[test]
+    fn a_desktop_fork_keeps_the_names_the_parents_file_tools_reached() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("fork-touched");
+        std::fs::create_dir_all(directory.join("pkg")).unwrap();
+        let root = directory.as_path();
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("work"));
+        let record: Record = serde_json::from_value(json!({
+            "id": "touched-parent", "directory": root, "title": "work",
+            "started": 1, "updated": 1,
+            "conversation": conversation.snapshot()
+        }))
+        .unwrap();
+        let mut parent_state =
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free");
+        let workspace = Workspace::new(root).unwrap();
+        workspace.record_touch("pkg/lib.rs");
+        assert!(workspace.take_telling("project"));
+        let touched = workspace.touched_record();
+        assert!(!touched.is_empty());
+        parent_state.kept = Some(workspace.kept_between_turns());
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let parent = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            parent_state,
+            true,
+            None,
+            false,
+        ));
+
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.fork", "params": {
+                "session": parent, "prompt": 0, "text": "work"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let forked = bridge.dispatch(&request).unwrap();
+
+        let child = bridge
+            .open
+            .get(forked["session"].as_str().unwrap())
+            .unwrap();
+        let state = child.state.lock().unwrap();
+        let carried = state
+            .kept
+            .as_ref()
+            .expect("the fork's workspace was begun without the names")
+            .touched_record();
+        assert_eq!(carried, touched, "the fork lost the names");
+        drop(state);
+        let parent_state = bridge.open.get(&parent).unwrap().state.lock().unwrap();
+        assert_eq!(
+            parent_state.kept.as_ref().unwrap().touched_record(),
+            touched,
+            "forking took the parent's names away"
+        );
     }
 
     /// A turn's workspace is new, so the server warning the record kept has to reach the point a

@@ -1,7 +1,7 @@
 import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
-import { memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
@@ -21,7 +21,7 @@ import { Toasts } from './Toasts'
 import { ForkIcon } from './ForkIcon'
 import { ago, contextMenu } from './Sessions'
 import { Markdown } from './Markdown'
-import { BotAvatar, type Doing } from './BotAvatar'
+import { BotAvatar, BotFace, type Doing } from './BotAvatar'
 import type { Bot } from '../../shared/bots'
 import { projectLabel } from '../../shared/recents'
 import { conversationPreferences, setConversation } from '../experience'
@@ -39,14 +39,15 @@ import { middleTruncate } from '../truncate'
 import { pointForPrompt, undoRow } from '../rewind'
 import { ShownContext, leftWords, mayAnswer, useShown, type OnScreen } from '../shown'
 import { showToast } from '../toasts'
-import { EMPTY_STAGING, named, stageDrop, stagePaste, withoutMarker, type Staging } from '../staging'
+import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, withoutMarker, type Staging, type SummonedBot } from '../staging'
+import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
 import type { Drop } from '../../shared/drops'
 import type { Paste } from '../../shared/pastes'
 
 interface Live {
   model: string | null
   handle: string
-  summary: { title: string; project: string; branch: string | null; directory: string }
+  summary: { id?: string | null; title: string; project: string; branch: string | null; directory: string }
   entries: t.Entry[]
   turns: Turns
   todos: TodoRow[]
@@ -157,11 +158,19 @@ interface Props {
   onExport: (format: ExportFormat) => void
   /** The kept yes about this directory as Permissions last read it, which another session may have changed. */
   onTrustRemembered: (session: string, kept: KeptTrust | null) => void
-  /** A bot's own page, shown when no conversation is open. */
+  /** A bot's earlier conversations, shown in place of a conversation when asked for. */
   botView?: { bot: Bot; history: BotConversation[] } | null
   onOpenBotConversation: (bot: Bot, summary: SessionSummary) => void
-  onStartBotChat: (bot: Bot, prompt: string, directory: string | null) => Promise<boolean>
-  onBotModel: (bot: Bot, model: string) => void
+  /** Show the open bot's earlier conversations. */
+  onEarlier: (bot: Bot) => void
+  /** Go back from the earlier conversations to the bot's current one. */
+  onBackToBot: (bot: Bot) => void
+  /** Every bot, for the faces over summoned replies and the bots the `@` list offers (MEMORY-14). */
+  bots: Bot[]
+  /** Which bot answered which summoned turn, as the main process recorded it. */
+  summons: Summon[]
+  /** Open the conversation a "Replied to" card names, at the summoned prompt. */
+  onOpenSummon: (summon: Summon) => void
   /** The composer's footer for the open conversation: its project and branch. */
   footer?: ComposerFooterProps
   /** Whether the open conversation runs in a bot's home folder, which has no project to show. */
@@ -327,8 +336,11 @@ export function Transcript({
   onTrustRemembered,
   botView,
   onOpenBotConversation,
-  onStartBotChat,
-  onBotModel,
+  onEarlier,
+  onBackToBot,
+  bots,
+  summons,
+  onOpenSummon,
   footer,
   noProject,
 }: Props): React.JSX.Element {
@@ -470,7 +482,9 @@ export function Transcript({
     onDraft(next.draft)
     requestAnimationFrame(() => {
       input.current?.focus()
-      input.current?.shadowRoot?.querySelector('textarea')?.setSelectionRange(next.caret, next.caret)
+      const area = input.current?.shadowRoot?.querySelector('textarea')
+      // A key typed before this frame has already put the caret where it belongs.
+      if (area?.value === next.draft) area.setSelectionRange(next.caret, next.caret)
     })
   }
   const dropped = useEvent((drop: Drop) => {
@@ -492,6 +506,34 @@ export function Transcript({
     restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))
   })
   useEffect(() => window.bravebot.onPaste(pasted), [pasted])
+  /** Stage a bot picked from the `@` list to answer this message (MEMORY-14). */
+  const summon = useEvent((picked: SummonedBot, word: string | null) => {
+    if (!live) return
+    const next = stageSummon(live.staging ?? EMPTY_STAGING, picked, draft, word)
+    if (next) restage(live.handle, next)
+  })
+  // The bots a message here may summon: every one in use but the one whose conversation this is.
+  const summonable = useMemo(() => bots
+    .filter((each) => each.retired === 0 && each.slug !== bot?.slug)
+    .map((each) => ({ slug: each.slug, name: each.name, avatar: each.avatar })), [bots, bot?.slug])
+  const faces = useMemo(() => new Map(bots.map((each) => [each.slug, { name: each.name, avatar: each.avatar }])), [bots])
+  // In a bot's own conversation, its replies elsewhere, each placed after the turn its
+  // conversation had reached when it was summoned.
+  const cards = useMemo(() => bot && live && live.summary.directory === bot.home
+    ? placeCards(summons, bot.slug, live.summary.id ?? null, live.entries)
+    : null, [bot, live?.summary.directory, live?.summary.id, live?.entries, summons])
+  const openSummon = useEvent(onOpenSummon)
+  // A reopened conversation's prompts are marked with the bots that answered them from the main
+  // process's record, which is the only place that survives the window.
+  const recorded = useMemo(() => summonedIn(summons, live?.summary.id ? { directory: live.summary.directory, id: live.summary.id } : null),
+    [summons, live?.summary.directory, live?.summary.id])
+  const entries = useMemo(() => live ? t.summonedAt(live.entries, recorded) : NO_ENTRIES, [live?.entries, recorded])
+  // The face over the working row is the bot answering the turn that runs: the one summoned for
+  // its prompt where there is one.
+  const answering = useMemo(() => {
+    const slug = live?.running ? t.summonedFor(entries) : undefined
+    return slug ? faces.get(slug) ?? null : bot
+  }, [live?.running, entries, faces, bot])
   // Entered and left once per element crossed, so counted rather than toggled.
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
@@ -555,10 +597,9 @@ export function Transcript({
   // The search belongs to what is on screen: a bot's page filters its list, a conversation finds
   // in its transcript. Moving between them closes it.
   useEffect(() => { setSearching(false) }, [viewing?.bot.slug, live?.handle])
-  // The right toggle goes with the column: a bot's conversation with no project has none worth
-  // drawing (`.app.no-context`), and neither does a window with nothing open, which is not a bot's
-  // page either (`.app.no-session`).
-  const contextless = live ? noProject : !botView
+  // The right toggle goes with the column, and a window with nothing open, which is not a bot's
+  // page either, has none (`.app.no-session`).
+  const contextless = !live && !botView
   const head = (
     <header className="transcript-head">
       <div className="drag" />
@@ -578,6 +619,8 @@ export function Transcript({
           )}
           {viewing && (
             <>
+              <IconButton icon="arrow-left" label={`Back to ${viewing.bot.name}`} tooltip={`Back to the conversation with ${viewing.bot.name}`}
+                className="earlier-back" data-test="earlier-back" onClick={() => onBackToBot(viewing.bot)} />
               <BotAvatar seed={viewing.bot.avatar} size={16} doing="open" />
               <h1>{viewing.bot.name}</h1>
             </>
@@ -608,6 +651,8 @@ export function Transcript({
             className="find-open" onClick={() => setSearching((value) => !value)} />
         </div>}
         {live && <div className="conversation-toolbar">
+          {bot && <IconButton icon="history" label="Earlier conversations" tooltip={`${bot.name}’s earlier conversations`}
+            className="earlier-open" data-test="earlier-conversations" onClick={() => onEarlier(bot)} />}
           <IconButton icon="search" label="Find" tooltip="Find in conversation" shortcut="⌘F" pressed={searching}
             className="find-open" onClick={() => setSearching((value) => !value)} />
           <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
@@ -670,13 +715,7 @@ export function Transcript({
           bot={viewing.bot}
           history={viewing.history}
           filtering={searching}
-          backendReady={backendReady}
           onOpen={(summary) => onOpenBotConversation(viewing.bot, summary)}
-          onStart={(prompt, directory) => onStartBotChat(viewing.bot, prompt, directory)}
-          onModel={(model) => onBotModel(viewing.bot, model)}
-          onSetup={setup}
-          onCheckBackend={checkBackend}
-          onDiagnostics={diagnostics}
         />
       </main>
     )
@@ -718,8 +757,9 @@ export function Transcript({
     )
   }
 
-  // Nothing said yet and nothing running: the composer is the whole of the page.
-  const fresh = live.entries.length === 0 && !live.running
+  // Nothing said yet, nothing running and no reply from elsewhere to show: the composer is the
+  // whole of the page.
+  const fresh = live.entries.length === 0 && !live.running && !(cards && (cards.end.length > 0 || cards.before.size > 0))
   return (
     <main className={`transcript${fresh ? ' fresh' : ''}`} data-drop-session={live.handle}
       onDragEnter={(event) => { if (carriesFiles(event) && ++dragDepth.current === 1) setDragging(true) }}
@@ -745,9 +785,15 @@ export function Transcript({
       }}>
         {fresh && (
           <div className="fresh-greeting">
-            {noProject ? <>
-              <h1>{bot ? `Talk to ${bot.name}` : 'Ready'}</h1>
-              <p>This conversation has no project. Pick one below to work in a folder.</p>
+            {bot && noProject ? (
+              <div className="bot-first-hero" data-test="bot-greeting">
+                <BotAvatar seed={bot.avatar} size={160} doing="open" />
+                <h1>Talk to {bot.name}</h1>
+                <p>One conversation that carries on. Type @ to bring in another bot, or summon {bot.name} from a project’s chat to work there.</p>
+              </div>
+            ) : noProject ? <>
+              <h1>Ready</h1>
+              <p>This conversation has no project.</p>
             </> : <>
               <h1>Ready in {footer?.choices
                 ? <ProjectMenu directory={footer.directory} choices={footer.choices} onChoose={footer.onChoose} disabled={live.running} variant="title" />
@@ -765,7 +811,7 @@ export function Transcript({
           onManage={() => setPermissions(true)}
         />
         <EntryList
-          entries={live.entries}
+          entries={entries}
           turns={live.turns}
           running={live.running}
           focused={focused}
@@ -780,12 +826,15 @@ export function Transcript({
           onFork={stableFork}
           rewind={live.rewind ?? NO_POINTS}
           onRewind={stableRewind}
+          faces={faces}
+          cards={cards}
+          onOpenSummon={openSummon}
         />
 
         {live.running && (
           <WorkingRow
             key={live.handle}
-            bot={bot}
+            bot={answering}
             word={workingWord(live.phase, live.checking, live.composing, live.hook)}
             tokens={live.tokens}
             turn={Object.values(live.turns).filter((turn) => turn.status === 'running').at(-1)?.turn ?? null}
@@ -849,6 +898,8 @@ export function Transcript({
           onRemoveAttachment={removeAttachment}
           staged={named(live.staging, draft)}
           onRemoveStaged={removeStaged}
+          summonable={summonable}
+          onSummon={summon}
           onPreview={preview}
           queued={queued}
           queuePaused={queuePaused}
@@ -981,7 +1032,8 @@ export function workingWord(phase: Waiting | null, checking: Checking | null, co
  * a second Cancel here was one more thing to aim at for the same act.
  */
 export function WorkingRow({ bot, word, tokens, turn, onAudit, thinking, showThinking, offerThinking, onThinking }: {
-  bot: Bot | null
+  /** The face of the bot answering, or `null` for a turn no bot answers. */
+  bot: { avatar: string } | null
   word: string
   tokens: number
   turn: number | null
@@ -1070,7 +1122,13 @@ export function runs(entries: t.Entry[]): Run[] {
 const EntryList = memo(function EntryList({
   entries, turns, running, focused, matched, marked,
   onTurnDisclosure, onAudit, onRecover, onChooseModel, onDecide, onAnswer, onFork, rewind, onRewind,
+  faces, cards, onOpenSummon,
 }: {
+  /** Each bot's name and face, by slug. */
+  faces: Map<string, Face>
+  /** Where the "Replied to" cards go, in a bot's own conversation. */
+  cards: Placement | null
+  onOpenSummon: (summon: Summon) => void
   entries: t.Entry[]
   turns: Turns
   running: boolean
@@ -1098,16 +1156,21 @@ const EntryList = memo(function EntryList({
   const lastReply = useMemo(() => [...entries].reverse().find((entry) => entry.kind === 'assistant')?.id, [entries])
   const undoing = useMemo(() => undoRow(entries, rewind), [entries, rewind])
   const undo = useMemo(() => rewind[0] && { running, onUndo: () => onRewind(rewind[0]!.steps) }, [rewind, running, onRewind])
+  const answeredBy = useMemo(() => t.summonedReplies(entries), [entries])
   return <>
-    {grouped.map((run) =>
-      run.kind === 'run' ? (
-        <ToolRun key={run.id} entries={run.entries} active={current?.has(run.id) ?? false} />
+    {grouped.map((run) => {
+      const id = run.kind === 'run' ? run.id : run.entry.id
+      const placed = cards?.before.get(id)
+      const summoner = run.kind === 'one' ? answeredBy.get(run.entry.id) : undefined
+      return <Fragment key={id}>
+      {placed?.map((summon) => <RepliedCard key={`${summon.session.id}#${summon.prompt}`} summon={summon} faces={faces} onOpen={onOpenSummon} />)}
+      {run.kind === 'run' ? (
+        <ToolRun entries={run.entries} active={current?.has(run.id) ?? false} />
       ) : (
         // Wrapped only to catch the right-click. `display: contents` keeps the wrapper
         // out of the layout entirely, so the bubbles flow exactly as they did — the
         // alternative was an `onContextMenu` on each of the eleven shapes `Row` returns.
         <div
-          key={run.entry.id}
           data-entry-id={run.entry.id}
           className={`entry-hit${run.entry.id === focused || run.entry.id === matched ? ' focused' : ''}${run.entry.id === lastReply ? ' last-reply' : ''}`}
           ref={run.entry.id === focused ? marked : undefined}
@@ -1120,6 +1183,7 @@ const EntryList = memo(function EntryList({
             run.entry.id,
           )}
         >
+          {summoner !== undefined && <SummonLabel slug={summoner} faces={faces} />}
           {run.entry.kind === 'turn-start' ? <TurnNotices details={turns[run.entry.number]} onDisclosure={onTurnDisclosure} /> : <Row
             entry={run.entry}
             onRecover={onRecover}
@@ -1132,19 +1196,169 @@ const EntryList = memo(function EntryList({
             // too for a prompt this window has sent and not yet been told the ordinal of:
             // that prompt is in the conversation, but nothing here knows where.
             forkable={!running && (run.entry.kind !== 'user' || run.entry.prompt !== undefined)}
+            face={run.entry.kind === 'user' && run.entry.summoned !== undefined ? faces.get(run.entry.summoned) : undefined}
+            revealed={run.entry.id === focused || run.entry.id === matched}
           />}
           {(run.entry.kind === 'assistant' || (run.entry.kind === 'error' && run.entry.turn !== undefined)) &&
-            <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onDisclosure={onTurnDisclosure} onAudit={onAudit}
+            <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onAudit={onAudit}
               copy={run.entry.kind === 'assistant' ? run.entry.text : undefined}
               undo={run.entry.id === undoing ? undo : undefined} />}
         </div>
-      ),
-    )}
+      )}
+      </Fragment>
+    })}
+    {cards?.end.map((summon) => <RepliedCard key={`${summon.session.id}#${summon.prompt}`} summon={summon} faces={faces} onOpen={onOpenSummon} />)}
   </>
 })
 
+/**
+ * A bot as the transcript draws it, from the bot rows. A bot deleted after it was summoned has no
+ * row and so no `Face`; its label names it by slug with a generic icon.
+ */
+interface Face {
+  name: string
+  avatar: string
+}
+
+/** A bot's face and name in a Nala label. A bot since deleted is named by its slug, with no face. */
+function BotLabel({ name, face, tooltip, test }: { name: string; face: Face | undefined; tooltip: string; test: string }): React.JSX.Element {
+  return (
+    <Label color="neutral" className="bot-label" data-test={test} data-tooltip={tooltip}>
+      <span slot="icon-before" className="bot-label-face">
+        {face ? <BotFace seed={face.avatar} size={16} /> : <Icon name="robot" />}
+      </span>
+      <span className="bot-label-name">{name}</span>
+    </Label>
+  )
+}
+
+/** The bot that answered, over its reply. */
+function SummonLabel({ slug, faces }: { slug: string; faces: Map<string, Face> }): React.JSX.Element {
+  const face = faces.get(slug)
+  const name = face?.name ?? slug
+  return (
+    <div className="summon-label">
+      <BotLabel name={name} face={face} tooltip={`Answered by ${name}`} test="summon-label" />
+    </div>
+  )
+}
+
+/**
+ * A message's words, with the marker of the bot it summoned drawn as that bot's label where the
+ * person typed it. The marker is looked up by the name the bot has now, so a message that was
+ * sent under another name is shown as typed.
+ */
+function SaidText({ text, summoned, face }: { text: string; summoned: string | undefined; face: Face | undefined }): React.JSX.Element {
+  const marker = summoned !== undefined && face ? summonMarker(face.name, summoned) : null
+  const at = marker === null ? -1 : text.indexOf(marker)
+  if (marker === null || at < 0 || !face) return <>{text}</>
+  return <>
+    {text.slice(0, at)}
+    <BotLabel name={face.name} face={face} tooltip={`${face.name} answers this message`} test="summon-mention" />
+    {text.slice(at + marker.length)}
+  </>
+}
+
+/** How long a prompt can be before the rest sits behind Show more. */
+const LONG_PROMPT_CHARS = 600
+const LONG_PROMPT_LINES = 8
+
+/**
+ * The person's own words. A long paste folds so the reply stays on screen. Copy and Fork sit
+ * outside the fold. Find opening this row expands it.
+ */
+function UserBubble({
+  text,
+  summoned,
+  face,
+  revealed,
+  forkable,
+  onCopy,
+  onFork,
+}: {
+  text: string
+  summoned: string | undefined
+  face: Face | undefined
+  revealed: boolean
+  forkable: boolean
+  onCopy: () => string
+  onFork: () => void
+}): React.JSX.Element {
+  const long = text.length > LONG_PROMPT_CHARS || text.split('\n').length > LONG_PROMPT_LINES
+  const [open, setOpen] = useState(revealed)
+  useEffect(() => { if (revealed) setOpen(true) }, [revealed])
+  const expanded = !long || open
+  return (
+    <div className="bubble user">
+      <div className={`bubble-text${expanded ? '' : ' folded'}`}>
+        <SaidText text={text} summoned={summoned} face={face} />
+      </div>
+      {long && (
+        <Button
+          kind="plain-faint"
+          size="tiny"
+          className="prompt-more"
+          aria-expanded={expanded}
+          onClick={() => setOpen((shown) => !shown)}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </Button>
+      )}
+      {/* Inside the row rather than beside it. The wrapper this row sits in is
+          `display: contents` and has no box to hang anything off, and the bubble is the
+          only thing here that knows where the row actually is on screen. */}
+      <div className="message-actions">
+        <CopyButton text={onCopy} label="Copy message" />
+        <Button
+          kind="plain-faint"
+          size="tiny"
+          fab
+          className="fork-here icon-button plain-faint tiny"
+          aria-label="Fork from here"
+          data-tooltip={
+            forkable
+              ? 'Fork from here · Start a session from what was said before this'
+              : 'Wait for the turn to finish'
+          }
+          isDisabled={!forkable}
+          onClick={onFork}
+        >
+          <span slot="icon-before"><ForkIcon /></span>
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A reply this bot gave in another conversation, drawn in its own (MEMORY-14). Not an entry and
+ * never part of what the bot is sent: it is drawn from the main process's record, and pressing it
+ * opens the conversation the reply is in, at the prompt that summoned it.
+ */
+function RepliedCard({ summon, faces, onOpen }: { summon: Summon; faces: Map<string, Face>; onOpen: (summon: Summon) => void }): React.JSX.Element {
+  const host = summon.host.kind === 'bot' ? faces.get(summon.host.slug) : undefined
+  const where = summon.host.kind === 'bot' ? host?.name ?? summon.host.slug : projectLabel(summon.session.directory)
+  return (
+    <button type="button" className="replied-card" data-test="replied-card"
+      data-tooltip={summon.host.kind === 'bot' ? `Open the conversation with ${where}` : `Open the chat in ${summon.session.directory}`}
+      onClick={() => onOpen(summon)}>
+      <span className="replied-head">
+        <Icon name="message-bubble" />
+        <span className="replied-to">Replied to</span>
+        {summon.host.kind === 'bot'
+          ? host ? <BotFace seed={host.avatar} size={16} /> : <Icon name="robot" />
+          : <Icon name="folder-open" />}
+        <span className="replied-where">{where}</span>
+        <span className="replied-when num">{ago(Math.floor(summon.at / 1000))}</span>
+      </span>
+      <span className="replied-text">{summon.reply}</span>
+    </button>
+  )
+}
+
 const nothing = (): undefined => undefined
 const NO_POINTS: RewindPoint[] = []
+const NO_ENTRIES: t.Entry[] = []
 
 /**
  * What a run did, in the agent's own verbs: "Read 3, Edit 1". Counted as sent rather than sorted
@@ -1158,7 +1372,7 @@ export function runSummary(entries: t.Entry[]): string {
     if (verb) counts.set(verb, (counts.get(verb) ?? 0) + 1)
   }
   const verbs = [...counts].map(([verb, count]) => `${verb} ${count}`).join(', ')
-  return `Worked through ${entries.length} step${entries.length === 1 ? '' : 's'}${verbs ? ` · ${verbs}` : ''}`
+  return verbs || `Worked through ${entries.length} step${entries.length === 1 ? '' : 's'}`
 }
 
 /**
@@ -1566,70 +1780,32 @@ function Approve({ kind = 'filled', className = 'approve', standing = false, too
   )
 }
 
-/** The same, as the plain button the yes-or-no cards draw. */
-function ApproveButton({ className = 'approve', standing = false, tooltip, onClick, children }: {
-  className?: string
-  standing?: boolean
-  tooltip?: string
-  onClick: () => void
-  children: React.ReactNode
-}): React.JSX.Element {
-  const { open, reason, press } = useApproval(standing, onClick)
-  return (
-    <button className={className} data-tooltip={tooltip} disabled={!open} aria-describedby={reason} onClick={press}>
-      {children}
-    </button>
-  )
-}
-
 /**
- * The foot of a question answered with a yes or a no: the two buttons while it waits, what was
- * answered once it has been, and that nobody answered where its turn ended first.
- *
- * One component so that the three states are the same three on every card that uses it. The
- * state that matters is the last: a card whose turn has ended draws no button, because the
- * question it would answer is no longer waiting and a press would be an approval of nothing.
- *
- * The words are the card's own and are passed in whole. A button here says what pressing it
- * does, in the words of the thing being decided, so there is no generic yes to press from habit.
- *
- * `kind` is a parameter and never worked out from anything drawn: it chooses the method the
- * answer is sent through, and the agent checks that against the question actually waiting.
+ * The two answers on a yes-or-no card. The words are the card's own. `kind` chooses the method
+ * the answer is sent through, and the agent checks that against the question actually waiting.
  */
 function YesOrNo({
   kind,
   request,
-  answerable,
-  decision,
   onDecide,
   reject,
   approve,
-  approved,
-  rejected,
 }: {
   kind: t.Asked
   request: number
-  answerable: boolean
-  decision: 'approve' | 'reject' | null
   onDecide: Answer
   reject: string
   approve: string
-  approved: string
-  rejected: string
 }): React.JSX.Element {
-  if (!answerable) return <Unanswered />
-  if (decision !== null) {
-    return <div className={`decided ${decision}`}>{decision === 'approve' ? approved : rejected}</div>
-  }
   return (
-    <Answers>
-      <button className="reject" onClick={() => onDecide(kind, request, false)}>
+    <>
+      <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide(kind, request, false)}>
         {reject}
-      </button>
-      <ApproveButton onClick={() => onDecide(kind, request, true)}>
+      </Button>
+      <Approve onClick={() => onDecide(kind, request, true)}>
         {approve}
-      </ApproveButton>
-    </Answers>
+      </Approve>
+    </>
   )
 }
 
@@ -1643,54 +1819,34 @@ function YesOrNo({
 function ThreeAnswers({
   kind,
   request,
-  answerable,
-  decision,
-  remember,
   onDecide,
   reject,
   approve,
   always,
   alwaysTooltip,
-  approved,
-  approvedAlways,
-  rejected,
 }: {
   kind: t.Asked
   request: number
-  answerable: boolean
-  decision: 'approve' | 'reject' | null
-  remember: boolean
   onDecide: Answer
   reject: string
   approve: string
   always: string | null
   alwaysTooltip: string
-  approved: string
-  approvedAlways: string
-  rejected: string
 }): React.JSX.Element {
-  if (!answerable) return <Unanswered />
-  if (decision !== null) {
-    return (
-      <div className={`decided ${decision}`}>
-        {decision === 'reject' ? rejected : remember ? approvedAlways : approved}
-      </div>
-    )
-  }
   return (
-    <Answers>
-      <button className="reject" onClick={() => onDecide(kind, request, false)}>
+    <>
+      <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide(kind, request, false)}>
         {reject}
-      </button>
+      </Button>
       {always && (
-        <ApproveButton className="approve always" standing tooltip={alwaysTooltip} onClick={() => onDecide(kind, request, true, true)}>
+        <Approve kind="outline" className="approve always" standing tooltip={alwaysTooltip} onClick={() => onDecide(kind, request, true, true)}>
           {always}
-        </ApproveButton>
+        </Approve>
       )}
-      <ApproveButton onClick={() => onDecide(kind, request, true)}>
+      <Approve onClick={() => onDecide(kind, request, true)}>
         {approve}
-      </ApproveButton>
-    </Answers>
+      </Approve>
+    </>
   )
 }
 
@@ -1791,6 +1947,10 @@ type RowProps = {
   onFork: (id: string) => void
   /** Whether a fork can be taken at all right now: false while a turn is running. */
   forkable: boolean
+  /** The bot a prompt summoned, for its label in the message. */
+  face?: Face
+  /** Open a long prompt: find or a fork landing landed on this row. */
+  revealed?: boolean
 }
 
 /**
@@ -1808,6 +1968,8 @@ export const Row = memo(function Row({
   onAnswer,
   onFork,
   forkable,
+  face,
+  revealed,
 }: RowProps): React.JSX.Element {
   const card = (
     <Card
@@ -1818,6 +1980,8 @@ export const Row = memo(function Row({
       onAnswer={onAnswer}
       onFork={onFork}
       forkable={forkable}
+      face={face}
+      revealed={revealed}
     />
   )
   if (!entry.interrupted) return card
@@ -1852,37 +2016,23 @@ function Card({
   onAnswer,
   onFork,
   forkable,
+  face,
+  revealed,
 }: RowProps): React.JSX.Element {
   const answerable = entry.interrupted !== true
   switch (entry.kind) {
     case 'turn-start': return <></>
     case 'user':
       return (
-        <div className="bubble user">
-          <div className="bubble-text">{entry.text}</div>
-          {/* Inside the row rather than beside it. The wrapper this row sits in is
-              `display: contents` and has no box to hang anything off, and the bubble is the
-              only thing here that knows where the row actually is on screen. */}
-          <div className="message-actions">
-            <CopyButton text={() => entry.text} label="Copy message" />
-            <Button
-              kind="plain-faint"
-              size="tiny"
-              fab
-              className="fork-here icon-button plain-faint tiny"
-              aria-label="Fork from here"
-              data-tooltip={
-                forkable
-                  ? 'Fork from here · Start a session from what was said before this'
-                  : 'Wait for the turn to finish'
-              }
-              isDisabled={!forkable}
-              onClick={() => onFork(entry.id)}
-            >
-              <span slot="icon-before"><ForkIcon /></span>
-            </Button>
-          </div>
-        </div>
+        <UserBubble
+          text={entry.text}
+          summoned={entry.summoned}
+          face={face}
+          revealed={revealed === true}
+          forkable={forkable}
+          onCopy={() => entry.text}
+          onFork={() => onFork(entry.id)}
+        />
       )
 
     case 'assistant':
@@ -2047,6 +2197,7 @@ function Card({
             </p>
           )}
           {request.lineEndings && <p className="permission-scope" data-test="line-endings" data-deciding="all">{request.lineEndings}</p>}
+          <HiddenCharacters note={request.hiddenNote} />
           {request.credentials && request.credentials.length > 0 && <Alert type="warning" className="card-alert credential-finding">
             <Icon name="shield-alert" slot="icon" />
             <span slot="title" data-deciding="all">This looks like it would put a secret in the tree</span>
@@ -2059,9 +2210,6 @@ function Card({
             <small><LabelChip label={request.remark.labelAxes} />{request.remark.lines > request.remark.preview.length ? `${request.remark.lines - request.remark.preview.length} more lines not shown. ` : ''}Review the diff before approving.</small>
           </div>}
           <Diff changes={request.changes} path={request.path} shownPath={request.shownPath} untrusted={request.untrusted} deciding />
-          <Collapse className="card-details" title="Details" isOpen={undefined}>
-            <p className="permission-scope">{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown above.</p>
-          </Collapse>
         </DecisionCard>
       )
     }
@@ -2091,7 +2239,7 @@ function Card({
             {request.canBeRemembered && (
               <Approve
                 kind="outline" className="approve always" standing
-                tooltip={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}`}
+                tooltip={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}. Revoke through Permissions.`}
                 onClick={() => onDecide('run', request.request, true, true)}
               >
                 Trust command and output
@@ -2161,10 +2309,7 @@ function Card({
           )}
           {/* Outside the fold: "Trust command and output" is a standing grant, and what it covers
               has to be readable at the moment it can be pressed, not only on hover or after a click. */}
-          {answerable && decision === null && request.canBeRemembered && <p className="permission-scope" data-deciding="standing"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
-          <Collapse className="card-details" title="Details" isOpen={undefined}>
-            <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
-          </Collapse>
+          {answerable && decision === null && request.canBeRemembered && <p className="permission-scope" data-deciding="standing"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and their output in this conversation.</p>}
         </DecisionCard>
       )
     }
@@ -2232,7 +2377,6 @@ function Card({
           <p data-deciding="all">Open this copy to see what the planner would be shown. It is deleted when you answer:</p>
           <pre className="preview" data-deciding="all">{picture.path}</pre>
           <Collapse className="card-details" title="Details" isOpen={undefined}>
-            <p className="permission-scope">Approval shows the planner only this file. It does not trust this file for future reads.</p>
             <VettingNotice vetting={request.vetting} />
           </Collapse>
         </DecisionCard>
@@ -2250,7 +2394,6 @@ function Card({
         <HiddenCharacters note={request.hiddenNote} />
         <pre className="preview" data-deciding="first">{request.content}</pre>
         <Collapse className="card-details" title="Details" isOpen={undefined}>
-          <p className="permission-scope">Approval lets the planner read only this content. It does not trust this file for future reads.</p>
           <VettingNotice vetting={request.vetting} />
         </Collapse>
       </DecisionCard>
@@ -2258,14 +2401,15 @@ function Card({
     case 'fetch': {
       const { request, decision } = entry
       return (
-        <div className={`confirm fetch ${request.ambient?.length ? 'spends' : ''}`}>
-          {/* The address as the planner wrote it, drawn as text and never as a link: nothing
-              in a question may be something a click follows. */}
-          <div className="confirm-head">
-            <span className="intent">fetch</span>
-            <code className="path" data-deciding="first">{request.url}</code>
-          </div>
-
+        <DecisionCard
+          className={`confirm fetch ${request.ambient?.length ? 'spends' : ''}`}
+          answerable={answerable}
+          subject={request.url}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed this fetch' : 'You refused this fetch' }}
+          head={<CardHead icon="globe" intent="Fetch"
+            subject={<code className="path" data-deciding="first">{request.url}</code>} />}
+          actions={<YesOrNo kind="fetch" request={request.request} onDecide={onDecide} reject="Don’t fetch" approve="Fetch once" />}
+        >
           {/* The host on a line of its own, as the agent read it out of the address. An
               address can be written so that a reader takes one name from it and the request
               goes to another, and the host is what a yes agrees to talk to. */}
@@ -2290,30 +2434,22 @@ function Card({
             “Fetch once” covers this address only. Nothing is remembered, so the next fetch
             asks again.
           </p>
-
-          <YesOrNo
-            kind="fetch"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Don’t fetch"
-            approve="Fetch once"
-            approved="You allowed this fetch"
-            rejected="You refused this fetch"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
     case 'server': {
       const { request, decision } = entry
       return (
-        <div className={`confirm server ${request.runsBuildTooling ? 'builds' : ''}`}>
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">start server</span>
-            <span className="path server-language">{request.language} language server</span>
-          </div>
+        <DecisionCard
+          className={`confirm server ${request.runsBuildTooling ? 'builds' : ''}`}
+          answerable={answerable}
+          subject={`${request.language} language server`}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You started this server for the conversation' : 'You refused this server' }}
+          head={<CardHead icon="laptop" intent="Start server" deciding
+            subject={<span className="path server-language">{request.language} language server</span>} />}
+          actions={<YesOrNo kind="server" request={request.request} onDecide={onDecide} reject="Don’t start" approve="Start for this conversation" />}
+        >
 
           {/* The resolved path is shown because `$PATH` decides what the name runs. */}
           <p className="permission-scope" data-deciding="all">
@@ -2355,32 +2491,22 @@ function Card({
             is shown to the model, and the text at that place stays confined unless you
             vouched for the file.
           </p>
-
-          <YesOrNo
-            kind="server"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Don’t start"
-            approve="Start for this conversation"
-            approved="You started this server for the conversation"
-            rejected="You refused this server"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
     case 'manifest': {
       const { request, decision } = entry
       return (
-        <div className="confirm manifest">
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">run plan</span>
-            <span className="path manifest-count">
-              {request.steps.length} step{request.steps.length === 1 ? '' : 's'}
-            </span>
-          </div>
+        <DecisionCard
+          className="confirm manifest"
+          answerable={answerable}
+          subject={request.task}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You approved this plan' : 'You declined this plan' }}
+          head={<CardHead icon="list" intent="Run plan" deciding
+            counts={<span className="counts">{request.steps.length} step{request.steps.length === 1 ? '' : 's'}</span>} />}
+          actions={<YesOrNo kind="manifest" request={request.request} onDecide={onDecide} reject="Don’t run" approve="Run this plan" />}
+        >
 
           <p className="permission-scope" data-deciding="all">
             <strong>You asked:</strong> {request.task}
@@ -2417,19 +2543,7 @@ function Card({
               </ul>
             </div>
           )}
-
-          <YesOrNo
-            kind="manifest"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Don’t run"
-            approve="Run this plan"
-            approved="You approved this plan"
-            rejected="You declined this plan"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
@@ -2437,14 +2551,16 @@ function Card({
       const { request, decision } = entry
       const found = request.credentials.length
       return (
-        <div className="confirm exposure">
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">send file</span>
-            <code className="path">{request.shownPath}</code>
-            <span className="counts">
-              {found} finding{found === 1 ? '' : 's'}
-            </span>
-          </div>
+        <DecisionCard
+          className="confirm exposure"
+          answerable={answerable}
+          subject={request.shownPath}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You sent this file to the model' : 'You kept this file back' }}
+          head={<CardHead icon="key" intent="Send file" deciding
+            subject={<code className="path">{request.shownPath}</code>}
+            counts={<span className="counts">{found} finding{found === 1 ? '' : 's'}</span>} />}
+          actions={<YesOrNo kind="exposure" request={request.request} onDecide={onDecide} reject="Keep it back" approve="Send it anyway" />}
+        >
 
           <p className="warn" data-deciding="all">
             The model asked to read this file, and what it reads goes to whoever performs
@@ -2470,19 +2586,7 @@ function Card({
             Your answer covers this file until this conversation closes. It is not saved, and
             it does not change whether the file is trusted.
           </p>
-
-          <YesOrNo
-            kind="exposure"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Keep it back"
-            approve="Send it anyway"
-            approved="You sent this file to the model"
-            rejected="You kept this file back"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
@@ -2490,12 +2594,27 @@ function Card({
       const { request, decision, remember } = entry
       const local = request.transport === 'stdio'
       return (
-        <div className={`confirm mcp-server ${request.fetching.length || request.changed ? 'fetches' : ''}`}>
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">use MCP server</span>
-            <code className="path">{request.alias}</code>
-            <span className="counts">{local ? 'runs on this computer' : 'remote'}</span>
-          </div>
+        <DecisionCard
+          className={`confirm mcp-server ${request.fetching.length || request.changed ? 'fetches' : ''}`}
+          answerable={answerable}
+          subject={request.alias}
+          decided={decision === null ? null : {
+            tone: decision,
+            text: decision === 'reject' ? 'You left this server out of the conversation' : remember ? 'You approved this server and every server this project requests' : 'You approved this server',
+          }}
+          head={<CardHead icon="plug" intent="Use MCP server" deciding
+            subject={<code className="path">{request.alias}</code>}
+            counts={<span className="counts">{local ? 'runs on this computer' : 'remote'}</span>} />}
+          actions={<ThreeAnswers
+            kind="mcp-server"
+            request={request.request}
+            onDecide={onDecide}
+            reject="Continue without it"
+            approve="Use this server"
+            always="Use it and all future servers in this project"
+            alwaysTooltip="Servers this project requests from now on start without asking, until you run bravebot mcp forget here"
+          />}
+        >
 
           <p className="permission-scope" data-deciding="all">
             <strong>Requested by:</strong> <code>{request.requestedBy}</code>
@@ -2576,23 +2695,7 @@ function Card({
             What it returns is kept from the model until you approve its list of tools, and each
             call to one of its tools is put to you.
           </p>
-
-          <ThreeAnswers
-            kind="mcp-server"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            remember={remember}
-            onDecide={onDecide}
-            reject="Continue without it"
-            approve="Use this server"
-            always="Use it and all future servers in this project"
-            alwaysTooltip="Servers this project requests from now on start without asking, until you run bravebot mcp forget here"
-            approved="You approved this server"
-            approvedAlways="You approved this server and every server this project requests"
-            rejected="You left this server out of the conversation"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
@@ -2600,15 +2703,17 @@ function Card({
       const { request, decision } = entry
       const count = request.tools.length
       return (
-        <div className={`confirm mcp-tools ${request.vetting.verdict === 'unsafe' ? 'unsafe' : ''}`}>
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">offer tools</span>
-            <code className="path">{request.alias}</code>
-            <span className="counts">
-              {count} tool{count === 1 ? '' : 's'}
-            </span>
-            <VettingVerdict vetting={request.vetting} />
-          </div>
+        <DecisionCard
+          className={`confirm mcp-tools ${request.vetting.verdict === 'unsafe' ? 'unsafe' : ''}`}
+          answerable={answerable}
+          subject={request.alias}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You offered these tools to the model' : 'You kept these tools from the model' }}
+          head={<CardHead icon="wrench" intent="Offer tools" deciding
+            subject={<code className="path">{request.alias}</code>}
+            counts={<span className="counts">{count} tool{count === 1 ? '' : 's'}</span>}
+            trust={<VettingVerdict vetting={request.vetting} />} />}
+          actions={<YesOrNo kind="mcp-tools" request={request.request} onDecide={onDecide} reject="Continue without them" approve="Offer these tools" />}
+        >
 
           <VettingReason vetting={request.vetting} />
 
@@ -2652,31 +2757,34 @@ function Card({
             Every call to one of these tools is still put to you. Your answer is remembered for
             this exact list, so the same list is not asked about again.
           </p>
-
-          <YesOrNo
-            kind="mcp-tools"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Continue without them"
-            approve="Offer these tools"
-            approved="You offered these tools to the model"
-            rejected="You kept these tools from the model"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
     case 'mcp-call': {
       const { request, decision, remember } = entry
       return (
-        <div className="confirm mcp-call">
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">call tool</span>
-            <code className="path">{request.name}</code>
-            <span className="counts">MCP</span>
-          </div>
+        <DecisionCard
+          className="confirm mcp-call"
+          answerable={answerable}
+          subject={request.name}
+          decided={decision === null ? null : {
+            tone: decision,
+            text: decision === 'reject' ? 'You refused this call' : remember ? 'You allowed this call and later ones to this tool in this project' : 'You allowed this call',
+          }}
+          head={<CardHead icon="plug" intent="Call tool" deciding
+            subject={<code className="path">{request.name}</code>}
+            counts={<span className="counts">MCP</span>} />}
+          actions={<ThreeAnswers
+            kind="mcp-call"
+            request={request.request}
+            onDecide={onDecide}
+            reject="Don’t call"
+            approve="Call once"
+            always={request.mayStand ? `Call, and stop asking for ${request.tool} here` : null}
+            alwaysTooltip="Later calls to this tool in this project are made without asking, until you run bravebot mcp forget here"
+          />}
+        >
 
           {request.description && (
             <blockquote className="mcp-tool-description" data-tooltip="Written by the server">
@@ -2707,34 +2815,22 @@ function Card({
             put in the model’s context.
             {!request.mayStand && ' Nothing answered in this conversation can be recorded, so it cannot stop asking.'}
           </p>
-
-          <ThreeAnswers
-            kind="mcp-call"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            remember={remember}
-            onDecide={onDecide}
-            reject="Don’t call"
-            approve="Call once"
-            always={request.mayStand ? `Call, and stop asking for ${request.tool} here` : null}
-            alwaysTooltip="Later calls to this tool in this project are made without asking, until you run bravebot mcp forget here"
-            approved="You allowed this call"
-            approvedAlways="You allowed this call and later ones to this tool in this project"
-            rejected="You refused this call"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
     case 'mcp-move': {
       const { request, decision } = entry
       return (
-        <div className="confirm mcp-move">
-          <div className="confirm-head">
-            <span className="intent">move server</span>
-            <code className="path">{request.alias}</code>
-          </div>
+        <DecisionCard
+          className="confirm mcp-move"
+          answerable={answerable}
+          subject={request.alias}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You moved this server' : 'You did not move this server' }}
+          head={<CardHead icon="folder-exchange" intent="Move server"
+            subject={<code className="path">{request.alias}</code>} />}
+          actions={<YesOrNo kind="mcp-move" request={request.request} onDecide={onDecide} reject="Don’t move it" approve="It moved there" />}
+        >
 
           <p className="permission-scope" data-deciding="all">
             <strong>Declared at:</strong> <code>{request.declared}</code>
@@ -2755,19 +2851,7 @@ function Card({
             {request.mayRecord ? ', in this conversation and the next' : ' until this conversation ends'}.
             Say no unless you know the server moved.
           </p>
-
-          <YesOrNo
-            kind="mcp-move"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Don’t move it"
-            approve="It moved there"
-            approved="You moved this server"
-            rejected="You did not move this server"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
@@ -2775,13 +2859,15 @@ function Card({
       const { request, decision } = entry
       const count = request.hosts.length
       return (
-        <div className="confirm host">
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">allow hosts</span>
-            <span className="counts">
-              {count} host{count === 1 ? '' : 's'}
-            </span>
-          </div>
+        <DecisionCard
+          className="confirm host"
+          answerable={answerable}
+          subject={request.hosts.join(', ')}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed these hosts for this session' : 'You kept these hosts blocked' }}
+          head={<CardHead icon="globe" intent="Allow hosts" deciding
+            counts={<span className="counts">{count} host{count === 1 ? '' : 's'}</span>} />}
+          actions={<YesOrNo kind="host" request={request.request} onDecide={onDecide} reject="Keep them blocked" approve="Allow for this session" />}
+        >
 
           <p className="permission-scope" data-deciding="all">
             A program this session started asked for {count === 1 ? 'a host' : 'hosts'} that
@@ -2806,19 +2892,7 @@ function Card({
             {count === 1 ? 'it' : 'them'}. Run the program again afterwards. Nothing is saved, so the
             next conversation asks again.
           </p>
-
-          <YesOrNo
-            kind="host"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Keep them blocked"
-            approve="Allow for this session"
-            approved="You allowed these hosts for this session"
-            rejected="You kept these hosts blocked"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
