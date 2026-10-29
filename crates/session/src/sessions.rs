@@ -1765,12 +1765,7 @@ impl Record {
     /// than as silence, because the rule about it does come back and a rule about files nothing
     /// can open is the failure this exists to rule out.
     pub fn reopen_added_directories(&self, workspace: &mut Workspace) -> Vec<String> {
-        // The rule that vouched for them is not restored (see [`Record::trust_map`]), and a
-        // directory opened with none refuses every path under it.
-        if self.trust_answered_by_mode {
-            return Vec::new();
-        }
-        self.directories
+        self.restorable_directories()
             .iter()
             .filter_map(|directory| match workspace.add_directory(directory) {
                 Ok(_) => None,
@@ -1781,6 +1776,18 @@ impl Record {
                 )),
             })
             .collect()
+    }
+
+    /// The added directories a resume gives back: none where the sitting had bypass on.
+    ///
+    /// The rule that vouched for them is not restored (see [`Record::trust_map`]), and a
+    /// directory opened with none refuses every path under it. Every client takes the list from
+    /// here, so the rule is written once.
+    pub fn restorable_directories(&self) -> &[String] {
+        match self.trust_answered_by_mode {
+            true => &[],
+            false => &self.directories,
+        }
     }
 
     /// The turns a rewind can go back to, oldest first.

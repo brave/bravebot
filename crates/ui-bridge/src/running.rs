@@ -257,10 +257,11 @@ impl State {
             answers: Answers::opening(trust, record.trusted_programs(project), Default::default()),
             // None where the record's sitting had bypass on: `Record::trust_map` took the rules
             // back, and a directory with no rule would be reachable and vouched for by nothing.
-            directories: match record.trust_answered_by_mode {
-                true => Vec::new(),
-                false => record.directories.iter().map(PathBuf::from).collect(),
-            },
+            directories: record
+                .restorable_directories()
+                .iter()
+                .map(PathBuf::from)
+                .collect(),
             answered_by_mode: false,
             kept: None,
             handle: Some(handle),
