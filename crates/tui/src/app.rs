@@ -36962,6 +36962,90 @@ mod tests {
         }
     }
 
+    /// MODE-4, TRUST-6. A session that had bypass on at any point writes a record whose map and
+    /// opened directories a resume without the flag does not take back, so the startup question
+    /// is put; one that never had it keeps its map. The faults it rejects: the record not saying
+    /// so, and a resume that reads the map back as the person's answer.
+    #[test]
+    fn a_resume_without_the_flag_asks_where_bypass_answered_for_the_record() {
+        use bravebot_agent::PermissionMode;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-bypass-record");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let written = |mode_during_the_sitting: &[PermissionMode]| {
+            let session = Session::new("none");
+            for mode in mode_during_the_sitting {
+                session.live_permission_mode().set(*mode);
+            }
+            let trust = crate::trust_prompt::answered_by(PermissionMode::Bypass, &root)
+                .expect("bypass answers the question");
+            let mut stored =
+                sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+            with_standing(
+                &session,
+                &Conversation::new(),
+                &trust,
+                &TrustedPrograms::new(),
+                &workspace,
+                |standing| stored.save("a session", standing),
+            );
+            sessions::load(&root, stored.id()).expect("the record")
+        };
+
+        // Left again before the record is written: the answers it holds were still the mode's.
+        for during in [
+            &[PermissionMode::Bypass][..],
+            &[PermissionMode::Bypass, PermissionMode::Ask],
+        ] {
+            let record = written(during);
+            assert!(record.trust_answered_by_mode, "{during:?}");
+            assert!(
+                matches!(
+                    opening_for(
+                        beginning_of(&Start::Resuming(Box::new(record.clone())), &root),
+                        PermissionMode::Ask,
+                        &root,
+                        || None,
+                    ),
+                    Opening::Ask
+                ),
+                "a resume without the flag took the map bypass wrote, {during:?}",
+            );
+            assert!(
+                matches!(
+                    opening_for(
+                        beginning_of(&Start::Resuming(Box::new(record)), &root),
+                        PermissionMode::Bypass,
+                        &root,
+                        || None,
+                    ),
+                    Opening::Settled(_, Whence::Unasked)
+                ),
+                "a resume given the flag again was asked",
+            );
+        }
+
+        let record = written(&[PermissionMode::AcceptEdits]);
+        assert!(!record.trust_answered_by_mode);
+        assert!(
+            matches!(
+                opening_for(
+                    beginning_of(&Start::Resuming(Box::new(record)), &root),
+                    PermissionMode::Ask,
+                    &root,
+                    || None,
+                ),
+                Opening::Settled(_, Whence::Resumed)
+            ),
+            "a map a person answered was not taken back on a resume",
+        );
+    }
+
     /// A rewind point read off the live session lands inside the turn it undoes: by the time the
     /// loop has a prompt in hand it is on the transcript and counted as a turn, so rewinding to
     /// such a point would leave the prompt in the scrollback and number the next turn one too high.
@@ -37048,6 +37132,7 @@ mod tests {
                     rewind: session.rewind.points(),
                     checkouts: &[],
                     touched: None,
+                    answered_by_mode: false,
                 },
             );
         }
@@ -37565,6 +37650,7 @@ mod tests {
                 rewind: session.rewind.points(),
                 checkouts: &[],
                 touched: None,
+                answered_by_mode: false,
             },
         );
         session.start_goal("cargo test exits 0".to_string());
@@ -38518,6 +38604,7 @@ mod tests {
                 rewind: session.rewind.points(),
                 checkouts: &workspace.session_checkouts(),
                 touched: None,
+                answered_by_mode: false,
             },
         );
         assert_eq!(
@@ -41957,6 +42044,7 @@ mod tests {
                     rewind: session.rewind.points(),
                     checkouts: &[],
                     touched: None,
+                    answered_by_mode: false,
                 },
             );
         }

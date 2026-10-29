@@ -326,7 +326,10 @@ fn run(
     // since two processes would write one record (SESSION-38).
     let mut kept = match hosted_as.as_deref() {
         Some(id) => match Kept::opening(workspace.root(), id, resumed.as_ref()) {
-            Ok(kept) => Some(kept),
+            Ok(mut kept) => {
+                kept.answered_by_mode = mode == PermissionMode::Bypass;
+                Some(kept)
+            }
             Err(held) => return fail(Ending::Failed, held.refusal()),
         },
         None => None,
@@ -804,6 +807,9 @@ struct Kept {
     timing: std::collections::BTreeMap<usize, bravebot_agent::timing::Timing>,
     /// The model that last answered, kept across a turn that failed before any server did.
     model: Option<String>,
+    /// Whether the mode that answers in the person's place is bypass, which the record says so a
+    /// resume without it asks again (MODE-4).
+    answered_by_mode: bool,
 }
 
 impl Kept {
@@ -823,6 +829,7 @@ impl Kept {
                 spend: record.spend.clone(),
                 timing: record.timing.clone(),
                 model: record.model.clone(),
+                answered_by_mode: false,
             },
             None => Self {
                 handle: Handle::begin_as(
@@ -837,6 +844,7 @@ impl Kept {
                 spend: std::collections::BTreeMap::new(),
                 timing: std::collections::BTreeMap::new(),
                 model: None,
+                answered_by_mode: false,
             },
         })
     }
@@ -933,6 +941,7 @@ impl Kept {
                 rewind: &[],
                 checkouts: &[],
                 touched: None,
+                answered_by_mode: self.answered_by_mode,
             },
         );
     }

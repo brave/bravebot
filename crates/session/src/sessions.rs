@@ -528,6 +528,13 @@ pub struct Record {
     /// Server descendants may outlive both their server and the last undo point.
     #[serde(default)]
     pub server_children_may_run: bool,
+    /// The sitting that wrote this record had bypass on at some point, so the trust map and the
+    /// opened directories may hold answers the mode gave and not a person (MODE-4, TRUST-6).
+    ///
+    /// A resume without the mode takes neither back, and puts the startup question. Not the mode
+    /// itself, which a record does not keep (MODE-10).
+    #[serde(default)]
+    pub trust_answered_by_mode: bool,
     /// The checkouts the session's delegates were given and it keeps (CHECKOUT-15).
     ///
     /// Beside the trust map, which holds the rules copied for them: a resume brings the checkouts
@@ -1528,6 +1535,7 @@ pub fn record_manifest_run(
             // None: a manifest run starts no delegate in a checkout of its own.
             checkouts: &[],
             touched: None,
+            answered_by_mode: false,
         },
     );
     Some(handle.id().to_string())
@@ -1674,7 +1682,13 @@ impl Record {
     /// relative, so re-prefixing here is what lets a record survive the checkout being moved or
     /// renamed: the rules still mean the same files. A rule outside the project is recorded in
     /// full and comes back as it was written.
+    ///
+    /// None where the sitting had bypass on: the flag answered for it, and a map that outlives the
+    /// flag would be a standing trust no person gave (MODE-4, TRUST-6).
     pub fn trust_map(&self, root: impl AsRef<std::path::Path>) -> Option<TrustStore> {
+        if self.trust_answered_by_mode {
+            return None;
+        }
         let rules = self.trust.as_ref()?;
         let mut trust = restored_rules(root.as_ref(), rules);
         trust.restore_confined_lines(self.confined_lines_in.as_deref());
@@ -1751,7 +1765,7 @@ impl Record {
     /// than as silence, because the rule about it does come back and a rule about files nothing
     /// can open is the failure this exists to rule out.
     pub fn reopen_added_directories(&self, workspace: &mut Workspace) -> Vec<String> {
-        self.directories
+        self.restorable_directories()
             .iter()
             .filter_map(|directory| match workspace.add_directory(directory) {
                 Ok(_) => None,
@@ -1762,6 +1776,18 @@ impl Record {
                 )),
             })
             .collect()
+    }
+
+    /// The added directories a resume gives back: none where the sitting had bypass on.
+    ///
+    /// The rule that vouched for them is not restored (see [`Record::trust_map`]), and a
+    /// directory opened with none refuses every path under it. Every client takes the list from
+    /// here, so the rule is written once.
+    pub fn restorable_directories(&self) -> &[String] {
+        match self.trust_answered_by_mode {
+            true => &[],
+            false => &self.directories,
+        }
     }
 
     /// The turns a rewind can go back to, oldest first.
@@ -1890,6 +1916,9 @@ pub struct Standing<'a> {
     /// What the session's file tools reached, for the record to carry (INSTR-14, INSTR-16). `None`
     /// writes none, which is what a front end that keeps no workspace of its own has.
     pub touched: Option<&'a bravebot_agent::workspace::TouchedRecord>,
+    /// Bypass was on at some point in this sitting, so `trust` and `directories` may hold what the
+    /// mode answered (MODE-4).
+    pub answered_by_mode: bool,
 }
 
 /// One turn, as it is added to a record that already exists.
@@ -1917,6 +1946,8 @@ pub struct Continuation<'a> {
     pub rewind: &'a [RewindPoint],
     /// Where this turn's time went, kept under the turn's number (SESSION-12).
     pub timing: bravebot_agent::timing::Timing,
+    /// Bypass was on at some point in this sitting, as [`Standing::answered_by_mode`] says.
+    pub answered_by_mode: bool,
 }
 
 /// A session worth picking up again, and where to pick it up.
@@ -2593,6 +2624,7 @@ impl Handle {
 
         let mut record = Record {
             server_children_may_run: self.server_children_may_run,
+            trust_answered_by_mode: standing.answered_by_mode,
             id: self.id.clone(),
             directory: self.project.display().to_string(),
             branch: self.branch.clone(),
@@ -2713,6 +2745,7 @@ impl Handle {
     ///
     /// `false` where nothing was written, which includes an incognito session.
     pub fn save_continuation(&mut self, mut record: Record, next: Continuation<'_>) -> bool {
+        record.trust_answered_by_mode |= next.answered_by_mode;
         let Some(directory) = self.directory() else {
             return false;
         };
@@ -5552,6 +5585,7 @@ mod tests {
             prompt_at: None,
             rewind: &[],
             timing: Default::default(),
+            answered_by_mode: false,
         };
         assert!(resumed.save_continuation(record.clone(), next()));
         assert_eq!(
@@ -5616,6 +5650,7 @@ mod tests {
                     prompt_at: None,
                     rewind: &[],
                     timing: Default::default(),
+                    answered_by_mode: false,
                 },
             ));
             load(&root, handle.id()).expect("written")
@@ -6381,6 +6416,7 @@ mod tests {
     fn a_record() -> Record {
         Record {
             server_children_may_run: false,
+            trust_answered_by_mode: false,
             history: None,
             id: "1-2".to_string(),
             directory: "/tmp/x".to_string(),
@@ -6611,6 +6647,7 @@ mod tests {
                 rewind: &[],
                 checkouts: &[],
                 touched: None,
+                answered_by_mode: false,
             },
         );
     }
@@ -6808,6 +6845,7 @@ mod tests {
                 rewind: &[],
                 checkouts: &[],
                 touched: None,
+                answered_by_mode: false,
             },
         );
         source.append_audit(
@@ -7188,6 +7226,7 @@ mod tests {
                 rewind: &[],
                 checkouts: &[],
                 touched: None,
+                answered_by_mode: false,
             },
         );
         handle.append_audit(
@@ -7245,6 +7284,7 @@ mod tests {
             rewind: &[],
             checkouts: &[],
             touched: None,
+            answered_by_mode: false,
         };
         let recorded = |handle: &Handle| load(&root, handle.id()).expect("the record").title;
 
@@ -7302,6 +7342,7 @@ mod tests {
                 rewind: &[],
                 checkouts: &[],
                 touched: None,
+                answered_by_mode: false,
             },
         );
 
@@ -7354,6 +7395,7 @@ mod tests {
                     rewind: &[],
                     checkouts: &[],
                     touched: None,
+                    answered_by_mode: false,
                 },
             );
             handle.append_audit(
@@ -7763,6 +7805,7 @@ mod tests {
                 rewind: &[],
                 checkouts: &[],
                 touched: None,
+                answered_by_mode: false,
             },
         );
         let record = load(&root, handle.id()).expect("the record was written");
@@ -7790,6 +7833,7 @@ mod tests {
                     wall_ms: 9,
                     ..Default::default()
                 },
+                answered_by_mode: false,
             },
         );
 
@@ -7857,6 +7901,7 @@ mod tests {
                 prompt_at: Some(0),
                 rewind: &[],
                 timing: Default::default(),
+                answered_by_mode: false,
             },
         ));
 
@@ -7912,6 +7957,7 @@ mod tests {
                 prompt_at: Some(0),
                 rewind: &replacing,
                 timing: Default::default(),
+                answered_by_mode: false,
             },
         ));
 
@@ -7969,6 +8015,7 @@ mod tests {
                 prompt_at: Some(0),
                 rewind: &[],
                 timing: Default::default(),
+                answered_by_mode: false,
             },
         )
     }
@@ -8224,6 +8271,7 @@ mod tests {
             rewind: &[],
             checkouts: &[],
             touched,
+            answered_by_mode: false,
         };
 
         handle.save("first", standing(Some(&touched)));
@@ -8303,6 +8351,7 @@ mod tests {
                 rewind: &[],
                 checkouts: &[],
                 touched: None,
+                answered_by_mode: false,
             },
         );
     }
@@ -8559,6 +8608,7 @@ mod tests {
                 rewind: &[],
                 checkouts: &[],
                 touched: None,
+                answered_by_mode: false,
             },
         );
 

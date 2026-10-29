@@ -767,7 +767,18 @@ impl Bridge {
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
         // work is the habit that turns into a stall later.
-        let (snapshot, said, trust, programs, directories, todos, parent, inherited, touched) = {
+        let (
+            snapshot,
+            said,
+            trust,
+            programs,
+            directories,
+            todos,
+            parent,
+            inherited,
+            touched,
+            by_mode,
+        ) = {
             let state = open
                 .state
                 .lock()
@@ -796,6 +807,7 @@ impl Bridge {
                     .kept
                     .as_ref()
                     .map(bravebot_agent::workspace::KeptBetweenTurns::touched_record),
+                state.answered_by_mode,
             )
         };
 
@@ -851,16 +863,21 @@ impl Bridge {
 
         let child = self.mint(Open::opened(
             project.clone(),
-            State::forked(
-                begun,
-                cut.before,
-                opening.trust,
-                programs,
-                directories,
-                ordinal,
-                todos.clone(),
-                first_prompt,
-            ),
+            {
+                let mut forked = State::forked(
+                    begun,
+                    cut.before,
+                    opening.trust,
+                    programs,
+                    directories,
+                    ordinal,
+                    todos.clone(),
+                    first_prompt,
+                );
+                // The map is the parent's, so what the mode answered in it is still the mode's.
+                forked.answered_by_mode = by_mode;
+                forked
+            },
             // Inherited along with the map itself: the same person, in the same directory, in
             // the same window, so asking again would be asking somebody to answer twice.
             opening.answered,
@@ -2999,7 +3016,7 @@ fn work(work: Work) {
     // which no mode a window can choose answers: only bypassing does (SERVERS-13), and a window
     // cannot reach it. The screening value is the task's, so the confirmer and the tools that fill
     // in a verdict read the same answer.
-    let mut confining = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
+    let mut confining = Confining::new(&mut confirmer, permission_mode.clone(), task.auto_vetting);
     open_rewind_point(&mut state, &workspace, &prompt);
     #[cfg(test)]
     crate::running::built_in::record("turn", task.account_session().identifier());
@@ -3101,6 +3118,7 @@ fn work(work: Work) {
                 state.model = Some(outcome.model.clone());
             }
 
+            state.answered_by_mode |= permission_mode.has_bypassed();
             let archived = save(&project, &mut state, turn, sink.trail());
 
             let rules = rules_json(&state.answers.trust);
@@ -3181,6 +3199,7 @@ fn work(work: Work) {
                 reporter.spent().unwrap_or_default(),
                 began_at.elapsed(),
             );
+            state.answered_by_mode |= permission_mode.has_bypassed();
             let _ = save(&project, &mut state, turn, sink.trail());
 
             let notices = [
@@ -3478,6 +3497,7 @@ pub(crate) fn save(
             manifest: None,
             checkouts: &checkouts,
             touched: touched.as_ref(),
+            answered_by_mode: state.answered_by_mode,
         },
     );
     handle.append_audit(turn, trail.events());
@@ -3898,6 +3918,60 @@ mod coverage_tests {
             "forking took the parent's answers away"
         );
         assert!(parent_state.answers.servers.is_some());
+    }
+
+    /// MODE-4, TRUST-6: a desktop fork copies its parent's map, so it also carries the mark that
+    /// bypass answered in it, and a parent that never bypassed gives the child no mark. The faults
+    /// this rejects: a fork that drops the mark, so the child's record restores a map bypass opened
+    /// without the startup question, and one that marks every child.
+    #[test]
+    fn a_desktop_fork_carries_the_mark_that_bypass_answered_in_its_parents_map() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        for marked in [false, true] {
+            let directory = test_profile::project(&format!("fork-mark-{marked}"));
+            std::fs::create_dir_all(&directory).unwrap();
+            let root = directory.as_path();
+            let mut conversation = bravebot_agent::Conversation::new();
+            conversation.push(bravebot_aichat::protocol::Message::user("work"));
+            let record: Record = serde_json::from_value(json!({
+                "id": "mark-parent", "directory": root, "title": "work",
+                "started": 1, "updated": 1,
+                "conversation": conversation.snapshot()
+            }))
+            .unwrap();
+            let mut parent_state =
+                State::resumed(root, &record, TrustStore::new(root)).expect("the record is free");
+            parent_state.answered_by_mode = marked;
+            let mut bridge = Bridge::new(Box::new(|_| {}));
+            let parent = bridge.mint(Open::opened(
+                root.to_path_buf(),
+                parent_state,
+                true,
+                None,
+                false,
+            ));
+
+            let request = Request::parse(
+                &json!({"id": 1, "method": "session.fork", "params": {
+                    "session": parent, "prompt": 0, "text": "work"
+                }})
+                .to_string(),
+            )
+            .unwrap();
+            let forked = bridge.dispatch(&request).unwrap();
+
+            let child = bridge
+                .open
+                .get(forked["session"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(
+                child.state.lock().unwrap().answered_by_mode,
+                marked,
+                "the fork of a parent with mark {marked} has the other"
+            );
+        }
     }
 
     /// SESSION-18, INSTR-14, INSTR-16: a desktop fork keeps the names of the files the parent's

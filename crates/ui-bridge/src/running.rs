@@ -62,6 +62,9 @@ pub struct State {
     /// map says. Held so a turn taken here restores the reach beside the rules it inherited,
     /// and so saving writes the grant back rather than dropping it on the session's behalf.
     pub directories: Vec<PathBuf>,
+    /// Bypass was on at some point while this session ran, so the map and the directories above
+    /// may hold what the mode answered, and the record says so (MODE-4).
+    pub answered_by_mode: bool,
     /// The checkouts the session's delegates were given and it keeps, which each turn's workspace
     /// is given because it is dropped when the turn ends (CHECKOUT-16). `None` until the first
     /// turn, or until a record that lists checkouts is opened.
@@ -204,6 +207,7 @@ impl State {
             conversation: Conversation::new(),
             answers: Answers::opening(trust, TrustedPrograms::new(), Default::default()),
             directories: Vec::new(),
+            answered_by_mode: false,
             kept: None,
             handle: None,
             turns: 0,
@@ -251,7 +255,14 @@ impl State {
         Ok(Self {
             conversation: Conversation::restored(record.conversation.clone()),
             answers: Answers::opening(trust, record.trusted_programs(project), Default::default()),
-            directories: record.directories.iter().map(PathBuf::from).collect(),
+            // None where the record's sitting had bypass on: `Record::trust_map` took the rules
+            // back, and a directory with no rule would be reachable and vouched for by nothing.
+            directories: record
+                .restorable_directories()
+                .iter()
+                .map(PathBuf::from)
+                .collect(),
+            answered_by_mode: false,
             kept: None,
             handle: Some(handle),
             turns: record.turns,
@@ -319,6 +330,7 @@ impl State {
             conversation: Conversation::restored(before),
             answers: Answers::opening(trust, programs, Default::default()),
             directories,
+            answered_by_mode: false,
             kept: None,
             handle: Some(handle),
             turns,
