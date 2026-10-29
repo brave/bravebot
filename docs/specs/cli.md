@@ -14,6 +14,7 @@ governs:
   - crates/cli/src/doctor.rs
   - crates/cli/src/auth.rs
   - crates/cli/src/completion.rs
+  - crates/cli/src/acp.rs
   - crates/cli/src/continued.rs
   - crates/cli/src/exit.rs
   - crates/cli/src/goal_run.rs
@@ -1266,7 +1267,7 @@ taken as the words, `--json` would be removed and the run would answer in the ot
 sentence that opens with `-` holds a space and is words. If a flag is given twice, the last is used.
 They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`,
 `stats`, the retired `import-leo-creds` ([PREM-15](premium-credentials.md#PREM-15)), `import-providers`,
-`completion` and `shell-init`, which start neither a session nor a task. A refusal writes the
+`completion`, `shell-init` and `acp`, which start neither a session nor a task. A refusal writes the
 result object of CLI-12 if one was asked for, sends nothing, and says why through the catalogue
 ([LOCALE-2](localization.md#LOCALE-2)).
 
@@ -1595,7 +1596,7 @@ in it is not a tool, so a typo is not read as a smaller list than its author mea
 twice, the last is used. Both are refused with `--mode manifest`, whose steps are planned and run
 from the plan, with `--bg`, which starts the session in another process that would not carry them,
 and with `doctor`, `auth`, `mcp`, `permissions`, `sessions`, `stats`, `attach`, `reply`, `import-leo-creds`,
-`import-providers`, `completion` and `shell-init`, which start neither a session nor a task.
+`import-providers`, `completion`, `shell-init` and `acp`, which start neither a session nor a task.
 
 **Why.** A harness running the agent on a shared machine needs to say what a run may reach without
 editing settings, and a refusal that depends on a mode could be undone by a flag that stops the
@@ -2476,3 +2477,46 @@ no session record, so `--resume` cannot carry it on. No limit applies across the
 `verified-by: bravebot_cli::main::a_goal_run_refuses_the_limit_flags_by_name`
 `verified-by: bravebot_cli::main::a_limit_flag_may_lead_the_line_like_the_other_task_flags`
 `verified-by: bravebot_cli::exit::a_run_stopped_at_its_limit_is_told_apart_from_a_failure`
+
+<a id="CLI-39"></a>
+### CLI-39: `acp` serves an editor over the Agent Client Protocol, as `bravebot-acp` does
+
+`bravebot acp` reads newline-delimited JSON-RPC 2.0 on standard input and writes it on standard
+output, running the loop `bravebot-acp` runs ([acp.md](acp.md)). It adds nothing to the protocol, so
+every clause of that file holds for it. A copy installed without the `bravebot-acp` program serves an editor
+with `"command": "bravebot", "args": ["acp"]`.
+
+Standard output holds protocol messages and nothing else ([ACP-6](acp.md#ACP-6)), so a notice from this command goes
+to standard error, and an input that ends before any line was sent leaves standard output empty and
+ends on status 0. `--settings <file>` names the file the sessions read, as it does for
+`bravebot-acp` (CLI-13). The command line settles the process-wide answers before it dispatches, as
+for every command (CLI-13), and the command starts the one sweep of what has outlived the retention
+period, as the program does.
+
+`--dangerously-skip-permissions` and `--dangerously-bypass-approvals-and-sandbox` are refused with
+`acp`, with the status for an argument (CLI-6), before anything is read from standard input, because
+an editor is always asked ([ACP-7](acp.md#ACP-7)). Any flag that shapes a session or a task is
+refused beside it, as CLI-19 has it for the other commands that start neither. A word after `acp`
+is refused the same way, and is never taken as a prompt.
+
+**Why.** The program is built with `bravebot-ui-bridge` and no release ships it, so a person who
+installed `bravebot` could not point an editor at anything. A second implementation of the loop in
+the command line would be a second path to the agent that the protocol's clauses did not cover, so
+the command calls the function the program calls. A bypass flag taken and ignored would let a line
+that reads as "never ask" start a program that asks, and one that looks safe in a wrapper script
+should fail where it is written.
+
+**Known costs.** `bravebot-cli` depends on `bravebot-ui-bridge` for this alone
+([layering.md](layering.md)). The command does not call `settle_for_process` of `bravebot-ui-bridge`,
+because the command line settles the same answers before it dispatches, and each is settled once.
+The `bravebot-acp` program stays, because the tests of the loop start it.
+
+`verified-by: bravebot_cli::acp::acp_answers_initialize_with_one_json_line_and_nothing_else`
+`verified-by: bravebot_cli::acp::acp_with_nothing_to_read_writes_nothing_to_standard_output`
+`verified-by: bravebot_cli::acp::acp_refuses_the_flags_that_would_stop_the_editor_being_asked`
+`verified-by: bravebot_cli::acp::acp_refuses_flags_and_words_that_shape_nothing_it_starts`
+`verified-by: bravebot_cli::acp::acp_reads_the_named_settings_and_sends_a_slash_word_to_the_model_as_text`
+`verified-by: bravebot_cli::acp::acp_treats_an_option_never_offered_as_a_refusal`
+`verified-by: bravebot_cli::acp::acp_ending_its_input_refuses_the_question_waiting_and_exits`
+`verified-by: bravebot_cli::acp::acp_waits_for_the_end_of_an_open_session_before_it_exits`
+`verified-by: bravebot_cli::flags::exactly_the_fifteen_commands_that_start_no_session_are_named`

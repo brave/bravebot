@@ -34,6 +34,7 @@ Usage:
   bravebot permissions check <call>      Report which permission rule decides a tool call
   bravebot completion <bash|zsh|fish>    Print a shell completion script
   bravebot shell-init <bash|zsh|fish>    Print the shell hook that gives @bravebot the commands you ran
+  bravebot acp                           Serve an editor over the Agent Client Protocol
   bravebot --handle-uri <link>           Open a session from a bravebot://open link, its prompt in the box and not sent
 ```
 
@@ -79,6 +80,7 @@ Usage:
 | `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
 | `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
 | `bravebot shell-init <shell>` | print a shell hook that gives `@bravebot` the commands you ran ([below](#shell-init)) |
+| `bravebot acp` | serve an editor over the Agent Client Protocol on standard input and output ([below](#acp)) |
 | `bravebot --version`, `-V` | print the build |
 | `bravebot --help`, `-h` | print this |
 
@@ -446,7 +448,7 @@ standing is better piped in, where it is quarantined.
 A flag with no words after it, a blank one, or one whose words open with `-` and hold no space is
 refused with status 2. A sentence opening with `-` is words. If a flag is given twice, the last is
 used. Both are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`, `stats`,
-`import-leo-creds`, `import-providers`, `completion` and `shell-init`. There is no settings key for them: words a checkout
+`import-leo-creds`, `import-providers`, `completion`, `shell-init` and `acp`. There is no settings key for them: words a checkout
 always wants belong in its `AGENTS.md`.
 
 ## `--json`
@@ -1225,6 +1227,21 @@ carries only what you ran after it.
 
 The command prints a fixed script and reads and writes nothing under `~/.bravebot`. It takes exactly
 one shell name and exits with status 2 for anything else.
+
+## `acp`
+
+```sh
+bravebot acp [--settings <file>]
+```
+
+Serves an editor that speaks the [Agent Client Protocol](https://agentclientprotocol.com) on
+standard input and standard output, as `bravebot-acp` does. The editor starts it, so you do not run
+it yourself; [Using Brave Bot in an editor](../using/editors.md) shows how to declare it in Zed.
+Standard output holds protocol messages and nothing else, and a notice goes to standard error.
+
+The command refuses `--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`,
+any flag that shapes a session or a task, and any word after `acp`, with status 2 before it reads
+anything. An editor is always asked.
 
 ## Interactive keys
 

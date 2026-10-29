@@ -20,6 +20,11 @@ fr:btw-nothing-sent-yet
 fr:btw-one-at-a-time
 fr:chatgpt-use-by-asking
 fr:chatgpt-use-by-naming
+fr:cli-acp-refuses-bypass
+fr:cli-acp-sessions-still-working
+fr:cli-acp-takes-nothing-else
+fr:cli-acp-unreadable-line
+fr:cli-usage-acp
 fr:command-lsp
 fr:command-outputs
 fr:command-sessions

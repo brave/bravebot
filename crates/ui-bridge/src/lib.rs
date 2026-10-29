@@ -31,6 +31,7 @@
 
 mod account_words;
 pub mod acp;
+pub mod acp_loop;
 pub mod allowlist;
 mod answerers;
 pub mod arguments;

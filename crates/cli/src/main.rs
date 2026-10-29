@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod acp;
 mod auth;
 mod background;
 mod brave;
@@ -609,6 +610,15 @@ fn main() -> ExitCode {
             Some(()) => ExitCode::SUCCESS,
             None => {
                 stopped_before_the_turn(as_json, Ending::Argument, t!(cli_completion_needs_a_shell))
+            }
+        },
+        Some("acp") if skip_permissions => {
+            stopped_before_the_turn(as_json, Ending::Argument, t!(cli_acp_refuses_bypass))
+        }
+        Some("acp") => match acp::command(&args[1..]) {
+            Some(()) => ExitCode::SUCCESS,
+            None => {
+                stopped_before_the_turn(as_json, Ending::Argument, t!(cli_acp_takes_nothing_else))
             }
         },
         Some("shell-init") => match shell_init::command(&args[1..]) {
@@ -2467,6 +2477,7 @@ mod tests {
     #[test]
     fn the_commands_that_start_no_session_refuse_every_flag_that_shapes_one() {
         let commands = [
+            "acp",
             "doctor",
             "update",
             "bug-report",
@@ -4162,6 +4173,7 @@ mod tests {
     #[test]
     fn a_definition_is_refused_where_nothing_would_work_under_it() {
         for first in [
+            "acp",
             "doctor",
             "update",
             "bug-report",
@@ -4289,6 +4301,7 @@ mod tests {
     #[test]
     fn the_system_prompt_flags_are_refused_where_nothing_would_use_them() {
         for first in [
+            "acp",
             "doctor",
             "update",
             "bug-report",
