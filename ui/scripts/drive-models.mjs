@@ -184,6 +184,30 @@ try {
   await openrouterGroup.waitFor()
   assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'OpenRouter group starts expanded')
   assert.equal(await braveGroup.getAttribute('aria-expanded'), 'true', 'Brave group starts expanded')
+  // Refusal: ArrowLeft/Right with a non-empty query must not collapse any section.
+  await search.fill('sonnet')
+  const innerInput = page.locator('.model-search').locator('input')
+  // Position caret at end to give ArrowLeft room to move.
+  await innerInput.evaluate((el) => { el.selectionStart = el.selectionEnd = el.value.length })
+  const caretBefore = await innerInput.evaluate((el) => el.selectionStart)
+  await search.press('ArrowLeft')
+  const caretAfter = await innerInput.evaluate((el) => el.selectionStart)
+  assert.ok(caretAfter < caretBefore, 'ArrowLeft with a query moves the caret rather than collapsing a section')
+  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'query present: ArrowLeft leaves sections expanded')
+  await search.press('ArrowRight')
+  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'query present: ArrowRight leaves sections expanded')
+  // Refusal: Enter with a collapsed section must not choose a model.
+  await search.fill('')
+  await search.press('ArrowDown') // Sonnet is first (recently chosen)
+  await search.press('End')       // jump to Brave model (last row)
+  await braveGroup.click()        // collapse Brave so Brave model is hidden
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
+  const labelBefore = await trigger.getAttribute('aria-label')
+  await search.press('Enter')     // active row is collapsed — should be ignored
+  assert.equal(await page.locator('.model-popover').isVisible(), true, 'Enter on a collapsed row leaves the menu open')
+  assert.equal(await trigger.getAttribute('aria-label'), labelBefore, 'Enter on a collapsed row does not change the model')
+  await braveGroup.click()        // expand again for the rest of the test
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length === 3)
   // ArrowLeft on a row collapses its provider section
   await search.fill('')
   await search.press('ArrowDown') // move to first model row (index 0)
@@ -222,7 +246,6 @@ try {
     /Claude Sonnet/,
     'PageUp from last row clamps to first row',
   )
-  // End key jumps to the last visible row.
   await search.press('End')
   assert.match(
     await page.locator('.model-menu leo-option.active').innerText(),
