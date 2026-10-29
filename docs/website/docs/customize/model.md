@@ -50,6 +50,12 @@ offers.
 The list is drawn for a person, and the names in it never reach a model. What you picked becomes the
 `model` routing field of later requests.
 
+**A prompt file can open the picker on a model.** A file in `~/.bravebot/prompts` whose front matter
+has `model: <name>` puts its text in the box and opens this picker with the cursor on the row whose
+key or name is that model. Nothing changes until you press Enter on a row, and Escape keeps the model
+in use. A name the list lacks is said. Under `--agent` with a definition that names a model the
+picker does not open. See [Prompt files](../reference/commands.md#prompt-files).
+
 With an AWS account or a gateway configured the picker offers those models alongside this list rather
 than instead of it, each under its own heading. See
 [Reaching a model through AWS Bedrock](providers/bedrock.md) and

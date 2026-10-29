@@ -645,8 +645,12 @@ fn a_projects_strict_does_not_lift_the_persons_read_only() {
 /// rejects is the mode reported and not enforced, or enforced for the first turn only.
 #[test]
 fn a_chosen_mode_is_what_the_next_turns_program_is_held_to() {
+    // A `strict` turn is refused where the kernel does not govern unix sockets with a path
+    // (SANDBOX-3), so the test has nothing to compare on such a kernel.
     if bravebot_sandbox::base::Prelude::current().is_none()
         || !bravebot_sandbox::confinement_works_here()
+        || !bravebot_sandbox::for_current_platform()
+            .is_ok_and(|sandbox| sandbox.capabilities().governs_sockets_with_a_path)
     {
         return;
     }

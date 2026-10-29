@@ -26487,11 +26487,14 @@ fn strict_cannot_run_here() -> bool {
 }
 
 /// A `read-only` stage starts with the network closed (SANDBOX-22), so it is refused where the
-/// platform cannot deny it (SANDBOX-5), and a test that needs one to start has nothing to test there.
+/// platform cannot deny it (SANDBOX-5), and, like a `strict` one, on a Linux kernel below Landlock
+/// ABI 9 (SANDBOX-3). A test that needs one to start has nothing to test there.
 fn read_only_cannot_run_here() -> bool {
     cannot_confine_here()
-        || !bravebot_sandbox::for_current_platform()
-            .is_ok_and(|sandbox| sandbox.capabilities().network_denial_enforced)
+        || !bravebot_sandbox::for_current_platform().is_ok_and(|sandbox| {
+            sandbox.capabilities().network_denial_enforced
+                && sandbox.capabilities().governs_sockets_with_a_path
+        })
 }
 
 /// A planner that meets `Operation not permitted` with nothing said about confinement looks for a
@@ -70091,7 +70094,7 @@ fn under_read_only_a_line_redirecting_into_a_file_is_refused_and_one_into_dev_nu
 #[test]
 fn under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not() {
     use bravebot_sandbox::SandboxMode::{ReadOnly, WorkspaceWrite};
-    if cannot_confine_here() {
+    if read_only_cannot_run_here() {
         return;
     }
     let turn_under = |name: &str, mode| {

@@ -756,7 +756,7 @@ doctor-kernel-enforced = imposé par le noyau
 doctor-not-enforced = NON imposé
 doctor-confinement-unavailable = confinement indisponible
 doctor-no-network-namespace = espaces de noms réseau : indisponibles ({ $reason }). Une étape sans réseau, ou limitée par sandbox.network.allowedHosts, est refusée ici. Autorisez les espaces de noms utilisateur non privilégiés pour utiliser l'un ou l'autre.
-doctor-sockets-with-a-path-reachable = sockets unix avec un chemin : accessibles. Landlock sur ce noyau est antérieur à l'ABI 9 (Linux 7.1), donc une étape en mode bac à sable read-only ou workspace-write, et un serveur MCP local quel que soit le mode, atteint chacun de ces sockets, dont le D-Bus de l'utilisateur, SSH_AUTH_SOCK et docker.sock. Une étape en mode strict est refusée ici.
+doctor-sockets-with-a-path-reachable = sockets unix avec un chemin : accessibles. Landlock sur ce noyau est antérieur à l'ABI 9 (Linux 7.1), donc une étape en mode bac à sable workspace-write, et un serveur MCP local quel que soit le mode, atteint chacun de ces sockets, dont le D-Bus de l'utilisateur, SSH_AUTH_SOCK et docker.sock. Une étape en mode strict ou read-only est refusée ici.
 doctor-network = réseau
 doctor-trust-roots = racines de confiance
 doctor-trust-roots-bundled = intégrées ({ $variables } en désigne d'autres)
@@ -797,7 +797,8 @@ permission-rule-empty = est vide
 permission-rule-unclosed-bracket = n'a pas sa parenthèse fermante
 permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit, Bash, WebFetch ou Mcp
 permission-rule-empty-brackets = a des parenthèses vides ; enlevez-les pour viser toute utilisation
-permission-rule-whitespace-at-an-end = a un caractère blanc au début ou à la fin de son chemin, qui ferait partie du nom d'un fichier ; enlevez-le, ou mettez un * à sa place, ce qui vise aussi d'autres noms
+permission-rule-empty-quoted-name = a des guillemets doubles autour de rien, et aucun fichier n'a un nom vide ; enlevez les parenthèses pour viser toute utilisation, ou mettez le nom du fichier entre les guillemets
+permission-rule-whitespace-at-an-end = a un caractère blanc au début ou à la fin de son chemin, qui ferait partie du nom d'un fichier ; enlevez-le, ou mettez tout le chemin entre guillemets doubles pour viser le nom tel qu'il est écrit
 permission-rule-unanchored = a besoin d'un répertoire personnel ou d'un répertoire de réglages pour indiquer vers quoi elle pointe
 permission-rule-not-a-domain-rule = a besoin d'un domaine ; écrivez WebFetch(domain:example.com)
 permission-rule-no-domain-named = ne nomme aucun domaine après 'domain:'
@@ -1742,6 +1743,7 @@ model-picker-search-placeholder = Rechercher
 model-picker-nothing-matches = aucune correspondance
 model-picker-loading = chargement des modèles…
 model-picker-listing-lost = la liste des modèles n'a pas été reçue
+model-picker-unknown-name = le fichier d'invite nomme { $model }, que la liste des modèles ne contient pas
 picker-current = actuel
 
 config-picker-title = mode d'édition
@@ -2373,7 +2375,7 @@ status-network-pinned = imposé fermé par { $path }, ni un drapeau ni un fichie
 status-network-pinned-by-policy = imposé fermé par les réglages gérés, ni un drapeau ni un fichier de réglages ne peut le changer
 status-path-sockets = Sockets unix des programmes
 status-path-sockets-reachable = chacun avec un chemin est accessible : D-Bus, SSH_AUTH_SOCK, docker.sock
-status-path-sockets-why = Landlock ici est antérieur à l'ABI 9 (Linux 7.1), et strict refuse les programmes
+status-path-sockets-why = Landlock ici est antérieur à l'ABI 9 (Linux 7.1), et strict et read-only refusent les programmes
 status-sandbox-filesystem = Règles de fichiers
 status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 status-sandbox-filesystem-files = de { $files }
@@ -3493,6 +3495,10 @@ prompt-file-empty =
     /{ $name } est un fichier d'invite vide, donc la ligne n'a pas été envoyée : { $path }
 prompt-file-agent-not-a-name =
     /{ $name } est un fichier d'invite dont l'agent n'est pas un seul mot, donc la ligne n'a pas été envoyée : { $path }
+prompt-file-model-not-a-name =
+    /{ $name } est un fichier d'invite dont le modèle n'est pas un seul mot, donc la ligne n'a pas été envoyée : { $path }
+prompt-file-agent-and-model =
+    /{ $name } est un fichier d'invite qui nomme un agent et un modèle, alors que la zone de saisie ne tient qu'une forme, donc la ligne n'a pas été envoyée : { $path }
 prompt-file-begins-with-a-command =
     /{ $name } est un fichier d'invite qui commence par une commande, ce qu'un fichier ne peut pas lancer, donc la ligne n'a pas été envoyée : { $path }
 paste-folded = { $lines ->

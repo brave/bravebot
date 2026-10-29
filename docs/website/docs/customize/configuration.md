@@ -262,10 +262,14 @@ spelling: seven of the ten above, plus the six AWS ones. The three exceptions ar
 the file, except where an [administrator pinned it](managed-settings.md), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
-Six network names can go there as well: `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`, `HTTPS_PROXY`,
-`HTTP_PROXY` and `NO_PROXY`. They are read from your own file and a `--settings` file outside the
-project, and from no project or local file; see
-[certificates and proxies](../security/security.md#certificates-and-proxies).
+Nine names are read from your own file and a `--settings` file outside the project, and from no
+project or local file: the six network names `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`,
+`HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and the three Google names. So are the six Bedrock names
+`BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers,
+because they choose the AWS account a conversation is sent through. `bravebot doctor` reports one a
+project or local file names and the name decides nothing; see
+[certificates and proxies](../security/security.md#certificates-and-proxies) for the network names
+and [Bedrock](providers/bedrock.md) for the AWS ones.
 
 ## `settings.json`
 
@@ -1295,10 +1299,15 @@ starts inside the workspace is a relative one, so `Read(/secrets/**)` in a proje
 
 Whitespace at either end of a path specifier makes the rule unreadable, since it could be padding or
 part of a file's name, and `doctor` names the rule. `Read( .env )` is dropped for that reason. Write
-a name that starts with whitespace from `./`, as `Read(./ notes.md)`. A name that ends with whitespace
-has no spelling, since `Read(./notes.md*)` covers it along with other names. Whitespace inside a name
-is fine: `Read(./my notes.md)` is about the file `my notes.md`. A `*` is always a wildcard, so no rule
-is about a file whose name holds one and nothing else.
+a name that starts with whitespace from `./`, as `Read(./ notes.md)`. Whitespace inside a name is
+fine: `Read(./my notes.md)` is about the file `my notes.md`.
+
+A path in double quotes is one name, taken as written. Use it for a name that ends with whitespace, a
+name of whitespace alone, or a name that holds a `*`: `Read("./notes.md ")` is about the file
+`notes.md ` alone, and `Read("./*.md")` is about the file called `*.md` and no other. Whitespace and
+`*` between the quotes are ordinary characters, and a name with no slash still matches at any depth.
+A name that itself begins and ends with a quote is written in one more pair. Whitespace outside the
+quotes is still reported.
 
 On Windows a path on a drive is a full path, with the drive as its first segment:
 `Read(//D:/work/secrets/**)` covers `D:\work\secrets\key` whichever separator the path is written

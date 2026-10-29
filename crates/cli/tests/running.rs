@@ -8385,8 +8385,8 @@ fn auth_login_bedrock_records_the_opt_in_once_its_account_signs_in() {
     );
 }
 
-/// CLI-18: a checkout's settings turning the switch on are read only in that checkout, so the
-/// person's own file is where it is recorded.
+/// CLI-18: a checkout's settings turning the switch on decide nothing (BACKEND-33), so the person's
+/// own file is where it is recorded, and `doctor` names the checkout's file as ignored.
 #[cfg(unix)]
 #[test]
 fn auth_login_bedrock_records_the_opt_in_where_only_a_checkout_turns_it_on() {
@@ -8419,6 +8419,22 @@ fn auth_login_bedrock_records_the_opt_in_where_only_a_checkout_turns_it_on() {
     assert!(
         recorded.contains(r#""BRAVEBOT_USE_BEDROCK": "1""#),
         "the checkout's switch kept the person's file from recording it: {recorded}"
+    );
+
+    let doctor = bravebot_started_in(
+        &scratch.path,
+        &scratch.path.join("checkout"),
+        NOTHING_CONFIGURED,
+        &["doctor"],
+    );
+    let (stdout, stderr) = said(&doctor);
+    assert!(
+        stdout.contains("BRAVEBOT_USE_BEDROCK in") && stdout.contains("is a checkout's file"),
+        "doctor did not name the checkout's switch as ignored: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("override  BRAVEBOT_USE_BEDROCK"),
+        "doctor said the checkout's switch won: {stdout}"
     );
 }
 

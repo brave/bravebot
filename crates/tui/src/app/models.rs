@@ -844,11 +844,15 @@ pub(super) fn open_model_picker_awaiting(
     config: &Config,
     listing: mpsc::Receiver<crate::model_prompt::Listed>,
 ) {
+    // The model a prompt file named is where the cursor opens (CMD-17). Opening on it chooses
+    // nothing: the person still presses Enter on the row.
+    let wanted = session.take_model_to_offer();
     session.open_picking(crate::picking::Picking::Model(
         crate::model_prompt::Picker::loading(
             Some(model_in_force(session.model(), config)),
             listing,
-        ),
+        )
+        .wanting(wanted),
     ));
 }
 

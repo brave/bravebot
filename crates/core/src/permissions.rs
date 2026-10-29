@@ -190,6 +190,12 @@ struct PathPattern {
     /// any depth, and the same pattern as an allow rule grants only the one at the top. A rule
     /// that restricts should cover the nested copy; a rule that grants should cover what it names.
     floats_when_restricting: bool,
+    /// Whether the segments are names and `*` and `**` in them are ordinary characters, from a
+    /// specifier written in double quotes (PERM-3). Such a pattern covers the one path it spells.
+    literal: bool,
+    /// Whether a literal pattern is a single name written without `./`, which matches at any depth
+    /// in every list. A pattern with wildcards says the same with a leading `**` instead.
+    anywhere: bool,
 }
 
 /// One rule: a family, and what of it the rule is about.
@@ -268,6 +274,16 @@ impl Rule {
         let written = specifier;
         let specifier = specifier.map(str::trim);
 
+        // A path specifier in double quotes is one name, taken as written (PERM-3). It is how a
+        // name with whitespace at an end, a name of whitespace alone and a name holding a `*` are
+        // spelled.
+        let quoted = written
+            .filter(|_| subject.takes_a_path())
+            .and_then(quoted_name);
+        if quoted == Some("") {
+            return Err(Rejected::new(text, Unreadable::EmptyQuotedName));
+        }
+
         // Whitespace at an end of a path specifier is part of a file's name where a path is bytes
         // (TRUST-2), and it is as likely padding inside the brackets. Read as the name, a deny rule
         // typed with padding covers a file nobody meant and the file it was for is left open. Read
@@ -275,6 +291,7 @@ impl Rule {
         // is a reading to guess at, so the rule is not read. The other families are words, where
         // padding says nothing.
         if subject.takes_a_path()
+            && quoted.is_none()
             && specifier.is_some_and(|s| !s.is_empty())
             && written != specifier
         {
@@ -287,8 +304,10 @@ impl Rule {
             Some("") => {
                 return Err(Rejected::new(text, Unreadable::EmptyBrackets));
             }
-            Some(specifier) if subject.takes_a_path() => path_pattern(specifier, anchors)
-                .ok_or_else(|| Rejected::new(text, Unreadable::Unanchored))?,
+            Some(specifier) if subject.takes_a_path() => {
+                path_pattern(quoted.unwrap_or(specifier), anchors, quoted.is_some())
+                    .ok_or_else(|| Rejected::new(text, Unreadable::Unanchored))?
+            }
             Some(specifier) if subject == Subject::WebFetch => {
                 // Claude Code's spelling, and the only one: a URL prefix would read as covering a
                 // path, and a rule about a path on a host it does not also pin is not a rule
@@ -347,11 +366,13 @@ impl Rule {
             | Pattern::Server(_)
             | Pattern::Tool(..) => return,
         };
-        let from = usize::from(pattern.segments.first().is_some_and(|first| first == "**"));
+        let from = usize::from(
+            !pattern.literal && pattern.segments.first().is_some_and(|first| first == "**"),
+        );
         let literal = from
             + pattern.segments[from..]
                 .iter()
-                .take_while(|segment| !segment.contains('*'))
+                .take_while(|segment| pattern.literal || !segment.contains('*'))
                 .count();
         let prefix = &pattern.segments[from..literal];
         if prefix.is_empty() || prefix.iter().any(|segment| segment == "..") {
@@ -374,6 +395,8 @@ impl Rule {
         let respelled = PathPattern {
             segments,
             floats_when_restricting: false,
+            literal: pattern.literal,
+            anywhere: false,
         };
         let respelled = match lands_absolute {
             true => Pattern::Absolute(respelled),
@@ -401,6 +424,8 @@ impl Rule {
                     Some(Pattern::Absolute(PathPattern {
                         segments,
                         floats_when_restricting: false,
+                        literal: pattern.literal,
+                        anywhere: false,
                     }))
                 }
                 _ => None,
@@ -546,6 +571,9 @@ pub enum Unreadable {
     UnknownFamily,
     /// `Read()`, which says nothing that `Read` alone does not.
     EmptyBrackets,
+    /// `Read("")`, a quoted name with nothing in it. No file has an empty name, and the quotes
+    /// are the spelling of a literal name, so the rule is not the bare family and is not read.
+    EmptyQuotedName,
     /// A path specifier with whitespace at its start or end, as `Read(./a.md )` or `Read( .env )`.
     /// The whitespace is part of the name of a file that has it and is as likely padding, so
     /// neither reading is safe for a rule that refuses.
@@ -970,15 +998,15 @@ fn tool_pattern(specifier: &str) -> Option<Pattern> {
 /// A name rooted at a drive letter is keyed the way [`Permissions::for_path`] keys the path, both
 /// as the directory a `~/` or `/` pattern is anchored at and as a specifier written without `//`,
 /// since the host spells a full path that way and the path it names reads as one.
-fn path_pattern(specifier: &str, anchors: &Anchors) -> Option<Pattern> {
+fn path_pattern(specifier: &str, anchors: &Anchors, literal: bool) -> Option<Pattern> {
     use crate::spelling::{to_key, to_slash};
     let backslash_separates = anchors.backslash_separates;
     let rooted = |key: &str| {
         let key = drive_in_upper_case(key, backslash_separates);
-        Some(Pattern::Absolute(PathPattern::rooted(&fold(
-            &key,
-            anchors.folds_case,
-        ))))
+        Some(Pattern::Absolute(PathPattern::rooted(
+            &fold(&key, anchors.folds_case),
+            literal,
+        )))
     };
     let specifier = &*to_slash(specifier, backslash_separates);
     if specifier.starts_with("//") {
@@ -1003,7 +1031,18 @@ fn path_pattern(specifier: &str, anchors: &Anchors) -> Option<Pattern> {
     Some(Pattern::Relative(PathPattern::relative(
         &fold(rest, anchors.folds_case),
         dotted.is_some(),
+        literal,
     )))
+}
+
+/// The name between the double quotes of a path specifier written as one, or `None` for a
+/// specifier that is not (PERM-3). Quoted is a quote at each end of the specifier as written, so
+/// padding outside the quotes leaves it unquoted. One pair is removed and what is inside is the
+/// name, quotes included.
+fn quoted_name(specifier: &str) -> Option<&str> {
+    specifier
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
 }
 
 /// `path` spelled as the rules match one: `/`-separated, its drive letter in upper case, and folded
@@ -1047,10 +1086,12 @@ fn join(base: &str, rest: &str) -> String {
 
 impl PathPattern {
     /// A pattern that starts where it says it starts, so it never floats.
-    fn rooted(pattern: &str) -> Self {
+    fn rooted(pattern: &str, literal: bool) -> Self {
         Self {
             segments: split(pattern),
             floats_when_restricting: false,
+            literal,
+            anywhere: false,
         }
     }
 
@@ -1064,15 +1105,17 @@ impl PathPattern {
     /// `dotted` is whether the specifier was written `./x`, which starts at the top of the
     /// workspace however many segments it has: it is not a name, so it neither floats to any depth
     /// nor reaches a nested copy where it restricts.
-    fn relative(pattern: &str, dotted: bool) -> Self {
+    fn relative(pattern: &str, dotted: bool, literal: bool) -> Self {
         let segments = split(pattern);
         let is_a_bare_name = segments.len() == 1 && !dotted;
         let starts_at_a_named_segment = segments
             .first()
-            .is_some_and(|first| first != "**" && !first.contains('*'));
+            .is_some_and(|first| literal || (first != "**" && !first.contains('*')));
         Self {
             floats_when_restricting: !is_a_bare_name && !dotted && starts_at_a_named_segment,
-            segments: if is_a_bare_name {
+            literal,
+            anywhere: literal && is_a_bare_name,
+            segments: if is_a_bare_name && !literal {
                 // A name matches at any depth, which is a leading `**` and nothing else.
                 let mut floated = vec!["**".to_string()];
                 floated.extend(segments);
@@ -1098,11 +1141,22 @@ impl PathPattern {
                 .map(|segment| crate::trust::canonical_form(segment, folds_case).into_owned())
                 .collect(),
             floats_when_restricting: self.floats_when_restricting,
+            literal: self.literal,
+            anywhere: self.anywhere,
         }
     }
 
     /// Whether this pattern covers `path`, already split into segments.
     fn matches(&self, path: &[&str], restricting: bool) -> bool {
+        if self.literal {
+            let ends_with = path.len() >= self.segments.len()
+                && path[path.len() - self.segments.len()..]
+                    .iter()
+                    .zip(&self.segments)
+                    .all(|(path, name)| path == name);
+            let at_any_depth = self.anywhere || (restricting && self.floats_when_restricting);
+            return ends_with && (at_any_depth || path.len() == self.segments.len());
+        }
         if segments_match(&self.segments, path) {
             return true;
         }
@@ -2085,6 +2139,210 @@ mod tests {
                 assert_eq!(rejected.text, written);
             }
         }
+    }
+
+    /// A path specifier in double quotes is one name taken as written (PERM-3), in every list and
+    /// for both families that take a path. It is the spelling of a name with whitespace at an end,
+    /// a name of whitespace alone and a name holding a `*`: each is about that file and no other,
+    /// where unquoted the same text is reported or is a wildcard.
+    #[test]
+    fn a_quoted_path_specifier_is_about_the_one_file_it_spells() {
+        for (written, covered, not_covered) in [
+            ("./a.md ", "a.md ", &["a.md", "a.md  ", " a.md"][..]),
+            ("./a.md\u{a0}", "a.md\u{a0}", &["a.md", "a.md "][..]),
+            ("./ ", " ", &["a", "  ", "\t"][..]),
+            ("./\u{3000}", "\u{3000}", &[" ", "a"][..]),
+            ("./*.md", "*.md", &["a.md", "b.md", "x*.md"][..]),
+            ("./a*", "a*", &["a", "ab", "a*b"][..]),
+            ("./**", "**", &["a", "d/a", "*"][..]),
+            ("./d/*", "d/*", &["d/a", "e/d/*"][..]),
+        ] {
+            for family in ["Read", "Edit"] {
+                let subject = if family == "Read" {
+                    Subject::Read
+                } else {
+                    Subject::Edit
+                };
+                let text = format!("{family}(\"{written}\")");
+                for (ruling, permissions) in [
+                    (Ruling::Deny, rules(&[text.as_str()], &[], &[])),
+                    (Ruling::Ask, rules(&[], &[text.as_str()], &[])),
+                    (Ruling::Allow, rules(&[], &[], &[text.as_str()])),
+                ] {
+                    assert_eq!(
+                        permissions.for_path(subject, covered),
+                        Decision::Ruled(ruling),
+                        "{text:?} ({ruling:?}) did not decide {covered:?}"
+                    );
+                    for other in not_covered {
+                        assert_eq!(
+                            permissions.for_path(subject, other),
+                            Decision::Unmatched,
+                            "{text:?} ({ruling:?}) decided {other:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A quoted name with no slash matches at any depth in every list, as an unquoted one does, and
+    /// one written from `./` is the top of the workspace only (PERM-4).
+    #[test]
+    fn a_quoted_name_keeps_the_depth_an_unquoted_one_has() {
+        let anywhere = rules(&["Read(\"*.md \")"], &[], &["Edit(\"*.md \")"]);
+        for path in ["*.md ", "d/*.md ", "d/e/*.md "] {
+            assert_eq!(
+                anywhere.for_path(Subject::Read, path),
+                Decision::Ruled(Ruling::Deny)
+            );
+            assert_eq!(
+                anywhere.for_path(Subject::Edit, path),
+                Decision::Ruled(Ruling::Allow)
+            );
+        }
+        let top = rules(&["Read(\"./*.md \")"], &[], &["Edit(\"./*.md \")"]);
+        assert_eq!(
+            top.for_path(Subject::Read, "*.md "),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(top.for_path(Subject::Read, "d/*.md "), Decision::Unmatched);
+        assert_eq!(top.for_path(Subject::Edit, "d/*.md "), Decision::Unmatched);
+        // A directory named by a deny rule is the nested one too, and by an allow rule the top one.
+        let directory = rules(&["Read(\"d*/x\")"], &[], &["Edit(\"d*/x\")"]);
+        assert_eq!(
+            directory.for_path(Subject::Read, "e/d*/x"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            directory.for_path(Subject::Edit, "e/d*/x"),
+            Decision::Unmatched
+        );
+        assert_eq!(
+            directory.for_path(Subject::Edit, "d*/x"),
+            Decision::Ruled(Ruling::Allow)
+        );
+    }
+
+    /// Only a specifier with a quote at each end is quoted, and padding outside the quotes is
+    /// whitespace at an end. Quotes holding nothing are empty brackets. A quote at one end is part
+    /// of a pattern as it was before, so no rule written without a pair of quotes changes meaning.
+    #[test]
+    fn a_quote_at_one_end_is_part_of_a_pattern_and_padding_outside_quotes_is_reported() {
+        for written in ["Read( \"./a.md\")", "Edit(\"./a.md\" )"] {
+            let rejected = Rule::parse(written, &anchors()).expect_err(written);
+            assert_eq!(rejected.reason, Unreadable::WhitespaceAtAnEnd);
+        }
+        for written in ["Read(\"\")", "Edit(\"\")"] {
+            let rejected = Rule::parse(written, &anchors()).expect_err(written);
+            assert_eq!(rejected.reason, Unreadable::EmptyQuotedName, "{written}");
+        }
+        let rejected = Rule::parse("Read()", &anchors()).expect_err("empty");
+        assert_eq!(rejected.reason, Unreadable::EmptyBrackets);
+        let one_end = rules(&["Read(\"a*)", "Read(a*\")"], &[], &[]);
+        assert_eq!(
+            one_end.for_path(Subject::Read, "\"abc"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            one_end.for_path(Subject::Read, "abc\""),
+            Decision::Ruled(Ruling::Deny)
+        );
+        // One more pair names a file whose name is itself quoted.
+        let quoted_name = rules(&["Read(\"\"a\"\")"], &[], &[]);
+        assert_eq!(
+            quoted_name.for_path(Subject::Read, "\"a\""),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            quoted_name.for_path(Subject::Read, "a"),
+            Decision::Unmatched
+        );
+        // The other families keep reading a quote as a character of the specifier.
+        assert!(Rule::parse("Bash(\"ls\")", &anchors()).is_ok());
+    }
+
+    /// A lone quote is not a pair: it has a quote at one end only, so it is a pattern that names the
+    /// file called `"`. An implementation that tests the first and last character separately sees
+    /// the one quote as both ends and reads quotes holding nothing.
+    #[test]
+    fn a_lone_quote_is_a_pattern_for_the_file_called_a_quote() {
+        let permissions = rules(&["Read(\")"], &[], &[]);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "\""),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "d/\""),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_path(Subject::Read, "a"),
+            Decision::Unmatched
+        );
+        assert!(Rule::parse("Read(\")", &anchors()).is_ok());
+    }
+
+    /// One pair is removed and a quote in the middle of the name stays, so `"a"b"` is the file
+    /// `a"b`. An implementation that removes every quote names `ab`, and one that refuses a quote
+    /// inside the pair reports the rule; neither covers `a"b` alone.
+    #[test]
+    fn a_quote_inside_a_quoted_name_is_part_of_the_name() {
+        let permissions = rules(&["Read(\"./a\"b\")"], &[], &[]);
+        assert_eq!(
+            permissions.for_path(Subject::Read, "a\"b"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        for other in ["ab", "\"a\"b\"", "a\"", "b"] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, other),
+                Decision::Unmatched,
+                "decided {other:?}"
+            );
+        }
+    }
+
+    /// A leading `**/` inside quotes is a segment called `**`, not the anchor that floats a pattern
+    /// to any depth, so `"**/a"` is the file `a` in a directory called `**` and nothing else. An
+    /// implementation that applies the `**/` anchor inside quotes covers `a` and `d/a` too.
+    #[test]
+    fn a_double_star_segment_inside_quotes_is_a_directory_called_that() {
+        for (ruling, permissions) in [
+            (Ruling::Deny, rules(&["Read(\"**/a\")"], &[], &[])),
+            (Ruling::Allow, rules(&[], &[], &["Read(\"**/a\")"])),
+        ] {
+            assert_eq!(
+                permissions.for_path(Subject::Read, "**/a"),
+                Decision::Ruled(ruling)
+            );
+            for other in ["a", "d/a", "d/e/a", "x/a"] {
+                assert_eq!(
+                    permissions.for_path(Subject::Read, other),
+                    Decision::Unmatched,
+                    "{ruling:?} decided {other:?}"
+                );
+            }
+        }
+    }
+
+    /// Where a backslash separates it is a separator inside quotes as it is outside them, since no
+    /// file there has one in its name; where a slash is the only separator it is a byte of the name.
+    #[test]
+    fn a_backslash_inside_quotes_follows_the_hosts_separator() {
+        let separating = rules_where_a_backslash_separates(&["Read(\"./d\\a \")"], &[], &[]);
+        assert_eq!(
+            separating.for_path(Subject::Read, "d/a "),
+            Decision::Ruled(Ruling::Deny)
+        );
+        let ordinary = rules(&["Read(\"./d\\a \")"], &[], &[]);
+        assert_eq!(
+            ordinary.for_path(Subject::Read, "d\\a "),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            ordinary.for_path(Subject::Read, "d/a "),
+            Decision::Unmatched
+        );
     }
 
     /// Only a path is bytes. A command is words, a host is a name in lower case and a tool is an
