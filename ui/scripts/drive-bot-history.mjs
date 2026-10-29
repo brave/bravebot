@@ -97,6 +97,8 @@ try {
   // Opening the bot again goes back to the conversation in its home folder, which has no project
   // chip and no context column, and the back button on its earlier conversations does the same.
   await overview();
+  // Playwright clicks bypass native window dragging; the arrow sits in the title row, over the drag strip.
+  assert.equal(await page.locator('[data-test="earlier-back"]').evaluate(e => getComputedStyle(e).getPropertyValue('-webkit-app-region')), 'no-drag', 'Back must receive native mouse clicks inside the draggable titlebar');
   await page.locator('[data-test="earlier-back"]').click();
   await page.locator('[data-test="bot-greeting"]').waitFor();
   await openBot();

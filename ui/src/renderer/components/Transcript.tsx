@@ -1197,9 +1197,10 @@ const EntryList = memo(function EntryList({
             // that prompt is in the conversation, but nothing here knows where.
             forkable={!running && (run.entry.kind !== 'user' || run.entry.prompt !== undefined)}
             face={run.entry.kind === 'user' && run.entry.summoned !== undefined ? faces.get(run.entry.summoned) : undefined}
+            revealed={run.entry.id === focused || run.entry.id === matched}
           />}
           {(run.entry.kind === 'assistant' || (run.entry.kind === 'error' && run.entry.turn !== undefined)) &&
-            <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onDisclosure={onTurnDisclosure} onAudit={onAudit}
+            <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onAudit={onAudit}
               copy={run.entry.kind === 'assistant' ? run.entry.text : undefined}
               undo={run.entry.id === undoing ? undo : undefined} />}
         </div>
@@ -1258,6 +1259,77 @@ function SaidText({ text, summoned, face }: { text: string; summoned: string | u
   </>
 }
 
+/** How long a prompt can be before the rest sits behind Show more. */
+const LONG_PROMPT_CHARS = 600
+const LONG_PROMPT_LINES = 8
+
+/**
+ * The person's own words. A long paste folds so the reply stays on screen. Copy and Fork sit
+ * outside the fold. Find opening this row expands it.
+ */
+function UserBubble({
+  text,
+  summoned,
+  face,
+  revealed,
+  forkable,
+  onCopy,
+  onFork,
+}: {
+  text: string
+  summoned: string | undefined
+  face: Face | undefined
+  revealed: boolean
+  forkable: boolean
+  onCopy: () => string
+  onFork: () => void
+}): React.JSX.Element {
+  const long = text.length > LONG_PROMPT_CHARS || text.split('\n').length > LONG_PROMPT_LINES
+  const [open, setOpen] = useState(revealed)
+  useEffect(() => { if (revealed) setOpen(true) }, [revealed])
+  const expanded = !long || open
+  return (
+    <div className="bubble user">
+      <div className={`bubble-text${expanded ? '' : ' folded'}`}>
+        <SaidText text={text} summoned={summoned} face={face} />
+      </div>
+      {long && (
+        <Button
+          kind="plain-faint"
+          size="tiny"
+          className="prompt-more"
+          aria-expanded={expanded}
+          onClick={() => setOpen((shown) => !shown)}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </Button>
+      )}
+      {/* Inside the row rather than beside it. The wrapper this row sits in is
+          `display: contents` and has no box to hang anything off, and the bubble is the
+          only thing here that knows where the row actually is on screen. */}
+      <div className="message-actions">
+        <CopyButton text={onCopy} label="Copy message" />
+        <Button
+          kind="plain-faint"
+          size="tiny"
+          fab
+          className="fork-here icon-button plain-faint tiny"
+          aria-label="Fork from here"
+          data-tooltip={
+            forkable
+              ? 'Fork from here · Start a session from what was said before this'
+              : 'Wait for the turn to finish'
+          }
+          isDisabled={!forkable}
+          onClick={onFork}
+        >
+          <span slot="icon-before"><ForkIcon /></span>
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 /**
  * A reply this bot gave in another conversation, drawn in its own (MEMORY-14). Not an entry and
  * never part of what the bot is sent: it is drawn from the main process's record, and pressing it
@@ -1274,7 +1346,7 @@ function RepliedCard({ summon, faces, onOpen }: { summon: Summon; faces: Map<str
         <Icon name="message-bubble" />
         <span className="replied-to">Replied to</span>
         {summon.host.kind === 'bot'
-          ? host ? <BotFace seed={host.avatar} size={14} /> : <Icon name="robot" />
+          ? host ? <BotFace seed={host.avatar} size={16} /> : <Icon name="robot" />
           : <Icon name="folder-open" />}
         <span className="replied-where">{where}</span>
         <span className="replied-when num">{ago(Math.floor(summon.at / 1000))}</span>
@@ -1300,7 +1372,7 @@ export function runSummary(entries: t.Entry[]): string {
     if (verb) counts.set(verb, (counts.get(verb) ?? 0) + 1)
   }
   const verbs = [...counts].map(([verb, count]) => `${verb} ${count}`).join(', ')
-  return `Worked through ${entries.length} step${entries.length === 1 ? '' : 's'}${verbs ? ` · ${verbs}` : ''}`
+  return verbs || `Worked through ${entries.length} step${entries.length === 1 ? '' : 's'}`
 }
 
 /**
@@ -1708,70 +1780,32 @@ function Approve({ kind = 'filled', className = 'approve', standing = false, too
   )
 }
 
-/** The same, as the plain button the yes-or-no cards draw. */
-function ApproveButton({ className = 'approve', standing = false, tooltip, onClick, children }: {
-  className?: string
-  standing?: boolean
-  tooltip?: string
-  onClick: () => void
-  children: React.ReactNode
-}): React.JSX.Element {
-  const { open, reason, press } = useApproval(standing, onClick)
-  return (
-    <button className={className} data-tooltip={tooltip} disabled={!open} aria-describedby={reason} onClick={press}>
-      {children}
-    </button>
-  )
-}
-
 /**
- * The foot of a question answered with a yes or a no: the two buttons while it waits, what was
- * answered once it has been, and that nobody answered where its turn ended first.
- *
- * One component so that the three states are the same three on every card that uses it. The
- * state that matters is the last: a card whose turn has ended draws no button, because the
- * question it would answer is no longer waiting and a press would be an approval of nothing.
- *
- * The words are the card's own and are passed in whole. A button here says what pressing it
- * does, in the words of the thing being decided, so there is no generic yes to press from habit.
- *
- * `kind` is a parameter and never worked out from anything drawn: it chooses the method the
- * answer is sent through, and the agent checks that against the question actually waiting.
+ * The two answers on a yes-or-no card. The words are the card's own. `kind` chooses the method
+ * the answer is sent through, and the agent checks that against the question actually waiting.
  */
 function YesOrNo({
   kind,
   request,
-  answerable,
-  decision,
   onDecide,
   reject,
   approve,
-  approved,
-  rejected,
 }: {
   kind: t.Asked
   request: number
-  answerable: boolean
-  decision: 'approve' | 'reject' | null
   onDecide: Answer
   reject: string
   approve: string
-  approved: string
-  rejected: string
 }): React.JSX.Element {
-  if (!answerable) return <Unanswered />
-  if (decision !== null) {
-    return <div className={`decided ${decision}`}>{decision === 'approve' ? approved : rejected}</div>
-  }
   return (
-    <Answers>
-      <button className="reject" onClick={() => onDecide(kind, request, false)}>
+    <>
+      <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide(kind, request, false)}>
         {reject}
-      </button>
-      <ApproveButton onClick={() => onDecide(kind, request, true)}>
+      </Button>
+      <Approve onClick={() => onDecide(kind, request, true)}>
         {approve}
-      </ApproveButton>
-    </Answers>
+      </Approve>
+    </>
   )
 }
 
@@ -1785,54 +1819,34 @@ function YesOrNo({
 function ThreeAnswers({
   kind,
   request,
-  answerable,
-  decision,
-  remember,
   onDecide,
   reject,
   approve,
   always,
   alwaysTooltip,
-  approved,
-  approvedAlways,
-  rejected,
 }: {
   kind: t.Asked
   request: number
-  answerable: boolean
-  decision: 'approve' | 'reject' | null
-  remember: boolean
   onDecide: Answer
   reject: string
   approve: string
   always: string | null
   alwaysTooltip: string
-  approved: string
-  approvedAlways: string
-  rejected: string
 }): React.JSX.Element {
-  if (!answerable) return <Unanswered />
-  if (decision !== null) {
-    return (
-      <div className={`decided ${decision}`}>
-        {decision === 'reject' ? rejected : remember ? approvedAlways : approved}
-      </div>
-    )
-  }
   return (
-    <Answers>
-      <button className="reject" onClick={() => onDecide(kind, request, false)}>
+    <>
+      <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide(kind, request, false)}>
         {reject}
-      </button>
+      </Button>
       {always && (
-        <ApproveButton className="approve always" standing tooltip={alwaysTooltip} onClick={() => onDecide(kind, request, true, true)}>
+        <Approve kind="outline" className="approve always" standing tooltip={alwaysTooltip} onClick={() => onDecide(kind, request, true, true)}>
           {always}
-        </ApproveButton>
+        </Approve>
       )}
-      <ApproveButton onClick={() => onDecide(kind, request, true)}>
+      <Approve onClick={() => onDecide(kind, request, true)}>
         {approve}
-      </ApproveButton>
-    </Answers>
+      </Approve>
+    </>
   )
 }
 
@@ -1935,6 +1949,8 @@ type RowProps = {
   forkable: boolean
   /** The bot a prompt summoned, for its label in the message. */
   face?: Face
+  /** Open a long prompt: find or a fork landing landed on this row. */
+  revealed?: boolean
 }
 
 /**
@@ -1953,6 +1969,7 @@ export const Row = memo(function Row({
   onFork,
   forkable,
   face,
+  revealed,
 }: RowProps): React.JSX.Element {
   const card = (
     <Card
@@ -1964,6 +1981,7 @@ export const Row = memo(function Row({
       onFork={onFork}
       forkable={forkable}
       face={face}
+      revealed={revealed}
     />
   )
   if (!entry.interrupted) return card
@@ -1999,37 +2017,22 @@ function Card({
   onFork,
   forkable,
   face,
+  revealed,
 }: RowProps): React.JSX.Element {
   const answerable = entry.interrupted !== true
   switch (entry.kind) {
     case 'turn-start': return <></>
     case 'user':
       return (
-        <div className="bubble user">
-          <div className="bubble-text"><SaidText text={entry.text} summoned={entry.summoned} face={face} /></div>
-          {/* Inside the row rather than beside it. The wrapper this row sits in is
-              `display: contents` and has no box to hang anything off, and the bubble is the
-              only thing here that knows where the row actually is on screen. */}
-          <div className="message-actions">
-            <CopyButton text={() => entry.text} label="Copy message" />
-            <Button
-              kind="plain-faint"
-              size="tiny"
-              fab
-              className="fork-here icon-button plain-faint tiny"
-              aria-label="Fork from here"
-              data-tooltip={
-                forkable
-                  ? 'Fork from here · Start a session from what was said before this'
-                  : 'Wait for the turn to finish'
-              }
-              isDisabled={!forkable}
-              onClick={() => onFork(entry.id)}
-            >
-              <span slot="icon-before"><ForkIcon /></span>
-            </Button>
-          </div>
-        </div>
+        <UserBubble
+          text={entry.text}
+          summoned={entry.summoned}
+          face={face}
+          revealed={revealed === true}
+          forkable={forkable}
+          onCopy={() => entry.text}
+          onFork={() => onFork(entry.id)}
+        />
       )
 
     case 'assistant':
@@ -2207,9 +2210,6 @@ function Card({
             <small><LabelChip label={request.remark.labelAxes} />{request.remark.lines > request.remark.preview.length ? `${request.remark.lines - request.remark.preview.length} more lines not shown. ` : ''}Review the diff before approving.</small>
           </div>}
           <Diff changes={request.changes} path={request.path} shownPath={request.shownPath} untrusted={request.untrusted} deciding />
-          <Collapse className="card-details" title="Details" isOpen={undefined}>
-            <p className="permission-scope">{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown above.</p>
-          </Collapse>
         </DecisionCard>
       )
     }
@@ -2239,7 +2239,7 @@ function Card({
             {request.canBeRemembered && (
               <Approve
                 kind="outline" className="approve always" standing
-                tooltip={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}`}
+                tooltip={`Stop asking about: ${request.vouches.map((v) => v.display).join(', ')}. Revoke through Permissions.`}
                 onClick={() => onDecide('run', request.request, true, true)}
               >
                 Trust command and output
@@ -2309,10 +2309,7 @@ function Card({
           )}
           {/* Outside the fold: "Trust command and output" is a standing grant, and what it covers
               has to be readable at the moment it can be pressed, not only on hover or after a click. */}
-          {answerable && decision === null && request.canBeRemembered && <p className="permission-scope" data-deciding="standing"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and trusts their output for this conversation, including after reopening it. Revoke through Permissions.</p>}
-          <Collapse className="card-details" title="Details" isOpen={undefined}>
-            <p className="permission-scope">Run this command in the project folder shown above. “Run once” approves only this execution.</p>
-          </Collapse>
+          {answerable && decision === null && request.canBeRemembered && <p className="permission-scope" data-deciding="standing"><strong>Remembered approval:</strong> {request.vouches.map((v) => v.display).join('; ')}. Covers these exact commands and their output in this conversation.</p>}
         </DecisionCard>
       )
     }
@@ -2380,7 +2377,6 @@ function Card({
           <p data-deciding="all">Open this copy to see what the planner would be shown. It is deleted when you answer:</p>
           <pre className="preview" data-deciding="all">{picture.path}</pre>
           <Collapse className="card-details" title="Details" isOpen={undefined}>
-            <p className="permission-scope">Approval shows the planner only this file. It does not trust this file for future reads.</p>
             <VettingNotice vetting={request.vetting} />
           </Collapse>
         </DecisionCard>
@@ -2398,7 +2394,6 @@ function Card({
         <HiddenCharacters note={request.hiddenNote} />
         <pre className="preview" data-deciding="first">{request.content}</pre>
         <Collapse className="card-details" title="Details" isOpen={undefined}>
-          <p className="permission-scope">Approval lets the planner read only this content. It does not trust this file for future reads.</p>
           <VettingNotice vetting={request.vetting} />
         </Collapse>
       </DecisionCard>
@@ -2406,14 +2401,15 @@ function Card({
     case 'fetch': {
       const { request, decision } = entry
       return (
-        <div className={`confirm fetch ${request.ambient?.length ? 'spends' : ''}`}>
-          {/* The address as the planner wrote it, drawn as text and never as a link: nothing
-              in a question may be something a click follows. */}
-          <div className="confirm-head">
-            <span className="intent">fetch</span>
-            <code className="path" data-deciding="first">{request.url}</code>
-          </div>
-
+        <DecisionCard
+          className={`confirm fetch ${request.ambient?.length ? 'spends' : ''}`}
+          answerable={answerable}
+          subject={request.url}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed this fetch' : 'You refused this fetch' }}
+          head={<CardHead icon="globe" intent="Fetch"
+            subject={<code className="path" data-deciding="first">{request.url}</code>} />}
+          actions={<YesOrNo kind="fetch" request={request.request} onDecide={onDecide} reject="Don’t fetch" approve="Fetch once" />}
+        >
           {/* The host on a line of its own, as the agent read it out of the address. An
               address can be written so that a reader takes one name from it and the request
               goes to another, and the host is what a yes agrees to talk to. */}
@@ -2438,30 +2434,22 @@ function Card({
             “Fetch once” covers this address only. Nothing is remembered, so the next fetch
             asks again.
           </p>
-
-          <YesOrNo
-            kind="fetch"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Don’t fetch"
-            approve="Fetch once"
-            approved="You allowed this fetch"
-            rejected="You refused this fetch"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
     case 'server': {
       const { request, decision } = entry
       return (
-        <div className={`confirm server ${request.runsBuildTooling ? 'builds' : ''}`}>
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">start server</span>
-            <span className="path server-language">{request.language} language server</span>
-          </div>
+        <DecisionCard
+          className={`confirm server ${request.runsBuildTooling ? 'builds' : ''}`}
+          answerable={answerable}
+          subject={`${request.language} language server`}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You started this server for the conversation' : 'You refused this server' }}
+          head={<CardHead icon="laptop" intent="Start server" deciding
+            subject={<span className="path server-language">{request.language} language server</span>} />}
+          actions={<YesOrNo kind="server" request={request.request} onDecide={onDecide} reject="Don’t start" approve="Start for this conversation" />}
+        >
 
           {/* The resolved path is shown because `$PATH` decides what the name runs. */}
           <p className="permission-scope" data-deciding="all">
@@ -2503,32 +2491,22 @@ function Card({
             is shown to the model, and the text at that place stays confined unless you
             vouched for the file.
           </p>
-
-          <YesOrNo
-            kind="server"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Don’t start"
-            approve="Start for this conversation"
-            approved="You started this server for the conversation"
-            rejected="You refused this server"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
     case 'manifest': {
       const { request, decision } = entry
       return (
-        <div className="confirm manifest">
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">run plan</span>
-            <span className="path manifest-count">
-              {request.steps.length} step{request.steps.length === 1 ? '' : 's'}
-            </span>
-          </div>
+        <DecisionCard
+          className="confirm manifest"
+          answerable={answerable}
+          subject={request.task}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You approved this plan' : 'You declined this plan' }}
+          head={<CardHead icon="list" intent="Run plan" deciding
+            counts={<span className="counts">{request.steps.length} step{request.steps.length === 1 ? '' : 's'}</span>} />}
+          actions={<YesOrNo kind="manifest" request={request.request} onDecide={onDecide} reject="Don’t run" approve="Run this plan" />}
+        >
 
           <p className="permission-scope" data-deciding="all">
             <strong>You asked:</strong> {request.task}
@@ -2565,19 +2543,7 @@ function Card({
               </ul>
             </div>
           )}
-
-          <YesOrNo
-            kind="manifest"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Don’t run"
-            approve="Run this plan"
-            approved="You approved this plan"
-            rejected="You declined this plan"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
@@ -2585,14 +2551,16 @@ function Card({
       const { request, decision } = entry
       const found = request.credentials.length
       return (
-        <div className="confirm exposure">
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">send file</span>
-            <code className="path">{request.shownPath}</code>
-            <span className="counts">
-              {found} finding{found === 1 ? '' : 's'}
-            </span>
-          </div>
+        <DecisionCard
+          className="confirm exposure"
+          answerable={answerable}
+          subject={request.shownPath}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You sent this file to the model' : 'You kept this file back' }}
+          head={<CardHead icon="key" intent="Send file" deciding
+            subject={<code className="path">{request.shownPath}</code>}
+            counts={<span className="counts">{found} finding{found === 1 ? '' : 's'}</span>} />}
+          actions={<YesOrNo kind="exposure" request={request.request} onDecide={onDecide} reject="Keep it back" approve="Send it anyway" />}
+        >
 
           <p className="warn" data-deciding="all">
             The model asked to read this file, and what it reads goes to whoever performs
@@ -2618,19 +2586,7 @@ function Card({
             Your answer covers this file until this conversation closes. It is not saved, and
             it does not change whether the file is trusted.
           </p>
-
-          <YesOrNo
-            kind="exposure"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Keep it back"
-            approve="Send it anyway"
-            approved="You sent this file to the model"
-            rejected="You kept this file back"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
@@ -2638,12 +2594,27 @@ function Card({
       const { request, decision, remember } = entry
       const local = request.transport === 'stdio'
       return (
-        <div className={`confirm mcp-server ${request.fetching.length || request.changed ? 'fetches' : ''}`}>
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">use MCP server</span>
-            <code className="path">{request.alias}</code>
-            <span className="counts">{local ? 'runs on this computer' : 'remote'}</span>
-          </div>
+        <DecisionCard
+          className={`confirm mcp-server ${request.fetching.length || request.changed ? 'fetches' : ''}`}
+          answerable={answerable}
+          subject={request.alias}
+          decided={decision === null ? null : {
+            tone: decision,
+            text: decision === 'reject' ? 'You left this server out of the conversation' : remember ? 'You approved this server and every server this project requests' : 'You approved this server',
+          }}
+          head={<CardHead icon="plug" intent="Use MCP server" deciding
+            subject={<code className="path">{request.alias}</code>}
+            counts={<span className="counts">{local ? 'runs on this computer' : 'remote'}</span>} />}
+          actions={<ThreeAnswers
+            kind="mcp-server"
+            request={request.request}
+            onDecide={onDecide}
+            reject="Continue without it"
+            approve="Use this server"
+            always="Use it and all future servers in this project"
+            alwaysTooltip="Servers this project requests from now on start without asking, until you run bravebot mcp forget here"
+          />}
+        >
 
           <p className="permission-scope" data-deciding="all">
             <strong>Requested by:</strong> <code>{request.requestedBy}</code>
@@ -2724,23 +2695,7 @@ function Card({
             What it returns is kept from the model until you approve its list of tools, and each
             call to one of its tools is put to you.
           </p>
-
-          <ThreeAnswers
-            kind="mcp-server"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            remember={remember}
-            onDecide={onDecide}
-            reject="Continue without it"
-            approve="Use this server"
-            always="Use it and all future servers in this project"
-            alwaysTooltip="Servers this project requests from now on start without asking, until you run bravebot mcp forget here"
-            approved="You approved this server"
-            approvedAlways="You approved this server and every server this project requests"
-            rejected="You left this server out of the conversation"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
@@ -2748,15 +2703,17 @@ function Card({
       const { request, decision } = entry
       const count = request.tools.length
       return (
-        <div className={`confirm mcp-tools ${request.vetting.verdict === 'unsafe' ? 'unsafe' : ''}`}>
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">offer tools</span>
-            <code className="path">{request.alias}</code>
-            <span className="counts">
-              {count} tool{count === 1 ? '' : 's'}
-            </span>
-            <VettingVerdict vetting={request.vetting} />
-          </div>
+        <DecisionCard
+          className={`confirm mcp-tools ${request.vetting.verdict === 'unsafe' ? 'unsafe' : ''}`}
+          answerable={answerable}
+          subject={request.alias}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You offered these tools to the model' : 'You kept these tools from the model' }}
+          head={<CardHead icon="wrench" intent="Offer tools" deciding
+            subject={<code className="path">{request.alias}</code>}
+            counts={<span className="counts">{count} tool{count === 1 ? '' : 's'}</span>}
+            trust={<VettingVerdict vetting={request.vetting} />} />}
+          actions={<YesOrNo kind="mcp-tools" request={request.request} onDecide={onDecide} reject="Continue without them" approve="Offer these tools" />}
+        >
 
           <VettingReason vetting={request.vetting} />
 
@@ -2800,31 +2757,34 @@ function Card({
             Every call to one of these tools is still put to you. Your answer is remembered for
             this exact list, so the same list is not asked about again.
           </p>
-
-          <YesOrNo
-            kind="mcp-tools"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Continue without them"
-            approve="Offer these tools"
-            approved="You offered these tools to the model"
-            rejected="You kept these tools from the model"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
     case 'mcp-call': {
       const { request, decision, remember } = entry
       return (
-        <div className="confirm mcp-call">
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">call tool</span>
-            <code className="path">{request.name}</code>
-            <span className="counts">MCP</span>
-          </div>
+        <DecisionCard
+          className="confirm mcp-call"
+          answerable={answerable}
+          subject={request.name}
+          decided={decision === null ? null : {
+            tone: decision,
+            text: decision === 'reject' ? 'You refused this call' : remember ? 'You allowed this call and later ones to this tool in this project' : 'You allowed this call',
+          }}
+          head={<CardHead icon="plug" intent="Call tool" deciding
+            subject={<code className="path">{request.name}</code>}
+            counts={<span className="counts">MCP</span>} />}
+          actions={<ThreeAnswers
+            kind="mcp-call"
+            request={request.request}
+            onDecide={onDecide}
+            reject="Don’t call"
+            approve="Call once"
+            always={request.mayStand ? `Call, and stop asking for ${request.tool} here` : null}
+            alwaysTooltip="Later calls to this tool in this project are made without asking, until you run bravebot mcp forget here"
+          />}
+        >
 
           {request.description && (
             <blockquote className="mcp-tool-description" data-tooltip="Written by the server">
@@ -2855,34 +2815,22 @@ function Card({
             put in the model’s context.
             {!request.mayStand && ' Nothing answered in this conversation can be recorded, so it cannot stop asking.'}
           </p>
-
-          <ThreeAnswers
-            kind="mcp-call"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            remember={remember}
-            onDecide={onDecide}
-            reject="Don’t call"
-            approve="Call once"
-            always={request.mayStand ? `Call, and stop asking for ${request.tool} here` : null}
-            alwaysTooltip="Later calls to this tool in this project are made without asking, until you run bravebot mcp forget here"
-            approved="You allowed this call"
-            approvedAlways="You allowed this call and later ones to this tool in this project"
-            rejected="You refused this call"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
     case 'mcp-move': {
       const { request, decision } = entry
       return (
-        <div className="confirm mcp-move">
-          <div className="confirm-head">
-            <span className="intent">move server</span>
-            <code className="path">{request.alias}</code>
-          </div>
+        <DecisionCard
+          className="confirm mcp-move"
+          answerable={answerable}
+          subject={request.alias}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You moved this server' : 'You did not move this server' }}
+          head={<CardHead icon="folder-exchange" intent="Move server"
+            subject={<code className="path">{request.alias}</code>} />}
+          actions={<YesOrNo kind="mcp-move" request={request.request} onDecide={onDecide} reject="Don’t move it" approve="It moved there" />}
+        >
 
           <p className="permission-scope" data-deciding="all">
             <strong>Declared at:</strong> <code>{request.declared}</code>
@@ -2903,19 +2851,7 @@ function Card({
             {request.mayRecord ? ', in this conversation and the next' : ' until this conversation ends'}.
             Say no unless you know the server moved.
           </p>
-
-          <YesOrNo
-            kind="mcp-move"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Don’t move it"
-            approve="It moved there"
-            approved="You moved this server"
-            rejected="You did not move this server"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
@@ -2923,13 +2859,15 @@ function Card({
       const { request, decision } = entry
       const count = request.hosts.length
       return (
-        <div className="confirm host">
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">allow hosts</span>
-            <span className="counts">
-              {count} host{count === 1 ? '' : 's'}
-            </span>
-          </div>
+        <DecisionCard
+          className="confirm host"
+          answerable={answerable}
+          subject={request.hosts.join(', ')}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed these hosts for this session' : 'You kept these hosts blocked' }}
+          head={<CardHead icon="globe" intent="Allow hosts" deciding
+            counts={<span className="counts">{count} host{count === 1 ? '' : 's'}</span>} />}
+          actions={<YesOrNo kind="host" request={request.request} onDecide={onDecide} reject="Keep them blocked" approve="Allow for this session" />}
+        >
 
           <p className="permission-scope" data-deciding="all">
             A program this session started asked for {count === 1 ? 'a host' : 'hosts'} that
@@ -2954,19 +2892,7 @@ function Card({
             {count === 1 ? 'it' : 'them'}. Run the program again afterwards. Nothing is saved, so the
             next conversation asks again.
           </p>
-
-          <YesOrNo
-            kind="host"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Keep them blocked"
-            approve="Allow for this session"
-            approved="You allowed these hosts for this session"
-            rejected="You kept these hosts blocked"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 

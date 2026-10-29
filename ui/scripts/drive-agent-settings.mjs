@@ -157,7 +157,6 @@ try {
   await emit('turn.started', { turn: 1 })
   await page.getByText('File watch 1: src/example.ts', { exact: true }).waitFor()
   await emit('confirm.request', { request: 1, path: 'file.ts', shownPath: 'file.ts', intent: 'edit', untrusted: true, existing: true, added: 1, removed: 1, exact: true, changes: [{ kind: 'removed', text: 'old' }, { kind: 'added', text: 'new' }], remark: { preview: ['Fixed a typo'], lines: 5, label: 'untrusted' } })
-  await page.locator('.confirm').last().locator('.card-details summary').click()
   await page.getByText('Processor’s remark · untrusted', { exact: true }).waitFor()
   await page.getByText('4 more lines not shown', { exact: false }).waitFor()
   await page.getByRole('button', { name: 'Don’t write', exact: true }).click()

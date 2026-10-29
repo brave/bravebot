@@ -43,7 +43,7 @@ const HOSTS = ['registry.example.com', '10.0.0.1']
 
 const asked = (overrides = {}) => t.askedHost({ request: 8, hosts: HOSTS, ...overrides })
 
-const buttons = (markup) => [...markup.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((found) => found[1])
+const buttons = (markup) => [...markup.matchAll(/<(?:leo-)?button[^>]*>(.*?)<\/(?:leo-)?button>/g)].map((found) => found[1]).filter((label) => label !== 'Show' && label !== 'Hide')
 
 test('the card lists every host as the program named it, one to a row', () => {
   const markup = draw(asked())

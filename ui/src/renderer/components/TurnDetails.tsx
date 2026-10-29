@@ -22,14 +22,14 @@ const exact = (value?: number): string => value === undefined ? 'Unavailable' : 
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 
 /**
- * The line under a reply: copy it, what it cost, and the way into its audit.
+ * The line under a reply: copy it, the way into its audit, and what it cost.
  *
  * Quiet until the row is hovered or is the last reply, except when a policy refused something in
- * the turn, which stays in view because it is the one thing here a reader has to know.
+ * the turn, which stays in view because it is the one thing here a reader has to know. The model
+ * line follows the audit control. Its tooltip holds the exact counts.
  */
-export function TurnFooter({ details, onDisclosure, onAudit, copy, undo }: {
+export function TurnFooter({ details, onAudit, copy, undo }: {
   details?: Details
-  onDisclosure: (turn: number, field: TurnDisclosure, open: boolean) => void
   onAudit: OpenAudit
   /** The reply's own text, for the Copy button. Absent under an error, which has its own details. */
   copy?: string
@@ -38,23 +38,12 @@ export function TurnFooter({ details, onDisclosure, onAudit, copy, undo }: {
 }): React.JSX.Element {
   const blocked = details?.clean === false
   const label = blocked ? 'Policy blocked an action' : details ? 'Audit' : 'Audit unavailable'
-  return <div className={`turn-footer${blocked ? ' has-refusal' : ''}${details?.statsOpen ? ' stats-open' : ''}`}>
+  return <div className={`turn-footer${blocked ? ' has-refusal' : ''}`}>
     {copy !== undefined && <CopyButton text={() => copy} label="Copy message" data-test="copy-message" />}
     {undo && <IconButton icon="arrow-undo" label="Undo turn" size="tiny" disabled={undo.running}
       tooltip={undo.running ? 'Wait for the turn to finish' : 'Undo turn · Put back its files and conversation'}
       data-test="turn-undo" onClick={undo.onUndo} />}
-    {details?.status === 'complete' ? <Collapse className="turn-statistics" isOpen={details.statsOpen}
-      title={`${details.model ?? 'Model unavailable'} · ${details.tokens === undefined ? 'Usage unavailable' : `${compact.format(details.tokens)} tokens`}`}
-      onToggle={({ open }) => { if (open !== details.statsOpen) onDisclosure(details.turn, 'statsOpen', open) }}
-      data-test="turn-statistics">
-      <div className="turn-statistics-body"><strong>Turn {details.turn}</strong><dl>
-        <dt>Model used</dt><dd>{details.model ?? 'Unavailable'}</dd>
-        {details.service && <><dt>Answered by</dt><dd>{details.service}</dd></>}
-        <dt>Total tokens</dt><dd>{exact(details.tokens)}</dd>
-        <dt>Output tokens</dt><dd>{exact(details.outputTokens)}</dd>
-        <dt>Tool-calling rounds</dt><dd>{exact(details.steps)}</dd>
-      </dl><p>Usage is summed across requests in this turn.</p></div>
-    </Collapse> : details ? <span className="turn-usage-missing">Final usage unavailable</span> : null}
+    {blocked && <span className="turn-refusal" aria-hidden="true">Policy blocked an action</span>}
     <IconButton icon={blocked ? 'shield-alert' : 'shield-done'} label={label}
       tooltip={blocked ? 'Policy blocked an action · Open the audit' : details ? 'Audit this turn' : 'Audit unavailable'}
       size="tiny"
@@ -63,6 +52,24 @@ export function TurnFooter({ details, onDisclosure, onAudit, copy, undo }: {
       data-test="turn-audit"
       controls="turn-audit-inspector"
       onClick={(event) => onAudit(details?.turn ?? null, event.currentTarget as HTMLButtonElement)} />
-    {blocked && <span className="turn-refusal" aria-hidden="true">Policy blocked an action</span>}
+    {details?.status === 'complete' ? <Usage details={details} /> : details ? <span className="turn-usage-missing">Final usage unavailable</span> : null}
   </div>
+}
+
+/** The model and a compact total. A click opens the exact counts; a screen reader can read them without one. */
+function Usage({ details }: { details: Details }): React.JSX.Element {
+  const shown = `${details.model ?? 'Model unavailable'} · ${details.tokens === undefined ? 'Usage unavailable' : `${compact.format(details.tokens)} tokens`}`
+  const tooltip = [
+    `Turn ${details.turn}`,
+    `Model used · ${details.model ?? 'Unavailable'}`,
+    ...(details.service ? [`Answered by · ${details.service}`] : []),
+    `Total tokens · ${exact(details.tokens)}`,
+    `Output tokens · ${exact(details.outputTokens)}`,
+    `Tool-calling rounds · ${exact(details.steps)}`,
+    'Usage is summed across requests in this turn',
+  ].join('\n')
+  return <button type="button" className="turn-usage" data-tooltip={tooltip} data-tooltip-trigger="click" data-test="turn-usage">
+    <span className="turn-usage-line">{shown}</span>
+    <span className="visually-hidden">{tooltip}</span>
+  </button>
 }

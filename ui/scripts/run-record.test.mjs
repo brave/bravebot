@@ -50,7 +50,7 @@ const saved = (manifest = {}, record = {}) => ({
 })
 
 const draw = (run, onNew = () => {}) => renderToStaticMarkup(React.createElement(RunRecord, { run, onNew }))
-const buttons = (markup) => [...markup.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((found) => found[1])
+const buttons = (markup) => [...markup.matchAll(/<(?:leo-)?button[^>]*>(.*?)<\/(?:leo-)?button>/g)].map((found) => found[1])
 
 test('a saved run says it is read only and offers nothing to type into', () => {
   const markup = draw(saved())
