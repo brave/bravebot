@@ -55,7 +55,7 @@ const ended = (overrides = {}) =>
     ...overrides,
   })
 
-const buttons = (markup) => [...markup.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((found) => found[1])
+const buttons = (markup) => [...markup.matchAll(/<(?:leo-)?button[^>]*>(.*?)<\/(?:leo-)?button>/g)].map((found) => found[1]).filter((label) => label !== 'Show' && label !== 'Hide')
 
 test('the plan card shows the task and every step, in order', () => {
   const many = Array.from({ length: 60 }, (_, index) => `${index + 1}. [fetch] read file-${index + 1}.md`)

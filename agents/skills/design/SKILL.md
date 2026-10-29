@@ -132,8 +132,10 @@ and at the minimum window size.
 **Grid and alignment**
 - Spacing comes from the Leo scale only: `--leo-spacing-s` 4, `-m` 8, `-l` 12, `-xl` 16, `-2xl` 24.
 - Each column has one left text edge. Icons, titles, meta and row content line up on it.
-- Icons sit centred on the text line: a 16px icon on a 20–22px line, a 14px icon beside meta text.
-- Hit targets are at least 28px (`--hit`), even when the glyph is 14px.
+- Icons sit centred on the text line: a 16px icon on a 20–22px line.
+  Conversation glyphs use two sizes: `--icon-control` 16 on every line, card head, notice, alert
+  and progress ring, and `--icon-hero` 20 on attach, send, drop and empty.
+- Hit targets are at least 28px (`--hit`), even when the glyph is 16px.
 
 **Typography**
 - A screen uses at most four sizes. Use the `--type-*` roles, not size-only tokens. The page title
@@ -150,7 +152,7 @@ and at the minimum window size.
 - Every interactive element has hover, pressed, focus-visible and disabled states. Hover feedback
   lands within `--motion-fast`. Nothing animates on first paint.
 - Every list and panel has designed empty, loading and error states. Loading shows a skeleton or a
-  12px ring only after 150ms (`useDelayedFlag`), with no blank flash. The loading row mounts when
+  progress ring only after 150ms (`useDelayedFlag`), with no blank flash. The loading row mounts when
   loading starts and carries `data-delayed` until the delay passes, so it holds its height while
   hidden. An empty state and any other branch still read the raw flag.
 - Switching sessions shows the target's skeleton immediately and restores scroll, with no flash of
@@ -198,7 +200,7 @@ Compose from these before inventing a new pattern.
 - **Decision card** (`cards.css`): a head with a kind icon and a short title saying what is being
   asked and about what, stat pills, the trust Label, a sunken evidence body, a collapsed "Details",
   right-aligned answers with the primary last, and a collapsed decided state.
-- **Notice**: a caption row with a 14px icon, one sentence and at most one inline link. Notes about a
+- **Notice**: a caption row with a 16px icon, one sentence and at most one inline link. Notes about a
   session (fork, remembered trust, vetting) sit at the top of the transcript and are not entries,
   so they are never exported.
 - **Thinking tail**: the last eight lines of what the model has thought this round, in caption type,

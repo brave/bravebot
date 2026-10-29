@@ -97,6 +97,8 @@ try {
   // reached from that conversation's header: the list in the middle, its details and memory on the right.
   await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator('[data-test="bot-greeting"]').waitFor()
   await page.locator('[data-test="earlier-conversations"]').click();await page.locator('[data-test="bot-conversations"]').waitFor();await snap('19-bot-overview')
+  // Playwright clicks bypass native window dragging; the arrow sits in the title row, over the drag strip.
+  assert.equal(await page.locator('[data-test="earlier-back"]').evaluate(e => getComputedStyle(e).getPropertyValue('-webkit-app-region')), 'no-drag', 'Back must receive native mouse clicks inside the draggable titlebar')
   await page.locator('[data-test="bot-details"]').getByRole('button',{name:'Edit memory',exact:true}).waitFor();await snap('20-bot-editor')
   await page.getByRole('button',{name:'Edit memory',exact:true}).click();await page.getByRole('textbox',{name:'Edit memory'}).fill('# Saved preference\n\n- Use a blue accent.');await page.getByRole('button',{name:'Save memory'}).click();await page.locator('.bot-memory').getByText('Saved preference',{exact:false}).waitFor();await snap('21-memory-read')
   await page.getByRole('button',{name:'Edit memory',exact:true}).click();await page.getByRole('button',{name:'Reset…',exact:true}).click();await snap('23-memory-reset');await page.getByRole('button',{name:'Reset saved memory'}).click()
