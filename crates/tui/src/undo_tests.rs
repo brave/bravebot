@@ -38,6 +38,7 @@ fn save(
             rewind: session.rewind.points(),
             checkouts: &[],
             touched: None,
+            answered_by_mode: false,
         },
     );
 }

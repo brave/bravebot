@@ -277,6 +277,7 @@ fn no_session_record_is_written() {
             rewind: &[],
             checkouts: &[],
             touched: None,
+            answered_by_mode: false,
         },
     );
 

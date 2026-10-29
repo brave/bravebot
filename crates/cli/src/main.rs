@@ -1870,6 +1870,9 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         cancel,
     } = run;
     let mut session: Option<String> = None;
+    // Taken before the task is given to the turn, which is where a mode that was bypass ends up
+    // readable only through the handle it holds.
+    let permission_mode = task.permission_mode.clone();
     // What a continued session vouched for comes back with it, as it does in a session
     // (SESSION-1). The programs it vouched for do not (CLI-1): the run is handed none, and
     // the record keeps the ones it holds.
@@ -1972,6 +1975,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
                 started,
                 events: sink.stamped(),
                 touched: workspace.touched_record(),
+                answered_by_mode: permission_mode.has_bypassed(),
             },
         );
     }

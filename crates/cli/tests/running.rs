@@ -16023,6 +16023,58 @@ fn a_one_shot_run_is_written_down_and_names_its_session() {
     assert!(written, "no record named {id} under {records:?}");
 }
 
+/// MODE-4, TRUST-6: a one-shot run records that bypass answered for the person, both as a new
+/// session and as one more turn of a session it continued, and a run that continues a record
+/// without bypass leaves a mark already on the record. The faults this rejects: a run that saves
+/// `false` whatever the mode, so a resume restores a map and directories bypass opened, and a
+/// continuation that overwrites the mark with the mode of its own run.
+#[test]
+fn a_one_shot_run_records_whether_bypass_answered_for_the_person() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("a reply"));
+    let scratch = Scratch::new("cli-running-bypass-mark").with_settings(&settings_for(&gateway));
+    let marked = |id: &str| saved_record(&scratch, id)["trust_answered_by_mode"] == true;
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["-p", "by a person"]);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let by_a_person = session_of(&stdout).expect("the run named its session");
+    assert!(!marked(&by_a_person), "a run without bypass was marked");
+
+    let (output, stdout, stderr) = a_recorded_run(
+        &scratch,
+        &["--dangerously-skip-permissions", "-p", "by the mode"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let by_the_mode = session_of(&stdout).expect("the run named its session");
+    assert!(
+        marked(&by_the_mode),
+        "a new session run under bypass was not marked"
+    );
+
+    let (output, _, stderr) = a_recorded_run(
+        &scratch,
+        &[
+            "--dangerously-skip-permissions",
+            "-p",
+            "and again",
+            "--resume",
+            &by_a_person,
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        marked(&by_a_person),
+        "a continuation run under bypass did not mark the record"
+    );
+
+    let (output, _, stderr) =
+        a_recorded_run(&scratch, &["-p", "once more", "--resume", &by_the_mode]);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        marked(&by_the_mode),
+        "a continuation without bypass cleared the mark an earlier sitting left"
+    );
+}
+
 /// SESSION-1, TRACE-5: a one-shot run keeps the trail of what its gates decided beside its record,
 /// and a run that continues the session adds its own turn to the same file. Without it the
 /// trail is printed under `--trace` and lost, and resuming the session shows nothing for the turn.

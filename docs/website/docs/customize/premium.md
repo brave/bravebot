@@ -56,7 +56,7 @@ The third form names the file when it cannot be read.
 
 The premium host is compiled in, so nobody sets an address. A build whose free endpoint is under
 `brave.software` or `bravesoftware.com` has the development host and any other build has the production
-host. Both are `https://ai-chat-premium.bsg.brave.software` while the premium service is live only in
+host. Both are `https://ai-gateway-api.bsg.brave.software` while the premium service is live only in
 development. A build that reaches no Brave backend (AWS Bedrock only) has no premium host and holds no
 key.
 
