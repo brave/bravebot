@@ -30,7 +30,9 @@ function load(path) {
   return module.exports
 }
 
-const { RememberedHere } = load('src/renderer/components/Permissions.tsx')
+const { RememberedHere, GRANT_PATH_WIDTH } = load('src/renderer/components/Permissions.tsx')
+const { middleTruncate } = load('src/renderer/truncate.ts')
+const { DIALOG_FRAME_CSS } = load('src/renderer/components/Modal.tsx')
 const now = () => Math.floor(Date.now() / 1000)
 const render = (kept) => renderToStaticMarkup(React.createElement(RememberedHere, { kept, busy: false, onForget() {} }))
 
@@ -60,4 +62,31 @@ test('an answer kept about no root names none', () => {
   const markup = render({ at: now() - 60, path: '/h/.bravebot/trusted', shownPath: '/h/.bravebot/trusted' })
 
   assert.ok(!markup.includes('remembered-root'), markup)
+})
+
+test('every dialog box is held to its width so a long line cannot grow a horizontal scrollbar', () => {
+  assert.match(DIALOG_FRAME_CSS, /\.leo-dialog\s*\{[^}]*overflow-x:\s*hidden/)
+  assert.match(DIALOG_FRAME_CSS, /\.body\s*\{[^}]*overflow-x:\s*hidden/)
+  assert.match(DIALOG_FRAME_CSS, /min-width:\s*0/)
+})
+
+test('a long kept path is shortened in the middle and the full spelling stays on the tooltip', () => {
+  const shownPath = '/Users/someone/Library/Application Support/bravebot-ui-b/trusted'
+  const shownRoot = '/Users/someone/Library/Application Support/bravebot-ui-b'
+  const markup = render({
+    at: now() - 86400,
+    path: shownPath,
+    shownPath,
+    root: shownRoot,
+    shownRoot,
+  })
+  const cutPath = middleTruncate(shownPath, GRANT_PATH_WIDTH)
+  const cutRoot = middleTruncate(shownRoot, GRANT_PATH_WIDTH)
+
+  assert.notEqual(cutPath, shownPath)
+  assert.ok(markup.includes(`>${cutPath}</code>`), markup)
+  assert.ok(markup.includes(`data-tooltip="${shownPath}"`), markup)
+  assert.ok(!markup.includes(`>${shownPath}</code>`), markup)
+  assert.ok(markup.includes(`for ${cutRoot}`), markup)
+  assert.ok(markup.includes(`data-tooltip="${shownRoot}"`), markup)
 })

@@ -26,21 +26,23 @@
   display: flex;
   align-items: center;
   gap: var(--leo-spacing-m);
+  min-width: 0;
   font: var(--leo-font-heading-h3);
   letter-spacing: -0.5px;
   color: var(--ink-primary);
+  overflow-wrap: anywhere;
 }
-.modal-header-action { display: inline-flex; margin-left: auto; font: var(--type-body); }
-.modal-subtitle { display: block; margin-top: var(--leo-spacing-s); font: var(--type-body); color: var(--ink-secondary); }
+.modal-header-action { display: inline-flex; flex: none; margin-left: auto; font: var(--type-body); }
+.modal-subtitle { display: block; margin-top: var(--leo-spacing-s); min-width: 0; font: var(--type-body); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .confirm-archive p { margin: 0; }
 .confirm-archive p + p { margin-top: var(--leo-spacing-m); }
 .confirm-delete { --leo-button-color: var(--status-error-ink); }
 .confirm-archive-name { color: var(--ink-primary); font: var(--type-body-strong); overflow-wrap: anywhere; }
 
-.modal p { margin: 0 0 var(--leo-spacing-l); font: var(--type-body); color: var(--ink-secondary); }
-.modal h3 { margin: var(--leo-spacing-2xl) 0 var(--leo-spacing-s); font: var(--type-body-strong); color: var(--ink-primary); }
-.modal h4 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-s); font: var(--type-meta-strong); color: var(--ink-primary); }
-.modal code { font: var(--type-code); }
+.modal p { margin: 0 0 var(--leo-spacing-l); font: var(--type-body); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.modal h3 { margin: var(--leo-spacing-2xl) 0 var(--leo-spacing-s); font: var(--type-body-strong); color: var(--ink-primary); overflow-wrap: anywhere; }
+.modal h4 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-s); font: var(--type-meta-strong); color: var(--ink-primary); overflow-wrap: anywhere; }
+.modal code { font: var(--type-code); overflow-wrap: anywhere; }
 /* A message naming a long path has no break in it, and an alert that will not wrap widens the body
    past the dialog, which clips the footer and its Close button off the right-hand edge. */
 .modal leo-alert { display: block; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
@@ -129,6 +131,7 @@
   margin: 0;
   padding: var(--leo-spacing-l);
   overflow: auto;
+  contain: inline-size;
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-control);
   background: var(--surface-sunken);
@@ -141,7 +144,7 @@
 
 .grant-lede { font: var(--type-meta); }
 .grant-section h3 { margin-top: var(--leo-spacing-xl); }
-.modal .grant-note { margin: 0 0 var(--leo-spacing-m); font: var(--type-caption); color: var(--ink-tertiary); }
+.modal .grant-note { margin: 0 0 var(--leo-spacing-m); font: var(--type-caption); color: var(--ink-tertiary); overflow-wrap: anywhere; }
 .grant-list {
   list-style: none;
   margin: 0;
@@ -159,12 +162,13 @@
 }
 .grant-row + .grant-row { border-top: 1px solid var(--border-hairline); }
 .grant-row > leo-icon { flex: none; color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
-.grant-row > code { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--ink-primary); }
+.grant-row > code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-primary); }
 .grant-row > leo-button { flex: none; margin-left: auto; }
-.grant-state { flex: none; margin-left: auto; padding-right: var(--leo-spacing-m); font: var(--type-caption); color: var(--ink-tertiary); }
+.grant-state { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; padding-right: var(--leo-spacing-m); font: var(--type-caption); color: var(--ink-tertiary); }
 .grant-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-.grant-path { overflow-wrap: anywhere; font: var(--type-code); color: var(--ink-primary); }
-.grant-meta { font: var(--type-caption); color: var(--ink-tertiary); }
+.grant-path,
+.grant-text > code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-code); color: var(--ink-primary); }
+.grant-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-caption); color: var(--ink-tertiary); }
 .modal .grant-empty {
   display: flex;
   align-items: center;
@@ -182,20 +186,22 @@
 
 /* ------------------------------------------------------------- previews */
 
-.preview-code { margin: 0; }
+.preview-code { margin: 0; min-width: 0; max-width: 100%; }
 .preview-code .tree-glyph { flex: none; margin-right: var(--leo-spacing-s); color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
 .preview-code pre {
   max-height: 60vh;
+  max-width: 100%;
   margin: 0;
   padding: var(--leo-spacing-l);
   overflow: auto;
+  contain: inline-size;
   background: var(--surface-raised);
   font: var(--type-code);
   white-space: pre;
   tab-size: 4;
 }
 .modal .preview-status { display: flex; align-items: center; gap: var(--leo-spacing-m); margin: 0; padding: var(--leo-spacing-m) var(--leo-spacing-l); font: var(--type-caption); color: var(--ink-tertiary); }
-.expanded-diff .diff { max-height: 65vh; }
+.expanded-diff .diff { max-height: 65vh; max-width: 100%; overflow-x: auto; }
 
 /* ----------------------------------------------------------------- about */
 

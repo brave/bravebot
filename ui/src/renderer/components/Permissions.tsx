@@ -4,6 +4,16 @@ import type { FilesystemKey, KeptTrust, SettingsRules } from '../../shared/proto
 import { Alert, Button, Icon } from '../nala'
 import { IconButton } from './IconButton'
 import { ago } from './Sessions'
+import { middleTruncate } from '../truncate'
+
+/** How many characters of a path fit a grant row before the middle gives way. */
+export const GRANT_PATH_WIDTH = 40
+
+/** A path in a grant row: shortened in the middle when it would wrap, full spelling on the tooltip. */
+function GrantName({ name }: { name: string }): React.JSX.Element {
+  const cut = middleTruncate(name, GRANT_PATH_WIDTH)
+  return <code data-tooltip={cut === name ? undefined : name}>{cut}</code>
+}
 
 interface Grants {
   /** `shownPath` is `path` spelled so a blank or whitespace-ended name is visible. */
@@ -43,7 +53,7 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
       <h3>Remembered commands</h3>
       <p className="grant-note">Each grant covers the resolved program and its exact arguments, including trust in its output.</p>
       {grants && grants.commands.length > 0 && <ul className="grant-list">{grants.commands.map((command) => <li className="grant-row" key={JSON.stringify(command)}>
-        <Icon name="window-console" /><code>{command.display}</code>
+        <Icon name="window-console" /><GrantName name={command.display} />
         <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => void request('permissions.revoke', { kind: 'command', command: { program: command.program, startedAs: command.startedAs, args: command.args } })}>Revoke</Button>
       </li>)}</ul>}
       {grants?.commands.length === 0 && <p className="grant-empty"><Icon name="window-console" />No remembered command grants.</p>}
@@ -63,10 +73,16 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
  * button that takes it back (TRUST-24).
  */
 export function RememberedHere({ kept, busy, onForget }: { kept: KeptTrust; busy: boolean; onForget: () => void }): React.JSX.Element {
+  const root = kept.shownRoot ? middleTruncate(kept.shownRoot, GRANT_PATH_WIDTH) : null
   return <ul className="grant-list"><li className="grant-row">
-    <Icon name="pin" /><code>{kept.shownPath}</code>
-    <span className="grant-state" data-test="remembered-when">{`Trusted ${ago(kept.at)}`}</span>
-    {kept.shownRoot && <span className="grant-state" data-test="remembered-root">{`for ${kept.shownRoot}`}</span>}
+    <Icon name="pin" />
+    <div className="grant-text">
+      <GrantName name={kept.shownPath} />
+      <span className="grant-meta">
+        <span data-test="remembered-when">{`Trusted ${ago(kept.at)}`}</span>
+        {root && <span data-test="remembered-root" data-tooltip={root === kept.shownRoot ? undefined : kept.shownRoot}>{` · for ${root}`}</span>}
+      </span>
+    </div>
     <Button size="small" kind="plain-faint" isDisabled={busy} onClick={onForget}>Forget</Button>
   </li></ul>
 }
@@ -83,15 +99,15 @@ export function PathPermissions({ paths, busy, onRevoke }: { paths: Grants['path
       <h3>Trusted paths</h3>
       <p className="grant-note">A parent grant covers its descendants unless a more specific rule overrides it. Revoking a parent keeps any separately listed child grants.</p>
       {trusted.length > 0 && <ul className="grant-list">{trusted.map((grant) => <li className="grant-row" key={grant.path}>
-        <Icon name="shield-done" /><code>{named(grant)}</code>
+        <Icon name="shield-done" /><GrantName name={named(grant)} />
         <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => onRevoke(grant.path)}>Revoke</Button>
       </li>)}</ul>}
       {trusted.length === 0 && <p className="grant-empty"><Icon name="shield-done" />No trusted path grants.</p>}
     </section>
     {refused.length > 0 && <section className="grant-section"><h3>Untrusted path exceptions</h3><p className="grant-note">These paths remain untrusted even when a parent is trusted.</p>
-      <ul className="grant-list">{refused.map((grant) => <li className="grant-row" key={grant.path}><Icon name="warning-triangle-outline" /><code>{named(grant)}</code><span className="grant-state">Untrusted</span></li>)}</ul></section>}
+      <ul className="grant-list">{refused.map((grant) => <li className="grant-row" key={grant.path}><Icon name="warning-triangle-outline" /><GrantName name={named(grant)} /><span className="grant-state">Untrusted</span></li>)}</ul></section>}
     {undecided.length > 0 && <section className="grant-section"><h3>Paths awaiting a decision</h3><p className="grant-note">These paths require write approval and their contents remain untrusted until you grant trust.</p>
-      <ul className="grant-list">{undecided.map((grant) => <li className="grant-row" key={grant.path}><Icon name="radio-unchecked" /><code>{named(grant)}</code><span className="grant-state">Not decided</span></li>)}</ul></section>}
+      <ul className="grant-list">{undecided.map((grant) => <li className="grant-row" key={grant.path}><Icon name="radio-unchecked" /><GrantName name={named(grant)} /><span className="grant-state">Not decided</span></li>)}</ul></section>}
   </>
 }
 
@@ -115,7 +131,7 @@ export function RulesInForce({ rules }: { rules: SettingsRules | null }): React.
     {lists.filter(([, , held]) => held.length > 0).map(([name, meaning, held]) => <div key={name}>
       <h4>{name}</h4>
       <p className="grant-note">{meaning}</p>
-      <ul className="grant-list">{held.map((rule, index) => <li className="grant-row" key={index}><code>{rule}</code></li>)}</ul>
+      <ul className="grant-list">{held.map((rule, index) => <li className="grant-row" key={index}><GrantName name={rule} /></li>)}</ul>
     </div>)}
     <FilesystemRules rules={rules} />
   </section>
@@ -146,7 +162,7 @@ export function FilesystemRules({ rules }: { rules: SettingsRules | null }): Rea
         <h4>{name}</h4>
         <p className="grant-note">{meaning}</p>
         <ul className="grant-list">{held.map((entry, index) => <li className="grant-row" key={index}>
-          <code>{entry.shownPath ?? entry.path}</code>
+          <GrantName name={entry.shownPath ?? entry.path} />
           <span className="grant-state">{entry.refused ? `Not in force: ${entry.refused}` : entry.pinned ? 'Set by your administrator' : entry.shownFile ?? entry.file ?? 'Command line'}</span>
         </li>)}</ul>
       </div>
