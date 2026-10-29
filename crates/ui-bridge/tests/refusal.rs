@@ -783,6 +783,7 @@ fn a_fetch() -> bravebot_agent::confirm::FetchRequest {
         url: "https://docs.example.com/api".into(),
         host: "docs.example.com".into(),
         redirected_from: None,
+        classified: Default::default(),
     }
 }
 

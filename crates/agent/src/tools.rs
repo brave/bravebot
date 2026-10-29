@@ -457,6 +457,13 @@ pub struct Tools<'a> {
     /// this turn was not offered is answered the way any other unknown name is rather than
     /// quietly working.
     pub advising: Option<crate::advisor::Advising<'a>>,
+    /// What the auto mode's classifier is given of the session, or `None` where it is not to be
+    /// consulted: another mode, a delegate, or a session the person has typed nothing to (AUTO-3).
+    ///
+    /// Built from the lines the person typed, selected by the tag recorded when they arrived.
+    /// The mode is read again where a question is put, so a mode chosen after this was built
+    /// decides the question and not this field.
+    pub classifying: Option<crate::classifier::Classifying<'a>>,
     /// What this turn sends messages to other background sessions with, and what it has sent, or
     /// `None` where the session cannot send (MSG-12).
     ///
@@ -8543,6 +8550,60 @@ fn run_call<S: Sink>(
     })
 }
 
+/// What the auto mode's classifier says of a line the policy is about to ask about, or that it was
+/// not consulted (AUTO-3).
+///
+/// Consulted only in auto, and only for a line the sandbox holds that did not ask to start with no
+/// profile: the classifier is shown the words of the line and not the binary they resolve to, so
+/// the confinement is what holds the line to those words. The plan and the directory are the
+/// driver's own structure and no labelled value is built or released here.
+fn consult_about_a_run<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    plan: &bravebot_core::command::Plan,
+    unconfined: bool,
+    confined: bool,
+) -> crate::confirm::Classified {
+    if unconfined || !confined || tools.permission_mode.get() != crate::PermissionMode::Auto {
+        return crate::confirm::Classified::NotAsked;
+    }
+    let Some(classifying) = tools.classifying.as_ref() else {
+        return crate::confirm::Classified::NotAsked;
+    };
+    let directory = plan.directory.display().to_string();
+    crate::classifier::consult(
+        policy,
+        &mut tools.chat,
+        classifying,
+        &crate::classifier::Question::Run {
+            line: &plan.line,
+            directory: &directory,
+        },
+    )
+}
+
+/// What the auto mode's classifier says of fetching a URL the policy is about to ask about, or that
+/// it was not consulted. Never asked for a download, which puts bytes into a file (AUTO-3).
+fn consult_about_a_fetch<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    url: &str,
+    host: &str,
+) -> crate::confirm::Classified {
+    if tools.permission_mode.get() != crate::PermissionMode::Auto {
+        return crate::confirm::Classified::NotAsked;
+    }
+    let Some(classifying) = tools.classifying.as_ref() else {
+        return crate::confirm::Classified::NotAsked;
+    };
+    crate::classifier::consult(
+        policy,
+        &mut tools.chat,
+        classifying,
+        &crate::classifier::Question::Fetch { url, host },
+    )
+}
+
 /// Put a plan to the person and act on what they answer.
 ///
 /// Called only when the policy says this line is to be asked about. The answer is recorded, the
@@ -8555,7 +8616,7 @@ fn run_call<S: Sink>(
 )]
 fn ask_about_the_run<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
-    tools: &Tools<'_>,
+    tools: &mut Tools<'_>,
     confirmer: &mut C,
     plan: &bravebot_core::command::Plan,
     record: Option<&crate::remembered::Store>,
@@ -8569,6 +8630,12 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     // argument list, so the order is a matter of reading rather than of correctness.
     let varied = policy.arguments_have_varied(plan);
     policy.asked_about(plan);
+    // Put to the classifier only a line it can be shown whole: nothing fed to it from a
+    // reference, no credential scope asked for, nothing private released (AUTO-3).
+    let classified = match requested.is_empty() && stdin.is_none() && !plan.releases_private() {
+        true => consult_about_a_run(policy, tools, plan, unconfined, confinement.is_some()),
+        false => crate::confirm::Classified::NotAsked,
+    };
     let request = crate::confirm::RunRequest {
         plan: plan.clone(),
         // Offered only where it would stop a later prompt, which the policy decides: not for a
@@ -8623,6 +8690,7 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
                 confinement.key_choice(&plan.steps(), crate::reach::Store::new(home).path())
             })
             .map(Box::new),
+        classified,
     };
     // Read before the question is put, for the reason a write's is.
     let mode = tools.permission_mode.get();
@@ -9592,6 +9660,8 @@ fn fetch_not_approved<S: Sink, C: Confirmer>(
     call: &str,
     url: &str,
     host: &str,
+    classified: crate::confirm::Classified,
+    mode: crate::PermissionMode,
 ) -> Option<Produced> {
     if !policy.fetch_needs_approval(url) {
         return None;
@@ -9600,8 +9670,18 @@ fn fetch_not_approved<S: Sink, C: Confirmer>(
         url: url.to_string(),
         host: host.to_string(),
         redirected_from: None,
+        classified,
     };
-    if confirmer.confirm_fetch(&request) != Decision::Reject {
+    let answer = confirmer.confirm_fetch(&request);
+    // Recorded for auto alone: no other mode's fetch answer has ever been, and its trail is not
+    // changed here (AUTO-8).
+    if mode == crate::PermissionMode::Auto {
+        policy.record_answer(
+            mode.answers_this_fetch_unasked(&request)
+                .then(|| mode.name()),
+        );
+    }
+    if answer != Decision::Reject {
         return None;
     }
     policy.refuse_unapproved_fetch(call);
@@ -9644,7 +9724,19 @@ fn fetch_url<S: Sink, C: Confirmer>(
     if let Some(refusal) = fetch_rules_refusal(policy, &url) {
         return refusal;
     }
-    if let Some(refusal) = fetch_not_approved(policy, confirmer, "fetch_url", &url, &host) {
+    let classified = match policy.fetch_needs_approval(&url) {
+        true => consult_about_a_fetch(policy, tools, &url, &host),
+        false => crate::confirm::Classified::NotAsked,
+    };
+    if let Some(refusal) = fetch_not_approved(
+        policy,
+        confirmer,
+        "fetch_url",
+        &url,
+        &host,
+        classified,
+        tools.permission_mode.get(),
+    ) {
         return refusal;
     }
 
@@ -9748,6 +9840,7 @@ fn fetch_followed_to<S: Sink, C: Confirmer>(
         url: url.to_string(),
         host: host.clone(),
         redirected_from: Some(approved.to_string()),
+        classified: crate::confirm::Classified::NotAsked,
     };
     if confirmer.confirm_fetch(&question) == Decision::Reject {
         policy.refuse_unapproved_fetch("fetch_url");
@@ -9860,7 +9953,15 @@ fn download_url<S: Sink, C: Confirmer>(
 
     // After the destination is known to be admissible, so the person is not asked about a host
     // for a path that would have been refused.
-    if let Some(refusal) = fetch_not_approved(policy, confirmer, "download_url", &url, &host) {
+    if let Some(refusal) = fetch_not_approved(
+        policy,
+        confirmer,
+        "download_url",
+        &url,
+        &host,
+        crate::confirm::Classified::NotAsked,
+        tools.permission_mode.get(),
+    ) {
         return refusal;
     }
 
@@ -21963,6 +22064,7 @@ mod tests {
                 remembering: None,
                 budget_left: None,
                 advising: None,
+                classifying: None,
                 messaging: None,
             })
         }

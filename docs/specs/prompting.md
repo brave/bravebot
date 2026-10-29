@@ -643,7 +643,7 @@ desktop bridge opens, resumes or forks starts with none. An undo leaves them
 | answers to the planner's questions | a series of questions the planner asks | each question and its choices | every field of the question, each with its length, its tag and its choices included | the live session; it is written nowhere, and a resumed session asks again | `verified-by: bravebot_core::ask::no_question_can_spell_the_key_of_another` `verified-by: bravebot_core::ask::a_series_answered_entirely_from_memory_asks_nothing` |
 | a proposed rule | the question `propose_rule` puts: "Keep this rule", "Don't keep it", or the person's own wording typed | the rule, the file it is appended to and the reason | nothing: the answer is kept only as the line it writes, and each question is asked afresh so no earlier yes answers it ([RECALL-3](recall.md#RECALL-3)) | the file the line is appended to, until the person edits it or `/undo` takes it back; the answer is written nowhere else | `verified-by: bravebot_agent::tools::a_rule_answer_is_never_reused` `verified-by: bravebot_agent::tools::a_refused_rule_writes_nothing` `verified-by: bravebot_agent::tools::an_approved_rule_is_appended_with_date_and_why` |
 | auto-vetting | the standing key at a vetting or output prompt whose check completed and found nothing | the bytes, where they came from, and what the check said | nothing about any one slot. It turns on the mode in which a later slot whose check finds nothing reaches the planner unasked | a file every later session reads, fresh or resumed, until it is turned off | `verified-by: bravebot_tui::state::pressing_the_standing_key_turns_vetting_on_for_the_session` `verified-by: bravebot_tui::persist::a_recorded_answer_about_vetting_outlives_the_session_that_gave_it` |
-| the permission mode | no question: the mode key, `/plan`, or starting a session that bypasses every check | the mode's name | nothing about any one effect. It answers in advance every prompt the mode reaches ([permission-modes.md](permission-modes.md)) | the sitting it was chosen in; it is not in the session record | `verified-by: bravebot_session::sessions::a_record_does_not_keep_a_permission_mode` `verified-by: bravebot_tui::state::cycling_the_mode_changes_nothing_a_resume_would_read` |
+| the permission mode | no question: the mode key, `/plan`, `--auto` on a one-shot run, or starting a session that bypasses every check | the mode's name | nothing about any one effect. It answers in advance every prompt the mode reaches ([permission-modes.md](permission-modes.md)). In auto it answers a run and a first fetch on a classifier's word, which is kept nowhere ([AUTO-6](auto-mode.md#AUTO-6)) | the sitting it was chosen in; it is not in the session record | `verified-by: bravebot_session::sessions::a_record_does_not_keep_a_permission_mode` `verified-by: bravebot_tui::state::cycling_the_mode_changes_nothing_a_resume_would_read` |
 | the sandbox mode | no question: `/sandbox` naming a mode, `off` included | the mode's name, and under `off` that programs `run` starts have no profile, so nothing confines what they read, write or reach | nothing about any one run. Every program started after it, in a turn already running or a later one, runs under the mode, with no profile under `off` | the process; `/resume` hands it to the session it starts | `verified-by: bravebot_tui::sandbox_command::a_move_to_off_is_made_when_typed_and_asks_nothing` `verified-by: bravebot_tui::sandbox_command::a_session_started_from_the_held_choice_keeps_the_commands_mode` |
 
 The register above says what each answer is kept under. This table says what seven changes to the
@@ -747,6 +747,12 @@ is a model call whose word ends in the refusal above. The closed channel keeps r
 a channel that cannot carry a question is a session whose person went away mid-turn, not somebody
 saying anything in advance.
 
+`--auto` ([auto-mode.md](auto-mode.md)) is another, to two of them: a classifier that is given only
+the lines the person typed and the action answers a run the sandbox confines and the first question
+about a URL, and its allow word is the whole of what it can say. Anything else, a failure included,
+is the refusal above, so it removes a question and never refuses one. It reads no byte of a slot, so
+it is not the check this paragraph's first sentence rules out.
+
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_refuses_a_run`
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_refuses_a_vetted_read`
 `verified-by: bravebot_tui::remote_confirm::a_closed_channel_answers_no_question`
@@ -755,6 +761,7 @@ saying anything in advance.
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked`
 `verified-by: bravebot_agent::manifest::a_plan_nobody_approved_runs_nothing`
+`verified-by: bravebot_cli::running::an_auto_run_runs_a_command_the_classifier_allows_and_refuses_one_it_does_not`
 
 <a id="PROMPT-10"></a>
 ### PROMPT-10: a prompt's own chrome is wholly the theme's

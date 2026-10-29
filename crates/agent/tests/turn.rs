@@ -274,6 +274,16 @@ fn reply_with(content: &str) -> String {
 /// nothing else uses the phrase, so a request carrying it is a check and not a round of a turn.
 const A_CHECK_ASKING: &str = "prompt-injection classifier";
 
+/// What the auto mode's classifier request is recognised by. It is answered from the same queue as a
+/// check, so a script of a turn's own rounds stays a script of the turn's own rounds, and one that
+/// is not about the classifier answers it with a reply that is not the allow word.
+const A_CLASSIFIER_ASKING: &str = "permission classifier";
+
+/// Whether a request is a check or the auto mode's classifier rather than a round of a turn.
+fn is_a_side_request(body: &str) -> bool {
+    body.contains(A_CHECK_ASKING) || body.contains(A_CLASSIFIER_ASKING)
+}
+
 /// What a check is answered when the test did not say. Every prompt that would promote quarantined
 /// content runs one first, so almost every script here would otherwise owe a reply to a
 /// conversation it is not about.
@@ -1142,11 +1152,11 @@ fn serve_rounds(
 
             // Every attempt, not only the first: a resend is not remembered, so the client
             // exhausts its attempts and the call fails rather than succeeding on the second.
-            let reply = if body.contains(A_CHECK_ASKING) && lose_every_check {
+            let reply = if is_a_side_request(&body) && lose_every_check {
                 None
             } else if resent.is_some() {
                 resent
-            } else if body.contains(A_CHECK_ASKING) {
+            } else if is_a_side_request(&body) {
                 let reply = checks.next().unwrap_or_else(a_check_finding_nothing);
                 answered = Some((body, reply.clone()));
                 Some(reply)
@@ -65307,6 +65317,350 @@ fn a_sealed_git_run_in_a_repository_nobody_vouched_for_does_not_name_read_git() 
         "a sealed git run in a repository nobody vouched for named a tool that declines it: {}",
         results[0]
     );
+}
+
+/// What the auto mode's classifier was sent and what the trail says of each question, for a turn in
+/// which the planner runs `command` after the person typed `prompt`.
+struct AutoRun {
+    /// The requests that were the classifier's.
+    classifier: Vec<String>,
+    /// How many runs reached the confirmer behind the mode.
+    asked: usize,
+    /// Every `approval` and `auto_mode` entry, in order.
+    trail: Vec<String>,
+    /// Whether the line ran and made its file.
+    made_it: bool,
+}
+
+fn an_auto_run(mode: bravebot_agent::PermissionMode, said: &str, command: &str) -> AutoRun {
+    // A name of its own for each run: tests run side by side and a scratch directory is named by
+    // the process and this, so a shared name would have one run delete another's files.
+    static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let scratch = Scratch::new(&format!(
+        "auto-classifier-run-{}",
+        RUNS.fetch_add(1, Ordering::Relaxed)
+    ));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(said)],
+        vec![
+            tool_request_2("run", &json!({ "command": command }).to_string()),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let live = bravebot_agent::LiveMode::new(mode);
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let seen = asked.seen.clone();
+    let mut confirmer = bravebot_agent::Confining::new(&mut asked, live.clone(), false);
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("make the file made.txt")
+            .with_permission_mode(live)
+            .with_confined_runs(true),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let classifier = received
+        .try_iter()
+        .filter(|body| body.contains(A_CLASSIFIER_ASKING))
+        .collect();
+    let trail = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "approval" | "auto_mode",
+                detail,
+            } if detail.starts_with("answered by")
+                || detail.starts_with("no mode answered")
+                || detail.starts_with("the classifier") =>
+            {
+                Some(detail.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let asked = seen.lock().unwrap().len();
+    AutoRun {
+        classifier,
+        asked,
+        trail,
+        made_it: scratch.path.join("made.txt").exists(),
+    }
+}
+
+/// AUTO-3, AUTO-6, AUTO-8: in auto, the classifier's allow word answers a run the sandbox confines
+/// and nothing else does. The line runs unasked on the one word, and goes to the person on a no, on
+/// a reply that merely contains the word, and on a platform with no sandbox to hold the line, where
+/// the classifier is not consulted at all. The trail names the classifier and what it said, and
+/// tells its answer from a question left with the person. The regressions it rejects: a reply
+/// that contains the word allowing, a line run unconfined on the classifier's word, and a trail that
+/// credits the mode with a question a person answered.
+#[test]
+fn auto_answers_a_confined_run_on_the_classifiers_allow_word_and_asks_the_person_otherwise() {
+    use bravebot_agent::PermissionMode;
+    let confinable = bravebot_sandbox::base::Prelude::current().is_some();
+    for (said, answers) in [
+        ("allow", true),
+        ("ALLOW", true),
+        ("deny", false),
+        ("allow, but only inside a test", false),
+    ] {
+        let run = an_auto_run(PermissionMode::Auto, said, "touch made.txt");
+        let words = format!("{said:?}");
+        if !confinable {
+            assert!(
+                run.classifier.is_empty(),
+                "{words}: consulted with no sandbox"
+            );
+            assert_eq!((run.asked, run.made_it), (1, false), "{words}");
+            continue;
+        }
+        assert_eq!(
+            run.classifier.len(),
+            1,
+            "{words}: the classifier was not asked once"
+        );
+        let sent = &run.classifier[0];
+        assert!(sent.contains("touch made.txt"), "{words}: {sent}");
+        assert!(sent.contains("make the file made.txt"), "{words}: {sent}");
+        assert_eq!(
+            run.made_it, answers,
+            "{words}: asked {}, trail {:?}",
+            run.asked, run.trail
+        );
+        assert_eq!(run.asked, usize::from(!answers), "{words}");
+        assert!(
+            run.trail
+                .iter()
+                .any(|entry| entry.starts_with("the classifier ")
+                    && entry.contains("asked about a run")
+                    && entry.contains(if answers {
+                        "said allow"
+                    } else {
+                        "said not allowed"
+                    })),
+            "{words}: {:?}",
+            run.trail
+        );
+        let credited = run
+            .trail
+            .iter()
+            .any(|entry| entry == "answered by auto mode, nobody was asked");
+        assert_eq!(credited, answers, "{words}: {:?}", run.trail);
+    }
+}
+
+/// AUTO-2, AUTO-3: no mode but auto consults the classifier, whatever it would have said. The
+/// regression it rejects: a model call, and a spend, in a session that never asked for one.
+#[test]
+fn no_mode_but_auto_consults_the_classifier() {
+    use bravebot_agent::PermissionMode;
+    for mode in [
+        PermissionMode::Ask,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Plan,
+        PermissionMode::Bypass,
+    ] {
+        let run = an_auto_run(mode, "allow", "touch made.txt");
+        assert!(
+            run.classifier.is_empty(),
+            "{mode:?} sent the classifier a request"
+        );
+        assert!(
+            !run.trail
+                .iter()
+                .any(|entry| entry.starts_with("the classifier")),
+            "{mode:?}: {:?}",
+            run.trail
+        );
+    }
+}
+
+/// AUTO-3: a line that asked to start with no profile is never put to the classifier, since the
+/// sandbox is what holds a line to the words the classifier read. The regression it rejects: a
+/// request to run unconfined being approved on a model's word.
+#[test]
+fn a_run_with_nothing_to_hold_it_is_not_put_to_the_classifier() {
+    use bravebot_agent::PermissionMode;
+    let scratch = Scratch::new("auto-classifier-unconfined");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with("allow")],
+        vec![
+            tool_request_2("run", r#"{"command":"touch made.txt"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let live = bravebot_agent::LiveMode::new(PermissionMode::Auto);
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+    let seen = asked.seen.clone();
+    let mut confirmer = bravebot_agent::Confining::new(&mut asked, live.clone(), false);
+
+    // A turn that does not confine runs at all, which is the line the classifier cannot be shown
+    // the binary of.
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("make the file made.txt")
+            .with_permission_mode(live)
+            .with_confined_runs(false),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        received
+            .try_iter()
+            .all(|body| !body.contains(A_CLASSIFIER_ASKING)),
+        "an unconfined line was put to the classifier"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1, "the person was not asked");
+    assert!(!scratch.path.join("made.txt").exists());
+}
+
+/// AUTO-3, AUTO-8: the classifier's allow word answers the first question about a URL, and its no
+/// leaves the question with the person. The trail credits auto for the first and not the second.
+/// The regression it rejects: a fetch answered on a reply that is not the allow word.
+#[test]
+fn auto_answers_a_fetch_on_the_classifiers_allow_word_and_asks_the_person_otherwise() {
+    use bravebot_agent::PermissionMode;
+    for (said, answers) in [("allow", true), ("deny", false)] {
+        let scratch = Scratch::new("auto-classifier-fetch");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            vec![reply_with(said)],
+            vec![
+                tool_request_2(
+                    "fetch_url",
+                    r#"{"url":"https://docs.example.invalid/guide"}"#,
+                ),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let live = bravebot_agent::LiveMode::new(PermissionMode::Auto);
+        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+        let mut confirmer = bravebot_agent::Confining::new(&mut asked, live.clone(), false);
+
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("read the guide").with_permission_mode(live),
+            &mut confirmer,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+
+        let classifier: Vec<String> = received
+            .try_iter()
+            .filter(|body| body.contains(A_CLASSIFIER_ASKING))
+            .collect();
+        assert_eq!(
+            classifier.len(),
+            1,
+            "{said}: the classifier was not asked once"
+        );
+        assert!(classifier[0].contains("https://docs.example.invalid/guide"));
+        assert!(classifier[0].contains("read the guide"));
+        let trail: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "approval",
+                    detail,
+                } if detail.starts_with("answered by")
+                    || detail.starts_with("no mode answered") =>
+                {
+                    Some(detail.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let credited = trail
+            .iter()
+            .any(|entry| entry == "answered by auto mode, nobody was asked");
+        assert_eq!(credited, answers, "{said}: {trail:?}");
+    }
+}
+
+/// AUTO-6: a context that holds private content or has met something untrusted is never put to the
+/// classifier. Private text is not sent to another model, and a reply written in an untrusted
+/// context cannot be read. The regression it rejects: a model call that carries a private
+/// argument to a second model, or one whose word is acted on after the planner met an attacker's.
+#[test]
+fn a_context_that_is_private_or_untrusted_is_not_put_to_the_classifier() {
+    use bravebot_agent::PermissionMode;
+    for (context, which) in [
+        (bravebot_core::label::Label::trusted_private(), "private"),
+        (bravebot_core::label::Label::untrusted_public(), "untrusted"),
+    ] {
+        let scratch = Scratch::new(&format!("auto-classifier-context-{which}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            vec![reply_with("allow")],
+            vec![
+                tool_request_2("run", r#"{"command":"touch made.txt"}"#),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let live = bravebot_agent::LiveMode::new(PermissionMode::Auto);
+        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+        let mut confirmer = bravebot_agent::Confining::new(&mut asked, live.clone(), false);
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.observed(context);
+
+        let _ = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("make the file made.txt")
+                .with_permission_mode(live)
+                .with_confined_runs(true),
+            &mut conversation,
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+
+        assert!(
+            received
+                .try_iter()
+                .all(|body| !body.contains(A_CLASSIFIER_ASKING)),
+            "a {which} context was put to the classifier"
+        );
+        assert!(
+            !scratch.path.join("made.txt").exists(),
+            "the line ran in a {which} context without the person"
+        );
+    }
 }
 
 #[path = "turn/retention.rs"]

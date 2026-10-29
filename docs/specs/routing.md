@@ -111,7 +111,9 @@ back from somewhere.
 
 An action whose capability was not granted is refused outright. A person's
 approval mints a **single-use** endorsement bound to that exact value, so it cannot be replayed,
-redirected to another value, or reused for a different pipeline.
+redirected to another value, or reused for a different pipeline. An answer a mode gives in a person's
+place mints the same endorsement for the same value and no other, and in the auto mode that answer is
+a classifier's word on one question ([AUTO-6](auto-mode.md#AUTO-6)).
 
 A write that would make a trusted path untrusted is the case that must be shown. Where nobody can
 be asked, effects are refused rather than applied unseen.
@@ -129,6 +131,7 @@ act, and the person approves it in the authority's popup.
 `verified-by: bravebot_core::policy::a_run_needs_the_capability_as_well_as_the_endorsement`
 `verified-by: bravebot_core::policy::a_connector_release_is_refused_unless_precommitted_to_that_place`
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_unread_slot_and_the_act_sends_the_released_text`
+`verified-by: bravebot_agent::permission_mode::auto_answers_a_run_only_on_the_classifiers_allow_word_for_a_confined_line`
 
 <a id="ROUTE-6"></a>
 ### ROUTE-6: a reference is not a destination unless it names a file

@@ -19,6 +19,7 @@ pub mod backend;
 pub mod bedrock_refusals;
 pub mod calendar;
 pub mod chatgpt;
+pub mod classifier;
 pub mod cmdline;
 pub mod commit_message;
 pub mod compact;

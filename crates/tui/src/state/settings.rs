@@ -103,16 +103,21 @@ impl Session {
             .set(self.permission_mode.get().cycle(self.bypass_reachable));
     }
 
-    /// Move to the next mode the ladder has short of bypassing, which is what a click on the mode
-    /// under the box does (MOUSE-14).
+    /// Move to the next mode the ladder has short of the two that stop asking a person, which is
+    /// what a click on the mode under the box does (MOUSE-14).
     ///
-    /// Bypassing answers every later question without asking, and a click is the one input a stray
-    /// press or a terminal that reports a position wrongly can make, so a click never grants it. The
-    /// key does, from the line that names the mode, and from bypassing both come back to the
-    /// first mode.
-    pub fn cycle_permission_mode_short_of_bypass(&mut self) {
-        self.permission_mode
-            .set(self.permission_mode.get().cycle(false));
+    /// Bypassing answers every later question without asking and auto hands the run and fetch
+    /// questions to a model. A click is the one input a stray press or a terminal that reports a
+    /// position wrongly can make, so a click grants neither. The key does, from the line that names
+    /// the mode, and from either of them both come back to the first mode.
+    pub fn cycle_permission_mode_by_click(&mut self) {
+        use bravebot_agent::PermissionMode;
+        let next = self.permission_mode.get().cycle(false);
+        let next = match next {
+            PermissionMode::Auto => next.cycle(false),
+            _ => next,
+        };
+        self.permission_mode.set(next);
     }
 
     /// Set plan mode, from whichever mode the session is in, and say nothing for the reason
