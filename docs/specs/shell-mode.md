@@ -69,6 +69,13 @@ cancelled command records nothing. What the screen shows when a command ends wit
 released text, and what it shows while the command runs, and of one that was stopped, is
 [SHELL-7](#SHELL-7).
 
+The command ends when the shell that ran it exits, not when every process it printed into does. A
+line that backgrounds a process with `&`, such as `sleep 10 &`, returns control to the shell at
+once, and the shell itself exits as soon as the line after it does; the backgrounded process is
+left running, unstopped and unwaited for. Each of its pipes is then read for
+[`DRAIN_GRACE`](../../crates/agent/src/shell.rs), a short, fixed span, and what had arrived by
+then is what reaches the planner: the same partial result a pipe that failed outright would leave.
+
 This is a first label from provenance, exactly like the label on a program's output or on the
 user's own configuration. It is admissible for the reason a vouched-for command is: a person took
 responsibility, and nothing inspected anything.
@@ -78,6 +85,7 @@ responsibility, and nothing inspected anything.
 `verified-by: bravebot_agent::shell::trusting_the_output_is_recorded_in_the_trail`
 `verified-by: bravebot_agent::shell::a_cancelled_command_records_nothing`
 `verified-by: bravebot_agent::shell::what_is_shown_is_what_the_gate_released`
+`verified-by: bravebot_agent::shell::a_line_that_backgrounds_a_process_returns_once_the_shell_exits`
 `verified-by: bravebot_tui::shell_mode::output_is_not_drawn_as_quarantined`
 `verified-by: bravebot_tui::shell_mode::output_cannot_draw_its_own_escapes`
 
@@ -206,6 +214,11 @@ everything above is void.
 - **A command stopped while it prints can lose its last lines.** The entry kept for it holds what
   had been read when the command was found to have ended, and a line still being read when it was
   killed is not in it.
+- **Output a backgrounded process goes on printing after the shell exits is cut off.** The command
+  is held to have ended at the shell's own exit (SHELL-3), so a process it backgrounded with `&` is
+  given only `DRAIN_GRACE` to finish writing to its pipe before what had arrived is taken as the
+  whole of it; the process itself is left running, unstopped. A line like `sleep 10 & echo done`
+  releases `done` and nothing `sleep` ever prints, whether or not the person is still watching.
 - **A line longer than the byte bound is kept from where the bound falls.** That can be inside a
   colour code, which then draws as the text of its end, since no escape is left to take out.
 - **A paste into an armed command line is bytes the person did not type reaching the shell.** The
