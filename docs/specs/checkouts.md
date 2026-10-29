@@ -1021,6 +1021,9 @@ Unix names none: the sweep removes them, and one it leaves is held by a running 
 `verified-by: bravebot_tui::sessions::the_checkouts_no_record_lists_are_named_and_nothing_is_named_where_a_record_is_unreadable`
 `verified-by: bravebot_tui::state::a_checkout_no_record_lists_is_named_with_its_path`
 `verified-by: bravebot_tui::sessions::the_checkouts_the_records_list_are_every_id_and_none_where_one_cannot_be_read`
+`verified-by: bravebot_tui::sessions::the_opening_sweep_removes_nothing_where_a_record_cannot_be_read`
+`verified-by: bravebot_tui::sessions::the_opening_sweep_leaves_a_checkout_a_record_lists_and_removes_the_other`
+`verified-by: bravebot_tui::sessions::the_opening_sweep_removes_every_checkout_where_no_record_exists`
 `verified-by: bravebot_agent::workspace::a_sweep_leaves_the_checkouts_a_session_made_or_took_back`
 `verified-by: bravebot_cli::running::a_one_shot_run_removes_the_checkouts_no_session_holds_and_leaves_a_held_one`
 `verified-by: bravebot_agent::workspace::a_move_is_refused_while_the_session_keeps_a_checkout_and_names_it`
