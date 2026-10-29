@@ -2256,7 +2256,7 @@ run-always-runs-again = it runs again unasked, side effects and all
 run-always-output-trusted = what it prints is trusted, and the model reads it
 run-always-exact-arguments = these arguments only: git log would not cover git push
 run-always-this-directory = this directory only: the same line elsewhere is asked about again
-run-allow-and-remember-explained = Allow and remember trusts this exact command, with these exact arguments, for the rest of this session: it runs again unasked, side effects and all, and what it prints is trusted so the model reads it.
+run-allow-and-remember-explained = Allow and remember trusts this exact command, with these exact arguments, in this directory: it runs again unasked, side effects and all, now and in later sessions, and what it prints is trusted so the model reads it.
 run-private-not-remembered =
     private input is asked about every time, so this one cannot be remembered
 run-assignment-not-remembered =

@@ -26,6 +26,7 @@ fr:editor-file-was-stopped
 fr:lsp-none-started
 fr:lsp-server-running
 fr:lsp-started
+fr:mcp-call-allow-and-remember-explained
 fr:memory-fact
 fr:memory-label-private
 fr:memory-label-public
@@ -54,6 +55,7 @@ fr:open-loops-uncommitted
 fr:outputs-hint
 fr:outputs-none
 fr:panel-rename-line-in-use
+fr:run-allow-and-remember-explained
 fr:session-link-not-opened
 fr:session-path-not-a-file
 fr:session-preview-denied

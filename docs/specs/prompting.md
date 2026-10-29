@@ -242,7 +242,12 @@ program is not git and whose profile writes more than the temporary directory, t
 the line other than git can write a repository's hooks and configuration, which git runs later
 with no sandbox ([SANDBOX-18](sandboxing.md#SANDBOX-18)); whether a stage's program is git is the
 decision its profile is built with. It asks for the side effects and the
-output together, and names the exact command it would vouch for. The output prompt says
+output together, and names the exact command it would vouch for. Where a front end offers a
+standing answer beside the run question or the call question, the lines say what picking it does:
+for a run, that the exact command, with its exact arguments, runs unasked and its output is
+trusted in this directory from then on, in later sessions and not only this one; for a call, that
+the tool is allowed without asking again in the project. A front end with no such answer to offer
+sends neither sentence. The output prompt says
 what approving does. The vetting prompt says what approving does and, because nothing else on the
 screen would, what it does not: no path is vouched for, so the same thing read again asks again. The trust prompt explains the consequence and names both answers, and says that a command the
 sandbox confines then runs in the directory without asking ([RUN-5](tools/run.md#RUN-5)), above the lines
@@ -272,6 +277,9 @@ run one keypress settles.
 `verified-by: bravebot_agent::turn::a_run_prompt_describes_the_confinement_only_where_the_turn_confines`
 `verified-by: bravebot_tui::confirm::run::a_run_prompt_asks_for_the_side_effects_and_the_output_together`
 `verified-by: bravebot_tui::confirm::run::a_run_prompt_names_the_exact_command_it_would_vouch_for`
+`verified-by: bravebot_approval::lib::a_run_explains_what_allow_and_remember_grants_only_where_it_is_offered`
+`verified-by: bravebot_approval::lib::a_call_explains_what_allow_and_remember_grants_only_where_it_is_offered`
+`verified-by: bravebot_ui_bridge::acp::a_remembered_run_and_a_standing_call_show_the_sentence_only_then`
 `verified-by: bravebot_tui::confirm::vet::the_output_prompt_says_what_approving_does`
 `verified-by: bravebot_tui::confirm::vet::the_vet_prompt_says_what_approving_does_and_does_not_do`
 `verified-by: bravebot_tui::trust_prompt::the_prompt_explains_the_consequence`

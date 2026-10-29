@@ -1549,6 +1549,66 @@ mod tests {
         );
     }
 
+    /// Issue #3045, TS-004: `call_text` reads `mayStand` and `run_text` reads `canBeRemembered`
+    /// off the wire, not off a fixture the test already knows the answer to. A run that cannot be
+    /// remembered and a call that offers no standing answer, which is what every other case in
+    /// `the_other_questions_read_to_the_editor_as_they_read_in_the_terminal` sends, cannot
+    /// distinguish a build that reads the field from one that hardcodes `false`.
+    #[test]
+    fn a_remembered_run_and_a_standing_call_show_the_sentence_only_then() {
+        use bravebot_agent::confirm::{McpCallRequest, RunRequest};
+        use bravebot_core::command::{Pipeline, Stage};
+
+        let pipeline = Pipeline::new(vec![Stage::new("docker", vec!["ps".into()])]);
+        let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/docker".into()], "/w");
+        assert!(
+            run.can_be_remembered(),
+            "the fixture must be rememberable for this test to mean anything"
+        );
+        let remembered = run_text(&crate::wire::run_request(1, &run)).expect("a run reads");
+        assert!(
+            remembered.contains("Allow and remember"),
+            "a run that can be remembered sent no sentence explaining it through the bridge: \
+             {remembered}"
+        );
+
+        run.plan.writes = vec!["/w/out.txt".into()];
+        assert!(
+            !run.can_be_remembered(),
+            "a line that writes a file cannot be remembered"
+        );
+        let not_remembered = run_text(&crate::wire::run_request(2, &run)).expect("a run reads");
+        assert!(
+            !not_remembered.contains("Allow and remember"),
+            "a run that offers no standing answer got a sentence about one anyway: \
+             {not_remembered}"
+        );
+
+        let standing = McpCallRequest {
+            alias: "a".into(),
+            tool: "t".into(),
+            arguments: Vec::new(),
+            description: None,
+            may_stand: true,
+        };
+        let standing_text = call_text(&crate::wire::mcp_call_request(3, &standing));
+        assert!(
+            standing_text.contains("Allow and remember") && standing_text.contains("a:t"),
+            "a call that offers a standing answer sent no sentence naming it through the bridge: \
+             {standing_text}"
+        );
+
+        let once = McpCallRequest {
+            may_stand: false,
+            ..standing
+        };
+        let once_text = call_text(&crate::wire::mcp_call_request(4, &once));
+        assert!(
+            !once_text.contains("Allow and remember"),
+            "a call that offers no standing answer got a sentence about one anyway: {once_text}"
+        );
+    }
+
     fn shown(stem: &str, data: Value) -> (String, &'static str, String) {
         describe(stem, &data).unwrap_or_else(|| panic!("`{stem}` has nothing to show"))
     }
