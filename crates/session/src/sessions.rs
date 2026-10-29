@@ -6956,6 +6956,8 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
             },
         );
         let source_id = source.id().to_string();

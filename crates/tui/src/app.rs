@@ -24355,6 +24355,8 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
             },
         );
 
