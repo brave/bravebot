@@ -2047,11 +2047,22 @@ saved under. `/sandbox` alone says the mode in force and the flag or file that c
 uses. `/sandbox strict`, `/sandbox read-only`, `/sandbox workspace-write` and `/sandbox off` set the mode for the rest of the
 process, and only a person's typed word does ([CMD-1](commands.md#CMD-1)): no tool, skill, hook or
 `AGENTS.md` line sets it, and the planner is told the mode in force and nothing about the command.
-A mode named while a turn runs is set as it is typed, `off` included ([CMD-8](commands.md#CMD-8)). A turn is built with the mode in force when it begins, so a turn's `run` description, its
-failure sentence, its `scopes` and `request_path` refusals and the profile its programs start under
-all come from one mode, every stage of the running turn keeps it, and the change applies from the next turn; a delegate spawned by a later turn runs
-under the new mode. A move to `off` is made when it is typed, like a move to any other mode, with
-no question; the reply says that programs then start with no profile. A background job keeps the profile it started under ([RUN-15](tools/run.md#RUN-15)), so a
+A mode named while a turn runs is set as it is typed, `off` included ([CMD-8](commands.md#CMD-8)), and the
+turn follows it from then on, as it follows a permission mode ([MODE-8](permission-modes.md#MODE-8)). A call
+reads the mode when it begins and is decided under that one mode throughout: its `run` failure
+sentence, its `scopes` and `request_path` refusals, a refusal of a file tool under `read-only`, and
+the profile its programs start under. A call whose question is on screen when the mode is named
+began before it and keeps the mode it began under. A delegate holds the same handle on the mode as
+the turn that spawned it, so one running when the mode is named follows it too, and so does the
+question whether bypassing answers a language server's start ([LSP-5](tools/lsp.md#LSP-5)). A
+program already started keeps the profile it started under, whichever way the mode moved. The `run`
+description the planner received states the mode the turn began in, so before its next request the
+planner is told of the change in words the driver writes from the two modes: for a mode that
+confines, the sentences the description would have carried under it, and for `off`, that programs
+now start with no sandbox profile. It is told once for each change, and a turn that confines none of
+its runs is told nothing. A move to `off` is made when it is typed, like a move to any other mode,
+with no question; the reply says that programs then start with no profile, and a reply made while a
+turn runs says that the turn uses the mode for each program it starts from then on. A background job keeps the profile it started under ([RUN-15](tools/run.md#RUN-15)), so a
 move to `read-only` while jobs are running says which ones keep the earlier mode, by the names `/jobs`
 lists, and that `/jobs stop` ends them; with none running it says nothing of jobs
 `verified-by: bravebot_tui::sandbox_command::a_move_to_read_only_names_the_jobs_that_keep_the_earlier_mode`.
@@ -2072,7 +2083,7 @@ request for `off`, or for any word that is not one of the three or `standard`, w
 sends. A mode the kernel cannot hold ([SANDBOX-3](#SANDBOX-3)) is still offered and accepted, and a `run`
 stage under it is refused with the sentence that clause describes. A choice is
 the session's own and applies from the next turn or manifest run; the one running keeps the mode it
-started in. The managed floor holds: a mode looser than the pin is refused with a sentence naming the
+started in, which `/sandbox` in the terminal does not. The managed floor holds: a mode looser than the pin is refused with a sentence naming the
 file and saying which of reading and writing the mode does more of, and a choice is met with the
 floor again when a turn starts. A session that is opened, resumed
 or forked starts from the settings and the pin, not from the choice of the session it came from, and
@@ -2114,7 +2125,13 @@ stricter than the machine requires. Bypass may widen `workspace-write`'s writes 
 `request_path` a session accepts is already granted without asking, so a stage starts with what the
 planner could get with one request instead of failing first. `strict` is not widened, since a
 person who chose it asked for less than the default. `read-only` is not widened either: bypass
-answers a question and does not change which mode is in force. The file tools are held to
+answers a question and does not change which mode is in force. A mode typed during a turn applies
+to the rest of it because a person who types `/sandbox off` over a running turn is usually answering
+a program the profile just refused, and a mode that waited for the turn to end would leave the
+planner retrying that line, or giving up on it, until then. A move to a stricter mode applies at
+once for the same reason in the other direction: the person who types it is stopping what the turn
+is about to start. The planner is told because its `run` description would otherwise go on stating
+a boundary that has ended, or omitting one that has begun. The file tools are held to
 `read-only` because they write the same directories its programs cannot, and accepting edits and
 bypassing answer the write prompt unasked, so a mode that held back programs alone would hand the
 project back through `write_file` in the two permission modes a person picks to stop being asked,
@@ -2123,7 +2140,9 @@ refused. The refusal comes before the
 permission mode is reached, as a deny rule's does ([MODE-6](permission-modes.md#MODE-6)), so no
 mode answers it.
 
-**What it costs.** `strict` fails any program that reads a place its binary's list and its argv do
+**What it costs.** A turn that follows the mode can be decided under more than one: its `run`
+description states the mode it began in until the notice that follows the change, and a program
+already started keeps its profile, so a move to `strict` does not stop a program that is running. `strict` fails any program that reads a place its binary's list and its argv do
 not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and chooses `workspace-write` or
 adds the directory. `off` is the whole of the confinement removed: a window never offers it, and
 the command line prints it on its opening line. On Windows, where `read-only` reads no more than
@@ -2224,8 +2243,14 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_tui::sandbox_command::a_word_that_is_not_a_mode_changes_nothing_and_the_bare_word_only_reports`
 `verified-by: bravebot_tui::sandbox_command::the_report_names_what_chose_the_mode`
 `verified-by: bravebot_tui::app::the_sandbox_command_carries_its_word_unparsed`
-`verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it`
 `verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed`
+`verified-by: bravebot_agent::live_sandbox::a_mode_set_through_one_handle_is_read_through_its_clones`
+`verified-by: bravebot_agent::live_sandbox::handles_made_apart_do_not_share_a_mode`
+`verified-by: bravebot_agent::turn::a_sandbox_mode_chosen_during_a_turn_applies_to_the_calls_after_it`
+`verified-by: bravebot_agent::turn::a_delegate_follows_a_sandbox_mode_chosen_while_it_runs`
+`verified-by: bravebot_agent::confine::the_planner_is_told_of_a_sandbox_mode_chosen_while_its_turn_runs`
+`verified-by: bravebot_agent::permission_mode::a_confirmer_follows_the_sandbox_mode_chosen_after_it_was_made`
 
 <a id="SANDBOX-23"></a>
 ### SANDBOX-23: reach a person remembered for a command is attached to that command's stage, and nothing else makes it

@@ -1513,7 +1513,7 @@ fn run_and_report(
     // only where nothing is confined (LSP-5).
     let mut confirmer =
         bravebot_agent::Confining::new(&mut one_shot, permission_mode, task.auto_vetting)
-            .with_sandbox_mode(task.sandbox);
+            .with_sandbox_mode(task.sandbox.clone());
 
     // Progress goes to stderr so stdout stays the reply and nothing else, which is what makes
     // the command pipeable. Without it a long turn prints nothing until it is over.

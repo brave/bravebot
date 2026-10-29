@@ -43,6 +43,7 @@ pub mod hunks;
 pub mod interjections;
 #[cfg(test)]
 mod kept_answers;
+mod live_sandbox;
 pub mod lsp;
 pub mod manifest;
 pub mod mcp;
@@ -114,6 +115,7 @@ pub use confirm::{
 };
 pub use conversation::Conversation;
 pub use delegate::Delegated;
+pub use live_sandbox::LiveSandbox;
 pub use mode::Mode;
 pub use outcome::{Category, Diagnosis, Ending, Spent, Work};
 pub use permission_mode::{Confining, LiveMode, PermissionMode};

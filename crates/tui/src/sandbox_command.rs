@@ -1,9 +1,9 @@
-//! `/sandbox`: the mode programs `run` starts are held to, changed from the next turn (SANDBOX-22).
+//! `/sandbox`: the mode programs `run` starts are held to, changed as it is typed (SANDBOX-22).
 //!
 //! A person's word and nobody else's: the line is dispatched from the input box like every other
 //! command (CMD-1), and nothing here reads a model reply, a skill, a hook or an `AGENTS.md` line.
-//! The planner is told the mode in force, as the `run` description already is, and nothing about
-//! the command.
+//! The planner is told the mode in force, as the `run` description already is, and when it changes
+//! while a turn runs, and nothing about the command.
 //!
 //! The decision is a pure function of what was typed, the mode held now and the managed file, so
 //! what a refusal and a change each turn on is tested without a terminal. The word is the person's
@@ -53,7 +53,7 @@ impl Sandboxed {
 pub enum Step {
     /// Say this and change nothing.
     Say(String),
-    /// Move to this mode from the next turn.
+    /// Move to this mode now. A turn running follows it from its next call.
     Move(SandboxMode),
 }
 
@@ -270,6 +270,11 @@ mod tests {
 
         let next = Session::new("kernel-enforced").with_sandbox(first.sandbox().clone());
         assert_eq!(next.sandbox_mode(), SandboxMode::Strict);
+        assert_eq!(
+            next.live_sandbox_mode().get(),
+            SandboxMode::Strict,
+            "the mode a turn of the new session reads"
+        );
         assert!(
             next.sandbox().typed,
             "the report must still name the command"

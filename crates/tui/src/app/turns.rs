@@ -666,10 +666,12 @@ pub(super) fn run_turn_animated(
         // screens nothing while believing it does.
         //
         // The sandbox mode comes off the task for the same reason: bypassing answers the start of a
-        // language server only where nothing is confined (LSP-5).
+        // language server only where nothing is confined (LSP-5). It is the task's handle, so a
+        // mode typed while the turn runs decides the questions after it as it decides the programs
+        // (SANDBOX-22).
         let mut confirmer =
             bravebot_agent::Confining::new(&mut asking, permission_mode, task.auto_vetting)
-                .with_sandbox_mode(task.sandbox);
+                .with_sandbox_mode(task.sandbox.clone());
         // Owned by the worker for the duration and handed back afterwards, whether the turn
         // succeeded or not. A failed turn is still part of the conversation, and the next one
         // is usually about it.

@@ -214,6 +214,28 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     }
     state.told_mode = chosen;
 
+    // The sandbox mode the person last chose applies to this turn as it runs (SANDBOX-22). The
+    // `run` description was written in the one the turn started in, so a change is said to the
+    // planner before the next request, in words the driver wrote from the two modes.
+    let sandbox = task.sandbox.get();
+    if let Some(notice) = crate::confine::change_notice(
+        task.confine_runs,
+        state.told_sandbox,
+        sandbox,
+        tools::requests_are_accepted(
+            task.confine_runs,
+            sandbox,
+            tools::workspace_is_trusted(policy, workspace),
+        ),
+    ) {
+        conversation.push_composed_from(
+            Message::user(&notice),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+    }
+    state.told_sandbox = sandbox;
+
     // A file the last round read or wrote may match the paths of a rule held back. The rule is
     // appended to the system prompt before this request goes out, after every byte the last
     // one carried, and the person is told which file brought it (INSTR-16).
@@ -614,7 +636,7 @@ pub(super) fn nudges(
     // The sandbox mode `read-only` does the same for the whole turn (SANDBOX-22).
     if may_write
         && !task.permission_mode.get().refuses_writes()
-        && !tools::sandbox_refuses_writes(task.confine_runs, task.sandbox)
+        && !tools::sandbox_refuses_writes(task.confine_runs, task.sandbox.get())
         && !conversation.asked_to_write()
         // A delegate that wrote in this workspace has delivered: its changes are on disk, and
         // the planner's own write calls are not the only way a turn writes (TURN-3).
@@ -897,7 +919,7 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
                 task.output_cap,
                 task.deadlines,
                 task.confine_runs,
-                task.sandbox,
+                task.sandbox.clone(),
                 task.mcp.as_ref(),
                 cancel,
                 &mut confirmer,
@@ -1402,7 +1424,9 @@ pub(super) fn tools_for_a_call<'a>(
         run_directory: &mut state.run_directory,
         confined_failures: &mut state.confined_failures,
         confine_runs: task.confine_runs,
-        sandbox: task.sandbox,
+        // Read as the call is built, so a mode the person chose while the turn ran is the one this
+        // call is decided under, in every one of its decisions (SANDBOX-22).
+        sandbox: task.sandbox.get(),
         asks_about_unconfined: task.asks_about_unconfined,
     }
 }

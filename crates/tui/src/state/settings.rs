@@ -5,6 +5,7 @@ use super::*;
 impl Session {
     /// Start under the mode a `/resume` carried over, which is the one the person last chose.
     pub fn with_sandbox(mut self, sandbox: crate::sandbox_command::Sandboxed) -> Self {
+        self.live_sandbox.set(sandbox.choice.mode);
         self.sandbox = sandbox;
         self
     }
@@ -27,9 +28,18 @@ impl Session {
         &self.sandbox
     }
 
-    /// Move the mode for the rest of the process, from the next turn.
+    /// A handle on the mode that a running turn reads, so `/sandbox` typed while it runs applies to
+    /// the programs it starts after that (SANDBOX-22). Hand this to a turn rather than the value
+    /// [`Session::sandbox_mode`] returns.
+    pub fn live_sandbox_mode(&self) -> bravebot_agent::LiveSandbox {
+        self.live_sandbox.clone()
+    }
+
+    /// Move the mode for the rest of the process. A turn running now follows it from its next
+    /// call, and a program already started keeps the profile it started under.
     pub fn set_sandbox_mode(&mut self, mode: bravebot_sandbox::SandboxMode) {
         self.sandbox = crate::sandbox_command::Sandboxed::typed(mode);
+        self.live_sandbox.set(mode);
     }
 
     /// Say what the configuration allows, for the opening screen to draw.

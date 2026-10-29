@@ -633,8 +633,9 @@ pub fn run(
     // confinement is a thing to avoid by delegating.
     confine_runs: bool,
     // And its mode, for the same reason: a delegate no looser than the turn that spawned it
-    // (SANDBOX-22).
-    sandbox: bravebot_sandbox::SandboxMode,
+    // (SANDBOX-22). The same handle and not a copy of what it held, so a mode the person chooses
+    // while the delegate runs is the one its next call is decided under.
+    sandbox: impl Into<crate::LiveSandbox>,
     // The servers the spawning turn reached. A delegate is offered the tools of the ones its spec
     // holds a grant for, on the lists that turn already settled (SERVERS-9).
     mcp: Option<&crate::mcp::Session>,

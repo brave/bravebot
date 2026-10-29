@@ -679,6 +679,10 @@ pub struct Session {
     /// Held here and not read from `bravebot_config::sandbox::in_force`, which is what start-up
     /// settled and cannot change: `/sandbox` moves this, and every turn is built from it.
     sandbox: crate::sandbox_command::Sandboxed,
+    /// The mode above, as a handle a running turn reads at each call, so `/sandbox` typed while it
+    /// runs applies to what it starts after that (SANDBOX-22). Moved only with `sandbox`, by
+    /// [`Session::set_sandbox_mode`] and [`Session::with_sandbox`].
+    live_sandbox: bravebot_agent::LiveSandbox,
     /// The MCP servers this session started, which is what makes the confinement above one it is
     /// using rather than one it has on offer.
     pub servers: Servers,
@@ -1297,7 +1301,10 @@ pub struct Servers {
 
 impl Session {
     pub fn new(confinement: impl Into<String>) -> Self {
+        let sandbox = crate::sandbox_command::Sandboxed::at_start();
         Self {
+            live_sandbox: bravebot_agent::LiveSandbox::new(sandbox.choice.mode),
+            sandbox,
             transcript: Entries::default(),
             layout: Kept::default(),
             reply_layout: Kept::default(),
@@ -1385,7 +1392,6 @@ impl Session {
             laid: Laid::default(),
             confinement: confinement.into(),
             sockets_with_a_path_reachable: false,
-            sandbox: crate::sandbox_command::Sandboxed::at_start(),
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
             kept_jobs: None,
