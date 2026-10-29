@@ -77,11 +77,12 @@ try {
     await shown.getByRole('button', { name: 'Manage', exact: true }).click()
     const forget = page.getByRole('button', { name: 'Forget', exact: true })
     await forget.waitFor()
-    assert.equal(
-      await page.locator('[data-test="remembered-root"]').innerText(),
-      `for ${spelledProject}`,
-      'the list names the directory the answer is about as spelled',
-    )
+    const rootSpan = page.locator('[data-test="remembered-root"]')
+    const visible = (await rootSpan.innerText()).trim()
+    assert.ok(visible.startsWith('· for '), 'the list names the directory the answer is about')
+    // A root longer than the row is cut in the middle. The full spelling is the accessible name.
+    const labeled = await rootSpan.getAttribute('aria-label')
+    assert.equal(labeled ?? visible.replace(/^·\s*/, ''), `for ${spelledProject}`, 'the list names the directory the answer is about as spelled')
     await page.screenshot({ path: `${shots}/remembered-4-permissions.png` })
     await forget.click()
     await page.getByText('Nothing is kept for this directory.', { exact: true }).waitFor()
