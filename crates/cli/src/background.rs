@@ -8,6 +8,7 @@
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
 use bravebot_session::jobs::{Held, Lookup, Mode, Roster, Seen, State, Stopped};
+use bravebot_session::listing::{Reader, Task};
 use bravebot_tui::sessions_view::{Choice, Row};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -87,12 +88,8 @@ fn wants_the_view(
 /// The list grouped by state; Enter on a row attaches as `bravebot attach` does (BG-16).
 fn view() -> ExitCode {
     let roster = Roster::readable();
-    let read = || {
-        roster
-            .as_ref()
-            .map(|roster| rows_of(&roster.list()))
-            .unwrap_or_default()
-    };
+    let mut reader = Reader::new();
+    let mut read = || rows_of(&roster_tasks(&mut reader, roster.as_ref()));
     let rows = read();
     if rows.is_empty() {
         return list(false);
@@ -107,17 +104,34 @@ fn view() -> ExitCode {
     }
 }
 
+/// The sessions the roster knows, from the listing the Sessions screen is built from, so the two
+/// agree on which sessions there are, what state each is in and what it is called (SCREEN-16).
+fn roster_tasks(reader: &mut Reader, roster: Option<&Roster>) -> Vec<Task> {
+    let Some(roster) = roster else {
+        return Vec::new();
+    };
+    let root = bravebot_session::sessions::sessions_root().unwrap_or_default();
+    reader.roster(&root, roster)
+}
+
+/// The lines, or with `--json` the roster's own fields. The JSON is the roster as it is written
+/// (BG-4) with the state names of BG-6, which scripts read, and not a view of the listing.
 fn list(as_json: bool) -> ExitCode {
-    let seen = Roster::readable()
-        .map(|roster| roster.list())
-        .unwrap_or_default();
+    let roster = Roster::readable();
     let mut out = std::io::stdout().lock();
     if as_json {
+        let seen = roster
+            .as_ref()
+            .map(|roster| roster.list())
+            .unwrap_or_default();
         let _ = writeln!(out, "{}", bravebot_session::jobs::as_json(&seen));
-    } else if seen.is_empty() {
+        return ExitCode::SUCCESS;
+    }
+    let tasks = roster_tasks(&mut Reader::new(), roster.as_ref());
+    if tasks.is_empty() {
         let _ = writeln!(out, "{}", t!(sessions_none));
     } else {
-        for line in lines_of(&seen) {
+        for line in lines_of(&tasks) {
             let _ = writeln!(out, "{line}");
         }
     }
@@ -699,46 +713,54 @@ fn shown(typed: &str) -> String {
 }
 
 /// One row for each session: the start of its id, its name, its state, where it works, how long
-/// since its last turn, and the last prompt the person typed.
+/// since it was last written, and the last prompt the person typed.
 ///
-/// A prompt that is held shows as needing input and the one word for its kind, and nothing of
-/// what it asks (BG-5). Both the lines and the list (BG-16) are drawn from these.
-fn rows_of(seen: &[Seen]) -> Vec<Row> {
-    seen.iter()
-        .map(|seen| {
-            let job = &seen.job;
-            Row {
-                id: job.id.clone(),
-                short: job.id.chars().take(ID_SHOWN).collect(),
-                name: shown(&job.name),
-                state: seen.state(),
-                state_words: state_in_words(seen),
-                since: bravebot_session::sessions::how_long_ago(
-                    job.last_turn.unwrap_or(job.started),
-                ),
-                directory: shown(&job.directory),
-                prompt: shown(&bravebot_session::sessions::title_from(&job.prompt)),
-            }
+/// The state is the Sessions screen's word for the session's status, and a prompt that is held
+/// shows as needing input and the one word for its kind, and nothing of what it asks (BG-5,
+/// SCREEN-16). The list (BG-16) is drawn from these.
+fn rows_of(tasks: &[Task]) -> Vec<Row> {
+    tasks
+        .iter()
+        .map(|task| Row {
+            id: task.id.clone(),
+            short: task.id.chars().take(ID_SHOWN).collect(),
+            name: shown(task.title.lines().next().unwrap_or("")),
+            state: task.status.process_state().unwrap_or(State::Stopped),
+            state_words: bravebot_tui::sessions_screen::status_in_words(task.status, task.held),
+            since: bravebot_session::sessions::how_long_ago(task.updated),
+            directory: shown(&task.directory),
+            prompt: shown(&bravebot_session::sessions::title_from(
+                task.prompt.as_deref().unwrap_or(""),
+            )),
         })
         .collect()
 }
 
-fn lines_of(seen: &[Seen]) -> Vec<String> {
-    rows_of(seen)
+/// The same sessions as lines for a pipe or a file. A line names the state in the words of BG-6,
+/// which a script reads, where the list says the Sessions screen's word for the same status.
+fn lines_of(tasks: &[Task]) -> Vec<String> {
+    rows_of(tasks)
         .iter()
-        .map(|row| {
+        .zip(tasks)
+        .map(|(row, task)| {
             format!(
                 "{}  {}  {}  {}  {}  {}",
-                row.short, row.name, row.state_words, row.directory, row.since, row.prompt
+                row.short,
+                row.name,
+                state_in_words(task),
+                row.directory,
+                row.since,
+                row.prompt
             )
         })
         .collect()
 }
 
-fn state_in_words(seen: &Seen) -> String {
-    match (seen.state(), seen.held()) {
-        (State::Working, _) => t!(sessions_state_working).to_string(),
-        (State::NeedsInput, Some(held)) => t!(
+/// The state of a session in the words of BG-6, with the kind of prompt held where one is.
+fn state_in_words(task: &Task) -> String {
+    match (task.status.process_state(), task.held) {
+        (Some(State::Working), _) => t!(sessions_state_working).to_string(),
+        (Some(State::NeedsInput), Some(held)) => t!(
             sessions_state_needs_input,
             kind = match held {
                 Held::Write => t!(sessions_held_write),
@@ -754,10 +776,10 @@ fn state_in_words(seen: &Seen) -> String {
                 Held::Message => t!(sessions_held_message),
             }
         ),
-        (State::NeedsInput, None) => t!(sessions_state_needs_input_unnamed).to_string(),
-        (State::Idle, _) => t!(sessions_state_idle).to_string(),
-        (State::Stopped, _) => t!(sessions_state_stopped).to_string(),
-        (State::Interrupted, _) => t!(sessions_state_interrupted).to_string(),
+        (Some(State::NeedsInput), None) => t!(sessions_state_needs_input_unnamed).to_string(),
+        (Some(State::Idle), _) => t!(sessions_state_idle).to_string(),
+        (Some(State::Interrupted), _) => t!(sessions_state_interrupted).to_string(),
+        (Some(State::Stopped) | None, _) => t!(sessions_state_stopped).to_string(),
     }
 }
 
@@ -810,6 +832,22 @@ mod tests {
     }
     use bravebot_session::jobs::{Job, Mode};
     use std::path::Path;
+
+    /// The tasks of roster entries with no record, which is all the fields a test of the words and
+    /// of what a row may hold needs.
+    fn entry_tasks(seen: &[Seen]) -> Vec<Task> {
+        seen.iter()
+            .map(bravebot_session::listing::task_of_entry)
+            .collect()
+    }
+
+    fn rows_of(seen: &[Seen]) -> Vec<Row> {
+        super::rows_of(&entry_tasks(seen))
+    }
+
+    fn lines_of(seen: &[Seen]) -> Vec<String> {
+        super::lines_of(&entry_tasks(seen))
+    }
 
     /// BG-9: `/detach` leaves, with space around it too, and nothing that only contains it does,
     /// so a prompt that mentions the word is still sent to the session.
@@ -1006,5 +1044,44 @@ mod tests {
             row.name.contains('\u{241b}') && row.directory.contains('\u{241b}'),
             "{row:?}"
         );
+    }
+
+    /// SCREEN-16: a session is the same task for the list, the lines and the Sessions screen. The
+    /// list and the screen say the screen's word for its status, and the lines say the word of BG-6,
+    /// which a script reads: `idle` where the screen says `Ready`.
+    #[test]
+    fn the_list_and_the_screen_say_one_word_and_the_lines_say_the_word_of_bg_6() {
+        let held = Some(Held::Write);
+        let sessions = [
+            seen("a", State::Working, None, true),
+            seen("b", State::NeedsInput, held, true),
+            seen("c", State::Idle, None, true),
+            seen("d", State::Stopped, None, false),
+            seen("e", State::Working, None, false),
+        ];
+        let tasks = entry_tasks(&sessions);
+        let rows = super::rows_of(&tasks);
+        let lines = super::lines_of(&tasks);
+        let words = [
+            ("Working", "working"),
+            ("Needs input (write)", "needs input (write)"),
+            ("Ready", "idle"),
+            ("Stopped", "stopped"),
+            ("Interrupted", "interrupted"),
+        ];
+        for (((task, row), line), (screen, script)) in
+            tasks.iter().zip(&rows).zip(&lines).zip(words)
+        {
+            assert_eq!(row.state_words, screen, "the list");
+            assert_eq!(
+                row.state_words,
+                bravebot_tui::sessions_screen::status_in_words(task.status, task.held),
+                "the list and the screen disagree"
+            );
+            assert!(line.contains(&format!("  {script}  ")), "{line:?}");
+            let screen_row = bravebot_tui::sessions_screen::Row::of(task.clone());
+            assert_eq!(row.name, screen_row.title, "the name");
+            assert_eq!(row.id, screen_row.task.id);
+        }
     }
 }

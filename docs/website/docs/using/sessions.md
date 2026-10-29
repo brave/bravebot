@@ -13,7 +13,7 @@ Each session is named after a version 4 UUID and keeps up to three files:
 
 | File | What it holds |
 |---|---|
-| `<id>.json` | the record: the conversation, what the picker shows, and what a resume needs |
+| `<id>.json` | the record: the conversation, what the Sessions screen shows, and what a resume needs |
 | `<id>.audit.jsonl` | the trail, appended a turn at a time: one JSON object per line |
 | `<id>.lock` | empty: the lock a process holds while it writes the record |
 
@@ -28,7 +28,7 @@ reading a conversation back does not mean reading JSON out of the state director
 ## Picking one back up
 
 ```sh
-bravebot --resume          # choose from the sessions in this directory
+bravebot --resume          # open the Sessions screen to choose one
 bravebot --resume <id>     # name one outright
 bravebot -r <id>           # the same
 bravebot --continue        # carry on with the most recent one, unnamed
@@ -63,10 +63,10 @@ many were left out. `--json` prints one object per line with `id`, `title`, `dir
 `branch`, `front` and `continuable`, and nothing else. A limit of zero, one that is not a number, a
 repeated flag or any other word is refused. Only sessions whose recorded directory is this one are
 listed, so two directories that share a store do not show each other's sessions, which the
-`--resume` picker still does. A bare `bravebot sessions` lists
+Sessions screen does not. A bare `bravebot sessions` lists
 [background sessions](#sessions-in-the-background) instead.
 
-`--continue` takes the session the picker would offer first and picks it up exactly as naming its id
+`--continue` takes the session the Sessions screen would offer first and picks it up exactly as naming its id
 would. It passes over a
 [manifest run](manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued) rather than
 refusing it. Where this directory holds nothing continuable it says so and fails rather than starting
@@ -415,7 +415,7 @@ gateway, a ChatGPT sign-in, an xAI sign-in, Brave's premium service), and no bac
 
 | Command | What it does |
 |---|---|
-| `bravebot sessions` | one line per background session of every project: id, name, state, directory, time since its last turn and your last prompt. In a terminal it opens a list grouped by state, where Enter attaches |
+| `bravebot sessions` | one line per background session of every project: id, name, state, directory, time since it was last written and your last prompt. In a terminal it opens a list grouped by state, in the words and the order the [Sessions screen](./sessions-screen.md) uses (`Ready` where a line says `idle`), where Enter attaches |
 | `bravebot sessions --json` | the same fields as JSON |
 | `bravebot attach <id>` | draw the session as a foreground one, with a held question put to you. One terminal attaches at a time |
 | `bravebot reply <id> "<text>"` | send the text as the session's next prompt. It is refused while the session is working or waiting for an answer, and it never answers a held question |
@@ -437,7 +437,7 @@ terminal does not reach it. One that ends during a turn is marked
 `interrupted`, the turn is not run again, and the planner is told so on the next prompt. In a git
 repository the session works in a checkout of its own, so two sessions do not edit one tree. A
 session running in the background cannot be resumed from another terminal: `--resume` and
-`--continue` say to attach. The start-up resume picker and `--from-pr` refuse such a record the
+`--continue` say to attach. The Sessions screen that `--resume` and `--from-pr` open treats such a record the
 same way: Enter on its row says to attach. Attaching and replying are accepted only from a program that can read the
 session's state directory, because each start writes a fresh random secret there that the session's
 socket requires. A confined stage cannot read that directory.

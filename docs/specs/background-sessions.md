@@ -191,8 +191,11 @@ was nearest.
 ### BG-5: the list shows labels and states, never content
 
 `bravebot sessions` prints one line per background session, across every project, wherever it does
-not open the list of [BG-16](#BG-16): the first eight characters of its id, its name, its state, its working directory, how long since its last turn, and the last prompt the person typed,
-cut as a title is cut. `--json` prints the roster fields for each session. Where a prompt is held,
+not open the list of [BG-16](#BG-16): the first eight characters of its id, its name, its state, its working directory, how long since it was last written, and the last prompt the person typed,
+cut as a title is cut. The sessions, their order and their names are those the Sessions screen lists
+for the same sessions ([SCREEN-16](sessions-screen.md#SCREEN-16)), and the state is named in the words of
+[BG-6](#BG-6), which a script reads. `--json` prints the roster fields for each session, as the roster
+holds them ([BG-4](#BG-4)) with the state names of BG-6, and is not a view of that listing. Where a prompt is held,
 the line says that the session needs input and names the kind of prompt it is, by one word from a fixed set with
 a word for each kind a foreground session puts and one for a message the session's planner wants to send
 ([MSG-3](session-messages.md#MSG-3)), and shows nothing of what the prompt is about.
@@ -222,7 +225,7 @@ sentence, which is the reason the info panel draws nothing from either.
 |---|---|
 | `working` | a turn is running |
 | `needs input` | a prompt is held ([BG-7](#BG-7)) |
-| `idle` | the process is alive and no turn is running |
+| `idle` | the process is alive and no turn is running; the Sessions screen and the list of [BG-16](#BG-16) call it `ready` ([SCREEN-16](sessions-screen.md#SCREEN-16)) |
 | `stopped` | the process was stopped by a person or by [BG-13](#BG-13), and the record is intact |
 | `interrupted` | the process ended while a turn was running ([BG-12](#BG-12)) |
 
@@ -231,6 +234,10 @@ A process is live while it holds the lock on the `live` file in its directory, w
 releases when the process ends however it ends. A roster entry with no such lock held reads as
 `interrupted` if its last state was `working` or `needs input`, and as `stopped` otherwise, so
 neither a process that was killed nor a pid that now belongs to another program is believed.
+
+The five names are the protocol: they are what the roster holds, what `--json` prints and what a line
+printed for a script says. The terminal list names the same five states in the words of the Sessions
+screen.
 
 **Why.** A state the list can show truthfully has to be one the process can state without anybody
 reading content. Whether a turn's work is ready for review is a judgement about content, so it is
@@ -509,15 +516,19 @@ passes it. Only a thing the confined program cannot read can tell the person's t
 
 Where standard input, standard output and standard error are all terminals, `bravebot sessions`
 with no other word opens a full-screen list of the roster. It groups sessions under a heading for their state
-([BG-6](#BG-6)), in the order `needs input`, `working`, `idle`, `interrupted`, `stopped`. A heading
+([BG-6](#BG-6)), in the words and the order the Sessions screen gives the same statuses
+([SCREEN-16](sessions-screen.md#SCREEN-16)): `needs input`, `interrupted`, `working`, `ready` (which
+BG-6 calls `idle`), `stopped`. A heading
 carries the number of sessions under it, and a state no session is in has none. Within a state the
-most recently used session is first. When the roster is empty nothing opens, and the line
+most recently written session is first. When the roster is empty nothing opens, and the line
 [BG-5](#BG-5) prints is printed. Anywhere else, and with `--json`, `bravebot sessions` prints as
 [BG-5](#BG-5) says. Standard error is among the three because `attach` says on it why a session
 cannot be started.
 
-A row shows the start of the session's id, its name, how long since its last turn, and its state
-with the word for the kind of prompt held where one is. A name of more than 28 columns is cut with an
+A row shows the start of the session's id, its name, how long since it was last written, and its state
+with the word for the kind of prompt held where one is. The rows are made from the tasks of the
+Sessions screen's listing, so the name, the state and the time are those the screen shows for the
+session. A name of more than 28 columns is cut with an
 ellipsis. On a screen too narrow for the rest of the row the name is cut further, to no fewer than 8 columns, so
 the time and the state after it stay on the screen. Below the list, the working directory and the
 last prompt the person typed are shown for the session under the cursor. These are fields of a
@@ -543,6 +554,7 @@ the person was looking at. The list starts no process and answers nothing: `atta
 in, so the mode ([BG-8](#BG-8)) and a held prompt ([BG-7](#BG-7)) are as they are for any attach.
 
 `verified-by: bravebot_tui::sessions_view::sessions_are_drawn_under_a_heading_for_their_state_in_a_fixed_order`
+`verified-by: bravebot_tui::sessions_view::the_headings_are_in_the_order_and_the_words_of_the_sessions_screens_statuses`
 `verified-by: bravebot_tui::sessions_view::a_state_no_session_is_in_has_no_heading`
 `verified-by: bravebot_tui::sessions_view::the_cursor_and_enter_follow_the_drawn_order_and_not_the_roster_order`
 `verified-by: bravebot_tui::sessions_view::the_directory_and_prompt_shown_are_those_of_the_row_under_the_cursor`
@@ -601,8 +613,10 @@ it is stated.
   start is made for sessions that never edit. One at the first edit moves the working directory
   during a session.
 - **Whether a row can reply, stop or show more.** [BG-16](#BG-16) attaches and does nothing else.
-  Replying from a row and stopping from one are not specified. Showing what a session last wrote
-  would put bytes a session produced in the list, which [BG-5](#BG-5) keeps out.
+  Replying from a row is not specified. Stopping from a row, and a list of more than the background
+  sessions, are in [sessions-screen.md](sessions-screen.md), which opens from a terminal with Left over an
+  empty box. Showing what a session last wrote would put bytes a session produced in the list, which
+  [BG-5](#BG-5) keeps out.
 
 ## Known costs
 

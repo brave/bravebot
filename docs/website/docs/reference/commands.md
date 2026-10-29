@@ -35,7 +35,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/clear` | | Start a new session here, keeping this one resumable |
 | `/handoff` | `<next goal>` | Start a new session from a brief you can edit, written for the next goal |
 | `/branch` | `[<name>]` | Copy this session and carry on in the copy, keeping the original to return to |
-| `/resume` | `[<id>]` | Pick up another session of this directory, by id or from a list |
+| `/resume` | `[<id>]` | Pick up another session by id, or open the Sessions screen to choose one |
 | `/bg` | | Hand this session to a background process that keeps running after the terminal closes |
 | `/detach` | | Leave a background session you attached to, leaving it running |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
@@ -47,6 +47,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
 | `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
+| `/sessions` | | Open the Sessions screen: every session on this machine and what each is doing. Left over an empty box does the same |
 | `/panel` | | Show or hide the info panel beside the transcript |
 | `/diff` | | List the files the session wrote and show every edit to the highlighted one |
 | `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
@@ -772,6 +773,14 @@ how the run ended and whether the model read it, and a running job's row shows t
 printed since the model last looked. Where no command has run, it says so and opens nothing. Nothing
 it shows is sent to the model or written to the session's record.
 
+## `/sessions`
+
+Opens the [Sessions screen](../using/sessions-screen.md), one list of every session on the
+machine: the ones running in the background, the ones open in other terminals and the ones saved from
+earlier days, in every project. Pressing Left with nothing typed in the box does the same. It works
+at the prompt and while a turn runs. Nothing typed after the word is used, and nothing is sent to the
+model.
+
 ## `/panel`
 
 Shows or hides the info panel on the right of the screen, as Ctrl-X does. The panel holds the
@@ -1259,8 +1268,8 @@ the turn, and emptying the box ends the handoff.
 ## `/resume [id]`
 
 Leaves this session for another one recorded in this directory, and carries on from it. With no id
-it draws the list `bravebot --resume` draws, without the session you are in, and Enter picks the one
-under the cursor. Escape, or Ctrl-C, returns to the session you were in. With an id it picks up that
+it opens the [Sessions screen](../using/sessions-screen.md) that `bravebot --resume` opens, and Enter picks
+the one under the cursor. Escape, or Ctrl-C, returns to the session you were in. With an id it picks up that
 record, so `/resume <id>` is `bravebot --resume <id>` without leaving the program.
 
 The session picked up is restored as the flag restores it: its transcript, its spend, and the
@@ -1551,7 +1560,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/sessions`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so

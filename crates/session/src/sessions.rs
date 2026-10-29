@@ -2088,7 +2088,13 @@ pub fn is_open_elsewhere(project: &Path, id: &str) -> bool {
     let Some(directory) = project_directory(project) else {
         return false;
     };
-    let Ok(file) = std::fs::File::open(lock_path(&directory, id)) else {
+    is_held_in(&directory, id)
+}
+
+/// [`is_open_elsewhere`] for the directory a project's records are in, which the caller has found.
+/// `id` is a session's name, which [`is_a_session_name`] settles before it is joined onto a path.
+pub fn is_held_in(directory: &Path, id: &str) -> bool {
+    let Ok(file) = std::fs::File::open(lock_path(directory, id)) else {
         return false;
     };
     // A lock this takes is dropped with `file`, when the function returns.
@@ -2962,6 +2968,55 @@ pub fn is_a_session_name(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+/// Why a stored session was not renamed.
+#[derive(Debug)]
+pub enum Renaming {
+    /// The name is empty once trimmed, or the id is not shaped like a session's name.
+    Refused,
+    /// No record of that name in that directory's store.
+    NotFound,
+    /// A process holds the record, so a second writer would fork it (SESSION-38).
+    Held,
+    /// The record could not be written.
+    Failed(std::io::Error),
+}
+
+/// Call the stored session `id` of `project` something else, as [`Handle::rename`] calls an open one
+/// (SCREEN-9).
+///
+/// The record is taken as a session takes it, so a process that holds it is refused and a record
+/// replaced since it was read is not written back over. Everything else in the record is left as it
+/// was written: the name is the one field this knows.
+pub fn rename_stored(project: &Path, id: &str, name: &str) -> Result<String, Renaming> {
+    if !is_a_session_name(id) || name.trim().is_empty() {
+        return Err(Renaming::Refused);
+    }
+    let directory = project_directory(project).ok_or(Renaming::NotFound)?;
+    rename_in(&directory, id, name)
+}
+
+/// [`rename_stored`] for the directory a project's records are in, which the caller has found. `id`
+/// is a session's name, which [`is_a_session_name`] settles before it is joined onto a path.
+pub(crate) fn rename_in(directory: &Path, id: &str, name: &str) -> Result<String, Renaming> {
+    let path = directory.join(format!("{id}.json"));
+    // Held for the read and the write, so no process begins writing the record between them.
+    let _claim = claim(directory, id).map_err(|_| Renaming::Held)?;
+    let mut record = read(&path).ok_or(Renaming::NotFound)?;
+    let title = title_from(name.trim());
+    record.title = title.clone();
+    // Given up with the old name, as `Handle::rename` gives them up (SESSION-19).
+    record.rewind.clear();
+    record.updated = now();
+    record.revision += 1;
+    let body = serde_json::to_vec_pretty(&record)
+        .map_err(|error| Renaming::Failed(std::io::Error::other(error)))?;
+    // Beside and renamed, as a save does, so an interrupted rename leaves the record it had.
+    let temporary = directory.join(format!("{id}.tmp"));
+    bravebot_agent::home::write_file(&temporary, &body).map_err(Renaming::Failed)?;
+    std::fs::rename(&temporary, &path).map_err(Renaming::Failed)?;
+    Ok(title)
+}
+
 /// Remove one session from disk: its record, the trail beside it, the index of what it said and the
 /// lock beside it where no process holds it (SESSION-30).
 ///
@@ -3475,31 +3530,54 @@ fn read(path: &Path) -> Option<Record> {
 /// conversation and the bytes that turn wrote over. Every one of those would be parsed and
 /// allocated to draw one line of a list, once per session in the directory, before the interface
 /// has drawn anything at all. As fields nothing here names, they cost the scan over their text.
-#[derive(Deserialize)]
-struct Listed {
-    id: String,
-    title: String,
-    directory: String,
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Listed {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) directory: String,
     /// Absent from a record written before the front end was kept.
     #[serde(default)]
     front: Option<String>,
     #[serde(default)]
-    branch: Option<String>,
+    pub(crate) branch: Option<String>,
     /// Absent from a record written before the links were kept.
     #[serde(default)]
-    issue: Option<String>,
+    pub(crate) issue: Option<String>,
     #[serde(default)]
-    pull_request: Option<String>,
+    pub(crate) pull_request: Option<String>,
     #[serde(default)]
-    handed_off_from: Option<String>,
-    updated: u64,
+    pub(crate) handed_off_from: Option<String>,
+    /// The definition the person named with `--agent`, absent from a record written before it was
+    /// kept and from a session started without one.
+    #[serde(default)]
+    pub(crate) agent: Option<String>,
+    pub(crate) updated: u64,
+    /// Absent from a record written before it was kept, and then zero.
+    #[serde(default)]
+    pub(crate) started: u64,
+    /// What the server reported answering with, as of the last turn.
+    #[serde(default)]
+    pub(crate) model: Option<String>,
+    #[serde(default)]
+    pub(crate) turns: usize,
+    #[serde(default)]
+    pub(crate) tokens: u64,
+    #[serde(default)]
+    pub(crate) split: Split,
     /// Whether the record has one, which is what makes it a manifest run. What is in it is not
     /// read: the row says only that the session cannot be continued.
     #[serde(default)]
     manifest: Option<serde::de::IgnoredAny>,
 }
 
-fn read_listing(path: &Path) -> Option<Listed> {
+impl Listed {
+    /// Whether this is a manifest run, which can be read but not continued.
+    pub(crate) fn is_a_manifest_run(&self) -> bool {
+        self.manifest.is_some()
+    }
+}
+
+pub(crate) fn read_listing(path: &Path) -> Option<Listed> {
     let contents = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&contents).ok()
 }
@@ -3518,7 +3596,7 @@ pub fn now() -> u64 {
 
 /// Whether `text` is shaped like an id [`new_id`] makes, which is all the picker draws from a
 /// record: a field somebody edited by hand must not put an escape on the screen.
-fn is_session_id(text: &str) -> bool {
+pub(crate) fn is_session_id(text: &str) -> bool {
     text.len() <= 64 && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
@@ -8248,6 +8326,75 @@ mod tests {
         let renamed = load(&root, &id).expect("the record is there");
         assert_eq!(renamed.title, "a name from the current copy");
         assert!(renamed.revision > after.revision);
+    }
+
+    /// SCREEN-9. A session nothing holds is renamed in its record, and nothing else in the record
+    /// changes but the points a rename gives up.
+    #[test]
+    fn a_stored_session_is_renamed_and_the_rest_of_its_record_is_left() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-rename-stored");
+        let before = a_record_left_by_a_session(&root);
+
+        let title = rename_stored(&root, &before.id, "  a longer name  ").expect("renamed");
+
+        assert_eq!(title, "a longer name");
+        let after = load(&root, &before.id).expect("the record is still there");
+        assert_eq!(after.title, "a longer name");
+        assert!(
+            after.revision > before.revision,
+            "the write was not counted"
+        );
+        assert_eq!(
+            (after.directory, after.turns, after.started),
+            (before.directory, before.turns, before.started),
+            "a field the rename does not know was changed"
+        );
+        assert!(
+            !project_directory(&root)
+                .expect("a sessions directory")
+                .join(format!("{}.tmp", before.id))
+                .exists(),
+            "the file the record was written beside is still there"
+        );
+    }
+
+    /// SCREEN-9. A record a process holds is not written by another, an empty name and an id that
+    /// is a path are refused, and a session that is not there is said not to be.
+    #[test]
+    fn a_stored_session_a_process_holds_is_not_renamed() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-rename-held");
+        let mut open = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_with(&mut open, 1, "seed", &a_vouched_root(&root));
+        let id = open.id().to_string();
+        let title = load(&root, &id).expect("written").title;
+
+        assert!(matches!(
+            rename_stored(&root, &id, "taken"),
+            Err(Renaming::Held)
+        ));
+        assert!(matches!(
+            rename_stored(&root, &id, "   "),
+            Err(Renaming::Refused)
+        ));
+        assert!(matches!(
+            rename_stored(&root, "../../escape", "taken"),
+            Err(Renaming::Refused)
+        ));
+        assert!(matches!(
+            rename_stored(&root, "0a1b2c3d-0000-4000-8000-0000000000aa", "taken"),
+            Err(Renaming::NotFound)
+        ));
+        assert_eq!(
+            load(&root, &id).expect("still there").title,
+            title,
+            "a held record was renamed"
+        );
     }
 
     /// RECALL-9: the keys already injected are kept in the record, so a resumed session does not

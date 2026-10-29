@@ -171,6 +171,10 @@ pub(crate) const JOBS_COMMAND: &str = "/jobs";
 /// so it is opened from here rather than from that key (WATCH-7).
 pub(crate) const OUTPUTS_COMMAND: &str = "/outputs";
 
+/// The line that opens the Sessions screen, which lists every session on the machine
+/// (SCREEN-1).
+pub(crate) const SESSIONS_COMMAND: &str = "/sessions";
+
 /// The line that opens or closes the info panel, as its key does.
 pub(crate) const PANEL_COMMAND: &str = "/panel";
 
@@ -391,7 +395,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 61] {
+pub fn commands() -> [Command; 62] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -601,6 +605,12 @@ pub fn commands() -> [Command; 61] {
             name: OUTPUTS_COMMAND,
             argument: "",
             description: t!(command_outputs),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: SESSIONS_COMMAND,
+            argument: "",
+            description: t!(command_sessions),
             mid_turn: MidTurn::Runs,
         },
         Command {

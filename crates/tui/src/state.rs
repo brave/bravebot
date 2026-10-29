@@ -23,6 +23,7 @@ mod menu;
 mod open_loops;
 mod queue;
 mod scroller;
+mod sessions_screen;
 mod settings;
 mod standing;
 mod targets;
@@ -367,6 +368,9 @@ pub struct Session {
     vetting: bool,
     /// Configurable keybindings for navigation and shortcuts.
     bindings: crate::keybindings::Keybindings,
+    /// The keys the Sessions screen answers (SCREEN-14), and what was refused when they were read.
+    sessions_keys: crate::sessions_keys::SessionsKeys,
+    sessions_keys_refused: Vec<crate::sessions_keys::Refused>,
     /// How many rows one mouse wheel event moves the view by.
     ///
     /// A preference about the person's terminal rather than about the session, read once at startup
@@ -552,6 +556,16 @@ pub struct Session {
     /// `None` at rest, on the same footing as the scroller: what decides whether a letter is a
     /// letter or a movement is the mode, never what happens to be on the screen.
     watching: Option<Watching>,
+    /// The Sessions screen, while it is open (SCREEN-1).
+    ///
+    /// `None` at rest, on the same footing as the delegate view: it takes every key while it is
+    /// open, and the box is not drawn.
+    sessions_screen: Option<crate::sessions_screen::SessionsScreen>,
+    /// The tasks the person hid in the Sessions screen, which stay hidden while this session lasts.
+    sessions_screen_hidden: std::collections::HashSet<String>,
+    /// What the Sessions screen was asked for over a running turn, and the person answered `y` to
+    /// stopping the turn for, until the turn has ended (SCREEN-15).
+    after_the_turn: Option<crate::sessions_screen::Effect>,
     /// What each command this session ran printed, oldest first.
     ///
     /// Held here rather than on the entry that ran it, because the view lists them across the
@@ -1253,6 +1267,8 @@ impl Session {
             // constructed by a test reads nothing from disk and asks.
             vetting: false,
             bindings: crate::keybindings::Keybindings::default(),
+            sessions_keys: crate::sessions_keys::SessionsKeys::default(),
+            sessions_keys_refused: Vec::new(),
             wheel_rows: WHEEL_ROWS,
             mouse: true,
             context_menu: true,
@@ -1301,6 +1317,9 @@ impl Session {
             scroller: None,
             last_request: None,
             watching: None,
+            sessions_screen: None,
+            sessions_screen_hidden: std::collections::HashSet::new(),
+            after_the_turn: None,
             outputs: Vec::new(),
             jobs_from: 0,
             asides: Vec::new(),
@@ -1811,6 +1830,8 @@ impl Session {
         self.asides.clear();
         self.watching = None;
         self.held_view = None;
+        self.sessions_screen = None;
+        self.after_the_turn = None;
     }
 
     /// The task list each turn finished with, by turn number, for writing the session down.
