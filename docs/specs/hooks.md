@@ -340,7 +340,9 @@ decision is taken from something a person wrote rather than from something a pro
 
 A hook that could not be started, that ended badly, or that was still running when its bound ran out
 and was stopped, is said to the person, naming the moment, the program and, for a hook that was stopped, the
-bound in seconds. The bound is 30 seconds unless the entry states a `timeout`, which is a whole number
+bound in seconds. A hook is stopped with every program it started, as the programs of a `run` stage
+are ([RUN-11](tools/run.md#RUN-11)), and not only the one it named. The bound is 30 seconds unless the
+entry states a `timeout`, which is a whole number
 of seconds from 1 to 600, and 5 seconds for a `session-ended` entry that states none (HOOK-10). An entry
 whose `timeout` is anything else declares no hook, as HOOK-3 treats a malformed argument. It reaches a
 live display as it happens and the turn's own account of itself as well, so a run with nowhere to draw
@@ -370,6 +372,7 @@ by hand, and the failure it most often has is a typo.
 `verified-by: bravebot_agent::hooks::a_hook_that_ends_badly_is_reported`
 `verified-by: bravebot_agent::hooks::a_hook_whose_program_is_not_there_is_reported`
 `verified-by: bravebot_agent::hooks::a_hook_that_outstays_the_bound_is_stopped`
+`verified-by: bravebot_agent::hooks::a_stopped_hook_ends_the_programs_it_started`
 `verified-by: bravebot_agent::hooks::a_hook_is_stopped_at_the_timeout_it_declared`
 `verified-by: bravebot_agent::hooks::a_hook_may_outlive_the_default_bound_by_declaring_more`
 `verified-by: bravebot_agent::turn::a_stopped_hook_says_the_timeout_it_declared`
