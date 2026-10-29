@@ -47,8 +47,10 @@ ordinary file, read only when something asks for it by name, or when the source 
 **A project's skills are read from three directories, at the project root only.**
 `.agents/skills`, then `.claude/skills`, then `.bravebot/skills`, so a skill in `.bravebot/skills`
 wins a name clash with either of the others. Skills you wrote for another agent work here without
-being copied or symlinked. Your own `~/.claude/skills` and `~/.agents/skills` are not read, because
-`~/.bravebot` is the one user directory tried.
+being copied or symlinked. Your own `~/.claude/skills` and `~/.agents/skills` are read only for a
+directory you name in `sharedSkillDirectories` in `~/.bravebot/settings.json`; a project's settings
+file cannot name one. `~/.bravebot/skills` is read without being named, and a skill in it wins a name
+clash with a skill in a directory you named.
 
 **A directory the session has worked in adds its own.** Once the planner has read a file in
 `packages/api/`, or written one, the `AGENTS.md` in `packages/api/` and in each directory above it

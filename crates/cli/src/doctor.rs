@@ -152,6 +152,22 @@ fn skill_keys_unread(
         .collect()
 }
 
+/// One line for each of the other agents' skill directories in the home directory that exists and
+/// that `sharedSkillDirectories` does not name, so the person can see it was found and left alone
+/// (INSTR-17).
+fn shared_skill_directories_left_alone(workspace: &Workspace) -> Vec<String> {
+    bravebot_agent::skills::shared_directories_not_read(workspace)
+        .into_iter()
+        .map(|directory| {
+            aligned(
+                t!(doctor_skill_key_unread),
+                t!(doctor_skills_shared_not_read, directory = directory),
+                FACT,
+            )
+        })
+        .collect()
+}
+
 /// The trust map a session starting in this directory would open with, without asking anybody.
 ///
 /// A kept yes answers here as it answers there (TRUST-23); anything else is a directory
@@ -488,6 +504,12 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     });
     ignored(settings.agent_ignored(), |path| {
         t!(doctor_settings_agent_ignored, path = path)
+    });
+    ignored(settings.shared_skill_directories_ignored(), |path| {
+        t!(
+            doctor_settings_shared_skill_directories_ignored,
+            path = path
+        )
     });
     ignored(settings.style_ignored(), |path| {
         t!(doctor_settings_style_ignored, path = path)
@@ -1079,12 +1101,13 @@ pub(crate) fn doctor() -> ExitCode {
             bravebot_agent::home::profile().as_deref(),
             workspace.root(),
         );
-        let lines = skill_keys_unread(
+        let mut lines = skill_keys_unread(
             &workspace,
             bravebot_agent::home::directory().as_deref(),
             trust_already_answered(workspace.root()),
             permissions,
         );
+        lines.extend(shared_skill_directories_left_alone(&workspace));
         if !lines.is_empty() {
             println!();
         }

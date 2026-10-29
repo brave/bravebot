@@ -281,6 +281,9 @@ pub struct Workspace {
     references: Vec<Referenced>,
     /// The entries of the `references` block that were not opened, and why (REFER-3).
     reference_problems: Vec<(String, ReferenceProblem)>,
+    /// The directories the person's settings named in `sharedSkillDirectories`, as written
+    /// (INSTR-17). Empty until a front end supplies them, which reads none.
+    shared_skills: Vec<String>,
 }
 
 /// A session's checkouts, with the numbers and the write log they are judged by, for a front end
@@ -442,7 +445,37 @@ impl Workspace {
             host_grants: Arc::default(),
             references: Vec::new(),
             reference_problems: Vec::new(),
+            shared_skills: Vec::new(),
         })
+    }
+
+    /// Record which of the other agents' skill directories in the person's home they agreed to have
+    /// read (INSTR-17).
+    ///
+    /// The names come from the person's own settings and are compared with a fixed set of paths
+    /// when the skills are found. Without them no such directory is read.
+    #[must_use]
+    pub fn with_shared_skill_directories(mut self, named: &[String]) -> Self {
+        self.shared_skills = named.to_vec();
+        self
+    }
+
+    /// The directories the person agreed to have skills read from, as written (INSTR-17).
+    pub(crate) fn shared_skill_directories(&self) -> &[String] {
+        &self.shared_skills
+    }
+
+    /// Stand in for the environment's profile directory, which a `~` in a shared skill directory
+    /// (INSTR-17) stands for, so a test does not depend on whose machine it runs on.
+    #[must_use]
+    pub fn with_profile_directory(mut self, profile: Option<PathBuf>) -> Self {
+        self.home = profile;
+        self
+    }
+
+    /// The home directory a leading `~` stands for in this workspace.
+    pub(crate) fn profile_directory(&self) -> Option<&Path> {
+        self.home.as_deref()
     }
 
     /// Put a search under the caps somebody configured, keeping the built-in one for each cap

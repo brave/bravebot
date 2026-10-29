@@ -715,6 +715,8 @@ doctor-settings-processor-ignored =
     processorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-agent-ignored =
     agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-shared-skill-directories-ignored =
+    sharedSkillDirectories in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-style-ignored =
     style in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-language-ignored =
@@ -4611,6 +4613,16 @@ home-skills-reached-through-the-workspace =
         [one] 1 skill in ~/.bravebot/skills was not loaded: the way to its file goes through a directory this session can write to
        *[other] { $count } skills in ~/.bravebot/skills were not loaded: the way to their files goes through a directory this session can write to
     }
+# Skills in a directory of another agent's that the person named in sharedSkillDirectories and that
+# were not loaded, for the same reason.
+shared-skills-reached-through-the-workspace =
+    { $count ->
+        [one] 1 skill in { $directory } was not loaded: the way to its file goes through a directory this session can write to
+       *[other] { $count } skills in { $directory } were not loaded: the way to their files goes through a directory this session can write to
+    }
+# Shown by doctor for a directory of another agent's skills that exists and that the person did not
+# name in sharedSkillDirectories, so nothing in it is read.
+doctor-skills-shared-not-read = { $directory } exists and is not read: name it in sharedSkillDirectories in ~/.bravebot/settings.json to load the skills in it
 # The person's own ~/.bravebot/AGENTS.md when it was not read, because the way to the file goes
 # through the working directory or a directory opened beside it, where a turn can write.
 home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md was not read: the way to it goes through a directory this session can write to

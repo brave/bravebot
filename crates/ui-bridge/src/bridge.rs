@@ -2494,7 +2494,8 @@ pub fn turn_workspace(
     Ok(Workspace::new(project)?
         .with_search_caps(caps.files, caps.time)
         .with_reads_kept_inside(inside)
-        .with_references(settings.references(), settings.references_unread()))
+        .with_references(settings.references(), settings.references_unread())
+        .with_shared_skill_directories(settings.shared_skill_directories()))
 }
 
 /// The workspace a turn in this session reads through, as the session stands now.

@@ -152,6 +152,13 @@ const CRASH_REPORTS_KEY: &str = "crashReports";
 /// since [`Retention::Days`] cannot hold zero.
 pub const DEFAULT_RETENTION_DAYS: NonZeroU32 = NonZeroU32::new(30).unwrap();
 
+/// The key naming the other agents' skill directories in the person's home that this program may
+/// read (INSTR-17).
+///
+/// An entry is the person's answer to whether to read that directory, so a directory not named is
+/// not read, and only a file the person wrote or named can name one.
+const SHARED_SKILLS_KEY: &str = "sharedSkillDirectories";
+
 /// The block holding the rules and the two keys that refuse without naming what they refuse.
 ///
 /// Named as a constant for the reason [`VETTING_BLOCK`] is: the rule lists and [`narrowing_stated`]
@@ -199,6 +206,7 @@ const READ_KEYS: &[&str] = &[
     SANDBOX_BLOCK,
     "search",
     "sessionsKeys",
+    SHARED_SKILLS_KEY,
     "suggestions",
     "style",
     "summaryModel",
@@ -515,6 +523,15 @@ pub struct Settings {
     /// Kept because a style's words open the system prompt, so which one a session starts in is the
     /// person's to say and not a checkout's.
     style_ignored: Vec<PathBuf>,
+    /// The directories the `sharedSkillDirectories` key named, as the file spelled them.
+    ///
+    /// Which of them is one this program reads is settled where the skills are found (INSTR-17).
+    shared_skills: Vec<String>,
+    /// The layers that named `sharedSkillDirectories` and were not obeyed, weakest first.
+    ///
+    /// Kept because naming a directory puts every skill in it in front of the planner, so a
+    /// checkout's file would be choosing what the person's home contributes to the prompt.
+    shared_skills_ignored: Vec<PathBuf>,
     /// The catalog the person's own file asked the interface to be read in, as the file spelled it.
     language: Option<String>,
     /// The layers that named `language` and were not obeyed, weakest first.
@@ -1070,6 +1087,7 @@ impl Settings {
         let mut processor_ignored = Vec::new();
         let mut agent_ignored = Vec::new();
         let mut style_ignored = Vec::new();
+        let mut shared_skills_ignored = Vec::new();
         let mut language_ignored = Vec::new();
         let mut ask_idle_ignored = Vec::new();
         // Settled per layer for the reason `model` is: how long the person's own records are kept is
@@ -1181,6 +1199,9 @@ impl Settings {
                 }
                 if root.remove("style") {
                     style_ignored.push(path.clone());
+                }
+                if root.remove(SHARED_SKILLS_KEY) {
+                    shared_skills_ignored.push(path.clone());
                 }
             }
             // Read before the command line is, so the file a flag names is not yet known to the
@@ -1455,6 +1476,7 @@ impl Settings {
         settings.processor_ignored = processor_ignored;
         settings.agent_ignored = agent_ignored;
         settings.style_ignored = style_ignored;
+        settings.shared_skills_ignored = shared_skills_ignored;
         settings.language_ignored = language_ignored;
         settings.ask_idle_ignored = ask_idle_ignored;
         settings.retention_ignored = retention_ignored;
@@ -1666,6 +1688,8 @@ impl Settings {
             agent_ignored: Vec::new(),
             style: word(root, "style"),
             style_ignored: Vec::new(),
+            shared_skills: strings(root, SHARED_SKILLS_KEY),
+            shared_skills_ignored: Vec::new(),
             language: word(root, "language"),
             language_ignored: Vec::new(),
         }
@@ -2390,6 +2414,8 @@ impl Settings {
             && self.agent_ignored.is_empty()
             && self.style_ignored.is_empty()
             && self.style.is_none()
+            && self.shared_skills_ignored.is_empty()
+            && self.shared_skills.is_empty()
             && self.language_ignored.is_empty()
             && self.language.is_none()
             && self.ask_idle_ignored.is_empty()
@@ -2480,6 +2506,17 @@ impl Settings {
     /// The files that named `style` from a layer not entitled to, weakest first.
     pub fn style_ignored(&self) -> impl Iterator<Item = &Path> {
         self.style_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The directories the settings in force named as ones to read skills from, as the file spelled
+    /// them (INSTR-17).
+    pub fn shared_skill_directories(&self) -> &[String] {
+        &self.shared_skills
+    }
+
+    /// The files that named `sharedSkillDirectories` from a layer not entitled to, weakest first.
+    pub fn shared_skill_directories_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.shared_skills_ignored.iter().map(PathBuf::as_path)
     }
 
     /// The language the person's own file asked the interface to be read in, as the file spelled it
@@ -8644,6 +8681,34 @@ mod tests {
             .read();
         assert_eq!(inside.ask_idle_seconds(), None);
         assert_eq!(inside.ask_idle_ignored().count(), 1);
+    }
+
+    /// INSTR-17: naming a directory to read skills from is the person's, so a checkout's layers
+    /// cannot name one.
+    #[test]
+    fn a_project_layer_cannot_name_a_shared_skill_directory() {
+        let settings = Layers::new("shared-skills-layers")
+            .global(r#"{"sharedSkillDirectories": ["~/.claude/skills", ""]}"#)
+            .project(r#"{"sharedSkillDirectories": ["~/.agents/skills"]}"#)
+            .local(r#"{"sharedSkillDirectories": ["~/.agents/skills"]}"#)
+            .read();
+        assert_eq!(settings.shared_skill_directories(), ["~/.claude/skills"]);
+        assert_eq!(settings.shared_skill_directories_ignored().count(), 2);
+
+        let only_project = Layers::new("shared-skills-only-project")
+            .project(r#"{"sharedSkillDirectories": ["~/.agents/skills"]}"#)
+            .read();
+        assert!(only_project.shared_skill_directories().is_empty());
+        assert_eq!(only_project.shared_skill_directories_ignored().count(), 1);
+
+        let named = Layers::new("shared-skills-named")
+            .named(r#"{"sharedSkillDirectories": ["~/.agents/skills"]}"#)
+            .read();
+        assert_eq!(named.shared_skill_directories(), ["~/.agents/skills"]);
+        assert_eq!(named.shared_skill_directories_ignored().count(), 0);
+
+        let nothing = Layers::new("shared-skills-unset").global("{}").read();
+        assert!(nothing.shared_skill_directories().is_empty());
     }
 
     /// INSTR-12: a style opens the system prompt, so a checkout's layers cannot pick one.

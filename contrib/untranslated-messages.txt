@@ -30,6 +30,8 @@ fr:command-outputs
 fr:command-sessions
 fr:command-unfinished
 fr:configured-start-heading
+fr:doctor-settings-shared-skill-directories-ignored
+fr:doctor-skills-shared-not-read
 fr:editor-file-exited-badly
 fr:editor-file-was-stopped
 fr:lsp-none-started
@@ -200,6 +202,7 @@ fr:sessions-screen-tab-needs-you
 fr:sessions-screen-tab-ready
 fr:sessions-screen-tab-working
 fr:sessions-screen-title
+fr:shared-skills-reached-through-the-workspace
 fr:transcript-copy-block
 fr:unfinished-checkout
 fr:unfinished-failed

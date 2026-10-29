@@ -10813,6 +10813,82 @@ fn doctor_says_nothing_of_a_skill_with_every_key_read_or_one_a_turn_drops() {
     );
 }
 
+/// SKILL-16 with INSTR-17. A shared skill directory that exists and that `sharedSkillDirectories`
+/// does not name is said to be left alone, and the one that is absent is not mentioned. A `doctor`
+/// that said nothing leaves a person who keeps skills for another agent unable to tell the
+/// directory was found; one that listed both names a directory that is not there.
+#[test]
+fn doctor_names_a_shared_skill_directory_it_left_alone() {
+    let scratch = Scratch::new("cli-running-skill-shared-left-alone").with_file(
+        ".agents/skills/other/SKILL.md",
+        "---\nname: other\ndescription: kept for another agent\nallowed-tools: Read\n---\n\nbody\n",
+    );
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("~/.agents/skills exists and is not read"),
+        "doctor did not say the directory was left alone: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("~/.claude/skills"),
+        "doctor named a directory that is not there: {stdout}"
+    );
+    assert!(
+        !stdout.contains("skills/other/SKILL.md"),
+        "doctor read a skill from a directory nobody named: {stdout}"
+    );
+}
+
+/// SKILL-16 with INSTR-17. Once the directory is named it is read the way a turn would read it: the
+/// notice that it was left alone is gone, and a key nothing reads in a skill there is reported with
+/// the directory it was found in.
+#[test]
+fn doctor_reads_a_named_shared_skill_directory_and_names_an_unread_key_in_it() {
+    let scratch = Scratch::new("cli-running-skill-shared-named")
+        .with_settings(r#"{"sharedSkillDirectories": ["~/.claude/skills"]}"#)
+        .with_file(
+            ".claude/skills/imported/SKILL.md",
+            "---\nname: imported\ndescription: kept for another agent\nallowed-tools: \
+             Read\n---\n\nbody\n",
+        );
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("~/.claude/skills/imported/SKILL.md") && stdout.contains("allowed-tools"),
+        "doctor did not name the unread key in the named directory: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("exists and is not read"),
+        "doctor said a named directory was left alone: {stdout}"
+    );
+}
+
 /// SKILL-16 with SKILL-4 and TRUST-23. `doctor` reads a project's skills the way a turn there
 /// would, so it names one's unread key only where the directory has been vouched for. A skill with
 /// no description is one reason a turn drops a file and an unvouched directory is another, and a
