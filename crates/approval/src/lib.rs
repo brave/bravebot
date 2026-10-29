@@ -94,6 +94,9 @@ pub struct Write<'a> {
     pub line_endings: Option<&'a str>,
     /// False when the diff had to give up on an exact answer.
     pub exact: bool,
+    /// How many characters in the lines the change adds or removes drew as nothing before the agent
+    /// wrote them out in `changes` (PROMPT-13).
+    pub hidden: usize,
     /// Lines the change adds, for saying what an inexact diff is too large to show.
     pub added: usize,
     /// Lines the change removes.
@@ -140,6 +143,8 @@ pub fn write_lines(write: &Write<'_>) -> Vec<String> {
         ));
         return lines;
     }
+
+    lines.extend(write_hidden_note(write.hidden));
 
     let mut changed = 0usize;
     let mut left_out = 0usize;
@@ -235,6 +240,12 @@ pub struct Run<'a> {
     pub ambient: &'a [String],
     /// Bytes going into a program are released somewhere this policy stops governing.
     pub releases_private: bool,
+    /// Whether a front end is offering a standing "allow and remember" answer beside this
+    /// question, so `run_lines` can say what it would grant. `false` where a front end has no
+    /// such answer to offer (the plain CLI's run question is only ever approve or reject) or
+    /// where the line could not be remembered anyway, in which case nothing here has to repeat
+    /// the reasons `RunRequest::can_be_remembered` already lists.
+    pub offers_remember: bool,
 }
 
 /// The sentence for a run the turn does not confine, in the catalog's words, so a front end that
@@ -285,6 +296,9 @@ pub fn run_lines(run: &Run<'_>) -> Vec<String> {
     }
     if run.releases_private {
         lines.push(t!(run_releases_private).to_string());
+    }
+    if run.offers_remember {
+        lines.push(t!(run_allow_and_remember_explained).to_string());
     }
     lines
 }
@@ -340,6 +354,12 @@ pub fn output_lines(summary: &str, check: Check, output: &str, hidden: usize) ->
 /// the catalog's words so a front end that draws it carries no copy of its own (SHARE-001).
 pub fn hidden_note(hidden: usize) -> Option<String> {
     (hidden > 0).then(|| t!(hidden_characters, count = hidden))
+}
+
+/// The sentence over a write's rows in which `hidden` characters draw as nothing, or none where none
+/// do, in the catalog's words so a front end that draws it carries no copy of its own (SHARE-001).
+pub fn write_hidden_note(hidden: usize) -> Option<String> {
+    (hidden > 0).then(|| t!(write_hidden_characters, count = hidden))
 }
 
 /// A picture or a PDF in place of the text of a vetted read.
@@ -669,6 +689,10 @@ pub struct Call<'a> {
     pub arguments: &'a [(String, String)],
     /// What the server says the tool does.
     pub description: Option<&'a str>,
+    /// Whether a front end is offering a standing "allow and remember" answer beside this
+    /// question, so `call_lines` can say what it would grant. `false` where a front end has no
+    /// such answer to offer (the plain CLI's call question is only ever approve or reject).
+    pub offers_remember: bool,
 }
 
 /// The lines a call to an MCP server's tool is read before approving.
@@ -684,6 +708,9 @@ pub fn call_lines(call: &Call<'_>) -> Vec<String> {
     }
     if let Some(description) = call.description {
         lines.extend(quarantined(description));
+    }
+    if call.offers_remember {
+        lines.push(t!(mcp_call_allow_and_remember_explained, tool = call.name).to_string());
     }
     lines
 }
@@ -916,6 +943,7 @@ mod tests {
             confinement: Some(&confinement),
             ambient: &["it reaches the container daemon".to_string()],
             releases_private: false,
+            offers_remember: false,
         })
         .join("\n");
         for part in [
@@ -930,6 +958,64 @@ mod tests {
         ] {
             assert!(text.contains(part), "`{part}` missing from {text}");
         }
+    }
+
+    /// Issue #3045: a front end offering a standing "allow and remember" answer beside a run
+    /// question states what it grants, and a front end with no such answer offers no sentence
+    /// about it.
+    #[test]
+    fn a_run_explains_what_allow_and_remember_grants_only_where_it_is_offered() {
+        let steps = [RunStep {
+            written: "docker ps".to_string(),
+            binary: "/usr/bin/docker".to_string(),
+        }];
+        let drawn = |offers_remember: bool| {
+            run_lines(&Run {
+                summary: "list containers",
+                steps: &steps,
+                writes: &[],
+                confinement: None,
+                ambient: &[],
+                releases_private: false,
+                offers_remember,
+            })
+            .join("\n")
+        };
+        let offered = drawn(true);
+        assert!(
+            offered.contains("Allow and remember"),
+            "the sentence explaining the grant is missing: {offered}"
+        );
+        let not_offered = drawn(false);
+        assert!(
+            !not_offered.contains("Allow and remember"),
+            "a front end with no such answer should get no sentence about it: {not_offered}"
+        );
+    }
+
+    /// Issue #3045: the same, for a call to an MCP server's tool, which names the tool and the
+    /// project rather than the exact command.
+    #[test]
+    fn a_call_explains_what_allow_and_remember_grants_only_where_it_is_offered() {
+        let drawn = |offers_remember: bool| {
+            call_lines(&Call {
+                name: "alias:tool",
+                arguments: &[],
+                description: None,
+                offers_remember,
+            })
+            .join("\n")
+        };
+        let offered = drawn(true);
+        assert!(
+            offered.contains("Allow and remember") && offered.contains("alias:tool"),
+            "the sentence explaining the grant is missing or does not name the tool: {offered}"
+        );
+        let not_offered = drawn(false);
+        assert!(
+            !not_offered.contains("Allow and remember"),
+            "a front end with no such answer should get no sentence about it: {not_offered}"
+        );
     }
 
     /// PROMPT-1: the files a line writes and the directories it is confined to are drawn with a
@@ -954,6 +1040,7 @@ mod tests {
                 confinement: Some(&confinement),
                 ambient: &[],
                 releases_private: false,
+                offers_remember: false,
             })
         };
         let plain = drawn("note.md", "/work");
@@ -996,6 +1083,7 @@ mod tests {
             written_since_checkout: false,
             line_endings: None,
             exact: true,
+            hidden: 0,
             added: 0,
             removed: 0,
             changes,
@@ -1019,6 +1107,25 @@ mod tests {
                 t!(write_unchanged, count = 3).to_string(),
             ]
         );
+    }
+
+    /// PROMPT-13, WRITE-4: a write says how many characters of the change draw as nothing above the
+    /// rows, and a change with none gets no such sentence.
+    #[test]
+    fn a_write_says_how_many_characters_draw_as_nothing_above_the_rows() {
+        let changes = [Change::Added(
+            "run(\"ok\")\u{2039}U+202E\u{203a} \u{2039}U+200B\u{203a}\u{2039}U+E0069 i\u{203a}"
+                .to_string(),
+        )];
+        let said = t!(write_hidden_characters, count = 3usize).to_string();
+        let lines = write_lines(&Write {
+            hidden: 3,
+            ..write(&changes)
+        });
+        assert_eq!(lines[0], said);
+        assert_eq!(lines.len(), 2);
+        assert!(!write_lines(&write(&changes)).contains(&said));
+        assert_eq!(write_hidden_note(0), None);
     }
 
     #[test]

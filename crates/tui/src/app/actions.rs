@@ -319,18 +319,12 @@ impl Held<'_> {
     /// The session it leaves behind, where `/resume` chose a record to switch to.
     pub(super) fn resume(
         &mut self,
-        terminal: &mut Tty,
         servers: &mut Servers,
         switch: &mut Option<Switch>,
         typed: &str,
     ) -> Option<Ended> {
-        let record = record_to_resume(
-            terminal,
-            self.session,
-            self.workspace.root(),
-            self.stored.id(),
-            typed,
-        )?;
+        let record =
+            record_to_resume(self.session, self.workspace.root(), self.stored.id(), typed)?;
         *switch = Some(switch_session(
             self.session,
             self.workspace,

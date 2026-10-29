@@ -81,6 +81,12 @@ pub struct Task {
     /// Whether the driver wrote this prompt and no person typed it, which the view of the request
     /// says of it. Set only by a caller that composed the line itself.
     pub driver_wrote_the_prompt: bool,
+    /// What the planner is told at the start of the turn about the open loops of earlier ones,
+    /// where they changed since it was last told (OPEN-4).
+    pub open_loops: Option<String>,
+    /// Whether the caller shows the person the open loops at the end of a turn, which then says
+    /// nothing of its own about changes left unbuilt (OPEN-3).
+    pub shows_open_loops: bool,
     /// Workspace-relative files to include as context. Trusted because the user named
     /// them, not the model.
     pub files: Vec<String>,
@@ -302,8 +308,10 @@ pub struct Task {
     pub confine_runs: bool,
     /// Which profile those programs run under, or that none does (SANDBOX-22).
     ///
-    /// Read only where `confine_runs` is true. A delegate inherits it with `confine_runs`.
-    pub sandbox: bravebot_sandbox::SandboxMode,
+    /// Read only where `confine_runs` is true. A delegate inherits it with `confine_runs`, and holds
+    /// the same handle, so a mode the person chooses while the turn runs is the one each call
+    /// after it is decided under.
+    pub sandbox: crate::LiveSandbox,
     /// Whether the front end can put a line that starts with no sandbox to a person (SANDBOX-29).
     ///
     /// Off unless the caller turns it on. The terminal interface and a session in lines draw the
@@ -426,6 +434,12 @@ pub struct Task {
     /// routing table, and the kernel matches it against the set this turn resolves, so a name
     /// matching nothing ends the turn before anything is sent.
     pub addressing: Option<String>,
+    /// Whether [`Task::addressing`] is the definition the session stands under (a bot's
+    /// conversation, a session started with `--agent`) and not one named for this turn alone.
+    ///
+    /// Recorded beside the prompt so a surface can tell the two apart once the turn is over
+    /// (ADDRESS-12). It decides nothing about the turn itself.
+    pub addressing_is_standing: bool,
     /// Whether [`Task::model`] outranks the model an addressed definition names.
     ///
     /// Set only by a caller whose model was named on its own command line. CLI-9 ranks that flag
@@ -521,6 +535,8 @@ impl Task {
             // A line somebody typed until a caller says what composed it.
             composed: None,
             driver_wrote_the_prompt: false,
+            open_loops: None,
+            shows_open_loops: false,
             injected_facts: std::collections::BTreeSet::new(),
             files: Vec::new(),
             attachments: Vec::new(),
@@ -572,7 +588,7 @@ impl Task {
             deadlines: crate::exec::Deadlines::BUILT_IN,
             // Unconfined, which is what a turn has always done.
             confine_runs: false,
-            sandbox: bravebot_sandbox::SandboxMode::default(),
+            sandbox: crate::LiveSandbox::default(),
             asks_about_unconfined: false,
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
@@ -588,6 +604,7 @@ impl Task {
             skill_mode: None,
             delegate: None,
             addressing: None,
+            addressing_is_standing: false,
             model_outranks_a_definition: false,
             servers: Vec::new(),
             mcp: None,
@@ -637,6 +654,14 @@ impl Task {
     /// Say that the driver wrote this prompt, for a line it sends when nobody typed one.
     pub fn written_by_the_driver(mut self) -> Self {
         self.driver_wrote_the_prompt = true;
+        self
+    }
+
+    /// Say that the caller shows the open loops, and give the planner `said` about them at the
+    /// start of the turn where there is something to say (OPEN-3, OPEN-4).
+    pub fn with_open_loops(mut self, said: Option<String>) -> Self {
+        self.open_loops = said;
+        self.shows_open_loops = true;
         self
     }
 
@@ -772,6 +797,13 @@ impl Task {
         self
     }
 
+    /// Say that the definition [`Task::addressing`] names is the one the session stands under,
+    /// and not one named for this turn alone.
+    pub fn addressing_standing(mut self, standing: bool) -> Self {
+        self.addressing_is_standing = standing;
+        self
+    }
+
     /// Say that [`Task::model`] was named on the command line, so it outranks a definition's.
     pub fn model_outranks_a_definition(mut self, outranks: bool) -> Self {
         self.model_outranks_a_definition = outranks;
@@ -887,8 +919,12 @@ impl Task {
     }
 
     /// Hold those programs to `mode`'s profile. See [`Task::sandbox`].
-    pub fn with_sandbox_mode(mut self, mode: bravebot_sandbox::SandboxMode) -> Self {
-        self.sandbox = mode;
+    ///
+    /// A [`crate::LiveSandbox`] is read again whenever the turn starts a call, so a mode the person
+    /// changes while the turn runs is the one the rest of it follows (SANDBOX-22). A bare
+    /// [`bravebot_sandbox::SandboxMode`] is a mode that never changes.
+    pub fn with_sandbox_mode(mut self, mode: impl Into<crate::LiveSandbox>) -> Self {
+        self.sandbox = mode.into();
         self
     }
 

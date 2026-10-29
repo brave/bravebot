@@ -482,6 +482,13 @@ pub(super) fn run_turn_animated(
     // other turn carries the definition the session was started under, if any (CLI-17). Kept past
     // the turn as well, because a stop puts the line back as it was typed, name and all.
     let addressed = session.take_addressing();
+    // Whether the name is the one the session stands under and not one a `/agent` line named for
+    // this turn alone, which the record keeps beside the prompt (ADDRESS-12).
+    let addressing_standing = addressed.as_ref().is_some_and(|addressed| {
+        session
+            .standing_definition()
+            .is_some_and(|standing| standing.name == addressed.name)
+    });
 
     // Before the worker starts, because a sign-in needs the terminal and this is the thread that
     // has it. Left to the worker, the URL and code the AWS CLI prints would land in a frame this
@@ -507,6 +514,11 @@ pub(super) fn run_turn_animated(
     // A fresh token per turn: reusing one could cancel a turn before it started.
     let cancel = Cancel::new();
     let worker_cancel = cancel.clone();
+
+    // The window of the model the session opened on, if it was still being looked up when this turn
+    // was sent. A turn sized against the default compacts at the wrong place, so it waits for the
+    // answer, for as long as a request for a roster may take and no longer (BACKEND-64).
+    adopt_the_awaited_budget(session, config, Some(BUDGET_WAIT));
 
     // Cloned rather than borrowed so the worker owns everything it needs. Config and Workspace
     // are cheap handles; Egress builds its own connection pool.
@@ -557,6 +569,7 @@ pub(super) fn run_turn_animated(
         // outlives the session. A one-shot run says nothing here and reads no record.
         .remembering(Some(stored.id().to_string()))
         .addressing(addressed.as_ref().map(|addressed| addressed.name.clone()))
+        .addressing_standing(addressing_standing)
         // The words `--system-prompt` and `--append-system-prompt` named, on every turn the session
         // sends, ticks and goal rounds included (CLI-19).
         .with_system_prompts(session.system_prompts().clone())
@@ -576,7 +589,11 @@ pub(super) fn run_turn_animated(
         .with_injected_facts(stored.injected_facts().clone())
         // The servers the session started, with a grant naming each. Their tools are offered once
         // a person has read the list, which the turn puts to them before it plans (SERVERS-8).
-        .with_mcp(session.servers.session.clone());
+        .with_mcp(session.servers.session.clone())
+        // What earlier turns left open, where it changed since the planner was last told, and
+        // this session's own line in place of the turn's about changes left unbuilt (OPEN-3,
+        // OPEN-4).
+        .with_open_loops(session.open_loops_for_the_planner());
     // Every file named with `@` becomes context, which a turn treats as trusted: the user typed the
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
     // line. Read back out of the prompt rather than tracked while it is typed, so the line that was
@@ -608,6 +625,8 @@ pub(super) fn run_turn_animated(
     // The worker shares file decisions so errors cannot return the pre-write map.
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
+    // The same map, for a `/btw` typed beside the turn to read the decisions the turn is making.
+    session.set_turn_files(Some(file_authority.clone()));
     let retained = RetainedTurn {
         files: file_authority,
         programs: programs.clone(),
@@ -647,10 +666,12 @@ pub(super) fn run_turn_animated(
         // screens nothing while believing it does.
         //
         // The sandbox mode comes off the task for the same reason: bypassing answers the start of a
-        // language server only where nothing is confined (LSP-5).
+        // language server only where nothing is confined (LSP-5). It is the task's handle, so a
+        // mode typed while the turn runs decides the questions after it as it decides the programs
+        // (SANDBOX-22).
         let mut confirmer =
             bravebot_agent::Confining::new(&mut asking, permission_mode, task.auto_vetting)
-                .with_sandbox_mode(task.sandbox);
+                .with_sandbox_mode(task.sandbox.clone());
         // Owned by the worker for the duration and handed back afterwards, whether the turn
         // succeeded or not. A failed turn is still part of the conversation, and the next one
         // is usually about it.
@@ -714,6 +735,7 @@ pub(super) fn run_turn_animated(
         session.keep_awake();
         // The rows of a model picker opened during the turn, taken as they arrive.
         settle_picking_during_a_turn(session);
+        settle_aside_beside_a_turn(session, &cancel);
         redraw(terminal, session)?;
 
         // Input is polled here rather than in the outer loop, which is blocked for the duration
@@ -1067,6 +1089,8 @@ pub(super) fn run_turn_animated(
         session.give_way_to_the_queue(Instant::now());
     }
 
+    end_aside_beside_a_turn(session);
+    session.set_turn_files(None);
     let finished = worker.join().unwrap_or_else(|_| {
         // A panicked turn is reported rather than propagated: the session survives. The
         // conversation does not, since the thread that held it is gone, and neither do the
@@ -1088,6 +1112,11 @@ pub(super) fn run_turn_animated(
     if let Some(decisions) = &finished.decisions {
         stored.set_injected_facts(decisions.injected_facts.clone());
     }
+    // And what every turn did, so a resume can say what was left open (OPEN-6).
+    let mut whole = session.work();
+    whole.then(finished.work);
+    stored.set_work(whole);
+    stored.set_written(&session.written());
     Ok(finish_turn(
         session,
         config,
@@ -1121,7 +1150,7 @@ pub(super) fn finish_turn(
     } = finished;
     // Before anything judges the goal, and however the turn ended: a stopped turn's writes are on
     // disk all the same (GROUND-4).
-    session.goal_worked(work);
+    session.worked(work);
     let carried = match decisions {
         Some(turn::Decisions {
             trust,
@@ -1192,6 +1221,8 @@ pub(super) fn finish_turn(
     // After the turn is folded in, so the prompt a stop gives back and the trail a failure keeps
     // are decided with what commands said during the turn still set apart from it.
     session.settle_what_was_said();
+    // Last, after every note the ending made, however the turn ended (OPEN-3).
+    session.say_open_loops(workspace);
     let Carried {
         trust,
         programs,
@@ -1382,6 +1413,31 @@ pub(super) fn past_sessions_offered(root: &Path, current: &str) -> Vec<bravebot_
         .collect()
 }
 
+/// A row of the `@` list for each definition a message may be addressed to, in the order the
+/// planner is told about them.
+///
+/// The set `/agent` accepts and the turn resolves again, so a row names a definition the line
+/// can be addressed to (ADDRESS-2). The rows carry names and descriptions to be drawn, and the
+/// turn is asked about the name alone.
+pub(super) fn definitions_offered(
+    workspace: &Workspace,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+) -> Vec<bravebot_mentions::Entry> {
+    bravebot_agent::agents::resolved(
+        workspace,
+        bravebot_agent::home::directory().as_deref(),
+        trust,
+        permissions,
+        &mut Trail::new(),
+    )
+    .iter()
+    .map(|definition| {
+        bravebot_mentions::definition_entry(definition.name(), definition.description())
+    })
+    .collect()
+}
+
 /// Carry the prompt of an MCP server a line runs, which the turn fetches (CMD-26).
 ///
 /// From a line the person wrote and from no other, for the reason [`files_named_in`] is: the
@@ -1461,7 +1517,7 @@ pub(super) struct Asked {
 
 /// Record what the turn asked for against what answered, and say so once where they differ.
 ///
-/// The endpoint substitutes rather than refusing: a premium model requested without a credential
+/// The endpoint substitutes rather than refusing: a premium model requested without a key
 /// comes back answered by a weaker model, with a 200 and a perfectly ordinary reply. So the only
 /// trace is this field, and a session that never compares them cannot tell a model it chose from
 /// one chosen for it.

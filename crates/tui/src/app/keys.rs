@@ -151,6 +151,11 @@ pub enum Action {
     /// Leave this session for another of this directory's: the id typed, or empty for the picker.
     /// Needs the terminal, the record store and the loop's state, which the loop owns.
     Resume(String),
+    /// Open the Sessions screen over the plain prompt (SCREEN-1). Needs the record of the
+    /// session being run, the state directory and the roster, which the loop holds.
+    OpenCenter,
+    /// Carry out what the Sessions screen asked for beyond changing its own state (SCREEN-8).
+    SessionsScreen(crate::sessions_screen::Effect),
     /// Show, set or clear one of the session's links. Needs the session record, which the loop
     /// owns, and carries the argument unparsed, since what it says back goes in the transcript.
     Link(bravebot_session::sessions::Link, String),
@@ -163,14 +168,16 @@ pub enum Action {
     /// Carries the argument unparsed, since what it says back goes in the transcript, and needs the
     /// servers the session holds and the terminal to ask on, which the loop owns.
     Mcp(String),
-    /// Report the sandbox mode, or move it from the next turn. Carries the word unparsed, since the
-    /// answer depends on the managed file and may need the screen to ask.
+    /// Report the sandbox mode, or move it. Carries the word unparsed, since the answer depends on
+    /// the managed file.
     Sandbox(String),
     /// Withdraw the remembered answer about the working directory. Needs the workspace, which the
     /// loop owns, and leaves this session's map as it is.
     ForgetTrust,
     /// List the checkouts the session keeps. Needs the workspace, which the loop owns.
     ListCheckouts,
+    /// List what the session left open (OPEN-5). Needs the workspace, which the loop owns.
+    Unfinished,
     /// List each definition's memory (MEMORY-12).
     ListMemories,
     /// Remove the checkout with this number. Needs the workspace, the trust map and the terminal
@@ -363,6 +370,7 @@ pub(super) fn stops_the_turn(session: &Session, key: KeyEvent) -> bool {
 pub(super) fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
     !session.scrolling()
         && session.watching().is_none()
+        && !session.showing_sessions()
         && !session.searching_history()
         && !session.files_open()
         && session.picking().is_none()
@@ -752,6 +760,29 @@ fn history_search_key(session: &mut Session, key: KeyEvent) -> Action {
 /// Two levels, and the key that leaves is read against the nearer one: from a delegate it goes
 /// back to the list, and from the list it closes. The chord that opened it and Ctrl-C leave the
 /// mode outright from either, because a person who wants out of a mode wants out of the mode.
+/// A key while the Sessions screen is open: the Sessions screen answers it, and what it asks for
+/// beyond its own state is handed on (SCREEN-1).
+pub(super) fn sessions_screen_key(session: &mut Session, key: KeyEvent) -> Action {
+    use crate::sessions_screen::Outcome;
+    let Some(sessions_screen) = session.sessions_screen_mut() else {
+        return Action::None;
+    };
+    match sessions_screen.key(key) {
+        Outcome::Nothing => Action::None,
+        Outcome::Redraw => Action::Redraw,
+        Outcome::Close => {
+            session.close_sessions_screen();
+            Action::Redraw
+        }
+        // What changes nothing the session is running is done here, in whichever loop has the keys.
+        // What is left is for the loop that holds the record and the terminal.
+        Outcome::Effect(effect) => match super::sessions_screen::carry_out(session, effect) {
+            Some(left) => Action::SessionsScreen(left),
+            None => Action::Redraw,
+        },
+    }
+}
+
 pub(super) fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
     // Ctrl alone: a settings file can give Ctrl-Alt-U to an action, and that is not the view's key.
     let ctrl = key.modifiers == KeyModifiers::CONTROL;
@@ -1003,6 +1034,9 @@ pub(super) fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<
     if session.files_open() {
         return Some(files_key(session, key));
     }
+    if session.showing_sessions() {
+        return Some(sessions_screen_key(session, key));
+    }
     if session.watching().is_some() {
         return Some(watching_key(session, key));
     }
@@ -1074,6 +1108,14 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     // the ones this answers are exactly the ones nothing else claims.
     if let Some(action) = change_history_scope(session, key) {
         return action;
+    }
+    // A press of Left with the box empty has nowhere to go in the line, so it goes to the sessions
+    // beside this one (SCREEN-1).
+    if key.code == KeyCode::Left
+        && key.modifiers.is_empty()
+        && session.left_opens_the_sessions_screen()
+    {
+        return Action::OpenCenter;
     }
     if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
@@ -1272,6 +1314,19 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
                 None => Action::None,
             }
         }
+        // A line addressed to a definition picked from the `@` list, which is the line `/agent` would
+        // have addressed (ADDRESS-2). Before the command arm, since a line that begins with a slash
+        // and holds a marker is still addressed, and before the arm that completes, since the
+        // marker is written with its space and a pick never leaves a half-typed word behind it.
+        // The marker is what says the pick stands: with it deleted the line is an ordinary prompt.
+        KeyCode::Enter if session.pick_stands() && !session.completion_would_change_the_line() => {
+            match session.take_summons() {
+                Some(commanded) => {
+                    Action::Address(commanded.line, commanded.pasted, commanded.attached)
+                }
+                None => Action::None,
+            }
+        }
         // Every command on one arm, reading the one table the set is written in, so a word the table
         // names is dispatched and never sent. Before the arm that completes a half-typed one, which
         // is what a whole word is not, and before the arm that submits, which is what the word must
@@ -1301,7 +1356,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // A line whose first word names a file in the person's prompt directory: the file's text
         // replaces the line and waits in the box (CMD-17). After every command, so a file cannot
         // shadow one, and before completion, so `/review the diff` is not read as a half-typed word.
-        KeyCode::Enter if session.expand_prompt_file() => Action::Redraw,
+        KeyCode::Enter if session.expand_prompt_file() => offering_a_model(session),
         // A line that runs a prompt of an MCP server with words that are not its arguments is said
         // so and not sent (CMD-26).
         KeyCode::Enter if session.refuse_unparsable_server_prompt() => Action::Redraw,
@@ -1320,6 +1375,17 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             None => Action::None,
         },
         _ => navigate(session, key),
+    }
+}
+
+/// What follows a prompt file expanding into the box: a redraw, or the model picker opened on the
+/// model the file named, which asks first whether the definition in force has fixed the model
+/// (CLI-17). The picker chooses nothing until Enter is pressed on a row (CMD-17).
+fn offering_a_model(session: &mut Session) -> Action {
+    if session.has_model_to_offer() {
+        super::ask_which_model(session)
+    } else {
+        Action::Redraw
     }
 }
 
@@ -1599,6 +1665,14 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     if let Some(action) = change_history_scope(session, key) {
         return action;
     }
+    // Looking at the sessions beside this one sends nothing, so a running turn refuses nothing here
+    // either (SCREEN-1).
+    if key.code == KeyCode::Left
+        && key.modifiers.is_empty()
+        && session.left_opens_the_sessions_screen()
+    {
+        return Action::OpenCenter;
+    }
     if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
     }
@@ -1703,6 +1777,18 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
         return session.answer_while_working(|session| dispatch_command(session, commanded));
     }
 
+    // A line addressed to a picked definition waits as the `/agent` line it is, which is the form
+    // the queue carries addressing in. Made into that line here so the arm below queues it with the
+    // other commands, and never as a prompt the running turn could be given.
+    if key.code == KeyCode::Enter
+        && !session.shell
+        && session.pick_stands()
+        && session.pick_into_the_line()
+        && session.queue_command()
+    {
+        return queued(session, key);
+    }
+
     // Before the arm that queues a prompt, because the two do the same thing to the box and differ
     // only in what is waiting afterwards. This line waits to be carried out; the queue is what a
     // person typing mid-turn already understands, so a command joins it rather than sitting in the
@@ -1726,7 +1812,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     if key.code == KeyCode::Enter
         && session.answer_while_working(|session| session.expand_prompt_file())
     {
-        return Action::Redraw;
+        return session.answer_while_working(offering_a_model);
     }
 
     // And a line running a prompt of a server that could not be sent is refused as it is at rest,
@@ -2015,7 +2101,9 @@ fn carry_out_choice(session: &mut Session, choice: crate::state::Choice) -> Acti
 /// which is the same distance in each.
 fn wheel(session: &mut Session, mouse: MouseEvent, down: bool) -> Action {
     let rows = session.wheel_rows();
-    if session.scrolling() {
+    if let Some(sessions_screen) = session.sessions_screen_mut() {
+        sessions_screen.wheel(usize::from(rows), down);
+    } else if session.scrolling() {
         session.take_the_scroller_count();
         match down {
             true => session.scroller_on(rows),
@@ -2070,7 +2158,10 @@ fn release(session: &mut Session, mouse: MouseEvent) -> Action {
 /// the first was a click on it or the start of a double click (MOUSE-42).
 fn click_acted_on(session: &Session, hit: Hit, action: &Action) -> bool {
     *action != Action::Copy
-        && !matches!(hit, Hit::Text { .. } | Hit::Item(_))
+        && !matches!(
+            hit,
+            Hit::Text { .. } | Hit::Item(_) | Hit::SessionsScreen(_)
+        )
         && session.pending_click.is_none()
 }
 
@@ -2085,6 +2176,14 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
         return match presses {
             1 | 2 => click_an_item(session, index, presses == 2),
             _ => Action::Copy,
+        };
+    }
+    // The same for a row of the Sessions screen: the first click puts the cursor on it and the
+    // second opens it, as Enter does (SCREEN-12).
+    if let Hit::SessionsScreen(click) = target.hit {
+        return match presses {
+            1 | 2 => click_in_the_sessions_screen(session, click, presses == 2),
+            _ => Action::None,
         };
     }
     if presses != 1 {
@@ -2131,13 +2230,46 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
         | Hit::Match(_)
         | Hit::Item(_)
         | Hit::Words(_)
-        | Hit::Wheel(_) => false,
+        | Hit::Wheel(_)
+        | Hit::SessionsScreen(_) => false,
     };
     if !acted {
         return Action::Copy;
     }
     session.clear_selection();
     Action::Redraw
+}
+
+/// What a release does that ends a click on a part of the Sessions screen: a tab is chosen, and
+/// a row or "Show more" takes the cursor, and is opened by the second click of a double click
+/// (SCREEN-12).
+fn click_in_the_sessions_screen(
+    session: &mut Session,
+    click: crate::sessions_screen::Click,
+    second: bool,
+) -> Action {
+    use crate::sessions_screen::{Click, Outcome};
+    session.clear_selection();
+    let Some(sessions_screen) = session.sessions_screen_mut() else {
+        return Action::None;
+    };
+    // A second press is one only where it is on what the first pointed at, and not on whatever a
+    // turn of the wheel or a read of the list has since put at the cell (MOUSE-15).
+    let second = sessions_screen.press(click) && second;
+    let outcome = match (click, second) {
+        (Click::Tab(_), _) | (_, false) => return Action::Redraw,
+        (_, true) => sessions_screen.open(),
+    };
+    match outcome {
+        // What changes nothing the session is running is done here, as the key path does it, so
+        // that "Show more" loads more whichever loop has the mouse. What is left is for the loop that
+        // holds the record and the terminal.
+        Outcome::Effect(effect) => match super::sessions_screen::carry_out(session, effect) {
+            Some(left) => Action::SessionsScreen(left),
+            None => Action::Redraw,
+        },
+        _ => Action::Redraw,
+    }
 }
 
 /// What a release does that ends the first or the second click of a double click on a row of a list
@@ -2261,7 +2393,8 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
         | Hit::Text { .. }
         | Hit::Link(_)
         | Hit::Call(_)
-        | Hit::Delegate(_) => Action::None,
+        | Hit::Delegate(_)
+        | Hit::SessionsScreen(_) => Action::None,
     }
 }
 
@@ -2281,6 +2414,7 @@ fn click_command(session: &mut Session, line: &str) -> Action {
         line: line.to_string(),
         pasted: Vec::new(),
         attached: Vec::new(),
+        typed_at: std::time::Instant::now(),
     };
     if !matches!(session.status, Status::Working | Status::Running) {
         return dispatch_command(session, commanded);

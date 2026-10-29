@@ -159,7 +159,7 @@
   gap: var(--leo-spacing-m);
   margin: 0;
   color: var(--leo-color-systemfeedback-warning-text);
-  --leo-icon-size: var(--icon-meta);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--status-warning);
 }
 .confirm p.warn leo-icon { flex: none; margin-top: var(--leo-spacing-xs); }
@@ -167,6 +167,8 @@
 .card-alert {
   --leo-alert-padding: var(--leo-spacing-l) var(--leo-spacing-xl);
   --leo-font-heading-h4: var(--type-meta-strong);
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-m: var(--icon-control);
   font: var(--type-meta);
 }
 .card-alert ul { margin: var(--leo-spacing-s) 0; padding-left: var(--leo-spacing-xl); }
@@ -245,7 +247,7 @@
   --leo-collapse-summary-color: var(--ink-tertiary);
   --leo-collapse-summary-color-hover: var(--ink-secondary);
   --leo-collapse-icon-color: var(--ink-tertiary);
-  --leo-collapse-icon-size: var(--icon-meta);
+  --leo-collapse-icon-size: var(--icon-control);
   --leo-font-heading-h3: var(--type-meta);
   align-self: flex-start;
   max-width: 100%;
@@ -322,7 +324,7 @@
   gap: var(--leo-spacing-m);
   min-width: 0;
   color: var(--ink-secondary);
-  --leo-icon-size: var(--icon-meta);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--ink-tertiary);
 }
 .decided.approve { --leo-icon-color: var(--status-success); }
@@ -434,7 +436,7 @@
   align-items: center;
   gap: var(--leo-spacing-s);
   font: var(--type-meta-strong);
-  --leo-icon-size: var(--icon-meta);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--ink-tertiary);
 }
 
@@ -509,6 +511,8 @@
 .error-card {
   --leo-alert-padding: var(--leo-spacing-l) var(--leo-spacing-xl);
   --leo-font-heading-h4: var(--type-meta-strong);
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-m: var(--icon-control);
   margin: 0;
   font: var(--type-meta);
 }
@@ -538,7 +542,7 @@
   --leo-collapse-summary-color-hover: var(--leo-color-systemfeedback-error-text);
   --leo-collapse-icon-color: var(--leo-color-systemfeedback-error-icon);
   --leo-collapse-icon-color-hover: var(--leo-color-systemfeedback-error-icon);
-  --leo-collapse-icon-size: var(--icon-meta);
+  --leo-collapse-icon-size: var(--icon-control);
   --leo-font-heading-h3: var(--type-meta);
 }
 .error-actions { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-m); }
@@ -593,7 +597,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--leo-spacing-s);
-  --leo-icon-size: var(--icon-meta);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--ink-tertiary);
 }
 .expanded-diff .diff { max-height: 65vh; }

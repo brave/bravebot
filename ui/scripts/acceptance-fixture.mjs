@@ -65,6 +65,8 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
   globalThis.ux = {
     emit,
     sent: [],
+    // The folder of each session the app asked for, in order.
+    created: [],
     configured: true,
     choose: directory,
     grants: {
@@ -130,7 +132,13 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
         },
       }
     }
-    if (method === 'session.new') return { ok: { session: 's-new', directory, branch: 'main', model: 'sample/fast' } }
+    // A bot's home conversation and a new chat in the project can be open together, so a folder
+    // other than the project's gets a handle of its own.
+    if (method === 'session.new') {
+      const where = p.directory ?? directory
+      globalThis.ux.created.push(where)
+      return { ok: { session: where === directory ? 's-new' : 's-home', directory: where, branch: 'main', model: 'sample/fast' } }
+    }
     if (method === 'session.open') {
       return {
         ok: {
@@ -185,6 +193,11 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
   })
   replace('bravebot:bots:send', (_, p) => {
     globalThis.ux.sent.push(p)
+    emit('turn.started', { turn: globalThis.ux.sent.length }, p.session)
+    return { ok: { turn: globalThis.ux.sent.length } }
+  })
+  replace('bravebot:bots:summon', (_, p) => {
+    globalThis.ux.sent.push({ ...p, summoned: true })
     emit('turn.started', { turn: globalThis.ux.sent.length }, p.session)
     return { ok: { turn: globalThis.ux.sent.length } }
   })

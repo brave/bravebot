@@ -38,30 +38,59 @@ impl Looked {
     pub(crate) fn command(&self) -> Option<String> {
         match self.importable.as_slice() {
             [] => None,
+            [Source::Environment] => Some(t!(onboarding_import_keys).to_string()),
             [source] if source.is_server() => {
                 Some(t!(onboarding_import_running, source = source.name()))
             }
             [source] => Some(t!(onboarding_import_one, source = source.name())),
             [first, second] => Some(t!(
                 onboarding_import_both,
-                first = first.name(),
-                second = second.name()
+                first = named_to_begin(*first).as_str(),
+                second = named(*second).as_str()
             )),
             [first, second, third] => Some(t!(
                 onboarding_import_three,
-                first = first.name(),
-                second = second.name(),
-                third = third.name()
+                first = named_to_begin(*first).as_str(),
+                second = named(*second).as_str(),
+                third = named(*third).as_str()
             )),
             sources => Some(t!(
                 onboarding_import_many,
                 sources = sources
                     .iter()
-                    .map(|source| source.name())
+                    .enumerate()
+                    .map(|(at, source)| match at {
+                        0 => named_to_begin(*source),
+                        _ => named(*source),
+                    })
                     .collect::<Vec<_>>()
                     .join(", ")
+                    .as_str()
             )),
         }
+    }
+}
+
+/// What `source` is called inside a sentence. A program goes by its own name, which is not
+/// translated. The environment is no program, so the catalog holds its name.
+fn named(source: Source) -> String {
+    match source {
+        Source::Environment => t!(import_source_environment).to_string(),
+        _ => source.name().to_string(),
+    }
+}
+
+/// What `source` is called where it begins a sentence. Only the environment's name, which the
+/// catalog holds in lowercase, takes a capital: a program's name is written as it always is.
+fn named_to_begin(source: Source) -> String {
+    let name = named(source);
+    if source != Source::Environment {
+        return name;
+    }
+    let mut letters = name.chars();
+    match letters.next() {
+        Some(first) => first.to_uppercase().chain(letters).collect(),
+        None => name,
     }
 }
 
@@ -102,7 +131,7 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
     {
         return None;
     }
-    let (subscription, a_service_is_configured, chatgpt, xai) = match serving {
+    let (a_service_is_configured, chatgpt, xai) = match serving {
         bravebot_agent::backend::Serving::Configured => return None,
         bravebot_agent::backend::Serving::Refused { file, why } => {
             return Some(fail(
@@ -111,11 +140,10 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
             ));
         }
         bravebot_agent::backend::Serving::NothingConfigured {
-            subscription,
             a_service_is_configured,
             chatgpt,
             xai,
-        } => (subscription, a_service_is_configured, chatgpt, xai),
+        } => (a_service_is_configured, chatgpt, xai),
     };
     match at_the_start(a_service_is_configured, named) {
         Start::Serving(imported) => {
@@ -126,7 +154,6 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
         Start::Refuse(looked) => Some(fail(
             Ending::Configuration,
             crate::model::how_to_configure_a_model(
-                subscription.as_deref(),
                 a_service_is_configured,
                 chatgpt,
                 xai,
@@ -225,14 +252,12 @@ fn at_the_start(a_service_is_configured: bool, named: Option<&str>) -> Start {
     let model = crate::model::model_for_this_run(named, &config);
     match bravebot_agent::backend::serving(&config, &bravebot_net::Egress::new(), &model) {
         bravebot_agent::backend::Serving::NothingConfigured {
-            subscription,
             a_service_is_configured,
             chatgpt,
             xai,
         } => Start::Ended(fail(
             Ending::Configuration,
             crate::model::how_to_configure_a_model(
-                subscription.as_deref(),
                 a_service_is_configured,
                 chatgpt,
                 xai,
@@ -322,8 +347,7 @@ pub(crate) fn providers(args: &[String]) -> ExitCode {
     if !args.is_empty() {
         return fail(Ending::Argument, t!(import_takes_nothing_else));
     }
-    // Before the terminal, as `import-leo-creds` refuses: this is a write, and the one thing an
-    // incognito session will not do.
+    // Before the terminal: this is a write, and the one thing an incognito session will not do.
     if bravebot_core::incognito::engaged() {
         return fail(Ending::Failed, t!(import_not_while_incognito));
     }
@@ -388,7 +412,7 @@ fn ask_server(source: Source, host: &str) -> Option<Vec<import::Installed>> {
         Source::Ollama => bravebot_agent::backend::installed_on_ollama(host, trail),
         Source::LmStudio => bravebot_agent::backend::installed_on_lm_studio(host, trail),
         Source::LlamaServer => bravebot_agent::backend::installed_on_llama_server(host, trail),
-        Source::ClaudeCode | Source::Opencode => None,
+        Source::ClaudeCode | Source::Opencode | Source::Environment => None,
     }
 }
 
@@ -442,7 +466,7 @@ fn offer<R: BufRead, W: Write>(
         }
         offered.asked = true;
         let lines = shown(&plan, destination.path(), managed);
-        let question = t!(import_question, source = plan.source.name());
+        let question = t!(import_question, source = named(plan.source).as_str());
         if asking.ask(&lines, &question) != Decision::Approve {
             continue;
         }
@@ -494,6 +518,8 @@ fn credential<R: BufRead, W: Write>(
             approved
         }
         Key::File(_) => false,
+        // The entry names the variable already, and the line shown with it said so.
+        Key::Command => return,
     };
     if kept {
         return;
@@ -652,6 +678,7 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
             source = plan.source.name(),
             url = printable(url)
         ),
+        (None, true) if plan.source == Source::Environment => t!(import_found_keys).to_string(),
         (None, true) => t!(import_found_exported, source = plan.source.name()),
         (None, false) => t!(
             import_found,
@@ -692,6 +719,14 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
                     import_key_file,
                     id = printable(&gateway.id),
                     path = printable(path)
+                )
+            )),
+            Key::Command => lines.push(format!(
+                "  {}",
+                t!(
+                    import_key_command,
+                    id = printable(&gateway.id),
+                    variables = printable(&gateway.variables().join(", "))
                 )
             )),
         }
@@ -790,7 +825,7 @@ fn left_lines(source: Source, left: &[Left]) -> Vec<String> {
     if left.is_empty() {
         return Vec::new();
     }
-    let mut lines = vec![t!(import_left_heading, source = source.name())];
+    let mut lines = vec![t!(import_left_heading, source = named(source).as_str())];
     for Left { name, reason } in left {
         let why = match reason {
             Reason::AnthropicApi => t!(import_left_anthropic_api),
@@ -803,6 +838,8 @@ fn left_lines(source: Source, left: &[Left]) -> Vec<String> {
             Reason::Substitution => t!(import_left_substitution),
             Reason::Elsewhere => t!(import_left_elsewhere),
             Reason::NoToolModel => t!(import_left_no_tool_model),
+            Reason::KeyForAnotherHost => t!(import_left_another_host),
+            Reason::ModelWord => t!(import_left_model_word),
         };
         lines.push(format!("  - {}: {why}", printable(name)));
     }
@@ -813,7 +850,11 @@ fn imported(source: Source, file: &Path) -> String {
     let file = printable(&file.display().to_string());
     match source.is_server() {
         true => t!(import_imported_running, source = source.name(), file = file),
-        false => t!(import_imported, source = source.name(), file = file),
+        false => t!(
+            import_imported,
+            source = named(source).as_str(),
+            file = file
+        ),
     }
 }
 
@@ -937,8 +978,19 @@ mod tests {
 
         /// What the two programs' files under this home hold, with nothing exported.
         fn found(&self) -> Vec<Found> {
+            self.found_exporting(&[])
+        }
+
+        /// The same, with `set` exported in the process environment.
+        fn found_exporting(&self, set: &[(&str, &str)]) -> Vec<Found> {
             let home = self.path.display().to_string();
-            let lookup = |name: &str| (name == "HOME").then(|| home.clone());
+            let lookup = |name: &str| match name {
+                "HOME" => Some(home.clone()),
+                _ => set
+                    .iter()
+                    .find(|(named, _)| *named == name)
+                    .map(|(_, value)| value.to_string()),
+            };
             import::found(&Places::from_lookup(lookup), lookup, |_, _| None)
         }
     }
@@ -1300,6 +1352,200 @@ mod tests {
             "a declined key was written"
         );
         assert!(said.contains("ANTHROPIC_API_KEY: export it"), "{said}");
+    }
+
+    /// IMPORT-3, IMPORT-5: a key exported for a service with an endpoint compiled in is shown as the
+    /// entry it would write, naming the variable and the host the key goes to, before the question.
+    /// It writes the variable and not the key, and asks nothing about a key because none is read.
+    #[test]
+    fn an_exported_key_is_asked_about_and_written_as_an_entry_naming_the_variable() {
+        let scratch = Scratch::new("cli-import-exported-key");
+        let found = scratch.found_exporting(&[("OPENAI_API_KEY", "sk-exported-nobody-may-see")]);
+
+        let (said, offered) = asked_about(&scratch, found, "y\n", &Managed::default(), &|_| None);
+
+        assert_eq!(offered.imported, [Source::Environment], "{said}");
+        assert_eq!(offered.gateways, ["openai"]);
+        assert!(
+            said.contains(
+                r#"provider.openai, reached at https://api.openai.com/v1: {"env":["OPENAI_API_KEY"]}"#
+            ),
+            "{said}"
+        );
+        assert!(
+            said.contains("Import this from your environment?"),
+            "{said}"
+        );
+        assert!(
+            said.contains("exported in this process's environment"),
+            "{said}"
+        );
+        assert!(
+            !said.contains("in plain text"),
+            "a key was asked about: {said}"
+        );
+        assert!(
+            !said.contains("nobody-may-see"),
+            "the key was drawn: {said}"
+        );
+        let file = written(&scratch);
+        assert!(file.contains(r#""env":["OPENAI_API_KEY"]"#), "{file}");
+        assert!(
+            !file.contains("nobody-may-see"),
+            "the key was written: {file}"
+        );
+    }
+
+    /// IMPORT-5: only the affirmative writes, so a decline leaves the file as it was.
+    #[test]
+    fn a_declined_exported_key_writes_nothing() {
+        let scratch = Scratch::new("cli-import-exported-key-declined");
+        let found = scratch.found_exporting(&[("OPENROUTER_API_KEY", "sk-or-exported")]);
+
+        let (said, offered) = asked_about(&scratch, found, "n\n", &Managed::default(), &|_| None);
+
+        assert!(offered.imported.is_empty(), "{said}");
+        assert!(said.contains("provider.openrouter"), "{said}");
+        assert!(!scratch.settings().exists(), "a declined import wrote");
+    }
+
+    /// IMPORT-4: a key exported beside a host of its own is said to be left, by the variable's name
+    /// and never its value, and nothing is asked because nothing can be written.
+    #[test]
+    fn a_key_exported_beside_a_host_is_said_to_be_left_and_not_asked_about() {
+        let scratch = Scratch::new("cli-import-exported-key-host");
+        let found = scratch.found_exporting(&[
+            ("ANTHROPIC_API_KEY", "sk-ant-exported-nobody-may-see"),
+            ("ANTHROPIC_BASE_URL", "https://proxy.invalid"),
+        ]);
+
+        let (said, offered) = asked_about(&scratch, found, "y\n", &Managed::default(), &|_| None);
+
+        assert!(!offered.asked, "{said}");
+        assert!(
+            said.contains("Found in your environment and not imported:"),
+            "{said}"
+        );
+        assert!(
+            said.contains("- ANTHROPIC_API_KEY: a key exported beside a host of its own"),
+            "{said}"
+        );
+        for value in ["nobody-may-see", "proxy.invalid"] {
+            assert!(!said.contains(value), "{value} was drawn: {said}");
+        }
+    }
+
+    /// IMPORT-7: an entry the file already has keeps its name, so an exported key offers no second
+    /// one, and the line naming it is the one said.
+    #[test]
+    fn an_exported_key_for_an_entry_the_file_already_has_is_left_as_it_is() {
+        let scratch = Scratch::new("cli-import-exported-key-kept");
+        scratch.write(
+            ".bravebot/settings.json",
+            r#"{"provider": {"openai": {"env": ["MY_OWN_OPENAI_VARIABLE"]}}}"#,
+        );
+        let found = scratch.found_exporting(&[("OPENAI_API_KEY", "sk-exported")]);
+
+        let (said, offered) = asked_about(&scratch, found, "y\n", &Managed::default(), &|_| None);
+
+        assert!(!offered.asked, "{said}");
+        assert!(said.contains("provider.openai"), "{said}");
+        assert!(written(&scratch).contains("MY_OWN_OPENAI_VARIABLE"));
+        assert!(!written(&scratch).contains(r#""env":["OPENAI_API_KEY"]"#));
+    }
+
+    /// IMPORT-3, IMPORT-4: a key command is offered as an `anthropic` entry naming the variable to
+    /// export, with no question about a key because none is held. The command is named as left and
+    /// never shown, and a word of Claude Code's own is not written as the model.
+    #[test]
+    fn a_claude_code_key_command_is_written_as_an_entry_naming_the_variable() {
+        let scratch = Scratch::new("cli-import-claude-key-command");
+        scratch.write(
+            ".claude/settings.json",
+            r#"{"apiKeyHelper": "echo sk-ant-in-the-command", "model": "sonnet"}"#,
+        );
+
+        let (said, offered) = asked(&scratch, "y\n", &Managed::default());
+
+        assert_eq!(offered.gateways, ["anthropic"]);
+        assert!(
+            said.contains(r#"provider.anthropic, reached at https://api.anthropic.com/v1: {"env":["ANTHROPIC_API_KEY"]}"#),
+            "{said}"
+        );
+        assert!(
+            said.contains("provider.anthropic: its key comes from a command, which is never run: export what it prints as ANTHROPIC_API_KEY"),
+            "{said}"
+        );
+        assert!(
+            said.contains("- model: a word Claude Code turns into a model"),
+            "{said}"
+        );
+        assert!(
+            !said.contains("in plain text"),
+            "a question about a key was asked: {said}"
+        );
+        for command in ["sk-ant-in-the-command", "echo"] {
+            assert!(!said.contains(command), "{command} was drawn: {said}");
+        }
+        let file = written(&scratch);
+        assert!(file.contains(r#""env":["ANTHROPIC_API_KEY"]"#), "{file}");
+        for left in ["apiKey", "sk-ant-in-the-command", "sonnet", r#""model":"#] {
+            assert!(!file.contains(left), "{left} was written: {file}");
+        }
+    }
+
+    /// IMPORT-3: a model Claude Code names the way Anthropic's API does is shown and written beside
+    /// the entry, in the form that names the gateway.
+    #[test]
+    fn a_claude_code_model_for_anthropics_api_is_written_beside_its_entry() {
+        let scratch = Scratch::new("cli-import-claude-anthropic-model");
+        scratch.write(
+            ".claude/settings.json",
+            r#"{"apiKeyHelper": "print-a-key", "model": "claude-sonnet-4-5"}"#,
+        );
+
+        let (said, _) = asked(&scratch, "y\n", &Managed::default());
+
+        assert!(
+            said.contains(r#"model: "anthropic/claude-sonnet-4-5""#),
+            "{said}"
+        );
+        let file = written(&scratch);
+        assert!(
+            file.contains(r#""model":"anthropic/claude-sonnet-4-5""#),
+            "{file}"
+        );
+    }
+
+    /// IMPORT-7: a key command and an exported key both name `provider.anthropic`. Claude Code is
+    /// asked first, and the entry its answer writes is one the environment finds already set, so the
+    /// person is asked once and the file names the variable once. A decline leaves the question to
+    /// the environment.
+    #[test]
+    fn a_key_command_and_an_exported_key_for_anthropic_are_asked_about_once() {
+        let settings = r#"{"apiKeyHelper": "print-a-key"}"#;
+        let exported = [("ANTHROPIC_API_KEY", "sk-ant-exported-nobody-may-see")];
+
+        let scratch = Scratch::new("cli-import-key-command-and-exported-key");
+        scratch.write(".claude/settings.json", settings);
+        let found = scratch.found_exporting(&exported);
+        assert_eq!(found.len(), 2, "{found:?}");
+        let (said, offered) =
+            asked_about(&scratch, found, "y\ny\n", &Managed::default(), &|_| None);
+        assert_eq!(offered.imported, [Source::ClaudeCode], "{said}");
+        assert_eq!(said.matches("Import this from").count(), 1, "{said}");
+        let kept = said.find("Left as they are").expect("the entry was named");
+        assert!(said[kept..].contains("provider.anthropic"), "{said}");
+        assert_eq!(written(&scratch).matches("ANTHROPIC_API_KEY").count(), 1);
+
+        let scratch = Scratch::new("cli-import-key-command-declined-exported-key");
+        scratch.write(".claude/settings.json", settings);
+        let found = scratch.found_exporting(&exported);
+        let (said, offered) =
+            asked_about(&scratch, found, "n\ny\n", &Managed::default(), &|_| None);
+        assert_eq!(offered.imported, [Source::Environment], "{said}");
+        assert_eq!(said.matches("Import this from").count(), 2, "{said}");
+        assert_eq!(written(&scratch).matches("ANTHROPIC_API_KEY").count(), 1);
     }
 
     /// IMPORT-6: a `{file:path}` credential is not followed. The shown line names the path, no
@@ -1905,6 +2151,7 @@ mod tests {
         let every = [
             Source::ClaudeCode,
             Source::Opencode,
+            Source::Environment,
             Source::Ollama,
             Source::LmStudio,
             Source::LlamaServer,
@@ -1918,16 +2165,41 @@ mod tests {
             let line = looked.command().expect("a line");
 
             for source in &every[..count] {
-                assert!(line.contains(source.name()), "{count}: {line}");
+                assert!(line.contains(&named(*source)), "{count}: {line}");
             }
             for source in &every[count..] {
-                assert!(!line.contains(source.name()), "{count}: {line}");
+                assert!(!line.contains(&named(*source)), "{count}: {line}");
             }
             assert!(
                 line.contains("bravebot auth login import"),
                 "{count}: {line}"
             );
         }
+        // The environment is no program: alone it is said as a key exported here, and ahead of a
+        // server its name begins the sentence.
+        let keys = Looked {
+            left: Vec::new(),
+            importable: vec![Source::Environment],
+        };
+        let line = keys.command().expect("a line");
+        assert!(
+            line.starts_with("An API key") && line.contains("bravebot auth login import"),
+            "{line}"
+        );
+        let with_a_server = Looked {
+            left: Vec::new(),
+            importable: vec![Source::Environment, Source::Ollama],
+        };
+        let line = with_a_server.command().expect("a line");
+        assert!(line.starts_with("Your environment and Ollama"), "{line}");
+        // A program that begins the sentence keeps its own spelling: a literal, not `named()`.
+        let programs = Looked {
+            left: Vec::new(),
+            importable: vec![Source::Opencode, Source::Ollama],
+        };
+        let line = programs.command().expect("a line");
+        assert!(line.starts_with("opencode and Ollama"), "{line}");
+
         let running = Looked {
             left: Vec::new(),
             importable: vec![Source::LmStudio],

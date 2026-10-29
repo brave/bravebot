@@ -1,0 +1,128 @@
+/* The playground's own controls. Tokens only, so they sit with the app in light and dark. */
+.pg-panel, .pg-pill {
+  position: fixed;
+  right: var(--leo-spacing-l);
+  bottom: var(--leo-spacing-l);
+  z-index: 60;
+  cursor: default;
+  user-select: none;
+}
+
+.pg-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  min-height: var(--hit);
+  padding: 0 var(--leo-spacing-l);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  color: var(--ink-primary);
+  font: var(--type-meta-strong);
+  box-shadow: var(--shadow-floating);
+}
+
+.pg-panel {
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  max-height: calc(100vh - 2 * var(--leo-spacing-l) - var(--titlebar));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-floating);
+  overflow: hidden;
+}
+
+.pg-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-l) var(--leo-spacing-l) var(--leo-spacing-m);
+  border-bottom: 1px solid var(--border-hairline);
+  font: var(--type-title);
+}
+.pg-sub { grid-column: 1; font: var(--type-meta); color: var(--ink-tertiary); }
+.pg-close {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  display: grid;
+  place-items: center;
+  width: var(--hit);
+  height: var(--hit);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-secondary);
+}
+.pg-close:hover, .pg-item:hover:not(:disabled) { background: var(--surface-hover); }
+
+.pg-body { display: flex; flex-direction: column; gap: var(--leo-spacing-m); padding: var(--leo-spacing-l); overflow-y: auto; }
+.pg-row { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-m); }
+.pg-label { font: var(--type-meta); color: var(--ink-secondary); }
+.pg-chips { display: inline-flex; gap: var(--leo-spacing-s); }
+.pg-chip {
+  min-height: var(--hit);
+  padding: 0 var(--leo-spacing-m);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ink-secondary);
+  font: var(--type-meta);
+  text-transform: capitalize;
+}
+.pg-chip[aria-pressed='true'] { border-color: var(--border-focus); background: var(--surface-selected); color: var(--ink-primary); }
+.pg-hint, .pg-note { margin: 0; font: var(--type-meta); color: var(--ink-tertiary); text-wrap: pretty; }
+.pg-note { color: var(--status-warning); }
+.pg-hint code { font: var(--type-code); }
+
+.pg-running {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-m) var(--leo-spacing-l);
+  border-radius: var(--radius-control);
+  background: var(--status-info-bg);
+  font: var(--type-meta);
+}
+
+.pg-search {
+  min-height: var(--hit);
+  padding: 0 var(--leo-spacing-l);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-field);
+  background: var(--surface-sunken);
+  color: var(--ink-primary);
+  user-select: text;
+}
+
+.pg-group summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--hit);
+  font: var(--type-meta-strong);
+  color: var(--ink-secondary);
+}
+.pg-count { font: var(--type-caption); color: var(--ink-tertiary); font-variant-numeric: tabular-nums; }
+.pg-group ul { margin: 0; padding: 0; list-style: none; }
+
+.pg-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  width: 100%;
+  padding: var(--leo-spacing-m) var(--leo-spacing-m);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  text-align: left;
+}
+.pg-item:disabled { color: var(--ink-disabled); }
+.pg-title { font: var(--type-body); color: inherit; }
+.pg-detail { font: var(--type-caption); color: var(--ink-tertiary); text-wrap: pretty; }
+
+:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; }

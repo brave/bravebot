@@ -47,8 +47,10 @@ ordinary file, read only when something asks for it by name, or when the source 
 **A project's skills are read from three directories, at the project root only.**
 `.agents/skills`, then `.claude/skills`, then `.bravebot/skills`, so a skill in `.bravebot/skills`
 wins a name clash with either of the others. Skills you wrote for another agent work here without
-being copied or symlinked. Your own `~/.claude/skills` and `~/.agents/skills` are not read, because
-`~/.bravebot` is the one user directory tried.
+being copied or symlinked. Your own `~/.claude/skills` and `~/.agents/skills` are read only for a
+directory you name in `sharedSkillDirectories` in `~/.bravebot/settings.json`; a project's settings
+file cannot name one. `~/.bravebot/skills` is read without being named, and a skill in it wins a name
+clash with a skill in a directory you named.
 
 **A directory the session has worked in adds its own.** Once the planner has read a file in
 `packages/api/`, or written one, the `AGENTS.md` in `packages/api/` and in each directory above it
@@ -90,8 +92,9 @@ globs are the ones `list_files` takes: `*`, `**`, `?` and `{a,b}`, with no `[abc
 Only a name the planner typed to a file tool or you typed after `@` counts. A name a listing, a
 search or a command printed does not. Each rule file goes through the trust check and the `deny`
 rules like `AGENTS.md`: a project directory you have not vouched for is reported with a count, and
-no name or text. The session remembers up to 1024 touched files, and `/cd` and a resumed session
-start with none.
+no name or text. The session remembers up to 1024 touched files, and `/cd` starts with none. A
+resumed session has the touched files and the rules it was told of from the session's record, so the
+nested instructions and path-scoped rules an earlier turn loaded are in force from the first turn.
 
 **The project's file is looked for under three names, and the first that exists is the one.** Not all
 three: a repository holding two of them holds one set of instructions under two names, and reading

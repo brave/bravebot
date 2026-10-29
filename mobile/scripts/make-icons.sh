@@ -1,80 +1,88 @@
 #!/bin/bash
-# Remakes both apps' icons from the desktop app's drawing, ui/build/icon.svg.
-# Needs macOS: it renders with AppKit through swiftc, and flattens with sips.
-# Run it from anywhere; it rewrites the icon files under android/ and ios/.
+# Remakes the Android app's icons from the desktop app's drawing, ui/build/icon.svg. The iOS app
+# takes the Icon Composer document instead: make-ios-icon.sh.
+# Needs python3 with Pillow. Run it from anywhere; it rewrites the icon files under android/.
 set -euo pipefail
 
 mobile="$(cd "$(dirname "$0")/.." && pwd)"
 drawing="$mobile/../ui/build/icon.svg"
 res="$mobile/android/app/src/main/res"
-catalog="$mobile/ios/Bravebot/Images.xcassets/AppIcon.appiconset"
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
 
-cat > "$work/render.swift" <<'SWIFT'
-import AppKit
-let args = CommandLine.arguments
-guard args.count == 4, let image = NSImage(contentsOfFile: args[1]) else { print("cannot load \(CommandLine.arguments)"); exit(1) }
-let size = Int(args[3])!
-guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8, samplesPerPixel: 4,
-                                 hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { exit(2) }
-rep.size = NSSize(width: size, height: size)
-NSGraphicsContext.saveGraphicsState()
-NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-NSColor.clear.set()
-NSRect(x: 0, y: 0, width: size, height: size).fill(using: .copy)
-image.draw(in: NSRect(x: 0, y: 0, width: size, height: size), from: .zero, operation: .sourceOver, fraction: 1)
-NSGraphicsContext.restoreGraphicsState()
-try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: args[2]))
-SWIFT
-swiftc -O "$work/render.swift" -o "$work/render"
-
-# The drawing is a rounded tile with a margin, as a macOS icon is. Each platform wants it cut differently.
-python3 - "$drawing" "$work" <<'PY'
+python3 - "$drawing" "$res" <<'PY'
+import re
 import sys
+from pathlib import Path
 
-source = open(sys.argv[1], encoding="utf-8").read()
-out = sys.argv[2]
-margin = 'viewBox="0 0 1024 1024"'
-tile_rect = '<rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)"/>'
-clip_rect = '<rect x="100" y="100" width="824" height="824" rx="185"/>'
-for needed in (margin, tile_rect, clip_rect):
-    assert source.count(needed) == 1, f"the drawing no longer contains {needed}"
-tile_only = source.replace(margin, 'viewBox="100 100 824 824"')
+from PIL import Image, ImageChops, ImageColor, ImageDraw
+
+source, res = sys.argv[1], Path(sys.argv[2])
+
+# The drawing is 8 by 9 squares of 64 units, one colour each. The grid keeps those colours, and
+# every size is drawn with a whole number of pixels per square, so no edge is blurred.
+squares = re.findall(r'd="M(\d+) (\d+)H(\d+)V\d+H\d+V\d+Z" fill="([^"]+)"', open(source, encoding="utf-8").read())
+assert len(squares) == 63, f"the drawing no longer has the 63 squares this script reads, it has {len(squares)}"
+grid = Image.new("RGBA", (8, 9))
+for _, top, left, fill in squares:
+    grid.putpixel(((int(left) - 32) // 64, int(top) // 64), ImageColor.getrgb(fill))
+# The eyes are the four squares in the sixth row that are white or near black.
+EYES = [(x, 6) for x in range(8) if grid.getpixel((x, 6))[:3] in ((255, 255, 255), (29, 31, 39))]
+assert len(EYES) == 4, f"expected four eye squares, found {EYES}"
+WHITES = [e for e in EYES if grid.getpixel(e)[:3] == (255, 255, 255)]
 
 
-def write(name, text):
-    open(f"{out}/{name}.svg", "w", encoding="utf-8").write(text)
+def mascot(cell, silhouette=False):
+    art = grid.resize((8 * cell, 9 * cell), Image.NEAREST)
+    if silhouette:
+        # One colour for the system to tint, with the white squares of the eyes cut out.
+        solid = Image.new("RGBA", art.size, (0, 0, 0, 255))
+        solid.putalpha(art.getchannel("A"))
+        art = solid
+        hole = Image.new("RGBA", (cell, cell), (0, 0, 0, 0))
+        for x, y in WHITES:
+            art.paste(hole, (x * cell, y * cell))
+    return art
 
 
-# Android before 8: the rounded tile, margin cut off.
-write("rounded", tile_only)
-# Android before 8, round: a circle instead of the rounded tile.
-write("round", tile_only.replace(tile_rect, '<circle cx="512" cy="512" r="412" fill="url(#tile)"/>')
-      .replace(clip_rect, '<circle cx="512" cy="512" r="412"/>'))
-# iOS applies its own mask, so it wants the square with no rounded corners.
-square = tile_only.replace(" rx=\"185\"", "")
-write("square", square)
-# Android 8 and later: the system draws the mask. The visible part is the middle 72 of 108, so the
-# square sits at two thirds of the canvas, over a background of the tile's own gradient.
-scale = 72 / 108 * 1024 / 824
-offset = (1024 - 824 * scale) / 2
-inner = square.split("</defs>", 1)[1].rsplit("</svg>", 1)[0]
-head = square.split("</defs>", 1)[0] + "</defs>"
-head = head.replace('viewBox="100 100 824 824"', 'viewBox="0 0 1024 1024"')
-write("foreground", f'{head}<g transform="translate({offset:.3f} {offset:.3f}) scale({scale:.5f}) translate(-100 -100)">{inner}</g></svg>')
+def centred(size, art):
+    canvas = Image.new("RGBA", (size, size))
+    canvas.paste(art, ((size - art.width) // 2, (size - art.height) // 2))
+    return canvas
+
+
+def tile(size, round_):
+    # White, cut to the shape, drawn at four times the size and reduced so the corners are
+    # smooth. The squares are pasted afterwards and stay sharp.
+    big = size * 4
+    fill = Image.new("RGBA", (big, big), (255, 255, 255, 255))
+    mask = Image.new("L", (big, big), 0)
+    draw = ImageDraw.Draw(mask)
+    if round_:
+        draw.ellipse((0, 0, big - 1, big - 1), fill=255)
+    else:
+        draw.rounded_rectangle((0, 0, big - 1, big - 1), radius=round(big * 0.22), fill=255)
+    fill.putalpha(ImageChops.multiply(fill.getchannel("A"), mask))
+    return fill.resize((size, size), Image.LANCZOS)
+
+
+# Android 8 and later. The system draws the mask over a 108 dp canvas, and only the middle 66 dp
+# circle is always visible. The figure's diagonal is 12.04 squares, so a square is the largest
+# whole number of pixels for which that diagonal fits in 66 dp at the density.
+for name, scale in (("mdpi", 1), ("hdpi", 1.5), ("xhdpi", 2), ("xxhdpi", 3), ("xxxhdpi", 4)):
+    folder = res / f"mipmap-{name}"
+    folder.mkdir(parents=True, exist_ok=True)
+    layer = round(108 * scale)
+    cell = int(66 * scale / (8 ** 2 + 9 ** 2) ** 0.5)
+    centred(layer, mascot(cell)).save(folder / "ic_launcher_foreground.png")
+    centred(layer, mascot(cell, silhouette=True)).save(folder / "ic_launcher_monochrome.png")
+    # Android before 8 (this app supports 7, API 24): the tile itself at 48 dp, and a round one.
+    icon = round(48 * scale)
+    legacy_cell = int(icon * 0.72 / 9)
+    for file, round_ in (("ic_launcher.png", False), ("ic_launcher_round.png", True)):
+        image = tile(icon, round_)
+        art = mascot(legacy_cell)
+        image.alpha_composite(art, ((icon - art.width) // 2, (icon - art.height) // 2))
+        image.save(folder / file)
 PY
-
-render() { "$work/render" "$work/$1.svg" "$2" "$3"; }
-
-for density in mdpi:48:108 hdpi:72:162 xhdpi:96:216 xxhdpi:144:324 xxxhdpi:192:432; do
-  IFS=: read -r name legacy adaptive <<< "$density"
-  folder="$res/mipmap-$name"
-  mkdir -p "$folder"
-  render rounded "$folder/ic_launcher.png" "$legacy"
-  render round "$folder/ic_launcher_round.png" "$legacy"
-  render foreground "$folder/ic_launcher_foreground.png" "$adaptive"
-done
 
 mkdir -p "$res/mipmap-anydpi-v26" "$res/drawable"
 for name in ic_launcher ic_launcher_round; do
@@ -83,35 +91,14 @@ for name in ic_launcher ic_launcher_round; do
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@drawable/ic_launcher_background" />
     <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
 </adaptive-icon>
 XML
 done
 cat > "$res/drawable/ic_launcher_background.xml" <<'XML'
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <gradient android:type="linear" android:angle="270" android:startColor="#FBFAF5" android:endColor="#E4E1D3" />
+    <solid android:color="#FFFFFF" />
 </shape>
 XML
-
-# The App Store refuses an icon with an alpha channel, and a round trip through JPEG drops it.
-render square "$work/icon-1024.png" 1024
-sips -s format jpeg "$work/icon-1024.png" --out "$work/icon-1024.jpg" > /dev/null
-mkdir -p "$catalog"
-sips -s format png "$work/icon-1024.jpg" --out "$catalog/icon-1024.png" > /dev/null
-cat > "$catalog/Contents.json" <<'JSON'
-{
-  "images" : [
-    {
-      "filename" : "icon-1024.png",
-      "idiom" : "universal",
-      "platform" : "ios",
-      "size" : "1024x1024"
-    }
-  ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
-  }
-}
-JSON
-echo "icons written under $res and $catalog"
+echo "icons written under $res"

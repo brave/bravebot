@@ -35,8 +35,8 @@ Write JSON to `{results_file}` and nothing else. Do not edit any file in the tre
 Do not say in any field that another site, platform, program or defect may have the same weakness,
 is not covered or is left for later. A site you found is covered by this candidate, in `place` and
 `evidence`, or is a candidate of its own. The issue is filed from these fields, and an issue that
-says a case is left undone has to cite the issue that tracks it, which does not exist for a case no
-candidate describes.
+says a defect is left unfixed has to cite the issue that tracks it, which does not exist for a defect
+no candidate describes.
 
 `impact` is what the defect costs if nobody fixes it, and it is about reach rather than about how
 interesting the bug is:

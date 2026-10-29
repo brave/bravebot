@@ -2322,6 +2322,57 @@ def test_key_steps_join_no_names():
     )
 
 
+OWNED_TREE = {
+    ".github/workflows/ci.yml": "jobs:\n  c:\n    steps:\n      - run: python3 contrib/affected-checks.py --github-output\n      - run: make check-spec\n",
+    "contrib/affected-checks.py": "",
+    "Makefile": "",
+}
+
+
+def owned(codeowners, files=None):
+    tree = dict(files or OWNED_TREE)
+    if codeowners is not None:
+        tree[".github/CODEOWNERS"] = codeowners
+    return with_cwd(in_tree(tree), lambda: list(audit.check_run_files_have_owners()))
+
+
+def test_run_files_have_owners():
+    found = owned("/.github/workflows/ @a\n/contrib/required-checks.txt @a\n")
+    check(
+        "a script and the Makefile a workflow runs with no owner entry are errors",
+        kinds(found) == ["unowned-workflow-file"] * 2
+        and {one["evidence"][0] for one in found}
+        == {
+            ".github/workflows/ci.yml:5 runs Makefile",
+            ".github/workflows/ci.yml:4 runs contrib/affected-checks.py",
+        },
+        str([one["evidence"] for one in found]),
+    )
+    # A directory entry owns what is under it, and the last matching rule wins: a later rule that
+    # names no owner takes the file back.
+    check(
+        "a file under an owned directory is owned",
+        owned("/contrib/ @a\n/Makefile @a\n") == [],
+    )
+    check(
+        "a later rule with no owner un-owns a file",
+        kinds(owned("/contrib/ @a\n/Makefile @a\n/contrib/affected-checks.py\n"))
+        == ["unowned-workflow-file"],
+    )
+    check(
+        "a file named exactly is owned",
+        owned("/contrib/affected-checks.py @a\n/Makefile @a\n") == [],
+    )
+    check(
+        "a missing CODEOWNERS is an error",
+        kinds(owned(None)) == ["unrecorded-code-owners"],
+    )
+    check(
+        "the tree's own workflows run only files with an owner",
+        with_cwd(ROOT, lambda: list(audit.check_run_files_have_owners())) == [],
+    )
+
+
 # One job, named the way a check run is named, running a target the documentation makes a promise
 # about. The promise is prose, so the fixture is prose: a rewording that stops matching is the thing
 # being caught, the same as the exception counts above.
@@ -3157,6 +3208,87 @@ def test_the_stop_hook():
         commands == ['python3 "$CLAUDE_PROJECT_DIR/agents/skills/security-audit/security-audit.py" --stop-hook']
         and (ROOT / "agents/skills/security-audit/security-audit.py").is_file(),
         str(commands),
+    )
+
+
+def run_stop_hook(payload, touched, findings):
+    """Run `stop_hook` the way Claude Code does, with the event on standard input.
+
+    The branch's changed files and the mechanical pass are replaced for the call, so the hook's own
+    decisions are what is measured: whether it checks at all, and what it writes. Returns the exit
+    status, what it wrote to standard output, and how many times the pass was run.
+    """
+    runs = []
+
+    def pass_over(specs, sources):
+        runs.append(1)
+        return findings
+
+    kept = (audit.branch_files, audit.mechanical_findings, sys.stdin)
+    audit.branch_files = lambda: set(touched)
+    audit.mechanical_findings = pass_over
+    sys.stdin = io.StringIO(json.dumps(payload))
+    written = io.StringIO()
+    try:
+        with redirect_stdout(written):
+            status = with_cwd(ROOT, audit.stop_hook)
+    finally:
+        audit.branch_files, audit.mechanical_findings, sys.stdin = kept
+    return status, written.getvalue(), len(runs)
+
+
+def test_the_stop_hook_answers_on_standard_output():
+    """The hook blocks the first stop of a failing branch, lets the next through, and ignores the rest.
+
+    `stop_response` is tested on its own above. This runs the whole hook as a session runs it. The
+    inputs are chosen so that a hook that never writes a decision, a hook that blocks every stop and
+    a hook that checks a branch which never touched the paths each give a different result.
+    """
+    broken = audit.finding(audit.ERROR, "answer-unregistered", "t", "a set nobody listed", "trust", "low")
+    lane_paths = [
+        "crates/agent/src/answers.rs",
+        "crates/agent/src/kept_answers.rs",
+        "docs/specs/prompting.md",
+    ]
+
+    for path in lane_paths:
+        status, out, runs = run_stop_hook({}, [path, "README.md"], [broken])
+        answer = json.loads(out) if out.strip() else {}
+        check(
+            f"the first stop of a failing branch that touched {path} is blocked with the finding",
+            status == 0
+            and runs == 1
+            and answer.get("decision") == "block"
+            and "a set nobody listed" in answer.get("reason", ""),
+            out,
+        )
+
+    status, out, runs = run_stop_hook({"stop_hook_active": True}, ["crates/agent/src/answers.rs"], [broken])
+    answer = json.loads(out) if out.strip() else {}
+    check(
+        "the stop after a block is let through, with the finding shown and no decision",
+        status == 0
+        and runs == 1
+        and "decision" not in answer
+        and "a set nobody listed" in answer.get("systemMessage", ""),
+        out,
+    )
+
+    for touched in (["README.md"], ["crates/core/src/label.rs", "docs/specs/labels.md"], []):
+        for payload in ({}, {"stop_hook_active": True}):
+            status, out, runs = run_stop_hook(payload, touched, [broken])
+            check(
+                f"a branch that touched {touched or 'nothing'} is not checked and writes no decision "
+                f"({'after a block' if payload else 'first stop'})",
+                status == 0 and runs == 0 and out == "",
+                out,
+            )
+
+    status, out, runs = run_stop_hook({}, ["crates/agent/src/answers.rs"], [])
+    check(
+        "a branch on the lane's paths with nothing failing is checked and let stop without a word",
+        status == 0 and runs == 1 and out == "",
+        out,
     )
 
 
@@ -5212,6 +5344,7 @@ TESTS = (
     test_checkout_ref_is_qualified,
     test_grant_is_behind_an_environment,
     test_required_checks_are_the_gates,
+    test_run_files_have_owners,
     test_construction_pinned,
     test_gates_pinned,
     test_key_sites_exhaustive,
@@ -5224,6 +5357,7 @@ TESTS = (
     test_answers_registered,
     test_changes_under_a_yes,
     test_the_stop_hook,
+    test_the_stop_hook_answers_on_standard_output,
     test_verifier_prompt_composes,
     test_impact_sets_severity,
     test_labels,

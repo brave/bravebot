@@ -14,9 +14,104 @@
 
 use bravebot_agent::RunDecision;
 
+#[allow(
+    dead_code,
+    reason = "repository.rs is shared by several test binaries, and this one uses only commit_files"
+)]
+mod repository;
+
 #[path = "../test-support/mock_model.rs"]
 mod mock_model;
-use mock_model::{Scratch, a_turn_asking_for, trust_of};
+use mock_model::{
+    Scratch, a_turn_asking_for, config_for, reply_with, serve_by_marker, tool_request, trust_of,
+};
+
+/// RUN-5, RUN-8 and CHECKOUT-10 through a turn: the yes that let a held line run unasked in the
+/// working directory does not cover a delegate's checkout, which is another tree.
+///
+/// The control is the same line in the working directory under the same yes, which runs unasked
+/// where the platform holds `.git` back (macOS). In the checkout the person is asked once, about a
+/// directory under the state directory's `checkouts`, and the refused line leaves no file.
+#[test]
+fn trust_of_the_directory_does_not_answer_a_held_line_in_a_checkout() {
+    bravebot_config::settle_run_network(Some(bravebot_sandbox::network::Network::Closed));
+    if !bravebot_sandbox::confinement_works_here() {
+        return;
+    }
+    let held_here = cfg!(target_os = "macos");
+    let scratch = Scratch::new("agent-confined-lines-checkout");
+    let work = scratch.path.join("work");
+    std::fs::create_dir_all(&work).expect("work");
+    repository::commit_files(&work, &[("README", "committed\n")], "first");
+    let home = Scratch::new("agent-confined-lines-checkout-home");
+    let workspace = bravebot_agent::Workspace::new(&work).expect("workspace");
+
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "RUN-HERE-THEN-APART",
+            vec![
+                tool_request("run", r#"{"command":"touch here"}"#),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"TOUCH-APART","isolation":"checkout"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "TOUCH-APART",
+            vec![
+                tool_request("run", r#"{"command":"touch plain"}"#),
+                reply_with("ran it"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut asked = mock_model::answers::Answers::new(RunDecision::reject());
+    let trust = trust_of(&workspace, true);
+    bravebot_agent::turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &bravebot_agent::turn::Task::new("RUN-HERE-THEN-APART")
+            .with_home(Some(home.path.clone()))
+            .with_profile(Some(home.path.join("profile")))
+            .with_confined_runs(true)
+            .with_sandbox_mode(bravebot_sandbox::SandboxMode::WorkspaceWrite),
+        &mut bravebot_agent::Conversation::new(),
+        &mut asked,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut bravebot_core::event::RecordingSink::new(),
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let directories: Vec<std::path::PathBuf> = asked
+        .runs
+        .iter()
+        .map(|request| request.plan.directory.clone())
+        .collect();
+    assert_eq!(
+        directories.len(),
+        1 + usize::from(!held_here),
+        "the line in the working directory was asked about, or the line in the checkout was not: \
+         {directories:#?}"
+    );
+    let in_the_checkout = directories.last().expect("a question");
+    assert!(
+        in_the_checkout
+            .components()
+            .any(|part| part.as_os_str() == "checkouts"),
+        "the question was not about the checkout: {directories:#?}"
+    );
+    assert_eq!(work.join("here").exists(), held_here);
+}
 
 /// RUN-5 through a turn, with the network closed for the process.
 ///

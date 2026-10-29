@@ -4,6 +4,7 @@ title: Pasting
 status: normative
 governs:
   - crates/tui/src/clipboard.rs
+  - crates/agent/src/picture.rs
   - crates/tui/src/state.rs
   - crates/tui/src/state/attachments.rs
   - crates/tui/src/state/queue.rs
@@ -169,7 +170,14 @@ travel in, so a marker in one is put back to words, whether the command is dispa
 queue reaches it when the turn ends. Those words say a picture was pasted and cannot be shown, which
 is what a picture on a line queued mid-turn becomes ([dropping.md](dropping.md#DROP-8)), and the
 person is told it did not go. A picture over 10 MB is decoded, scaled so its longest side is at most
-2048 pixels, re-encoded as PNG and sent in that form when the result is under 10 MB. Only when it will
+2048 pixels, re-encoded as PNG and sent in that form when the result is under 10 MB. A dropped
+picture is scaled by the same function, `bravebot_agent::picture::downscaled`
+([DROP-4](dropping.md#DROP-4)). The two limits are separate constants and are not the same number:
+a paste is held to `MAX_PASTED_IMAGE_BYTES`, 10 MB, both as it arrives and once scaled, and a drop
+to `MAX_ATTACHMENT_BYTES`, 8 MiB, for the scaled result, with a PNG or JPEG read for scaling only up
+to 64 MiB. Nothing in the code or the specs gives a reason for the difference. Each constant states
+only what it bounds: the paste limit what one request costs to encode, and the attachment limit the
+cost of a picture that every later round re-sends. Only when it will
 not decode, or is still over, is it refused rather than sent, and it says so with the size it was
 pasted at.
 

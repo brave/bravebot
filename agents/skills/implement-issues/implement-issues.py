@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Open the implement-issues skill in the terminal client, after the steps that need no model.
 
-    python3 agents/skills/implement-issues/implement-issues.py [--bravebot PATH] -- <argument>
+    python3 agents/skills/implement-issues/implement-issues.py [--bravebot PATH] [--notes TEXT] -- <argument>
 
-`make implement-issues ISSUES=<argument>` runs it. <argument> is what the skill takes: issue numbers,
-links and search queries separated by commas. The skill receives it unchanged, since the session is
-`bravebot -i "/implement-issues <argument>"` and opens on that line as its first turn.
+`make implement-issues ISSUES=<argument> [NOTES=<notes>]` runs it. <argument> is what the skill takes:
+issue numbers, links and search queries separated by commas. The skill receives it unchanged, since the
+session is `bravebot -i "/implement-issues <argument>"` and opens on that line as its first turn.
+
+The notes are the person's instructions for the run, such as how to group the issues. They begin at a
+line of <argument> that starts with `Notes:`, and `--notes` adds such a line after <argument>. The skill
+reads them (step 1). This script takes no issue, link or query from them, and they do not change which
+issues it claims.
 
 Before the session opens, from the same reading of <argument> as step 1 of the skill, and with no
 model:
@@ -46,6 +51,8 @@ STATE = re.compile(r"\b(?:is|state):(?:open|closed)\b", re.IGNORECASE)
 READ = "{state: .state, pull: (.pull_request != null), assignees: [.assignees[].login], labels: [.labels[].name]}"
 SEARCH = ".items[] | select(.pull_request == null) | .number"
 READ_JOBS = 8
+# The notes of an argument begin at a line that starts with this and run to the end of the argument.
+NOTES = re.compile(r"^Notes:", re.MULTILINE)
 # Statuses after which the skill does nothing more with an item (SKILL.md, step 0), so it needs no claim.
 FINISHED = {"done", "skipped", "blocked"}
 
@@ -83,6 +90,12 @@ def current_user():
     if done.returncode or not NAME.fullmatch(login):
         die(f"could not read the login gh writes as: {pr_worktree.printed(done) or 'no login returned'}")
     return login
+
+
+def split_notes(argument):
+    """The part of the argument that names the issues, and the notes that follow it, or an empty string."""
+    found = NOTES.search(argument)
+    return (argument[: found.start()], argument[found.start():]) if found else (argument, "")
 
 
 def pieces(argument):
@@ -299,9 +312,11 @@ def session(command):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bravebot", default="bravebot", help="the terminal client to open, by name or path")
+    parser.add_argument("--notes", default="", help="notes for the skill, which reads them; no issue is taken from them")
     parser.add_argument("argument", help="what the skill takes, which it receives unchanged")
     args = parser.parse_args(argv)
-    if not args.argument.strip():
+    named_in, _ = split_notes(args.argument)
+    if not named_in.strip():
         die("name the issues to implement, or a search for them. Nothing was changed.")
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         die("the session needs a terminal on stdin and stdout. Nothing was changed.")
@@ -309,8 +324,11 @@ def main(argv=None):
     if client is None:
         die(f"{args.bravebot} is not on PATH. Nothing was changed.")
     me = current_user()
+    prompt = f"/{SKILL} {args.argument}"
+    if args.notes.strip():
+        prompt += f"\nNotes: {args.notes.strip()}"
 
-    numbers, notes = resolve(args.argument)
+    numbers, notes = resolve(named_in)
     issues, more = open_issues(numbers)
     if notes or more:
         print(f"left alone: {'; '.join(notes + more)}", flush=True)
@@ -331,7 +349,7 @@ def main(argv=None):
 
     status = 1
     try:
-        status = session([client, "-i", f"/{SKILL} {args.argument}"])
+        status = session([client, "-i", prompt])
     finally:
         stuck = release(labelled)
         if labelled and not stuck:

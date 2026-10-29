@@ -2,6 +2,7 @@
 //! alone (INSTR-14, INSTR-16). No file is opened and nothing a file holds is consulted.
 
 use super::{Workspace, locked};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// The most directories [`Workspace::record_touch`] keeps, so a planner reading through a large
@@ -32,7 +33,62 @@ pub(super) struct Touched {
     loaded: Vec<String>,
 }
 
+/// What a session's touched names amount to as they are written into its record, so a session
+/// that is resumed keeps the nested instructions and the path-scoped rules they loaded in force
+/// (INSTR-14, INSTR-16).
+///
+/// Names the driver recorded from what the planner and the person typed, and nothing a file holds.
+/// A resume reads them as claims: [`Workspace::restore_touched`] places each by its spelling under
+/// the root and keeps the limits, and the text of any instructions file or rule still comes from
+/// the read every turn makes, under the trust map and the `deny` rules.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TouchedRecord {
+    /// The directories below the root a file tool read from or wrote to.
+    #[serde(default)]
+    pub directories: Vec<String>,
+    /// The files read, written or named with `@`, in the order they were first reached.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// The origins of the rule files added to a prompt, in the order they were added.
+    #[serde(default)]
+    pub rules: Vec<String>,
+    /// The origins of the rule files the person has been told were added.
+    #[serde(default)]
+    pub told: Vec<String>,
+}
+
+impl TouchedRecord {
+    /// Whether nothing was touched, which is what a record written before this was kept reads as.
+    pub fn is_empty(&self) -> bool {
+        self.directories.is_empty()
+            && self.files.is_empty()
+            && self.rules.is_empty()
+            && self.told.is_empty()
+    }
+}
+
 impl Touched {
+    /// What is kept, as it is written into a session's record.
+    pub(super) fn record(&self) -> TouchedRecord {
+        TouchedRecord {
+            directories: self.directories.iter().cloned().collect(),
+            files: self.files.clone(),
+            rules: self.loaded.clone(),
+            told: self.told.iter().cloned().collect(),
+        }
+    }
+
+    /// Keep the directories in `parts`, a path split at its separators, and every one above each,
+    /// until the record is full.
+    fn insert_directories(&mut self, parts: &[&str]) {
+        for end in 1..=parts.len() {
+            if self.directories.len() >= TOUCHED_LIMIT {
+                break;
+            }
+            self.directories.insert(parts[..end].join("/"));
+        }
+    }
+
     /// Keep `relative` as a file, unless the record is full or has it. A full record drops the new
     /// name and keeps the old ones: a caller that has compared the first `n` files asks for those
     /// from the `n`th on ([`Workspace::touched_files_from`]), and removing one would shift them.
@@ -86,13 +142,7 @@ impl Workspace {
         };
         let mut parts: Vec<&str> = relative.split('/').collect();
         parts.pop();
-        let mut touched = locked(&self.kept.touched);
-        for end in 1..=parts.len() {
-            if touched.directories.len() >= TOUCHED_LIMIT {
-                break;
-            }
-            touched.directories.insert(parts[..end].join("/"));
-        }
+        locked(&self.kept.touched).insert_directories(&parts);
     }
 
     /// Record the file `typed`, a name the planner gave a file tool that read or wrote it
@@ -151,6 +201,45 @@ impl Workspace {
             .get(from..)
             .unwrap_or_default()
             .to_vec()
+    }
+
+    /// What the session has touched, for its record to carry (INSTR-14, INSTR-16).
+    pub fn touched_record(&self) -> TouchedRecord {
+        locked(&self.kept.touched).record()
+    }
+
+    /// Take back the names a session's record holds, for the workspace of the session resuming it
+    /// (INSTR-14, INSTR-16).
+    ///
+    /// The record is a claim. Each directory and file is placed under the root by its spelling, as
+    /// a name the planner typed is, so one that lands outside it adds nothing, and the limits that
+    /// bound a live session bound this. Nothing is opened: whether a nested instructions file or a
+    /// rule is read, and whether its text reaches the prompt, is decided on the first turn by the
+    /// same read every turn makes. The rule origins are only compared with the origins of the rule
+    /// files found, and the files are compared with their globs by name.
+    pub fn restore_touched(&self, record: &TouchedRecord) {
+        let mut touched = locked(&self.kept.touched);
+        for directory in &record.directories {
+            if let Some(relative) = place_by_spelling(&self.root, directory) {
+                let parts: Vec<&str> = relative.split('/').collect();
+                touched.insert_directories(&parts);
+            }
+        }
+        for file in &record.files {
+            if let Some(relative) = place_by_spelling(&self.root, file) {
+                touched.insert_file(relative);
+            }
+        }
+        for origin in &record.rules {
+            if touched.loaded.len() < TOUCHED_FILES_LIMIT && !touched.loaded.contains(origin) {
+                touched.loaded.push(origin.clone());
+            }
+        }
+        for origin in &record.told {
+            if touched.told.len() < TOUCHED_FILES_LIMIT {
+                touched.told.insert(origin.clone());
+            }
+        }
     }
 
     /// The rule files added to a prompt, in the order they were (INSTR-16).

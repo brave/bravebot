@@ -10,7 +10,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -41,7 +40,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/generate.rs");
     println!("cargo:rerun-if-changed=locales");
 
-    let locales = load();
+    let locales = load(Path::new("locales"), REFERENCE);
     let reference = locales
         .iter()
         .find(|l| l.tag == REFERENCE)
@@ -58,60 +57,6 @@ fn main() {
 
     let path = Path::new(&env::var("OUT_DIR").expect("cargo sets OUT_DIR")).join("messages.rs");
     fs::write(&path, out).expect("write the generated catalog");
-}
-
-/// Every catalog in `locales/`, reference first so generated indices are stable.
-fn load() -> Vec<Catalog> {
-    let dir = Path::new("locales");
-    let mut found: Vec<Catalog> = Vec::new();
-
-    let entries = fs::read_dir(dir).expect("locales/ exists");
-    let mut paths: Vec<_> = entries
-        .map(|e| e.expect("read locales/").path())
-        .filter(|p| p.extension().is_some_and(|e| e == "ftl"))
-        .collect();
-    paths.sort();
-
-    for path in paths {
-        let tag = path
-            .file_stem()
-            .expect("a .ftl file has a stem")
-            .to_str()
-            .expect("locale filenames are ASCII")
-            .to_string();
-        let (language, region) = match tag.split_once('-') {
-            Some((language, region)) => (language, Some(region)),
-            None => (tag.as_str(), None),
-        };
-        let well_formed = language.len() >= 2
-            && language.len() <= 3
-            && language.chars().all(|c| c.is_ascii_lowercase())
-            && region.is_none_or(|r| r.len() == 2 && r.chars().all(|c| c.is_ascii_uppercase()));
-        assert!(
-            well_formed,
-            "locales/{tag}.ftl is not named for a locale: use `fr.ftl` or `fr-CA.ftl`"
-        );
-
-        let source = fs::read_to_string(&path).expect("read a catalog");
-        let parsed = parse(&source).unwrap_or_else(|e| panic!("locales/{tag}.ftl: {e}"));
-
-        let mut messages = BTreeMap::new();
-        for message in parsed {
-            messages.insert(message.id.clone(), message);
-        }
-
-        found.push(Catalog {
-            tag: tag.clone(),
-            language: language.to_string(),
-            variant: camel_case(&tag.to_lowercase()),
-            messages,
-        });
-    }
-
-    // The reference leads so `Locale as usize` indexes the per-message tables with the fallback
-    // at a known position.
-    found.sort_by_key(|l| (l.tag != REFERENCE, l.tag.clone()));
-    found
 }
 
 /// Everything a translation is not allowed to do, checked before a line is generated.
@@ -204,6 +149,19 @@ fn locale_enum(locales: &[Catalog]) -> String {
             locale.variant, locale.language
         ));
     }
+    out.push_str("        }\n    }\n\n");
+
+    out.push_str(
+        "    /// What the catalog calls itself, in its own words, for a list to choose it from.\n",
+    );
+    out.push_str("    pub fn name(self) -> &'static str {\n        match self {\n");
+    for locale in locales {
+        out.push_str(&format!(
+            "            Locale::{} => {:?},\n",
+            locale.variant,
+            name_or_fail(locale)
+        ));
+    }
     out.push_str("        }\n    }\n}\n\n");
 
     out.push_str("/// Every catalog, reference first.\npub const LOCALES: &[Locale] = &[\n");
@@ -218,6 +176,15 @@ fn locale_enum(locales: &[Catalog]) -> String {
         locales[0].variant
     ));
     out
+}
+
+/// [`own_name`], refusing a malformed `locale-name` by failing the build.
+#[expect(
+    clippy::panic,
+    reason = "a build script refuses a malformed catalog by failing the build"
+)]
+fn name_or_fail(locale: &Catalog) -> String {
+    own_name(locale).unwrap_or_else(|refused| panic!("{refused}"))
 }
 
 /// One `t!` arm per message, which is what makes an unknown key fail to compile.

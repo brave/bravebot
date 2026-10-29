@@ -2119,6 +2119,9 @@ pub(super) fn draw_transcript(frame: &mut Frame, area: Rect, session: &Session) 
 /// Refusals are coloured differently from passes: a blocked gate is the most important
 /// thing on the screen when it happens. The wording is settled in [`bravebot_session::audit`], so a line
 /// that happened in this session and one read back off disk are drawn the same way.
+///
+/// The text holds paths and listing entry names a checkout chose, so it goes through [`printable`]
+/// (LAYER-3): a control character is drawn as its picture instead of being dropped by the buffer.
 fn trail_line(recorded: &TrailLine) -> Line<'static> {
     let style = if recorded.blocked {
         Style::default()
@@ -2128,7 +2131,7 @@ fn trail_line(recorded: &TrailLine) -> Line<'static> {
         dim()
     };
     Line::from(Span::styled(
-        format!("  {DETAIL_MARKER} {}", recorded.text),
+        format!("  {DETAIL_MARKER} {}", printable(&recorded.text)),
         style,
     ))
 }
@@ -2459,6 +2462,23 @@ mod tests {
                 (write, position(&lines, "… 5 more lines") + 1, 2)
             ]
         );
+    }
+
+    /// A path or a listing entry's name in the trail is text a checkout chose. The buffer drops a
+    /// control character without a trace, so it is drawn as its picture first (LAYER-3).
+    #[test]
+    fn the_trail_a_person_opens_draws_a_checkouts_names_as_pictures() {
+        let drawn = trail_line(&TrailLine {
+            text: "slot ref:1 holds x\u{1b}]0;T\u{7}\u{1b}[31mred.txt, unread, at (U,priv)"
+                .to_string(),
+            blocked: false,
+        });
+        let text: String = drawn.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("holds x\u{241b}]0;T\u{2407}\u{241b}[31mred.txt, unread"),
+            "the name is not drawn as pictures: {text:?}"
+        );
+        assert!(!text.chars().any(char::is_control), "{text:?}");
     }
 
     /// The rows of a reply as text, each with the ink of its first span after the lead.

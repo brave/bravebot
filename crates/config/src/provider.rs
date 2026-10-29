@@ -31,6 +31,54 @@ pub fn without_userinfo(url: &str) -> String {
     format!("{scheme}://{host}{tail}")
 }
 
+/// The host of an authority and the port written after it, or the text that cannot be read as a
+/// port.
+///
+/// A port is ASCII digits that fit a `u16`, which is what the transport reads. A `:` followed by
+/// nothing, or by anything else, makes the client connect to the scheme's default port, which is
+/// not the socket the url spells. The authority carries no userinfo. The one reading of a port
+/// for an MCP declaration ([SERVERS-11](../../../docs/specs/mcp-servers.md#SERVERS-11)), a
+/// provider `baseURL` and the endpoint variable
+/// ([BACKEND-62](../../../docs/specs/backends.md#BACKEND-62)).
+pub(crate) fn host_and_port(authority: &str) -> Result<(&str, Option<u16>), &str> {
+    let (host, after) = match authority.strip_prefix('[') {
+        // A bracketed IPv6 literal, whose colons are part of the address.
+        Some(bracketed) => bracketed.split_once(']').ok_or(authority)?,
+        None => authority.split_at(authority.find(':').unwrap_or(authority.len())),
+    };
+    match after.strip_prefix(':') {
+        Some(digits) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => digits
+            .parse::<u16>()
+            .map(|port| (host, Some(port)))
+            .map_err(|_| digits),
+        Some(digits) => Err(digits),
+        None if after.is_empty() => Ok((host, None)),
+        None => Err(after),
+    }
+}
+
+/// An endpoint whose authority writes a port that cannot be read.
+///
+/// What a report names, so the person can find the line: the text after the `:`, empty where
+/// nothing follows it. Never the rest of the url, which may state credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortFault {
+    /// The text written where the port belongs.
+    pub port: String,
+}
+
+/// The fault in the port `url` writes, or `None` where it writes a readable one or none.
+pub(crate) fn unreadable_port(url: &str) -> Option<PortFault> {
+    let (_, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    host_and_port(authority).err().map(|port| PortFault {
+        port: port.to_string(),
+    })
+}
+
 /// The endpoints known by the name a provider block gives them.
 ///
 /// Here because the other tool resolves this from a registry it fetches, and a block copied out of it
@@ -65,7 +113,7 @@ const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
 ///
 /// Named apart from the table because a reply from it is read differently: see
 /// [`Provider::answers_under_the_model_behind_an_alias`].
-const OPENAI_ID: &str = "openai";
+pub(crate) const OPENAI_ID: &str = "openai";
 
 /// The models a chat completions route at OpenAI's own API cannot reach, because they take requests
 /// through the Responses API alone ([BACKEND-19]).
@@ -228,7 +276,7 @@ pub(crate) fn known_endpoint(id: &str) -> Option<&'static str> {
 ///
 /// The authority is read as [`without_userinfo`] reads it, so a `user:token@` is not part of the
 /// host.
-fn reached_at(url: &str) -> Option<(String, u16)> {
+pub(crate) fn reached_at(url: &str) -> Option<(String, u16)> {
     let (scheme, rest) = url.split_once("://")?;
     let default = match scheme.to_ascii_lowercase().as_str() {
         "https" => 443,
@@ -302,7 +350,11 @@ const VERTEX_SDK: &str = "@ai-sdk/google-vertex";
 
 /// The SDK an entry names to say that its endpoint takes the Responses API, as opencode names the
 /// package that speaks it.
-const RESPONSES_SDK: &str = "@ai-sdk/openai";
+pub(crate) const RESPONSES_SDK: &str = "@ai-sdk/openai";
+
+/// The SDK an entry names to say that its endpoint takes chat completions, as opencode names the
+/// package for a gateway that speaks it.
+const CHAT_SDK: &str = "@ai-sdk/openai-compatible";
 
 /// The publisher a model named without one is taken to belong to.
 const VERTEX_PUBLISHER: &str = "google";
@@ -570,7 +622,8 @@ pub enum Protocol {
     Messages,
     /// Google's native `generateContent` API, which Vertex AI express mode speaks.
     GenerateContent,
-    /// OpenAI's Responses API, which an entry naming `@ai-sdk/openai` speaks
+    /// OpenAI's Responses API, which an entry naming `@ai-sdk/openai` speaks, and an `openai`
+    /// entry reached at OpenAI's own API
     /// ([BACKEND-61](../../../docs/specs/backends.md#BACKEND-61)).
     Responses,
 }
@@ -650,6 +703,27 @@ impl Provider {
             .collect()
     }
 
+    /// The entries under `provider` that [`Self::all`] drops because the `baseURL` they state
+    /// writes a port that cannot be read, with the text written there
+    /// ([BACKEND-62](../../../docs/specs/backends.md#BACKEND-62)).
+    ///
+    /// Kept as a list of its own because `all` returns the entries that stand, and a dropped one
+    /// is otherwise a gateway that is missing with nothing saying which line did it.
+    pub fn refused(root: &serde_json::Map<String, serde_json::Value>) -> Vec<(String, PortFault)> {
+        let Some(serde_json::Value::Object(block)) = root.get("provider") else {
+            return Vec::new();
+        };
+        block
+            .iter()
+            .filter(|(id, _)| id.as_str() != AWS_PROVIDER_ID)
+            .filter_map(|(id, entry)| {
+                let options = entry.get("options").and_then(serde_json::Value::as_object);
+                let fault = unreadable_port(stated_endpoint(options)?)?;
+                Some((id.clone(), fault))
+            })
+            .collect()
+    }
+
     /// One entry under `provider`, or `None` where it does not describe a reachable service.
     fn one(id: &str, entry: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
         let options = match entry.get("options") {
@@ -661,8 +735,14 @@ impl Provider {
             return Self::aws(id, entry, options);
         }
         let stated = stated_endpoint(options);
+        // The client connects to the scheme's default port for a `:` it cannot read a port after,
+        // and a request there carries no credential. The entry is dropped and named by
+        // [`Self::refused`].
+        if stated.is_some_and(|url| unreadable_port(url).is_some()) {
+            return None;
+        }
         let npm = string(entry.get("npm"));
-        let mut protocol = protocol_of(id, npm.as_deref());
+        let mut protocol = protocol_of(id, npm.as_deref(), stated);
         let project = string(options.and_then(|options| options.get("project")));
         // A Vertex entry naming no project is the express mode of the native API, which needs the
         // key alone. One that states an endpoint of its own keeps speaking chat completions there
@@ -739,16 +819,18 @@ impl Provider {
 
     /// The Vertex AI service the environment names, where it names one.
     ///
-    /// The key has to hold a value, and a project that is set has to be one the service's host can
-    /// be built from. A key with no project is express mode, which the native API serves with the
-    /// key alone; a project with no key is a service nobody could sign in to. The entry names
-    /// `GOOGLE_API_KEY` in `env`, so an exported key is read again when a request needs it, and
+    /// A project that is set has to be one the service's host can be built from, and a service is
+    /// named by a key, a project or both. A key with no project is express mode, which the native
+    /// API serves with the key alone; a project with no key is signed in by the Google Cloud CLI
+    /// ([BACKEND-65]). The entry names `GOOGLE_API_KEY` in `env`, so an exported key is read again when a request needs it, and
     /// holds the value `lookup` found for the case where the key lives only in a settings file.
     pub(crate) fn from_environment(lookup: &impl Fn(&str) -> Option<String>) -> Option<Self> {
         let filled = |name: &str| lookup(name).filter(|value| !value.trim().is_empty());
-        let mut key = filled(crate::env_var::GOOGLE_API_KEY)?;
-        let token = Secret::new(key.trim());
-        crate::scrub(&mut key);
+        let token = filled(crate::env_var::GOOGLE_API_KEY).map(|mut key| {
+            let token = Secret::new(key.trim());
+            crate::scrub(&mut key);
+            token
+        });
         let (base_url, protocol) = match filled(crate::env_var::GOOGLE_CLOUD_PROJECT) {
             Some(project) => {
                 let location = filled(crate::env_var::VERTEX_LOCATION);
@@ -756,10 +838,12 @@ impl Provider {
                     vertex_endpoint(Some(project.trim()), location.as_deref().map(str::trim))?;
                 (base_url, Protocol::ChatCompletions)
             }
-            None => (
+            // Express mode takes a key and nothing else.
+            None if token.is_some() => (
                 VERTEX_EXPRESS_ENDPOINT.to_string(),
                 Protocol::GenerateContent,
             ),
+            None => return None,
         };
 
         Some(Self {
@@ -767,7 +851,7 @@ impl Provider {
             name: None,
             base_url,
             env: vec![crate::env_var::GOOGLE_API_KEY.to_string()],
-            api_key: Some(token),
+            api_key: token,
             stored_key: None,
             endpoint_compiled_in: false,
             models: Vec::new(),
@@ -946,6 +1030,60 @@ impl Provider {
         }
     }
 
+    /// Whether a request to this service may carry a Google Cloud access token in place of a key
+    /// ([BACKEND-65]).
+    ///
+    /// Only a Vertex AI entry on the chat completions route, which a project builds, and only while
+    /// its requests reach a Google Vertex host over `https` on the default port. An entry whose
+    /// `baseURL` names a proxy is left out, since the token is the person's Google sign-in and goes to
+    /// Google's host alone. Express mode takes a key and no token.
+    ///
+    /// [BACKEND-65]: ../../../docs/specs/backends.md#BACKEND-65
+    pub fn takes_google_cloud_token(&self) -> bool {
+        if self.id != GOOGLE_VERTEX_ID
+            || self.protocol != Protocol::ChatCompletions
+            || !self.base_url.starts_with("https://")
+        {
+            return false;
+        }
+        reached_at(&self.base_url).is_some_and(|(host, port)| {
+            port == 443
+                && (host == "aiplatform.googleapis.com"
+                    || host
+                        .strip_suffix("-aiplatform.googleapis.com")
+                        .is_some_and(|location| {
+                            !location.is_empty()
+                                && location.chars().all(|c| {
+                                    c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'
+                                })
+                        }))
+        })
+    }
+
+    /// Whether a request to this service is sent a Google Cloud access token because nothing else
+    /// authenticates it ([BACKEND-65]): [`Self::takes_google_cloud_token`], no key resolving through
+    /// `lookup`, the entry or a stored key, and no `authorization` or `x-goog-api-key` header of the
+    /// block's own.
+    ///
+    /// A block that names no variable and no key counts as having none, which is how a project that
+    /// disallows keys is written.
+    ///
+    /// [BACKEND-65]: ../../../docs/specs/backends.md#BACKEND-65
+    pub fn needs_google_cloud_token(&self, lookup: impl Fn(&str) -> Option<String>) -> bool {
+        self.takes_google_cloud_token()
+            && !matches!(self.credential(lookup), Credential::Token(_))
+            && !self.headers.iter().any(|held| {
+                held.name.eq_ignore_ascii_case("authorization")
+                    || held.name.eq_ignore_ascii_case(VERTEX_KEY_HEADER)
+            })
+    }
+
+    /// The header an OAuth access token goes in: `authorization`, as a bearer, where
+    /// [`Self::credential_header`] puts a Vertex key in `x-goog-api-key`.
+    pub fn bearer_header(token: &str) -> (&'static str, String) {
+        ("authorization", format!("Bearer {token}"))
+    }
+
     /// The headers this service takes on every request whatever the credential, with their values.
     ///
     /// Empty for every gateway but Anthropic, whose API requires the version of itself the request
@@ -1003,25 +1141,33 @@ impl Provider {
     }
 
     /// Whether this entry's requests go to OpenAI's own API, from the host and port they are sent
-    /// to compared with the endpoint compiled in for [`OPENAI_ID`].
+    /// to ([`is_openais_endpoint`]).
     ///
     /// The entry's id does not matter: an entry keyed `openai` that states a proxy behaves as that
-    /// proxy, and an entry under another id that states OpenAI's endpoint behaves as OpenAI's. Case,
-    /// a trailing dot on the host and a port that is the scheme's default are spellings of the same
-    /// place ([`reached_at`]). A port that is not the default is another service listening on
-    /// OpenAI's name, so it is not OpenAI's own API.
+    /// proxy, and an entry under another id that states OpenAI's endpoint behaves as OpenAI's.
     fn at_openais_api(&self) -> bool {
-        let own = known_endpoint(OPENAI_ID).and_then(reached_at);
-        own.is_some() && own == reached_at(&self.base_url)
+        is_openais_endpoint(&self.base_url)
+    }
+
+    /// Whether a listing of this service states a `shutdown_date` for a model that its requests
+    /// are refused after ([BACKEND-19]).
+    ///
+    /// OpenAI's own API only. Another service that states a field of that name may mean something
+    /// else by it, and nothing is known of what its dates are for.
+    ///
+    /// [BACKEND-19]: ../../../docs/specs/backends.md#BACKEND-19
+    pub fn lists_shutdown_dates(&self) -> bool {
+        self.at_openais_api()
     }
 
     /// The ids a listing of this service is not offered, because the models they name take
     /// requests through the Responses API only.
     ///
-    /// Empty except for OpenAI's own API reached in the chat completions protocol. An entry that
-    /// names `@ai-sdk/openai` is reached in the Responses protocol, which serves them, and a
-    /// proxy at another host may serve them over chat completions. A block that names `models`
-    /// is offered those and no others, so a Responses-only model is still one somebody can name.
+    /// Empty except for OpenAI's own API reached in the chat completions protocol, which an
+    /// `openai` entry is only where it names the OpenAI-compatible SDK. An entry reached in the
+    /// Responses protocol serves them, and a proxy at another host may serve them over chat
+    /// completions. A block that names `models` is offered those and no others, so a
+    /// Responses-only model is still one somebody can name.
     pub fn responses_only_models(&self) -> &'static [&'static str] {
         if self.protocol == Protocol::ChatCompletions && self.at_openais_api() {
             RESPONSES_ONLY_MODELS
@@ -1253,21 +1399,36 @@ impl fmt::Debug for Credential {
     }
 }
 
-/// The protocol an entry's requests are written in, from its id and the SDK it names.
+/// The protocol an entry's requests are written in, from its id, the SDK it names and the endpoint
+/// it states.
 ///
 /// An entry naming the SDK that speaks the Responses API is reached in it, whatever its id but
-/// `google-vertex`, whose own protocols, and the header its key goes in, are fixed by the id. Otherwise
-/// only the `anthropic` id is reached in the Messages protocol, as opencode reaches it, and an entry
-/// under that id that names the OpenAI-compatible SDK is reached as any other gateway is. Any other
+/// `google-vertex`, whose own protocols, and the header its key goes in, are fixed by the id.
+/// Otherwise the `anthropic` id is reached in the Messages protocol, as opencode reaches it, and the
+/// `openai` id in the Responses protocol where it is reached at OpenAI's own API. An entry under
+/// either id that names the OpenAI-compatible SDK is reached as any other gateway is, and so is an
+/// `openai` entry that states a proxy's endpoint, which may speak chat completions alone. Any other
 /// SDK an entry names is not read: the id decides.
-fn protocol_of(id: &str, npm: Option<&str>) -> Protocol {
+pub(crate) fn protocol_of(id: &str, npm: Option<&str>, stated: Option<&str>) -> Protocol {
     if npm == Some(RESPONSES_SDK) && id != GOOGLE_VERTEX_ID {
         Protocol::Responses
-    } else if id == ANTHROPIC_ID && npm != Some("@ai-sdk/openai-compatible") {
+    } else if id == ANTHROPIC_ID && npm != Some(CHAT_SDK) {
         Protocol::Messages
+    } else if id == OPENAI_ID && npm != Some(CHAT_SDK) && stated.is_none_or(is_openais_endpoint) {
+        Protocol::Responses
     } else {
         Protocol::ChatCompletions
     }
+}
+
+/// Whether `url` reaches the same host and port as the endpoint compiled in for [`OPENAI_ID`].
+///
+/// Case, a trailing dot on the host and a port that is the scheme's default are spellings of the
+/// same place ([`reached_at`]). A port that is not the default is another service listening on
+/// OpenAI's name, so it is not OpenAI's own API.
+fn is_openais_endpoint(url: &str) -> bool {
+    let own = known_endpoint(OPENAI_ID).and_then(reached_at);
+    own.is_some() && own == reached_at(url)
 }
 
 /// The OpenAI-compatible endpoint of Vertex AI for a project and location, without a trailing slash.
@@ -1591,6 +1752,119 @@ mod tests {
 
     const PLACEHOLDER_PROJECT: &str = "example-project-1";
 
+    /// BACKEND-62: a `baseURL` whose `:` is followed by no readable port is not a gateway, and
+    /// `refused` names the entry and the text written where the port belongs. The regressions it
+    /// rejects are keeping the entry (the client then connects to the scheme's default port),
+    /// reading a port as a number only when it is short, and accepting what `u16` cannot hold.
+    #[test]
+    fn a_base_url_whose_port_cannot_be_read_is_refused_naming_the_port() {
+        for (base_url, port) in [
+            ("https://gw.example.com:/v1", ""),
+            ("https://gw.example.com:", ""),
+            ("https://gw.example.com:abc/v1", "abc"),
+            ("https://gw.example.com:99999/v1", "99999"),
+            ("https://gw.example.com:65536/v1", "65536"),
+            ("https://gw.example.com:+80/v1", "+80"),
+            ("https://api.openai.com:/v1", ""),
+            ("https://api.openai.com:+443/v1", "+443"),
+            ("https://gw.example.com:8080:9/v1", "8080:9"),
+            ("http://[::1]:/v1", ""),
+            ("http://[::1]x/v1", "x"),
+            ("https://user:secret@gw.example.com:x/v1", "x"),
+            ("https://gw.example.com:x?next=http://y:80", "x"),
+        ] {
+            let text = format!(
+                r#"{{"provider": {{"gw": {{"env": ["GW_TOKEN"], "options": {{"baseURL": "{base_url}"}}}}}}}}"#
+            );
+            let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+                panic!("not an object");
+            };
+            assert!(
+                Provider::all(&root).is_empty(),
+                "{base_url} was kept as a gateway"
+            );
+            assert_eq!(
+                Provider::refused(&root),
+                [(
+                    "gw".to_string(),
+                    PortFault {
+                        port: port.to_string()
+                    }
+                )],
+                "{base_url}"
+            );
+        }
+        for base_url in [
+            "https://gw.example.com/v1",
+            "https://gw.example.com:8080/v1",
+            "https://gw.example.com:0080/v1",
+            "https://gw.example.com:65535",
+            "http://[::1]:8080/v1",
+            "http://[::1]/v1",
+            "https://user:secret@gw.example.com:8080/v1",
+            "https://gw.example.com/v1?port=:x",
+        ] {
+            let text =
+                format!(r#"{{"provider": {{"gw": {{"options": {{"baseURL": "{base_url}"}}}}}}}}"#);
+            let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+                panic!("not an object");
+            };
+            assert_eq!(Provider::all(&root).len(), 1, "{base_url}");
+            assert!(Provider::refused(&root).is_empty(), "{base_url}");
+        }
+    }
+
+    /// BACKEND-62: the port rule for a `baseURL` and an endpoint is the one a declared MCP url is
+    /// held to (SERVERS-11). The regression it rejects is a second reading of a port that drifts
+    /// from `remote`, so a url one accepts the other refuses.
+    #[test]
+    fn a_port_is_read_as_a_declared_mcp_url_reads_it() {
+        let (mut readable, mut unreadable) = (0, 0);
+        for scheme in ["http", "HTTPS"] {
+            for host in ["h", "1.2.3.4", "[::1]", "[::1", "[::1]x", "h%41"] {
+                for port in [
+                    "", ":", ":80", ":0", ":+1", ":-1", ":x", ":65535", ":65536", ":1:2", ":080",
+                ] {
+                    for rest in ["", "/p", "?q", "#f"] {
+                        let url = format!("{scheme}://{host}{port}{rest}");
+                        let declared = crate::mcp::Declaration::http(url.clone()).is_ok();
+                        let read = unreadable_port(&url).is_none();
+                        assert_eq!(declared, read, "{url}");
+                        match read {
+                            true => readable += 1,
+                            false => unreadable += 1,
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            readable > 50 && unreadable > 50,
+            "{readable} readable, {unreadable} unreadable"
+        );
+    }
+
+    /// BACKEND-62: only the entry with the bad port is dropped, and the others stand.
+    #[test]
+    fn a_refused_base_url_leaves_the_other_entries_standing() {
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {
+                "bad": {"options": {"baseURL": "https://a.example.com:x/v1"}},
+                "good": {"options": {"baseURL": "https://b.example.com:8443/v1"}}
+            }}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        let kept: Vec<String> = Provider::all(&root).into_iter().map(|it| it.id).collect();
+        assert_eq!(kept, ["good"]);
+        let refused: Vec<String> = Provider::refused(&root)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(refused, ["bad"]);
+    }
+
     /// The `google-vertex` entry written as `entry`, which holds the whole block.
     fn one_entry(entry: &str) -> Provider {
         let text = format!(r#"{{"provider": {{"google-vertex": {entry}}}}}"#);
@@ -1629,6 +1903,76 @@ mod tests {
             "https://us-central1-aiplatform.googleapis.com/v1/projects/example-project-1/locations/us-central1/endpoints/openapi"
         );
         assert_eq!(all[0].host(), "us-central1-aiplatform.googleapis.com");
+    }
+
+    /// BACKEND-65: a token goes to a Google Vertex host over https and to no other, whatever the
+    /// entry states as its endpoint.
+    #[test]
+    fn only_a_project_reached_at_a_google_vertex_host_takes_the_google_cloud_token() {
+        let takes = |options: String| vertex(&options)[0].takes_google_cloud_token();
+        assert!(takes(format!(r#"{{"project": "{PLACEHOLDER_PROJECT}"}}"#)));
+        assert!(takes(format!(
+            r#"{{"project": "{PLACEHOLDER_PROJECT}", "location": "us-central1"}}"#
+        )));
+        // Express mode takes a key and no token.
+        assert!(!takes("{}".to_string()));
+        for stated in [
+            "https://proxy.example.invalid/v1",
+            "http://aiplatform.googleapis.com/v1",
+            "https://aiplatform.googleapis.com.evil.invalid/v1",
+            "https://aiplatform.googleapis.com@evil.invalid/v1",
+            "https://evil.invalid/-aiplatform.googleapis.com",
+            "https://aiplatform.googleapis.com:8443/v1",
+            "https://evil-aiplatform.example.invalid/v1",
+        ] {
+            assert!(
+                !takes(format!(
+                    r#"{{"project": "{PLACEHOLDER_PROJECT}", "baseURL": "{stated}"}}"#
+                )),
+                "{stated}"
+            );
+        }
+        assert!(takes(format!(
+            r#"{{"project": "{PLACEHOLDER_PROJECT}", "baseURL": "https://europe-west4-aiplatform.googleapis.com/v1"}}"#
+        )));
+    }
+
+    /// BACKEND-65: a key, or an `authorization` header the block wrote, is what authenticates the
+    /// request, and no token is asked for beside it.
+    #[test]
+    fn a_key_or_an_authorization_header_of_the_blocks_own_leaves_no_need_for_a_token() {
+        let none = |_: &str| None;
+        let project = format!(r#""project": "{PLACEHOLDER_PROJECT}""#);
+        let needs = |entry: String, lookup: &dyn Fn(&str) -> Option<String>| {
+            let root: serde_json::Value =
+                serde_json::from_str(&format!(r#"{{"provider": {{"google-vertex": {entry}}}}}"#))
+                    .expect("json");
+            let serde_json::Value::Object(root) = root else {
+                panic!("not an object")
+            };
+            Provider::all(&root)[0].needs_google_cloud_token(lookup)
+        };
+        assert!(needs(format!(r#"{{"options": {{{project}}}}}"#), &none));
+        assert!(!needs(
+            format!(r#"{{"options": {{{project}, "apiKey": "a-key"}}}}"#),
+            &none
+        ));
+        assert!(!needs(
+            format!(r#"{{"env": ["GOOGLE_API_KEY"], "options": {{{project}}}}}"#),
+            &|name| (name == "GOOGLE_API_KEY").then(|| "a-key".to_string())
+        ));
+        assert!(!needs(
+            format!(r#"{{"options": {{{project}, "headers": {{"Authorization": "Bearer x"}}}}}}"#),
+            &none
+        ));
+        assert!(!needs(
+            format!(r#"{{"options": {{{project}, "headers": {{"X-Goog-Api-Key": "a-key"}}}}}}"#),
+            &none
+        ));
+        assert_eq!(
+            Provider::bearer_header("placeholder-t"),
+            ("authorization", "Bearer placeholder-t".to_string())
+        );
     }
 
     #[test]
@@ -2449,14 +2793,18 @@ mod tests {
     /// OpenAI is a gateway like any other once its host is known: the key goes in `authorization`,
     /// nothing is compiled in to offer, and no tool call carries anything back that this program
     /// keeps. A name that changed any of that would be a second code path for a service that
-    /// speaks the protocol everything else here speaks.
+    /// speaks the protocol everything else here speaks. The protocol is the Responses one
+    /// ([BACKEND-17]), the one every model OpenAI serves takes with a tool.
+    ///
+    /// [BACKEND-17]: ../../../docs/specs/backends.md#BACKEND-17
     #[test]
     fn an_openai_entry_is_reached_at_openais_host_like_any_other_gateway() {
         let provider = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
         assert_eq!(provider.base_url, "https://api.openai.com/v1");
+        assert_eq!(provider.protocol(), Protocol::Responses);
         assert_eq!(
-            provider.chat_completions_url(),
-            "https://api.openai.com/v1/chat/completions"
+            provider.completion_url(),
+            "https://api.openai.com/v1/responses"
         );
         assert_eq!(provider.models_url(), "https://api.openai.com/v1/models");
         assert_eq!(provider.host(), "api.openai.com");
@@ -2539,7 +2887,11 @@ mod tests {
     /// entry that states OpenAI's host.
     #[test]
     fn openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called() {
-        let own = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        let own = one(r#"{"provider": {"openai": {
+                "npm": "@ai-sdk/openai-compatible",
+                "env": ["OPENAI_API_KEY"]
+            }}}"#);
+        assert_eq!(own.protocol(), Protocol::ChatCompletions);
         assert_eq!(own.host(), "api.openai.com");
         assert!(!own.takes_cache_markers());
         assert_eq!(own.responses_only_models(), RESPONSES_ONLY_MODELS);
@@ -2571,6 +2923,15 @@ mod tests {
             "the Responses route serves those models"
         );
 
+        let bare = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        assert_eq!(bare.protocol(), Protocol::Responses);
+        assert!(!bare.takes_cache_markers());
+        assert!(bare.lists_shutdown_dates());
+        assert!(
+            bare.responses_only_models().is_empty(),
+            "an openai entry is reached in the Responses protocol, which serves those models"
+        );
+
         let other = one(r#"{"provider": {"openrouter": {"env": ["OPENROUTER_API_KEY"]}}}"#);
         assert!(other.takes_cache_markers());
         assert!(other.responses_only_models().is_empty());
@@ -2594,7 +2955,6 @@ mod tests {
             "https://api.openai.com:443/v1",
             "https://api.openai.com./v1",
             "https://API.OPENAI.COM.:443/v1/",
-            "https://api.openai.com:/v1",
             "https://api.openai.com",
             "https://api.openai.com/v1?api-version=1",
             "https://user:token@api.openai.com/v1",
@@ -2615,8 +2975,6 @@ mod tests {
             "https://api.openai.com:444/v1",
             "https://api.openai.com:80/v1",
             "http://api.openai.com/v1",
-            "https://api.openai.com:abc/v1",
-            "https://api.openai.com:+443/v1",
             "https://api.openai.com.proxy.example.invalid/v1",
             "https://notapi.openai.com/v1",
             "https://proxy.example.invalid/api.openai.com/v1",
@@ -2639,7 +2997,10 @@ mod tests {
     /// id passes.
     #[test]
     fn the_responses_only_list_holds_the_marked_ids_and_leaves_out_a_sample_that_stays_offered() {
-        let own = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        let own = one(r#"{"provider": {"openai": {
+                "npm": "@ai-sdk/openai-compatible",
+                "env": ["OPENAI_API_KEY"]
+            }}}"#);
         let listed = own.responses_only_models();
         for id in [
             "gpt-5.1-codex",
@@ -2852,11 +3213,11 @@ mod tests {
             "https://api.openai.com/v1/responses"
         );
 
-        let plain = one(r#"{"provider": {"openai": {"env": ["A_KEY"]}}}"#);
+        let plain = one(r#"{"provider": {"openrouter": {"env": ["A_KEY"]}}}"#);
         assert_eq!(plain.protocol(), Protocol::ChatCompletions);
         assert_eq!(
             plain.completion_url(),
-            "https://api.openai.com/v1/chat/completions"
+            "https://openrouter.ai/api/v1/chat/completions"
         );
 
         let stated = one(r#"{"provider": {"anthropic": {
@@ -2875,6 +3236,76 @@ mod tests {
                 "options": {"project": "an-example-project", "apiKey": "a-key"}
             }}}"#);
         assert_eq!(vertex.protocol(), Protocol::ChatCompletions);
+    }
+
+    /// BACKEND-17 and BACKEND-61: an `openai` entry is reached in the Responses protocol where it is
+    /// reached at OpenAI's own API. On its chat completions route OpenAI refuses a request that
+    /// offers a function tool to `gpt-6-sol` or `gpt-6.1-sol`, and every request from this program
+    /// offers tools. A proxy keyed `openai` may speak chat completions alone, so
+    /// it keeps that route, as does an entry that names the OpenAI-compatible SDK, which is how a
+    /// person asks for chat completions at OpenAI's own API. An entry under another id keeps
+    /// chat completions whatever endpoint it states, so a block written for another service is not
+    /// moved to a route its service may not have.
+    #[test]
+    fn an_openai_entry_is_reached_in_the_responses_protocol_at_openais_own_api_only() {
+        let at = |block: &str| one(&format!(r#"{{"provider": {block}}}"#)).protocol();
+
+        for (block, expected) in [
+            (r#"{"openai": {"env": ["A_KEY"]}}"#, Protocol::Responses),
+            (r#"{"openai": {}}"#, Protocol::Responses),
+            (
+                r#"{"openai": {"options": {"baseURL": "https://api.openai.com/v1"}}}"#,
+                Protocol::Responses,
+            ),
+            (
+                r#"{"openai": {"options": {"baseURL": "HTTPS://API.OpenAI.com.:443/v1/"}}}"#,
+                Protocol::Responses,
+            ),
+            (
+                r#"{"openai": {"npm": "@ai-sdk/openai", "env": ["A_KEY"]}}"#,
+                Protocol::Responses,
+            ),
+            (
+                r#"{"openai": {"npm": "an-sdk-nobody-reads", "env": ["A_KEY"]}}"#,
+                Protocol::Responses,
+            ),
+            (
+                r#"{"openai": {"npm": "@ai-sdk/openai-compatible", "env": ["A_KEY"]}}"#,
+                Protocol::ChatCompletions,
+            ),
+            (
+                r#"{"openai": {"options": {"baseURL": "https://proxy.example.invalid/v1"}}}"#,
+                Protocol::ChatCompletions,
+            ),
+            (
+                r#"{"openai": {"options": {"baseURL": "https://api.openai.com:8443/v1"}}}"#,
+                Protocol::ChatCompletions,
+            ),
+            (
+                r#"{"openai": {"options": {"baseURL": "http://localhost:11434/v1"}}}"#,
+                Protocol::ChatCompletions,
+            ),
+            (
+                r#"{"openai": {"npm": "@ai-sdk/openai-compatible",
+                    "options": {"baseURL": "https://proxy.example.invalid/v1"}}}"#,
+                Protocol::ChatCompletions,
+            ),
+            (
+                r#"{"work": {"options": {"baseURL": "https://api.openai.com/v1"}}}"#,
+                Protocol::ChatCompletions,
+            ),
+        ] {
+            assert_eq!(at(block), expected, "{block}");
+        }
+
+        // The entry a session reaches for the name alone, which is what a stored key is sent to.
+        assert_eq!(
+            Provider::known("openai").map(|provider| provider.protocol()),
+            Some(Protocol::Responses)
+        );
+        // The other known names keep their own.
+        assert_eq!(at(r#"{"openrouter": {}}"#), Protocol::ChatCompletions);
+        assert_eq!(at(r#"{"anthropic": {}}"#), Protocol::Messages);
     }
 
     /// The table supplies an address and nothing else. A block naming no credential does not have an

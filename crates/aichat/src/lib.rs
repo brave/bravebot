@@ -26,6 +26,7 @@ pub mod models;
 pub mod ollama;
 pub mod protocol;
 pub mod responses;
+pub mod roster;
 
 #[cfg(test)]
 mod local_servers;
@@ -70,7 +71,7 @@ pub enum ChatError {
     /// problem is that there was going to be more. Retried like a connection that died, because
     /// that is most often what it is.
     Incomplete,
-    /// A subscription is configured but no credential could be presented.
+    /// The premium tier is configured but its key could not be presented.
     ///
     /// Fails the request rather than falling back: see [`AichatClient::route`].
     Subscription(String),
@@ -144,8 +145,9 @@ impl fmt::Display for ChatError {
             Self::Account(failure) => write!(f, "ChatGPT account: {failure}"),
             Self::Subscription(detail) => write!(
                 f,
-                "the Leo subscription could not be used: {detail}. Run `bravebot auth login leo` to \
-                 refresh it, or unset the premium endpoint to send requests without one"
+                "the premium key could not be used: {detail}. Run `bravebot auth login brave` to \
+                 replace it, or `bravebot auth logout brave` to send requests to the free endpoint \
+                 instead"
             ),
         }
     }
@@ -437,33 +439,31 @@ impl fmt::Display for AccountFailure {
     }
 }
 
-/// A source of subscription credentials, one per request.
+/// A source of the key premium requests are authorised with, asked once per request.
 ///
-/// A trait rather than a stored string because each credential is single-use: presenting one
-/// spends it, so a request has to ask for its own rather than reuse a cached value. It is also
-/// what keeps this crate independent of where credentials come from.
+/// A trait rather than a key held here because the caller that owns the key also decides what is
+/// counted against it (a session's `limit` in credits is one for each premium request), and
+/// because it keeps this crate independent of where the key comes from.
 pub trait Subscription {
-    /// The cookie value presenting the next credential.
+    /// The key presenting the next premium request.
     ///
     /// An error here fails the request. It deliberately does not fall back to sending none: a
-    /// configured subscription that silently stops being used looks like the model got worse for
+    /// configured premium tier that silently stops being used looks like the model got worse for
     /// no reason, and the one thing worse than an error is an unexplained downgrade.
     fn next_credential(&mut self) -> Result<SubscriptionCredential, String>;
 }
 
-/// A credential ready to be attached to one request.
+/// The key ready to be attached to one request.
 pub struct SubscriptionCredential {
-    /// The cookie name the backend reads.
-    pub cookie_name: String,
-    /// The presented credential.
-    pub cookie_value: String,
+    /// The bearer key the premium host reads.
+    pub key: Secret,
 }
 
 /// Redacting rather than derived: the value is a bearer credential, and the obvious debugging
 /// reflex of printing a request would otherwise put a live one in a log.
 impl fmt::Debug for SubscriptionCredential {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SubscriptionCredential({}=<redacted>)", self.cookie_name)
+        f.write_str("SubscriptionCredential(<redacted>)")
     }
 }
 
@@ -506,6 +506,9 @@ struct Gateway<'a> {
     /// one the gateway has never heard of.
     model: String,
     token: Option<Secret>,
+    /// Whether the token is an OAuth access token, sent as a bearer whatever header the provider
+    /// puts its own key in ([`AichatClient::with_access_token`]).
+    access_token: bool,
     /// Whether a redirect in answer is a failure and nothing is sent to the address it names, as it
     /// is for a request to a host this program compiled in
     /// ([`AichatClient::refusing_redirects`]).
@@ -570,9 +573,19 @@ impl<'a> AichatClient<'a> {
             provider,
             model: model.into(),
             token,
+            access_token: false,
             redirects_refused: false,
             headers: Vec::new(),
         });
+        self
+    }
+
+    /// Send the gateway's token as an OAuth bearer, as a Google Cloud access token is, rather than in
+    /// the header the provider takes its key in. Does nothing where no gateway is set.
+    pub fn with_access_token(mut self) -> Self {
+        if let Some(gateway) = self.gateway.as_mut() {
+            gateway.access_token = true;
+        }
         self
     }
 
@@ -602,7 +615,7 @@ impl<'a> AichatClient<'a> {
         self
     }
 
-    /// Send requests on the premium tier, spending a credential on each.
+    /// Send requests on the premium tier, presenting the key on each.
     pub fn with_subscription(mut self, subscription: &'a mut dyn Subscription) -> Self {
         self.subscription = Some(subscription);
         self
@@ -638,13 +651,13 @@ impl<'a> AichatClient<'a> {
 
     /// Where this request goes, and any credential to attach.
     ///
-    /// The premium host and the credential travel together: a credential belongs to the premium
-    /// deployment, so a build with no premium host sends no credential rather than sending one
-    /// somewhere it does not belong.
+    /// The premium host and the key travel together: the key belongs to the premium deployment, so
+    /// a build with no premium host sends no key rather than sending one somewhere it does not
+    /// belong.
     ///
-    /// With both a premium host and a subscription, this is premium or nothing. A credential that
-    /// cannot be produced fails the request rather than quietly sending none, because a downgrade
-    /// nobody was told about is indistinguishable from the service getting worse.
+    /// With both a premium host and a key, this is premium or nothing. A key that cannot be
+    /// produced fails the request rather than quietly sending none, because a downgrade nobody was
+    /// told about is indistinguishable from the service getting worse.
     fn route(&mut self) -> Result<(String, Option<SubscriptionCredential>), ChatError> {
         let base = self.config.chat_completions_url();
 
@@ -657,8 +670,8 @@ impl<'a> AichatClient<'a> {
                 Ok(credential) => Ok((premium_url, Some(credential))),
                 Err(detail) => Err(ChatError::Subscription(detail)),
             },
-            // Premium is configured but nothing has been imported, which is not an error: a caller
-            // who has imported nothing sends no credential.
+            // Premium is configured but no key is held, which is not an error: a caller with none
+            // sends the free endpoint's signed request.
             None => Ok((base, None)),
         }
     }
@@ -763,6 +776,7 @@ impl<'a> AichatClient<'a> {
                 }
             }
             let mut http = Request::post(gateway.provider.chat_completions_url(), encode(&body)?)
+                .with_client_certificate()
                 .header("content-type", "application/json");
             if let Some(gap) = gateway.provider.patience.idle_timeout {
                 http = http.idle_within(gap);
@@ -771,7 +785,11 @@ impl<'a> AichatClient<'a> {
                 http = http.refusing_redirects();
             }
             if let Some(token) = gateway.token.as_ref().map(Secret::expose) {
-                let (name, value) = gateway.provider.credential_header(token);
+                let (name, value) = if gateway.access_token {
+                    bravebot_config::provider::Provider::bearer_header(token)
+                } else {
+                    gateway.provider.credential_header(token)
+                };
                 http = if gateway.redirects_refused {
                     http.socket_header(name, value)
                 } else {
@@ -788,23 +806,31 @@ impl<'a> AichatClient<'a> {
         }
 
         let body = encode(&body)?;
-        let headers =
-            bravebot_signing::sign(self.config.signing_key.expose(), &self.config.key_id, &body);
         let (url, credential) = self.route()?;
 
-        let mut http = as_brave_bot(
-            Request::post(url, body)
-                .header("content-type", "application/json")
-                .header("digest", &headers.digest)
-                .header("authorization", &headers.authorization),
-        );
-        if let Some(credential) = credential {
-            http = http.header(
-                "cookie",
-                format!("{}={}", credential.cookie_name, credential.cookie_value),
-            );
-        }
-        Ok(http)
+        let http = Request::post(url, body.clone())
+            .with_client_certificate()
+            .header("content-type", "application/json");
+        let http = match credential {
+            // The premium host authorises on the key alone, so the request is not signed and the
+            // key is the one `authorization` it carries. A redirect is answered with its status
+            // and nothing is sent to the address it names, since a bearer key goes to the host it
+            // was configured for and no other.
+            Some(credential) => http.refusing_redirects().socket_header(
+                "authorization",
+                format!("Bearer {}", credential.key.expose()),
+            ),
+            None => {
+                let headers = bravebot_signing::sign(
+                    self.config.signing_key.expose(),
+                    &self.config.key_id,
+                    &body,
+                );
+                http.header("digest", &headers.digest)
+                    .header("authorization", &headers.authorization)
+            }
+        };
+        Ok(as_brave_bot(http))
     }
 
     /// Send a chat completion request.
@@ -1428,7 +1454,8 @@ pub struct Refusals {
     /// It will not take a streamed request that asks to show thinking as it happens.
     ///
     /// Learned by the Bedrock client alone. A model wanting to be told whether to think refuses the
-    /// ask, since the ask says only how.
+    /// ask, since the ask says only how. The one field an earlier process may have found out: the
+    /// agent keeps it for later sessions ([BACKEND-63](../../../docs/specs/backends.md#BACKEND-63)).
     pub thinking_shown: bool,
 }
 
@@ -1757,6 +1784,30 @@ mod tests {
             .expect("prepared");
 
         assert_eq!(header(&http, "authorization"), Some("Bearer a-token"));
+        assert_eq!(header(&http, "x-goog-api-key"), None);
+    }
+
+    /// BACKEND-65: a Google Cloud access token is an OAuth credential, and the service reads it as
+    /// a bearer. It is not the key header's value, which the service refuses a token in.
+    #[test]
+    fn a_google_vertex_access_token_is_sent_as_a_bearer_and_not_in_the_key_header() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = vertex_provider();
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(
+                &provider,
+                "google/gemini-2.5-flash",
+                Some(Secret::new("placeholder-access-token")),
+            )
+            .with_access_token()
+            .prepare(&request("google-vertex/google/gemini-2.5-flash"))
+            .expect("prepared");
+
+        assert_eq!(
+            header(&http, "authorization"),
+            Some("Bearer placeholder-access-token")
+        );
         assert_eq!(header(&http, "x-goog-api-key"), None);
     }
 

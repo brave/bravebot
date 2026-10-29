@@ -155,12 +155,10 @@ pub(crate) mod fake {
     }
 
     impl FakeAgent {
-        /// The directory is under the checkout's scratch directory, so the socket path stays
-        /// short enough to bind.
-        pub(crate) fn answering(name: &str, answer: Answer) -> Self {
-            let directory = crate::testutil::scratch_dir(&format!("agent-{name}"));
-            let _ = std::fs::remove_dir_all(&directory);
-            std::fs::create_dir_all(&directory).unwrap();
+        /// The directory is a new one under the temporary directory, so the socket path fits in
+        /// `sun_path` whatever the depth of the checkout.
+        pub(crate) fn answering(_name: &str, answer: Answer) -> Self {
+            let directory = crate::testutil::a_directory_for_sockets(&[]);
             let socket = directory.join("s");
             let listener = UnixListener::bind(&socket).unwrap();
             std::thread::spawn(move || {

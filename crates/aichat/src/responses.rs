@@ -343,6 +343,7 @@ impl<'a> ResponsesClient<'a> {
     /// The request for one attempt, addressed and authenticated.
     fn build(&self, body: Vec<u8>, token: Option<&Secret>) -> Request {
         let mut http = Request::post(self.provider.completion_url(), body)
+            .with_client_certificate()
             .header("content-type", "application/json")
             .header("accept", "text/event-stream");
         for (name, value) in self.provider.fixed_headers() {
@@ -723,7 +724,7 @@ struct Reply {
     model: Option<String>,
     /// Whether any reasoning arrived.
     thought: bool,
-    /// Whether the service said it stopped the reply for its content.
+    /// Whether the service said it stopped the reply for its content, or wrote a refusal part.
     withheld: bool,
     /// Whether a known piece could not be decoded.
     ///
@@ -788,11 +789,13 @@ impl Reply {
                 model,
                 withheld,
             } => {
-                self.withheld = withheld;
+                self.withheld |= withheld;
                 self.ending = Some(ending);
                 self.reported = usage;
                 self.model = model;
             }
+            // The words themselves are not kept, so the reply holds a refusal and nothing it said.
+            Event::Declined => self.withheld = true,
             // A failure and a refusal end the stream where they arrive, in `stream_once`, before a
             // reply is built from anything after them.
             Event::Failed(_) | Event::Refused(_) => {}

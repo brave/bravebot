@@ -412,9 +412,7 @@ fn command_when(session: &Session, command: &crate::command_table::Command) -> &
         }
         MidTurn::Runs => t!(command_when_now),
         MidTurn::Waits => t!(command_when_queued),
-        MidTurn::Changes | MidTurn::RunsUnlessItStarts | MidTurn::ChangesUnlessItAsks => {
-            t!(command_when_either)
-        }
+        MidTurn::Changes | MidTurn::RunsUnlessItStarts => t!(command_when_either),
     }
 }
 
@@ -480,6 +478,7 @@ pub(super) fn shortcuts(
         ("shift-tab".to_string(), "what to ask before acting"),
         ("esc".to_string(), escape),
         ("up / down".to_string(), "earlier prompts"),
+        ("left".to_string(), "every session, empty line"),
         ("pgup / pgdn".to_string(), "scroll the transcript"),
         ("ctrl-c".to_string(), "stop, clear, then exit"),
         ("ctrl-d".to_string(), "exit"),

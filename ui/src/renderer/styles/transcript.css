@@ -16,7 +16,9 @@
 /* ---- a file being dragged over the conversation
 
    Over the whole column, and inert: the drop itself is taken by the preload wherever it lands in
-   here, so this only says what letting go will do. */
+   here, so this only says what letting go will do. It takes no pointer, so a hit test passes
+   through it, and it is marked `data-veil="own"` in Transcript.tsx for the count of rows a decision
+   card rests on (shown.ts) to treat what it covers as not on screen. */
 .drop-target {
   position: absolute;
   inset: var(--leo-spacing-m);
@@ -40,7 +42,7 @@
   gap: var(--leo-spacing-s);
   font: var(--type-caption);
   color: var(--ink-tertiary);
-  --leo-icon-size: var(--icon-caption);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--status-warning);
 }
 @keyframes drop-target-in { from { opacity: 0; } }
@@ -87,6 +89,11 @@
   gap: var(--leo-spacing-m);
 }
 .head-titles > .bot-avatar-frame { flex: none; }
+/* In the title row, over the drag strip. It opts out so the click reaches the control. */
+.head-titles .earlier-back {
+  flex: none;
+  -webkit-app-region: no-drag;
+}
 .head-titles h1 {
   flex: 0 1 auto;
   min-width: 0;
@@ -106,10 +113,17 @@
   align-items: center;
   overflow: hidden;
   -webkit-app-region: no-drag;
+  --leo-icon-size: var(--icon-control);
 }
 /* Leo's label host is inline-block, which sits on the text baseline and leaves the descender's
    space under it, so it rides high in a row. As a flex box it centres with the rest. */
 .head-titles leo-label { display: flex; max-width: 100%; }
+/* Leo Label sizes a slotted icon itself; inherit does not reach it. */
+.transcript leo-label leo-icon {
+  --leo-icon-size: var(--icon-control);
+  width: var(--icon-control);
+  height: var(--icon-control);
+}
 .plan-run-chip { flex: none; font: var(--type-caption-strong); color: var(--ink-accent); }
 
 .vetting-chip {
@@ -119,6 +133,7 @@
   align-items: center;
   border-radius: var(--radius-chip);
   -webkit-app-region: no-drag;
+  --leo-icon-size: var(--icon-control);
 }
 .vetting-chip:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
 
@@ -276,7 +291,7 @@
   margin: 0;
   font: var(--type-caption);
   color: var(--ink-secondary);
-  --leo-icon-size: var(--icon-meta);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--ink-tertiary);
 }
 .session-notice > leo-icon { flex: none; }
@@ -330,6 +345,14 @@
   background: var(--surface-sunken);
   white-space: pre-wrap;
 }
+.bubble.user .bubble-text.folded {
+  max-height: calc(8 * 1.5em);
+  overflow: hidden;
+}
+.prompt-more {
+  min-width: 6.5em;
+  min-height: var(--hit);
+}
 
 /* Copy and Fork under the prompt. Kept in the tree rather than rendered on hover, so they can
    be tabbed to, and shown whenever something inside has focus. */
@@ -372,10 +395,8 @@
 .entry-hit.last-reply > .turn-footer,
 .turn-footer:focus-within,
 .turn-footer.has-refusal,
-.turn-footer.stats-open,
 .turn-footer:has(.copied) { opacity: 1; }
 
-.turn-statistics,
 .turn-notices {
   min-width: 0;
   max-width: 100%;
@@ -388,32 +409,37 @@
   --leo-collapse-summary-color: var(--ink-tertiary);
   --leo-collapse-summary-color-hover: var(--ink-secondary);
   --leo-collapse-icon-color: var(--ink-tertiary);
-  --leo-collapse-icon-size: var(--icon-meta);
+  --leo-collapse-icon-size: var(--icon-control);
   --leo-collapse-summary-padding: var(--leo-spacing-s) var(--leo-spacing-m);
   --leo-collapse-content-padding: 0 var(--leo-spacing-m) var(--leo-spacing-m);
   --leo-collapse-radius: var(--radius-control);
   --leo-font-heading-h3: var(--type-caption);
   font: var(--type-caption);
 }
-.turn-statistics-body {
-  margin-top: var(--leo-spacing-s);
-  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
-  border: 1px solid var(--border-hairline);
+.turn-usage {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--hit);
+  padding-block: 0;
+  padding-inline: var(--leo-spacing-s);
+  border: 0;
   border-radius: var(--radius-control);
-  background: var(--surface-sunken);
-  font: var(--type-meta);
-  color: var(--ink-primary);
+  appearance: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
 }
-.turn-statistics-body strong { font: var(--type-meta-strong); }
-.turn-statistics-body dl {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--leo-spacing-s) var(--leo-spacing-xl);
-  margin: var(--leo-spacing-m) 0;
+.turn-usage-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.turn-statistics-body dt { color: var(--ink-secondary); }
-.turn-statistics-body dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.turn-statistics-body p { margin: var(--leo-spacing-m) 0 0; color: var(--ink-secondary); }
+.turn-usage:hover { color: var(--ink-secondary); }
+.turn-usage:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
 .turn-usage-missing { padding-inline: var(--leo-spacing-m); }
 
 /* What the runtime told the reader about a turn, folded under the reply it belongs to. */
@@ -449,36 +475,36 @@
 
 /* The task of a manifest run. Drawn where a prompt is, and marked so it is not taken for one. */
 .bubble.user.plan-task { border: 1px dashed var(--accent-quiet); }
-.plan-task-mark { display: block; font: var(--type-caption-strong); text-transform: uppercase; opacity: 0.75; margin-bottom: 2px; }
+.plan-task-mark { display: block; font: var(--type-caption-strong); text-transform: uppercase; opacity: 0.75; margin-bottom: var(--leo-spacing-xs); }
 
 /* What a run released for a screen. Bordered as confined content is, since it can be a file's text. */
 .plan-reply { border: 1px solid var(--confine); border-radius: var(--radius-card); margin: var(--leo-spacing-m) 0; overflow: hidden; }
-.plan-reply-head { display: flex; gap: var(--leo-spacing-m); align-items: baseline; padding: 6px 12px; border-bottom: 1px solid var(--border-hairline); font: var(--type-caption); color: var(--ink-secondary); }
+.plan-reply-head { display: flex; gap: var(--leo-spacing-m); align-items: baseline; padding: var(--leo-spacing-m) var(--leo-spacing-l); border-bottom: 1px solid var(--border-hairline); font: var(--type-caption); color: var(--ink-secondary); }
 .plan-reply-head .mark { text-transform: uppercase; font: var(--type-caption-strong); color: var(--confine); }
-.plan-reply-foot { padding: 6px 12px; border-top: 1px solid var(--border-hairline); font: var(--type-caption); color: var(--ink-secondary); }
+.plan-reply-foot { padding: var(--leo-spacing-m) var(--leo-spacing-l); border-top: 1px solid var(--border-hairline); font: var(--type-caption); color: var(--ink-secondary); }
 
-.plan-ended { border: 1px solid var(--border-subtle); border-radius: var(--radius-card); margin: var(--leo-spacing-m) 0; padding: 10px 12px; }
+.plan-ended { border: 1px solid var(--border-subtle); border-radius: var(--radius-card); margin: var(--leo-spacing-m) 0; padding: var(--leo-spacing-l); }
+.plan-ended.quiet { border-color: var(--border-hairline); }
 .plan-ended.failed { border-color: var(--removed); }
 .plan-ended p { margin: var(--leo-spacing-xs) 0; color: var(--ink-secondary); font: var(--type-caption); }
 /* A command in the sentence is code, in the code type role like the rest of the window's code. The rule names the sentence's paragraph, so the code in the saved run's line below it is not matched. */
 .plan-ended .plan-detail code { font: var(--type-code); overflow-wrap: anywhere; }
-.plan-ended summary { cursor: pointer; font: var(--type-caption); margin-top: 6px; }
+.plan-ended summary { cursor: pointer; font: var(--type-caption); margin-top: var(--leo-spacing-m); }
 .plan-text { margin: var(--leo-spacing-xs) 0 0; font: var(--type-code); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
 
 /* A saved plan run, read only. */
-.run-record-body { padding: 12px 2px 24px; }
+.run-record-body { padding: var(--leo-spacing-l) var(--leo-spacing-xs) var(--leo-spacing-2xl); }
 .run-record-body h2 { font: var(--type-caption-strong); text-transform: uppercase; color: var(--ink-secondary); margin: var(--leo-spacing-xl) 0 var(--leo-spacing-xs); }
 .run-record-body section p { margin: var(--leo-spacing-xs) 0; font: var(--type-caption); }
-.run-record-notice { border: 1px solid var(--border-subtle); border-radius: var(--radius-card); padding: 10px 12px; background: var(--surface-sunken); }
+.run-record-notice { border: 1px solid var(--border-subtle); border-radius: var(--radius-card); padding: var(--leo-spacing-l); background: var(--surface-sunken); }
 .run-record-notice p { margin: var(--leo-spacing-xs) 0 var(--leo-spacing-m); font: var(--type-caption); color: var(--ink-secondary); }
 .run-record-outcome.stopped strong { color: var(--removed); }
 .run-record-outcome.finished strong { color: var(--added); }
-.run-record-meta { margin-top: 18px; font: var(--type-caption); color: var(--ink-tertiary); overflow-wrap: anywhere; }
+.run-record-meta { margin-top: var(--leo-spacing-xl); font: var(--type-caption); color: var(--ink-tertiary); overflow-wrap: anywhere; }
 
-/* ---- a bot's own page
+/* ---- a bot's earlier conversations
 
-   Its recent conversations in one card, with the composer docked under them. The rows reuse the
-   sidebar's three lines. */
+   In one card. The rows reuse the sidebar's three lines. */
 .bot-view-body { flex: 1; min-height: 0; overflow-y: auto; }
 .bot-view-column {
   box-sizing: border-box;
@@ -489,24 +515,67 @@
 }
 .bot-view-title { margin: 0 0 var(--leo-spacing-m); font: var(--type-body-strong); color: var(--ink-tertiary); }
 
-/* A bot nobody has talked to yet: its face and a line, 16px apart, then the box 40px under them,
-   the whole of it centred in the column. */
-.bot-first { display: grid; place-items: center; }
-.bot-first-column {
-  box-sizing: border-box;
+/* A bot's conversation with nothing said yet: its face over the greeting, 16px apart. */
+.bot-first-hero { display: flex; flex-direction: column; align-items: center; gap: var(--leo-spacing-xl); }
+.bot-first-hero h1 { margin: 0; }
+
+/* ---- a summoned bot (MEMORY-14)
+
+   A bot's face and name in a Nala label: over the reply it gave, on the reply's own left edge,
+   and inside the message that summoned it, where the person typed its marker. */
+.summon-label {
+  display: flex;
+  margin-bottom: calc(var(--leo-spacing-s) - var(--part-gap));
+}
+.bot-label { max-width: 100%; vertical-align: middle; --leo-icon-size: var(--icon-control); }
+.bot-label-face { display: inline-flex; align-items: center; }
+.bot-label-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A reply the bot gave elsewhere, in its own conversation: a raised card that opens the reply. */
+.replied-card {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: var(--leo-spacing-4xl);
+  gap: var(--leo-spacing-s);
   width: 100%;
-  max-width: calc(var(--reading-width) + 2 * var(--leo-spacing-2xl));
-  padding: var(--leo-spacing-2xl);
+  margin-top: calc(var(--turn-gap) - var(--part-gap));
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+  color: var(--ink-primary);
+  font: inherit;
+  text-align: start;
+  transition: background var(--motion-fast);
 }
-.bot-first-hero { display: flex; flex-direction: column; align-items: center; gap: var(--leo-spacing-xl); text-align: center; }
-.bot-first-hero h1 { margin: 0; font: var(--type-page-title); color: var(--ink-primary); text-wrap: balance; }
-.bot-first-hero p { margin: 0; font: var(--type-lede); color: var(--ink-secondary); text-wrap: pretty; }
-.bot-first .composer-dock { --dock-inset: 0px; padding: 0; }
-.bot-first .composer-dock::before { display: none; }
+.replied-card:hover { background: var(--surface-hover); }
+.replied-card:active { background: var(--surface-selected); }
+.replied-card:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.replied-head {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  min-width: 0;
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+  --leo-icon-size: var(--icon-control);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.replied-to { flex: none; }
+.replied-where { min-width: 0; overflow: hidden; font: var(--type-meta-strong); color: var(--ink-primary); text-overflow: ellipsis; white-space: nowrap; }
+.replied-when { flex: none; margin-inline-start: auto; color: var(--ink-tertiary); font-variant-numeric: tabular-nums; }
+.replied-text {
+  display: -webkit-box;
+  overflow: hidden;
+  font: var(--type-body);
+  color: var(--ink-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+@media (forced-colors: active) {
+  .replied-card { border-color: CanvasText; }
+}
 .bot-history-search { display: block; margin-bottom: var(--leo-spacing-l); }
 .bot-conversations {
   display: flex;
@@ -536,7 +605,7 @@
 .bot-history-row.unavailable { color: var(--ink-tertiary); }
 .bot-history-row.unavailable code { font: var(--type-code); }
 .bot-history-archived { flex: none; color: var(--ink-tertiary); }
-.bot-history-empty { display: flex; align-items: center; gap: var(--leo-spacing-m); margin: 0; padding: var(--leo-spacing-l); font: var(--type-caption); color: var(--ink-tertiary); --leo-icon-size: var(--icon-meta); }
+.bot-history-empty { display: flex; align-items: center; gap: var(--leo-spacing-m); margin: 0; padding: var(--leo-spacing-l); font: var(--type-caption); color: var(--ink-tertiary); --leo-icon-size: var(--icon-control); }
 @media (forced-colors: active) {
   .bot-conversations { border-color: CanvasText; }
 }

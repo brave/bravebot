@@ -1213,19 +1213,8 @@ fn remote(url: &str) -> Result<(), Problem> {
     if authority.contains('@') {
         return Err(Problem::Credentials);
     }
-    let (host, after) = match authority.strip_prefix('[') {
-        Some(bracketed) => bracketed.split_once(']').ok_or(Problem::Url)?,
-        None => authority.split_at(authority.find(':').unwrap_or(authority.len())),
-    };
-    let port = match after.strip_prefix(':') {
-        Some(digits) => {
-            !digits.is_empty()
-                && digits.bytes().all(|b| b.is_ascii_digit())
-                && digits.parse::<u16>().is_ok()
-        }
-        None => after.is_empty(),
-    };
-    match host.is_empty() || !port {
+    let (host, _) = crate::provider::host_and_port(authority).map_err(|_| Problem::Url)?;
+    match host.is_empty() {
         true => Err(Problem::Url),
         false => Ok(()),
     }

@@ -378,3 +378,78 @@ fn a_withheld_drop_is_the_sentence_naming_it_and_no_bytes() {
         other => panic!("a withheld drop is a sentence: {other:?}"),
     }
 }
+
+/// A PNG of `width` by `height` that does not compress, so its length is close to its pixel count.
+fn noise_png(width: u32, height: u32) -> Vec<u8> {
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    let picture = image::RgbImage::from_fn(width, height, |_, _| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let bytes = state.to_le_bytes();
+        image::Rgb([bytes[0], bytes[3], bytes[6]])
+    });
+    let mut out = Vec::new();
+    picture
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .expect("encode the picture");
+    out
+}
+
+/// DROP-4. A picture over the attachment cap comes back shown, scaled to a PNG that a request can
+/// hold, where it used to fail the turn.
+#[test]
+fn a_dropped_picture_over_the_cap_comes_back_shown_and_smaller() {
+    use base64::Engine;
+    let scratch = Scratch::new("over-the-cap");
+    let bytes = noise_png(4000, 1000);
+    assert!(bytes.len() > bravebot_agent::workspace::MAX_ATTACHMENT_BYTES);
+    std::fs::write(scratch.path.join("big.png"), &bytes).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+
+    let carried = attached::read(
+        &workspace,
+        &dropped("big.png"),
+        &mut TrustStore::new(&scratch.path),
+        &mut sink,
+    )
+    .expect("a picture over the cap is scaled and carried");
+
+    let [Carried::Shown { uri, .. }] = carried.as_slice() else {
+        panic!("the scaled picture was not shown: {carried:?}");
+    };
+    let (_, encoded) = uri.split_once(";base64,").expect("a base64 data URI");
+    let scaled = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .expect("valid base64");
+    assert!(uri.starts_with("data:image/png;base64,"));
+    assert!(scaled.len() < bytes.len());
+    assert!(scaled.len() <= bravebot_agent::workspace::MAX_ATTACHMENT_BYTES);
+    let decoded = image::load_from_memory(&scaled).expect("the carried bytes decode");
+    assert_eq!(decoded.width(), bravebot_agent::picture::DOWNSCALED_SIDE);
+}
+
+/// A file over the cap that no decoder reads is still refused, and the turn does not go on without
+/// it.
+#[test]
+fn a_dropped_picture_over_the_cap_that_will_not_decode_still_fails() {
+    let scratch = Scratch::new("corrupt");
+    let broken = vec![0u8; bravebot_agent::workspace::MAX_ATTACHMENT_BYTES + 1];
+    std::fs::write(scratch.path.join("broken.png"), broken).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+
+    let error = attached::read(
+        &workspace,
+        &dropped("broken.png"),
+        &mut TrustStore::new(&scratch.path),
+        &mut sink,
+    )
+    .expect_err("bytes that are no picture are not carried");
+
+    assert!(
+        error.to_string().contains("MiB"),
+        "the failure did not name the limit: {error}"
+    );
+}

@@ -24,11 +24,14 @@ import type { CommandId, ContextCommandId, ContextRef, WindowState } from '../sh
 import type { ExportOutcome, ExportRequest } from '../shared/export'
 import type { Fork } from '../shared/forks'
 import type { Bot, BotServers } from '../shared/bots'
+import type { Summon } from '../shared/summons'
 import type { Listing, OpenOutcome, FilePreview, FileSearch, FileAttachment } from '../shared/files'
 import type { Appearance } from '../shared/theme'
 import type { Experience } from '../shared/experience'
 import type { Drop, DropOutcome } from '../shared/drops'
 import type { Paste, PasteOutcome } from '../shared/pastes'
+import type { Composed, SaveOutcome } from '../shared/bug-report'
+import type { PageName } from '../shared/update'
 
 /** The appearance in force: System, Light, or Dark. */
 export interface ThemeState {
@@ -195,6 +198,14 @@ const api = {
     void ipcRenderer.invoke('bravebot:theme:write', name)
   },
 
+  /**
+   * Start the app again, which is when a language chosen in Settings applies. False where a turn
+   * is running, since quitting would refuse what it waits on and end it.
+   */
+  relaunch(): Promise<boolean> {
+    return ipcRenderer.invoke('bravebot:app:relaunch') as Promise<boolean>
+  },
+
   /** Listen for appearance changes written through the main process. */
   onThemeChanged(listener: (state: ThemeState) => void): () => void {
     const handler = (_event: IpcRendererEvent, state: ThemeState) => listener(state)
@@ -334,6 +345,32 @@ const api = {
   },
 
   /**
+   * Send one turn addressed to a bot a person picked in the composer (MEMORY-14).
+   *
+   * Names the bot and the session. The main process names the bot's definition, and the turn runs
+   * where the session runs.
+   */
+  summonBot(request: {
+    session: string
+    slug: string
+    prompt: string
+    model?: string | null
+    attachments?: string[]
+    drops?: string[]
+    pastes?: string[]
+  }): Promise<Answer<{ turn: number }>> {
+    return ipcRenderer.invoke('bravebot:bots:summon', request) as Promise<Answer<{ turn: number }>>
+  },
+
+  /**
+   * Which bot answered which summoned turn, newest first. No write half: the main process writes
+   * a line when a summoned turn ends, from the pick and from what the agent answered.
+   */
+  readSummons(): Promise<Summon[]> {
+    return ipcRenderer.invoke('bravebot:summons:read') as Promise<Summon[]>
+  },
+
+  /**
    * One directory of the folder a session is working in, or `null` for anything it may not see.
    *
    * A session handle and a path *relative* to that session's directory — never a path. The main
@@ -393,6 +430,28 @@ const api = {
    */
   exportSession(request: ExportRequest): Promise<ExportOutcome> {
     return ipcRenderer.invoke('bravebot:export', request) as Promise<ExportOutcome>
+  },
+
+  /**
+   * The bug report's text, as the bridge composed it, and the newest log's path (DIAG-9).
+   *
+   * None of the four below takes text, a URL or a path. A save asks for the report again and
+   * writes that, a page is one of two names, and the log shown is the one the bridge names.
+   */
+  composeBugReport(): Promise<Composed> {
+    return ipcRenderer.invoke('bravebot:bug-report:compose') as Promise<Composed>
+  },
+  /** Save the report where the person chooses in a native sheet, readable by them alone. */
+  saveBugReport(): Promise<SaveOutcome> {
+    return ipcRenderer.invoke('bravebot:bug-report:save') as Promise<SaveOutcome>
+  },
+  /** Show the newest diagnostic log in the file manager. False where there is none. */
+  showBugReportLog(): Promise<boolean> {
+    return ipcRenderer.invoke('bravebot:bug-report:show-log') as Promise<boolean>
+  },
+  /** Open the releases page or a new issue in the browser (UPDATE-12, DIAG-9). */
+  openPage(name: PageName): Promise<boolean> {
+    return ipcRenderer.invoke('bravebot:open-page', name) as Promise<boolean>
   },
 
   /**

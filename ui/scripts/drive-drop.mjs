@@ -43,8 +43,9 @@ try {
   const pdf = at('scan.pdf', '%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n')
   const md = at('notes.md', 'The drop marker colour is teal.\n')
   const dmg = at('installer.dmg', 'not text')
-  // Over the agent's 8 MiB cap for an attachment. Only its size is read before it is left out.
-  const huge = at('huge.png', '')
+  // Over the agent's 8 MiB cap for an attachment. Only its size is read before it is left out. A PDF,
+  // because a PNG or JPEG up to 64 MiB is scaled down by the agent and not left out (DROP-4).
+  const huge = at('huge.pdf', '')
   truncateSync(huge, 9 * 1024 * 1024)
   const folder = join(desktop, 'a folder')
 
@@ -132,10 +133,10 @@ try {
   assert.equal(await chips.count(), 3)
   assert.equal(await page.locator('[data-test="status-toast"]').filter({ hasText: 'Could not attach' }).count(), 0, 'and is not even looked at')
 
-  // ---- a picture over the cap is left out, told in the bridge's words ----------------------------
+  // ---- a PDF over the cap is left out, told in the bridge's words --------------------------------
   const kept = await composer.inputValue()
   await drag([huge], '.composer textarea')
-  await page.locator('[data-test="status-toast"]').filter({ hasText: 'huge.png is 9.0 MB, and an attachment carries at most 8.0 MB' }).waitFor()
+  await page.locator('[data-test="status-toast"]').filter({ hasText: 'huge.pdf is 9.0 MB, and an attachment carries at most 8.0 MB' }).waitFor()
   assert.equal(await composer.inputValue(), kept, 'a file too large to carry writes no marker')
   assert.equal(await chips.count(), 3, 'and stages no chip')
   await page.screenshot({ path: join(output, 'drop-too-large.png') })
@@ -195,19 +196,19 @@ try {
   assert.ok(requeued, 'the requeued message was sent once its name could go')
   assert.ok(requeued.slice(requeued.lastIndexOf('Requeued')).includes('data:image/png;base64,'), 'with the picture it was queued with')
 
-  // ---- a picture that grew past the cap after it was dropped refuses the send, in the same words --
-  const grows = at('grows.png', Buffer.from(pictureBytes, 'base64'))
+  // ---- a PDF that grew past the cap after it was dropped refuses the send, in the same words ------
+  const grows = at('grows.pdf', '%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n')
   await drag([grows], '.composer textarea')
   await chips.first().waitFor()
   truncateSync(grows, 9 * 1024 * 1024)
   const asked = requests.length
   await composer.press('Enter')
   // The error card's detail, which the card holds folded until it is opened.
-  await page.locator('.entries pre').filter({ hasText: 'grows.png is 9.0 MB, and an attachment carries at most 8.0 MB' }).waitFor({ state: 'attached' })
+  await page.locator('.entries pre').filter({ hasText: 'grows.pdf is 9.0 MB, and an attachment carries at most 8.0 MB' }).waitFor({ state: 'attached' })
   assert.equal(requests.length, asked, 'the refused send reached no model')
 
   assert.deepEqual(errors, [])
-  console.log(`PASS: a trusted drop stages markers and chips, a picture over the cap is left out with the bridge's note, a forged drop does nothing, the send carries the picture, the PDF and the text file, a queued message refused for its @ name keeps its picture, and one that grew past the cap is refused with the bridge's note. Screenshots in ${output}/drop-*.png`)
+  console.log(`PASS: a trusted drop stages markers and chips, a PDF over the cap is left out with the bridge's note, a forged drop does nothing, the send carries the picture, the PDF and the text file, a queued message refused for its @ name keeps its picture, and a PDF that grew past the cap is refused with the bridge's note. Screenshots in ${output}/drop-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'drop-failure.png') }).catch(() => undefined)
   throw error

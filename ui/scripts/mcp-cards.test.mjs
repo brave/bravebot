@@ -39,7 +39,7 @@ const draw = (entry, onDecide = () => {}) =>
     React.createElement(Row, { entry, onDecide, onAnswer() {}, onFork() {}, forkable: false }),
   )
 
-const buttons = (markup) => [...markup.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((found) => found[1])
+const buttons = (markup) => [...markup.matchAll(/<(?:leo-)?button[^>]*>(.*?)<\/(?:leo-)?button>/g)].map((found) => found[1]).filter((label) => label !== 'Show' && label !== 'Hide')
 
 const server = (overrides = {}) =>
   t.askedMcpServer({

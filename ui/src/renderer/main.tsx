@@ -1,6 +1,9 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { setLocale } from './i18n'
+import { askLocale } from './i18n/choose'
+import type { LanguageReport } from '../shared/protocol'
 import './nala-setup'
 import './styles.css'
 
@@ -13,8 +16,12 @@ if (typeof platform === 'string' && platform !== 'darwin') document.documentElem
 const root = document.getElementById('root')
 if (!root) throw new Error('no #root to mount into')
 
-createRoot(root).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+// The catalog is chosen once, before anything is drawn (LOCALE-7).
+void askLocale(() => window.bravebot.request<LanguageReport>('language.get')).then((tag) => {
+  setLocale(tag)
+  createRoot(root).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  )
+})

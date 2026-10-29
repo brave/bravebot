@@ -84,8 +84,12 @@ against the plan's directory, without following links. Some programs read the pa
 by, so `venv/bin/python` started by the interpreter it links to does not find its venv. On Windows
 the path is the file itself, since a virtual environment's `python.exe` there is a copy of the
 interpreter. The prompt shows the path and the file it leads to, and an entry records both
-([RUN-8](#RUN-8)). A result, a job's line, a remembered line and the execution plan the desktop app
-shows name the program the same way: the path, then the file it leads to. A `cargo` that rustup serves
+([RUN-8](#RUN-8)). A job's line as the person watching sees it, a remembered line and the execution plan the
+desktop app shows name the program the same way: the path, then the file it leads to. A result, the
+account of a job that ended and the sentence for a job that did not start name it by the path alone:
+the planner typed that path, and the file a link leads to is a name whoever wrote the tree chose,
+which a sentence the driver writes to the planner never spells ([TOOL-4](tool-surface.md#TOOL-4),
+[CMDLINE-4](command-line.md#CMDLINE-4)). A `cargo` that rustup serves
 is named with both, and not as `rustup`. A program started by its own file is named by that file
 alone. Just before each pipeline starts, each of its steps' paths is resolved again. If one no longer
 leads to the approved file, the pipeline is refused before any of its steps starts or any file it
@@ -107,10 +111,15 @@ in it.
 `verified-by: bravebot_agent::programs::a_link_is_started_by_its_own_path`
 `verified-by: bravebot_core::command::two_spellings_of_one_binary_encode_apart`
 `verified-by: bravebot_core::command::an_argument_holding_an_arrow_is_quoted`
+`verified-by: bravebot_core::command::an_argument_holding_an_invisible_character_is_spelled`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_draws_names_that_differ_in_an_invisible_character_apart`
 `verified-by: bravebot_core::command::a_plan_shows_a_program_started_through_a_link_as_the_link_and_its_file`
 `verified-by: bravebot_core::command::arguments_that_spell_a_link_draw_apart_from_the_link_in_a_plan`
 `verified-by: bravebot_core::remembered::a_line_started_through_a_link_is_read_back_as_the_plan_draws_it`
-`verified-by: bravebot_agent::turn::a_result_names_a_program_started_through_a_link_by_the_link_and_its_file`
+`verified-by: bravebot_core::command::what_the_planner_is_told_names_a_program_by_its_link_alone`
+`verified-by: bravebot_agent::turn::a_result_names_a_program_started_through_a_link_by_the_link_alone`
+`verified-by: bravebot_agent::turn::a_job_that_ended_is_told_to_the_planner_by_the_link_alone`
+`verified-by: bravebot_agent::turn::a_job_that_did_not_start_is_told_to_the_planner_by_the_link_alone`
 `verified-by: bravebot_agent::turn::a_job_names_a_program_started_through_a_link_by_the_link_and_its_file`
 `verified-by: bravebot_ui_bridge::wire::a_stage_started_through_a_link_sends_the_link`
 `verified-by: bravebot_tui::confirm::run::a_run_prompt_shows_the_link_a_program_is_started_by`
@@ -239,7 +248,8 @@ settings and the person's answer and never from what a stage wrote or printed:
 
 - the line starts in the workspace root the yes was given for, not a directory beneath or beside it,
   and the root is still trusted. The answer is keyed to that one directory ([RUN-8](#RUN-8)), so a
-  worktree is its own directory with its own answer and `/cd` leaves the answer behind;
+  worktree is its own directory with its own answer, `/cd` leaves the answer behind, and a delegate's
+  checkout ([CHECKOUT-10](../checkouts.md#CHECKOUT-10)) is not the directory the yes was given for;
 - the yes said so. A directory trusted before the question said so, one trusted by a kept answer
   written before it, a session that resumed from a record that kept no answer or kept one for another
   directory (a resume brings back the answer its own record kept, for the directory it was given in and no
@@ -335,6 +345,8 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_agent::confine::a_quoted_name_in_a_command_string_names_the_file_it_runs`
 `verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
 `verified-by: bravebot_agent::confined_lines::trust_of_the_directory_answers_a_held_line_and_nothing_else`
+`verified-by: bravebot_core::policy::the_answer_given_for_the_working_directory_does_not_cover_a_checkout`
+`verified-by: bravebot_agent::confined_lines::trust_of_the_directory_does_not_answer_a_held_line_in_a_checkout`
 
 <a id="RUN-6"></a>
 ### RUN-6: private input asks every time, whatever is vouched for
@@ -431,8 +443,9 @@ too.
 
 **The person's trust of a directory is one directory's too.** What a yes to the startup question
 says about confined lines ([RUN-5](#RUN-5)) is keyed to the workspace root it was given in, exactly as an
-entry is: it grants nothing in a directory beneath it, and none in another worktree of the same repository,
-which has a root and an answer of its own. Whether trust should follow the repository is not decided here.
+entry is: it grants nothing in a directory beneath it, and none in another worktree of the same repository
+or in a delegate's checkout ([CHECKOUT-10](../checkouts.md#CHECKOUT-10)), each of which has a root and an
+answer of its own. Whether trust should follow the repository is not decided here.
 Reading the identity of a repository from a worktree's `.git` pointer or `commondir` is not an option, since
 a stage can write those bytes.
 
@@ -929,7 +942,15 @@ their jobs per turn, so a job cannot outlive the turn that started one: a backgr
 running after its turn ended would be an effect nobody is watching, nobody is being asked about, and
 nobody can stop. An interactive session in the terminal
 interface owns them instead, so a job survives the end of its turn and is killed when the session
-ends, when `/clear` begins another conversation, or when the person stops it.
+ends, when `/clear` begins another conversation, or when the person stops it. `/branch` is none of
+these: the copy is the same process, so a job started before it keeps running with the profile it
+started under ([SANDBOX-22](../sandboxing.md#SANDBOX-22)) and is listed and stopped from the copy.
+The copy forgets the reach and host answers the job started with ([PROMPT-8](../prompting.md#PROMPT-8)),
+so a `run` started in the copy is asked about them again, while the programs vouched for come across
+with the record ([RUN-9](#RUN-9)) and are not asked about
+`verified-by: bravebot_tui::app::a_branch_keeps_what_the_record_holds_and_forgets_the_rest`.
+That test pins the answers the copy keeps and forgets. No test starts a job and then branches, so
+no test covers a job surviving `/branch`.
 
 **What makes that watched.** The person can see a job between turns, on the hint line and in the
 rows of [RUN-26](#RUN-26), and stop it with `/jobs stop` ([RUN-27](#RUN-27)), which is carried out
@@ -1397,6 +1418,17 @@ pressing `r` is a decision about the tree as much as about the command.
 
 **Other known costs.** A binary replaced in place at the recorded path is covered without anybody
 being asked again, which is a longer exposure than a session's and is what the answer lasting costs.
+A `git switch` that rewrites a file the line takes its work from is covered the same way.
+Steps that were each answered for separately are not covered as a line when they are recombined:
+this record compares the whole line, joins included, so a pipeline or a `&&` of two remembered
+steps is not covered by it
+`verified-by: bravebot_core::remembered::how_the_steps_are_joined_is_part_of_the_line`.
+The vouched list of the session that gave the yes is keyed by step ([RUN-8](#RUN-8)), and `a` or `r`
+adds each step of the line to it, so in that session steps answered for one at a time run unasked
+in any pipeline, order or join that holds only vouched steps
+`verified-by: bravebot_core::policy::steps_vouched_for_one_at_a_time_are_covered_when_recombined`.
+A line holding a step that was not vouched for is still asked about
+`verified-by: bravebot_core::policy::an_unvouched_step_in_a_recombined_line_is_still_asked_about`.
 A directory removed and made again at the same path is covered by what was recorded for the one
 before it, since an entry names its directory by path and holds nothing that identifies the
 directory standing there, where the startup answer holds its identity

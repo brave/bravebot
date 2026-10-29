@@ -62,7 +62,7 @@ line took the place of the definition's model, a skill's model replaces the comm
 would with no definition addressed.
 
 If the service answers a skill's rounds with a different model than the one the skill named, which
-it does for a misspelt name or a premium model with no subscription in hand, the session says so.
+it does for a misspelt name or a premium model with no premium key stored, the session says so.
 
 A value that cannot be used is reported and the skill still loads, on whatever the session was
 already running: a level spelled some other way, or a model needing a sign-in this machine has not
@@ -205,6 +205,7 @@ files. Running a script kept there is not part of this; `run` has its own gate.
 | Source | Trusted because |
 |---|---|
 | `~/.bravebot/skills/<name>/SKILL.md` | it is your own directory: provenance, never the trust map |
+| `~/.agents/skills/<name>/SKILL.md`, `~/.claude/skills/<name>/SKILL.md` | only if you name the directory in `sharedSkillDirectories`; then provenance, as for `~/.bravebot/skills` |
 | `<workspace>/.bravebot/skills/<name>/SKILL.md` | you vouched for the directory |
 | `<workspace>/.claude/skills/<name>/SKILL.md` | you vouched for the directory |
 | `<workspace>/.agents/skills/<name>/SKILL.md` | you vouched for the directory |
@@ -223,7 +224,19 @@ session has read or written something under your home directory, as any director
 `.bravebot/skills` is. Where nothing reads them, you are told how many were not loaded.
 
 A project skill replaces a global one of the same name, and one in `.bravebot/skills` replaces one
-of the same name in `.claude/skills` or `.agents/skills`.
+of the same name in `.claude/skills` or `.agents/skills`. A skill in `~/.bravebot/skills` replaces one
+of the same name in a shared directory you named.
+
+To read the skills you keep for another agent, list the directories in
+`~/.bravebot/settings.json`:
+
+```json
+{ "sharedSkillDirectories": ["~/.agents/skills", "~/.claude/skills"] }
+```
+
+Neither directory is read until you do. `bravebot doctor` says when one exists and is left alone. The
+key is read from your own settings file and from the file `--settings` names, and a project's
+settings file cannot set it.
 
 A project skill that a `deny` [rule](configuration.md#permissions) covers, under the name it was
 found by or the file it links to, is not offered, and you are told it was left out.

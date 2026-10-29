@@ -56,7 +56,7 @@ const asked = (overrides = {}) =>
     ...overrides,
   })
 
-const buttons = (markup) => [...markup.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((found) => found[1])
+const buttons = (markup) => [...markup.matchAll(/<(?:leo-)?button[^>]*>(.*?)<\/(?:leo-)?button>/g)].map((found) => found[1]).filter((label) => label !== 'Show' && label !== 'Hide')
 
 test('the card says what would run and what it would read', () => {
   const markup = draw(asked())

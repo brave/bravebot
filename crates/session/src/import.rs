@@ -195,6 +195,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
                         Spoken::Agent(text) => Message::assistant(text.as_str()),
                     },
                     composed: Some(Composed::Imported),
+                    address: None,
                     source: None,
                 })
                 .collect(),
@@ -207,10 +208,14 @@ fn record_of(project: &Path, found: &Found) -> Record {
         asides: Vec::new(),
         notes: Vec::new(),
         injected_facts: Default::default(),
+        work: Default::default(),
+        written: Vec::new(),
         manifest: None,
         rewind: Vec::new(),
         server_children_may_run: false,
+        trust_answered_by_mode: false,
         checkouts: Vec::new(),
+        touched: Default::default(),
         agent: None,
         skill_mode: None,
     }
@@ -759,7 +764,7 @@ mod tests {
             matches!(
                 drawn.as_slice(),
                 [
-                    bravebot_agent::conversation::Said::User(_),
+                    bravebot_agent::conversation::Said::User(..),
                     bravebot_agent::conversation::Said::Assistant(_),
                     bravebot_agent::conversation::Said::Assistant(_)
                 ]

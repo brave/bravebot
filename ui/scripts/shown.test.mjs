@@ -9,6 +9,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
 import { CASES } from './shown-cases.mjs'
 
 const require = createRequire(import.meta.url)
@@ -207,9 +208,10 @@ test('an answer is open once measured with nothing left, and a standing one wait
 // mark dropped from one of the rows they draw would fail nothing there: no token sits in it.
 const CONDITIONAL = {
   confirm: {
-    request: { ...CASES.confirm.request, untrusted: true, exact: false, writtenSinceCheckout: true },
+    request: { ...CASES.confirm.request, untrusted: true, exact: false, writtenSinceCheckout: true, hiddenNote: '2 characters in the lines this changes draw as nothing' },
     phrases: [
       'Read it as you would a stranger’s patch',
+      '2 characters in the lines this changes draw as nothing',
       'too dissimilar to diff exactly',
       'after the checkout was made',
     ],
@@ -246,8 +248,8 @@ test('the warnings and closing sentences no case token sits in are rows the card
   }
 })
 
-test('an output or vetted read the agent sent no sentence for says nothing about characters that draw as nothing', () => {
-  for (const kind of ['output', 'vet']) {
+test('a write, an output or a vetted read the agent sent no sentence for says nothing about characters that draw as nothing', () => {
+  for (const kind of ['confirm', 'output', 'vet']) {
     for (const [hidden, hiddenNote] of [[undefined, undefined], [0, null]]) {
       const markup = draw(ENTRY[kind]({ ...CASES[kind].request, hidden, hiddenNote }))
       assert.ok(!markup.includes('draw as nothing') && !markup.includes('draws as nothing'), `${kind}: a count of ${hidden} drew the sentence\n${markup}`)
@@ -257,12 +259,22 @@ test('an output or vetted read the agent sent no sentence for says nothing about
 })
 
 test('the sentence the agent sent is drawn as sent, with no wording of the card’s own', () => {
-  for (const kind of ['output', 'vet']) {
+  for (const kind of ['confirm', 'output', 'vet']) {
     const note = 'Zq9 sentence the agent worded, in whatever language'
     const markup = draw(ENTRY[kind]({ ...CASES[kind].request, hiddenNote: note }))
     assert.equal(texts(markup).filter((run) => run.text === note && run.deciding === 'all').length, 1, `${kind}: the sentence is drawn once, as a deciding row\n${markup}`)
     assert.ok(!markup.includes('draw as nothing') && !markup.includes('draws as nothing'), `${kind}: the card put words of its own beside the agent's\n${markup}`)
   }
+})
+
+// The overlay drawn while a file is dragged over the transcript takes no pointer, so a hit test
+// passes through it and only the mark tells `shown.ts` that it covers the rows under it.
+// drive-shown.mjs holds the window to it in a real renderer; this fails without one.
+test('the overlay drawn while a file is dragged over the transcript is marked as a veil', () => {
+  const source = readFileSync('src/renderer/components/Transcript.tsx', 'utf8')
+  const overlay = source.match(/<div [^>]*data-test="drop-target"[^>]*>/)?.[0]
+  assert.ok(overlay, 'the drop overlay is no longer found by its data-test')
+  assert.match(overlay, /data-veil="own"/, `the drop overlay takes no pointer and is not marked as a veil: ${overlay}`)
 })
 
 test('every warning a decision card draws is inside a row it marks as deciding, or holds one', () => {

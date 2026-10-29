@@ -233,11 +233,11 @@ The body, written in the repository's own words rather than the reporter's:
 - For a family: the earlier issues and pull requests, each sibling with whether it fails or is
   handled and whether a test or a reading of the code shows it, and the issue that tracks the
   family where there is one.
-- Each case the body says is left undone, such as a sibling that fails or a call site, platform or
-  program the report does not cover, with the number of the issue that tracks it. A case with no
+- Each defect the body says is left unfixed, such as a sibling that fails or a call site, platform or
+  program the report does not cover, with the number of the issue that tracks it. A defect with no
   issue is checked and drafted as a sibling is, with no HackerOne line, shown with this one and
-  filed first, so its number is in this body when it is posted. A case the check shows is handled is
-  left out of the body. The [issue-poster](../../agents/issue-poster.md) definition reads the body
+  filed first, so its number is in this body when it is posted. A defect the check shows is handled
+  is left out of the body. The [issue-poster](../../agents/issue-poster.md) definition reads the body
   for these statements again before posting, and has nothing to file where each one has its
   number.
 - `Reported through HackerOne` and the report number if it has one. Not the reporter's name,

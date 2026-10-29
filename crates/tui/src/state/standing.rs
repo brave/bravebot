@@ -47,7 +47,10 @@ impl Session {
     /// `/clear`, and leaving. It is not written down, for the reason a loop is not. Unlike `/loop` it
     /// may be typed while a turn runs, since nothing starts until the delay is up and the session is
     /// idle.
-    pub fn start_after(&mut self, request: crate::loops::Request) {
+    ///
+    /// The delay counts from `typed`, when the person typed the line. A line typed during a turn is
+    /// armed when that turn ends, and a delay that has passed by then is due at once.
+    pub fn start_after(&mut self, request: crate::loops::Request, typed: Instant) {
         if self.looping.is_full() {
             self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
             return;
@@ -69,12 +72,24 @@ impl Session {
         // Numbered before anything is said about it, so what is said is the number it has.
         let number = self
             .looping
-            .start(crate::loops::Running::after(request, Instant::now()));
+            .start(crate::loops::Running::after(request, typed));
         if let crate::loops::Pacing::Once(delay) = pacing {
+            // The time left, since a line typed during a turn has already spent part of its delay
+            // (LOOP-18). The whole delay stands in only where the line cannot be found, which it
+            // always can be straight after it was started.
+            let left = self
+                .looping
+                .get_mut(number)
+                .and_then(|running| running.until(Instant::now()))
+                // Whole seconds rounded up, so a line typed a moment ago still reads as its delay.
+                .map(|left| {
+                    Duration::from_secs(left.as_secs() + u64::from(left.subsec_nanos() > 0))
+                })
+                .unwrap_or(delay);
             self.note(t!(
                 after_started,
                 number = number,
-                delay = crate::loops::spell(delay)
+                delay = crate::loops::spell(left)
             ));
         }
     }

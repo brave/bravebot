@@ -121,6 +121,8 @@ pub(super) fn with_standing<R>(
         manifest: None,
         rewind: session.rewind.points(),
         checkouts: &workspace.session_checkouts(),
+        touched: Some(&workspace.touched_record()),
+        answered_by_mode: session.live_permission_mode().has_bypassed(),
     })
 }
 

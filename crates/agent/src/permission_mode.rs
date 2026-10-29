@@ -226,6 +226,9 @@ impl PermissionMode {
 #[derive(Debug, Clone)]
 pub struct LiveMode {
     mode: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    /// Whether the mode was bypass at any moment since this handle was made, which a later
+    /// change of mode does not take back (MODE-4).
+    bypassed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     nobody_to_ask: bool,
 }
 
@@ -233,6 +236,9 @@ impl LiveMode {
     pub fn new(mode: PermissionMode) -> Self {
         Self {
             mode: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(mode as u8)),
+            bypassed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                mode == PermissionMode::Bypass,
+            )),
             nobody_to_ask: false,
         }
     }
@@ -255,7 +261,17 @@ impl LiveMode {
         }
     }
 
+    /// Whether bypass was the mode at any moment of this session's sitting, so that a rule the
+    /// map holds may be one the mode answered and not a person (MODE-4, TRUST-6).
+    pub fn has_bypassed(&self) -> bool {
+        self.bypassed.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     pub fn set(&self, mode: PermissionMode) {
+        if mode == PermissionMode::Bypass {
+            self.bypassed
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
         self.mode
             .store(mode as u8, std::sync::atomic::Ordering::Release);
     }
@@ -299,7 +315,7 @@ pub struct Confining<'a, C: Confirmer> {
     auto_vetting: bool,
     /// The sandbox mode the session's programs run under, which decides with the permission mode
     /// whether a language server's start is asked about ([`PermissionMode::answers_a_server_start_unasked`]).
-    sandbox: bravebot_sandbox::SandboxMode,
+    sandbox: crate::LiveSandbox,
     /// Called before each question that is not answered by the mode, which is the questions that
     /// reach a person (HOOK-2).
     alert: Option<PromptAlert>,
@@ -330,7 +346,7 @@ impl<'a, C: Confirmer> Confining<'a, C> {
             inner,
             mode: mode.into(),
             auto_vetting,
-            sandbox: bravebot_sandbox::SandboxMode::default(),
+            sandbox: crate::LiveSandbox::default(),
             alert: None,
         }
     }
@@ -339,9 +355,12 @@ impl<'a, C: Confirmer> Confining<'a, C> {
     ///
     /// Left off, a confirmer holds the default mode, which confines, so a caller that forgets it
     /// puts a question that could have been answered and never answers one that should be put.
+    ///
+    /// A [`crate::LiveSandbox`] is read when each question is asked, so a mode the person chooses
+    /// while the work runs decides the questions after it (SANDBOX-22).
     #[must_use]
-    pub fn with_sandbox_mode(mut self, sandbox: bravebot_sandbox::SandboxMode) -> Self {
-        self.sandbox = sandbox;
+    pub fn with_sandbox_mode(mut self, sandbox: impl Into<crate::LiveSandbox>) -> Self {
+        self.sandbox = sandbox.into();
         self
     }
 
@@ -505,7 +524,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         request: &crate::confirm::ServerRequest,
     ) -> (Decision, Option<&'static str>) {
         let mode = self.mode.get();
-        match mode.answers_a_server_start_unasked(self.sandbox) {
+        match mode.answers_a_server_start_unasked(self.sandbox.get()) {
             true => (Decision::Approve, Some(mode.name())),
             false => (self.asking().confirm_server(request), None),
         }
@@ -1566,6 +1585,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// LSP-5, SANDBOX-22: a confirmer holds the session's handle on the sandbox mode and reads it
+    /// when each question is asked. Bypassing answers a server's start under `off`, and the person
+    /// who types `/sandbox workspace-write` over a running turn is asked about the next one. The
+    /// regression it rejects is a confirmer that kept the mode it was made with, which goes on
+    /// answering for a session that is confined again.
+    #[test]
+    fn a_confirmer_follows_the_sandbox_mode_chosen_after_it_was_made() {
+        use bravebot_sandbox::SandboxMode;
+        let live = crate::LiveSandbox::new(SandboxMode::Off);
+        let mut asked = YesToServers::default();
+        let mut confirmer = Confining::new(&mut asked, PermissionMode::Bypass, false)
+            .with_sandbox_mode(live.clone());
+
+        assert_eq!(confirmer.confirm_server(&a_server()), Decision::Approve);
+        live.set(SandboxMode::WorkspaceWrite);
+        assert_eq!(confirmer.confirm_server(&a_server()), Decision::Approve);
+        live.set(SandboxMode::Off);
+        assert_eq!(confirmer.confirm_server(&a_server()), Decision::Approve);
+
+        drop(confirmer);
+        assert_eq!(asked.0, 1, "only the question put under a confining mode");
     }
 
     /// LSP-5: a confirmer built without the sandbox mode holds the default, which confines, so a

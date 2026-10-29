@@ -69,9 +69,10 @@ address its host resolves to, by [FETCH-8](tools/fetch-url.md#FETCH-8).
 
 A request may instead refuse redirects (`Request::refusing_redirects`). A redirect in answer to it is
 returned as the failure it is, with the status it came with, and nothing is sent to the address it names,
-so there is no hop to revalidate. It is for a request that carries a credential to a destination compiled
-into the program, such as the serving host of a ChatGPT account ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)) and of
-an xAI account ([XAI-16](xai-sign-in.md#XAI-16)).
+so there is no hop to revalidate. It is for a request that carries a credential to a destination fixed by the
+program or by the person's own configuration, such as the serving host of a ChatGPT account
+([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)) and of an xAI account ([XAI-16](xai-sign-in.md#XAI-16)), and Brave's
+premium host, which the premium key is presented to ([PREM-10](premium-credentials.md#PREM-10)).
 
 `verified-by: bravebot_net::egress::every_redirect_hop_is_revalidated`
 `verified-by: bravebot_core::policy::a_fetch_cannot_be_redirected_to_a_host_nobody_approved`
@@ -81,6 +82,7 @@ an xAI account ([XAI-16](xai-sign-in.md#XAI-16)).
 `verified-by: bravebot_net::lib::path_absolute_redirects_keep_the_authority`
 `verified-by: bravebot_aichat::client::a_gateway_client_refusing_redirects_goes_nowhere_a_reply_names`
 `verified-by: bravebot_aichat::client::a_redirect_in_answer_to_the_xai_listing_is_a_failure_and_goes_nowhere`
+`verified-by: bravebot_aichat::client::a_redirect_from_the_premium_host_is_a_failure_and_goes_nowhere`
 `verified-by: bravebot_net::lib::relative_redirects_resolve_against_the_parent_path`
 `verified-by: bravebot_net::lib::scheme_relative_redirects_keep_the_scheme`
 `verified-by: bravebot_net::lib::a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further`
@@ -173,6 +175,13 @@ past aside, is absent. It is a number that only sets a timer ([BACKEND-54](backe
 the header's text is never kept or shown, and the retryable set above is decided from the status
 alone.
 
+A request that presents a client certificate ([NET-11](#NET-11)) is also sent once more after a
+connection-level failure on its first hop (for example a reset or a TLS handshake failure), and only when reading
+the certificate and key files again found a different pair than the one that failed. This adds to the
+rules above. It changes nothing about which failures are retryable, a refusal by status is still not
+sent again, and the extra send is made at most once for a request, on its first hop and never on the
+hop of a redirect.
+
 **Why.** Retrying a refusal turns one denied request into several. A failed name lookup is retried
 whatever it failed on, because a name that does not exist and a network that is not up yet cannot be
 told apart by the failure ([Known costs](#known-costs)).
@@ -183,6 +192,10 @@ told apart by the failure ([Known costs](#known-costs)).
 `verified-by: bravebot_net::lib::a_lookup_that_failed_another_way_is_reported_as_it_failed`
 `verified-by: bravebot_net::lib::the_systems_own_failed_lookup_is_reported_as_a_host_not_found`
 `verified-by: bravebot_net::lib::only_the_statuses_that_mean_not_now_are_worth_another_attempt`
+`verified-by: bravebot_net::lib::a_changed_pair_is_sent_once_more_after_a_refused_handshake`
+`verified-by: bravebot_net::lib::an_unchanged_pair_is_not_sent_again`
+`verified-by: bravebot_net::lib::a_half_written_rotation_keeps_the_pair_in_use_and_is_not_sent_again`
+`verified-by: bravebot_net::lib::a_refusal_by_status_does_not_read_the_pair_again`
 `verified-by: bravebot_net::lib::a_retry_after_is_read_as_seconds_or_a_date_and_bounded`
 `verified-by: bravebot_net::lib::a_status_carries_the_wait_the_server_asked_for_and_nothing_it_wrote`
 `verified-by: bravebot_net::egress::a_non_success_status_is_an_error`
@@ -392,40 +405,78 @@ because its body is read to the end and a stop pressed meanwhile is not acted on
 ### NET-11: a client certificate is presented when one is named, and a request is refused when it cannot be
 
 `BRAVEBOT_CLIENT_CERT` names a file holding a certificate (with its chain, where there is one) and
-`BRAVEBOT_CLIENT_KEY` a file holding its unencrypted private key, both in the environment and
-read once with the other transport settings. Both together are set on the TLS configuration every
-client in this process is built from, so a server that asks for a certificate during the handshake
-is given this one. A settings file does not state them: only the environment does.
+`BRAVEBOT_CLIENT_KEY` a file holding its private key, unencrypted or encrypted as PKCS#8
+(`BEGIN ENCRYPTED PRIVATE KEY`), both in the environment and read with the other transport settings.
+An encrypted key is opened with the passphrase in `BRAVEBOT_CLIENT_KEY_PASSPHRASE`. That variable is
+read from the environment only: a settings file does not state it, nor the two paths. The passphrase
+is in no setting, no `Debug` text, no `doctor` line, no trace and no error.
 
-Naming one without the other, a file that cannot be read, one holding no certificate or no key, an
-encrypted key, and a key that is not the one that belongs to the certificate are each a problem
+The pair is presented only on a request marked `Request::with_client_certificate`, which the requests
+to a model provider or its gateway are, and only to the socket (scheme, host and port) of that
+request's own URL. A redirect to another socket is sent on an agent that holds no certificate. The
+comparison is the one that decides which headers a hop carries (`Request::socket_headers` and
+`authorization`, in `send`): a URL with no socket, on either side, is never on the request's socket,
+so neither the pair nor those headers are sent to it. A
+client that is not marked presents none, so the ChatGPT and xAI sign-in clients of `bravebot-skus`
+and every other request go out without it. A server that asks for a certificate during the handshake
+on the request's own socket is given this one.
+
+Naming one file without the other, a file that cannot be read, one holding no certificate or no key,
+an encrypted key with no passphrase or with one that does not open it, a key in OpenSSL's legacy
+encrypted form (`Proc-Type: 4,ENCRYPTED`), which is refused with advice to convert it with `openssl
+pkcs8 -topk8`, and a key that is not the one that belongs to the certificate are each a problem
 reported by path, every one of them rather than the first. While there is one, every TLS handshake
 is refused, as it is when [NET-7](#NET-7) leaves nothing trusted, instead of the request going to a
 server that would have been given the certificate without it. The pair is checked against itself
-once, when it is read: the TLS library panics at the first request on a pair that disagree.
-`doctor` ([CLI-7](cli.md#CLI-7)) names the two paths and says they loaded, or names each path that
-did not and ends on a configuration error. It never prints the key, and neither does the
-transport's `Debug`.
+when it is read, by asking the TLS library whether the key signs for the certificate, so a pair that
+disagree is refused by the key's path and does not panic. `doctor` ([CLI-7](cli.md#CLI-7)) names the
+two paths and says they loaded, says whether a passphrase was given (never its value), or names each
+path that did not load and why, and ends on a configuration error. It never prints the key.
+
+After a connection-level failure on the first hop of a request that presents the certificate
+([NET-6](#NET-6)), the egress reads both files again together and loads them as one pair. It sends
+the request once more only when that pair differs from the one in use, so a certificate rotated under
+a running process is picked up without a restart. A reading that cannot be used keeps the pair in
+use, and the diagnostic log says which of the two files, by role (`certificate` or `key`) and never by
+path or contents, could not be used.
 
 **Why.** A gateway or proxy that requires mutual TLS fails at the handshake with nothing to say
 which end refused, and a program that had no way to name a certificate cannot be used behind one.
 Refusing rather than connecting without it is the same bargain NET-7 makes for a named authority: a
 setting that fails open is one whose failure looks like the server's.
 
-The key is a secret for the reason a proxy credential is under [NET-8](#NET-8): the report exists to
-be pasted into an issue, so it holds the path and the fact that it loaded. The passphrase an
-encrypted key needs is not read; see Known costs.
+The certificate identifies this machine to the host a person configured it for. Offering it to a
+host reached through a redirect, or to a service that was never configured to ask for it, tells that
+host who is calling, so the pair follows the request's own socket and nothing else.
 
+The key and the passphrase are secrets for the reason a proxy credential is under [NET-8](#NET-8):
+the report exists to be pasted into an issue, so it holds the paths, the fact that they loaded and
+whether a passphrase was given.
+
+`verified-by: bravebot_net::lib::a_client_certificate_is_presented_to_a_server_that_requires_one`
+`verified-by: bravebot_net::lib::a_client_certificate_is_not_sent_on_a_request_that_does_not_ask_for_it`
+`verified-by: bravebot_net::lib::a_client_certificate_is_not_sent_to_another_socket_on_a_redirect`
+`verified-by: bravebot_net::lib::a_changed_pair_is_sent_once_more_after_a_refused_handshake`
+`verified-by: bravebot_net::lib::an_unchanged_pair_is_not_sent_again`
+`verified-by: bravebot_net::lib::a_half_written_rotation_keeps_the_pair_in_use_and_is_not_sent_again`
+`verified-by: bravebot_net::lib::a_mismatched_pair_is_refused_with_the_key_path_and_presents_nothing`
+`verified-by: bravebot_net::transport::a_debug_print_of_the_transport_says_a_passphrase_was_given_and_not_what_it_was`
 `verified-by: bravebot_net::transport::a_certificate_and_key_that_agree_are_what_a_client_presents`
 `verified-by: bravebot_net::transport::naming_no_client_certificate_presents_none`
 `verified-by: bravebot_net::transport::a_key_that_does_not_belong_to_the_certificate_is_refused_with_its_path`
 `verified-by: bravebot_net::transport::a_certificate_file_that_cannot_be_read_is_refused_with_its_path`
 `verified-by: bravebot_net::transport::every_client_file_that_cannot_be_used_is_reported`
 `verified-by: bravebot_net::transport::a_certificate_named_without_a_key_is_refused_and_so_is_a_key_without_a_certificate`
-`verified-by: bravebot_net::transport::an_encrypted_key_is_refused_as_encrypted`
+`verified-by: bravebot_net::transport::an_encrypted_key_with_no_passphrase_is_refused_naming_the_variable`
+`verified-by: bravebot_net::transport::a_wrong_passphrase_is_refused_without_repeating_it`
+`verified-by: bravebot_net::transport::the_right_passphrase_opens_an_encrypted_key_and_the_pair_is_presented`
+`verified-by: bravebot_net::transport::a_decrypted_key_that_does_not_belong_to_the_certificate_is_refused`
+`verified-by: bravebot_net::transport::a_legacy_openssl_encrypted_key_is_reported_as_encrypted_and_named_by_path`
 `verified-by: bravebot_net::transport::a_debug_print_of_the_transport_holds_the_paths_and_none_of_the_key`
 `verified-by: bravebot_cli::doctor::the_network_section_names_a_client_certificate_that_loaded_and_never_its_key`
 `verified-by: bravebot_cli::doctor::the_network_section_names_each_client_file_that_cannot_be_used`
+`verified-by: bravebot_cli::doctor::the_network_section_says_whether_a_passphrase_was_given_and_never_its_value`
+`verified-by: bravebot_cli::doctor::the_network_section_tells_the_reasons_a_client_key_cannot_be_used_apart`
 
 <a id="NET-12"></a>
 ### NET-12: a request may ask for the whole body of a refusal, and nothing here reads it
@@ -476,25 +527,21 @@ failed request.
   default, and a token replacement or a backoff waits behind it. A stop ends the wait where the request was
   made with a way to stop it, and a request made without one waits it out.
 - **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds HTTP clients
-  of its own: one for the subscription service and one for each of the ChatGPT and xAI sign-ins. That traffic carries
-  credentials, an order id, an authorization code and tokens, never workspace content or model
-  output, so no labelled value escapes the gate. NET-1 is about everything carrying labelled
+  of its own: one for each of the ChatGPT and xAI sign-ins. That traffic carries an authorization
+  code, a device code and tokens, never workspace content or model output, so no labelled value
+  escapes the gate. NET-1 is about everything carrying labelled
   content. A second egress in this process that ever carried content would be a violation. Its
-  clients are its own; its transport is not. `register`, the ChatGPT and xAI sign-ins and the renewal of an
+  clients are its own; its transport is not. The ChatGPT and xAI sign-ins and the renewal of an
   access token are handed the transport configuration this module resolved, by a caller that
-  depends on both crates, so NET-7, NET-8 and NET-11 hold of them too and a machine whose authority
+  depends on both crates, so NET-7 and NET-8 hold of them too and a machine whose authority
   or route off it is stated in the environment reaches each service on the terms it reaches
-  everything else. What stays separate is the policy gate, which those clients have nothing to put
-  to, and the redirect loop, so NET-9 does not reach them either. What each does with a redirect
-  differs:
-  - The ChatGPT clients follow none. A redirect in answer to a request that carries an
-    authorization code, a verifier or a token is a failure, and nothing is sent to the address it
-    names ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)). The xAI client follows none either, for a
-    request that carries a device code or a refresh token ([XAI-1](xai-sign-in.md#XAI-1)).
-  - The subscription client follows its hops through its library's default, which refuses nothing,
-    so the subscription service can redirect its own traffic into cleartext and put an order id and
-    a credential on the wire. Holding it to the same rule means either following its redirects here
-    or configuring that client to follow none, and neither is decided in this document.
+  everything else. They present no client certificate ([NET-11](#NET-11)). What stays separate is the
+  policy gate, which those clients have nothing to put
+  to, and the redirect loop, so NET-9 does not reach them either. Neither follows a redirect. A
+  redirect in answer to a ChatGPT request that carries an authorization code, a verifier or a token
+  is a failure, and nothing is sent to the address it names
+  ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)). The xAI client follows none either, for a request
+  that carries a device code or a refresh token ([XAI-1](xai-sign-in.md#XAI-1)).
 
   This bullet is the register, and it is read rather than only written: `make check-security` takes
   the crates it names out of it and fails on any manifest under `crates/` that declares a network
@@ -605,23 +652,17 @@ failed request.
   on each attempt. A request that fails for any of these reasons ends after three attempts with the
   same failure it would have ended with on the first.
 
-- **The certificate is offered to any https host that asks for one, and no test here has a server
-  that does.** The TLS library presents it to whichever server requests a certificate during a
-  handshake, and nothing records the host it was configured for, so an endpoint that redirects to
-  another host ([NET-2](#NET-2) revalidates the hop and no more) is offered it there too. The
-  clients built by `bravebot-skus`, for the subscription service and for the ChatGPT sign-in, are
-  handed the same configuration and present it alike. What would bound it is a setting naming the
-  hosts, which is not decided here. Pinning that a server demanding a certificate receives this one
-  needs a TLS server in the test, and `bravebot-net` has no dependency that is one; the tests pin what
-  is handed to the client's configuration, and the change was observed against
-  `openssl s_server -Verify`.
+- **The pair is checked with the TLS library's own key check, which refuses a kind of key it cannot sign
+  with.** Whether the key belongs to the certificate is asked of `CertifiedKey::keys_match`, which
+  returns an error and does not panic, so a pair that disagree is refused by the key's path and does not
+  end a release build, which aborts on a panic. The same check refuses a key of a kind the signing
+  provider does not support, and reports it as a key that does not match the certificate or is a kind
+  this build cannot use.
 
-- **An encrypted key is refused, not decrypted.** Decrypting a key means a dependency this build
-  does not have, so no passphrase is read from the environment or the credential store either. A key that needs one is reported by path as encrypted, and the file has to be
-  given an unencrypted copy readable only by its owner.
-
-- **The pair is checked by a stand-in connection.** The TLS library offers no way to ask whether a
-  pair agree except building a configuration, which panics when they do not. The check does that
-  on a connection that carries nothing, catches the panic and withholds its report for that thread.
-  A library release that stopped panicking would still be caught, because any error other than the
-  stand-in's own counts as a pair that cannot be used.
+- **The files are read again after any failed connection, and only then.** The failure a handshake
+  refusal produces is not told apart from a reset or a timeout, so each of them on the first hop of a
+  request that presents the certificate reads both files again. The request is sent once more only if
+  the pair differs, so a failure that is not the certificate's costs two file reads. A certificate
+  replaced while no request fails is not noticed until one does, and `doctor` reports the pair read
+  when the process started. The paths and the passphrase are read from the environment only, so a
+  settings file cannot name them.

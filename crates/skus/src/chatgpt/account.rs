@@ -1,9 +1,8 @@
 //! The sign-in kept in one file the account owns
 //! ([CHATGPT-6](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-6)).
 //!
-//! `chatgpt-account.json` sits beside the Leo credentials in the state directory and is made the
-//! way that file is: private to the account as it is created, written beside and renamed over, and
-//! written and removed under a claim of its own. It holds the two tokens, the instant the access
+//! `chatgpt-account.json` sits in the state directory and is private to the account as it is
+//! created, written beside and renamed over, and written and removed under a claim of its own. It holds the two tokens, the instant the access
 //! token expires, the client OpenAI issued and the host identifier. It does not hold the ID token.
 
 use crate::Secret;
@@ -407,15 +406,15 @@ mod tests {
     }
 
     /// Writing and forgetting are made under a claim of their own, named for this file and not
-    /// for the Leo credentials: a claim held on the Leo file must not stop a sign-in, and one held
+    /// for another sign-in's: a claim held on the xAI file must not stop a sign-in here, and one held
     /// here must stop a write. A write that waited on the wrong name would be a lock on nothing.
     #[test]
-    fn a_write_waits_for_the_claim_on_this_file_and_not_for_the_leo_one() {
+    fn a_write_waits_for_the_claim_on_this_file_and_not_for_another_sign_ins() {
         let path = scratch("claim");
-        std::fs::File::create(path.with_file_name("leo-premium.lock")).expect("a Leo claim");
+        std::fs::File::create(path.with_file_name("xai-account.lock")).expect("an xAI claim");
 
         // The write ends well inside the minute after which a claim is judged abandoned, so a write
-        // that waited on the Leo claim and then broke it is not one that passes.
+        // that waited on the xAI claim and then broke it is not one that passes.
         let (done, finished) = std::sync::mpsc::channel();
         std::thread::spawn({
             let path = path.clone();
@@ -425,7 +424,7 @@ mod tests {
         });
         finished
             .recv_timeout(std::time::Duration::from_secs(20))
-            .expect("the Leo claim held up a write to the ChatGPT file")
+            .expect("the xAI claim held up a write to the ChatGPT file")
             .expect("a write");
 
         let claim = Claim::take_as(&path, CLAIM, ABANDONED_AFTER).expect("a claim");
@@ -483,9 +482,8 @@ mod tests {
     }
 
     /// TS-004: a claim aged less than the 60 seconds this file's claim is given is waited on, not
-    /// broken, and one aged past it is broken. The Leo claim is abandoned after 5 seconds, so a
-    /// ChatGPT claim aged 10 seconds that was judged by that figure would be taken from a holder
-    /// still waiting on its reply.
+    /// broken, and one aged past it is broken. A claim judged by a shorter figure would be taken from
+    /// a holder still waiting on its reply.
     #[test]
     fn a_claim_on_this_file_is_waited_on_until_it_is_a_minute_old() {
         let path = scratch("claim-age");

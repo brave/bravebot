@@ -177,16 +177,10 @@ export default {
     // Bows out where the world has none: a `--real` run, or a build with nothing to drive turns.
     if (await spoken.count()) {
       await s.say('And one that remembers', 'Asked once to keep something. What it kept is in the file.', 2.6)
+      // Opening a bot opens its conversation; its details are on the page of earlier ones.
       await s.click(spoken.locator(BOT_OPEN_BUTTON))
+      await s.click(page.locator('[data-test="earlier-conversations"]'))
       await page.locator('[data-test="bot-details"]').waitFor()
-      // Its memory is kept in the project it worked in, so that folder's memory is shown.
-      const folder = page.locator('[data-test="memory-folder"]')
-      if (await folder.count()) {
-        await s.click(folder)
-        const project = page.locator('leo-option').filter({ hasNotText: 'No project' }).first()
-        if (await project.count()) await s.click(project)
-        await page.waitForTimeout(600)
-      }
       const kept = page.locator('[data-test="bot-details"] [data-test="bot-memory"]')
       if (await kept.count()) {
         await s.glideTo(kept)
@@ -201,8 +195,8 @@ export default {
         await s.shot('12-bot-memory')
       }
 
-      await s.say('One conversation, resumed', 'Opening it from the bot’s page resumes it, not a new one each time.', 2.6)
-      await s.click(page.locator('[data-test="bot-conversations"] .bot-history-row').first())
+      await s.say('One conversation, resumed', 'Opening the bot resumes its conversation, not a new one each time.', 2.6)
+      await s.click(page.locator('[data-test="earlier-back"]'))
       await page.waitForTimeout(1800)
       const wrote = page.locator('.tool').filter({ hasText: '.bravebot-ui/bots/' }).last()
       if (await wrote.count()) {

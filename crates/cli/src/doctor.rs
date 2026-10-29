@@ -130,14 +130,38 @@ fn skill_keys_unread(
         .iter()
         .filter(|skill| !skill.unread.is_empty())
         .map(|skill| {
+            // skill.origin holds the skill directory's name and each unread key is read off its
+            // frontmatter unchanged, so both are drawn through printable the way every other
+            // piece of a checkout's own text shown by this command already is (LAYER-3, CLI-7).
+            let keys: Vec<String> = skill
+                .unread
+                .iter()
+                .map(|key| progress::printable(key))
+                .collect();
             aligned(
                 t!(doctor_skill_key_unread),
                 t!(
                     doctor_skill_keys_unread,
-                    skill = &skill.origin,
+                    skill = progress::printable(&skill.origin),
                     count = skill.unread.len() as i64,
-                    keys = skill.unread.join(", ")
+                    keys = keys.join(", ")
                 ),
+                FACT,
+            )
+        })
+        .collect()
+}
+
+/// One line for each of the other agents' skill directories in the home directory that exists and
+/// that `sharedSkillDirectories` does not name, so the person can see it was found and left alone
+/// (INSTR-17).
+fn shared_skill_directories_left_alone(workspace: &Workspace) -> Vec<String> {
+    bravebot_agent::skills::shared_directories_not_read(workspace)
+        .into_iter()
+        .map(|directory| {
+            aligned(
+                t!(doctor_skill_key_unread),
+                t!(doctor_skills_shared_not_read, directory = directory),
                 FACT,
             )
         })
@@ -428,6 +452,17 @@ fn report_settings_sources(settings: &bravebot_config::Settings) {
     );
 }
 
+/// The line for a gateway dropped because its `baseURL` writes a port that cannot be read. The id
+/// and the text written where the port belongs are the person's own words, shown as pictures where
+/// they hold a control character.
+fn refused_provider_port(id: &str, port: &str) -> String {
+    t!(
+        doctor_settings_provider_port_refused,
+        id = progress::printable(id),
+        port = progress::printable(port)
+    )
+}
+
 /// Every setting that was read and not obeyed, or not read at all, from the vetting key through the
 /// narrowing keys. The network and filesystem ones follow in their own sections.
 fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Managed) {
@@ -442,6 +477,13 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     ignored(settings.providers_ignored(), |path| {
         t!(doctor_settings_provider_ignored, path = path)
     });
+    // A gateway whose baseURL writes a port that cannot be read is dropped when the settings are
+    // read. Naming it here is the only place the missing gateway is explained.
+    each(
+        t!(doctor_settings_ignored),
+        settings.providers_refused(),
+        |(id, fault)| refused_provider_port(id, &fault.port),
+    );
     ignored(settings.model_ignored(), |path| {
         t!(doctor_settings_model_ignored, path = path)
     });
@@ -462,6 +504,12 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     });
     ignored(settings.agent_ignored(), |path| {
         t!(doctor_settings_agent_ignored, path = path)
+    });
+    ignored(settings.shared_skill_directories_ignored(), |path| {
+        t!(
+            doctor_settings_shared_skill_directories_ignored,
+            path = path
+        )
     });
     ignored(settings.style_ignored(), |path| {
         t!(doctor_settings_style_ignored, path = path)
@@ -711,11 +759,8 @@ fn report_permissions(
 }
 
 /// The backends a person can choose from and what would end each credential this build holds for
-/// itself. Returns the stored subscription it loaded, which the model section reports.
-fn report_backends(
-    config: &Config,
-    ending: &mut Ending,
-) -> Option<bravebot_skus::StoredCredentials> {
+/// itself.
+fn report_backends(config: &Config, ending: &mut Ending) {
     // Both, where both are reachable, because both are offered to a person choosing and a
     // report naming one of them explains only the half of the picker they happened to use.
     if config.serves_aichat() {
@@ -743,21 +788,31 @@ fn report_backends(
         );
     }
 
+    // A premium key file that cannot be read is read as no key, so every premium request goes to the
+    // free endpoint, and this says why. The same footing as the file of gateway keys above.
+    if let Some(directory) = bravebot_agent::home::directory()
+        && bravebot_config::brave_key::read(&directory).is_err()
+    {
+        *ending = ends_on(*ending, Ending::Failed);
+        fact(
+            t!(doctor_brave_key),
+            t!(
+                brave_key_unreadable,
+                path = bravebot_config::brave_key::file(&directory).display()
+            ),
+        );
+    }
+
     // What would end each credential this build holds for itself, and which tier the gate
     // walk left it on. Reported beside the backends rather than kept for a leak, because it
     // can only be written down while the arrangement is still understood, and the person
     // reading it after a key appears somewhere public needs the surface that revokes it
     // rather than the expiry, which is all anything here kept before.
-    //
-    // The batch is asked for here rather than inside the record, because the record is
-    // configuration and the file the batch sits in is a fact about the machine.
-    let subscription = bravebot_skus::store::load().ok();
-    for held in config.held(subscription.is_some()) {
+    for held in config.held() {
         report_held(held);
     }
     report_chatgpt_sign_in(ending);
     report_xai_sign_in(ending);
-    subscription
 }
 
 /// The account of one held credential: what would end it, the tier its walk stopped at, and the
@@ -831,12 +886,8 @@ fn report_xai_sign_in(ending: &mut Ending) {
     }
 }
 
-/// What a run would actually request, and the subscription where one means something.
-fn report_model(
-    config: &Config,
-    settings: &bravebot_config::Settings,
-    subscription: Option<&bravebot_skus::StoredCredentials>,
-) {
+/// What a run would actually request.
+fn report_model(config: &Config, settings: &bravebot_config::Settings) {
     // What a run would actually request, since a choice made with `/model` overrides the
     // configured default and reporting only the default would explain the wrong thing. Not
     // where a checkout's settings outrank the choice, since naming it then would explain
@@ -885,12 +936,6 @@ fn report_model(
             t!(doctor_model_default, model = &config.default_model),
         ),
     }
-
-    // Only where a subscription means something. A Leo credential is what the premium half of
-    // the Brave roster needs, and it means nothing to Bedrock.
-    if config.serves_aichat() {
-        report_subscription(subscription);
-    }
 }
 
 /// Last of the configuration section, and a failure, because a report that said "configuration OK"
@@ -903,7 +948,6 @@ fn report_serving(config: &Config, ending: &mut Ending) {
     let model = model_for_this_run(None, config);
     match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model) {
         bravebot_agent::backend::Serving::NothingConfigured {
-            subscription,
             a_service_is_configured,
             chatgpt,
             xai,
@@ -920,7 +964,6 @@ fn report_serving(config: &Config, ending: &mut Ending) {
             println!(
                 "{}",
                 how_to_configure_a_model(
-                    subscription.as_deref(),
                     a_service_is_configured,
                     chatgpt,
                     xai,
@@ -980,8 +1023,8 @@ pub(crate) fn doctor() -> ExitCode {
             }
 
             report_permissions(&settings, &granted, &mut ending);
-            let subscription = report_backends(&config, &mut ending);
-            report_model(&config, &settings, subscription.as_ref());
+            report_backends(&config, &mut ending);
+            report_model(&config, &settings);
             report_serving(&config, &mut ending);
         }
         Err(err) => {
@@ -1058,12 +1101,13 @@ pub(crate) fn doctor() -> ExitCode {
             bravebot_agent::home::profile().as_deref(),
             workspace.root(),
         );
-        let lines = skill_keys_unread(
+        let mut lines = skill_keys_unread(
             &workspace,
             bravebot_agent::home::directory().as_deref(),
             trust_already_answered(workspace.root()),
             permissions,
         );
+        lines.extend(shared_skill_directories_left_alone(&workspace));
         if !lines.is_empty() {
             println!();
         }
@@ -1385,6 +1429,9 @@ pub(crate) fn gateway_credential(
     lookup: impl Fn(&str) -> Option<String>,
 ) -> String {
     use bravebot_config::provider::{Credential, Source};
+    if provider.needs_google_cloud_token(&lookup) {
+        return t!(doctor_gateway_token_google_cloud).to_string();
+    }
     match provider.credential_and_source(lookup) {
         (Credential::Token(_), Some(Source::Stored)) => t!(doctor_gateway_token_stored).to_string(),
         (Credential::Token(_), _) => t!(doctor_gateway_token).to_string(),
@@ -1436,7 +1483,7 @@ pub(crate) fn what_would_end(held: bravebot_config::Held<'_>) -> String {
         bravebot_config::Held::GatewayToken { host } => {
             t!(doctor_ends_gateway_token, gateway = host)
         }
-        bravebot_config::Held::SubscriptionBatch => t!(doctor_ends_subscription_batch).to_string(),
+        bravebot_config::Held::PremiumKey => t!(doctor_ends_premium_key).to_string(),
         bravebot_config::Held::ChatgptAccount => t!(doctor_ends_chatgpt_account).to_string(),
         bravebot_config::Held::XaiAccount => t!(doctor_ends_xai_account).to_string(),
     }
@@ -1486,7 +1533,7 @@ pub(crate) fn how_soon_a_leak_is_noticed(held: bravebot_config::Held<'_>) -> Opt
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsAccessKey
         | bravebot_config::Held::GatewayToken { .. }
-        | bravebot_config::Held::SubscriptionBatch
+        | bravebot_config::Held::PremiumKey
         | bravebot_config::Held::ChatgptAccount
         | bravebot_config::Held::XaiAccount => None,
     }
@@ -1599,8 +1646,18 @@ pub(crate) fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
-        (Held::SubscriptionBatch, Condition::NothingDecidesEachUse) => t!(
-            doctor_dropped_subscription_batch_nothing_decides_each_use,
+        (Held::PremiumKey, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_premium_key_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::PremiumKey, Condition::NoBoundFixedBeforeIssue) => t!(
+            doctor_dropped_premium_key_no_bound_fixed_before_issue,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::PremiumKey, Condition::NotMintedForOneStep) => t!(
+            doctor_dropped_premium_key_not_minted_for_one_step,
             gate = gate,
             answer = answer
         ),
@@ -1634,12 +1691,11 @@ pub(crate) fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
-        // The conditions each credential's walk does not hold. Gate 2 is passed by the
-        // subscription batch, which is why it has no account of the gates below the one it
-        // stopped at; the rest are the other conditions of the gates each credential does drop
-        // at, and a drop recorded on one of them is an account nobody has written.
+        // The conditions each credential's walk does not hold: the other conditions of the gates
+        // each credential does drop at, and a drop recorded on one of them is an account nobody
+        // has written.
         (
-            Held::SigningKey | Held::AwsAccessKey | Held::GatewayToken { .. },
+            Held::SigningKey | Held::AwsAccessKey | Held::GatewayToken { .. } | Held::PremiumKey,
             Condition::NothingCanRefuseAUse
             | Condition::BoundEnforcedWithinReach
             | Condition::BoundWithNoEnd
@@ -1661,16 +1717,6 @@ pub(crate) fn why_it_dropped(
             | Condition::BoundWithNoEnd
             | Condition::NotMintedForOneStep
             | Condition::IssuerEndsNothing,
-        )
-        | (
-            Held::SubscriptionBatch,
-            Condition::NothingCanRefuseAUse
-            | Condition::NoBoundFixedBeforeIssue
-            | Condition::BoundEnforcedWithinReach
-            | Condition::BoundWithNoEnd
-            | Condition::NotMintedForOneStep
-            | Condition::IssuerEndsNothing
-            | Condition::RenewableWithoutAuthority,
         ) => return None,
     })
 }
@@ -1705,7 +1751,7 @@ pub(crate) fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsSession
         | bravebot_config::Held::GatewayToken { .. }
-        | bravebot_config::Held::SubscriptionBatch => None,
+        | bravebot_config::Held::PremiumKey => None,
     }
 }
 
@@ -1715,7 +1761,10 @@ fn report_aichat(config: &Config) {
     let (endpoint, premium) = aichat_endpoints(config);
     fact(t!(doctor_endpoint), endpoint);
     match premium {
-        Some(url) => fact(t!(doctor_premium), &url),
+        Some(url) if config.premium_key.is_some() => {
+            fact(t!(doctor_premium), t!(doctor_premium_keyed, url = url))
+        }
+        Some(url) => fact(t!(doctor_premium), t!(doctor_premium_unkeyed, url = url)),
         None => fact(t!(doctor_premium), t!(doctor_premium_absent)),
     }
     fact(t!(doctor_key_id), &config.key_id);
@@ -1773,29 +1822,6 @@ pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
         },
         FACT,
     )]
-}
-
-/// Report the imported subscription, and how much of it is left.
-///
-/// Counts only: a credential is a bearer secret, so none of it is printed. The environment rather
-/// than the channel it came from, because that is what decides whether the batch can be spent
-/// against the endpoint this build talks to, and it is what the file records.
-///
-/// The batch arrives rather than being loaded here, because the record of what would end each
-/// credential needs the same answer and a second load would let the two halves of one report
-/// disagree about whether a subscription is held.
-fn report_subscription(stored: Option<&bravebot_skus::StoredCredentials>) {
-    if let Some(stored) = stored {
-        fact(
-            t!(doctor_leo),
-            t!(
-                doctor_subscription,
-                environment = stored.environment.as_str(),
-                unspent = stored.remaining(),
-                total = stored.credentials.len()
-            ),
-        );
-    }
 }
 
 /// Whether a file created under the state directory is reachable only by the account that owns it.
@@ -1988,6 +2014,17 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
                 DETAIL,
             ));
         }
+    }
+    // Whether a passphrase was given for the key, on the same terms as the row above: only where a
+    // file is named. Yes or no, and never the value.
+    if transport.names_client_certificate() {
+        let variable = bravebot_net::transport::CLIENT_KEY_PASSPHRASE;
+        let detail = if transport.client_passphrase_given() {
+            t!(doctor_client_passphrase_given, variable = variable)
+        } else {
+            t!(doctor_client_passphrase_absent, variable = variable)
+        };
+        lines.push(aligned(t!(doctor_client_passphrase), detail, DETAIL));
     }
 
     // Which hosts the proxy is not used for, since that is what decides whether a proxy in force
@@ -2443,6 +2480,158 @@ mod tests {
         assert!(lines.join("\n").contains("refused"), "{lines:?}");
     }
 
+    const CLIENT_CERTIFICATE_PEM: [&str; 10] = [
+        "MIIBmTCCAT+gAwIBAgIUGoEm4tLRujtRq+Z9SYoo7mpaVTgwCgYIKoZIzj0EAwIw",
+        "ITEfMB0GA1UEAwwWYnJhdmVib3QtdGVzdC1jbGllbnQtYTAgFw0yNjEwMjIxNjQ5",
+        "MjJaGA8yMTI2MDkyODE2NDkyMlowITEfMB0GA1UEAwwWYnJhdmVib3QtdGVzdC1j",
+        "bGllbnQtYTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABC/GcNDcBgcN5ka3+sg2",
+        "SitB1Hb2ewhYttjW1f288agg+KLdGhEfad2e7iq/fmlM4vlk+hPpbxkXi0S57YrN",
+        "pbujUzBRMB0GA1UdDgQWBBSiEIAHwsbVA0ZZsQ1BDSeQ1FBAfjAfBgNVHSMEGDAW",
+        "gBSiEIAHwsbVA0ZZsQ1BDSeQ1FBAfjAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49",
+        "BAMCA0gAMEUCIQDV/pEMcyED9IfcGuf4pke2It4Kj4yubw6uM0lrqz5ymgIgRKEK",
+        "slJ1+wh5R7cmgoS2bui3Umrk+r+pU9FokD8FYZM=",
+        "",
+    ];
+    /// The private key `CLIENT_CERTIFICATE_PEM` belongs to, encrypted as PKCS#8 under
+    /// `CLIENT_PASSPHRASE` (PBES2: PBKDF2 with HMAC-SHA256, AES-256-CBC).
+    const CLIENT_ENCRYPTED_KEY_PEM: [&str; 7] = [
+        "MIH0MF8GCSqGSIb3DQEFDTBSMDEGCSqGSIb3DQEFDDAkBBAHBwcHBwcHBwcHBwcH",
+        "BwcHAgIIADAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQCQkJCQkJCQkJCQkJ",
+        "CQkJCQSBkAfpHAg6UBxIbFEVMKGkwQVAEEreKFPNXgbLfkLyQqd4QgT7rRumDNlh",
+        "dmT2QhpYuBV68SCOBjF3OU6U+h9qfNK79uBAsw+jpRodFGQHaMBVWhUucEOmTLyR",
+        "rW7dVneyfXwIlfAsA+l7QUtHc8i9qzGU7xYbuVJkH4zqqKvjDXCG0YKkMEHY2erk",
+        "hgeuMnNYVg==",
+        "",
+    ];
+    /// A key that does not belong to `CLIENT_CERTIFICATE_PEM`.
+    const OTHER_KEY_PEM: [&str; 4] = [
+        "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgelZvU4tWD/NVOwfb",
+        "DUI00URNX/zgu9ybKgXU2Pkdqj+hRANCAASN8kQiMv+SDHgFjaKHKIt5KF7D8gLJ",
+        "SYjcDrZ4lZT8NTj0TPvc+G/EN5tEtwRz/9/RGamARW++a28XqN8cntww",
+        "",
+    ];
+    const CLIENT_PASSPHRASE: &str = "correct-horse";
+    const PASSPHRASE_VARIABLE: &str = "BRAVEBOT_CLIENT_KEY_PASSPHRASE";
+
+    fn armoured(kind: &str, body: &[&str]) -> String {
+        let lines: Vec<&str> = body
+            .iter()
+            .copied()
+            .filter(|line| !line.is_empty())
+            .collect();
+        format!(
+            "-----BEGIN {kind}-----\n{}\n-----END {kind}-----\n",
+            lines.join("\n")
+        )
+    }
+
+    /// Writes the certificate and a key file with `key` as its contents, returning their paths.
+    fn client_files(name: &str, key: &str) -> (PathBuf, PathBuf) {
+        let root = scratch(name);
+        let certificate = root.join("client.crt");
+        let key_path = root.join("client.key");
+        std::fs::write(
+            &certificate,
+            armoured("CERTIFICATE", &CLIENT_CERTIFICATE_PEM),
+        )
+        .expect("certificate");
+        std::fs::write(&key_path, key).expect("key");
+        (certificate, key_path)
+    }
+
+    fn encrypted_key_text() -> String {
+        armoured("ENCRYPTED PRIVATE KEY", &CLIENT_ENCRYPTED_KEY_PEM)
+    }
+
+    /// NET-11: where a file is named the report says whether a passphrase was given and where it
+    /// is read from, and never the passphrase. A machine naming none has no such row.
+    #[test]
+    fn the_network_section_says_whether_a_passphrase_was_given_and_never_its_value() {
+        let (certificate, key) = client_files("doctor-client-given", &encrypted_key_text());
+        let given = Transport::stated_with_client_pair_and_passphrase(
+            Some(&certificate),
+            Some(&key),
+            CLIENT_PASSPHRASE,
+        );
+        let absent = Transport::stated_with_client_pair(Some(&certificate), Some(&key));
+
+        let given = network(&given, &Default::default()).join("\n");
+        let absent = network(&absent, &Default::default()).join("\n");
+        let bare = network(
+            &Transport::stated(TrustRoots::Bundled, None, None),
+            &Default::default(),
+        )
+        .join("\n");
+
+        assert!(given.contains("loaded"), "{given}");
+        assert!(given.contains("key passphrase"), "{given}");
+        assert!(given.contains("given in"), "{given}");
+        assert!(!given.contains("none given"), "{given}");
+        assert!(given.contains(PASSPHRASE_VARIABLE), "{given}");
+        assert!(!given.contains(CLIENT_PASSPHRASE), "{given}");
+        assert!(absent.contains("key passphrase"), "{absent}");
+        assert!(absent.contains("none given in"), "{absent}");
+        assert!(!bare.contains("passphrase"), "{bare}");
+    }
+
+    /// NET-11: a legacy encrypted key, a missing passphrase, a wrong one and a pair that disagrees
+    /// are four causes with four different fixes, so each is reported as itself and by the key's
+    /// path, and none repeats the passphrase.
+    #[test]
+    fn the_network_section_tells_the_reasons_a_client_key_cannot_be_used_apart() {
+        let report_for = |name: &str, key: String, passphrase: Option<&str>| {
+            let (certificate, key_path) = client_files(name, &key);
+            let transport = match passphrase {
+                Some(passphrase) => Transport::stated_with_client_pair_and_passphrase(
+                    Some(&certificate),
+                    Some(&key_path),
+                    passphrase,
+                ),
+                None => Transport::stated_with_client_pair(Some(&certificate), Some(&key_path)),
+            };
+            (
+                network(&transport, &Default::default()).join("\n"),
+                key_path.display().to_string(),
+            )
+        };
+        let legacy = armoured(
+            &format!("RSA {} KEY", "PRIVATE"),
+            &[
+                "Proc-Type: 4,ENCRYPTED",
+                "DEK-Info: AES-256-CBC,00112233445566778899AABBCCDDEEFF",
+                "MIHsMFcGCSqGSIb3DQEFDTBKMCkG",
+            ],
+        );
+
+        let (missing, missing_path) = report_for("doctor-key-missing", encrypted_key_text(), None);
+        let (wrong, wrong_path) = report_for(
+            "doctor-key-wrong",
+            encrypted_key_text(),
+            Some("battery-staple"),
+        );
+        let (old, old_path) = report_for("doctor-key-legacy", legacy, None);
+        let (differs, differs_path) = report_for(
+            "doctor-key-differs",
+            armoured(&format!("{} KEY", "PRIVATE"), &OTHER_KEY_PEM),
+            None,
+        );
+
+        assert!(missing.contains(&missing_path), "{missing}");
+        assert!(missing.contains(PASSPHRASE_VARIABLE), "{missing}");
+        assert!(missing.contains("names no passphrase"), "{missing}");
+        assert!(wrong.contains(&wrong_path), "{wrong}");
+        assert!(wrong.contains("does not open"), "{wrong}");
+        assert!(!wrong.contains("battery-staple"), "{wrong}");
+        assert!(!wrong.contains("names no passphrase"), "{wrong}");
+        assert!(old.contains(&old_path), "{old}");
+        assert!(old.contains("legacy encrypted"), "{old}");
+        assert!(old.contains("openssl pkcs8 -topk8"), "{old}");
+        assert!(!old.contains("does not match"), "{old}");
+        assert!(differs.contains(&differs_path), "{differs}");
+        assert!(differs.contains("does not match"), "{differs}");
+        assert!(!differs.contains("legacy encrypted"), "{differs}");
+    }
+
     /// A protocol this build cannot connect through is not the route requests take, so naming it as
     /// the proxy in force would send whoever ran this looking at a proxy that is seeing nothing.
     #[test]
@@ -2628,10 +2817,10 @@ mod tests {
         assert!(note.contains("sandbox.network.allowedHosts"), "{note}");
     }
 
-    /// SANDBOX-3: below Landlock ABI 9 a program under read-only or workspace-write reaches every unix socket that has
-    /// a path and a strict stage is refused, and `doctor` is where a person learns both. The
+    /// SANDBOX-3: below Landlock ABI 9 a program under workspace-write reaches every unix socket that has
+    /// a path and a strict or read-only stage is refused, and `doctor` is where a person learns both. The
     /// regressions it rejects: no line on such a kernel, a line where the sockets are governed,
-    /// and a line that names neither the sockets, the kernel it needs, nor what strict does.
+    /// and a line that names neither the sockets, the kernel it needs, nor what strict and read-only do.
     #[test]
     fn doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs() {
         let report = |governs_sockets_with_a_path| {
@@ -2659,6 +2848,7 @@ mod tests {
             "ABI 9",
             "Linux 7.1",
             "strict",
+            "read-only",
         ] {
             assert!(expected.contains(word), "{word}: {expected}");
         }
@@ -3019,7 +3209,7 @@ mod tests {
         // record separates are separated in the report. Reported alike, the tier line would be
         // decoration beside an account that already names the credential.
         assert_ne!(
-            what_tier_it_stands_at(bravebot_config::Held::SubscriptionBatch.tier()),
+            what_tier_it_stands_at(bravebot_config::Tier::Granted),
             what_tier_it_stands_at(bravebot_config::Held::SigningKey.tier()),
             "a bounded credential and a permanent one are reported alike"
         );
@@ -3027,7 +3217,7 @@ mod tests {
 
     /// CRED-26: the binding reaches the person reading the record, for exactly the credentials the
     /// record gives one, and each answer reads as itself. A session STS offers no bound form of and
-    /// a batch nobody asked a bound form of are different facts, and only the second is a decision
+    /// a sign-in nobody asked a bound form of are different facts, and only the second is a decision
     /// made here, so a report that printed one sentence for both would hide which one to revisit.
     /// Both say bearer, since that is the word the clause asks the record to use.
     #[test]
@@ -3042,11 +3232,11 @@ mod tests {
 
         let session =
             how_it_is_bound(bravebot_config::Held::AwsSession).expect("a derived credential");
-        let batch = how_it_is_bound(bravebot_config::Held::SubscriptionBatch)
-            .expect("a derived credential");
+        let sign_in =
+            how_it_is_bound(bravebot_config::Held::ChatgptAccount).expect("a derived credential");
         assert!(session.contains("bearer"), "{session}");
-        assert!(batch.contains("bearer"), "{batch}");
-        assert_ne!(session, batch);
+        assert!(sign_in.contains("bearer"), "{sign_in}");
+        assert_ne!(session, sign_in);
         assert_ne!(
             how_it_is_bound(bravebot_config::Held::SigningKey),
             Some(session)
@@ -3081,9 +3271,9 @@ mod tests {
     /// CRED-3: a reason is reported for exactly the drops the record holds. A credential whose
     /// drops go unreported leaves the tier an assertion, which is the state the clause exists to
     /// end. A reason reported for a drop the record does not hold is the other half and the worse
-    /// one: the subscription batch's bound is enforced by the backend that verifies it, and a line
-    /// saying it failed gate 2 sends somebody looking for a bound nothing is missing, while a gate
-    /// 3 line naming a condition the walk did not fail is a stated reason that is not the reason.
+    /// one: a line saying a gate was failed that the walk passed sends somebody looking for a bound
+    /// nothing is missing, while a gate 3 line naming a condition the walk did not fail is a stated
+    /// reason that is not the reason.
     ///
     /// Asked of every condition of every gate rather than of the walk alone, since the walk is
     /// what both sides read and a report keyed on something coarser agrees with it by accident.
@@ -3183,6 +3373,28 @@ mod tests {
             .clone()
     }
 
+    /// BACKEND-62: a gateway dropped for a `baseURL` port that cannot be read is named by its id
+    /// and by the text written where the port belongs, and nothing else of the url is shown. The
+    /// regression it rejects is the gateway vanishing from the settings with no line saying why.
+    #[test]
+    fn a_gateway_dropped_for_its_port_is_reported_with_its_id_and_the_port_and_not_the_url() {
+        let settings = bravebot_config::Settings::parse(
+            r#"{"provider": {"gw": {"options": {"baseURL": "https://user:hunter2@gw.example.com:abc/v1"}}}}"#,
+        );
+        assert!(settings.providers().is_empty());
+        let reported: Vec<String> = settings
+            .providers_refused()
+            .iter()
+            .map(|(id, fault)| refused_provider_port(id, &fault.port))
+            .collect();
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert!(reported[0].contains("gw"), "{}", reported[0]);
+        assert!(reported[0].contains("abc"), "{}", reported[0]);
+        for withheld in ["hunter2", "gw.example.com"] {
+            assert!(!reported[0].contains(withheld), "{}", reported[0]);
+        }
+    }
+
     /// A gateway's credential is a long-lived bearer token, so a diagnostic that echoed one would put
     /// a live credential in every issue somebody pastes this into.
     #[test]
@@ -3247,6 +3459,26 @@ mod tests {
         assert_eq!(
             gateway_credential(&names_one, |_| None),
             t!(doctor_gateway_token_absent, id = "gw")
+        );
+    }
+
+    /// BACKEND-65: a Vertex AI project with no key is reported as signed in by the Google Cloud CLI,
+    /// and not as a credential to go and set.
+    #[test]
+    fn a_vertex_project_with_no_key_is_reported_as_signed_in_by_the_google_cloud_cli() {
+        let project = configured_gateway(
+            r#"{"provider": {"google-vertex": {"options": {"project": "example-project-1"}}}}"#,
+        );
+        assert_eq!(
+            gateway_credential(&project, |_| None),
+            t!(doctor_gateway_token_google_cloud)
+        );
+        let express = configured_gateway(
+            r#"{"provider": {"google-vertex": {"env": ["GOOGLE_API_KEY"], "options": {}}}}"#,
+        );
+        assert_eq!(
+            gateway_credential(&express, |_| None),
+            t!(doctor_gateway_token_absent, id = "google-vertex")
         );
     }
 

@@ -397,7 +397,8 @@ and shut down when the session ends. It is not started at launch, and a session 
 of a language starts nothing.
 
 The process is killed if it does not exit on request, so a server that ignores `shutdown` does not
-outlive the agent that started it.
+outlive the agent that started it. The servers of a session are stopped beside each other, so ending
+the session waits for the slowest of them and not for the sum of their waits.
 
 A delegate asks the servers of the session that spawned it, not a set of its own. A server one
 started answers the session's next turn, and a start a delegate causes is put to the person through
@@ -417,6 +418,7 @@ nobody asks about spends a person's CPU on nothing.
 `verified-by: bravebot_lsp::server::no_server_starts_until_a_request_needs_one`
 `verified-by: bravebot_lsp::server::a_server_that_ignores_shutdown_is_killed`
 `verified-by: bravebot_lsp::server::a_server_that_ignores_shutdown_does_not_outlive_its_set`
+`verified-by: bravebot_lsp::server::the_servers_of_a_set_are_stopped_beside_each_other`
 `verified-by: bravebot_lsp::server::dropping_the_set_stops_every_server`
 `verified-by: bravebot_agent::lsp::a_server_approved_in_one_turn_answers_the_next`
 `verified-by: bravebot_agent::lsp::a_turn_that_is_handed_no_set_starts_a_server_of_its_own`
@@ -724,6 +726,19 @@ only through a processor.
 `verified-by: bravebot_lsp::protocol::a_flood_of_diagnostics_is_capped_in_the_words_and_says_so`
 
 ## Known costs
+
+- **The `path` of a query is not confined to the workspace.** The tool joins `path` onto the root the
+  server was started in, so an absolute path or one with `..` names a file outside it, and a link
+  inside the root that leads out is followed. Only the deny rules are consulted
+  (`refuse_denied_path`). A server for the file's extension is asked about it and reads it with the
+  person's own access ([LSP-5](#LSP-5)). What comes back is labelled as for any query
+  ([LSP-3](#LSP-3)): hover text is untrusted, and a location in an outside file is shown as outside
+  the workspace and not readable ([LSP-4](#LSP-4)). The locations, line numbers and diagnostic counts
+  of an outside file still reach the planner as structure. The file tools resolve a path through
+  the workspace and refuse one outside the added directories; this tool does not, and no test
+  passes it an outside path. This is a defect and not an accepted cost: LSP-4 says nothing outside
+  the workspace becomes readable by being named here, and the unconfined `path` goes against that.
+  It is filed as [#3519](https://github.com/brave/bravebot/issues/3519).
 
 - **A declared server's own build tooling is unknown, so the prompt cannot say what it runs.**
   [LSP-11](#LSP-11) says that it is unknown. A person who declares a server wrapping a build tool

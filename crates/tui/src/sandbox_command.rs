@@ -1,17 +1,16 @@
-//! `/sandbox`: the mode programs `run` starts are held to, changed from the next turn (SANDBOX-22).
+//! `/sandbox`: the mode programs `run` starts are held to, changed as it is typed (SANDBOX-22).
 //!
 //! A person's word and nobody else's: the line is dispatched from the input box like every other
 //! command (CMD-1), and nothing here reads a model reply, a skill, a hook or an `AGENTS.md` line.
-//! The planner is told the mode in force, as the `run` description already is, and nothing about
-//! the command.
+//! The planner is told the mode in force, as the `run` description already is, and when it changes
+//! while a turn runs, and nothing about the command.
 //!
 //! The decision is a pure function of what was typed, the mode held now and the managed file, so
-//! what a refusal, a question and a change each turn on is tested without a terminal. Asking is the
-//! caller's, because it needs the screen.
+//! what a refusal and a change each turn on is tested without a terminal. The word is the person's
+//! own, so `off` is made when it is typed, as every other mode is, and nothing is asked.
 
 use bravebot_config::Managed;
 use bravebot_config::sandbox::{Choice, Floor, Refused, Source, allowed_in_session, in_force};
-use bravebot_core::ask::{Answer, Asking, Prompt, Row};
 use bravebot_i18n::t;
 use bravebot_sandbox::SandboxMode;
 
@@ -54,9 +53,7 @@ impl Sandboxed {
 pub enum Step {
     /// Say this and change nothing.
     Say(String),
-    /// Ask before moving to `off`, which starts programs with no profile.
-    Ask,
-    /// Move to this mode from the next turn.
+    /// Move to this mode now. A turn running follows it from its next call.
     Move(SandboxMode),
 }
 
@@ -102,8 +99,8 @@ fn refusal(refused: &Refused) -> String {
 
 /// Decide what `word`, the argument after `/sandbox`, comes to.
 ///
-/// The managed floor is checked before anything is asked, so a person is never put a question whose
-/// answer cannot be obeyed.
+/// The managed floor is checked first, so a mode it does not allow is refused with the file named
+/// and is never moved to.
 pub fn decide(word: &str, held: &Sandboxed, managed: &Managed) -> Step {
     if word.is_empty() {
         return Step::Say(report(held));
@@ -114,65 +111,18 @@ pub fn decide(word: &str, held: &Sandboxed, managed: &Managed) -> Step {
     if let Err(refused) = allowed_in_session(mode, managed) {
         return Step::Say(refusal(&refused));
     }
-    match mode {
-        _ if mode == held.choice.mode => Step::Say(t!(session_sandbox_already, mode = mode.name())),
-        SandboxMode::Off => Step::Ask,
-        _ => Step::Move(mode),
+    if mode == held.choice.mode {
+        return Step::Say(t!(session_sandbox_already, mode = mode.name()));
     }
+    Step::Move(mode)
 }
 
-/// The question put before programs start with no profile.
-///
-/// The row that keeps the mode is first, so Enter on the question as drawn changes nothing, and a
-/// reply typed in the person's own words is read as that row too.
-pub fn question(keeping: SandboxMode) -> Asking {
-    Asking {
-        prompts: vec![Prompt {
-            header: t!(ask_sandbox_off_header).to_string(),
-            question: t!(ask_sandbox_off_question).to_string(),
-            rows: vec![
-                Row {
-                    index: 0,
-                    label: t!(ask_sandbox_off_no, mode = keeping.name()),
-                    detail: None,
-                },
-                Row {
-                    index: 1,
-                    label: t!(ask_sandbox_off_yes).to_string(),
-                    detail: Some(t!(ask_sandbox_off_yes_detail).to_string()),
-                },
-            ],
-            multiple: false,
-            key: String::new(),
-        }],
-        ..Default::default()
-    }
-}
-
-/// Whether the answers to [`question`] say yes. Anything but the one row that does is a no.
-pub fn said_yes(answers: &[Answer]) -> bool {
-    matches!(answers, [Answer::Chosen(rows)] if rows.as_slice() == [1])
-}
-
-/// Carry out `/sandbox <word>`, asking through `ask` where the move is to `off`.
-pub fn run(
-    session: &mut crate::state::Session,
-    word: &str,
-    managed: &Managed,
-    ask: impl FnOnce(&Asking) -> Vec<Answer>,
-) {
-    let kept = session.sandbox_mode();
+/// Carry out `/sandbox <word>`.
+pub fn run(session: &mut crate::state::Session, word: &str, managed: &Managed) {
     let moved = match decide(word, session.sandbox(), managed) {
         Step::Say(sentence) => {
             session.note(sentence);
             return;
-        }
-        Step::Ask => {
-            if !said_yes(&ask(&question(kept))) {
-                session.note(t!(session_sandbox_kept, mode = kept.name()));
-                return;
-            }
-            SandboxMode::Off
         }
         Step::Move(mode) => mode,
     };
@@ -206,10 +156,6 @@ mod tests {
         Managed::at(&file)
     }
 
-    fn never_asked(_: &Asking) -> Vec<Answer> {
-        panic!("a question was put where none was owed");
-    }
-
     fn last_note(session: &Session) -> String {
         session
             .transcript
@@ -227,7 +173,7 @@ mod tests {
         let mut session = Session::new("kernel-enforced");
         assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
 
-        run(&mut session, "strict", &Managed::default(), never_asked);
+        run(&mut session, "strict", &Managed::default());
         assert_eq!(session.sandbox_mode(), SandboxMode::Strict);
         assert!(
             last_note(&session).contains("strict"),
@@ -235,7 +181,7 @@ mod tests {
             last_note(&session)
         );
 
-        run(&mut session, "read-only", &Managed::default(), never_asked);
+        run(&mut session, "read-only", &Managed::default());
         assert_eq!(session.sandbox_mode(), SandboxMode::ReadOnly);
         assert!(
             last_note(&session).contains("read-only"),
@@ -243,12 +189,7 @@ mod tests {
             last_note(&session)
         );
 
-        run(
-            &mut session,
-            "workspace-write",
-            &Managed::default(),
-            never_asked,
-        );
+        run(&mut session, "workspace-write", &Managed::default());
         assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
     }
 
@@ -266,7 +207,7 @@ mod tests {
             });
         };
         let mut session = Session::new("kernel-enforced");
-        run(&mut session, "read-only", &Managed::default(), never_asked);
+        run(&mut session, "read-only", &Managed::default());
         assert!(
             !last_note(&session).contains("/jobs stop"),
             "{}",
@@ -280,7 +221,7 @@ mod tests {
             name: "job:2".to_string(),
             outcome: bravebot_agent::report::Outcome::Succeeded,
         });
-        run(&mut session, "read-only", &Managed::default(), never_asked);
+        run(&mut session, "read-only", &Managed::default());
         let note = last_note(&session);
         assert!(
             note.contains("job:1") && note.contains("/jobs stop"),
@@ -290,7 +231,7 @@ mod tests {
 
         let mut session = Session::new("kernel-enforced");
         start(&mut session, "job:1");
-        run(&mut session, "strict", &Managed::default(), never_asked);
+        run(&mut session, "strict", &Managed::default());
         assert!(
             !last_note(&session).contains("job:1"),
             "{}",
@@ -305,10 +246,10 @@ mod tests {
     #[test]
     fn the_earlier_word_for_workspace_write_still_moves_the_mode() {
         let mut session = Session::new("kernel-enforced");
-        run(&mut session, "strict", &Managed::default(), never_asked);
+        run(&mut session, "strict", &Managed::default());
         assert_eq!(session.sandbox_mode(), SandboxMode::Strict);
 
-        run(&mut session, "standard", &Managed::default(), never_asked);
+        run(&mut session, "standard", &Managed::default());
         assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
         assert!(
             last_note(&session).contains("workspace-write"),
@@ -325,10 +266,15 @@ mod tests {
     #[test]
     fn a_session_started_from_the_held_choice_keeps_the_commands_mode() {
         let mut first = Session::new("kernel-enforced");
-        run(&mut first, "strict", &Managed::default(), never_asked);
+        run(&mut first, "strict", &Managed::default());
 
         let next = Session::new("kernel-enforced").with_sandbox(first.sandbox().clone());
         assert_eq!(next.sandbox_mode(), SandboxMode::Strict);
+        assert_eq!(
+            next.live_sandbox_mode().get(),
+            SandboxMode::Strict,
+            "the mode a turn of the new session reads"
+        );
         assert!(
             next.sandbox().typed,
             "the report must still name the command"
@@ -336,66 +282,45 @@ mod tests {
         assert_eq!(next.sandbox(), first.sandbox());
     }
 
-    /// SANDBOX-22: `off` asks first, and a no, a decline and a reply in the person's own words all
-    /// keep the mode. The regression it rejects is a move to `off` made before the question is
-    /// answered, which unconfines programs on the strength of a line that may have been a slip.
+    /// SANDBOX-22: `/sandbox off` moves the mode the next turn is built with at once, from every
+    /// mode and with nothing to answer, and the reply says that programs then have no profile. The
+    /// regression it rejects is a move to `off` that stops at a question, which leaves the mode where
+    /// it was for a person who typed the word on purpose.
     #[test]
-    fn a_move_to_off_asks_and_anything_but_a_yes_keeps_the_mode() {
-        for answers in [
-            vec![Answer::Chosen(vec![0])],
-            vec![Answer::Declined],
-            vec![Answer::Typed("yes".to_string())],
-            Vec::new(),
+    fn a_move_to_off_is_made_when_typed_and_asks_nothing() {
+        for held in [
+            SandboxMode::Strict,
+            SandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite,
         ] {
             let mut session = Session::new("kernel-enforced");
-            run(&mut session, "strict", &Managed::default(), never_asked);
-            let mut asked = 0;
-            run(&mut session, "off", &Managed::default(), |asking| {
-                asked += 1;
-                assert!(
-                    asking.prompts[0].question.contains("no profile"),
-                    "the question does not say what off does"
-                );
-                answers.clone()
-            });
-            assert_eq!(asked, 1, "{answers:?}");
-            assert_eq!(session.sandbox_mode(), SandboxMode::Strict, "{answers:?}");
+            session.set_sandbox_mode(held);
+
+            run(&mut session, "off", &Managed::default());
+
+            assert_eq!(session.sandbox_mode(), SandboxMode::Off, "from {held:?}");
+            assert_eq!(
+                last_note(&session),
+                t!(session_sandbox_set_off).to_string(),
+                "from {held:?}"
+            );
+            assert!(
+                session.sandbox().typed,
+                "the report must name the command, from {held:?}"
+            );
         }
-
-        let mut session = Session::new("kernel-enforced");
-        run(&mut session, "off", &Managed::default(), |_| {
-            vec![Answer::Chosen(vec![1])]
-        });
-        assert_eq!(session.sandbox_mode(), SandboxMode::Off);
-        assert!(
-            last_note(&session).contains("no profile"),
-            "{}",
-            last_note(&session)
-        );
-    }
-
-    /// SANDBOX-22: the question's first row, the one Enter lands on, is the one that keeps the
-    /// mode. The regression it rejects is the yes row first, which makes a held Enter unconfine.
-    #[test]
-    fn the_row_the_cursor_starts_on_keeps_the_mode() {
-        let asking = question(SandboxMode::Strict);
-        let rows = &asking.prompts[0].rows;
-        assert_eq!(rows[0].index, 0);
-        assert!(rows[0].label.contains("strict"), "{}", rows[0].label);
-        assert!(!said_yes(&[Answer::Chosen(vec![rows[0].index])]));
-        assert!(said_yes(&[Answer::Chosen(vec![rows[1].index])]));
     }
 
     /// SANDBOX-22: the managed floor holds for the command as it does for the flag, the refusal
-    /// names the file, no question is put for a move that would be refused, and the mode stays. The
-    /// regression it rejects is a command that skips the start-up check.
+    /// names the file, and the mode stays, `off` included. The regression it rejects is a command
+    /// that skips the start-up check, which would now move to `off` on the strength of the word alone.
     #[test]
-    fn the_managed_floor_refuses_a_looser_mode_naming_the_file_and_asks_nothing() {
+    fn the_managed_floor_refuses_a_looser_mode_naming_the_file() {
         let strict = pinned("strict", r#"{"sandbox": {"mode": "strict"}}"#);
         for word in ["workspace-write", "off"] {
             let mut session = Session::new("kernel-enforced");
             session.set_sandbox_mode(SandboxMode::Strict);
-            run(&mut session, word, &strict, never_asked);
+            run(&mut session, word, &strict);
             assert_eq!(session.sandbox_mode(), SandboxMode::Strict, "{word}");
             let said = last_note(&session);
             assert!(
@@ -406,14 +331,14 @@ mod tests {
 
         let closed = pinned("closed", r#"{"run": {"network": "closed"}}"#);
         let mut session = Session::new("kernel-enforced");
-        run(&mut session, "off", &closed, never_asked);
+        run(&mut session, "off", &closed);
         assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
         let said = last_note(&session);
         assert!(
             said.contains("managed.json") && said.contains("run.network"),
             "{said}"
         );
-        run(&mut session, "strict", &closed, never_asked);
+        run(&mut session, "strict", &closed);
         assert_eq!(session.sandbox_mode(), SandboxMode::Strict);
     }
 
@@ -448,7 +373,7 @@ mod tests {
             );
             let mut session = Session::new("kernel-enforced");
             session.set_sandbox_mode(held);
-            run(&mut session, word, &managed, never_asked);
+            run(&mut session, word, &managed);
             assert_eq!(session.sandbox_mode(), held, "{word}");
             let note = last_note(&session);
             assert!(note.contains(said), "{note}");
@@ -463,7 +388,7 @@ mod tests {
     fn a_word_that_is_not_a_mode_changes_nothing_and_the_bare_word_only_reports() {
         let mut session = Session::new("kernel-enforced");
         for word in ["Strict", "strict now", "none", "--strict"] {
-            run(&mut session, word, &Managed::default(), never_asked);
+            run(&mut session, word, &Managed::default());
             assert_eq!(
                 session.sandbox_mode(),
                 SandboxMode::WorkspaceWrite,
@@ -478,7 +403,7 @@ mod tests {
                 "{said}"
             );
         }
-        run(&mut session, "", &Managed::default(), never_asked);
+        run(&mut session, "", &Managed::default());
         assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
         assert!(
             last_note(&session).contains("workspace-write"),
@@ -522,23 +447,22 @@ mod tests {
         );
     }
 
-    /// SANDBOX-22: asking for the mode already held says so and asks nothing, `off` included.
+    /// SANDBOX-22: asking for the mode already held says so and changes nothing, `off` included.
     #[test]
-    fn the_mode_already_held_is_said_and_not_asked_about() {
+    fn the_mode_already_held_is_said_and_not_moved_to() {
         let mut session = Session::new("kernel-enforced");
-        run(
-            &mut session,
-            "workspace-write",
-            &Managed::default(),
-            never_asked,
-        );
+        run(&mut session, "workspace-write", &Managed::default());
         assert!(
             last_note(&session).contains("already"),
             "{}",
             last_note(&session)
         );
         session.set_sandbox_mode(SandboxMode::Off);
-        run(&mut session, "off", &Managed::default(), never_asked);
+        run(&mut session, "off", &Managed::default());
         assert_eq!(session.sandbox_mode(), SandboxMode::Off);
+        assert_eq!(
+            last_note(&session),
+            t!(session_sandbox_already, mode = "off").to_string()
+        );
     }
 }

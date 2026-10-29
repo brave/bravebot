@@ -822,7 +822,7 @@ test('every chip tooltip is one of the fixed sentences', () => {
     { kind: 'declassified', slot: 's1', from: { integrity: 'untrusted', confidentiality: 'private' }, to: { integrity: 'untrusted', confidentiality: 'public' }, refusal: false },
   ].map((event, index) => ({ sequence: index + 1, event, bytes: 1 }))
   const markup = renderToStaticMarkup(React.createElement(AuditInspector, {
-    details: { turn: 1, status: 'complete', started: true, notices: [], noticesOpen: false, statsOpen: false, clean: true, audit, received: 3, omitted: 0, bytes: 3 },
+    details: { turn: 1, status: 'complete', started: true, notices: [], noticesOpen: false, clean: true, audit, received: 3, omitted: 0, bytes: 3 },
     onClose() {},
   }))
   assert.match(markup, /Routing &amp; content/)
@@ -838,10 +838,13 @@ test('every chip tooltip is one of the fixed sentences', () => {
 test('a reply says which service answered it only where the bridge said so', () => {
   const { TurnFooter } = load('src/renderer/components/TurnDetails.tsx')
   const footer = (service) => renderToStaticMarkup(React.createElement(TurnFooter, {
-    details: { turn: 1, status: 'complete', started: true, notices: [], noticesOpen: false, statsOpen: true, model: 'stub-model', service, audit: [], received: 0, omitted: 0, bytes: 0 },
-    onDisclosure() {}, onAudit() {},
+    details: { turn: 1, status: 'complete', started: true, notices: [], noticesOpen: false, model: 'stub-model', service, audit: [], received: 0, omitted: 0, bytes: 0 },
+    onAudit() {},
   }))
-  assert.match(footer('Brave'), /<dt>Answered by<\/dt><dd>Brave<\/dd>/)
+  const brave = footer('Brave')
+  assert.match(brave, /Answered by · Brave/)
+  assert.doesNotMatch(brave, /leo-collapse/)
+  assert.ok(brave.indexOf('data-test="turn-audit"') < brave.indexOf('data-test="turn-usage"'), brave)
   assert.doesNotMatch(footer(undefined), /Answered by/)
 })
 
@@ -875,7 +878,7 @@ test('a turn the fallback model answered says no service under the reply', () =>
   const { TurnFooter } = load('src/renderer/components/TurnDetails.tsx')
   // What the bridge sends for a turn that moved to the fallback model.
   const turns = receiveTurn({}, { event: 'turn.done', session: 's', data: { turn: 1, model: 'fallback-model', service: null, sessionModel: false, tokens: 10, notices: [] } })
-  const footer = renderToStaticMarkup(React.createElement(TurnFooter, { details: { ...turns[1], statsOpen: true }, onDisclosure() {}, onAudit() {} }))
+  const footer = renderToStaticMarkup(React.createElement(TurnFooter, { details: turns[1], onAudit() {} }))
   assert.match(footer, /fallback-model/)
   assert.doesNotMatch(footer, /Answered by/)
 })

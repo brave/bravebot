@@ -179,7 +179,8 @@ impl Ending {
 /// How many calls changed a file and how many ran a program, and whether a program ran after the
 /// last change, which is bravebot's own record of its work and never what a model said of it
 /// (GROUND-1).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Work {
     /// Calls that changed a file.
     pub writes: usize,
@@ -187,24 +188,33 @@ pub struct Work {
     pub commands: usize,
     /// Whether the last call that ran a program came after the last call that changed a file.
     pub ran_after_last_write: bool,
+    /// Whether the last call that ran a program ended badly: a stage exited with a status other
+    /// than 0, or the line was stopped (OPEN-1).
+    pub last_command_failed: bool,
 }
 
 impl Work {
     /// Count one call. A call that both ran a program and changed a file is counted as the change
     /// coming last, since nothing ran after what it wrote.
-    pub fn count(&mut self, changed_a_file: bool, ran_a_program: bool) {
+    /// `failed` says the program it ran ended badly.
+    pub fn count(&mut self, changed_a_file: bool, ran_a_program: bool, failed: bool) {
         self.then(Work {
             writes: usize::from(changed_a_file),
             commands: usize::from(ran_a_program),
             ran_after_last_write: ran_a_program && !changed_a_file,
+            last_command_failed: ran_a_program && failed,
         });
     }
 
     /// Add work that came after this, such as a delegate taken back or the next turn: a write in it
     /// is the last write, and a program it ran after its own last write ran after this one's too.
+    /// Its last command, where it ran one, is the last command.
     pub fn then(&mut self, later: Work) {
         self.writes += later.writes;
         self.commands += later.commands;
+        if later.commands > 0 {
+            self.last_command_failed = later.last_command_failed;
+        }
         if later.writes > 0 {
             self.ran_after_last_write = later.ran_after_last_write;
         } else if later.commands > 0 {
@@ -377,10 +387,10 @@ mod work_tests {
     #[test]
     fn each_write_that_changed_a_file_is_counted() {
         let mut work = Work::default();
-        work.count(true, false);
-        work.count(true, false);
-        work.count(false, false);
-        work.count(false, true);
+        work.count(true, false, false);
+        work.count(true, false, false);
+        work.count(false, false, false);
+        work.count(false, true, false);
         assert_eq!((work.writes, work.commands), (2, 1));
     }
 
@@ -390,12 +400,12 @@ mod work_tests {
     #[test]
     fn a_command_after_the_last_write_is_recorded_as_after_it() {
         let mut work = Work::default();
-        work.count(true, false);
-        work.count(false, true);
+        work.count(true, false, false);
+        work.count(false, true, false);
         assert!(work.ran_after_last_write);
-        work.count(true, false);
+        work.count(true, false, false);
         assert!(!work.ran_after_last_write);
-        work.count(true, true);
+        work.count(true, true, false);
         assert!(!work.ran_after_last_write);
     }
 
@@ -408,11 +418,13 @@ mod work_tests {
             writes: 1,
             commands: 0,
             ran_after_last_write: false,
+            last_command_failed: false,
         };
         let ran = Work {
             writes: 0,
             commands: 1,
             ran_after_last_write: true,
+            last_command_failed: false,
         };
         let mut record = wrote;
         record.then(ran);
@@ -425,6 +437,7 @@ mod work_tests {
             writes: 2,
             commands: 3,
             ran_after_last_write: true,
+            last_command_failed: false,
         });
         assert_eq!(
             record,
@@ -432,6 +445,7 @@ mod work_tests {
                 writes: 4,
                 commands: 4,
                 ran_after_last_write: true,
+                last_command_failed: false,
             }
         );
     }

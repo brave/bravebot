@@ -237,6 +237,84 @@ fn the_agent_advertises_what_it_carries_and_nothing_more() {
     assert_eq!(prompts["audio"], false);
     assert_eq!(result["agentCapabilities"]["loadSession"], false);
     assert_eq!(result["authMethods"], json!([]));
+    assert!(
+        result["agentCapabilities"]["sessionCapabilities"]["additionalDirectories"].is_object(),
+        "{result}"
+    );
+}
+
+/// ACP-9. A directory `session/new` lists in `additionalDirectories` is opened the way
+/// `--add-dir` opens one: a tool call naming an absolute path inside it reaches the file, though
+/// nothing was vouched for about it, so the write still asks the editor before it lands.
+#[test]
+fn additional_directories_are_opened_like_add_dir() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("additional-directories");
+    let beside = project
+        .parent()
+        .unwrap()
+        .join("additional-directories-beside");
+    std::fs::create_dir_all(&beside).unwrap();
+    let beside = std::fs::canonicalize(&beside).unwrap();
+    let target = beside.join("output.txt");
+    let (config, _requests, server) = endpoint::endpoint(
+        vec![
+            endpoint::tool(
+                "write_file",
+                json!({"path": target.display().to_string(), "contents": "written"}),
+            ),
+            endpoint::answer(),
+        ],
+        None,
+    );
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let id = editor.request(
+        "session/new",
+        json!({"cwd": project, "mcpServers": [], "additionalDirectories": [beside]}),
+    );
+    let session = editor.response(id)["result"]["sessionId"]
+        .as_str()
+        .expect("a listed directory refused the session")
+        .to_string();
+    let prompt = editor.prompt(&session, text("write it"));
+    // Untrusted, so the write is a question too: in a trusted directory it is not asked about.
+    editor.answer_next(selected("reject-once"));
+    editor.answer_next(selected("allow-once"));
+    let done = editor.response(prompt);
+    server.join().unwrap();
+    assert_eq!(done["result"]["stopReason"], "end_turn", "{done}");
+    assert!(
+        target.exists(),
+        "the additional directory was not reachable"
+    );
+}
+
+/// An entry of `additionalDirectories` that is not an absolute path to an existing directory is
+/// refused with invalid parameters before the session starts, as a link `session/new` cannot
+/// carry is (ACP-2).
+#[test]
+fn additional_directories_refuses_an_entry_it_cannot_open() {
+    let (sent, written) = mpsc::channel();
+    let mut editor = Editor {
+        acp: Acp::new(
+            Box::new(move |message| drop(sent.send(message))),
+            Box::new(|| {}),
+            None,
+        ),
+        written,
+        seen: Vec::new(),
+        cursor: 0,
+        next: 0,
+    };
+    let project = std::env::temp_dir();
+    let id = editor.request(
+        "session/new",
+        json!({"cwd": project, "mcpServers": [], "additionalDirectories": ["not/absolute"]}),
+    );
+    let response = editor.response(id);
+    assert_eq!(response["error"]["code"], -32602, "{response}");
 }
 
 /// An approval the editor selects lets the write land, which is what makes the refusals below

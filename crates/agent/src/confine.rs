@@ -1897,7 +1897,7 @@ impl Confinement {
                 wanted = wanted.with_egress_through(socket);
             }
         }
-        if let Some(detail) = cannot_keep_strict_from_sockets(self.mode, &capabilities)
+        if let Some(detail) = cannot_keep_from_sockets(self.mode, &capabilities)
             .or_else(|| cannot_close_the_network(&wanted, &capabilities))
             .or_else(|| cannot_hold_to_the_proxy(&wanted, &capabilities))
         {
@@ -2114,6 +2114,46 @@ pub fn stated_to_the_planner(
         said,
         Prelude::current(),
         bravebot_config::holds_back_temporary_directory(),
+    ))
+}
+
+/// What the planner is told when the person changes the sandbox mode while its turn runs, or `None`
+/// where there is nothing to say (SANDBOX-22).
+///
+/// The `run` description the turn began with still states the mode it began in, so this says the
+/// new one. A mode that confines is given the sentences the description would have carried under
+/// it. `off` is given the one fact there is, because the description says nothing under `off` and
+/// the planner has no other way to learn that the boundary it was told of has ended. A turn that
+/// confines none of its runs was never told of a boundary, so it is told nothing.
+///
+/// Built from the two modes and the platform alone, so it carries nothing a program printed or a
+/// file held.
+pub fn change_notice(
+    confine_runs: bool,
+    from: SandboxMode,
+    to: SandboxMode,
+    requests_offered: bool,
+) -> Option<String> {
+    if !confine_runs || from == to {
+        return None;
+    }
+    let said = match to {
+        SandboxMode::Off => " Programs `run` starts from now on start with no sandbox profile, so \
+             the limits its description states do not apply to them."
+            .to_string(),
+        mode => stated_to_the_planner(confine_runs, mode, requests_offered)
+            .map(|stated| {
+                format!(
+                    " It applies to the programs `run` starts from now on, in place of anything \
+                     the `run` description says of them. {stated}"
+                )
+            })
+            .unwrap_or_default(),
+    };
+    Some(format!(
+        "The user changed the sandbox mode to `{}` while this turn was running.{said} A program \
+         already started keeps the profile it started under.",
+        to.name()
     ))
 }
 
@@ -2550,23 +2590,28 @@ fn stated(
     Some(said)
 }
 
-/// Why a stage cannot run under `mode`, where the mode is strict and the backend cannot hold a
-/// connect to a unix socket that has a path to the stage's write rows, or `None`.
+/// Why a stage cannot run under `mode`, where the mode is strict or read-only and the backend
+/// cannot hold a connect to a unix socket that has a path to the stage's write rows, or `None`.
 ///
 /// Such a socket reaches whatever serves it with that server's authority: `systemd-run --user`
-/// through the user's D-Bus starts a program outside the sandbox. Strict keeps a program from
-/// everything it was not granted, so it is refused where that cannot hold. `workspace-write` runs the stage,
-/// and `doctor`, `/status` and the opening screen say the sockets are reachable (SANDBOX-3).
-fn cannot_keep_strict_from_sockets(
+/// through the user's D-Bus starts a program outside the sandbox, which writes wherever the person
+/// can. Strict keeps a program from everything it was not granted and read-only keeps it from
+/// writing the session's directories, so each is refused where that cannot hold. `workspace-write`
+/// runs the stage, and `doctor`, `/status` and the opening screen say the sockets are reachable
+/// (SANDBOX-3, SANDBOX-22).
+fn cannot_keep_from_sockets(
     mode: SandboxMode,
     capabilities: &bravebot_sandbox::policy::Capabilities,
 ) -> Option<String> {
-    (mode == SandboxMode::Strict && !capabilities.governs_sockets_with_a_path).then(|| {
-        "the sandbox mode is strict (sandbox.mode) and this kernel cannot keep a program from a \
-         unix socket that has a path, such as the user's D-Bus, the SSH agent or docker.sock; \
-         strict needs Landlock ABI 9, which is Linux 7.1 or newer"
-            .to_string()
-    })
+    (matches!(mode, SandboxMode::Strict | SandboxMode::ReadOnly)
+        && !capabilities.governs_sockets_with_a_path)
+        .then(|| {
+            format!(
+                "the sandbox mode is {mode} (sandbox.mode) and this kernel cannot keep a program \
+                 from a unix socket that has a path, such as the user's D-Bus, the SSH agent or \
+                 docker.sock; {mode} needs Landlock ABI 9, which is Linux 7.1 or newer"
+            )
+        })
 }
 
 /// What a local server's policy becomes under the session's decision about the network
@@ -3035,14 +3080,34 @@ fn temporary_directory() -> PathBuf {
 /// sits beside where it was installed. A `bin` directory brings its parent, where an installation
 /// keeps what its programs load. None of these reaches the home directory: a `PATH` naming it, or a
 /// directory above it, is left out, and so is a parent inside it, since `~/.cargo` holds a registry
-/// token beside `~/.cargo/bin`. The program's own `bin` directory is the exception where it sits
-/// deeper in the home than that, as `nvm` installs one, since that parent is the installation the
-/// program came from. A row that is, holds or lies inside a credential location is left out
-/// whatever named it.
+/// token beside `~/.cargo/bin`. A program installed inside the home is read as the file a person
+/// read and not as its directory, which the caller adds. A row that is, holds or lies inside a
+/// credential location is left out whatever named it.
 pub(crate) fn program_reads(
     program: &Path,
     searched: &[PathBuf],
     home: Option<&Path>,
+) -> Vec<PathBuf> {
+    reads_of(program, searched, home, false)
+}
+
+/// [`program_reads`] for a local server, which has no toolchain list to bring the installation a
+/// version manager keeps in the home. The program's own `bin` directory brings its parent where it
+/// sits deeper in the home than a directory directly inside it, as `nvm` installs one, since that
+/// parent is the installation the program came from.
+pub(crate) fn server_program_reads(
+    program: &Path,
+    searched: &[PathBuf],
+    home: Option<&Path>,
+) -> Vec<PathBuf> {
+    reads_of(program, searched, home, true)
+}
+
+fn reads_of(
+    program: &Path,
+    searched: &[PathBuf],
+    home: Option<&Path>,
+    with_installation: bool,
 ) -> Vec<PathBuf> {
     let home = home.map(canonical);
     let outside_home = |path: &Path| home.as_ref().is_none_or(|home| !home.starts_with(path));
@@ -3063,7 +3128,7 @@ pub(crate) fn program_reads(
         .parent()
         .filter(|directory| directory.file_name() == Some(OsStr::new("bin")))
         .and_then(Path::parent)
-        .filter(|installation| below_the_top_of_home(installation))
+        .filter(|installation| with_installation && below_the_top_of_home(installation))
     {
         reads.push(installation.to_path_buf());
     }
@@ -3095,6 +3160,49 @@ mod tests {
 
     // Not under /home: macOS mounts autofs there, so each lookup beneath it asks the automounter.
     const HOME: &str = "/people/person";
+
+    /// SANDBOX-22: the planner is told of a sandbox mode chosen while its turn runs, in the words
+    /// of the mode it moved to, and of nothing that did not change. A move to `off` is told as the
+    /// end of a boundary, since the description says nothing under `off`; a move to a confining
+    /// mode carries what the description would have said under it. The regressions it rejects are
+    /// a notice for a change that is not one, one for a turn that was never told of a boundary,
+    /// `off` repeating the sentences of the mode it left, and one confining mode's sentences given
+    /// for another's.
+    #[test]
+    fn the_planner_is_told_of_a_sandbox_mode_chosen_while_its_turn_runs() {
+        use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+
+        assert_eq!(change_notice(true, Strict, Strict, true), None, "no change");
+        assert_eq!(
+            change_notice(false, Strict, Off, true),
+            None,
+            "a turn that confines none of its runs"
+        );
+
+        let off = change_notice(true, WorkspaceWrite, Off, true).expect("told of off");
+        assert!(
+            off.contains("to `off`") && off.contains("no sandbox profile"),
+            "{off}"
+        );
+        let stated = stated_to_the_planner(true, WorkspaceWrite, true).expect("stated");
+        assert!(!off.contains(&stated), "{off}");
+
+        for to in [Strict, ReadOnly, WorkspaceWrite] {
+            let notice = change_notice(true, Off, to, true).expect("told");
+            let stated = stated_to_the_planner(true, to, true).expect("stated");
+            assert!(
+                notice.contains(&format!("to `{}`", to.name())) && notice.contains(&stated),
+                "{notice}"
+            );
+        }
+        let strict = change_notice(true, Off, Strict, true).expect("told");
+        let workspace_write = change_notice(true, Off, WorkspaceWrite, true).expect("told");
+        assert!(!strict.contains("may read this machine"), "{strict}");
+        assert!(
+            workspace_write.contains("may read this machine"),
+            "{workspace_write}"
+        );
+    }
 
     fn step(resolved: &str, args: &[&str]) -> Step {
         Step {
@@ -4358,6 +4466,7 @@ mod tests {
             assert!(reads(&policy, "/"), "{prelude:?}");
             for held_back in [
                 format!("{HOME}/.bravebot/gateway-keys.json"),
+                format!("{HOME}/.bravebot/brave-key.json"),
                 format!("{HOME}/.bravebot/leo-premium.json"),
                 format!("{HOME}/.bravebot/chatgpt-account.json"),
                 format!("{HOME}/.bravebot/xai-account.json"),
@@ -6794,6 +6903,30 @@ mod tests {
         assert!(!rows.contains(&PathBuf::from(format!("{HOME}/.cargo"))));
     }
 
+    /// A program under a `bin` directory deep in the home (`nvm`'s layout) brings no row for the
+    /// installation above that directory from `run`, and a local server keeps the row for it. The
+    /// regression it rejects: `run` reading a parent inside the home, which SANDBOX-18 leaves out.
+    #[test]
+    fn a_program_deep_in_the_home_brings_no_installation_row_to_a_stage_but_does_to_a_server() {
+        let installation = format!("{HOME}/.tools/versions/v24");
+        let program = format!("{installation}/bin/tool");
+        let searched = vec![PathBuf::from(format!("{installation}/bin"))];
+
+        let stage = program_reads(Path::new(&program), &searched, Some(Path::new(HOME)));
+        let server = server_program_reads(Path::new(&program), &searched, Some(Path::new(HOME)));
+
+        assert!(!stage.contains(&PathBuf::from(&installation)), "{stage:?}");
+        assert!(stage.contains(&PathBuf::from(format!("{installation}/bin"))));
+        assert!(server.contains(&PathBuf::from(&installation)), "{server:?}");
+
+        let confined = confinement(&["/work/project"]).with_mode(SandboxMode::Strict);
+        let policy = confined.policy(&step(&program, &[]), Path::new("/work/project"), &[]);
+        assert!(!reads(&policy, &installation));
+        assert!(!reads(&policy, &format!("{HOME}/.tools")));
+        assert!(!reads(&policy, HOME));
+        assert!(reads(&policy, &program), "the program is read as a file");
+    }
+
     /// A directory the search names is no read row where it holds a credential location or lies
     /// inside one, whatever put it in the search (SANDBOX-18, SANDBOX-12).
     #[test]
@@ -7239,12 +7372,13 @@ mod tests {
         assert!(!plain.profile(&[&make]).contains("allowedHosts"));
     }
 
-    /// SANDBOX-22: strict is refused where a backend cannot hold a connect to a socket that has a
-    /// path, with the mode and the kernel it needs named, and workspace-write is not. The regressions it
-    /// rejects: a strict stage started where the user's D-Bus and the SSH agent are reachable,
-    /// workspace-write refused along with it, and strict refused on a backend that governs the sockets.
+    /// SANDBOX-22: strict and read-only are refused where a backend cannot hold a connect to a
+    /// socket that has a path, with the mode and the kernel it needs named, and workspace-write is
+    /// not. The regressions it rejects: a strict or read-only stage started where the user's D-Bus
+    /// and the SSH agent are reachable, workspace-write refused along with them, either refused on a
+    /// backend that governs the sockets, and a read-only refusal that names strict.
     #[test]
-    fn strict_is_refused_where_sockets_with_a_path_are_not_governed() {
+    fn strict_and_read_only_are_refused_where_sockets_with_a_path_are_not_governed() {
         let backend = |governs_sockets_with_a_path| bravebot_sandbox::policy::Capabilities {
             level: bravebot_sandbox::policy::ConfinementLevel::Partial,
             mechanisms: Vec::new(),
@@ -7256,29 +7390,36 @@ mod tests {
         };
         let (ungoverned, governed) = (backend(false), backend(true));
 
-        let detail =
-            cannot_keep_strict_from_sockets(SandboxMode::Strict, &ungoverned).expect("refused");
-        assert!(detail.contains("strict (sandbox.mode)"), "{detail}");
-        assert!(detail.contains("Landlock ABI 9"), "{detail}");
-        assert!(detail.contains("Linux 7.1"), "{detail}");
+        for mode in [SandboxMode::Strict, SandboxMode::ReadOnly] {
+            let detail = cannot_keep_from_sockets(mode, &ungoverned).expect("refused");
+            assert!(
+                detail.contains(&format!("the sandbox mode is {mode} (sandbox.mode)")),
+                "{detail}"
+            );
+            assert!(
+                detail.contains(&format!("{mode} needs Landlock ABI 9")),
+                "{detail}"
+            );
+            assert!(detail.contains("Linux 7.1"), "{detail}");
+            assert_eq!(cannot_keep_from_sockets(mode, &governed), None, "{mode}");
+        }
         assert_eq!(
-            cannot_keep_strict_from_sockets(SandboxMode::WorkspaceWrite, &ungoverned),
+            cannot_keep_from_sockets(SandboxMode::WorkspaceWrite, &ungoverned),
             None
         );
         assert_eq!(
-            cannot_keep_strict_from_sockets(SandboxMode::Strict, &governed),
+            cannot_keep_from_sockets(SandboxMode::Off, &ungoverned),
             None
         );
     }
 
-    /// A strict stage is prepared on this machine's backend exactly where that backend governs a
-    /// connect to a socket that has a path, and refused naming the kernel requirement where it
-    /// does not, while a workspace-write stage is prepared either way. The regression it rejects is the
-    /// refusal written and never asked by the path every stage is started through.
+    /// A strict or read-only stage is prepared on this machine's backend exactly where that backend
+    /// governs a connect to a socket that has a path, and refused naming the kernel requirement
+    /// where it does not, while a workspace-write stage is prepared either way. The regression it
+    /// rejects is the refusal written and never asked by the path every stage is started through.
     #[test]
-    fn a_strict_stage_is_prepared_only_where_sockets_with_a_path_are_governed() {
+    fn a_strict_or_read_only_stage_is_prepared_only_where_sockets_with_a_path_are_governed() {
         let (session, workspace_write) = a_session("strict-path-sockets");
-        let strict = workspace_write.clone().with_mode(SandboxMode::Strict);
         let cat = step("/bin/cat", &["a"]);
         let Ok(sandbox) = bravebot_sandbox::for_current_platform() else {
             return;
@@ -7287,14 +7428,20 @@ mod tests {
         workspace_write
             .prepared(&Command::new("/bin/cat"), &cat, &session)
             .expect("a workspace-write stage is confined whatever the kernel governs");
-        match strict.prepared(&Command::new("/bin/cat"), &cat, &session) {
-            Ok(_) => assert!(sandbox.capabilities().governs_sockets_with_a_path),
-            Err(error) => {
-                assert!(
-                    !sandbox.capabilities().governs_sockets_with_a_path,
-                    "{error}"
-                );
-                assert!(error.to_string().contains("Landlock ABI 9"), "{error}");
+        for mode in [SandboxMode::Strict, SandboxMode::ReadOnly] {
+            let held = workspace_write.clone().with_mode(mode);
+            match held.prepared(&Command::new("/bin/cat"), &cat, &session) {
+                Ok(_) => assert!(sandbox.capabilities().governs_sockets_with_a_path, "{mode}"),
+                Err(error) => {
+                    let said = error.to_string();
+                    if sandbox.capabilities().governs_sockets_with_a_path {
+                        // Refused for another reason on this machine, never for the kernel.
+                        assert!(!said.contains("Landlock ABI 9"), "{mode}: {said}");
+                    } else {
+                        assert!(said.contains("Landlock ABI 9"), "{mode}: {said}");
+                        assert!(said.contains(&format!("{mode} needs")), "{mode}: {said}");
+                    }
+                }
             }
         }
     }

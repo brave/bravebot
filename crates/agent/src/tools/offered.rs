@@ -1625,7 +1625,14 @@ fn ask_why(tool: &mut Tool) {
                         call, which already shows the tool and what it acts on, so give the \
                         reason rather than repeating those."
     });
-    if let Some(required) = parameters["required"].as_array_mut() {
+    // A tool with no required argument of its own gets a list of one. Indexing the missing key to
+    // write through it would store `null` there, which Bedrock refuses as a schema for the whole
+    // request.
+    if let Some(required) = parameters
+        .as_object_mut()
+        .map(|schema| schema.entry("required").or_insert_with(|| json!([])))
+        .and_then(|required| required.as_array_mut())
+    {
         required.push(json!(WHY));
     }
 }

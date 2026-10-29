@@ -1245,6 +1245,45 @@ fn a_paged_read_in_a_plan_never_carries_a_decoding_of_another_encoding() {
     );
 }
 
+/// WRITE-8. A write step of a plan over a vouched file in another encoding fails the run, as a
+/// `write_file` call of a turn is refused, and the file keeps its bytes.
+#[test]
+fn a_planned_write_over_a_vouched_file_in_another_encoding_is_refused() {
+    let scratch = Scratch::new("planned-write-other-encoding");
+    let original: Vec<u8> = b"caf\xe9 au lait\n".to_vec();
+    std::fs::write(scratch.path.join("latin1.txt"), &original).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_WRITE", "args": {"path": "latin1.txt", "contents": "new text\n"}},
+        ])),
+    ]);
+    let mut trust = TrustStore::new("/work");
+    trust.trust(".");
+    let mut sink = RecordingSink::new();
+
+    let failure = run_with_trust(
+        &config_for(&endpoint),
+        &workspace,
+        "rewrite latin1.txt",
+        trust,
+        &mut sink,
+    )
+    .expect_err("a write that would turn the file into UTF-8 must stop the run");
+
+    assert!(
+        failure.to_string().contains("encoding other than UTF-8"),
+        "the step failed for another reason: {failure}"
+    );
+    assert_eq!(
+        std::fs::read(scratch.path.join("latin1.txt")).unwrap(),
+        original,
+        "a planned write replaced a file in another encoding with UTF-8"
+    );
+}
+
 /// An unmarked processor answer is a remark, not a file. Treating it as the slot would write
 /// an explanation over whatever the plan named next, which is the thing the marker exists to
 /// stop.

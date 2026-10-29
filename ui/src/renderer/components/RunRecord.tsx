@@ -1,4 +1,5 @@
 import type { RunRecord as Saved } from '../../shared/protocol'
+import { Button } from '../nala'
 import { ago } from './Sessions'
 
 /**
@@ -22,7 +23,7 @@ export function RunRecord({ run, onNew }: { run: Saved; onNew: (directory?: stri
           A plan run has no conversation, so it cannot be continued. Start a chat in this
           project to ask again.
         </p>
-        <button onClick={() => onNew(record.directory)}>New chat here</button>
+        <Button kind="outline" size="small" onClick={() => onNew(record.directory)}>New chat here</Button>
       </div>
 
       <section>

@@ -214,6 +214,28 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     }
     state.told_mode = chosen;
 
+    // The sandbox mode the person last chose applies to this turn as it runs (SANDBOX-22). The
+    // `run` description was written in the one the turn started in, so a change is said to the
+    // planner before the next request, in words the driver wrote from the two modes.
+    let sandbox = task.sandbox.get();
+    if let Some(notice) = crate::confine::change_notice(
+        task.confine_runs,
+        state.told_sandbox,
+        sandbox,
+        tools::requests_are_accepted(
+            task.confine_runs,
+            sandbox,
+            tools::workspace_is_trusted(policy, workspace),
+        ),
+    ) {
+        conversation.push_composed_from(
+            Message::user(&notice),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+    }
+    state.told_sandbox = sandbox;
+
     // A file the last round read or wrote may match the paths of a rule held back. The rule is
     // appended to the system prompt before this request goes out, after every byte the last
     // one carried, and the person is told which file brought it (INSTR-16).
@@ -286,6 +308,16 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     // to know is there (RUN-15).
     if !std::mem::replace(&mut state.told_of_kept_jobs, true) {
         tell_of_kept_jobs(state.jobs, conversation);
+    }
+
+    // Once, beside the jobs and for the same reason: what earlier turns left open is gone from
+    // what the planner reads once it is compacted away (OPEN-4).
+    if let Some(said) = state.open_loops.take() {
+        conversation.push_composed_from(
+            Message::user(format!("{TOOL_BUDGET_SPENT} {said}")),
+            Composed::Notice,
+            Provenance::Driver,
+        );
     }
 
     // And whatever another session sent, in the same place and for the same reason: it
@@ -604,7 +636,7 @@ pub(super) fn nudges(
     // The sandbox mode `read-only` does the same for the whole turn (SANDBOX-22).
     if may_write
         && !task.permission_mode.get().refuses_writes()
-        && !tools::sandbox_refuses_writes(task.confine_runs, task.sandbox)
+        && !tools::sandbox_refuses_writes(task.confine_runs, task.sandbox.get())
         && !conversation.asked_to_write()
         // A delegate that wrote in this workspace has delivered: its changes are on disk, and
         // the planner's own write calls are not the only way a turn writes (TURN-3).
@@ -832,7 +864,7 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
     workspace: &'scope Workspace,
     task: &'scope Task,
     cancel: &'scope Cancel,
-    wallet: Option<&'scope dyn crate::shared::Spends>,
+    premium_key: Option<&'scope dyn crate::shared::Spends>,
     turn_model: &Option<String>,
     effort: Option<Effort>,
 ) where
@@ -887,13 +919,13 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
                 task.output_cap,
                 task.deadlines,
                 task.confine_runs,
-                task.sandbox,
+                task.sandbox.clone(),
                 task.mcp.as_ref(),
                 cancel,
                 &mut confirmer,
                 &mut reporter,
                 &mut sink,
-                wallet,
+                premium_key,
                 shared,
             );
             (ended, reporter.last_spent(), reporter.take_inference())
@@ -1075,6 +1107,9 @@ pub(super) fn build_request<R: Reporter>(
     };
     if task.delegate.is_none() && reporter.wants_request_view() {
         reporter.request_built(RequestView::of(&request, system, &marks));
+    }
+    if task.delegate.is_none() && reporter.wants_fork() {
+        reporter.exchange_forked(crate::aside::Fork::of(conversation));
     }
     request
 }
@@ -1389,7 +1424,9 @@ pub(super) fn tools_for_a_call<'a>(
         run_directory: &mut state.run_directory,
         confined_failures: &mut state.confined_failures,
         confine_runs: task.confine_runs,
-        sandbox: task.sandbox,
+        // Read as the call is built, so a mode the person chose while the turn ran is the one this
+        // call is decided under, in every one of its decisions (SANDBOX-22).
+        sandbox: task.sandbox.get(),
         asks_about_unconfined: task.asks_about_unconfined,
     }
 }
@@ -1439,9 +1476,12 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // gave it. Read at the end of the turn to say whether a change went out
     // unbuilt, and the round is the one the first change landed on, since before
     // that there was nothing to run.
-    state
-        .worked
-        .count(state.steps, output.changed_a_file, output.ran_a_program);
+    state.worked.count(
+        state.steps,
+        output.changed_a_file,
+        output.ran_a_program,
+        output.command_failed,
+    );
     if (output.changed_a_file || output.started_a_program)
         && let Some(checkout) = workspace.checkout()
     {
@@ -1482,7 +1522,7 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
         workspace,
         task,
         cancel,
-        plan.wallet,
+        plan.premium_key,
         &state.turn_model,
         state.effort,
     );

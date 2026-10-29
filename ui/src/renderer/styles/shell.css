@@ -24,10 +24,8 @@
   height: var(--card-gap);
   -webkit-app-region: drag;
 }
-/* With no context column there is no gap before it either. A bot's conversation with no project
-   has no context worth a column. */
-.app.no-session,
-.app.no-context { grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 0 0; }
+/* With no context column there is no gap before it either. */
+.app.no-session { grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 0 0; }
 .app.right-folded { grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 0 var(--col-right); }
 
 /* A side column folds away rather than blinking out. The track list itself is animated, so
@@ -65,16 +63,14 @@
 }
 /* A folded context card is only its border; drawing that would leave a seam at the window's edge. */
 .app.right-folded .context,
-.app.no-session .context,
-.app.no-context .context { border-color: transparent; }
+.app.no-session .context { border-color: transparent; }
 
 /* A folded column must not be tabbable or read out, and a zero-width track does neither on its
    own. Hiding waits for the fold to finish so there is something to watch on the way out; on the
    way back it lifts at once. */
 .app.left-folded .sessions,
 .app.right-folded .context,
-.app.no-session .context,
-.app.no-context .context {
+.app.no-session .context {
   visibility: hidden;
   transition: visibility 0s var(--panel-duration);
 }
@@ -96,8 +92,7 @@
   touch-action: none;
   background: transparent;
 }
-.app.no-session .gutter.right,
-.app.no-context .gutter.right { visibility: hidden; }
+.app.no-session .gutter.right { visibility: hidden; }
 
 .gutter::after {
   content: '';
@@ -135,7 +130,6 @@
 @media (max-width: 1120px) {
   .app,
   .app.no-session,
-  .app.no-context,
   .app.right-folded { grid-template-columns: var(--col-left) 1px minmax(0, 1fr) 0 0; }
   /* Under the conversation's head rather than over it, so the toggle that put it there is
      still the one that takes it away. */

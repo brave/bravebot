@@ -80,6 +80,8 @@ pub enum Hit {
     /// A pane of the files state that a turn of the wheel scrolls, whatever is drawn over it. A
     /// click on it does nothing that a click on the text under it would not (MOUSE-19).
     Wheel(Scrolled),
+    /// A row, a tab or "Show more" of the Sessions screen (SCREEN-12).
+    SessionsScreen(crate::sessions_screen::Click),
 }
 
 /// A pane of the files state of the info panel that the wheel scrolls (MOUSE-19).
@@ -120,7 +122,9 @@ impl Hit {
     pub fn stands(self, session: &Session, laid: &Laid) -> bool {
         // While a panel that holds the input is open nothing of the frame beneath it stands
         // (MOUSE-45), which every kind below the panels' own is asked first.
-        let beneath = !session.modal();
+        // The Sessions screen is the whole frame while it is open, so nothing the plain frame
+        // drew stands under it (SCREEN-12).
+        let beneath = !session.modal() && !session.showing_sessions();
         match self {
             // The panels that hold the input stand for as long as they are drawn over the frame, and
             // only while the panel is open: one a key closed before the frame that draws it gone is
@@ -157,6 +161,8 @@ impl Hit {
             }
             Hit::Wheel(_) => beneath && session.in_the_plain_frame() && session.files_open(),
             Hit::Scrollbar => beneath && session.in_the_plain_frame(),
+            // The Sessions screen is the whole frame while it is open, and no other target is recorded then.
+            Hit::SessionsScreen(_) => session.showing_sessions(),
             Hit::Item(_) => beneath && session.in_the_plain_frame() && session.is_completing(),
             // The vi style has modes a click would have to know the meaning of, and the files state
             // owns every key, so neither has a caret to put (MOUSE-16).

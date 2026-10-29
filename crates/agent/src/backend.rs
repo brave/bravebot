@@ -24,6 +24,7 @@ pub use bravebot_bedrock::credentials::CredentialError;
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
 use bravebot_config::ModelRefusal;
+use bravebot_config::Serves;
 use bravebot_config::provider::{self, Credential, Protocol};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
@@ -36,7 +37,7 @@ use std::path::{Path, PathBuf};
 /// A failure from whichever backend was asked.
 ///
 /// One type so a caller handles one error. The variants stay distinct because the remedies differ:
-/// an expired AWS session is fixed by signing in, and a spent Leo credential by importing again.
+/// an expired AWS session is fixed by signing in, and an unusable premium key by unsetting it.
 #[derive(Debug)]
 pub enum BackendError {
     Aichat(ChatError),
@@ -52,6 +53,9 @@ pub enum BackendError {
     NoGatewayToken {
         provider: String,
     },
+    /// The Google Cloud CLI gave no access token for a Vertex AI project that takes no key
+    /// ([BACKEND-65](../../../docs/specs/backends.md#BACKEND-65)).
+    GoogleCloud(crate::gcloud::GcloudError),
     /// The failure and the number of requests handed to egress, including probes.
     /// Zero means preparation failed before egress; a policy refusal still counts as an attempt.
     Attempted {
@@ -77,6 +81,7 @@ impl fmt::Display for BackendError {
                 "no credential for the {provider} gateway: set one of the variables its `env` names, \
                  or `options.apiKey` in its settings block"
             ),
+            Self::GoogleCloud(e) => write!(f, "{e}"),
             // Counts belong to structured diagnostics; preserve the underlying error's display.
             Self::Attempted { cause, .. } => write!(f, "{cause}"),
         }
@@ -167,6 +172,12 @@ impl BackendError {
                 attempts, cause, ..
             } => return cause.diagnosis().after(*attempts),
             Self::NoGatewayToken { .. } => return Diagnosis::of(Category::Unconfigured).after(0),
+            // A missing CLI is a machine that is not set up, as a missing token variable is. A CLI
+            // that gave no token is a sign-in that is missing or ended.
+            Self::GoogleCloud(crate::gcloud::GcloudError::NotInstalled) => {
+                return Diagnosis::of(Category::Unconfigured).after(0);
+            }
+            Self::GoogleCloud(_) => return Diagnosis::of(Category::Unauthorized).after(0),
             Self::Aichat(error) => match error {
                 // Callers handle cancellation separately; its fallback diagnosis stays internal.
                 ChatError::Encode(_) | ChatError::Cancelled => Category::Internal,
@@ -683,11 +694,6 @@ pub enum Serving {
     Configured,
     /// No service is configured to answer, so nothing will be asked.
     NothingConfigured {
-        /// What was wrong with a stored Leo Premium batch, where something was.
-        ///
-        /// Somebody in that case is one import away rather than a whole configuration away, and
-        /// the sentence saying what the store refused is the difference between the two.
-        subscription: Option<String>,
         /// Whether another service is configured and only the model in force is Brave's own.
         ///
         /// The case a settings block copied from another tool lands in: those blocks name their
@@ -722,7 +728,7 @@ pub enum Serving {
     },
 }
 
-/// What the model in force would be served by, reading the credential store to find out.
+/// What the model in force would be served by, reading the sign-in files to find out.
 ///
 /// The model decides which service answers, so the model is what this is asked about rather than
 /// the configuration: a turn bound for Bedrock or for a gateway is served by the service that was
@@ -730,7 +736,7 @@ pub enum Serving {
 /// [`Backend::spends_a_subscription`]'s question, asked here for the same reason
 /// [`crate::turn::discover_subscription`] asks it.
 ///
-/// The store and the ChatGPT sign-in file are read only where nothing before them has answered, since
+/// The ChatGPT and xAI sign-in files are read only where nothing before them has answered, since
 /// each is a file in somebody's home directory and a read that cannot change the answer is a read
 /// for nothing.
 pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
@@ -774,14 +780,9 @@ fn serving_with(
         return Serving::Configured;
     }
 
-    // A build with no premium host cannot spend a credential at all, so there is nothing to look
-    // for: sending one to an endpoint that did not issue it would send it where it does not belong.
-    let stored = config
-        .premium_endpoint
-        .as_deref()
-        .map(crate::ImportedSubscription::discover);
-
-    if stored.as_ref().is_some_and(crate::Discovery::holds_a_batch) {
+    // A build with no premium host holds no key to present: sending one to an endpoint that did not
+    // issue it would send it where it does not belong.
+    if crate::PremiumKey::held(config).is_some() {
         return Serving::Configured;
     }
 
@@ -799,10 +800,6 @@ fn serving_with(
         (chatgpt(), xai())
     };
     Serving::NothingConfigured {
-        subscription: stored
-            .as_ref()
-            .and_then(|found| found.complaint())
-            .map(str::to_string),
         a_service_is_configured: configured_elsewhere
             || chatgpt == crate::chatgpt::AccountFile::Stored
             || xai == crate::chatgpt::AccountFile::Stored,
@@ -955,9 +952,6 @@ pub fn pick(config: &Config, recorded: Option<String>) -> Pick {
 
 /// Whether a pick [`serving`] answered `pick` for gives way to a default it answers `default` for.
 ///
-/// Not where a stored Leo Premium batch was refused: that pick is served once the batch is imported
-/// again, and the refusal is what says so.
-///
 /// A pick the machine-level layer refuses gives way on the same terms as one nothing serves
 /// (BACKEND-48). Both are a recorded name that cannot be asked for today while a configured model
 /// beneath it can, and the record is left as it is either way: an administrator's list changes, and a
@@ -965,10 +959,7 @@ pub fn pick(config: &Config, recorded: Option<String>) -> Pick {
 fn sets_aside(pick: Serving, default: impl FnOnce() -> Serving) -> bool {
     let gives_way = matches!(
         pick,
-        Serving::NothingConfigured {
-            subscription: None,
-            ..
-        } | Serving::Refused { .. }
+        Serving::NothingConfigured { .. } | Serving::Refused { .. }
     );
     gives_way && default() == Serving::Configured
 }
@@ -998,43 +989,37 @@ impl<'a> Backend<'a> {
     /// configured default, or from a delegate definition loaded from a vouched-for source
     /// (DELEGATE-20), and that is the endorsement for the request field it lands in.
     pub fn select(config: &'a Config, egress: &'a Egress, model: &str) -> Self {
-        if let Some(bedrock) = config.bedrock_for(model) {
-            return Self::Bedrock {
+        match config.serves(model) {
+            Serves::Bedrock(bedrock) => Self::Bedrock {
                 config: bedrock,
                 egress,
                 cancel: None,
-            };
-        }
-        if let Some((provider, wire_model)) = config.provider_for(model) {
-            return Self::Gateway {
+            },
+            Serves::Gateway(provider, wire_model) => Self::Gateway {
                 config,
                 provider,
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
-            };
-        }
-        if let Some(wire_model) = config.chatgpt_model(model) {
-            return Self::Account {
+            },
+            Serves::Chatgpt(wire_model) => Self::Account {
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
                 session: None,
-            };
-        }
-        if let Some(wire_model) = config.xai_model(model) {
-            return Self::XaiAccount {
+            },
+            Serves::Xai(wire_model) => Self::XaiAccount {
                 config,
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
-            };
-        }
-        Self::Aichat {
-            config,
-            egress,
-            subscription: None,
-            cancel: None,
+            },
+            Serves::Aichat => Self::Aichat {
+                config,
+                egress,
+                subscription: None,
+                cancel: None,
+            },
         }
     }
 
@@ -1070,9 +1055,31 @@ impl<'a> Backend<'a> {
         say: impl FnMut(String),
     ) -> Result<(), BackendError> {
         let Some(bedrock) = config.bedrock_for(model) else {
-            return Ok(());
+            return if Self::signs_in_with_google_cloud(config, model) {
+                crate::gcloud::sign_in_if_needed(say).map_err(BackendError::GoogleCloud)
+            } else {
+                Ok(())
+            };
         };
         Self::sign_in_to(bedrock, say)
+    }
+
+    /// Whether `model` is served by a Vertex AI project that no key was found for, so that the
+    /// Google Cloud CLI is what signs it in ([BACKEND-65]).
+    ///
+    /// [BACKEND-65]: ../../../docs/specs/backends.md#BACKEND-65
+    fn signs_in_with_google_cloud(config: &Config, model: &str) -> bool {
+        Self::signs_in_with_google_cloud_by(config, model, |name| std::env::var(name).ok())
+    }
+
+    fn signs_in_with_google_cloud_by(
+        config: &Config,
+        model: &str,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> bool {
+        config
+            .provider_for(model)
+            .is_some_and(|(provider, _)| provider.needs_google_cloud_token(lookup))
     }
 
     /// [`Backend::sign_in_if_needed`] for one AWS account, named by the account rather than by a
@@ -1185,15 +1192,18 @@ impl<'a> Backend<'a> {
     /// having the sign-in report back, because what it would return is "nothing happened", and a
     /// caller that has already dismantled its display to find that out has paid the whole cost.
     pub fn needs_sign_in(config: &Config, model: &str) -> bool {
-        config
-            .bedrock_for(model)
-            .is_some_and(|bedrock| !Self::signed_in_to(bedrock))
+        match config.bedrock_for(model) {
+            Some(bedrock) => !Self::signed_in_to(bedrock),
+            None => {
+                Self::signs_in_with_google_cloud(config, model) && !crate::gcloud::is_signed_in()
+            }
+        }
     }
 
-    /// Whether an imported subscription would be spent on this backend's requests.
+    /// Whether the premium key would be presented on this backend's requests.
     ///
     /// Only the aichat endpoint has the notion. Bedrock reaches whatever the AWS account is entitled
-    /// to and a gateway authenticates with a token of its own, so a Leo credential means nothing to
+    /// to and a gateway authenticates with a token of its own, so the premium key means nothing to
     /// either and [`Backend::with_subscription`] drops one handed to it.
     ///
     /// For a caller deciding whether to look for a subscription at all. The same reasoning as
@@ -1206,7 +1216,7 @@ impl<'a> Backend<'a> {
     /// Send requests on the premium tier, where the backend has one.
     ///
     /// Ignored by Bedrock, which has no such notion: an AWS account reaches the models it reaches,
-    /// and a Leo credential means nothing to it.
+    /// and the premium key means nothing to it.
     pub fn with_subscription(mut self, source: &'a mut dyn Subscription) -> Self {
         if let Self::Aichat { subscription, .. } = &mut self {
             *subscription = Some(source);
@@ -1341,8 +1351,12 @@ impl<'a> Backend<'a> {
                 egress,
                 cancel,
             } => {
-                let mut client = bedrock_client(config, egress, cancel.as_ref());
-                counted!(client, client.complete_streaming(policy, request, progress))
+                // What an earlier session found the model to refuse is put back before the first
+                // stream, and what this one found is kept after it (BACKEND-63).
+                crate::bedrock_refusals::around(&request.model, || {
+                    let mut client = bedrock_client(config, egress, cancel.as_ref());
+                    counted!(client, client.complete_streaming(policy, request, progress))
+                })
             }
             Self::Gateway {
                 config,
@@ -1489,13 +1503,22 @@ fn gateway_client<'a>(
     wire_model: &str,
     egress: &'a Egress,
 ) -> Result<GatewayClient<'a>, BackendError> {
-    let (token, headers) = gateway_request_parts(provider, |name| std::env::var(name).ok())?;
+    let ((token, headers), access_token) = gateway_parts_or_google_token(
+        provider,
+        |name| std::env::var(name).ok(),
+        crate::gcloud::token,
+    )?;
     Ok(match provider.protocol() {
-        Protocol::ChatCompletions => GatewayClient::Chat(
-            AichatClient::new(config, egress)
+        Protocol::ChatCompletions => {
+            let client = AichatClient::new(config, egress)
                 .for_gateway(provider, wire_model, token)
-                .with_gateway_headers(headers),
-        ),
+                .with_gateway_headers(headers);
+            GatewayClient::Chat(if access_token {
+                client.with_access_token()
+            } else {
+                client
+            })
+        }
         Protocol::Messages => GatewayClient::Messages(
             AnthropicClient::new(config, egress, provider, wire_model, token)
                 .with_gateway_headers(headers),
@@ -1534,6 +1557,25 @@ fn gateway_request_parts(
     let token = gateway_token(provider, &lookup)?;
     let headers = provider.request_headers(&lookup);
     Ok((token, headers))
+}
+
+/// [`gateway_request_parts`], asking `google_token` for an access token where the provider is a
+/// Vertex AI project and no key resolves ([BACKEND-65]). The last member says the token is one.
+///
+/// A key that resolves is used and `google_token` is not called, so a person with a key never
+/// starts the CLI.
+///
+/// [BACKEND-65]: ../../../docs/specs/backends.md#BACKEND-65
+fn gateway_parts_or_google_token(
+    provider: &bravebot_config::provider::Provider,
+    lookup: impl Fn(&str) -> Option<String>,
+    google_token: impl FnOnce() -> Result<bravebot_config::Secret, crate::gcloud::GcloudError>,
+) -> Result<(GatewayRequestParts, bool), BackendError> {
+    if provider.needs_google_cloud_token(&lookup) {
+        let token = google_token().map_err(BackendError::GoogleCloud)?;
+        return Ok(((Some(token), provider.request_headers(&lookup)), true));
+    }
+    Ok((gateway_request_parts(provider, &lookup)?, false))
 }
 
 /// A client for a configured gateway, whichever protocol it speaks.
@@ -1804,11 +1846,62 @@ mod tests {
                 || AccountFile::NotStored
             ),
             Serving::NothingConfigured {
-                subscription: None,
                 a_service_is_configured: false,
                 chatgpt: AccountFile::NotStored,
                 xai: AccountFile::NotStored,
             }
+        );
+    }
+
+    /// BACKEND-39: a premium key stored with a premium host that is Brave's configures the Brave
+    /// backend, so a build that holds one starts work. Each half of the pair is held to the other:
+    /// a host with no key leaves the state a first run is told about, and a key for a host that is
+    /// not Brave's is a destination somebody chose, whose key is not presented.
+    #[test]
+    fn a_premium_key_with_a_braves_premium_host_is_a_service_configured() {
+        let egress = Egress::new();
+        let with = |premium: Option<&str>, key: Option<&str>| {
+            let mut config = Config::from_lookup(|name| {
+                match name {
+                    env_var::SIGNING_KEY => Some("test-signing-key"),
+                    env_var::KEY_ID => Some("test-key-id"),
+                    env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.com"),
+                    env_var::PREMIUM_ENDPOINT => premium,
+                    _ => None,
+                }
+                .map(str::to_string)
+            })
+            .expect("configured");
+            config.premium_key = key.map(bravebot_config::Secret::new);
+            config
+        };
+        let served = |config: &Config| {
+            serving_with(
+                config,
+                &egress,
+                DEFAULT_MODEL,
+                || AccountFile::NotStored,
+                || AccountFile::NotStored,
+            )
+        };
+        let nothing = Serving::NothingConfigured {
+            a_service_is_configured: false,
+            chatgpt: AccountFile::NotStored,
+            xai: AccountFile::NotStored,
+        };
+        let premium = Some("https://ai-chat-premium.bsg.brave.software");
+
+        assert_eq!(served(&with(premium, Some("a-key"))), Serving::Configured);
+        assert_eq!(
+            served(&with(None, Some("a-key"))),
+            Serving::Configured,
+            "the host compiled in"
+        );
+        assert_eq!(served(&with(premium, None)), nothing, "a host and no key");
+        assert_eq!(
+            served(&with(Some("https://premium.example"), Some("a-key"))),
+            nothing,
+            "a key for a host that is not Brave's"
         );
     }
 
@@ -1834,7 +1927,6 @@ mod tests {
                     || AccountFile::NotStored
                 ),
                 Serving::NothingConfigured {
-                    subscription: None,
                     a_service_is_configured: configured,
                     chatgpt: found,
                     xai: AccountFile::NotStored,
@@ -1875,7 +1967,6 @@ mod tests {
             assert_eq!(
                 serving_with(&config, &egress, DEFAULT_MODEL, || chatgpt, || xai),
                 Serving::NothingConfigured {
-                    subscription: None,
                     a_service_is_configured: configured,
                     chatgpt,
                     xai,
@@ -1933,7 +2024,6 @@ mod tests {
                     || panic!("the xAI sign-in file was read beside {configured}")
                 ),
                 Serving::NothingConfigured {
-                    subscription: None,
                     a_service_is_configured: true,
                     chatgpt: AccountFile::NotStored,
                     xai: AccountFile::NotStored,
@@ -1977,7 +2067,6 @@ mod tests {
                 || AccountFile::NotStored
             ),
             Serving::NothingConfigured {
-                subscription: None,
                 a_service_is_configured: true,
                 chatgpt: AccountFile::NotStored,
                 xai: AccountFile::NotStored,
@@ -2108,23 +2197,6 @@ mod tests {
         std::fs::write(&path, text).expect("a managed file");
         let managed = bravebot_config::Managed::at(&path);
         (managed.models().clone(), path)
-    }
-
-    /// BACKEND-47: a pick refused because a stored Leo Premium batch could not be used stays in
-    /// force, so the start is refused with what was wrong with the batch.
-    #[test]
-    fn a_pick_refused_for_a_stored_batch_is_not_set_aside() {
-        let refused = |subscription: Option<&str>| Serving::NothingConfigured {
-            subscription: subscription.map(str::to_string),
-            a_service_is_configured: true,
-            chatgpt: AccountFile::NotStored,
-            xai: AccountFile::NotStored,
-        };
-        assert!(sets_aside(refused(None), || Serving::Configured));
-        assert!(!sets_aside(
-            refused(Some("the store was written by another channel")),
-            || Serving::Configured
-        ));
     }
 
     /// BACKEND-47: a recorded tier word names the model that tier's variable names.
@@ -3175,7 +3247,7 @@ mod tests {
 
     /// CHATGPT-9: the account answers for its own models alone. One conversation moves between two
     /// of them and no further, the name a reply reports is not compared with the qualified name, and
-    /// the account spends no Leo credential and asks for no AWS sign-in.
+    /// the account presents no premium key and asks for no AWS sign-in.
     #[test]
     fn the_account_answers_for_its_own_models_and_for_nothing_a_credential_of_another_service_is_for()
      {
@@ -3589,9 +3661,8 @@ mod tests {
         assert!(said.is_empty(), "a gateway asked for a sign-in: {said:?}");
     }
 
-    /// A Leo credential is only spendable against Brave's endpoint. Deciding otherwise would have a
-    /// turn read the credential store, and report on what it found there, for a request going to a
-    /// service that has never heard of a subscription.
+    /// The premium key is only presented to Brave's endpoint. Deciding otherwise would hand a turn a
+    /// key for a request going to a service that has never heard of one.
     #[test]
     fn only_the_aichat_backend_spends_an_imported_subscription() {
         let config = with_a_gateway();
@@ -3604,7 +3675,7 @@ mod tests {
         for model in ["opus-arn", "z-ai/glm-4.6"] {
             assert!(
                 !Backend::select(&config, &egress, model).spends_a_subscription(),
-                "{model} was taken to spend a Leo credential"
+                "{model} was taken to present the premium key"
             );
         }
     }
@@ -4672,6 +4743,135 @@ mod tests {
         assert!(said.contains("options.apiKey"), "no remedy: {said}");
     }
 
+    fn vertex_config(entry: &str) -> Config {
+        with_providers(&format!(r#"{{"provider": {{"google-vertex": {entry}}}}}"#))
+    }
+
+    const VERTEX_MODEL: &str = "google-vertex/google/gemini-2.5-flash";
+    const A_PROJECT: &str = r#"{"options": {"project": "example-project-1"}}"#;
+    const A_PROJECT_AND_A_KEY_VARIABLE: &str =
+        r#"{"env": ["GOOGLE_API_KEY"], "options": {"project": "example-project-1"}}"#;
+
+    fn a_key_in_the_environment(name: &str) -> Option<String> {
+        (name == env_var::GOOGLE_API_KEY).then(|| "a-key".to_string())
+    }
+
+    /// BACKEND-65: with a project and no key the CLI's token is what the request carries, and it
+    /// is marked as an access token so that it goes as a bearer. A block naming no variable and a
+    /// block naming one that holds nothing are both a project with no key.
+    #[test]
+    fn a_vertex_project_with_no_key_is_sent_the_token_the_cli_gives() {
+        for entry in [A_PROJECT, A_PROJECT_AND_A_KEY_VARIABLE] {
+            let config = vertex_config(entry);
+            let (provider, _) = config.provider_for(VERTEX_MODEL).expect("offered");
+            let ((token, _), access_token) = gateway_parts_or_google_token(
+                provider,
+                |_| None,
+                || Ok(bravebot_config::Secret::new("placeholder-t")),
+            )
+            .expect("resolved");
+            assert_eq!(token.expect("a token").expose(), "placeholder-t", "{entry}");
+            assert!(access_token, "{entry}");
+        }
+    }
+
+    /// BACKEND-65: a key that resolves is used and the CLI is never started.
+    #[test]
+    fn a_vertex_project_with_a_key_never_asks_the_cli() {
+        let config = vertex_config(A_PROJECT_AND_A_KEY_VARIABLE);
+        let (provider, _) = config.provider_for(VERTEX_MODEL).expect("offered");
+        let ((token, _), access_token) =
+            gateway_parts_or_google_token(provider, a_key_in_the_environment, || {
+                panic!("the CLI was asked although a key resolved")
+            })
+            .expect("resolved");
+        assert_eq!(token.expect("a key").expose(), "a-key");
+        assert!(!access_token);
+    }
+
+    /// BACKEND-65: the CLI's refusal ends the request before anything is sent, as its own failure.
+    #[test]
+    fn a_refusal_by_the_cli_ends_the_request_naming_the_cli() {
+        let config = vertex_config(A_PROJECT);
+        let (provider, _) = config.provider_for(VERTEX_MODEL).expect("offered");
+        for refusal in [
+            crate::gcloud::GcloudError::NotInstalled,
+            crate::gcloud::GcloudError::Refused {
+                detail: "no credentials".into(),
+            },
+        ] {
+            let failure = gateway_parts_or_google_token(provider, |_| None, || Err(refusal))
+                .expect_err("refused");
+            assert!(matches!(failure, BackendError::GoogleCloud(_)));
+            assert!(
+                format!("{failure}").contains("gcloud auth application-default login"),
+                "{failure}"
+            );
+        }
+    }
+
+    /// BACKEND-65: express mode, a proxy named in `baseURL`, a block with an `authorization` header of
+    /// its own and another gateway are not asked of the CLI, since the token goes to Google's Vertex
+    /// host and nowhere else, and only where nothing else authenticates the request.
+    #[test]
+    fn only_a_vertex_project_at_a_google_host_with_no_other_credential_is_given_the_cli_token() {
+        for (state, entry) in [
+            ("express mode", r#"{"options": {}}"#),
+            (
+                "a proxy",
+                r#"{"options": {"project": "example-project-1", "baseURL": "https://proxy.example.invalid/v1"}}"#,
+            ),
+            (
+                "a header of its own",
+                r#"{"options": {"project": "example-project-1", "headers": {"authorization": "Bearer mine"}}}"#,
+            ),
+        ] {
+            let config = vertex_config(entry);
+            let (provider, _) = config.provider_for(VERTEX_MODEL).expect("offered");
+            let ((_, _), access_token) = gateway_parts_or_google_token(
+                provider,
+                |_| None,
+                || panic!("{state}: the CLI was asked"),
+            )
+            .expect("resolved without it");
+            assert!(!access_token, "{state}");
+        }
+        let gateway = with_a_gateway();
+        let (provider, _) = gateway.provider_for("z-ai/glm-4.6").expect("offered");
+        let failure = gateway_parts_or_google_token(provider, |_| None, || panic!("asked"))
+            .expect_err("refused");
+        assert!(matches!(failure, BackendError::NoGatewayToken { .. }));
+    }
+
+    /// BACKEND-9, BACKEND-65: the sign-in is due for a model such a project serves and for no
+    /// other, and not where a key resolves.
+    #[test]
+    fn the_cli_sign_in_is_due_only_for_a_vertex_project_with_no_key() {
+        let config = vertex_config(A_PROJECT_AND_A_KEY_VARIABLE);
+        let none = |_: &str| None;
+        assert!(Backend::signs_in_with_google_cloud_by(
+            &config,
+            VERTEX_MODEL,
+            none
+        ));
+        assert!(!Backend::signs_in_with_google_cloud_by(
+            &config,
+            VERTEX_MODEL,
+            a_key_in_the_environment
+        ));
+        assert!(!Backend::signs_in_with_google_cloud_by(
+            &config,
+            DEFAULT_MODEL,
+            none
+        ));
+        let express = vertex_config(r#"{"options": {}}"#);
+        assert!(!Backend::signs_in_with_google_cloud_by(
+            &express,
+            VERTEX_MODEL,
+            none
+        ));
+    }
+
     /// A block naming nowhere for a credential to live is somebody saying the gateway wants none,
     /// which is how the tool this shape is borrowed from configures a local Ollama. Refused, such a
     /// block reaches the model picker and then cannot answer a turn, and the remedy the refusal names
@@ -5039,7 +5239,7 @@ mod tests {
     }
 
     /// The remedies differ, so the messages have to. An expired AWS session is fixed by signing in
-    /// and a spent Leo credential by importing again, and a person shown the wrong one is sent to
+    /// and an unusable premium key by unsetting it, and a person shown the wrong one is sent to
     /// fix something that is not broken.
     #[test]
     fn each_backend_keeps_its_own_explanation() {
@@ -5051,8 +5251,9 @@ mod tests {
         .to_string();
         assert!(bedrock.contains("aws sso login"), "{bedrock}");
 
-        let leo = BackendError::from(ChatError::Subscription("spent".into())).to_string();
-        assert!(leo.contains("bravebot auth login leo"), "{leo}");
+        let premium = BackendError::from(ChatError::Subscription("not held".into())).to_string();
+        assert!(premium.contains("bravebot auth login brave"), "{premium}");
+        assert!(!premium.contains("aws sso login"), "{premium}");
     }
 
     /// A gateway nothing holds a token for is a setting somebody has not finished, not a service

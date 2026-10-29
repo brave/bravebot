@@ -69,7 +69,6 @@ fn draft(
         source,
         format,
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut RecordingSink::new(),
         trust,
         &Cancel::new(),

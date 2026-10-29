@@ -64,7 +64,7 @@ const asked = (overrides = {}) =>
     ...overrides,
   })
 
-const buttons = (markup) => [...markup.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((found) => found[1])
+const buttons = (markup) => [...markup.matchAll(/<(?:leo-)?button[^>]*>(.*?)<\/(?:leo-)?button>/g)].map((found) => found[1]).filter((label) => label !== 'Show' && label !== 'Hide')
 
 test('the host is drawn on a line of its own, as the agent read it', () => {
   // An address written to be misread: a person skimming it takes the first name, and the request

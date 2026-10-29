@@ -90,7 +90,7 @@ pub(crate) fn scratch_dir(name: &str) -> PathBuf {
 /// macOS, 108 on Linux), which a checkout's [`scratch_dir`] need not leave room for. The name is
 /// this process's id, a clock reading and a count of the directories this process has made, and
 /// the directory is created rather than reused, so no two tests share one.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(unix)]
 pub(crate) fn a_directory_for_sockets(dirs: &[&str]) -> PathBuf {
     static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

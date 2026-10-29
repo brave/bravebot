@@ -258,11 +258,36 @@ impl Acp {
             .and_then(Value::as_str)
             .filter(|cwd| Path::new(cwd).is_absolute())
             .ok_or((INVALID_PARAMS, "`cwd` must be an absolute path".to_string()))?;
+        let mut session_params = json!({ "directory": cwd });
+        // Opened the way `--add-dir` opens one (ACP-9): reachable, and vouched for by nobody. An
+        // editor's own workspace roots, never a file in the checkout, so there is nothing here to
+        // read before the list is passed on. An entry that is not an absolute path to an existing
+        // directory is refused, as a link `session/new` cannot carry is (ACP-2).
+        if let Some(listed) = params.get("additionalDirectories") {
+            let directories = listed
+                .as_array()
+                .ok_or((
+                    INVALID_PARAMS,
+                    "`additionalDirectories` must be a list of strings".to_string(),
+                ))?
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_str()
+                        .filter(|path| Path::new(path).is_absolute())
+                        .map(str::to_string)
+                        .ok_or((
+                            INVALID_PARAMS,
+                            "every entry of `additionalDirectories` must be an absolute path"
+                                .to_string(),
+                        ))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            session_params["directories"] = json!(directories);
+        }
         // Servers the editor lists are not started: a server is declared in a person's own
         // directory and asked about before it starts, and an editor's list is neither.
-        let made = self
-            .call("session.new", json!({ "directory": cwd }))
-            .map_err(failed)?;
+        let made = self.call("session.new", session_params).map_err(failed)?;
         let handle = made["session"].as_str().unwrap_or_default().to_string();
         let mut shared = self.lock();
         shared.sessions.insert(
@@ -436,6 +461,7 @@ fn initialized() -> Value {
             "loadSession": false,
             "promptCapabilities": { "image": true, "audio": false, "embeddedContext": false },
             "mcpCapabilities": { "http": false, "sse": false },
+            "sessionCapabilities": { "additionalDirectories": {} },
         },
         "agentInfo": {
             "name": "bravebot",
@@ -922,6 +948,7 @@ fn write_text(data: &Value) -> String {
         written_since_checkout: data["writtenSinceCheckout"].as_bool() == Some(true),
         line_endings: data["lineEndings"].as_str(),
         exact: data["exact"].as_bool() != Some(false),
+        hidden: count("hidden"),
         added: count("added"),
         removed: count("removed"),
         changes: &changes,
@@ -997,6 +1024,7 @@ fn run_text(data: &Value) -> Option<String> {
             confinement: confinement.as_ref(),
             ambient: &ambient_of(data)?,
             releases_private: data["releasesPrivate"].as_bool() == Some(true),
+            offers_remember: data["canBeRemembered"].as_bool() == Some(true),
         })
         .join("\n"),
     )
@@ -1091,6 +1119,7 @@ fn call_text(data: &Value) -> String {
         name: text_of(data, "name"),
         arguments: &arguments,
         description: data["description"].as_str(),
+        offers_remember: data["mayStand"].as_bool() == Some(true),
     })
     .join("\n")
 }
@@ -1313,6 +1342,7 @@ mod tests {
             written_since_checkout: true,
             line_endings: line_endings.as_deref(),
             exact: true,
+            hidden: request.diff.hidden(),
             added: request.diff.added(),
             removed: request.diff.removed(),
             changes: &changes,
@@ -1442,6 +1472,7 @@ mod tests {
                 confinement: confinement.as_ref(),
                 ambient: &ambient,
                 releases_private: run.releases_private(),
+                offers_remember: run.can_be_remembered(),
             })
             .join("\n")
         };
@@ -1559,6 +1590,7 @@ mod tests {
                 name: &call.name(),
                 arguments: &call.arguments,
                 description: call.description.as_deref(),
+                offers_remember: false,
             })
             .join("\n")
         );
@@ -1581,6 +1613,66 @@ mod tests {
                 may_record: true,
             })
             .join("\n")
+        );
+    }
+
+    /// Issue #3045, TS-004: `call_text` reads `mayStand` and `run_text` reads `canBeRemembered`
+    /// off the wire, not off a fixture the test already knows the answer to. A run that cannot be
+    /// remembered and a call that offers no standing answer, which is what every other case in
+    /// `the_other_questions_read_to_the_editor_as_they_read_in_the_terminal` sends, cannot
+    /// distinguish a build that reads the field from one that hardcodes `false`.
+    #[test]
+    fn a_remembered_run_and_a_standing_call_show_the_sentence_only_then() {
+        use bravebot_agent::confirm::{McpCallRequest, RunRequest};
+        use bravebot_core::command::{Pipeline, Stage};
+
+        let pipeline = Pipeline::new(vec![Stage::new("docker", vec!["ps".into()])]);
+        let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/docker".into()], "/w");
+        assert!(
+            run.can_be_remembered(),
+            "the fixture must be rememberable for this test to mean anything"
+        );
+        let remembered = run_text(&crate::wire::run_request(1, &run)).expect("a run reads");
+        assert!(
+            remembered.contains("Allow and remember"),
+            "a run that can be remembered sent no sentence explaining it through the bridge: \
+             {remembered}"
+        );
+
+        run.plan.writes = vec!["/w/out.txt".into()];
+        assert!(
+            !run.can_be_remembered(),
+            "a line that writes a file cannot be remembered"
+        );
+        let not_remembered = run_text(&crate::wire::run_request(2, &run)).expect("a run reads");
+        assert!(
+            !not_remembered.contains("Allow and remember"),
+            "a run that offers no standing answer got a sentence about one anyway: \
+             {not_remembered}"
+        );
+
+        let standing = McpCallRequest {
+            alias: "a".into(),
+            tool: "t".into(),
+            arguments: Vec::new(),
+            description: None,
+            may_stand: true,
+        };
+        let standing_text = call_text(&crate::wire::mcp_call_request(3, &standing));
+        assert!(
+            standing_text.contains("Allow and remember") && standing_text.contains("a:t"),
+            "a call that offers a standing answer sent no sentence naming it through the bridge: \
+             {standing_text}"
+        );
+
+        let once = McpCallRequest {
+            may_stand: false,
+            ..standing
+        };
+        let once_text = call_text(&crate::wire::mcp_call_request(4, &once));
+        assert!(
+            !once_text.contains("Allow and remember"),
+            "a call that offers no standing answer got a sentence about one anyway: {once_text}"
         );
     }
 

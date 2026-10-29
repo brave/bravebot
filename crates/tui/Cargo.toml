@@ -29,6 +29,9 @@ bravebot-net = { path = "../net" }
 bravebot-sandbox = { path = "../sandbox" }
 bravebot-session = { path = "../session" }
 bravebot-stamp = { path = "../stamp" }
+# The startup line about a newer release, and the hourly ask behind it, which the desktop bridge
+# asks too.
+bravebot-update = { path = "../update" }
 image = { workspace = true }
 ratatui = { workspace = true }
 ratatui-image = { workspace = true }

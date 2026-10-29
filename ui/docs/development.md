@@ -134,8 +134,11 @@ alone carries.
 
 `TooltipLayer` is the only tooltip in the window: one Leo `Tooltip` laid over whichever
 `[data-tooltip]` element the pointer rests on or the keyboard reaches, with a 1s first delay
-and no delay while moving along a toolbar. Use `data-tooltip` on anything else that needs one
-rather than a native `title`, which would draw a second box. A tooltip supplements the accessible
+and no delay while moving along a toolbar. `data-tooltip-trigger="click"` opens that one
+from a click instead, and leaves it closed while the pointer rests on it. Use `data-tooltip`
+on anything else that needs one rather than a native `title`, which would draw a second box.
+A newline in the attribute is drawn
+as a line break; otherwise the text stays on one line. A tooltip supplements the accessible
 name and never replaces it, and a disabled control shows none.
 
 Hit targets are at least 28px (`--hit`), even when the glyph is 14px.
@@ -262,6 +265,9 @@ main UI are visible and the Rust bridge responds, then saves a screenshot under
 `/tmp/bravebot-ui/`. To check a Linux package, run
 `pnpm run drive:smoke -- "./dist/Brave Bot-linux-x64/Brave Bot"`.
 
+`pnpm run playground` runs the renderer in a browser against a scripted bridge, with an example of
+every piece the conversation can show. See [playground](playground.md).
+
 `scripts/build-bridge.sh` builds the Rust bridge and secure-file helper. TypeScript
 then checks the code and electron-vite bundles the main process, preload and React
 renderer into `out/`. Development executables are in the workspace `../target/debug/`.
@@ -353,32 +359,69 @@ since the 7-Zip electron-builder fetches for Windows cannot open an installer to
 `scripts/check-windows-install.mjs` installs, starts, upgrades and uninstalls the real one, in the
 account running it, so it is CI's on a runner of each architecture rather than a local check.
 
-Every macOS bundle carries the bundle id `com.brave.bravebot` and the icon `build/icon.icns`. macOS
-keys privacy grants and keychain items on the bundle id, so it does not change between releases.
-A Windows bundle carries `build/icon.ico` and a version resource naming Brave as the company and
-"Brave Bot" as the product, which is what its properties dialog and Task Manager show; without one
-they both say Electron, because the resource would be the one Electron's own build left behind.
-The icon is the flat robot avatar in Brave orange on a macOS tile, drawn in `build/icon.svg`; after
-changing the drawing, remake all three sets of icons from it:
+Every macOS bundle carries the bundle id `com.brave.bravebot` and the icons `build/icon.icon` and
+`build/icon.icns`. macOS keys privacy grants and keychain items on the bundle id, so it does not
+change between releases. A Windows bundle carries `build/icon.ico` and a version resource naming
+Brave as the company and "Brave Bot" as the product, which is what its properties dialog and Task
+Manager show; without one they both say Electron, because the resource would be the one Electron's
+own build left behind.
+
+The icon is an orange pixel mascot with two eyes. There are two sources for it, and each is edited
+in its own tool:
+
+- `build/icon.icon` is an Icon Composer document: the mascot's body and eyes as two layers, with
+  the glass, shadow and tile macOS 26 draws around them. The packager compiles it into the bundle's
+  `Assets.car`, which needs macOS 26 and Xcode 26 or later. `build/icon.icns` is Apple's flattened
+  rendering of the same document, which macOS before 26 shows. `build/icon.png` is its 1024 pixel
+  size, which `pnpm run dev` sets as the dock icon, because Electron cannot load an `.icns` there.
+- `build/icon.svg` is the flat mascot on a transparent square, 8 by 9 cells of 64 units. The
+  Windows and Linux icons are rendered from it, and Linux installs it as the scalable icon.
+
+After changing either source, remake what is made from it:
 
 ```bash
-inkscape build/icon.svg -w 1024 -h 1024 -o /tmp/icon-1024.png
-mkdir /tmp/icon.iconset
-for s in 16 32 128 256 512; do
-  sips -z $s $s /tmp/icon-1024.png --out /tmp/icon.iconset/icon_${s}x${s}.png
-  sips -z $((s*2)) $((s*2)) /tmp/icon-1024.png --out /tmp/icon.iconset/icon_${s}x${s}@2x.png
-done
-iconutil -c icns /tmp/icon.iconset -o build/icon.icns
-python3 -c "from PIL import Image; Image.open('/tmp/icon-1024.png').save('build/icon.ico', \
-  sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
-for s in 16 32 48 64 128 256 512; do
-  sips -z $s $s /tmp/icon-1024.png --out build/icons/${s}x${s}.png
-done
+# macOS, from build/icon.icon
+w=$(mktemp -d) && cp -R build/icon.icon "$w/Icon.icon"
+xcrun actool "$w/Icon.icon" --compile "$w" --output-partial-info-plist "$w/info.plist" \
+  --app-icon Icon --include-all-app-icons --standalone-icon-behavior all \
+  --target-device mac --minimum-deployment-target 12.0 --platform macosx
+cp "$w/Icon.icns" build/icon.icns
+iconutil -c iconset build/icon.icns -o "$w/i.iconset"
+cp "$w/i.iconset/icon_512x512@2x.png" build/icon.png
+
+# Windows and Linux, from build/icon.svg
+python3 - <<'PY'
+import re
+from PIL import Image, ImageColor
+grid = Image.new('RGBA', (8, 9))
+svg = open('build/icon.svg').read()
+for _, top, left, fill in re.findall(r'd="M(\d+) (\d+)H(\d+)V\d+H\d+V\d+Z" fill="([^"]+)"', svg):
+    grid.putpixel(((int(left) - 32) // 64, int(top) // 64), ImageColor.getrgb(fill))
+def icon(size):
+    cell = max(size // 9, 1)
+    art = grid.resize((8 * cell, 9 * cell), Image.NEAREST)
+    canvas = Image.new('RGBA', (size, size))
+    canvas.paste(art, ((size - art.width) // 2, (size - art.height) // 2))
+    return canvas
+for size in (16, 24, 32, 48, 64, 128, 256, 512):
+    icon(size).save(f'build/icons/{size}x{size}.png')
+ico = [icon(size) for size in (16, 24, 32, 48, 64, 128, 256)]
+ico[-1].save('build/icon.ico', sizes=[i.size for i in ico], append_images=ico[:-1])
+PY
 ```
 
-The `.ico` holds every size Windows asks for, from the file list at 16 to the extra-large view at
-256. A file holding only the largest is legal, and Windows scales it down itself, but a mascot with
-two eyes in it does not survive that to 16 pixels.
+The `--standalone-icon-behavior all` flag is what puts every size up to 1024 in the `.icns`.
+Without it `actool` stops at 256, which a Retina display shows blurred.
+
+The Python reads each 64-unit square's colour out of the drawing and scales the 8 by 9 grid by a
+whole number of pixels per cell, so no cell edge is blurred. That leaves a transparent margin
+where the size is not a multiple of 9. At 16 pixels the mascot is 8 by 9 pixels in the middle of
+the square, because scaling it to fill 16 blurs the eyes into the body. The script only
+understands the drawing's squares, so a drawing with any other shape in it needs another renderer.
+
+The `.ico` holds every size Windows asks for, from the file list at 16 and the taskbar at 24 to
+the extra-large view at 256. A file holding only the largest is legal, but Windows would then
+scale it down itself and blur every cell.
 
 `build/icons/` is the same set for Linux, where the packages install one file per size into the
 `hicolor` theme. They are rendered here rather than at packaging time for the reason the other two

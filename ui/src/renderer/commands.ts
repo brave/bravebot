@@ -41,6 +41,8 @@ export interface CommandActions {
   focusComposer: () => void
   about: () => void
   doctor: () => void
+  /** Open the bug report, which shows what a saved one would hold before anything is written. */
+  bugReport: () => void
   /** Open the session a right-click named. */
   openSession: (id: string) => void
   /** Close the session a right-click named, which may not be the open one. */
@@ -145,6 +147,10 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.about()
         case 'help.doctor':
           return act.doctor()
+        case 'help.update':
+          return act.about()
+        case 'help.bug-report':
+          return act.bugReport()
       }
       // No default. `CommandId` is a closed union, so a new command that nobody handled is
       // a type error here rather than a menu item that silently does nothing.

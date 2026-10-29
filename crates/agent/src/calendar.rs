@@ -2,7 +2,7 @@
 //! format or parse a date by hand rather than take a date library for one conversion.
 
 /// The civil date of a day counted from 1970-01-01, by Howard Hinnant's algorithm.
-pub(crate) fn civil_from_days(days: i64) -> (i64, u32, u32) {
+pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -16,7 +16,7 @@ pub(crate) fn civil_from_days(days: i64) -> (i64, u32, u32) {
 }
 
 /// The day count since 1970-01-01 of a civil date; the inverse of [`civil_from_days`].
-pub(crate) fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
     let yoe = y.rem_euclid(400);

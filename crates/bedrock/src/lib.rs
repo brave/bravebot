@@ -162,7 +162,11 @@ pub use bravebot_aichat::Refusals;
 /// the same thing. Kept per model, since what one refuses says nothing about another, on the same
 /// footing and for the same reason as the sessions a credential is known good for.
 ///
-/// A process is a session here, so this lasts exactly as long as the answer is worth having.
+/// A process is a session here, so this lasts exactly as long as the answer is worth having. The
+/// one refusal an earlier process may have found out is the ask to show thinking, which the
+/// agent puts back with [`known_to_refuse_showing_thinking`] ([BACKEND-63]).
+///
+/// [BACKEND-63]: ../../../docs/specs/backends.md#BACKEND-63
 struct Learned(std::sync::Mutex<std::collections::HashMap<String, Refusals>>);
 
 fn learned() -> &'static Learned {
@@ -188,6 +192,26 @@ fn remember(model: &str, refusals: Refusals) {
     if let Ok(mut known) = learned().0.lock() {
         known.insert(model.to_string(), refusals);
     }
+}
+
+/// Take it from an earlier session that `model` refuses the ask to show thinking, so the first
+/// streamed request of this one is sent without it instead of being refused first
+/// ([BACKEND-63]).
+///
+/// Sets that field and keeps whatever else this process has found the model to refuse.
+///
+/// Not content. What an earlier session found is the status a request was answered with, kept by
+/// the agent in the state directory.
+///
+/// [BACKEND-63]: ../../../docs/specs/backends.md#BACKEND-63
+pub fn known_to_refuse_showing_thinking(model: &str) {
+    remember(
+        model,
+        Refusals {
+            thinking_shown: true,
+            ..refusals(model)
+        },
+    );
 }
 
 /// The status AWS answers a request it will not accept the contents of.
@@ -926,6 +950,7 @@ impl<'a> BedrockClient<'a> {
         );
 
         let mut http = Request::post(url, body)
+            .with_client_certificate()
             .header("content-type", "application/json")
             .header("host", host)
             .header("x-amz-date", &signed.date)
@@ -2775,6 +2800,58 @@ mod tests {
             carried(&body),
             (false, true, true),
             "the next turn asked again"
+        );
+    }
+
+    /// A model an earlier session found refusing the ask to show thinking ([BACKEND-63]) is sent
+    /// its first streamed request without the ask, so no request is spent on a refusal already
+    /// known. Another model is still asked, and what this process found the model to refuse
+    /// besides is kept.
+    ///
+    /// The fault this rejects: a record put back under the wrong name or over the others, which
+    /// either asks a model that refuses or stops asking one that reads the ask.
+    ///
+    /// [BACKEND-63]: ../../../docs/specs/backends.md#BACKEND-63
+    #[test]
+    fn a_model_an_earlier_session_found_refusing_the_ask_is_not_sent_it() {
+        let (known, other) = (
+            "a-model-an-earlier-session-found-refusing-the-ask",
+            "a-model-no-earlier-session-found-anything-about",
+        );
+        remember(
+            known,
+            Refusals {
+                effort: true,
+                ..Refusals::default()
+            },
+        );
+        known_to_refuse_showing_thinking(known);
+        assert_eq!(
+            refusals(known),
+            Refusals {
+                effort: true,
+                thinking_shown: true,
+                ..Refusals::default()
+            }
+        );
+        assert_eq!(refusals(other), Refusals::default());
+
+        let (result, sent) =
+            stream_against(&config_for(known), &writing_a_file(known), vec![answered()]);
+        result.expect("the request without the ask answers");
+        assert_eq!(
+            sent.iter().map(|body| carried(body).0).collect::<Vec<_>>(),
+            [false],
+            "the first request carried the ask to show thinking"
+        );
+
+        let (result, sent) =
+            stream_against(&config_for(other), &writing_a_file(other), vec![answered()]);
+        result.expect("the request answers");
+        assert_eq!(
+            sent.iter().map(|body| carried(body).0).collect::<Vec<_>>(),
+            [true],
+            "a model nothing was found about was not asked"
         );
     }
 

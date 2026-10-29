@@ -671,15 +671,21 @@ An entry a person vouched for this session names the tree it was given in
 ([RUN-8](tools/run.md#RUN-8)), and a checkout is not that tree. A line remembered past the session
 ([RUN-19](tools/run.md#RUN-19)) names no tree and is spelled against the workspace root, which in a
 checkout would be the checkout's, so in a checkout it is not honoured. A run in a checkout is asked
-about unless an entry made this session names the checkout.
+about unless an entry made this session names the checkout. The same holds for the person's yes to
+the startup question when it said confined lines run without asking ([RUN-5](tools/run.md#RUN-5)):
+the answer is keyed to the working directory, so a line the sandbox holds is asked about in a
+checkout.
 
 **Why.** `sh check.sh` vouched for at the root is a statement about the file the root holds, and
 the checkout's file at that path may differ.
 
-Built. A delegate in a checkout is given no remembered lines, and an entry made this session names
-the tree it was given in.
+Built. A delegate in a checkout is given no remembered lines, an entry made this session names
+the tree it was given in, and a confined-lines answer is honoured only by a policy whose root is the
+directory the answer names.
 
 `verified-by: bravebot_agent::turn::a_command_vouched_for_in_the_working_directory_is_asked_about_again_in_a_checkout`
+`verified-by: bravebot_core::policy::the_answer_given_for_the_working_directory_does_not_cover_a_checkout`
+`verified-by: bravebot_agent::confined_lines::trust_of_the_directory_does_not_answer_a_held_line_in_a_checkout`
 
 <a id="CHECKOUT-11"></a>
 ### CHECKOUT-11: a write in a checkout asks what the same write in the working directory asks

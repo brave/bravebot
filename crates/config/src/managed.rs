@@ -70,7 +70,7 @@ const MANAGED_DIR: &str = "/etc/bravebot";
 /// The names this layer answers for that are not variables are the server lists and the two
 /// `permissions` keys that only refuse, each read in its own field: what they have in common with
 /// the list here is that none of them can widen anything.
-const PINNABLE: [&str; 8] = [
+pub(crate) const PINNABLE: [&str; 8] = [
     env_var::ENDPOINT,
     env_var::PREMIUM_ENDPOINT,
     env_var::USE_BEDROCK,

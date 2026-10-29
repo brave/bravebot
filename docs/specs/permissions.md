@@ -181,10 +181,37 @@ likely padding inside the brackets. Read as the name, `Read( .env )` would cover
 and leave `.env` open. Trimmed, `Read(./a.md )` would cover `a.md` and not the file it names, and as
 an `allow` rule would grant it. Neither reading is one to guess at. Whitespace between the first and
 last character is part of the name, so `Read(./my notes.md)` is about the file `my notes.md`, and a
-name that starts with whitespace is written from `./` or `**/`, as `Read(./ a.md)`. A name that ends
-with whitespace has no spelling, since a `*` in its place covers other names too. Brackets holding
+name that starts with whitespace is written from `./` or `**/`, as `Read(./ a.md)`. Brackets holding
 only whitespace are empty. The line around the rule is trimmed, and so is the specifier of every
 other family, where padding inside the brackets says nothing.
+
+A path specifier written inside double quotes is one name and not a pattern. It is quoted when its
+first and its last character are both `"`, and the text between them is taken as written: whitespace
+at either end is part of the name, and `*` and `**` are ordinary characters. The anchors `//`, `~/`,
+`/` and `./` apply to the text inside the quotes, and a name with no slash in it still matches at
+any depth. A leading `**/` does not: inside quotes `**` is a segment called `**`, so `Read("**/a")`
+is about the file `a` in a directory called `**`, and not about every file `a`. The host's
+separator still applies to the text inside the quotes. Where a backslash separates it is a separator
+there too, since no file on that host has one in its name, so `Read("./d\a ")` is about `d/a `;
+where a slash is the only separator a backslash is a byte of the name. So
+`Read("./a.md ")` is about the file `a.md ` alone, `Read("./ ")` about the file called a space, and
+`Read("./*.md")` about the file called `*.md` alone, in `deny`, `ask` and `allow`. This is the
+spelling of a name that ends with whitespace, is only whitespace, or holds a `*`. Quotes inside a
+quoted specifier are ordinary characters too, so a name that itself begins and ends with a quote is
+written inside one more pair, as `Read(""a"")` for the file `"a"`, and `Read("a"b")` is the file
+`a"b`. A lone `"` has a quote at one end only and is the pattern for the file called `"`. Quotes
+holding nothing are reported ([PERM-11](#PERM-11)), since no file has an empty name.
+Padding outside the quotes, as in `Read( "./a.md" )`, is whitespace at an end and is reported. A
+specifier with a quote at only one of its ends is a pattern.
+
+**Why a quoted name.** The escape has to be a spelling no file with a legal name needs, and a byte
+of a name cannot be set aside for it: only `/` and NUL are excluded from names where a path is
+bytes. A backslash is a separator on the hosts that separate with one and an ordinary byte on the
+others, and a bracket class changes what `[` and `]` mean in every name that holds them. A quoted
+specifier changes the reading of only the rules whose specifier both begins and ends with a quote,
+which name a file whose name does, and the person respells those with one more pair. Leaving the
+names unspellable and reporting a rule for them is not enough, because a rule for a name holding
+`*` is a valid pattern and nothing can tell it from a wildcard on purpose.
 
 Segments are separated by `/`. A path pattern and the path it is matched against are both spelled
 that way first, whatever the host separates with, and both are respelled where the rules are read
@@ -260,6 +287,13 @@ spelled as a full path would refuse nothing asked for by that name.
 `verified-by: bravebot_core::permissions::whitespace_inside_a_path_specifier_is_part_of_the_name`
 `verified-by: bravebot_core::permissions::padding_inside_the_brackets_of_a_command_host_or_tool_rule_is_dropped`
 `verified-by: bravebot_config::settings::a_slash_rule_keeps_the_whitespace_at_an_end_of_its_specifier`
+`verified-by: bravebot_core::permissions::a_quoted_path_specifier_is_about_the_one_file_it_spells`
+`verified-by: bravebot_core::permissions::a_quoted_name_keeps_the_depth_an_unquoted_one_has`
+`verified-by: bravebot_core::permissions::a_quote_at_one_end_is_part_of_a_pattern_and_padding_outside_quotes_is_reported`
+`verified-by: bravebot_core::permissions::a_lone_quote_is_a_pattern_for_the_file_called_a_quote`
+`verified-by: bravebot_core::permissions::a_quote_inside_a_quoted_name_is_part_of_the_name`
+`verified-by: bravebot_core::permissions::a_double_star_segment_inside_quotes_is_a_directory_called_that`
+`verified-by: bravebot_core::permissions::a_backslash_inside_quotes_follows_the_hosts_separator`
 `verified-by: bravebot_core::permissions::a_trailing_double_star_covers_the_directory_it_names`
 `verified-by: bravebot_core::permissions::a_relative_rule_says_nothing_about_an_absolute_path`
 `verified-by: bravebot_core::permissions::an_anchored_pattern_matches_only_where_it_is_anchored`
@@ -645,13 +679,18 @@ directory a person typed from being reachable on different terms.
 <a id="PERM-11"></a>
 ### PERM-11: an unreadable rule is dropped, named, and takes nothing with it
 
-A line that is not a rule, names no family this agent has, has no anchor to resolve, or holds a path
-with whitespace at an end ([PERM-3](#PERM-3)) is dropped, and the rest of the file still applies. So
+A line that is not a rule, names no family this agent has, has no anchor to resolve, holds a path
+with whitespace at an end ([PERM-3](#PERM-3)), or holds a quoted path specifier with nothing between
+the quotes (`Read("")`, which has its own wording and does not advise dropping the brackets alone)
+is dropped, and the rest of the file still applies. So
 is an entry that is not a line at all: a number, or a rule nested one array too deep. So is a `deny`,
 `ask` or `allow` value that is not an array, and a `permissions` block that is not an object, each
 named with the keys that lead to it and the file that wrote it. Every one dropped is reported: on
 `doctor`, and in the session where the file was read, named in the spelling the file used, with each
-control character drawn as its picture ([LAYER-3](layering.md#LAYER-3)).
+control character drawn as its picture ([LAYER-3](layering.md#LAYER-3)). The desktop window's
+sentence about a dropped rule quotes the rule and the file spelled as in
+[PROMPT-1](prompting.md#PROMPT-1), so an invisible character or a trailing space in it is
+written out.
 
 **Why.** A misspelled deny rule reads as protection that is not there, which is the one failure
 here worth interrupting somebody over. Refusing the whole file instead would mean a typo in an
@@ -677,7 +716,9 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_core::permissions::a_dropped_rule_is_named_in_the_spelling_the_file_used`
 `verified-by: bravebot_agent::permissions::a_padded_unreadable_rule_is_reported_in_the_spelling_the_file_used`
 `verified-by: bravebot_ui_bridge::rules::a_padded_unreadable_rule_is_not_listed_as_in_force`
+`verified-by: bravebot_ui_bridge::rules::the_sentence_about_an_unreadable_rule_quotes_it_spelled`
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
+`verified-by: bravebot_agent::permissions::a_rule_with_quotes_around_nothing_is_not_told_to_mean_every_use_alone`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
 `verified-by: bravebot_cli::running::doctor_names_a_padded_path_rule_that_an_earlier_version_read_as_the_file_without_the_padding`
 `verified-by: bravebot_agent::permissions::a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching`

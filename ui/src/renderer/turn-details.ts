@@ -3,6 +3,8 @@ import type { BridgeEvent } from '../shared/protocol'
 export interface AuditRecord {
   sequence: number
   event: Record<string, unknown>
+  /** Each string field of `event` drawn by the bridge, which owns how a control character is pictured. */
+  pictured: Record<string, string>
   bytes: number
 }
 
@@ -12,7 +14,6 @@ export interface TurnDetails {
   started: boolean
   notices: string[]
   noticesOpen: boolean
-  statsOpen: boolean
   model?: string
   /** The service the session's model is served by, as the bridge named it from configuration. */
   service?: string
@@ -27,14 +28,14 @@ export interface TurnDetails {
 }
 
 export type Turns = Record<number, TurnDetails>
-export type TurnDisclosure = 'noticesOpen' | 'statsOpen'
+export type TurnDisclosure = 'noticesOpen'
 export const AUDIT_EVENTS_PER_TURN = 1000
 export const AUDIT_BYTES_PER_TURN = 256 * 1024
 export const AUDIT_BYTES_PER_SESSION = 2 * 1024 * 1024
 
 function fresh(turn: number): TurnDetails {
   return { turn, status: 'running', started: false, notices: [], noticesOpen: true,
-    statsOpen: false, audit: [], received: 0, omitted: 0, bytes: 0 }
+    audit: [], received: 0, omitted: 0, bytes: 0 }
 }
 
 /** Numbers missing from older payloads are unavailable, not zero. */
@@ -45,6 +46,13 @@ function count(value: unknown): number | undefined {
 /** What the turn said about itself, which both of the events ending a turn carry. */
 function noticesIn(data: Record<string, unknown>): string[] {
   return Array.isArray(data.notices) ? data.notices.filter((line): line is string => typeof line === 'string') : []
+}
+
+/** The words the bridge drew for the string fields of a record. Anything else is not text to draw. */
+function picturedIn(data: Record<string, unknown>): Record<string, string> {
+  const sent = data.pictured
+  if (!sent || typeof sent !== 'object' || Array.isArray(sent)) return {}
+  return Object.fromEntries(Object.entries(sent).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
 }
 
 /** This map belongs to one session handle. Only numbered events may change it. */
@@ -76,12 +84,13 @@ export function receiveTurn(turns: Turns, message: BridgeEvent): Turns {
   } else {
     const event = data.event
     if (!event || typeof event !== 'object' || Array.isArray(event)) return turns
-    const bytes = new TextEncoder().encode(JSON.stringify(event)).length
+    const pictured = picturedIn(data)
+    const bytes = new TextEncoder().encode(JSON.stringify(event) + JSON.stringify(pictured)).length
     next.received++
     // Retain whole records only. A partially shown decision is not reviewable evidence.
     if (next.audit.length >= AUDIT_EVENTS_PER_TURN || next.bytes + bytes > AUDIT_BYTES_PER_TURN) next.omitted++
     else {
-      next.audit = [...next.audit, { sequence: next.received, event: event as Record<string, unknown>, bytes }]
+      next.audit = [...next.audit, { sequence: next.received, event: event as Record<string, unknown>, pictured, bytes }]
       next.bytes += bytes
     }
   }
@@ -119,11 +128,22 @@ export function isRefusal(event: Record<string, unknown>): boolean {
 
 const text = (value: unknown): string => typeof value === 'string' ? value : ''
 
+/**
+ * A field of a record as the window draws it: the words the bridge sent for it, in which each
+ * control character is already replaced by its picture by `printable` in `bravebot-approval`
+ * (LAYER-3). A name from a checkout can hold an escape or a bell; a text node drops those without
+ * a trace. The renderer holds no definition of which characters those are, and a field the bridge
+ * sent no words for is drawn as nothing rather than as the raw text. The recorded evidence is JSON,
+ * which escapes them already.
+ */
+const shownIn = (pictured: Record<string, string>) => (field: string): string => pictured[field] ?? ''
+
 /** Labels come from structured tags; arbitrary reasons remain the bridge's own words. */
-export function auditDescription(event: Record<string, unknown>): { title: string; detail: string } {
+export function auditDescription(event: Record<string, unknown>, pictured: Record<string, string> = {}): { title: string; detail: string } {
+  const shown = shownIn(pictured)
   switch (event.kind) {
-    case 'gate_blocked': return { title: 'Gate blocked', detail: text(event.reason) || text(event.detail) }
-    case 'gate_passed': return { title: 'Gate passed', detail: text(event.detail) }
+    case 'gate_blocked': return { title: 'Gate blocked', detail: shown('reason') || shown('detail') }
+    case 'gate_passed': return { title: 'Gate passed', detail: shown('detail') }
     case 'action_field': {
       const label = event.label as { integrity?: unknown } | null
       const untrustedRouting = event.allowed === false && event.role === 'routing' && label?.integrity === 'untrusted'
@@ -133,8 +153,8 @@ export function auditDescription(event: Record<string, unknown>): { title: strin
     }
     case 'observed': return { title: 'Data observed', detail: text(event.capability) }
     case 'slot_written': return { title: 'Slot written', detail: text(event.slot) }
-    case 'slot_deferred': return { title: 'File reserved for later reading', detail: text(event.origin) || text(event.slot) }
-    case 'declassified': return { title: 'Data authorized for release', detail: text(event.reason) }
+    case 'slot_deferred': return { title: 'File reserved for later reading', detail: shown('origin') || shown('slot') }
+    case 'declassified': return { title: 'Data authorized for release', detail: shown('reason') }
     default: return { title: 'Audit event', detail: text(event.kind) }
   }
 }

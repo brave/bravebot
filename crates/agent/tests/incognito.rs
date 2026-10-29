@@ -670,3 +670,55 @@ fn a_checkout_is_not_made_under_the_state_directory() {
         "a private session made a checkout under the state directory"
     );
 }
+
+const A_BEDROCK_MODEL: &str =
+    "arn:aws:bedrock:us-west-2:111122223333:application-inference-profile/abc";
+
+/// INCOG-5, BACKEND-63: a Bedrock model found to refuse the ask to show thinking is not recorded
+/// in a private session, which holds for the session and outlives nothing. The finding is still
+/// made and used for the rest of the session by the client's own record.
+///
+/// The fault this rejects: a record written through the state directory's reading answer, which
+/// leaves a file naming the model in a session that is to add nothing.
+#[test]
+fn no_bedrock_refusal_is_written_down() {
+    let scratch = Scratch::new("bedrock-refusal-adds-nothing");
+    let store = bravebot_agent::bedrock_refusals::Store::new(&scratch.home);
+
+    store
+        .keep_refusing_showing_thinking(A_BEDROCK_MODEL, std::time::SystemTime::now())
+        .expect("a write that declines is not a failure");
+
+    assert!(
+        !scratch.home.join("bedrock-refusals.json").exists(),
+        "an incognito session wrote a refusal into the state directory"
+    );
+    assert!(!store.refuses_showing_thinking(A_BEDROCK_MODEL, std::time::SystemTime::now()));
+}
+
+/// INCOG-5, BACKEND-63: reading is unchanged. A refusal an earlier session kept still stops the
+/// ask here, for the reason a recorded model and theme are still read: a private session does not
+/// spend a refused request on a question an ordinary one already answered.
+#[test]
+fn a_bedrock_refusal_an_earlier_session_kept_is_still_honoured() {
+    let scratch = Scratch::new("bedrock-refusal-still-reads");
+    let found = std::time::SystemTime::now();
+    let seconds = found
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after the epoch")
+        .as_secs();
+
+    // Seeded as an ordinary session would have left it, past the write this mode declines.
+    std::fs::write(
+        scratch.home.join("bedrock-refusals.json"),
+        format!(r#"{{"thinking_shown":{{"{A_BEDROCK_MODEL}":{seconds}}}}}"#),
+    )
+    .expect("seed a record");
+
+    let store = bravebot_agent::bedrock_refusals::Store::new(&scratch.home);
+    assert!(
+        store.refuses_showing_thinking(A_BEDROCK_MODEL, found),
+        "an incognito session read nothing back"
+    );
+    assert!(!store.refuses_showing_thinking("anthropic.claude-opus-5-5", found));
+}

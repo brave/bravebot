@@ -158,13 +158,76 @@ impl SessionScratch {
 }
 
 impl Drop for SessionScratch {
-    /// Take the directory and everything in it.
+    /// Take the directory and everything in it, waiting at most [`REMOVAL_WAIT`] for it to go.
     ///
     /// A failure is not reported: this runs as a session ends, where there is nobody left to tell
     /// and nothing useful to do about it. What it leaves behind is what a session killed outright
     /// leaves behind too, and the next session to open takes it.
     fn drop(&mut self) {
+        #[cfg(unix)]
+        removed_within(
+            REMOVAL_WAIT,
+            &self.path,
+            self.claim.try_clone().ok(),
+            |path| {
+                let _ = std::fs::remove_dir_all(path);
+            },
+        );
+        // Nothing takes what a session leaves here, so it waits for the whole removal.
+        #[cfg(not(unix))]
         let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// How long ending a session waits for its directory to be removed.
+///
+/// A directory can hold a large tree, and a person leaving should not wait on it. What is not gone
+/// by then is still being removed while the process runs, and if the process ends first it is what
+/// a killed session leaves, which the next session to open takes ([`sweep`]). Unix only, since the
+/// sweep is.
+#[cfg(unix)]
+const REMOVAL_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Run `remove` on `path` on a thread of its own, and wait for it for `wait` at most. Answers
+/// whether it had finished by then.
+///
+/// The thread keeps `held`, the lock on the directory where there is one, until `remove` returns. A
+/// directory half removed is still locked, so a session opening beside this one does not take it as
+/// a leftover while this one is taking it. Where the thread cannot be started `remove` runs here,
+/// which is the wait this exists to avoid and the removal the session is owed.
+#[cfg(unix)]
+fn removed_within<F>(
+    wait: std::time::Duration,
+    path: &Path,
+    held: Option<std::fs::File>,
+    remove: F,
+) -> bool
+where
+    F: Fn(&Path) + Send + Sync + 'static,
+{
+    use std::sync::mpsc::RecvTimeoutError;
+
+    let remove = std::sync::Arc::new(remove);
+    let (ending, ended) = std::sync::mpsc::channel::<()>();
+    let owned = path.to_path_buf();
+    let thread_remove = std::sync::Arc::clone(&remove);
+    let started = std::thread::Builder::new()
+        .name("scratch removal".into())
+        .spawn(move || {
+            thread_remove(&owned);
+            drop(held);
+            // Nothing is sent. The waiting end reads this one going as the removal being over, and
+            // it may have stopped waiting already.
+            drop(ending);
+        });
+    match started {
+        // Only a timeout is a removal still going: the thread's end of the channel going is it
+        // having finished.
+        Ok(_) => !matches!(ended.recv_timeout(wait), Err(RecvTimeoutError::Timeout)),
+        Err(_) => {
+            remove(path);
+            true
+        }
     }
 }
 
@@ -546,7 +609,148 @@ mod tests {
 
         drop(scratch);
 
-        assert!(!path.exists(), "{} outlived the session", path.display());
+        assert!(gone_soon(&path), "{} outlived the session", path.display());
+    }
+
+    /// How long a test gives a removal that has started to finish.
+    const PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Whether `path` is gone within [`PATIENCE`]. Ending a session waits for its directory for a
+    /// moment and leaves the rest of the removal to a thread, so a directory can still be going
+    /// when the session has returned.
+    fn gone_soon(path: &Path) -> bool {
+        let deadline = std::time::Instant::now() + PATIENCE;
+        while path.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        !path.exists()
+    }
+
+    /// What a removal held up by the test is called back through: a removal to hand
+    /// [`removed_within`], the signal that it has begun, the release that lets it go on, and the
+    /// signal that it has finished.
+    ///
+    /// The wait for the release is bounded, so an implementation that waits for the removal runs
+    /// out the bound and fails the assertion after it rather than hanging the run.
+    #[cfg(unix)]
+    fn a_removal_the_test_holds_up() -> (
+        impl Fn(&Path) + Send + Sync + 'static,
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    ) {
+        let (reached, began) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let (finished, was_removed) = std::sync::mpsc::channel();
+        let released = std::sync::Mutex::new(released);
+        let remove = move |path: &Path| {
+            let _ = reached.send(());
+            let _ = released
+                .lock()
+                .unwrap_or_else(|held| held.into_inner())
+                .recv_timeout(PATIENCE);
+            let _ = std::fs::remove_dir_all(path);
+            let _ = finished.send(());
+        };
+        (remove, began, release, was_removed)
+    }
+
+    /// TRUST-15: leaving does not wait on a directory that is slow to remove.
+    ///
+    /// The removal here does not finish until the test lets it, which happens after the call has
+    /// returned, so a call that waited for it would return only once the directory was gone.
+    #[test]
+    #[cfg(unix)]
+    fn ending_a_session_does_not_wait_for_a_directory_that_is_slow_to_go() {
+        let scratch = SessionScratch::create().expect("a scratch directory");
+        let path = scratch.path().to_path_buf();
+        std::fs::write(path.join("workings.txt"), "kept").expect("write");
+        let (remove, began, release, finished) = a_removal_the_test_holds_up();
+
+        let finished_in_time =
+            removed_within(std::time::Duration::from_millis(50), &path, None, remove);
+
+        assert!(
+            !finished_in_time,
+            "the removal was reported finished while it was held up"
+        );
+        began
+            .recv_timeout(PATIENCE)
+            .expect("the removal never began");
+        assert!(
+            path.join("workings.txt").exists(),
+            "ending the session waited for the removal to finish"
+        );
+        release.send(()).expect("let the removal go on");
+        finished
+            .recv_timeout(PATIENCE)
+            .expect("the removal never finished once it was let go");
+        assert!(!path.exists(), "{} outlived the removal", path.display());
+    }
+
+    /// TRUST-15: leaving waits for a removal that finishes within the bound, so a directory that
+    /// goes quickly is gone when the session has ended and is not left to a thread the process may
+    /// outrun.
+    #[test]
+    #[cfg(unix)]
+    fn leaving_waits_for_a_directory_that_goes_quickly() {
+        let scratch = SessionScratch::create().expect("a scratch directory");
+        let path = scratch.path().to_path_buf();
+        std::fs::write(path.join("workings.txt"), "kept").expect("write");
+
+        // A removal that takes a moment, so a wait that returned at once would return before it.
+        let finished_in_time = removed_within(PATIENCE, &path, None, |path| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let _ = std::fs::remove_dir_all(path);
+        });
+
+        assert!(
+            finished_in_time,
+            "a removal that took a moment was reported unfinished"
+        );
+        assert!(
+            !path.exists(),
+            "{} was still there when the wait ended",
+            path.display()
+        );
+    }
+
+    /// TRUST-15: a directory a session is removing is still held, so a session opening beside it
+    /// does not take it for a leftover and remove it a second time.
+    #[test]
+    #[cfg(unix)]
+    fn a_directory_being_removed_stays_held_until_it_is_gone() {
+        let root = SessionScratch::create().expect("a directory to stand for the temporary one");
+        let owner = owner_of(root.path());
+        let home = places_in(root.path(), owner).home;
+        let path = reserved_name(&home, SESSION);
+        made_unclaimed(&path).expect("made");
+        let claim = claimed(&path).expect("claimed");
+        std::fs::write(path.join("workings.txt"), "kept").expect("written");
+        // What the session gives up when it is dropped, with only the copy the removal keeps left.
+        let held = claim.try_clone().expect("a second handle on the lock");
+        drop(claim);
+        let (remove, began, release, finished) = a_removal_the_test_holds_up();
+
+        removed_within(
+            std::time::Duration::from_millis(50),
+            &path,
+            Some(held),
+            remove,
+        );
+
+        began
+            .recv_timeout(PATIENCE)
+            .expect("the removal never began");
+        assert!(
+            abandoned(&path, owner).is_none(),
+            "a directory still being removed was taken for a leftover"
+        );
+        release.send(()).expect("let the removal go on");
+        finished
+            .recv_timeout(PATIENCE)
+            .expect("the removal never finished once it was let go");
+        assert!(gone_soon(&path), "{} outlived the removal", path.display());
     }
 
     /// A name something else holds is refused rather than adopted, and what was there is left

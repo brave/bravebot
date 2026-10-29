@@ -1,8 +1,7 @@
 //! A sign-in kept in one file the account owns.
 //!
-//! The file sits beside the Leo credentials in the state directory and is made the way that file is:
-//! private to the account as it is created, written beside and renamed over, and written and removed
-//! under a claim of its own. Which file, which claim and what it holds are the [`Kind`]'s.
+//! The file sits in the state directory and is private to the account as it is created, written
+//! beside and renamed over, and written and removed under a claim of its own. Which file, which claim and what it holds are the [`Kind`]'s.
 
 use super::Kind;
 use crate::Secret;
@@ -65,25 +64,17 @@ impl std::fmt::Display for AccountError {
 
 impl std::error::Error for AccountError {}
 
-/// A store failure while writing or removing the file, which the store words for the Leo file.
+/// A store failure while writing or removing the file.
 fn unwritable(failure: StoreError) -> AccountError {
-    match failure {
-        StoreError::Unusable { detail } | StoreError::Malformed { detail } => {
-            AccountError::Unwritable { detail }
-        }
-        other => AccountError::Unwritable {
-            detail: other.to_string(),
-        },
-    }
+    let StoreError::Unusable { detail } = failure;
+    AccountError::Unwritable { detail }
 }
 
 /// Where the sign-in of `K` is kept.
 pub(crate) fn path<K: Kind>() -> Result<PathBuf, AccountError> {
-    beside(K::FILE).map_err(|failure| match failure {
-        StoreError::Unusable { detail } => AccountError::Nowhere { detail },
-        other => AccountError::Nowhere {
-            detail: other.to_string(),
-        },
+    beside(K::FILE).map_err(|failure| {
+        let StoreError::Unusable { detail } = failure;
+        AccountError::Nowhere { detail }
     })
 }
 

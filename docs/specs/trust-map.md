@@ -215,13 +215,10 @@ each row's line names.
 
 A rule written about one of the names is asked in the deny, ask and allow lists and for `Read` and
 `Edit`, since a rule is matched under a key built apart from the map's. A deny or ask rule reaches
-the other name of the NFC and NFD group on purpose and an allow rule does not. A path specifier with
-whitespace at an end is reported and not read, since the whitespace is as likely padding as part of the
-name ([PERM-3](permissions.md#PERM-3)), so a name with whitespace at its end and a name of whitespace
-alone cannot be written as a rule about that file, and a rule typed for one is reported. A `*` in a
-rule is always a wildcard, so a name holding `*` cannot be written as a rule about that file alone
-either, and nothing reports it, since the rule is a pattern. A name with whitespace at its start is
-written from `./`. The test lists the three kinds against #2864 and fails once one can be written.
+the other name of the NFC and NFD group on purpose and an allow rule does not. A name with
+whitespace at its end, a name of whitespace alone and a name holding `*` are written as a path in
+double quotes, which is one name taken as written ([PERM-3](permissions.md#PERM-3)), so the test
+asks them as `Read("./name")`. A name with whitespace at its start is written from `./`.
 
 A listing is asked the same pairs. It reports two entries for two files, and a refusal of one reaches
 a listing of the other only within a group.
@@ -431,6 +428,13 @@ A no is never kept, so a directory answered with a no asks again. `/clear` begin
 therefore asks, on the same terms. `--resume` does not ask, and restores the map from the record of
 the session chosen; a record from before maps were kept has none, and is asked about.
 
+A record written by a sitting that had bypass on at any point says so, and `--resume` restores neither
+its map nor its opened directories: the mode answered the startup question and each vouch in the
+person's place ([MODE-4](permission-modes.md#MODE-4)), so what the map holds is not an answer the
+person resuming gave, and it asks. A rule the person made in that sitting by hand is not kept either,
+which is the cost of a record that cannot tell the two apart. Resuming with the flag again is
+answered by the mode as it was.
+
 A continuing caller keeps the current map after success, returned error or cancellation, after
 joining the turn's children. This includes grants made while loading context before a later load
 fails and downgrades recorded by effects. The caller adopts that map before saving or starting
@@ -438,10 +442,15 @@ another turn; a pre-turn copy cannot replace it. A record is written by one proc
 ([SESSION-38](sessions.md#SESSION-38)), so the map one process recorded is not replaced by a copy
 another process made before it.
 
+`verified-by: bravebot_tui::app::a_resume_without_the_flag_asks_where_bypass_answered_for_the_record`
+`verified-by: bravebot_tui::sessions::a_record_written_under_bypass_restores_no_trust_and_no_directory`
 `verified-by: bravebot_cli::plain_retention_tests::failed_plain_turn_excludes_replacement_from_the_next_request`
 `verified-by: bravebot_agent::turn::retention::early_loading_errors_return_current_decisions`
 `verified-by: bravebot_agent::turn::ordinary_parent_endings_retain_delegate_file_and_program_decisions`
 `verified-by: bravebot_ui_bridge::retention::worker::bridge_ordinary_endings_keep_decisions_live_and_resumed`
+`verified-by: bravebot_ui_bridge::retention::worker::a_desktop_turn_records_whether_bypass_answered_for_the_person`
+`verified-by: bravebot_ui_bridge::bridge::a_desktop_fork_carries_the_mark_that_bypass_answered_in_its_parents_map`
+`verified-by: bravebot_cli::running::a_one_shot_run_records_whether_bypass_answered_for_the_person`
 `verified-by: bravebot_session::sessions::a_second_resume_cannot_erase_the_distrust_the_first_recorded`
 
 A kept yes is the yes and nothing else the session held. The session it settles starts from the rule
@@ -1099,10 +1108,22 @@ resume, a fork, the session `/clear` begins and the copy `/branch` carries on in
 ([SESSION-31](sessions.md#SESSION-31)) each open a new directory, and the one belonging to the
 session they followed is removed rather than handed on.
 
+Ending the session waits a quarter of a second at most for the directory to go. The removal runs on
+a thread of its own that keeps the directory's lock until it has finished, so a directory too large
+to go in that time is still being removed while the process runs, and a session opening beside it
+does not take it for a leftover ([TRUST-25](#TRUST-25)). If the process ends first, what remains is
+what a killed session leaves, and the next session to open takes it. On Windows, where nothing takes
+what a session leaves, ending the session waits for the whole removal.
+
 **Why.** A resume can come days later, and bytes surviving that gap are a cache nothing evicts.
 There is nothing to reconstruct anyway, since the name carries what tells one directory from its
 neighbours rather than the session's identifier. What a cleared context wrote is not something the
 session after it should find lying there either.
+
+**Why the wait is bounded.** A directory can hold a large tree, and a person leaving should not wait
+on removing one. The sweep ([TRUST-25](#TRUST-25)) already takes a directory whose session is gone,
+so handing it the remainder adds no way for one to be left that a killed session did not already
+have.
 
 A `/cd` needs nothing done to the directory, which is the one lifetime rule this location removes
 rather than restates: the directory is not under the working directory, so a move does not leave it
@@ -1110,6 +1131,9 @@ behind, and there is no ordering to get right between removing it and still bein
 (TRUST-13).
 
 `verified-by: bravebot_agent::scratch::nothing_written_in_it_outlives_the_session`
+`verified-by: bravebot_agent::scratch::ending_a_session_does_not_wait_for_a_directory_that_is_slow_to_go`
+`verified-by: bravebot_agent::scratch::leaving_waits_for_a_directory_that_goes_quickly`
+`verified-by: bravebot_agent::scratch::a_directory_being_removed_stays_held_until_it_is_gone`
 `verified-by: bravebot_agent::scratch::no_two_sessions_are_given_the_same_directory`
 
 <a id="TRUST-16"></a>
@@ -1443,6 +1467,7 @@ whole tree out of somebody looking at a file, which is the largest grant this do
 ([TRUST-9](#TRUST-9)) issued for the smallest gesture. Writing there is the same: what a person
 edited themselves is theirs, and a turn reading it later is a read like any other.
 
+`verified-by: bravebot_cli::layering::the_ui_files_helper_starts_no_process`
 `verified-by: by-construction (the helper is a process of its own that runs no command and speaks to no turn, so a byte it read reaches a screen and has no road into a turn's context: it holds no labelled value, mints no witness, and writes nothing the map is consulted about)`
 
 ## Keeping the answer to the startup question

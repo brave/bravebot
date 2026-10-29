@@ -12,10 +12,60 @@ use bravebot_config::Config;
 use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
-use bravebot_net::{Egress, Request};
+use bravebot_net::{Egress, Request, Timeouts};
 use serde::Deserialize;
+use std::time::Duration;
 
 use crate::ChatError;
+
+/// How long a request for a roster may take
+/// ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)).
+///
+/// A person is waiting on a picker, and on a start that has not yet drawn anything, so a service
+/// that takes the connection and never answers costs them seconds rather than the minutes a
+/// model's reply is allowed. A listing is one request for a few hundred kilobytes at most, so these
+/// leave a remote gateway room for a TLS handshake and a slow link and no more.
+pub const LISTING_TIMEOUTS: Timeouts = Timeouts {
+    resolve: Duration::from_secs(3),
+    connect: Duration::from_secs(5),
+    send: Duration::from_secs(5),
+    reply: Duration::from_secs(10),
+    idle: Duration::from_secs(5),
+};
+
+/// The egress a roster request is made through, which gives up on a service far sooner than a
+/// reply does.
+pub fn listing_egress() -> Egress {
+    Egress::with_timeouts(LISTING_TIMEOUTS)
+}
+
+/// Run each of `asks` at once, on a thread of its own, while `meanwhile` runs on this one, and
+/// give back what each answered in the order they were given
+/// ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)).
+///
+/// For the requests of a roster, which are independent of one another: a person waits for the
+/// slowest service and not for all of them in turn. An ask owns everything it needs, including
+/// the policy it fetches under, so what one answers cannot reach another.
+///
+/// `meanwhile` is for the asks that have to stay on the calling thread. A panic in an ask is
+/// raised here once the rest have finished, as it would have been had it run in place.
+pub fn concurrently<'asks, T: Send, U>(
+    asks: Vec<Box<dyn FnOnce() -> T + Send + 'asks>>,
+    meanwhile: impl FnOnce() -> U,
+) -> (Vec<T>, U) {
+    std::thread::scope(|scope| {
+        let running: Vec<_> = asks.into_iter().map(|ask| scope.spawn(ask)).collect();
+        let meanwhile = meanwhile();
+        let answers = running
+            .into_iter()
+            .map(|ask| {
+                ask.join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect();
+        (answers, meanwhile)
+    })
+}
 
 /// What a service advertised about a model, in the words the service used.
 ///
@@ -165,8 +215,11 @@ pub fn list<S: Sink>(
     config: &Config,
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
-    let request =
-        crate::as_brave_bot(Request::get(config.models_url()).header("accept", "application/json"));
+    let request = crate::as_brave_bot(
+        Request::get(config.models_url())
+            .with_client_certificate()
+            .header("accept", "application/json"),
+    );
 
     // Through the egress gate like everything else, because that gate is the only way out to the
     // network. The label records where the bytes came from; nothing here branches on them beyond
@@ -224,9 +277,28 @@ struct ListedByGateway {
     /// that needs one.
     #[serde(default)]
     architecture: Option<Architecture>,
+    /// The day OpenAI stops serving the model, as `YYYY-MM-DD`, where the listing states one.
+    ///
+    /// Held as it arrived, since a listing that states it in another shape, or as `null`, is still
+    /// a listing that can be read.
+    #[serde(default)]
+    shutdown_date: Option<serde_json::Value>,
 }
 
 impl ListedByGateway {
+    /// Whether the listing states a `shutdown_date` that is `now` or earlier, a date read as its
+    /// first second in UTC.
+    ///
+    /// Only a calendar date counts. An absent field, a `null` and any other shape state nothing, so
+    /// the row stays.
+    fn is_shut_down(&self, now: i64) -> bool {
+        self.shutdown_date
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .and_then(|date| bravebot_config::time::rfc3339(&format!("{date}T00:00:00Z")))
+            .is_some_and(|(shutdown, _)| shutdown <= now)
+    }
+
     /// Whether the listing says this model reads no effort level.
     ///
     /// Only an explicit `false`: a listing that does not mention the capability, or states it in
@@ -284,6 +356,7 @@ pub fn list_from_gateway<S: Sink>(
     headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
+    let now = now_seconds();
     // Vertex AI has no listing a key can call, so asking would carry the key to be answered 404.
     if let Some(compiled) = provider.compiled_roster() {
         let listed = compiled
@@ -293,7 +366,7 @@ pub fn list_from_gateway<S: Sink>(
                 ..ListedByGateway::default()
             })
             .collect();
-        return Ok(offered_by_gateway(provider, listed));
+        return Ok(offered_by_gateway(provider, listed, now));
     }
 
     if token.is_some() && provider.answers_for_an_account() {
@@ -308,7 +381,7 @@ pub fn list_from_gateway<S: Sink>(
             headers,
             egress,
         ) {
-            return Ok(offered_by_gateway(provider, listed));
+            return Ok(offered_by_gateway(provider, listed, now));
         }
     }
 
@@ -320,7 +393,15 @@ pub fn list_from_gateway<S: Sink>(
         headers,
         egress,
     )?;
-    Ok(offered_by_gateway(provider, listed))
+    Ok(offered_by_gateway(provider, listed, now))
+}
+
+/// Seconds since the epoch, or 0 where the clock reads before it, so that a clock that cannot be
+/// read drops only a row dated 1970-01-01 or earlier.
+fn now_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as i64)
 }
 
 /// One roster request, decoded.
@@ -332,7 +413,9 @@ fn fetch_listing<S: Sink>(
     headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<ListedByGateway>, ChatError> {
-    let mut request = Request::get(&url).header("accept", "application/json");
+    let mut request = Request::get(&url)
+        .with_client_certificate()
+        .header("accept", "application/json");
     for (name, value) in provider.fixed_headers() {
         request = request.header(*name, *value);
     }
@@ -438,6 +521,7 @@ pub fn list_from_account<S: Sink>(
     let url = provider.models_url();
     let (name, value) = provider.credential_header(token);
     let request = Request::get(&url)
+        .with_client_certificate()
         .header("accept", "application/json")
         .socket_header(name, value)
         .refusing_redirects()
@@ -639,6 +723,7 @@ pub fn list_from_xai_account<S: Sink>(
     let url = provider.models_url();
     let (name, value) = provider.credential_header(token);
     let request = Request::get(&url)
+        .with_client_certificate()
         .header("accept", "application/json")
         .socket_header(name, value)
         .refusing_redirects();
@@ -734,15 +819,19 @@ struct GatewayListing {
 /// so a limit here would be this program deciding somebody may not choose a model their gateway
 /// serves.
 ///
-/// What a listing leaves out is what it says cannot call tools, and the ids the provider is
-/// compiled with a list of ([`bravebot_config::provider::Provider::responses_only_models`]): a
-/// route that cannot reach a model does not offer it. The ids are compared with that list only,
-/// and the rows go to a picker, as those the capability filter keeps do.
+/// What a listing leaves out is what it says cannot call tools, the ids the provider is compiled
+/// with a list of ([`bravebot_config::provider::Provider::responses_only_models`]): a route that
+/// cannot reach a model does not offer it, and, where the provider reads them
+/// ([`bravebot_config::provider::Provider::lists_shutdown_dates`]), a model whose listed
+/// `shutdown_date` is `now` or earlier, which the service no longer serves. The ids are compared
+/// with that list only, and the rows go to a picker, as those the capability filter keeps do.
 fn offered_by_gateway(
     provider: &bravebot_config::provider::Provider,
     listed: Vec<ListedByGateway>,
+    now: i64,
 ) -> Vec<Model> {
     let left_out = provider.responses_only_models();
+    let reads_shutdown_dates = provider.lists_shutdown_dates();
     listed
         .into_iter()
         .filter(|entry| match entry.supported_parameters.as_ref() {
@@ -751,6 +840,7 @@ fn offered_by_gateway(
         })
         .filter(|entry| !entry.id.trim().is_empty())
         .filter(|entry| !left_out.contains(&entry.id.as_str()))
+        .filter(|entry| !(reads_shutdown_dates && entry.is_shut_down(now)))
         .map(|entry| Model {
             key: format!("{}/{}", provider.id, entry.id),
             // The bare name the gateway knows it by. What a person reads is composed by whoever
@@ -1049,9 +1139,21 @@ mod tests {
             .expect("one provider")
     }
 
+    /// A moment that is before every `shutdown_date` a listing could state in these tests, so a
+    /// test of something else is not read against a clock.
+    const BEFORE_ANY_SHUTDOWN: i64 = 0;
+
     fn from_gateway(provider: &bravebot_config::provider::Provider, body: &str) -> Vec<Model> {
+        from_gateway_at(provider, body, BEFORE_ANY_SHUTDOWN)
+    }
+
+    fn from_gateway_at(
+        provider: &bravebot_config::provider::Provider,
+        body: &str,
+        now: i64,
+    ) -> Vec<Model> {
         let listed: GatewayListing = serde_json::from_str(body).expect("the test body parses");
-        offered_by_gateway(provider, listed.data)
+        offered_by_gateway(provider, listed.data, now)
     }
 
     /// The shape a gateway answers with: an envelope around entries whose only certain field is the
@@ -1484,7 +1586,8 @@ mod tests {
     /// them (`-pro` or `-codex` on a model neither document lists) is offered, because the list is
     /// of ids, and so is a model another endpoint also serves (`gpt-image-1`) and one that takes
     /// chat completions beside the Responses request (`gpt-5.4`). The same listing is offered whole
-    /// where the route is the Responses one or the host is not OpenAI's.
+    /// where the route is the Responses one, which is where an `openai` entry reaches OpenAI's own
+    /// API unless it names the OpenAI-compatible SDK, or where the host is not OpenAI's.
     #[test]
     fn an_openai_listing_is_not_offered_the_models_only_its_responses_api_takes() {
         let listing = r#"{"data": [
@@ -1503,7 +1606,7 @@ mod tests {
         };
 
         assert_eq!(
-            keys(r#"{"openai": {"env": ["OPENAI_API_KEY"]}}"#),
+            keys(r#"{"openai": {"npm": "@ai-sdk/openai-compatible", "env": ["OPENAI_API_KEY"]}}"#),
             [
                 "openai/gpt-4o-mini",
                 "openai/text-embedding-3-small",
@@ -1512,6 +1615,11 @@ mod tests {
                 "openai/o9-pro",
                 "openai/gpt-9-codex"
             ]
+        );
+        assert_eq!(
+            keys(r#"{"openai": {"env": ["OPENAI_API_KEY"]}}"#).len(),
+            17,
+            "an openai entry is reached in the Responses protocol, which takes those models"
         );
         assert_eq!(
             keys(r#"{"openai": {"npm": "@ai-sdk/openai", "env": ["OPENAI_API_KEY"]}}"#).len(),
@@ -1527,6 +1635,105 @@ mod tests {
             17,
             "a proxy keyed openai was left out of models it may serve"
         );
+    }
+
+    /// 2026-10-27 12:00:00 UTC.
+    const NOON_ON_THE_27TH: i64 = 1_793_102_400;
+    /// 2026-10-27 00:00:00 UTC.
+    const START_OF_THE_27TH: i64 = 1_793_059_200;
+
+    /// BACKEND-19: OpenAI's listing states the day a model stops being served, and a request for
+    /// one past it is answered as deprecated. A row dated that day or earlier is not offered, and
+    /// every other row is: one dated later, one with no date, a `null`, and a date stated in a
+    /// shape that is not `YYYY-MM-DD`, which says nothing about when the model stops.
+    #[test]
+    fn an_openai_listing_is_not_offered_a_model_on_or_past_its_shutdown_date() {
+        let listing = r#"{"data": [
+            {"id": "gpt-4o-mini", "shutdown_date": null},
+            {"id": "o1", "shutdown_date": "2026-10-23"},
+            {"id": "gpt-ends-today", "shutdown_date": "2026-10-27"},
+            {"id": "gpt-ends-tomorrow", "shutdown_date": "2026-10-28"},
+            {"id": "gpt-undated"},
+            {"id": "gpt-worded", "shutdown_date": "soon"},
+            {"id": "gpt-numbered", "shutdown_date": 20261023},
+            {"id": "gpt-timestamped", "shutdown_date": "2026-10-23T00:00:00Z"}
+        ]}"#;
+        let keys = |block: &str, now: i64| -> Vec<String> {
+            from_gateway_at(&entry(block), listing, now)
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+        let kept = [
+            "openai/gpt-4o-mini",
+            "openai/gpt-ends-tomorrow",
+            "openai/gpt-undated",
+            "openai/gpt-worded",
+            "openai/gpt-numbered",
+            "openai/gpt-timestamped",
+        ];
+
+        assert_eq!(
+            keys(
+                r#"{"openai": {"env": ["OPENAI_API_KEY"]}}"#,
+                NOON_ON_THE_27TH
+            ),
+            kept
+        );
+        assert_eq!(
+            keys(
+                r#"{"openai": {"npm": "@ai-sdk/openai-compatible", "env": ["OPENAI_API_KEY"]}}"#,
+                NOON_ON_THE_27TH
+            ),
+            kept,
+            "the route does not decide what OpenAI has shut down"
+        );
+        assert_eq!(
+            keys(
+                r#"{"work": {"options": {"baseURL": "https://API.OpenAI.com/v1"}}}"#,
+                NOON_ON_THE_27TH
+            )
+            .len(),
+            6,
+            "an entry under another id that states OpenAI's host is read the same way"
+        );
+    }
+
+    /// A date is its first second in UTC: on the day, the model is gone, and the second before it
+    /// the model is still offered. A comparison that took the date as the end of its day would keep
+    /// a model that already answers as deprecated.
+    #[test]
+    fn a_shutdown_date_takes_effect_at_the_start_of_its_day() {
+        let listing = r#"{"data": [{"id": "o1", "shutdown_date": "2026-10-27"}]}"#;
+        let block = r#"{"openai": {"env": ["OPENAI_API_KEY"]}}"#;
+
+        assert!(from_gateway_at(&entry(block), listing, START_OF_THE_27TH).is_empty());
+        assert_eq!(
+            from_gateway_at(&entry(block), listing, START_OF_THE_27TH - 1).len(),
+            1
+        );
+    }
+
+    /// Another service that states a field of that name may mean something else by it, so only
+    /// OpenAI's own API is read for it. A proxy keyed `openai`, and any other gateway, is offered
+    /// every row it lists.
+    #[test]
+    fn a_shutdown_date_is_read_at_openais_own_api_and_nowhere_else() {
+        let listing = r#"{"data": [{"id": "o1", "shutdown_date": "2026-10-23"}]}"#;
+
+        for block in [
+            r#"{"openai": {"env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/v1"}}}"#,
+            r#"{"openai": {"env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://api.openai.com:8443/v1"}}}"#,
+            r#"{"openrouter": {"options": {"baseURL": "https://openrouter.example.invalid/v1"}}}"#,
+        ] {
+            assert_eq!(
+                from_gateway_at(&entry(block), listing, NOON_ON_THE_27TH).len(),
+                1,
+                "{block}"
+            );
+        }
     }
 
     /// A name is what a request carries, so an entry without one cannot be asked for. Nothing else
@@ -2023,5 +2230,77 @@ mod tests {
                 .iter()
                 .all(|model| model.advertised == Advertised::default())
         );
+    }
+
+    /// A meeting `expected` threads each reach, which says whether they were all there at once. It
+    /// gives up after a few seconds, so asks run one after the next fail the test and do not hang it.
+    fn meet(gate: &(std::sync::Mutex<usize>, std::sync::Condvar), expected: usize) -> bool {
+        let (arrived, signal) = gate;
+        let mut here = arrived.lock().expect("the count");
+        *here += 1;
+        signal.notify_all();
+        let (count, waited) = signal
+            .wait_timeout_while(here, Duration::from_secs(5), |here| *here < expected)
+            .expect("the count");
+        drop(count);
+        !waited.timed_out()
+    }
+
+    /// BACKEND-64: the asks of a roster are in flight together, are answered in the order they were
+    /// given, and leave the calling thread free to work while they are.
+    ///
+    /// Three asks and the caller each have to reach the meeting before any may leave it, so asks run
+    /// one after the next fail it. The first ask finishes last, so answers handed back in the order
+    /// the asks finished are not the order they were given.
+    #[test]
+    fn the_asks_of_a_roster_are_in_flight_together_and_answered_in_the_order_given() {
+        let gate = std::sync::Arc::new((std::sync::Mutex::new(0), std::sync::Condvar::new()));
+        let asks: Vec<Box<dyn FnOnce() -> (usize, bool) + Send>> = (0..3_usize)
+            .map(|index| {
+                let gate = gate.clone();
+                Box::new(move || {
+                    let together = meet(&gate, 4);
+                    if index == 0 {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    (index, together)
+                }) as Box<dyn FnOnce() -> (usize, bool) + Send>
+            })
+            .collect();
+
+        let (answers, meanwhile) = concurrently(asks, || meet(&gate, 4));
+
+        assert_eq!(answers, [(0, true), (1, true), (2, true)]);
+        assert!(
+            meanwhile,
+            "the calling thread was not working while the asks were in flight"
+        );
+    }
+
+    /// BACKEND-64: an ask that panics is raised to the caller as it would have been had it run in
+    /// place, and not turned into an answer from a service that said nothing.
+    #[test]
+    #[should_panic(expected = "the ask went wrong")]
+    fn a_panic_in_an_ask_is_raised_to_the_caller() {
+        let asks: Vec<Box<dyn FnOnce() -> u8 + Send>> =
+            vec![Box::new(|| 1), Box::new(|| panic!("the ask went wrong"))];
+        concurrently(asks, || ());
+    }
+
+    /// BACKEND-64: a request for a roster is given up on in seconds, where a model's reply is allowed
+    /// minutes. The figures are what is pinned: waiting on a service that takes the connection and
+    /// says nothing is what held a start for as long as a reply may take.
+    #[test]
+    fn a_request_for_a_roster_is_given_up_on_in_seconds_and_not_minutes() {
+        let ceiling = Duration::from_secs(30);
+        let bounds = [
+            LISTING_TIMEOUTS.resolve,
+            LISTING_TIMEOUTS.connect,
+            LISTING_TIMEOUTS.send,
+            LISTING_TIMEOUTS.reply,
+            LISTING_TIMEOUTS.idle,
+        ];
+        assert!(bounds.iter().all(|bound| *bound <= ceiling), "{bounds:?}");
+        assert!(LISTING_TIMEOUTS.reply < Timeouts::default().reply);
     }
 }

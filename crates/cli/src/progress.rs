@@ -38,6 +38,17 @@ pub(crate) fn printable_path(path: &std::path::Path) -> String {
     printable(&path.display().to_string())
 }
 
+/// Text of several lines as [`printable`] draws it, each line break kept.
+///
+/// For words that run over more than one line and may carry a name a checkout chose, such as a
+/// notice naming a file or the account of a plan's steps (LAYER-3).
+pub(crate) fn printable_lines(text: &str) -> String {
+    text.split('\n')
+        .map(printable)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// One dropped permission entry, said as [`bravebot_agent::permissions::describe`] says it, with
 /// the entry and the file it was written in pictured by [`printable`] (LAYER-3).
 ///
@@ -214,8 +225,12 @@ impl<W: Write> Progress<W> {
 
     /// A failed write is dropped. Progress announces and has nothing to refuse with, so a
     /// closed stderr means nobody is reading, not that the turn should stop.
+    ///
+    /// Every line is drawn through [`printable_lines`] on the way out: a call's target, reason and
+    /// note can name a file a checkout chose (LAYER-3), and a sentence added later is covered
+    /// without its author having to remember.
     fn say(&mut self, line: &str) {
-        let _ = writeln!(self.out, "{line}");
+        let _ = writeln!(self.out, "{}", printable_lines(line));
         let _ = self.out.flush();
     }
 }
@@ -437,6 +452,29 @@ mod tests {
         assert!(!written.contains("a second line"), "got: {written}");
     }
 
+    /// A quarantined listing entry's real file name reaches the call line in place of its
+    /// reference (LAYER-3), the way it did for [`the_lines_of_a_call_draw_a_checkouts_names_as_pictures`]
+    /// below, but through the `ref:N(flags):name` form `target_of` builds rather than a bare
+    /// name, which is the shape #3064 reported (`say` already pictures it through
+    /// [`printable_lines`]).
+    #[test]
+    fn a_call_line_draws_a_targets_control_characters_as_pictures() {
+        let written = log(|p| {
+            p.tool_started(Activity::running(
+                "Read",
+                "ref:1(U,priv):x\u{1b}]0;PWNED-TITLE\u{7}\u{1b}[31mred.txt",
+            ));
+        });
+        assert!(
+            !written.contains('\u{1b}') && !written.contains('\u{7}'),
+            "got: {written:?}"
+        );
+        assert!(
+            written.contains("x\u{241b}]0;PWNED-TITLE\u{2407}"),
+            "the escape should be drawn as its picture: {written:?}"
+        );
+    }
+
     #[test]
     fn a_finished_call_prints_what_came_of_it() {
         let written = log(|p| {
@@ -466,6 +504,30 @@ mod tests {
             p.tool_finished(Activity::running("Search", "todo").done("4 matches"));
         });
         assert!(!written.contains("at the model"), "got: {written}");
+    }
+
+    /// TRACE-11, LAYER-3: a call's target, reason and note can name a file a checkout chose, and
+    /// the line each is said on is drawn with its control characters pictured.
+    #[test]
+    fn the_lines_of_a_call_draw_a_checkouts_names_as_pictures() {
+        let name = "x\u{1b}]0;T\u{7}\u{1b}[31mred.txt";
+        let pictured = "x\u{241b}]0;T\u{2407}\u{241b}[31mred.txt";
+        let written = log(|p| {
+            p.tool_started(
+                Activity::running("Read", name).saying_why(format!("open {name} to check it")),
+            );
+            p.tool_finished(Activity::running("Read", name).done(format!("read {name}")));
+        });
+        assert_eq!(
+            written.chars().find(|c| c.is_control() && *c != '\n'),
+            None,
+            "a control character reached the line: {written:?}"
+        );
+        assert_eq!(
+            written.matches(pictured).count(),
+            3,
+            "a name was dropped or left raw: {written:?}"
+        );
     }
 
     /// A refusal is worth printing too: a run that quietly skipped a write and answered anyway

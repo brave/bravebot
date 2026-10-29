@@ -80,25 +80,47 @@ export function TooltipLayer(): React.JSX.Element | null {
       }
       return null
     }
+    const opensOnClick = (target: Element | null): boolean => target?.getAttribute('data-tooltip-trigger') === 'click'
     const over = (event: PointerEvent) => {
       if (event.pointerType === 'touch') return
       const target = owner(event)
+      // A click tooltip stays until a click, Escape, or another tooltip takes its place.
+      if (opensOnClick(target)) {
+        if (current.current && !opensOnClick(current.current)) hide()
+        return
+      }
+      if (opensOnClick(current.current)) {
+        if (target) show(target, false)
+        return
+      }
       if (target) show(target, false)
       else if (current.current) hide()
     }
     const focus = (event: FocusEvent) => {
       const target = owner(event)
       // Keyboard focus only. A click focuses the control as well, and the tooltip that follows
-      // a click is one nobody asked for.
+      // a click is one nobody asked for. A click tooltip is the exception: it opens from the click.
       const keyboard = document.querySelector(':focus-visible') !== null
         || (event.target instanceof Element && event.target.shadowRoot?.querySelector(':focus-visible') !== null)
-      if (target && keyboard) show(target, true)
+      if (target && keyboard && !opensOnClick(target)) show(target, true)
+    }
+    const down = (event: Event) => {
+      const target = owner(event)
+      if (opensOnClick(target)) return
+      hide()
+    }
+    const activate = (event: MouseEvent) => {
+      const target = owner(event)
+      if (!target || !opensOnClick(target)) return
+      if (current.current === target) hide()
+      else show(target, true)
     }
     const blur = (event: FocusEvent) => { if (owner(event) === current.current) hide() }
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape' && current.current) hide() }
 
     document.addEventListener('pointerover', over, true)
-    document.addEventListener('pointerdown', hide, true)
+    document.addEventListener('pointerdown', down, true)
+    document.addEventListener('click', activate, true)
     document.addEventListener('focusin', focus, true)
     document.addEventListener('focusout', blur, true)
     document.addEventListener('keydown', key, true)
@@ -108,7 +130,8 @@ export function TooltipLayer(): React.JSX.Element | null {
     return () => {
       clear()
       document.removeEventListener('pointerover', over, true)
-      document.removeEventListener('pointerdown', hide, true)
+      document.removeEventListener('pointerdown', down, true)
+      document.removeEventListener('click', activate, true)
       document.removeEventListener('focusin', focus, true)
       document.removeEventListener('focusout', blur, true)
       document.removeEventListener('keydown', key, true)
@@ -144,7 +167,7 @@ export function TooltipLayer(): React.JSX.Element | null {
       style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
     >
       <Tooltip ref={tooltip} visible mode="mini" placement={shown.placement} positionStrategy="fixed" offset={6}>
-        <div slot="content" className="tooltip-text" data-veil="slot">
+        <div slot="content" className={`tooltip-text${shown.text.includes('\n') ? ' multiline' : ''}`} data-veil="slot">
           {shown.text}
           {shown.shortcut && <kbd className="tooltip-shortcut">{shown.shortcut}</kbd>}
         </div>

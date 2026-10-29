@@ -6,7 +6,7 @@ description: Run a session from an editor that speaks the Agent Client Protocol,
 
 # Using Brave Bot in an editor
 
-`bravebot-acp` runs a session for an editor that speaks the
+`bravebot acp` runs a session for an editor that speaks the
 [Agent Client Protocol](https://agentclientprotocol.com), such as Zed. The editor starts the
 program, draws the conversation, and shows each question as an approval.
 
@@ -17,14 +17,20 @@ In Zed, declare it as a custom agent in your settings:
   "agent_servers": {
     "Brave Bot": {
       "type": "custom",
-      "command": "bravebot-acp",
-      "args": []
+      "command": "bravebot",
+      "args": ["acp"]
     }
   }
 }
 ```
 
-The program is built with the rest of the workspace and sits beside `bravebot-rpc`.
+This works with any installed copy of `bravebot`. The command reads the protocol on its standard
+input and writes it on its standard output, so it prints nothing else there. It takes `--settings
+<file>` and refuses `--dangerously-skip-permissions` and `--dangerously-bypass-approvals-and-sandbox`,
+because an editor is always asked.
+
+A build of the workspace also makes `bravebot-acp`, which runs the same server and takes the same
+`--settings` option. Use `"command": "bravebot-acp"` with `"args": []` to start it instead.
 
 ## What the editor can send
 
@@ -32,6 +38,15 @@ Text you type is a prompt, exactly as in the terminal, and a `/` word in it is t
 not a command. A picture you attach arrives as a pasted picture and a file you link arrives as a
 dropped file. An embedded selection or other resource is refused, because it could only be carried
 by putting its text in your words. MCP servers an editor lists are not started.
+
+## Several workspace roots
+
+Where the editor has more than one workspace root, it sends one as the session's directory and
+the rest in `session/new`'s `additionalDirectories`. Each of those is opened the same way
+`--add-dir` opens one on the command line: reachable for the session, but nothing in it is
+vouched for, so a write there is still asked about as any write outside the session's directory
+is. An entry that is not an absolute path to a directory that exists refuses the whole session
+before it starts.
 
 ## Approvals
 

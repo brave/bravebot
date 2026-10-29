@@ -1844,11 +1844,40 @@ impl Servers {
 /// under rust-analyzer) are its business and outlive it by however long they take to notice, so
 /// this narrows the window rather than closing it, and what loses the race is a directory left
 /// behind rather than anything read.
+///
+/// The servers are stopped beside each other ([`stop_together`]), so ending a session waits for the
+/// slowest server and not for the sum of them.
 impl Drop for Servers {
     fn drop(&mut self) {
-        self.running.clear();
+        stop_together(self.running.drain().map(|(_, server)| server));
         self.publish();
     }
+}
+
+/// Stop `servers`, each on a thread of its own, and return once every one has stopped.
+///
+/// A server that ignores `shutdown` is waited on for [`SHUTDOWN_GRACE`] twice before it is killed
+/// ([`Server`]'s `Drop`), so stopped one after another the servers of a session cost the sum of
+/// their waits. A server is stopped by nothing but its own `Drop`, so this changes when each one
+/// starts to stop and not how: none is left running when this returns. Where a thread cannot be
+/// started its server is dropped in the thread that asked, which is the same stop.
+fn stop_together(servers: impl IntoIterator<Item = Server>) {
+    let mut servers: Vec<Server> = servers.into_iter().collect();
+    // One needs no thread, and the last of several is stopped here while the others are being
+    // stopped beside it.
+    let Some(last) = servers.pop() else {
+        return;
+    };
+    std::thread::scope(|scope| {
+        for server in servers {
+            // Dropped with the closure if the thread cannot be started, which stops it here.
+            std::thread::Builder::new()
+                .name("lsp stop".into())
+                .spawn_scoped(scope, move || drop(server))
+                .ok();
+        }
+        drop(last);
+    });
 }
 
 /// What a person is being asked to approve.
@@ -2847,12 +2876,17 @@ done
     }
 
     /// A server starts under the spawn gate, so it cannot overlap the creation of a control channel.
+    ///
+    /// [`LAUNCHING`] is taken and the workspace written on this thread before the hook holds the
+    /// gate. The hook runs the start on another thread, and a start that took [`LAUNCHING`] there
+    /// would wait behind a test that holds it while it waits for the gate this thread holds.
     #[cfg(unix)]
     #[test]
     fn a_server_start_waits_for_a_channel_being_created() {
-        bravebot_sandbox::process::start_waits_at_the_gate(|| {
-            let (_launching, scratch, _log, declared) =
-                a_workspace_with_a_declared_server(DECLARED_AND_APPROVED);
+        let _launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
+        let (scratch, _log, declared) =
+            write_a_workspace_with_a_declared_server(DECLARED_AND_APPROVED);
+        bravebot_sandbox::process::start_waits_at_the_gate(move || {
             let mut servers = Servers::new(
                 scratch.to_path_buf(),
                 None,
@@ -3122,6 +3156,10 @@ done
     ///
     /// One at a time closes the window rather than waiting it out, since [`Server::launch`] is the
     /// only thing in this binary that forks and no write is in flight while one of them happens.
+    ///
+    /// A test takes this before the spawn gate, never after: every launch holds this and then waits
+    /// for the gate, so a thread that held the gate and waited for this would wait for a test that
+    /// is itself waiting for the gate.
     #[cfg(unix)]
     static LAUNCHING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -3170,6 +3208,34 @@ done
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
 
         (launching, scratch, file)
+    }
+
+    /// Wait until the notice a server wrote after an answer is queued for the client.
+    ///
+    /// The answer and the notice arrive in one write, but the reader parses them one after the
+    /// other, so a client that has read the answer may not hold the notice yet. The messages pass
+    /// through a relay that reports each one once it is queued, which makes the notice certainly
+    /// waiting when this returns. That is the state the drain of what was already queued is for.
+    #[cfg(unix)]
+    fn wait_for_the_notice_after_the_answer(servers: &mut Servers) {
+        let server = servers
+            .running
+            .get_mut(&Key::Builtin(Language::Rust))
+            .expect("the question started it");
+        let (relayed, incoming) = std::sync::mpsc::channel();
+        let (queued, notice) = std::sync::mpsc::channel();
+        let reader = std::mem::replace(&mut server.incoming, incoming);
+        std::thread::spawn(move || {
+            for message in reader {
+                if relayed.send(message).is_err() {
+                    return;
+                }
+                let _ = queued.send(());
+            }
+        });
+        notice
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the server's notice after its answer was queued");
     }
 
     /// Everything a question needs besides the question: the capability, and a yes to starting the
@@ -3626,6 +3692,123 @@ done
         );
     }
 
+    /// A language server that answers `shutdown` only once the set's other server has been asked to
+    /// shut down as well, and records that it saw that as `met.<pid>`. A server stopped before the
+    /// other is asked never sees it, is not answered, and is killed. It exits when told to, and
+    /// records its process id as `pid.<pid>` before anything else.
+    #[cfg(unix)]
+    const WAITS_FOR_THE_OTHER_SERVER_TO_BE_ASKED: &str = r#"#!/bin/sh
+here=$(dirname "$0")
+echo $$ > "$here/pid.$$"
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r _blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"rustAnalyzer/cachePriming","value":{"kind":"end"}}}'
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"gopls/loading","value":{"kind":"end"}}}'
+      ;;
+    *'"textDocument/definition"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[]}"
+      ;;
+    *'"shutdown"'*)
+      : > "$here/asked.$$"
+      tries=0
+      while [ $tries -lt 150 ]; do
+        set -- "$here"/asked.*
+        if [ $# -ge 2 ]; then
+          : > "$here/met.$$"
+          reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+          break
+        fi
+        sleep 0.02
+        tries=$((tries + 1))
+      done
+      ;;
+    *'"exit"'*) exit 0 ;;
+  esac
+done
+"#;
+
+    #[cfg(unix)]
+    const STOPS_TOGETHER: &str = "bravebot-lsp-stops-together";
+
+    #[cfg(unix)]
+    fn the_server_that_waits_for_the_other(_: &str) -> Option<PathBuf> {
+        Some(crate::testutil::scratch_dir(STOPS_TOGETHER).join("server"))
+    }
+
+    /// The names in `directory` that start with `prefix`.
+    #[cfg(unix)]
+    fn recorded(directory: &Path, prefix: &str) -> Vec<String> {
+        std::fs::read_dir(directory)
+            .expect("read the directory")
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name.starts_with(prefix))
+            .collect()
+    }
+
+    /// LSP-8: the servers of a session are stopped beside each other, so leaving waits for the
+    /// slowest and not for the sum.
+    ///
+    /// Driven against two processes, a Rust server and a Go one, that each answer `shutdown` only
+    /// once both have been asked. Observed as an event and not as a duration: stopped one after
+    /// the other, the first is never answered because the second is not asked until it is gone, so
+    /// it records no meeting and is killed, and only the second meets the first's request. A time
+    /// limit would pass or fail with the load on the machine running it.
+    #[cfg(unix)]
+    #[test]
+    fn the_servers_of_a_set_are_stopped_beside_each_other() {
+        let (_launching, scratch, workspace, rust_file) =
+            a_workspace_with_a_reporting_server(STOPS_TOGETHER);
+        std::fs::write(
+            scratch.join("server"),
+            WAITS_FOR_THE_OTHER_SERVER_TO_BE_ASKED,
+        )
+        .expect("write the server");
+        let go_file = workspace.join("src").join("b.go");
+        std::fs::write(&go_file, "package b\n").expect("write the file");
+        let mut servers = Servers::new(
+            workspace,
+            None,
+            the_server_that_waits_for_the_other,
+            false,
+            Vec::new,
+        );
+        a_definition_in(&mut servers, &rust_file);
+        a_definition_in(&mut servers, &go_file);
+        assert_eq!(servers.running(), 2, "the set did not start both servers");
+        let pids: Vec<u32> = recorded(&scratch, "pid.")
+            .iter()
+            .map(|name| name["pid.".len()..].parse().expect("a process id"))
+            .collect();
+        assert_eq!(pids.len(), 2, "each server records its process id");
+
+        drop(servers);
+
+        assert_eq!(
+            recorded(&scratch, "met.").len(),
+            2,
+            "a server was stopped before the other was asked to stop, so it never saw it"
+        );
+        for pid in pids {
+            assert!(
+                !a_process_is_running(pid),
+                "a server outlived the set that started it"
+            );
+        }
+    }
+
     /// LSP-10: an incognito session keeps no index under `~/.bravebot`, and what it does instead
     /// is index somewhere else, never inside the workspace.
     ///
@@ -3839,8 +4022,9 @@ done
     /// none on a change. `$SILENT` makes it say nothing at all, and `$QUIET_ON_CHANGE` says nothing on
     /// a change, and `$LATE_NOTICE` publishes an error after answering a definition, which leaves a
     /// notice queued once the question is over. The answer and that notice go out in one write, so
-    /// the notice has arrived by the time the answer is read rather than whenever the shell is next
-    /// scheduled.
+    /// the notice is in the pipe by the time the answer is read rather than whenever the shell is
+    /// next scheduled. Whether the client has queued it is the reader's pace, which
+    /// [`wait_for_the_notice_after_the_answer`] waits out.
     ///
     /// The two differ so that what a test reads says which message the client sent, and whether it
     /// read a notice from before the file changed.
@@ -3919,6 +4103,8 @@ done
     }
 
     /// A workspace holding one file the declared server serves, with its script and a log path.
+    ///
+    /// [`LAUNCHING`] comes back with them for the reason [`a_workspace_a_server_rejects`] gives.
     #[cfg(unix)]
     fn a_workspace_with_a_declared_server(
         name: &str,
@@ -3928,9 +4114,21 @@ done
         PathBuf,
         Declared,
     ) {
+        let launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
+        let (scratch, log, declared) = write_a_workspace_with_a_declared_server(name);
+        (launching, scratch, log, declared)
+    }
+
+    /// [`a_workspace_with_a_declared_server`] for a caller that already holds [`LAUNCHING`]. A test
+    /// that runs its launch on another thread under the spawn gate takes the lock first on its own
+    /// thread and writes the workspace there, because a guard cannot move to that thread and the
+    /// lock has to be taken before the gate.
+    #[cfg(unix)]
+    fn write_a_workspace_with_a_declared_server(
+        name: &str,
+    ) -> (crate::testutil::Scratch, PathBuf, Declared) {
         use std::os::unix::fs::PermissionsExt;
 
-        let launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
         let scratch = crate::testutil::Scratch::new(name);
         std::fs::create_dir_all(&*scratch).expect("create the workspace");
         std::fs::write(scratch.join("a.zz"), "one\ntwo\n").expect("write the file");
@@ -3952,7 +4150,7 @@ done
             initialization_options: Some(serde_json::json!({ "indexer": { "threads": 3 } })),
             digest: "one".into(),
         };
-        (launching, scratch, log, declared)
+        (scratch, log, declared)
     }
 
     #[cfg(unix)]
@@ -4387,6 +4585,7 @@ done
             },
         )
         .expect("the question starts the server");
+        wait_for_the_notice_after_the_answer(&mut servers);
 
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);

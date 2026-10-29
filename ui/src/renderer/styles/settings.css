@@ -158,7 +158,10 @@
   gap: var(--leo-spacing-2xl);
   padding: var(--leo-spacing-2xl);
 }
+.settings-row-control { display: flex; align-items: center; gap: var(--leo-spacing-m); }
 .settings-row-control leo-dropdown { min-width: 160px; }
+/* A problem with the row's choice reads under both its text and its control. */
+.settings-row-alert { grid-column: 1 / -1; }
 .settings-row-text p { margin: var(--leo-spacing-xs) 0 0; font: var(--type-body); color: var(--ink-secondary); }
 .settings-actions { display: flex; flex-wrap: wrap; gap: var(--leo-spacing-m); }
 

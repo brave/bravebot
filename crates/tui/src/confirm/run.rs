@@ -1303,6 +1303,27 @@ mod tests {
         assert!(drawn.contains("/home/someone/project"), "{drawn}");
     }
 
+    /// Two file names that differ only in a zero-width character are drawn apart, because a
+    /// terminal skips such a character and `a.tmp a.tmp` would otherwise stand for both lists. The
+    /// character is written out inside the quoting, and none reaches the screen.
+    #[test]
+    fn a_run_prompt_draws_names_that_differ_in_an_invisible_character_apart() {
+        let mut hidden = a_run(false);
+        let mut plain = a_run(false);
+        for (request, second) in [(&mut hidden, "a\u{200b}.tmp"), (&mut plain, "a.tmp")] {
+            if let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps {
+                steps[0].program = "rm".to_string();
+                steps[0].args = vec!["a.tmp".to_string(), second.to_string()];
+            }
+        }
+        let hidden = rendered_run(&hidden);
+        let plain = rendered_run(&plain);
+        assert!(hidden.contains(r"rm a.tmp 'a\u{200b}.tmp'"), "{hidden}");
+        assert!(plain.contains("rm a.tmp a.tmp"), "{plain}");
+        assert!(!hidden.contains('\u{200b}'), "{hidden}");
+        assert_ne!(hidden, plain);
+    }
+
     /// A name that reached its file through a link is drawn with the link beside the file, since
     /// the link is what starts and an entry for the line is keyed on both.
     #[test]

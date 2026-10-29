@@ -17,7 +17,7 @@ governs:
   - crates/tui/src/list_picker.rs
   - crates/tui/src/model_prompt.rs
   - crates/tui/src/theme_prompt.rs
-  - crates/tui/src/resume.rs
+  - crates/tui/src/sessions_screen.rs
   - crates/tui/src/sessions_view.rs
   - crates/tui/src/render/hint.rs
   - crates/tui/src/render/hover.rs
@@ -409,15 +409,16 @@ Enter does, and sends nothing. A press on the title, on the box the search is ty
 shown in full beside the list is on no prompt. The search holds the input, so a press anywhere on the
 screen is its own and begins no selection of what the transcript above it says.
 
-In the list of sessions that `--resume` and `/resume` open, a left press on a session puts the cursor
-on it, on any of the three rows it takes, and leaves the list where it is, and a second on the same
-session takes it as Enter does: it resumes the session, or says why it cannot be, which is the sentence Enter gives for a manifest run
-and for a record a background session or another process holds. The list `bravebot sessions` opens
-takes a press the same way, and a second press attaches. A roster read again between two presses that
-puts another session at the cell does not make them one double click. A press on a heading, on the space between
-two groups, on the search box, the project or the line of keys, or below the last session is on no
-session. The question of deleting a record is answered by the next key and by nothing else, so while
-it stands no press or turn of the wheel does anything to it or to the list.
+In the Sessions screen, which `--resume`, `/resume`, `/sessions` and Left open, a left press on a session
+puts the cursor on it and leaves the list where it is, and a second on the same session opens it as
+Enter does: it resumes the session, or says why it cannot be, which is the sentence Enter gives for a
+manifest run and for a record a background session or another process holds. The list `bravebot
+sessions` opens takes a press the same way, and a second press attaches. A roster read again between
+two presses that puts another session at the cell does not make them one double click. A press on a
+heading, on the space between two groups, on the search box or the line of keys, or below the last
+session is on no session. The question of archiving or deleting a record is answered by the next key and
+by nothing else, so while it stands no press or turn of the wheel does anything to it or to the list
+([MOUSE-50](#MOUSE-50)).
 
 In the list of commands, skills or files that is offered under the box as a line is typed,
 a left click that sweeps nothing on a row puts the cursor on it, and a second click on the same
@@ -467,15 +468,13 @@ the box is [MOUSE-16](#MOUSE-16)'s. The keys stay the way to do it without a mou
 `verified-by: bravebot_tui::app::tests::completions::a_row_of_a_list_that_has_gone_since_the_frame_is_no_target`
 `verified-by: bravebot_tui::app::tests::completions::a_click_on_a_row_of_the_list_offered_while_a_turn_runs_takes_it_the_same`
 `verified-by: bravebot_tui::app::tests::completions::a_click_on_a_file_moves_the_cursor_and_a_second_writes_it_after_the_at`
-`verified-by: bravebot_tui::resume::a_press_on_a_session_moves_the_cursor_and_a_second_takes_it`
-`verified-by: bravebot_tui::resume::a_second_press_on_a_session_that_cannot_be_resumed_says_why`
-`verified-by: bravebot_tui::resume::a_press_off_the_sessions_and_any_other_mouse_event_leave_the_list_alone`
-`verified-by: bravebot_tui::resume::each_session_drawn_is_the_one_a_press_on_it_picks_in_a_list_that_has_scrolled`
-`verified-by: bravebot_tui::resume::a_double_click_in_place_takes_the_session_pointed_at_on_every_entry_of_a_list_scrolled_or_not`
-`verified-by: bravebot_tui::resume::a_press_where_the_wheel_has_since_drawn_another_session_is_a_first_press_on_it`
-`verified-by: bravebot_tui::resume::a_key_after_a_press_moves_the_list_as_the_keys_alone_do`
-`verified-by: bravebot_tui::resume::while_the_question_of_deleting_stands_the_pointer_does_nothing`
-`verified-by: bravebot_tui::resume::the_list_reads_the_pointer_before_the_question_of_deleting_is_asked`
+`verified-by: bravebot_tui::sessions_screen_tests::a_click_on_a_tab_chooses_it_and_a_click_on_a_row_puts_the_cursor_on_it`
+`verified-by: bravebot_tui::sessions_screen_tests::a_double_click_in_place_opens_the_session_pointed_at_on_every_row_of_a_list_scrolled_or_not`
+`verified-by: bravebot_tui::sessions_screen_tests::a_press_where_the_wheel_has_since_drawn_another_session_is_a_first_press_on_it`
+`verified-by: bravebot_tui::sessions_screen_tests::a_second_click_on_show_more_asks_for_more_where_the_click_is_taken`
+`verified-by: bravebot_tui::sessions_screen_tests::a_second_click_on_a_row_opens_it_as_enter_does`
+`verified-by: bravebot_tui::sessions_screen_tests::a_press_that_is_on_no_row_does_nothing`
+`verified-by: bravebot_tui::sessions_screen_tests::a_click_or_the_wheel_while_a_question_is_up_leaves_the_list_alone`
 `verified-by: bravebot_tui::sessions_view::a_press_on_a_session_moves_the_cursor_and_a_second_attaches`
 `verified-by: bravebot_tui::sessions_view::a_press_on_no_session_and_any_other_mouse_event_leave_the_list_alone`
 `verified-by: bravebot_tui::sessions_view::each_session_drawn_is_the_one_a_press_on_it_picks_in_a_list_that_has_scrolled`
@@ -1591,8 +1590,8 @@ deleting a record do not read the wheel. The keys stay the way to do it without 
 `verified-by: bravebot_tui::app::tests::pickers::the_wheel_walks_a_picker_opened_mid_turn_by_the_wheel_rows`
 `verified-by: bravebot_tui::model_prompt::the_wheel_moves_the_cursor_by_the_models_asked_over_the_headings`
 `verified-by: bravebot_tui::app::tests::history_search::the_wheel_walks_the_prompts_by_the_wheel_rows_and_stops_at_both_ends`
-`verified-by: bravebot_tui::resume::the_wheel_moves_the_cursor_by_the_sessions_asked_and_stops_at_both_ends`
 `verified-by: bravebot_tui::sessions_view::the_wheel_moves_the_cursor_by_the_sessions_asked_over_the_headings`
+`verified-by: bravebot_tui::sessions_screen_tests::the_wheel_walks_the_cursor_and_stops_at_the_ends`
 `verified-by: bravebot_tui::app::tests::completions::the_wheel_over_the_list_walks_it_and_elsewhere_scrolls_the_transcript`
 `verified-by: bravebot_tui::confirm::tests::mouse_tests::a_turn_of_the_wheel_moves_the_body_of_a_question_as_the_keys_do`
 `verified-by: bravebot_tui::app::tests::popups::a_press_outside_the_scrollers_key_list_puts_it_away_and_nothing_else`
@@ -1609,7 +1608,7 @@ nothing else, and the release that follows it is the panel's.
 |---|---|---|
 | the pickers `/effort`, `/config`, `/theme` and `/model` open, at rest and while a turn runs | leaves what was in force alone, and `/theme` puts back the theme it opened on | closes it the same way |
 | the search over the prompts already sent | closes it, leaving the box as it was | closes it the same way |
-| the lists of sessions `--resume`, `/resume` and `bravebot sessions` open | leaves without resuming or attaching | there is nothing outside them: each takes the whole screen |
+| the Sessions screen and the list `bravebot sessions` opens | leaves without resuming or attaching | there is nothing outside them: each takes the whole screen |
 | the list offered under the box as a line is typed | clears the line, which discards what was typed | does nothing |
 | the scroller's key list | puts it away, as does any key | puts it away |
 | an approval, a question the planner or the interface asks, the question of trusting a directory or of deleting a record | refuses, declines or stops, each of which is an answer ([MOUSE-44](#MOUSE-44)) | does nothing |
@@ -1807,6 +1806,10 @@ selected by a double click as any text is ([MOUSE-16](#MOUSE-16)). A row of the 
 takes a second click as its own ([MOUSE-15](#MOUSE-15)). A path waits for the second press to say
 whether the first was a click on it ([MOUSE-42](#MOUSE-42)). Nor is a click that did nothing: a
 double click on text that is no target, or on an address without ctrl held, selects the word.
+
+The rows, the tabs and "Show more" of the Sessions screen ([SCREEN-12](sessions-screen.md#SCREEN-12))
+are recorded as the cells they are drawn in, and stand while the Sessions screen is open. While it is open it
+is the whole frame, so no target of the plain frame stands.
 
 `verified-by: bravebot_tui::state::targets::the_target_recorded_last_is_the_one_drawn_on_top`
 `verified-by: bravebot_tui::state::targets::a_target_in_the_transcript_follows_the_view_as_it_scrolls`

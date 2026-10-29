@@ -10,7 +10,10 @@
 use crate::Secret;
 use crate::bedrock::{Bedrock, Tier};
 use crate::env_var;
-use crate::provider::{self, ANTHROPIC_ID, AWS_PROVIDER_ID, GOOGLE_VERTEX_ID, Provider};
+use crate::provider::{
+    self, ANTHROPIC_ID, AWS_PROVIDER_ID, GOOGLE_VERTEX_ID, OPENAI_ID, Protocol, Provider,
+    RESPONSES_SDK,
+};
 use serde_json::{Map, Value};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -25,6 +28,13 @@ const SOURCE_BYTES: u64 = 1024 * 1024;
 const CLAUDE_BEDROCK: &str = "CLAUDE_CODE_USE_BEDROCK";
 /// Claude Code's switch for Vertex AI, which serves Claude models through Google Cloud credentials.
 const CLAUDE_VERTEX: &str = "CLAUDE_CODE_USE_VERTEX";
+/// Claude Code's switch for Azure AI Foundry, which serves Claude models through Azure credentials.
+const CLAUDE_FOUNDRY: &str = "CLAUDE_CODE_USE_FOUNDRY";
+/// The command Claude Code runs to get the key it reaches Anthropic's API with.
+///
+/// Only whether it is stated is read, never what it says: a command can hold a key itself. It is
+/// not run, not copied and not shown.
+const CLAUDE_KEY_COMMAND: &str = "apiKeyHelper";
 /// Claude Code's model variable, which it reads before the settings file's `model` key.
 const CLAUDE_MODEL: &str = "ANTHROPIC_MODEL";
 /// The Bedrock API key Claude Code can sign in with, which bravebot does not: it signs through the
@@ -35,10 +45,12 @@ const BEDROCK_BEARER: &str = "AWS_BEARER_TOKEN_BEDROCK";
 const ANTHROPIC_KEY: &str = "ANTHROPIC_API_KEY";
 /// The host Claude Code sends it to instead of Anthropic's.
 const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
+/// The bearer token Claude Code can reach Anthropic's own API with in place of a key.
+const ANTHROPIC_AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
 /// What else Claude Code reaches Anthropic's own API with. The first is sent as a bearer token and
 /// the second is a host written without the route this program appends, so neither is carried into
 /// a `provider` block.
-const ANTHROPIC_NAMES: [&str; 2] = ["ANTHROPIC_AUTH_TOKEN", ANTHROPIC_BASE_URL];
+const ANTHROPIC_NAMES: [&str; 2] = [ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL];
 /// The names a Claude Code Bedrock setup states that bravebot reads under the same spelling.
 const BEDROCK_NAMES: [&str; 5] = [
     env_var::AWS_REGION,
@@ -71,22 +83,27 @@ const LLAMA_SERVER_PORTS: [u16; 2] = [9931, 8080];
 /// in `bravebot-aichat` and the choice here agree on.
 pub const TOOLS: &str = "tools";
 
-/// The two programs whose configuration is read, and the servers that are asked.
+/// The two programs whose configuration is read, the keys exported in this process's environment,
+/// and the servers that are asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     ClaudeCode,
     Opencode,
+    /// An API key exported for a service whose endpoint is compiled in.
+    Environment,
     Ollama,
     LmStudio,
     LlamaServer,
 }
 
 impl Source {
-    /// The program's own name, which is not translated.
+    /// The program's own name, which is not translated. [`Source::Environment`] is no program, so
+    /// its name here is English and a front end that translates names says its own.
     pub fn name(self) -> &'static str {
         match self {
             Self::ClaudeCode => "Claude Code",
             Self::Opencode => "opencode",
+            Self::Environment => "your environment",
             Self::Ollama => "Ollama",
             Self::LmStudio => "LM Studio",
             Self::LlamaServer => "llama-server",
@@ -105,7 +122,7 @@ impl Source {
             Self::Ollama => Some("ollama"),
             Self::LmStudio => Some("lmstudio"),
             Self::LlamaServer => Some("llama-server"),
-            Self::ClaudeCode | Self::Opencode => None,
+            Self::ClaudeCode | Self::Opencode | Self::Environment => None,
         }
     }
 }
@@ -507,6 +524,9 @@ pub enum Key {
     Held(Secret),
     /// A `{file:path}` reference, which is not followed.
     File(String),
+    /// A command the source runs to get the key, which is never run. The entry names the variable
+    /// to export what it prints as.
+    Command,
 }
 
 /// One thing found that is not imported, by name only.
@@ -542,6 +562,12 @@ pub enum Reason {
     Elsewhere,
     /// A running server with no model that can call tools, which a session could not use.
     NoToolModel,
+    /// A key exported beside the host its service's own tools read from the environment: it was
+    /// issued for that host, and an entry at the endpoint compiled in would send it to another.
+    KeyForAnotherHost,
+    /// A model word Claude Code turns into a model itself, which nothing here can do for
+    /// Anthropic's API: written as it stands it would reach Brave's roster.
+    ModelWord,
 }
 
 /// One model a running server lists, as its listing names it.
@@ -558,8 +584,8 @@ pub struct Installed {
     pub window: Option<u64>,
 }
 
-/// Everything the sources hold, Claude Code first, then opencode, then the servers in the order
-/// [`Places::servers`] lists them.
+/// Everything the sources hold, Claude Code first, then opencode, then the keys exported, then the
+/// servers in the order [`Places::servers`] lists them.
 ///
 /// `environment` is the process environment. A Claude Code Bedrock setup is often exported rather
 /// than written down, and a name already there is read from there at run time, so it is not copied.
@@ -579,6 +605,7 @@ pub fn found(
         found.extend(claude_code(path, &environment));
     }
     found.extend(opencode(&places.opencode, places.opencode_auth.as_deref()));
+    found.extend(exported_keys(&environment));
 
     let addresses: Vec<(Source, &str)> = places
         .servers
@@ -853,11 +880,12 @@ fn truthy(value: &str) -> bool {
     )
 }
 
-/// What Claude Code's settings file and the process environment say about Bedrock.
+/// What Claude Code's settings file and the process environment say about the services it reaches.
 ///
-/// Only the `env` block and the `model` key are opened. `apiKeyHelper`, `awsAuthRefresh`,
-/// `awsCredentialExport`, `permissions`, `hooks` and `mcpServers` are commands and grants, which a
-/// settings file here may not hold.
+/// Only the `env` block and the `model` key are opened, and `apiKeyHelper` for whether it is
+/// stated. `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `permissions`, `hooks` and
+/// `mcpServers` are commands and grants, which a settings file here may not hold, so none of their
+/// values is read.
 fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Option<Found> {
     let file = read(path, false);
     let exported = environment(CLAUDE_BEDROCK).is_some_and(|value| truthy(&value));
@@ -901,14 +929,16 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
     let reached = |tier: Tier| {
         env.iter().any(|(name, _)| name == tier.env_var()) || environment(tier.env_var()).is_some()
     };
-    let model = stated(CLAUDE_MODEL)
-        .or_else(|| string(root.and_then(|root| root.get("model"))))
+    let word = stated(CLAUDE_MODEL).or_else(|| string(root.and_then(|root| root.get("model"))));
+    let mut model = word
+        .clone()
         .filter(|word| bedrock && Tier::from_alias(word).is_some_and(reached));
 
     // A key stated beside a host was issued for that host, and the entry written here would send it
-    // to Anthropic's, so both are left.
+    // to Anthropic's, so both are left. So is a host exported, which Claude Code reads as it reads
+    // one stated.
     let mut gateways = Vec::new();
-    let proxied = stated(ANTHROPIC_BASE_URL).is_some();
+    let proxied = stated(ANTHROPIC_BASE_URL).is_some() || environment(ANTHROPIC_BASE_URL).is_some();
     match (
         stated(ANTHROPIC_KEY),
         provider::known_endpoint(ANTHROPIC_ID),
@@ -925,6 +955,45 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
         }),
         (None, _) => {}
     }
+    stated_and_left(&stated, &mut left);
+
+    key_command_entry(
+        root,
+        &stated,
+        environment,
+        proxied,
+        &mut gateways,
+        &mut left,
+    );
+
+    let mut model_gateway = None;
+    if !bedrock
+        && gateways.iter().any(|gateway| gateway.id == ANTHROPIC_ID)
+        && let Some(id) = word
+            .as_deref()
+            .and_then(|word| anthropic_model_entry(word, &mut left))
+    {
+        model = Some(format!("{ANTHROPIC_ID}/{id}"));
+        model_gateway = Some(ANTHROPIC_ID.to_string());
+    }
+
+    let found = Found {
+        source: Source::ClaudeCode,
+        read: file.map(|_| path.to_path_buf()).into_iter().collect(),
+        running_at: None,
+        window: None,
+        env,
+        model,
+        model_gateway,
+        gateways,
+        left,
+    };
+    (found.importable() || !found.left.is_empty()).then_some(found)
+}
+
+/// What a Claude Code settings file states that no entry here carries: the other ways it reaches
+/// Anthropic's API, a Vertex switch, and a Bedrock bearer token.
+fn stated_and_left(stated: &dyn Fn(&str) -> Option<String>, left: &mut Vec<Left>) {
     for name in ANTHROPIC_NAMES {
         if stated(name).is_some() {
             left.push(Left {
@@ -945,19 +1014,147 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
             reason: Reason::BearerToken,
         });
     }
+}
 
+/// A model Claude Code states for Anthropic's API goes beside the entry that reaches it. A word
+/// of Claude Code's own (`sonnet`, `opus[1m]`) is not a model there, and written as it stands it
+/// would reach Brave's roster, so it is listed as left.
+fn anthropic_model_entry<'a>(word: &'a str, left: &mut Vec<Left>) -> Option<&'a str> {
+    let id = anthropic_model(word);
+    if id.is_none() {
+        left.push(Left {
+            name: "model".to_string(),
+            reason: Reason::ModelWord,
+        });
+    }
+    id
+}
+
+/// A command that prints the key Claude Code reaches Anthropic's API with. What it prints is
+/// not read, so the entry names the variable to export it as, and says the key is a command's.
+/// Where Claude Code is switched to a cloud account the command is not used, so nothing is
+/// inferred. Where it is told to reach another host the key was issued for that host, so no entry
+/// is written and the command is listed as left.
+fn key_command_entry(
+    root: Option<&Map<String, Value>>,
+    stated: &dyn Fn(&str) -> Option<String>,
+    environment: &dyn Fn(&str) -> Option<String>,
+    proxied: bool,
+    gateways: &mut Vec<Gateway>,
+    left: &mut Vec<Left>,
+) {
+    let on_a_cloud = [CLAUDE_BEDROCK, CLAUDE_VERTEX, CLAUDE_FOUNDRY]
+        .into_iter()
+        .any(|name| {
+            [stated(name), environment(name)]
+                .into_iter()
+                .flatten()
+                .any(|value| truthy(&value))
+        });
+    let key_command = root
+        .and_then(|root| root.get(CLAUDE_KEY_COMMAND))
+        .and_then(Value::as_str)
+        .is_some_and(|command| !command.trim().is_empty());
+    if key_command && !on_a_cloud && stated(ANTHROPIC_KEY).is_none() {
+        let another_host = proxied || stated(ANTHROPIC_AUTH_TOKEN).is_some();
+        match (another_host, provider::known_endpoint(ANTHROPIC_ID)) {
+            (false, Some(endpoint)) => {
+                let mut entry = Map::new();
+                entry.insert("env".to_string(), Value::from(vec![ANTHROPIC_KEY]));
+                gateways.push(Gateway {
+                    id: ANTHROPIC_ID.to_string(),
+                    endpoint: endpoint.to_string(),
+                    entry,
+                    key: Key::Command,
+                });
+            }
+            _ => left.push(Left {
+                name: CLAUDE_KEY_COMMAND.to_string(),
+                reason: Reason::AnthropicApi,
+            }),
+        }
+    }
+}
+
+/// The variables a service's own tools read a host from, other than the endpoint compiled in for it.
+///
+/// A key exported beside one was issued for that host. Per service, because a host named for one
+/// service says nothing about the key of another.
+fn host_variables(id: &str) -> &'static [&'static str] {
+    match id {
+        ANTHROPIC_ID => &[ANTHROPIC_BASE_URL],
+        OPENAI_ID => &["OPENAI_BASE_URL", "OPENAI_API_BASE"],
+        _ => &[],
+    }
+}
+
+/// The keys exported in the process environment for the services whose endpoint is compiled in.
+///
+/// Read from the same list a session reaches those services by ([`provider::known_ids`]), so a
+/// service added there is offered here with no change. Whether a variable is set is the only thing
+/// read about it: the value is held as a [`Secret`] for that check and cleared, and nothing of it is
+/// kept, shown or written. The entry names the variable, which is where an entry for these services
+/// reads a key from. `GOOGLE_API_KEY` is not here: exported alone it already configures Vertex AI,
+/// so a start with it is not one that is refused.
+fn exported_keys(environment: &dyn Fn(&str) -> Option<String>) -> Option<Found> {
+    let mut gateways = Vec::new();
+    let mut left = Vec::new();
+    for id in provider::known_ids() {
+        let (Some(variable), Some(endpoint)) =
+            (provider::known_variable(id), provider::known_endpoint(id))
+        else {
+            continue;
+        };
+        if environment(variable).map(Secret::new).is_none() {
+            continue;
+        }
+        if host_variables(id)
+            .iter()
+            .any(|host| environment(host).is_some())
+        {
+            left.push(Left {
+                name: variable.to_string(),
+                reason: Reason::KeyForAnotherHost,
+            });
+            continue;
+        }
+        let mut entry = Map::new();
+        entry.insert("env".to_string(), Value::from(vec![variable]));
+        gateways.push(Gateway {
+            id: id.to_string(),
+            endpoint: endpoint.to_string(),
+            entry,
+            key: Key::Named,
+        });
+    }
     let found = Found {
-        source: Source::ClaudeCode,
-        read: file.map(|_| path.to_path_buf()).into_iter().collect(),
+        source: Source::Environment,
+        read: Vec::new(),
         running_at: None,
         window: None,
-        env,
-        model,
+        env: Vec::new(),
+        model: None,
         model_gateway: None,
         gateways,
         left,
     };
     (found.importable() || !found.left.is_empty()).then_some(found)
+}
+
+/// A model Anthropic's API is asked for by name, as Claude Code states one: `claude-` and then
+/// letters, digits, `.`, `_` and `-`.
+///
+/// A word such as `sonnet` is a tier Claude Code resolves itself, and a suffix such as `[1m]` is its
+/// own, so neither is a name this API knows.
+fn anthropic_model(word: &str) -> Option<&str> {
+    let word = word.trim();
+    let named = word
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_'));
+    let after_the_prefix = word
+        .strip_prefix("claude-")
+        .is_some_and(|rest| !rest.is_empty());
+    (after_the_prefix && named).then_some(word)
 }
 
 /// What opencode's configuration and `auth.json` say about gateways.
@@ -1041,7 +1238,7 @@ fn opencode(configs: &[PathBuf], auth: Option<&Path>) -> Option<Found> {
                     Reason::BearerToken
                 } else if has_entry {
                     continue;
-                } else if !speaks_the_protocol(id, None) {
+                } else if !speaks_the_protocol(id, None, None) {
                     Reason::AnotherSdk
                 } else if id == GOOGLE_VERTEX_ID {
                     // A key with no project is express mode, which needs nothing else.
@@ -1133,9 +1330,14 @@ const OWN_SDK_IDS: [&str; 4] = ["azure", "cohere", "google", "google-vertex-anth
 /// On top of [`Provider::all`], which ignores the field: an `@ai-sdk/anthropic` entry under any id
 /// but `anthropic`, with a `baseURL`, would be kept there and then sent requests in a protocol that
 /// id is not reached by. An entry naming no SDK gets the one opencode picks for its id.
-fn speaks_the_protocol(id: &str, npm: Option<&str>) -> bool {
+///
+/// `stated` is the entry's `baseURL`. The SDK that speaks the Responses API is kept where the entry
+/// written without it is reached in that protocol anyway, which is an `openai` entry at OpenAI's own
+/// host: the field that says so is not written.
+fn speaks_the_protocol(id: &str, npm: Option<&str>, stated: Option<&str>) -> bool {
     match npm {
         None => !OWN_SDK_IDS.contains(&id),
+        Some(RESPONSES_SDK) => provider::protocol_of(id, None, stated) == Protocol::Responses,
         // Not for `anthropic`, which an entry written out here would then be read as reaching in the
         // Messages protocol: the field that says otherwise is not written.
         Some("@ai-sdk/openai-compatible") => id != ANTHROPIC_ID,
@@ -1177,7 +1379,13 @@ fn gateway(
     signed_in: impl Fn() -> Option<String>,
 ) -> Result<Gateway, Reason> {
     let npm = entry.get("npm").and_then(Value::as_str).map(str::trim);
-    if !speaks_the_protocol(id, npm) {
+    let stated = string(
+        entry
+            .get("options")
+            .and_then(Value::as_object)
+            .and_then(|options| options.get("baseURL")),
+    );
+    if !speaks_the_protocol(id, npm, stated.as_deref()) {
         return Err(Reason::AnotherSdk);
     }
     if id == GOOGLE_VERTEX_ID {
@@ -1998,7 +2206,7 @@ mod tests {
     }
 
     /// IMPORT-3: opencode reads an `openai` entry naming no SDK, and bravebot reaches the same host
-    /// through its chat-completions route. The entry arrives naming the variable opencode reads the
+    /// through its Responses route. The entry arrives naming the variable opencode reads the
     /// key from, since this program reads only what an entry names.
     #[test]
     fn an_openai_entry_naming_no_sdk_is_offered_at_openais_endpoint() {
@@ -2017,21 +2225,60 @@ mod tests {
         assert!(left(&found).is_empty(), "{:?}", left(&found));
     }
 
-    /// IMPORT-3: `@ai-sdk/openai` speaks the Responses API, and the entry import writes names no SDK,
-    /// so one written from it would be sent chat completions at a host that takes the other protocol.
-    /// An entry naming it is left even though the host it would reach is one this program knows.
+    /// IMPORT-3: `@ai-sdk/openai` speaks the Responses API, and an `openai` entry that names no SDK
+    /// is reached in that protocol at OpenAI's own host, so the entry import writes keeps the route
+    /// the SDK named. It is offered with no host stated and with OpenAI's stated.
     #[test]
-    fn an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk() {
-        let home = Scratch::new("import-openai-sdk");
+    fn an_openai_entry_naming_the_responses_sdk_at_openais_host_is_offered() {
+        for (state, entry) in [
+            ("no host", r#"{"npm": "@ai-sdk/openai"}"#),
+            (
+                "OpenAI's host",
+                r#"{"npm": "@ai-sdk/openai", "options": {"baseURL": "https://api.openai.com/v1"}}"#,
+            ),
+        ] {
+            let home = Scratch::new("import-openai-sdk");
+            home.write(
+                ".config/opencode/opencode.json",
+                &format!(r#"{{"provider": {{"openai": {entry}}}}}"#),
+            );
+
+            let found = one(&home.path, &[], Source::Opencode);
+
+            assert_eq!(ids(&found), ["openai"], "{state}");
+            let openai = gateway(&found, "openai");
+            assert_eq!(openai.endpoint, "https://api.openai.com/v1", "{state}");
+            assert_eq!(openai.variables(), ["OPENAI_API_KEY"], "{state}");
+            assert!(left(&found).is_empty(), "{state}: {:?}", left(&found));
+        }
+    }
+
+    /// IMPORT-3: the entry import writes names no SDK, and an `openai` entry that states another host
+    /// is reached in chat completions there, so one that names the Responses SDK would change
+    /// protocol. It is left, and so is an entry under any other id that names the SDK.
+    #[test]
+    fn an_entry_naming_the_responses_sdk_where_the_written_entry_would_not_speak_it_is_left() {
+        let home = Scratch::new("import-openai-sdk-elsewhere");
         home.write(
             ".config/opencode/opencode.json",
-            r#"{"provider": {"openai": {"npm": "@ai-sdk/openai"}}}"#,
+            r#"{"provider": {
+                "openai": {"npm": "@ai-sdk/openai",
+                    "options": {"baseURL": "https://proxy.example.invalid/v1"}},
+                "a-gateway": {"npm": "@ai-sdk/openai",
+                    "options": {"baseURL": "https://gateway.example.invalid/v1"}}
+            }}"#,
         );
 
         let found = one(&home.path, &[], Source::Opencode);
 
         assert!(ids(&found).is_empty(), "{:?}", ids(&found));
-        assert_eq!(left(&found), [("openai", Reason::AnotherSdk)]);
+        assert_eq!(
+            left(&found),
+            [
+                ("a-gateway", Reason::AnotherSdk),
+                ("openai", Reason::AnotherSdk)
+            ]
+        );
     }
 
     /// IMPORT-3: `opencode auth login` keeps an OpenAI key in `auth.json` and writes no config
@@ -2537,6 +2784,348 @@ mod tests {
             left(&found),
             [("ANTHROPIC_AUTH_TOKEN", Reason::AnthropicApi)]
         );
+    }
+
+    fn environment_source(set: &[(&str, &str)]) -> Option<Found> {
+        // No profile directory is named by `set`, so no file is read and only the keys can be found.
+        let lookup = |name: &str| {
+            set.iter()
+                .find(|(named, _)| *named == name)
+                .map(|(_, value)| value.to_string())
+        };
+        found(&Places::from_lookup(lookup), lookup, |_, _| None)
+            .into_iter()
+            .find(|found| found.source == Source::Environment)
+    }
+
+    /// IMPORT-3: a key exported for a service whose endpoint is compiled in is an entry at that
+    /// endpoint, naming the variable. The value is not read into the entry, a line or the model.
+    #[test]
+    fn an_exported_key_is_a_provider_naming_the_variable() {
+        let found = environment_source(&[("OPENAI_API_KEY", "sk-exported-nobody-may-see")])
+            .expect("the key was not found");
+
+        assert_eq!(ids(&found), ["openai"]);
+        let openai = gateway(&found, "openai");
+        assert_eq!(openai.endpoint, "https://api.openai.com/v1");
+        assert_eq!(openai.shown(), r#"{"env":["OPENAI_API_KEY"]}"#);
+        assert!(matches!(openai.key, Key::Named), "{:?}", openai.key);
+        assert!(found.read.is_empty());
+        assert_eq!(found.env, []);
+        assert_eq!(found.model, None);
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+        assert!(
+            !format!("{found:?}").contains("nobody-may-see"),
+            "the key reached {found:?}"
+        );
+    }
+
+    /// IMPORT-3: every service the endpoints table holds is offered under the variable that table
+    /// names, in the table's order, so a service added there is offered with no change here.
+    #[test]
+    fn every_known_service_is_offered_under_the_variable_its_table_row_names() {
+        let set: Vec<(&str, &str)> = provider::known_ids()
+            .map(|id| (provider::known_variable(id).expect("a variable"), "a-key"))
+            .collect();
+        assert!(set.len() >= 3, "{set:?}");
+
+        let found = environment_source(&set).expect("the keys were not found");
+
+        let wanted: Vec<&str> = provider::known_ids().collect();
+        assert_eq!(ids(&found), wanted);
+        for id in wanted {
+            let gateway = gateway(&found, id);
+            assert_eq!(
+                Some(gateway.endpoint.as_str()),
+                provider::known_endpoint(id)
+            );
+            assert_eq!(
+                gateway.variables(),
+                [provider::known_variable(id).expect("a variable")]
+            );
+        }
+    }
+
+    /// IMPORT-3: a variable that is set and holds nothing is not a key, and the variables of other
+    /// services, and `GOOGLE_API_KEY`, which configures Vertex AI on its own, offer nothing.
+    #[test]
+    fn a_blank_variable_and_a_variable_that_is_no_known_services_are_not_offered() {
+        for value in ["", "   ", "\t\n"] {
+            let found = environment_source(&[("OPENAI_API_KEY", value)]);
+            assert!(found.is_none(), "{value:?} was taken for a key");
+        }
+        for name in [
+            "GOOGLE_API_KEY",
+            "OPENAI_ORG_ID",
+            "AWS_ACCESS_KEY_ID",
+            "XAI_API_KEY",
+        ] {
+            let found = environment_source(&[(name, "a-key")]);
+            assert!(found.is_none(), "{name} was offered: {found:?}");
+        }
+    }
+
+    /// IMPORT-3, IMPORT-4: a key exported beside the host its own service's tools read was issued for
+    /// that host, so it is not offered at the endpoint compiled in and is said to be left. A host
+    /// named for another service says nothing about this one's key.
+    #[test]
+    fn a_key_exported_beside_a_host_of_its_own_is_left() {
+        let hosts = [
+            ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"),
+            ("OPENAI_API_KEY", "OPENAI_BASE_URL"),
+            ("OPENAI_API_KEY", "OPENAI_API_BASE"),
+        ];
+        for (key, host) in hosts {
+            let found = environment_source(&[(key, "a-key"), (host, "https://proxy.invalid")])
+                .unwrap_or_else(|| panic!("{key} beside {host} was not said"));
+
+            assert!(
+                ids(&found).is_empty(),
+                "{key} beside {host}: {:?}",
+                ids(&found)
+            );
+            assert_eq!(left(&found), [(key, Reason::KeyForAnotherHost)]);
+            let said = format!("{found:?}");
+            for value in ["a-key", "proxy.invalid"] {
+                assert!(!said.contains(value), "{value} is in {said}");
+            }
+        }
+
+        let found = environment_source(&[
+            ("OPENROUTER_API_KEY", "a-key"),
+            ("OPENAI_API_KEY", "a-key"),
+            ("OPENAI_BASE_URL", "https://proxy.invalid"),
+        ])
+        .expect("the keys were not found");
+        assert_eq!(ids(&found), ["openrouter"]);
+        assert_eq!(
+            left(&found),
+            [("OPENAI_API_KEY", Reason::KeyForAnotherHost)]
+        );
+    }
+
+    /// IMPORT-2: the keys are looked for in the environment of the process and nowhere on disk, so a
+    /// profile directory with files in it and nothing exported offers no entry from here.
+    #[test]
+    fn nothing_exported_offers_nothing_from_the_environment() {
+        let home = Scratch::new("import-nothing-exported");
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"OPENAI_API_KEY": "sk-in-a-file"}}"#,
+        );
+
+        let found = found_in(&home.path, &[]);
+
+        assert!(
+            found
+                .iter()
+                .all(|found| found.source != Source::Environment),
+            "{found:?}"
+        );
+    }
+
+    fn claude_code_in(home: &Path, set: &[(&str, &str)]) -> Option<Found> {
+        found_in(home, set)
+            .into_iter()
+            .find(|found| found.source == Source::ClaudeCode)
+    }
+
+    /// IMPORT-3: Claude Code on a key a command prints reaches Anthropic's API, so the import offers
+    /// an `anthropic` entry that names the variable to export the key as. The command is said to be
+    /// left, and neither it nor anything it holds is read into the entry, the lines or the model.
+    #[test]
+    fn a_key_command_is_an_anthropic_entry_naming_the_variable() {
+        let home = Scratch::new("import-claude-key-command");
+        home.write(
+            ".claude/settings.json",
+            r#"{"apiKeyHelper": "echo sk-ant-in-the-command",
+                "model": "sonnet",
+                "skipDangerousModePermissionPrompt": true}"#,
+        );
+
+        let found = one(&home.path, &[], Source::ClaudeCode);
+
+        assert!(found.importable());
+        assert_eq!(ids(&found), ["anthropic"]);
+        let anthropic = gateway(&found, "anthropic");
+        assert_eq!(anthropic.endpoint, "https://api.anthropic.com/v1");
+        assert_eq!(anthropic.shown(), r#"{"env":["ANTHROPIC_API_KEY"]}"#);
+        assert!(
+            matches!(anthropic.key, Key::Command),
+            "the key was not a command's: {:?}",
+            anthropic.key
+        );
+        assert_eq!(left(&found), [("model", Reason::ModelWord)]);
+        // `sonnet` is Claude Code's word, which on this machine would name a model on Brave's roster.
+        assert_eq!(found.model, None);
+        assert_eq!(found.model_gateway, None);
+        assert_eq!(found.env, []);
+        let said = format!("{found:?}");
+        for command in ["sk-ant-in-the-command", "echo"] {
+            assert!(!said.contains(command), "{command} reached {said}");
+        }
+    }
+
+    /// IMPORT-3: where Claude Code is switched to a cloud account its command is not used, and where
+    /// it is told to reach another host the key was issued for that host. An entry written for
+    /// Anthropic's would send the key to the wrong place, so none is offered.
+    #[test]
+    fn a_key_command_beside_a_cloud_account_or_a_host_is_not_an_anthropic_entry() {
+        let home = Scratch::new("import-claude-key-command-elsewhere");
+        let helper = r#""apiKeyHelper": "print-a-key""#;
+        let with_env = |env: &str| format!(r#"{{{helper}, "env": {{{env}}}}}"#);
+        let alone = format!("{{{helper}}}");
+        // What is left, and that nothing is offered, for settings and what the shell exported.
+        let check = |settings: &str, exported: &[(&str, &str)], expected: &[(&str, Reason)]| {
+            home.write(".claude/settings.json", settings);
+
+            let found = claude_code_in(&home.path, exported);
+
+            let seen = found.as_ref().map(left).unwrap_or_default();
+            assert_eq!(seen, expected, "{settings} with {exported:?}");
+            let offered = found.as_ref().map(ids).unwrap_or_default();
+            assert!(
+                offered.is_empty(),
+                "{settings} with {exported:?} offered {offered:?}"
+            );
+        };
+
+        // A cloud account is the one Claude Code uses, so the command says nothing about Anthropic's.
+        check(&with_env(r#""CLAUDE_CODE_USE_FOUNDRY": "1""#), &[], &[]);
+        check(&alone, &[("CLAUDE_CODE_USE_FOUNDRY", "1")], &[]);
+        check(&alone, &[("CLAUDE_CODE_USE_VERTEX", "1")], &[]);
+        check(
+            &with_env(r#""CLAUDE_CODE_USE_VERTEX": "true""#),
+            &[],
+            &[("CLAUDE_CODE_USE_VERTEX", Reason::Vertex)],
+        );
+        check(
+            &with_env(r#""CLAUDE_CODE_USE_BEDROCK": "1""#),
+            &[],
+            &[("CLAUDE_CODE_USE_BEDROCK", Reason::NoRegion)],
+        );
+        // Another host is where the command's key was issued for.
+        check(
+            &with_env(r#""ANTHROPIC_BASE_URL": "https://proxy.invalid""#),
+            &[],
+            &[
+                ("ANTHROPIC_BASE_URL", Reason::AnthropicApi),
+                ("apiKeyHelper", Reason::AnthropicApi),
+            ],
+        );
+        check(
+            &alone,
+            &[("ANTHROPIC_BASE_URL", "https://proxy.invalid")],
+            &[("apiKeyHelper", Reason::AnthropicApi)],
+        );
+        check(
+            &with_env(r#""ANTHROPIC_AUTH_TOKEN": "a-bearer-token""#),
+            &[],
+            &[
+                ("ANTHROPIC_AUTH_TOKEN", Reason::AnthropicApi),
+                ("apiKeyHelper", Reason::AnthropicApi),
+            ],
+        );
+    }
+
+    /// IMPORT-3: a host exported in the shell is read as Claude Code reads one, so a key stated beside
+    /// it is no more Anthropic's than a key stated beside a host in the file.
+    #[test]
+    fn a_key_beside_an_exported_host_is_left() {
+        let home = Scratch::new("import-claude-key-exported-host");
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-secret"}}"#,
+        );
+
+        let found = one(
+            &home.path,
+            &[("ANTHROPIC_BASE_URL", "https://proxy.invalid")],
+            Source::ClaudeCode,
+        );
+
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(left(&found), [("ANTHROPIC_API_KEY", Reason::AnthropicApi)]);
+    }
+
+    /// IMPORT-3: a key stated in the file is the entry, so a command beside it adds neither a second
+    /// entry nor a line about itself.
+    #[test]
+    fn a_key_command_beside_a_stated_key_adds_no_second_entry() {
+        let home = Scratch::new("import-claude-key-and-command");
+        home.write(
+            ".claude/settings.json",
+            r#"{"apiKeyHelper": "print-a-key", "env": {"ANTHROPIC_API_KEY": "sk-ant-secret"}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::ClaudeCode);
+
+        assert_eq!(ids(&found), ["anthropic"]);
+        assert!(matches!(gateway(&found, "anthropic").key, Key::Held(_)));
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+    }
+
+    /// IMPORT-3: a command that is not there states nothing, so a blank one is not a setup.
+    #[test]
+    fn a_blank_key_command_is_not_a_setup() {
+        let home = Scratch::new("import-claude-blank-command");
+        for settings in [
+            r#"{"apiKeyHelper": ""}"#,
+            r#"{"apiKeyHelper": "   "}"#,
+            r#"{"apiKeyHelper": null}"#,
+            r#"{"apiKeyHelper": ["print-a-key"]}"#,
+        ] {
+            home.write(".claude/settings.json", settings);
+            assert!(
+                claude_code_in(&home.path, &[]).is_none(),
+                "{settings} was taken for a setup"
+            );
+        }
+    }
+
+    /// IMPORT-3: a model Claude Code states by the name Anthropic's API knows goes beside the entry
+    /// that reaches it, and a word of Claude Code's own is left. Written as it stands, `opus` would be
+    /// read as a tier and sent to Brave's roster, which the person never chose.
+    #[test]
+    fn a_model_for_anthropics_api_is_written_only_where_it_is_a_name_and_beside_its_entry() {
+        let home = Scratch::new("import-claude-anthropic-model");
+        let model_of = |settings: &str| {
+            home.write(".claude/settings.json", settings);
+            one(&home.path, &[], Source::ClaudeCode)
+        };
+
+        let named =
+            model_of(r#"{"apiKeyHelper": "print-a-key", "model": "claude-sonnet-4-5-20250929"}"#);
+        assert_eq!(
+            named.model.as_deref(),
+            Some("anthropic/claude-sonnet-4-5-20250929")
+        );
+        assert_eq!(named.model_gateway.as_deref(), Some("anthropic"));
+        assert!(left(&named).is_empty(), "{:?}", left(&named));
+
+        // The variable is read before the key, as Claude Code reads it.
+        let exported = model_of(
+            r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-secret", "ANTHROPIC_MODEL": "claude-opus-4-1"},
+                "model": "claude-haiku-4-5"}"#,
+        );
+        assert_eq!(exported.model.as_deref(), Some("anthropic/claude-opus-4-1"));
+        assert_eq!(exported.model_gateway.as_deref(), Some("anthropic"));
+        assert!(left(&exported).is_empty(), "{:?}", left(&exported));
+
+        for word in [
+            "opus",
+            "opusplan",
+            "claude-sonnet-4-5[1m]",
+            "claude-",
+            "claude-a model",
+            "gpt-5",
+        ] {
+            let settings = format!(r#"{{"env": {{"ANTHROPIC_API_KEY": "k"}}, "model": "{word}"}}"#);
+            let found = model_of(&settings);
+            assert_eq!(found.model, None, "{word} was written");
+            assert_eq!(found.model_gateway, None, "{word} named a gateway");
+            assert_eq!(left(&found), [("model", Reason::ModelWord)], "{word}");
+        }
     }
 
     /// IMPORT-6: `{env:VAR}` is opencode's substitution, and bravebot makes none, so copied as it is
@@ -3524,7 +4113,7 @@ mod tests {
                 Source::Ollama => (three_pulled(), 200),
                 Source::LmStudio => (lm_studio_listing(), 100),
                 Source::LlamaServer => (llama_server_listing(), 0),
-                Source::ClaudeCode | Source::Opencode => return None,
+                Source::ClaudeCode | Source::Opencode | Source::Environment => return None,
             };
             std::thread::sleep(std::time::Duration::from_millis(after));
             Some(listed)

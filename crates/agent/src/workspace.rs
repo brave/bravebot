@@ -68,6 +68,7 @@ use results::{
     MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
     MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES,
 };
+pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub use volume::{BACKSLASH_SEPARATES, key_of, trust_store, volume_folds_case};
 pub(crate) use volume::{on_disk, one_file};
@@ -88,6 +89,35 @@ pub use reach::{Moved, PathReach, ReferenceProblem, Referenced};
 /// growing cost rather than a single one. Generous enough for a screenshot or a scanned page,
 /// which is what people attach.
 pub const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
+
+/// The most a dropped PNG or JPEG may weigh and still be scaled down instead of refused (DROP-4).
+///
+/// The file is read whole and decoded, so this bounds that read: the length the file system
+/// reports is checked before any byte is read, and a longer file is refused unread. A dropped
+/// picture over [`MAX_ATTACHMENT_BYTES`] is carried only if the scaled copy is within that cap.
+pub const MAX_SCALABLE_PICTURE_BYTES: usize = 64 * 1024 * 1024;
+
+/// The most a dropped file of type `media` may weigh before it is read: the scalable ceiling for
+/// a PNG or JPEG, which the agent can scale down, and [`MAX_ATTACHMENT_BYTES`] for anything else.
+///
+/// `media` is the type an extension names, never one a file declares.
+pub fn dropped_size_limit(media: &str) -> usize {
+    if scales_down(media) {
+        MAX_SCALABLE_PICTURE_BYTES
+    } else {
+        MAX_ATTACHMENT_BYTES
+    }
+}
+
+fn scales_down(media: &str) -> bool {
+    matches!(media, "image/png" | "image/jpeg")
+}
+
+/// An attachment as a data URI, and the lengths it went from and to where it was scaled down.
+struct Encoded {
+    uri: String,
+    reduced: Option<(usize, usize)>,
+}
 
 /// The most that may be kept in memory so that turns can be rewound.
 ///
@@ -251,6 +281,9 @@ pub struct Workspace {
     references: Vec<Referenced>,
     /// The entries of the `references` block that were not opened, and why (REFER-3).
     reference_problems: Vec<(String, ReferenceProblem)>,
+    /// The directories the person's settings named in `sharedSkillDirectories`, as written
+    /// (INSTR-17). Empty until a front end supplies them, which reads none.
+    shared_skills: Vec<String>,
 }
 
 /// A session's checkouts, with the numbers and the write log they are judged by, for a front end
@@ -303,6 +336,11 @@ impl KeptBetweenTurns {
     /// The checkouts the session made and has not removed (CHECKOUT-21).
     pub fn checkouts(&self) -> Vec<SessionCheckout> {
         listed(&self.session_checkouts)
+    }
+
+    /// What the session has touched, for its record to carry (INSTR-14, INSTR-16).
+    pub fn touched_record(&self) -> TouchedRecord {
+        locked(&self.touched).record()
     }
 }
 
@@ -407,7 +445,37 @@ impl Workspace {
             host_grants: Arc::default(),
             references: Vec::new(),
             reference_problems: Vec::new(),
+            shared_skills: Vec::new(),
         })
+    }
+
+    /// Record which of the other agents' skill directories in the person's home they agreed to have
+    /// read (INSTR-17).
+    ///
+    /// The names come from the person's own settings and are compared with a fixed set of paths
+    /// when the skills are found. Without them no such directory is read.
+    #[must_use]
+    pub fn with_shared_skill_directories(mut self, named: &[String]) -> Self {
+        self.shared_skills = named.to_vec();
+        self
+    }
+
+    /// The directories the person agreed to have skills read from, as written (INSTR-17).
+    pub(crate) fn shared_skill_directories(&self) -> &[String] {
+        &self.shared_skills
+    }
+
+    /// Stand in for the environment's profile directory, which a `~` in a shared skill directory
+    /// (INSTR-17) stands for, so a test does not depend on whose machine it runs on.
+    #[must_use]
+    pub fn with_profile_directory(mut self, profile: Option<PathBuf>) -> Self {
+        self.home = profile;
+        self
+    }
+
+    /// The home directory a leading `~` stands for in this workspace.
+    pub(crate) fn profile_directory(&self) -> Option<&Path> {
+        self.home.as_deref()
     }
 
     /// Put a search under the caps somebody configured, keeping the built-in one for each cap
@@ -766,8 +834,17 @@ impl Workspace {
             let resolved = self.resolve_attachment(&relative, reach)?;
             let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
 
-            self.encode_attachment(&resolved, &relative, media)
-                .map(|text| Labelled::new(text, label))
+            // Only a picture a gesture dropped is scaled (DROP-4), and only where the kernel
+            // labelled the file trusted, which a drop's grant does (DROP-2). The same bytes read by
+            // a tool, or read while the grant did not take, are carried as they are or refused, so
+            // the length and the header are never looked at for a file the label says is untrusted.
+            let scales = matches!(reach, Reach::Dropped) && label.is_trusted();
+
+            let encoded = self.encode_attachment(&resolved, &relative, media, scales)?;
+            if let Some((from, to)) = encoded.reduced {
+                policy.record_reduced_picture(&relative, from, to);
+            }
+            Ok(Labelled::new(encoded.uri, label))
         })
     }
 
@@ -782,29 +859,80 @@ impl Workspace {
         media: &str,
     ) -> Result<String, WorkspaceError> {
         let resolved = self.resolve_attachment(named, Reach::Confined)?;
-        self.encode_attachment(&resolved, named, media)
+        self.encode_attachment(&resolved, named, media, false)
+            .map(|encoded| encoded.uri)
     }
 
+    /// The data URI for the file at `resolved`.
+    ///
+    /// With `scales` set, which only the read of a trusted dropped file does, a picture over
+    /// [`MAX_ATTACHMENT_BYTES`] or with a side over [`crate::picture::DOWNSCALED_SIDE`] is decoded,
+    /// scaled down and carried as a PNG. A picture inside both limits keeps its own bytes. One that
+    /// will not decode, or whose scaled copy is over the cap, is refused for its length if it is
+    /// itself over the cap, and keeps its own bytes if it is within it, since the cap is what a
+    /// request holds. A file whose reported length is over the limit for its type is refused before
+    /// it is read. The branches are on the length and the header's canvas of a file whose path a
+    /// person fixed, and on the media type its extension names, never on what the picture shows.
     fn encode_attachment(
         &self,
         resolved: &Path,
         relative: &str,
         media: &str,
-    ) -> Result<String, WorkspaceError> {
-        let raw = std::fs::read(resolved).map_err(|e| WorkspaceError::Io {
+        scales: bool,
+    ) -> Result<Encoded, WorkspaceError> {
+        let io = |e: std::io::Error| WorkspaceError::Io {
             path: relative.to_string(),
             detail: io_detail(&e, relative, &self.root),
-        })?;
+        };
+        let too_large = |limit: usize| WorkspaceError::TooLarge {
+            path: relative.to_string(),
+            limit,
+        };
 
-        if raw.len() > MAX_ATTACHMENT_BYTES {
-            return Err(WorkspaceError::TooLarge {
-                path: relative.to_string(),
-                limit: MAX_ATTACHMENT_BYTES,
-            });
+        // The length the file system reports bounds the read, so a file over the limit for its
+        // type is refused without a byte of it being read. The length of what was read is checked
+        // again below, since the file can change between the two.
+        let limit = if scales && scales_down(media) {
+            MAX_SCALABLE_PICTURE_BYTES
+        } else {
+            MAX_ATTACHMENT_BYTES
+        };
+        let declared = std::fs::metadata(resolved).map_err(io)?.len();
+        if usize::try_from(declared).map_or(true, |declared| declared > limit) {
+            return Err(too_large(limit));
+        }
+        let raw = std::fs::read(resolved).map_err(io)?;
+
+        let over_bytes = raw.len() > MAX_ATTACHMENT_BYTES;
+        if scales && scales_down(media) {
+            if raw.len() > MAX_SCALABLE_PICTURE_BYTES {
+                return Err(too_large(MAX_SCALABLE_PICTURE_BYTES));
+            }
+            let over_pixels = crate::picture::longest_side(&raw)
+                .is_some_and(|side| side > crate::picture::DOWNSCALED_SIDE);
+            if over_bytes || over_pixels {
+                // A picture that will not decode, or is still too heavy once scaled, is refused
+                // for its own length. The over-cap copy is not sent in its place.
+                if let Some(smaller) = crate::picture::downscaled(&raw)
+                    && smaller.len() <= MAX_ATTACHMENT_BYTES
+                {
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&smaller);
+                    return Ok(Encoded {
+                        uri: format!("data:image/png;base64,{encoded}"),
+                        reduced: Some((raw.len(), smaller.len())),
+                    });
+                }
+            }
+        }
+        if over_bytes {
+            return Err(too_large(MAX_ATTACHMENT_BYTES));
         }
 
         let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
-        Ok(format!("data:{media};base64,{encoded}"))
+        Ok(Encoded {
+            uri: format!("data:{media};base64,{encoded}"),
+            reduced: None,
+        })
     }
 
     /// Read a bounded window of a file's lines, for the model.
@@ -1196,16 +1324,30 @@ impl Workspace {
     /// value in are of the same version. The first is the pessimistic one for the review; the
     /// second is what [`bravebot_core::policy::Policy::scan_a_write`] reads the pre-image through,
     /// where a path nobody vouched for comes back untrusted and the gate there refuses it.
+    ///
+    /// The third value is whether the file is text in an encoding other than UTF-8 (READ-3), from
+    /// the same bytes and labelled as the trust map holds the path. It is read only through
+    /// [`holds_another_encoding`], which asks the label first.
     pub fn peek_labelled_for_write<S: Sink>(
         &self,
         policy: &Policy<'_, S>,
         relative: &str,
-    ) -> (Labelled<String>, Labelled<String>) {
-        let text = self.peek_for_review(relative).unwrap_or_default();
+    ) -> (Labelled<String>, Labelled<String>, Labelled<bool>) {
+        let bytes = self
+            .resolve(relative)
+            .ok()
+            .and_then(|resolved| std::fs::read(resolved).ok());
+        let other_encoding = bytes.as_deref().is_some_and(|bytes| {
+            std::str::from_utf8(bytes).is_err() && decode_text(bytes.to_vec()).is_some()
+        });
+        let text = bytes
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_default();
         let label = policy.label_in_force(&self.trust_key(relative));
         (
             Labelled::new(text.clone(), read_label()),
             Labelled::new(text, label),
+            Labelled::new(other_encoding, label),
         )
     }
 
@@ -1867,6 +2009,24 @@ pub fn in_the_replaced_files_format<S: Sink>(
     };
     let format = FileFormat::of(&existing);
     policy.render_in_place(tool, &body, |text| format.applied_to(text))
+}
+
+/// Whether a write would replace a file the trust map vouches for with UTF-8 where the file is
+/// text in another encoding (WRITE-8).
+///
+/// A file nobody vouched for answers `false` without the gate being asked: what encoding it uses
+/// is a fact about untrusted bytes, and refusing on it would be the driver deciding from them. The
+/// answer for a vouched file goes through [`Policy::read_trusted_content`], the gate `edit_file`
+/// reads a file through before it compares it.
+pub fn holds_another_encoding<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+    other_encoding: &Labelled<bool>,
+) -> bool {
+    other_encoding.label().is_trusted()
+        && policy
+            .read_trusted_content(tool, other_encoding)
+            .unwrap_or(false)
 }
 
 /// The two things about a file's bytes a whole-file write would otherwise lose.
@@ -4326,6 +4486,37 @@ mod tests {
             after: 0,
             _claim: None,
         });
+    }
+
+    /// OPEN-1. A kept checkout is listed as not applied until its files are brought back, then as
+    /// applied, and only the one named, so the open loop closes for it alone.
+    #[test]
+    fn a_kept_checkout_is_open_until_applied_or_removed() {
+        let root = crate::testutil::scratch_dir("session-checkout-applied");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        for id in ["c1", "c2"] {
+            std::fs::create_dir(root.join(id)).unwrap();
+            keep_checkout(&workspace, id, root.join(id));
+        }
+        let applied = |workspace: &Workspace| -> Vec<(String, bool)> {
+            workspace
+                .session_checkouts()
+                .into_iter()
+                .map(|kept| (kept.id, kept.applied))
+                .collect()
+        };
+        assert_eq!(
+            applied(&workspace),
+            [("c1".to_string(), false), ("c2".to_string(), false)]
+        );
+        workspace.checkout_applied("c2");
+        assert_eq!(
+            applied(&workspace),
+            [("c1".to_string(), false), ("c2".to_string(), true)]
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// CHECKOUT-15, CHECKOUT-21. Removing, reading and the status over a checkout name it by number,

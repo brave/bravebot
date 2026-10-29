@@ -8,8 +8,8 @@ description: What is baked into the binary, what lives in ~/.bravebot and beside
 
 There is one thing to set up before the first session, and it is which service answers a turn. A
 released binary arrives pointed at Brave's own endpoint, which is not the same as having a service
-configured to do this work: no account was named, no gateway was written down, and no subscription
-was imported. So rather than open a session with nothing set up to answer it, a first run **says
+configured to do this work: no account was named, no gateway was written down, and no premium key
+was stored. So rather than open a session with nothing set up to answer it, a first run **says
 what to configure and stops**. It names five routes, each by the thing to type or write:
 
 | Route | Where |
@@ -18,7 +18,7 @@ what to configure and stops**. It names five routes, each by the thing to type o
 | an OpenAI-compatible gateway, including a local one | [Reaching an OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway) |
 | a ChatGPT Plus or Pro account | [Reaching a model with a ChatGPT account](providers/chatgpt.md) |
 | an xAI SuperGrok subscription | [Reaching a model with an xAI SuperGrok subscription](providers/xai.md) |
-| a Leo Premium subscription you already have | [Leo Premium](premium.md) |
+| a premium key for Brave's premium service, stored with `bravebot auth login brave` | [Brave's premium service](premium.md) |
 
 `bravebot doctor` says the same thing and fails while it holds. A run whose model a configured
 service serves is not this case, whatever the Brave fields hold, and neither is a build pointed at a
@@ -54,7 +54,7 @@ bravebot doctor
 configuration OK
   offers    Brave Leo
   endpoint  https://ai-chat.bsg.brave.com/v1/chat/completions
-  premium   https://ai-chat-premium.bsg.brave.com/v1/chat/completions
+  premium   https://ai-gateway-api.bsg.brave.software/v1/chat/completions, without a premium key, so requests go to the endpoint above
   key id    …
   model     automatic-bravebot (default)
   key       … (never transmitted)
@@ -96,6 +96,7 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/granted/<directory>.jsonl` | the permission rules a checkout proposed that you granted, one file per directory ([`permissions`](#permissions)) |
 | `~/.bravebot/trusted/<directory>.jsonl` | the yes to the startup question, one file per directory ([remembering the answer](../security/trust.md#remembering-the-answer)) |
 | `~/.bravebot/untrusted/<directory>.jsonl` | the [delegate definitions' memories](agents.md#memory) a write left untrusted, one per directory |
+| `~/.bravebot/bedrock-refusals.json` | the AWS Bedrock models that refused the request for their thinking to be shown as it happens, each kept for 30 days so the first request of a later session leaves it out; delete the file to ask again |
 | `~/.bravebot/history` | prompts you have sent |
 | `~/.bravebot/model` | the model chosen with `/model` |
 | `~/.bravebot/effort` | the effort level chosen with `/effort` |
@@ -103,11 +104,14 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/editor-mode` | the editing style chosen with `/config` |
 | `~/.bravebot/language` | the interface language chosen with `/language` ([details](language.md)) |
 | `~/.bravebot/panel` | whether the [info panel](../using/sessions.md#telling-sessions-apart) was left open |
+| `~/.bravebot/sessions-grouping` | how the [Sessions screen](../using/sessions-screen.md) lays out its list: `together`, `project`, `agent` or `model` |
+| `~/.bravebot/sessions-pinned` | the sessions pinned in the Sessions screen, one id a line |
+| `~/.bravebot/sessions-archived` | the sessions archived in the Sessions screen, each with the time it was archived |
 | `~/.bravebot/themes/<name>.json` | themes you wrote yourself |
 | `~/.bravebot/settings.json` | long-lived settings (see [below](#settingsjson)) |
 
-An imported Leo Premium subscription is kept here too, in a file only you can read. See
-[Leo Premium](premium.md#where-they-are-kept).
+A premium key stored with `bravebot auth login brave` is kept here too, in `brave-key.json`, a file only
+you can read. See [Brave's premium service](premium.md#storing-the-key).
 
 **Nobody else on the machine can read any of it.** On Unix, every directory bravebot makes under
 `~/.bravebot` is reachable by you alone and every file it writes there is readable by you alone,
@@ -160,7 +164,7 @@ rather than obeyed.
 ### Moving the state directory
 
 `BRAVEBOT_HOME` names the state directory itself, so two accounts or a CI job can each keep their own
-settings, sessions, history, skills and imported subscription without changing `HOME` for everything
+settings, sessions, history, skills and stored sign-ins without changing `HOME` for everything
 else the process starts:
 
 ```sh
@@ -186,7 +190,7 @@ as your shell sources the hook, so export it before the line in your shell's sta
 evaluates the hook, and the hook records in that directory.
 
 :::warning
-A program a `run` starts is refused `~/.bravebot`, where the gateway keys and the premium token are,
+A program a `run` starts is refused `~/.bravebot`, where the gateway keys and the premium key are,
 and not a directory `BRAVEBOT_HOME` puts anywhere else
 ([what a stage cannot reach](../security/security.md)). Keep it somewhere you would not mind a
 program a `run` starts reading, or leave the variable unset.
@@ -208,6 +212,8 @@ program a `run` starts reading, or leave the variable unset.
 
 The interface is read in your language where a translation has shipped, and in English otherwise. See [Choosing a language](language.md).
 
+In the desktop app, **Settings ▸ General ▸ Language** saves the same choice `/language` does. It applies when the app next starts.
+
 ### What stays in English
 
 The names of the slash commands, the letters `y` and `n`, the audit trail and, unless a language
@@ -224,7 +230,7 @@ without rebuilding it. The one exception is `BRAVEBOT_DEFAULT_MODEL`, which a
 | Variable | What it sets |
 |---|---|
 | `BRAVE_AI_CHAT_ENDPOINT` | the host requests go to |
-| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, used once a subscription is imported |
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, in place of the one compiled in ([Brave's premium service](premium.md#what-is-sent-and-where)) |
 | `SERVICES_KEY_AICHAT` | the services key requests are signed with |
 | `BRAVE_SERVICES_KEY_ID` | the key id that goes with it |
 | `BRAVEBOT_DEFAULT_MODEL` | the model to request when no settings file or `/model` choice names one |
@@ -256,10 +262,14 @@ spelling: seven of the ten above, plus the six AWS ones. The three exceptions ar
 the file, except where an [administrator pinned it](managed-settings.md), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.
 
-Six network names can go there as well: `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`, `HTTPS_PROXY`,
-`HTTP_PROXY` and `NO_PROXY`. They are read from your own file and a `--settings` file outside the
-project, and from no project or local file; see
-[certificates and proxies](../security/security.md#certificates-and-proxies).
+Nine names are read from your own file and a `--settings` file outside the project, and from no
+project or local file: the six network names `SSL_CERT_FILE`, `SSL_CERT_DIR`, `ALL_PROXY`,
+`HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and the three Google names. So are the six Bedrock names
+`BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three `ANTHROPIC_DEFAULT_*_MODEL` tiers,
+because they choose the AWS account a conversation is sent through. `bravebot doctor` reports one a
+project or local file names and the name decides nothing; see
+[certificates and proxies](../security/security.md#certificates-and-proxies) for the network names
+and [Bedrock](providers/bedrock.md) for the AWS ones.
 
 ## `settings.json`
 
@@ -294,10 +304,10 @@ one thing leaves everything else in force:
 
 | What | How the files combine |
 |---|---|
-| `env`, `keybindings` | per name one level down; the value under a name is replaced whole |
+| `env`, `keybindings`, `sessionsKeys` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `agent`, `style`, `sharedSkillDirectories`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
 | `references` | your own file and a `--settings` file outside the project; a project or local file's block, and a `--settings` file that resolves inside the project, is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
@@ -352,7 +362,8 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
 | `language` | the language the interface is in: a locale tag such as `fr`, or `auto`. Read from your own file only ([details](language.md)) |
 | `style` | the output style a session starts in: `concise`, `explanatory`, `proactive` or a file in `~/.bravebot/styles`. Read from your own file and the file `--settings` names only, and it cannot name a project's style from `.bravebot/styles` (pick that with `/style`) |
-| `limit` | the most tokens or Leo Premium credits a session may spend before it asks ([below](#limit)) |
+| `sharedSkillDirectories` | the directories of skills kept for other agents to read: `~/.agents/skills`, `~/.claude/skills`, or both. Neither is read until named. Read from your own file and the file `--settings` names only ([details](skills.md#trust)) |
+| `limit` | the most tokens or premium requests a session may spend before it asks ([below](#limit)) |
 | `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
@@ -367,6 +378,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `run.defaultSeconds`, `run.maxSeconds` | how long a command may run ([below](#rundefaultseconds-and-runmaxseconds)) |
 | `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
+| `sessionsKeys` | the keys of the [Sessions screen](../using/sessions-screen.md) rebound to your own choice ([below](#sessionskeys)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
 | `retentionDays` | how many days a session record, a language server index and a findings file are kept ([below](#retentiondays)) |
@@ -744,10 +756,10 @@ a checkout, which is why a file in a repository is the weaker claim.
 { "limit": "500k" }
 ```
 
-The most tokens or Leo Premium credits a session may spend before the terminal client asks whether to
+The most tokens or premium requests a session may spend before the terminal client asks whether to
 stop, to go on without a limit or to go on under a new one. A whole number of tokens, or a string with
 `k` or `m` after it for thousands or millions. Put `credits` after the figure, as in `"200 credits"`,
-to count the credentials a Leo Premium subscription spends, one per request, instead. A value that is
+to count premium requests instead, one for each request that presents the premium key. A value that is
 none of these, and zero, sets no limit. The nearest settings file that names it wins, and
 [`/limit`](../reference/commands.md#limit-amount--off) changes it for one session. Tokens are
 the usage the model service reports, so a limit in tokens is a bound on tokens and not on money. The
@@ -1287,10 +1299,15 @@ starts inside the workspace is a relative one, so `Read(/secrets/**)` in a proje
 
 Whitespace at either end of a path specifier makes the rule unreadable, since it could be padding or
 part of a file's name, and `doctor` names the rule. `Read( .env )` is dropped for that reason. Write
-a name that starts with whitespace from `./`, as `Read(./ notes.md)`. A name that ends with whitespace
-has no spelling, since `Read(./notes.md*)` covers it along with other names. Whitespace inside a name
-is fine: `Read(./my notes.md)` is about the file `my notes.md`. A `*` is always a wildcard, so no rule
-is about a file whose name holds one and nothing else.
+a name that starts with whitespace from `./`, as `Read(./ notes.md)`. Whitespace inside a name is
+fine: `Read(./my notes.md)` is about the file `my notes.md`.
+
+A path in double quotes is one name, taken as written. Use it for a name that ends with whitespace, a
+name of whitespace alone, or a name that holds a `*`: `Read("./notes.md ")` is about the file
+`notes.md ` alone, and `Read("./*.md")` is about the file called `*.md` and no other. Whitespace and
+`*` between the quotes are ordinary characters, and a name with no slash still matches at any depth.
+A name that itself begins and ends with a quote is written in one more pair. Whitespace outside the
+quotes is still reported.
 
 On Windows a path on a drive is a full path, with the drive as its first segment:
 `Read(//D:/work/secrets/**)` covers `D:\work\secrets\key` whichever separator the path is written
@@ -1445,6 +1462,42 @@ to another action has that action back on its default until the file moves `todo
 
 The block layers per action the way `env` does, so a project file moving one action says nothing about
 the others. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
+
+### `sessionsKeys`
+
+```json
+{ "sessionsKeys": { "stop": "ctrl-x", "archive": "z" } }
+```
+
+The keys of the [Sessions screen](../using/sessions-screen.md), which are bare letters and so are not
+covered by [`keybindings`](#keybindings). Thirteen actions can be moved and nothing else can:
+
+| Action | Default | What it does |
+|---|---|---|
+| `up`, `down` | `k`, `j` | move the cursor |
+| `new` | `n` | begin a session in the directory of the one under the cursor |
+| `fork` | `f` | copy the session and carry on in the copy |
+| `rename` | `r` | rename it |
+| `stop` | `x` | stop the background process running it |
+| `archive` | `a` | take it off the list until it is used again |
+| `delete` | `backspace` | delete it (the Delete key too) |
+| `hide` | `h` | hide it for as long as the session you are in lasts |
+| `pin` | `p` | pin it to the top, or take the pin off |
+| `group` | `g` | go to the next layout |
+| `search` | `/` | open the search (F3 too) |
+| `help` | `?` | open and close the list of keys |
+
+A key is one character, alone or after `ctrl-` or `alt-`, or a function key from `f1` to `f12`. Unlike
+[`keybindings`](#keybindings), a key without Ctrl or Alt is on offer, since a character typed into a
+search or a name is text whatever it is bound to. The key an action was moved off does nothing.
+
+**A request that cannot be had leaves the action where it was.** That covers a spelling that names no
+key, a key the screen keeps (Enter, the arrows, Tab, Escape, the digits 1 to 5, Ctrl-P, Ctrl-N,
+Ctrl-B, Ctrl-F, Ctrl-C, F3), a name that is no action, and a key another action stands on. A key two
+actions both asked for is given up by both, and two actions *trading* keys is not a conflict. The
+Sessions screen says what was refused when it opens.
+
+The block layers per action the way `keybindings` does.
 
 ### `search`
 

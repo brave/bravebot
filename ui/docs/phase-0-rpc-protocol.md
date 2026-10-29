@@ -699,7 +699,9 @@ Two more optional lists carry bytes rather than text, and both default to empty.
 `attachments` is a list of absolute paths to pictures and PDFs a person dropped (DROP-10). Each
 entry must name a regular file, with an extension the agent carries as bytes (`png`, `jpg`, `jpeg`,
 `gif`, `webp`, `pdf`, in any case), no larger than 8 MiB
-(`bravebot_agent::workspace::MAX_ATTACHMENT_BYTES`). The bridge takes the media type from that
+(`bravebot_agent::workspace::MAX_ATTACHMENT_BYTES`), except a `png`, `jpg` or `jpeg`, which may be as
+large as 64 MiB (`bravebot_agent::workspace::MAX_SCALABLE_PICTURE_BYTES`) because the agent scales
+one over 8 MiB or 2048 pixels down before it is sent (DROP-4). The bridge takes the media type from that
 extension and never from the caller. The read is unconfined and the file is vouched for, as for
 `dropped`, and the bytes go in the prompt's own message as a `data:` URL part.
 
@@ -1547,6 +1549,17 @@ Still open:
   The native `bravebot:settings:select` picker grants the path; renderer requests cannot set it.
   Model discovery uses the same override and the session's registered project directory.
   `bravebot-rpc --settings <path>` restores the override on process restart.
+- `language.get` reports `{ inUse, saved, available, overridden }`: the tag of the catalog a
+  window started now reads (by [LOCALE-8](../../docs/specs/localization.md#LOCALE-8)), the tag
+  `/language` saved or null, each shipped catalog as `{ tag, name }` with the name in its own
+  language, and whether `BRAVEBOT_LOCALE` outranks the choice. The main process replaces its params
+  with `system`, the OS's preferred languages, which answer only where nothing else names one. `language.set` takes `tag`, a word
+  a catalog answers or `auto`, saves the catalog's own tag in `~/.bravebot/language` (or removes it
+  for `auto`) and answers `{ saved, tag }`, with `saved: false` and nothing changed where the file
+  could not be written or removed; a word no catalog answers is `bad_request`. The window
+  chooses its catalog once, before its first paint, and `bravebot:app:relaunch` (main-process IPC)
+  restarts the app to apply a new choice. It answers false and does nothing while a turn runs in
+  any session, since quitting would refuse what the turn waits on.
 - `doctor` no longer runs an external CLI. It returns `found: true`, `structured: true`
   and the linked agent's configuration report as formatted `text` for existing consumers.
 - Open/fork responses and completion/error events include `contextTokens`, the last
@@ -1650,13 +1663,17 @@ Still open:
   `mayStand`, which says whether the third answer can be recorded. A `remember: true` sent
   where it is false is read as a yes to the one call.
 - `session.new`, `session.open`, `session.fork` and `permissions.list` carry `settingsRules`:
-  `{ deny, ask, allow, unreadable, proposed, directories }`. The first three are the rules in
-  force, as the files spelled them. `unreadable` holds `{ rule, said }` for each entry that is
-  not a rule, where `said` is the agent's sentence about why. `proposed` holds
+  `{ deny, ask, allow, unreadable, proposed, directories, filesystem, filesystemIgnored }`. The first three are the rules in
+  force, as the files spelled them, and `shownDeny`, `shownAsk` and `shownAllow` are the same
+  lists spelled as text. `unreadable` holds `{ rule, shownRule, said }` for each entry that is
+  not a rule, where `shownRule` is `rule` spelled as text and `said` is the agent's sentence about
+  why, which quotes the entry spelled. `proposed` holds
   `{ rule, shownRule, file, shownFile }` for each `allow` rule a checkout wrote, which is not in
   force; `shownRule` is `rule` spelled as text and `shownFile` is `file` spelled as `shownPath`
   is, and a client draws those. `directories` holds the names
-  in `additionalDirectories`, none of which is opened.
+  in `additionalDirectories`, none of which is opened, and `shownDirectories` the same names
+  spelled as `shownPath` is. Each entry of `filesystem` carries `shownPath` and `shownFile` and
+  each entry of `filesystemIgnored` carries `shownFile`, spelled the same way.
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.
 - A manifest run is passed the session's rules, and the agent's runner does not read them.

@@ -61,7 +61,6 @@ help:
 	@echo "  make check-versions        Whether every file stating the version states the same one"
 	@echo "  make check-lint-increase   Whether this branch adds sites of the clippy lints held to the base"
 	@echo "  make check-narration       Whether this branch's commits and lines narrate their writer's process [BASE=ref]"
-	@echo "  make check-pr-body         Whether a pull request body (PR_BODY) has a Not covered line, with an issue per case"
 	@echo "  make check-docs            Build the documentation website under docs/website"
 	@echo "  make docs-changes          What has landed in the specs since the site was updated"
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
@@ -84,8 +83,8 @@ help:
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
 	@echo "  make check-linux           The same checks on Linux, current stable toolchain"
-	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer [REPO=owner/name REVIEWER=login]"
-	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else, assigning you, and labelling bot/in-progress for the session [BRAVEBOT=path]"
+	@echo "  make review-ready          Open PRs that are mergeable, not draft, with passing checks, approved by the reviewer; waits up to WAIT seconds for ones GitHub reports UNKNOWN [REPO=owner/name REVIEWER=login LIMIT=n WAIT=$(REVIEW_WAIT)]"
+	@echo "  make implement-issues ISSUES=\"<issues or search>\"  Open the implement-issues skill in the terminal client, after refusing an issue assigned to someone else, assigning you, and labelling bot/in-progress for the session [NOTES=\"<instructions for the run>\"] [BRAVEBOT=path]"
 	@echo "  make clean-worktrees       Remove every linked git worktree but the one this runs in, including ones with uncommitted changes; exits 1 if any is kept"
 	@echo "  make fmt                   Apply formatting"
 	@echo "  make aws-logout            End every cached AWS SSO session, to test signing in again"
@@ -113,10 +112,11 @@ help:
 	@echo
 	@echo "  make clean          Remove build output"
 
-# agents/ is the checked-in source of truth for skills and AGENTS.md, and no tool reads
-# it: each tool looks under its own discovery paths. This creates the symlinks that
-# bridge them. The links are gitignored, so a fresh clone needs it once, and it is
-# idempotent, so re-running costs nothing.
+# agents/ is the checked-in source of truth for skills, subagents and AGENTS.md, and no tool
+# reads it: each tool looks under its own discovery paths. This creates the symlinks that
+# bridge them, and writes the TOML files Codex reads its subagents from. They are
+# gitignored, so a fresh clone needs it once, and it is idempotent, so re-running costs
+# nothing. Run it again after a definition in agents/agents/ changes.
 .PHONY: init
 init: hooks
 	python3 agents/setup.py link
@@ -226,6 +226,7 @@ check-spec:
 	@python3 contrib/check-issue-posters.py --selftest
 	@python3 agents/issue_helper_selftest.py
 	@python3 agents/work_dir_selftest.py
+	@python3 agents/setup_selftest.py
 	@python3 contrib/check-issue-posters.py
 
 # The deterministic half of the security audit. It answers the questions check-spec cannot: whether
@@ -532,25 +533,31 @@ docs-updated-to-sha:
 # The pull requests a reviewer can pick up now: mergeable, not a draft, with every check passed
 # or skipped, whose latest review by REVIEWER is an approval, and with no latest review by anyone
 # that requests changes. REPO names another repository, REVIEWER another account and LIMIT raises
-# how many are read.
+# how many are read. GitHub reports mergeable as UNKNOWN for every open pull request after main
+# moves, until each has been read, so contrib/review-ready.py reads the list again every few seconds
+# while an approved, passing, non-draft pull request is UNKNOWN, for WAIT seconds in total, and
+# names on stderr any still UNKNOWN at the end. Each ready pull request is printed as soon as it is
+# seen.
 REVIEW_REPO = brave/bravebot
 REVIEW_REVIEWER = netzenbot-reviewer
 REVIEW_LIMIT = 500
+REVIEW_WAIT = 30
 .PHONY: review-ready
 review-ready:
-	@gh pr list --repo $(or $(REPO),$(REVIEW_REPO)) --limit $(or $(LIMIT),$(REVIEW_LIMIT)) \
-	  --json number,title,url,mergeable,latestReviews,isDraft,statusCheckRollup \
-	  --jq '.[] | select(.mergeable == "MERGEABLE" and .isDraft == false and any(.latestReviews[]; .author.login == "$(or $(REVIEWER),$(REVIEW_REVIEWER))" and .state == "APPROVED") and all(.latestReviews[]; .state != "CHANGES_REQUESTED") and all(.statusCheckRollup[]; (.conclusion // .state) | IN("SUCCESS", "NEUTRAL", "SKIPPED"))) | "\(.url)  \(.title)"'
+	@python3 contrib/review-ready.py --repo '$(or $(REPO),$(REVIEW_REPO))' --reviewer '$(or $(REVIEWER),$(REVIEW_REVIEWER))' \
+	  --limit '$(or $(LIMIT),$(REVIEW_LIMIT))' --wait '$(or $(WAIT),$(REVIEW_WAIT))'
 
 # Opens the implement-issues skill in the terminal client on ISSUES, which the skill receives as
-# written: issue numbers, links and search queries separated by commas. Before the session opens, with
-# no model, agents/skills/implement-issues/implement-issues.py stops when an issue is assigned to
-# anybody but the account gh writes as, assigns that account, and adds the label bot/in-progress,
-# which it removes when the session ends. ISSUES reaches the script through the environment, so no
-# quote in it needs escaping. BRAVEBOT names the client when it is not the one on PATH.
+# written: issue numbers, links and search queries separated by commas. NOTES is the person's
+# instructions for the run, such as how to group the issues. The skill reads it, and no issue is taken
+# from it. Before the session opens, with no model, agents/skills/implement-issues/implement-issues.py
+# stops when an issue is assigned to anybody but the account gh writes as, assigns that account, and
+# adds the label bot/in-progress, which it removes when the session ends. ISSUES and NOTES reach the
+# script through the environment, so no quote in them needs escaping. BRAVEBOT names the client when
+# it is not the one on PATH.
 .PHONY: implement-issues
 implement-issues:
-	@python3 agents/skills/implement-issues/implement-issues.py $(if $(BRAVEBOT),--bravebot '$(BRAVEBOT)') -- "$$ISSUES"
+	@python3 agents/skills/implement-issues/implement-issues.py $(if $(BRAVEBOT),--bravebot '$(BRAVEBOT)') --notes="$$NOTES" -- "$$ISSUES"
 
 # Removes every linked worktree git knows about, wherever it lives, unlocking locked ones first.
 # The first entry `git worktree list` prints is the main working tree and is never touched.
@@ -568,7 +575,7 @@ clean-worktrees:
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
 .PHONY: check-all-local check-all
-check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-pr-body check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
+check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
 # The gates this branch's changes need, against its merge base with BASE, which check-reviewdog
@@ -589,10 +596,12 @@ check-affected-containers:
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
+	check-review-ready-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest check-implement-issues-selftest \
+	check-review-ready-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -629,6 +638,9 @@ check-lint-increase-selftest:
 
 check-implement-issues-selftest:
 	python3 agents/skills/implement-issues/selftest.py
+
+check-review-ready-selftest:
+	python3 contrib/review-ready-selftest.py
 
 check-release-preflight-selftest:
 	python3 contrib/release-preflight.py --selftest
@@ -714,16 +726,6 @@ locales:
 check-narration:
 	python3 contrib/check-narration.py --selftest
 	python3 contrib/check-narration.py $(if $(BASE),--base '$(BASE)')
-
-# Whether a pull request body has a Not covered line, which is `none` or a bullet per case, each
-# naming the issue that tracks it. The body is read from PR_BODY, as check-narration reads it, and
-# a run with no PR_BODY and not in a pull request has no body to read, so locally this runs the
-# selftest and checks a draft only where it is given one: PR_BODY="$(cat body.md)" make check-pr-body.
-# Only pull requests opened by netzenbot are held to the line, and PR_AUTHOR says who opened one.
-.PHONY: check-pr-body
-check-pr-body:
-	python3 contrib/check-pr-body.py --selftest
-	python3 contrib/check-pr-body.py
 
 # Whether every catalog matches contrib/untranslated-messages.txt, which records the messages each
 # translation is knowingly missing. A gap is allowed and silence about one is not: falling back to

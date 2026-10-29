@@ -44,6 +44,9 @@ pub enum ToMain {
     PromptRecorded(usize),
     /// The request the turn is about to send the planner. No reply.
     RequestBuilt(Box<bravebot_agent::request_view::RequestView>),
+    /// The conversation as the turn is about to send it, for a question typed beside the turn
+    /// to be asked over (CMD-8). No reply.
+    Forked(Box<bravebot_agent::aside::Fork>),
     /// A write needs approval. The main thread must reply.
     Write(WriteRequest),
     /// A pipeline needs approval before it runs. The main thread must reply.
@@ -374,6 +377,18 @@ impl Reporter for RemoteReporter {
 
     fn request_built(&mut self, view: bravebot_agent::request_view::RequestView) {
         let _ = self.outbound.send(ToMain::RequestBuilt(Box::new(view)));
+    }
+
+    fn wants_fork(&self) -> bool {
+        true
+    }
+
+    fn exchange_forked(&mut self, fork: bravebot_agent::aside::Fork) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a closed channel means the display is gone, and nothing rests on the fork arriving"
+        )]
+        let _ = self.outbound.send(ToMain::Forked(Box::new(fork)));
     }
 
     fn prompt_recorded(&mut self, at: usize) {
@@ -1153,6 +1168,7 @@ mod tests {
                     ToMain::Spent(_) => seen.push("spent"),
                     ToMain::PromptRecorded(_) => seen.push("prompt"),
                     ToMain::RequestBuilt(_) => seen.push("request"),
+                    ToMain::Forked(_) => seen.push("forked"),
                     ToMain::Written(_) => seen.push("written"),
                     ToMain::Phase(_) => seen.push("phase"),
                     ToMain::Narration(_) => seen.push("narration"),

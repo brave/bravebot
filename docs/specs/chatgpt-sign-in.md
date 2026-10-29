@@ -99,8 +99,8 @@ sent in the Responses protocol of [BACKEND-61](backends.md#BACKEND-61), as [CHAT
 The flow carries no workspace content and no model output. The rule that untrusted content never
 reaches the driver or the planner is [AGENTS.md](../../agents/AGENTS.md), and
 [CHATGPT-5](#CHATGPT-5) checks this flow against it. Where each part lives is
-[layering.md](layering.md). The other sign-in that stores a person's subscription is
-[premium-credentials.md](premium-credentials.md), what a credential owes is
+[layering.md](layering.md). The other sign-in that keeps an account's tokens in a file is
+[xai-sign-in.md](xai-sign-in.md), what a credential owes is
 [credential-protection.md](credential-protection.md), and the command this extends is
 `auth login` in [cli.md](cli.md).
 
@@ -333,8 +333,12 @@ that program.
 ### CHATGPT-4: the listener takes the one callback that carries its state
 
 The listener binds `127.0.0.1`, and nothing else, on a port the operating system chooses, and the redirect
-URI is `http://127.0.0.1:<port>/auth/callback` with that port. The authorization server accepts a redirect
-to any such port for a client registered this way. Where the listener cannot start, the sign-in says so,
+URI is `http://127.0.0.1:<port>/auth/callback` with that port. The authorization server was seen to accept a
+redirect to two such ports for clients registered this way. Two sign-ins on other ports were tried and not
+answered in time, so nothing is claimed of those two
+([What the exchange has to record](#what-the-exchange-has-to-record)). OpenAI's documentation says later
+sign-ins may use another available port, and this program relies on that for the port the operating system
+chooses next. Where the listener cannot start, the sign-in says so,
 opens no browser and stops. The port is stated to the person once it is bound ([CHATGPT-13](#CHATGPT-13)).
 
 A request is the callback only if it is a `GET` for `/auth/callback` whose `state` equals the one
@@ -392,7 +396,7 @@ The sign-in runs as a command before any session, so no planner exists whose con
 refresh of [CHATGPT-7](#CHATGPT-7) runs inside a turn, in the same crate, and its outcome reaches the agent.
 Both read bytes this program did not write: a callback from a browser, and replies from the authorization
 server and its key set. The crate compares and parses them and hands none of them to a turn, a trace or a
-message to the planner. That is the argument [premium-credentials.md](premium-credentials.md) makes for its own flow. It
+message to the planner. That is the argument [xai-sign-in.md](xai-sign-in.md) makes for its own flow. It
 is checked here against [reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md), shape by
 shape:
 
@@ -518,14 +522,14 @@ whether the token verified, and what leaves the crate is that answer and no clai
 The sign-in is kept in `chatgpt-account.json` in the state directory. It holds a version, the access token, the
 refresh token, the instant the access token expires, the client OpenAI issued ([CHATGPT-3](#CHATGPT-3)) and
 the host identifier, and not the ID token. The file is created before anything is written to it, reachable by the account that signed in
-and by no other, with the protection the Leo credentials file has: mode 0600 on Unix and an access-control
-list for one account on Windows, with nothing inherited. A platform with neither has the sign-in refused. It
+and by no other: mode 0600 on Unix and an access-control list for one account on Windows, with nothing
+inherited. A platform with neither has the sign-in refused. It
 is written beside the file and renamed over it, so a write that stops part way leaves the last good file.
 No settings layer, `provider` block or environment variable holds a token or names one, and the file is not
 `settings.json`.
 
 A file that cannot be read, is empty, or holds the fields of another version is reported with the remedy
-and is not read as an absent sign-in, as a stored Leo batch that cannot be spent is.
+and is not read as an absent sign-in.
 
 Each token is a credential at a tier, in the terms of [credential-protection.md](credential-protection.md):
 
@@ -562,7 +566,7 @@ secret with the answer `NotAttempted`, and a leak of it has no figure for how qu
 [CHATGPT-11](#CHATGPT-11) is where `doctor` reports it.
 
 **Why.** A file of its own because the shape differs from the gateway keys, which are one string under an id
-with no expiry, and from the Leo batch, which is spent a credential at a time. Held because the arrangement
+with no expiry. Held because the arrangement
 is the one that spec names as the false pass, a short-lived token that the holder renews by itself. A record
 of what ends the credential is what a person who suspects a leak needs, and it can only be written down
 while the arrangement is understood.
@@ -577,7 +581,7 @@ while the arrangement is understood.
 `verified-by: bravebot_skus::chatgpt::account::the_file_is_readable_by_its_owner_alone_and_so_is_its_replacement`
 `verified-by: bravebot_skus::chatgpt::account::a_write_that_stops_part_way_leaves_the_last_good_file_and_no_temporary`
 `verified-by: bravebot_skus::chatgpt::account::a_second_sign_in_replaces_the_first_and_forgetting_removes_it`
-`verified-by: bravebot_skus::chatgpt::account::a_write_waits_for_the_claim_on_this_file_and_not_for_the_leo_one`
+`verified-by: bravebot_skus::chatgpt::account::a_write_waits_for_the_claim_on_this_file_and_not_for_another_sign_ins`
 `verified-by: bravebot_skus::chatgpt::account::a_claim_on_this_file_is_waited_on_until_it_is_a_minute_old`
 `verified-by: bravebot_skus::chatgpt::account::the_temporary_of_a_name_that_is_not_utf8_is_named_from_its_bytes`
 `verified-by: bravebot_agent::home::a_directory_named_in_the_environment_is_the_state_directory_in_every_crate`
@@ -607,15 +611,15 @@ turn with a sentence from [CHATGPT-8](#CHATGPT-8). Where the refresh fails other
 than by ending the sign-in and the access token in hand has not yet passed its expiry, the request is sent
 with it.
 
-The refresh is taken under an exclusive claim on the file, as the Leo store takes one for a spend, and the
+The refresh is taken under an exclusive claim on the file, and the
 file is read again once the claim is held. Every write of the file and its removal is made under the claim.
 A process that finds a token other than the one it was about to replace uses it and presents nothing. A
 refresh request has a deadline of thirty seconds, and a claim is judged abandoned once its file was last
 modified sixty seconds ago. A refresh makes one request, or two where the first was refused as ended and the
 file had changed since (below), and the claim is made as young as a new one before the second, so no request
 waits under a claim older than thirty seconds. A claim older than sixty belongs to a process that died holding
-it, or to one that was stopped for longer than a request may take, and is broken as the Leo store breaks one,
-by moving it aside and judging it there. A holder that was stopped that long can have its claim broken, and
+it, or to one that was stopped for longer than a request may take, and is broken by moving it aside and
+judging it there. A holder that was stopped that long can have its claim broken, and
 what follows from that is below.
 
 A refresh the authorization server refuses as the refresh token no longer being valid ends the sign-in. That
@@ -667,8 +671,7 @@ such as one that starts after it, finds no file and says no sign-in is stored.
 second process read before the first's reply is dead. A session, a background run and a one-shot run on one
 machine present it together as a matter of course, and the one that loses ends the sign-in for all of them.
 The claim is held across up to two network round trips, so its age of abandonment is twice a trip's deadline, and
-it is made young again between the two: the Leo claim is judged abandoned after seconds because its hold is one
-local read and write. The reply is written
+it is made young again between the two. The reply is written
 first because a process that stops between receiving it and writing it has spent a refresh token it cannot
 present again. This server replaces the refresh token on use, so the claim and the early write are
 required here. A server that did not replace it would lose nothing to them. Removing the file
@@ -754,8 +757,9 @@ failure. The rest are these, each saying which it is:
   remedy for a failure that may pass. Whether signing in again would mend a renewal the server refuses in
   a code this program does not read as the end of the sign-in is not observed (see
   [Known costs](#known-costs)).
-- **The sign-in file** cannot be read, cannot be written, or has nowhere to be kept on this platform, with the
-  remedy the Leo store gives for a batch it cannot use.
+- **The sign-in file** cannot be read, cannot be written, or has nowhere to be kept on this platform, with
+  the remedy of signing in again with `bravebot auth login chatgpt` or forgetting it with `bravebot auth
+  logout chatgpt`.
 - **The account has reached its usage limit, or may not be used this way.** A request is refused with one of
   the codes the exchange records as ending the use of a subscription, in the `error.code` of the refusal's
   body, whatever its status, or in the `response.error.code` of a `response.failed` event or the code of an
@@ -1487,14 +1491,14 @@ line is the one thing in a pasted report that says whose account it was.
 ### CHATGPT-12: signing in is refused where it cannot be done
 
 `auth login chatgpt` is refused in an incognito session before the listener binds and before a browser
-opens, as importing a subscription is refused there: the sign-in is a write to `~/.bravebot` that the mode
+opens, as storing a gateway key is refused there ([INCOG-7](incognito.md#INCOG-7)): the sign-in is a write to `~/.bravebot` that the mode
 exists to decline. It is refused with the argument status where stderr is not a terminal, since the URL is shown there, and
 says to run it at one. Where a sign-in is already stored the command asks before replacing it
 ([CHATGPT-11](#CHATGPT-11)), and is refused in the same way where stdin is not a terminal, since a run
 nobody is watching cannot answer.
 
-**Why.** Refusing the sign-in is the same argument as the import's: doing it and discarding the result
-would leave a session that was signed in once and never again.
+**Why.** Refusing the sign-in is the argument [INCOG-7](incognito.md#INCOG-7) makes for every sign-in: doing it
+and discarding the result would leave a session that was signed in once and never again.
 
 `verified-by: bravebot_cli::chatgpt::each_condition_that_cannot_be_answered_stops_the_command_with_its_own_ending`
 `verified-by: bravebot_cli::chatgpt::a_stored_sign_in_needs_a_terminal_to_be_asked_about_and_a_first_one_does_not`
@@ -2392,7 +2396,7 @@ These are the places where another spec states something about this service, eac
 ## Known costs
 
 - The refresh token is a bearer secret in a file for as long as the account keeps the sign-in. Anything
-  running as the person can read it, as it can read the Leo credentials and the gateway keys. Nothing asks
+  running as the person can read it, as it can read the xAI sign-in and the gateway keys. Nothing asks
   for a form that binds it to this machine.
 - The callback puts a `code` and a `state` in the address bar and history of the person's own browser. The
   `code` is single use and exchanges only with the verifier this process holds.
@@ -2425,6 +2429,16 @@ These are the places where another spec states something about this service, eac
   system error or cause, so a full disk and a folder that cannot be written get the same advice.
 - A person on a machine with no browser forwards the listener's port, which changes at every sign-in, and
   no device-code route is available to this program.
+- The listener binds a port the operating system chooses, and the authorization server was seen to accept two
+  such ports. Two sign-ins on other ports were tried and not answered in time, and nothing is claimed of
+  those two ([CHATGPT-4](#CHATGPT-4)). Why they were not answered was not seen. If the server refused a
+  port, the sign-in would end at the time bound ([CHATGPT-13](#CHATGPT-13)) with no callback, which is also
+  what a sign-in that is not answered in time looks like. A fixed port with a fallback is not
+  built, because no observation shows that a port the operating system chooses fails. Codex uses port 1455
+  and falls back to 1457 for its own client, and nothing read says those ports apply to the clients this
+  program registers. Observing other ports, the ID token of the code exchange, a narrower scope, a proof at
+  the code exchange and the clients per host identifier needs a person with a browser and a ChatGPT account
+  (#3390).
 - Where the listing cannot be read the pickers list the compiled names ([CHATGPT-9](#CHATGPT-9)), and a
   person who wants another types `chatgpt/<name>`. The names are the eight one account's listing offered on
   2026-10-25 and 2026-10-26, so another account may be offered others and one may name a model the account

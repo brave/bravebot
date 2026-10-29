@@ -195,6 +195,9 @@ pub struct Output {
     /// Read beside `changed_a_file` and the outcome for the same reason: a run the person
     /// declined leaves the change as unbuilt as it was before.
     pub ran_a_program: bool,
+    /// Whether the program this call ran ended badly: a stage exited with a status other than 0,
+    /// or the line was stopped. False where no program ran (OPEN-1).
+    pub command_failed: bool,
     /// Whether a program was started, whatever came of the call.
     ///
     /// Wider than `ran_a_program`, which says a program ran: a line that failed after an earlier
@@ -1187,6 +1190,8 @@ struct Produced {
     /// happen, and a turn that counted it would say a change had been built when nothing had
     /// compiled it.
     ran_a_program: bool,
+    /// Whether the program it ran ended badly (OPEN-1).
+    command_failed: bool,
     /// Whether a program was started, including a call that was then refused or failed.
     started_a_program: bool,
     /// The directory each git stage of the command worked in.
@@ -1292,6 +1297,7 @@ impl Produced {
             untrusted: false,
             changed_a_file: false,
             ran_a_program: false,
+            command_failed: false,
             started_a_program: false,
             ran_git_in: Vec::new(),
             answers_for: None,
@@ -1957,7 +1963,11 @@ pub(crate) fn review_a_write<S: Sink>(
     landed: &std::path::Path,
 ) -> Reviewed {
     let reviewed = policy.render_pair_in_place(tool, existing, body, |existing, written| {
-        let diff = Diff::compute(&existing, &written);
+        // Written out in the same reshape, as the output and vet prompts do (PROMPT-13): what a yes
+        // writes is what the rows are read from, and a character that draws as nothing is a row
+        // that omits part of it. The comparison is of the real lines, so a line differing only in such a
+        // character is still a change.
+        let diff = Diff::compute(&existing, &written).spelled();
         let (note, changes) = change_report(intent, &diff, replaced_age);
         // A new file is a change whatever it holds. A file that was there and has every line it
         // had is not, so its call carries no counts and nothing lists it (FILES-1).
@@ -2516,6 +2526,7 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         content: produced.content,
         changed_a_file: produced.changed_a_file,
         ran_a_program: produced.ran_a_program,
+        command_failed: produced.command_failed,
         started_a_program: produced.started_a_program,
         ran_git_in: produced.ran_git_in,
         usage: produced.usage,
@@ -4774,17 +4785,35 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // Whether there is a file here at all is a separate question, answered from the path and
     // `stat`, because the labelled peek cannot say: it reports a file it could not decode as
     // text the same way it reports one that is not there.
-    let (existing, pre_image, replaces, approved_revision) =
+    let (existing, pre_image, other_encoding, replaces, approved_revision) =
         policy.capture_files(|policy, capture| {
             let key = workspace.trust_key(&proposed_path);
             let peeks = workspace.peek_labelled_for_write(policy, &proposed_path);
             (
                 peeks.0,
                 peeks.1,
+                peeks.2,
                 workspace.names_a_file(&proposed_path),
                 capture.revision_of(&key),
             )
         });
+    // A file the trust map vouches for that is text in an encoding other than UTF-8 is not replaced
+    // by a body that lands as UTF-8 (WRITE-8). Refused before the format step, the scan and the
+    // question, since no answer changes what the file is. A file nobody vouched for is not asked
+    // about: its encoding is a fact about untrusted bytes, and the write replaces it as WRITE-1
+    // says.
+    if replaces && crate::workspace::holds_another_encoding(policy, call, &other_encoding) {
+        return write_refused(
+            policy,
+            tools,
+            call,
+            destination,
+            &crate::workspace::WorkspaceError::NotUtf8 {
+                path: shown_path.clone(),
+            },
+            &shown_path,
+        );
+    }
     // The same bytes, so the comparison below can be made inside the kernel. Taken from the one
     // peek rather than read a second time: two reads of a file somebody else may be writing can
     // disagree, and then the diff a person approves is of a version that never existed.
@@ -5332,6 +5361,25 @@ fn removed_sentence(removed: &[String]) -> String {
 /// The half of [`apply_checkout`] that does not care who named the checkout: the planner's call
 /// and the person's `/checkouts apply` both end here, and ask the same questions (CHECKOUT-14).
 fn bring_back<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    id: &str,
+    kept: &crate::workspace::SessionCheckout,
+    offered: &Offered,
+    paths: Vec<String>,
+) -> Produced {
+    let produced = bring_back_files(policy, tools, confirmer, id, kept, offered, paths);
+    // Whoever asked, the planner or the person, a checkout whose files came back is no longer
+    // waiting on anybody (OPEN-1).
+    if produced.changed_a_file {
+        tools.workspace.checkout_applied(id);
+    }
+    produced
+}
+
+/// [`bring_back`]'s work: put each path to the person and write back the ones they allow.
+fn bring_back_files<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     confirmer: &mut C,
@@ -7780,8 +7828,10 @@ fn request_path<S: Sink, C: Confirmer>(
                 ),
             };
             Produced::new(
+                // The path as the planner typed it: where a link landed is a name whoever made the
+                // link chose, and this sentence is the driver's own words (PATHREQ-2).
                 Labelled::trusted(format!(
-                    "approved: programs you start with run may {access} {shown} for the rest of \
+                    "approved: programs you start with run may {access} {path} for the rest of \
                      this session. Run the command again.{file_tools}"
                 )),
                 String::new(),
@@ -9407,6 +9457,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             produced.covered_by_record = covered_by_record;
             produced.read_asked = read_asked;
             produced.ran_a_program = true;
+            produced.command_failed = !ran.succeeded();
             produced.started_a_program = true;
             produced.ran_git_in = plan
                 .steps()
@@ -9425,7 +9476,11 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             let text = failed_line_text(&said, &error);
             let produced = Produced::problem(text);
             match stopped {
-                true => produced.having_run_a_program(),
+                true => {
+                    let mut produced = produced.having_run_a_program();
+                    produced.command_failed = true;
+                    produced
+                }
                 false => produced.having_started_a_program(),
             }
         }
@@ -13715,6 +13770,11 @@ mod tests {
 
         offer_advisor(&mut offered);
         offer_tool_loader(&mut offered, &["server:tool".to_string()]);
+        offer_message_session(&mut offered);
+        offer_propose_plan(&mut offered);
+        offer_remember(&mut offered);
+        offer_propose_rule(&mut offered);
+        offer_recall(&mut offered);
 
         for tool in offered {
             let name = &tool.function.name;
@@ -13723,6 +13783,8 @@ mod tests {
                 parameters["properties"][WHY]["type"], "string",
                 "{name} does not ask why it is being called"
             );
+            // An array, so a tool that states no arguments of its own does not send `null`, which
+            // Bedrock refuses as a schema for the whole request.
             assert!(
                 parameters["required"]
                     .as_array()

@@ -43,7 +43,7 @@ pub struct Cut {
 pub fn prompts(said: &[Said]) -> Vec<&str> {
     said.iter()
         .filter_map(|entry| match entry {
-            Said::User(text) => Some(text.as_str()),
+            Said::User(text, _) => Some(text.as_str()),
             _ => None,
         })
         .collect()
@@ -256,11 +256,13 @@ mod tests {
         before.messages.push(Stored {
             message: Message::user(format!("{TOOL_RESULT_PREFIX}read_file: contents")),
             composed: Some(Composed::ToolResult),
+            address: None,
             source: None,
         });
         before.messages.push(Stored {
             message: Message::user(format!("{RESUMED_PREFIX} references are dead")),
             composed: Some(Composed::Resumed),
+            address: None,
             source: None,
         });
         before
@@ -306,6 +308,7 @@ mod tests {
             composed: Some(Composed::Attached {
                 path: "readme.md".into(),
             }),
+            address: None,
             source: None,
         });
         before.messages.push(Stored::plain(Message::user("second")));
@@ -330,6 +333,7 @@ mod tests {
             composed: Some(Composed::Attached {
                 path: "readme.md".into(),
             }),
+            address: None,
             source: None,
         });
         before
@@ -351,6 +355,7 @@ mod tests {
         before.messages.push(Stored {
             message: Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")),
             composed: Some(Composed::Summary),
+            address: None,
             source: None,
         });
         before.messages.push(Stored::plain(Message::user("third")));
@@ -384,6 +389,7 @@ mod tests {
             composed: Some(Composed::SkillKept {
                 name: "commit-style".into(),
             }),
+            address: None,
             source: None,
         });
         before.archive.extend(plain(vec![
@@ -410,6 +416,7 @@ mod tests {
                     Message::assistant(*words)
                 },
                 composed: Some(Composed::Imported),
+                address: None,
                 source: None,
             })
             .collect();
@@ -435,6 +442,7 @@ mod tests {
         before.messages.push(Stored {
             message: Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")),
             composed: Some(Composed::Summary),
+            address: None,
             source: None,
         });
         before.messages.extend(plain(vec![

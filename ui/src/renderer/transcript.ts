@@ -49,8 +49,15 @@ export type Entry = (
    * `prompt` is the agent's own ordinal for it, which is what `session.fork` cuts on. Absent
    * for a prompt this window has added and not yet heard back about: such a prompt is in the
    * conversation but the window does not know where, and a fork is refused rather than guessed.
+   *
+   * `summoned` is the slug of the bot a person picked for this message, which answered it
+   * (MEMORY-14). Set from the pick when it is sent, and from the main process's record of summons
+   * when a conversation is reopened. Never read off the text.
+   *
+   * `interjected` is set on a line the planner read in the middle of a running turn. It belongs to
+   * that turn and starts none, so it does not change which bot the turn's reply is drawn as.
    */
-  | { kind: 'user'; id: string; text: string; prompt?: number }
+  | { kind: 'user'; id: string; text: string; prompt?: number; summoned?: string; interjected?: true }
   | { kind: 'assistant'; id: string; text: string }
   /** `command` is the words of `text` that are a command to run, where a notice names one. */
   | { kind: 'narration'; id: string; text: string; command?: string | null }
@@ -267,7 +274,56 @@ export function fromSaid(said: Said[]): Entry[] {
   })
 }
 
-export const userSaid = (text: string): Entry => ({ kind: 'user', id: nextId(), text })
+export const userSaid = (text: string, summoned?: string, interjected?: true): Entry => ({
+  kind: 'user',
+  id: nextId(),
+  text,
+  ...(summoned ? { summoned } : {}),
+  ...(interjected ? { interjected } : {}),
+})
+
+/**
+ * Which reply answers a summoned prompt: the first after it, by entry id, with the summoned bot's
+ * slug. Read off the pick recorded on the prompt, never off any text.
+ */
+export function summonedReplies(entries: Entry[]): Map<string, string> {
+  const found = new Map<string, string>()
+  let waiting: string | null = null
+  for (const entry of entries) {
+    // A line read into a running turn belongs to it, and a watch or a consolidation starts a turn
+    // of its own, which no pick was made for.
+    if (entry.kind === 'user') { if (!entry.interjected) waiting = entry.summoned ?? null }
+    else if (entry.kind === 'watch' || entry.kind === 'consolidation') waiting = null
+    else if (entry.kind === 'assistant' && waiting !== null) {
+      found.set(entry.id, waiting)
+      waiting = null
+    }
+  }
+  return found
+}
+
+/**
+ * The bot a person summoned for the turn that runs now, or undefined where it is not a summoned
+ * one: the slug on the prompt that started it, past any lines read into it since.
+ */
+export function summonedFor(entries: Entry[]): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!
+    if (entry.kind === 'user' && !entry.interjected) return entry.summoned
+    if (entry.kind === 'watch' || entry.kind === 'consolidation') return undefined
+  }
+  return undefined
+}
+
+/** The entries with each prompt `found` names marked with the bot that answered it. */
+export function summonedAt(entries: Entry[], found: Map<number, string>): Entry[] {
+  if (found.size === 0) return entries
+  return entries.map((entry) => {
+    if (entry.kind !== 'user' || entry.prompt === undefined) return entry
+    const slug = found.get(entry.prompt)
+    return slug && entry.summoned !== slug ? { ...entry, summoned: slug } : entry
+  })
+}
 export const consolidating = (): Entry => ({ kind: 'consolidation', id: nextId() })
 export const narrated = (text: string, command?: string | null): Entry => ({ kind: 'narration', id: nextId(), text, command })
 export const watchFired = (number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
@@ -303,8 +359,11 @@ export const askedFetch = (request: FetchRequest): Entry => ({ kind: 'fetch', id
 export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server', id: nextId(), request, decision: null })
 export const askedManifest = (request: ManifestRequest, unheld: string[] = []): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null, unheld })
 
-/** The rules that narrow what a session does, which a manifest run is not held to. */
-export const narrowing = (rules: SettingsRules | null | undefined): string[] => [...(rules?.deny ?? []), ...(rules?.ask ?? [])]
+/** The rules that narrow what a session does, which a manifest run is not held to, spelled for a person (PROMPT-1). */
+export const narrowing = (rules: SettingsRules | null | undefined): string[] => [
+  ...(rules?.shownDeny ?? rules?.deny ?? []),
+  ...(rules?.shownAsk ?? rules?.ask ?? []),
+]
 
 /** Whether a settings file wrote something that is not in force, which the person is told. */
 export const notInForce = (rules: SettingsRules | null | undefined): boolean =>

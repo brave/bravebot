@@ -39,10 +39,33 @@ function returnTarget(): HTMLElement | null {
 }
 
 /**
+ * Leo's dialog is a grid item whose min-width is auto. A long path or an unwrapped line then
+ * grows the box past `--leo-dialog-width`, and the user-agent `overflow: auto` on `<dialog>`
+ * draws a horizontal scrollbar. These rules stay inside the shadow root so every dialog is
+ * held to its width; long text wraps or truncates, and a code box that must scroll does so
+ * inside itself.
+ */
+export const DIALOG_FRAME_CSS = `
+  .leo-dialog { min-width: 0; overflow-x: hidden; }
+  .leo-dialog header, .leo-dialog .body, .leo-dialog .actions { min-width: 0; max-width: 100%; }
+  .leo-dialog .body { overflow-x: hidden; }
+  .leo-dialog .title, .leo-dialog .subtitle { min-width: 0; overflow-wrap: anywhere; }
+`
+
+/**
  * Leo pads the head, the body and the footer by the full dialog padding each, and its rule that
  * drops the body's bottom padding above a footer does not match inside the shadow root. A short
  * dialog of one or two lines ends up with more empty space than text.
  */
+let frameSheet: CSSStyleSheet | null = null
+const frameStyles = (): CSSStyleSheet => {
+  if (!frameSheet) {
+    frameSheet = new CSSStyleSheet()
+    frameSheet.replaceSync(DIALOG_FRAME_CSS)
+  }
+  return frameSheet
+}
+
 let compactSheet: CSSStyleSheet | null = null
 const compactStyles = (): CSSStyleSheet => {
   if (!compactSheet) {
@@ -130,9 +153,11 @@ export function Modal({
   // rebuilds the inner element, which drops the role until it is set again.
   useLayoutEffect(() => {
     const shadow = host.current?.shadowRoot
-    if (!compact || !shadow) return
-    const sheet = compactStyles()
-    if (!shadow.adoptedStyleSheets.includes(sheet)) shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, sheet]
+    if (!shadow) return
+    const extra = [frameStyles()]
+    if (compact) extra.push(compactStyles())
+    const missing = extra.filter((sheet) => !shadow.adoptedStyleSheets.includes(sheet))
+    if (missing.length) shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, ...missing]
   }, [compact])
 
   useLayoutEffect(() => {

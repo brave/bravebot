@@ -64,6 +64,8 @@ fn a_record_written_here_is_read_back_by_the_agents_own_reader() {
             history: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
             asides: &[],
             conversation: &conversation.snapshot(),
             turns: 1,
@@ -133,6 +135,8 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
             history: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
             asides: &[],
             conversation: &conversation.snapshot(),
             turns: 2,
@@ -157,7 +161,7 @@ fn a_stored_conversation_recounts_to_what_a_person_said() {
     let text: Vec<&str> = said
         .iter()
         .filter_map(|entry| match entry {
-            bravebot_agent::conversation::Said::User(t)
+            bravebot_agent::conversation::Said::User(t, _)
             | bravebot_agent::conversation::Said::Assistant(t)
             | bravebot_agent::conversation::Said::Tool { line: t, .. } => Some(t.as_str()),
             // A message the agent composed reports the tag it was recorded with beside its words.
@@ -191,6 +195,8 @@ fn resuming_a_session_started_under_a_definition_stops_recording_it() {
         history: None,
         rewind: &[],
         checkouts: &[],
+        touched: None,
+        answered_by_mode: false,
         asides: &[],
         conversation: &snapshot,
         turns,
@@ -305,6 +311,8 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
                 prompt: "remember the word haddock".into(),
             }],
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
             asides: &[bravebot_session::sessions::Aside {
                 question: "what is haddock?".into(),
                 answer: Some("a fish".into()),
@@ -346,6 +354,8 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
             history: None,
             rewind: state.rewind.points(),
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
             asides: &state.asides,
             conversation: &state.conversation.snapshot(),
             turns: state.turns,
@@ -442,6 +452,8 @@ fn two_prompt_session(project: &std::path::Path, trust: Option<&TrustStore>) -> 
             history: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
             asides: &[bravebot_session::sessions::Aside {
                 question: "what is haddock?".into(),
                 answer: Some("a fish".into()),
@@ -523,11 +535,13 @@ fn a_session_holding_imported_words_is_not_forked() {
         bravebot_agent::conversation::Stored {
             message: Message::user("a prompt typed elsewhere"),
             composed: Some(bravebot_agent::conversation::Composed::Imported),
+            address: None,
             source: None,
         },
         bravebot_agent::conversation::Stored {
             message: Message::assistant("an answer given elsewhere"),
             composed: Some(bravebot_agent::conversation::Composed::Imported),
+            address: None,
             source: None,
         },
     ];
@@ -543,6 +557,8 @@ fn a_session_holding_imported_words_is_not_forked() {
             history: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
             asides: &[],
             conversation: &snapshot,
             turns: 1,
@@ -822,6 +838,8 @@ fn a_fork_gets_an_id_of_its_own_rather_than_the_one_it_came_from() {
             history: None,
             rewind: state.rewind.points(),
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
             asides: &state.asides,
             conversation: &state.conversation.snapshot(),
             turns: state.turns,
@@ -1003,6 +1021,8 @@ fn a_session_written_by(project: &std::path::Path, front: sessions::Front) -> St
             history: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
             asides: &[],
             conversation: &conversation.snapshot(),
             turns: 1,

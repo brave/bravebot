@@ -249,7 +249,9 @@ about a line is said in the words the planner wrote: the result of a run, the ac
 started, moved or ended, an error that the line did not start or run, and a refusal by a deny rule,
 which names the program and not its operands. The expanded plan is what the person is shown and
 endorses, so a file name read out of a directory nobody vouched for is never spelled into a
-sentence the driver writes to the planner.
+sentence the driver writes to the planner. The names are drawn with a control character, a character
+that draws as nothing and the other characters [PROMPT-1](../prompting.md#PROMPT-1) lists written
+as `\u{..}`, so a name holding one does not draw as another name.
 
 Ignored directories are ignored the way the tree walk ignores them, so `**` does not descend into
 `.git` or `node_modules`.
@@ -283,6 +285,8 @@ everything and asks nothing.
 `verified-by: bravebot_agent::cmdline::a_quoted_pattern_is_not_expanded`
 `verified-by: bravebot_agent::cmdline::braces_multiply_a_word`
 `verified-by: bravebot_agent::cmdline::a_plan_is_told_to_the_planner_with_each_pattern_as_it_was_written`
+`verified-by: bravebot_core::command::an_argument_holding_an_invisible_character_is_spelled`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_draws_names_that_differ_in_an_invisible_character_apart`
 `verified-by: bravebot_agent::turn::a_run_result_does_not_spell_the_names_a_glob_matched_to_the_planner`
 `verified-by: bravebot_agent::turn::a_finished_jobs_account_does_not_spell_the_names_a_glob_matched_to_the_planner`
 `verified-by: bravebot_agent::turn::a_deny_rule_refusal_does_not_spell_the_names_a_glob_matched_to_the_planner`

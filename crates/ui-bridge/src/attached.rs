@@ -8,7 +8,7 @@
 use crate::protocol::{Failure, Request};
 use base64::Engine;
 use bravebot_agent::turn::{MAX_PASTED_IMAGE_BYTES, PASTED_IMAGE_MEDIA, PastedImage};
-use bravebot_agent::workspace::MAX_ATTACHMENT_BYTES;
+use bravebot_agent::workspace::dropped_size_limit;
 use bravebot_filetype::by_name::{Kind, kind_of, media_for};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -182,17 +182,19 @@ fn dropped_attachment(named: &str) -> Result<&'static str, Failure> {
             "{named} is not a picture or a PDF; a text file belongs in `dropped`"
         )));
     };
-    if let Some(note) = over_the_cap(path, metadata.len()) {
+    if let Some(note) = over_the_cap(path, metadata.len(), media) {
         return Err(Failure::bad_request(note));
     }
     Ok(media)
 }
 
 /// The note for a dropped picture or PDF of `bytes` at `path` that is larger than the agent will
-/// carry, or `None` when it is within the cap. The window shows it as it stands, so it is in the
-/// terminal's words and in the locale `bravebot-rpc` chose, which is `en-US`.
-fn over_the_cap(path: &Path, bytes: u64) -> Option<String> {
-    let most = MAX_ATTACHMENT_BYTES as u64;
+/// carry, or `None` when it is within the cap. The cap is the agent's for the type `media` names: a
+/// PNG or JPEG the agent scales down is held to its ceiling and not to the size a request carries.
+/// The window shows the note as it stands, so it is in the terminal's words and in the locale
+/// `bravebot-rpc` chose, which is `en-US`.
+fn over_the_cap(path: &Path, bytes: u64, media: &str) -> Option<String> {
+    let most = dropped_size_limit(media) as u64;
     (bytes > most).then(|| {
         let name = path
             .file_name()
@@ -238,8 +240,8 @@ pub fn classified(request: &Request) -> Result<Value, Failure> {
                 return Ok(Value::Null);
             };
             // Text has no cap: the turn reads it the way it reads a file named with `@`.
-            if matches!(kind, Kind::Attachment(_))
-                && let Some(note) = over_the_cap(Path::new(path), bytes)
+            if let Kind::Attachment(media) = kind
+                && let Some(note) = over_the_cap(Path::new(path), bytes, media)
             {
                 return Ok(json!({ "note": note }));
             }

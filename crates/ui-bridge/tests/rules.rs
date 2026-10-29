@@ -436,8 +436,9 @@ fn with_no_rule_a_fetch_is_put_to_the_window() {
     let (session, rules) = run.front.session(&run.scratch);
     assert_eq!(
         rules,
-        json!({"deny": [], "ask": [], "allow": [], "unreadable": [], "proposed": [],
-            "directories": [], "filesystem": [], "filesystemIgnored": []})
+        json!({"deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [],
+            "unreadable": [], "proposed": [], "directories": [], "shownDirectories": [],
+            "filesystem": [], "filesystemIgnored": []})
     );
 
     let question = run.front.ask(&session);

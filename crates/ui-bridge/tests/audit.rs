@@ -82,3 +82,56 @@ fn the_live_audit_event_names_the_delegate_that_took_the_decision() {
         "the live event named the wrong run, or none at all"
     );
 }
+
+/// TRACE-11: a name from a checkout can hold an escape, and the window's text node drops those
+/// without a trace. The bridge sends the words drawn by `printable` beside the event, so the
+/// window and the terminal picture a control character with one definition, and the event itself
+/// stays as the audit file holds it.
+#[test]
+fn the_live_audit_event_carries_each_string_field_drawn_by_printable() {
+    let (mut sink, events) = harness();
+    let name = "x\u{1b}]0;PWNED-TITLE\u{7}\u{1b}[31mred.txt\nnext\u{7f}\u{85}\ttab café";
+
+    sink.emit(gate(&format!("read_file: {name} will be read")));
+
+    let events = events.lock().expect("not poisoned");
+    let sent: Vec<&Event> = events.iter().filter(|e| e.name == "audit").collect();
+    assert_eq!(sent.len(), 1);
+    let record = sent[0].data["event"].as_object().expect("an event object");
+    let pictured = sent[0].data["pictured"]
+        .as_object()
+        .expect("a pictured object");
+    let mut strings: Vec<&String> = record
+        .iter()
+        .filter(|(_, v)| v.is_string())
+        .map(|(k, _)| k)
+        .collect();
+    strings.sort();
+    let mut drawn: Vec<&String> = pictured.keys().collect();
+    drawn.sort();
+    assert_eq!(
+        drawn, strings,
+        "a string field was left without its drawn words"
+    );
+    for field in strings {
+        assert_eq!(
+            pictured[field].as_str(),
+            Some(bravebot_approval::printable(record[field].as_str().unwrap()).as_str()),
+            "{field} was not drawn by printable"
+        );
+    }
+    let detail = pictured["detail"].as_str().unwrap();
+    assert!(
+        detail.contains('\u{241b}') && detail.contains('\u{240a}') && detail.contains('\u{2407}'),
+        "the escape, the line break and the bell were not pictured: {detail:?}"
+    );
+    assert!(detail.contains('\t'), "a tab was changed");
+    assert!(
+        !detail.chars().any(|c| c.is_control() && c != '\t'),
+        "a control character reached the drawn words: {detail:?}"
+    );
+    assert!(
+        record["detail"].as_str().unwrap().contains('\u{1b}'),
+        "the recorded event was changed, and the audit file holds it as it was"
+    );
+}

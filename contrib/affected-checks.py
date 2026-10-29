@@ -75,6 +75,9 @@ READ_BY_RUST = ("CHANGELOG.md",)
 # Read by a test, and by the build of the agent crate, which carries each spec's clause headings.
 READ_BY_RUST_UNDER = ("docs/specs/",)
 
+# Part of the desktop UI, and compared by a Rust test with what it generates from the catalogs.
+UI_READ_BY_RUST = ("ui/src/renderer/i18n/messages.gen.ts",)
+
 # Outside crates/, run by the installer tests themselves rather than read as data: a change to
 # one is a change to what those tests exercise, whatever else reads it.
 READ_BY_INSTALLER_TESTS = {
@@ -129,7 +132,7 @@ FUZZ_MANIFEST = "fuzz/Cargo.toml"
 # they need a nightly toolchain and cargo-fuzz, so `make check-fuzz` is run by name.
 ALWAYS = (
     "check-scripts", "check-spec", "check-security", "check-locales", "check-versions",
-    "check-narration", "check-pr-body", "check-reviewdog",
+    "check-narration", "check-reviewdog",
 )
 HOST = {
     "rust": ("check",),
@@ -212,6 +215,8 @@ def classify_by_area(path, desktop, fuzz):
         if path.startswith(under):
             lockfile = path[len(under):] in PACKAGE_FILES
             found = {area, "npm"} if lockfile else {area}
+            if path in UI_READ_BY_RUST:
+                found.add("rust")
             # help.rs compiles each page under docs/website/docs into a fixed table, builds an
             # index naming every page's title from its front matter, and loads a page by the
             # name that index gives. An add, an edit that breaks a page's front matter, or a
@@ -438,6 +443,7 @@ CASES = (
     ("ui/scripts/package.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/fuses.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/windows-installer.test.mjs", {"ui"}),
+    ("ui/src/renderer/i18n/messages.gen.ts", {"rust", "ui"}),
     ("packages/agent-client/src/common/client.ts", {"ui", "mobile"}),
     ("packages/agent-client/test-fixtures/wire-contract.json", {"rust", "ui", "mobile"}),
     ("packages/agent-client/package-lock.json", {"ui", "mobile", "npm"}),
@@ -459,6 +465,10 @@ CASES = (
     ("pnpm-lock.yaml", {"npm"}),
     ("pnpm-workspace.yaml", {"npm"}),
     ("agents/skills/rebase/SKILL.md", NOTHING),
+    ("agents/skills/security-audit/security-audit.py", NOTHING),
+    ("crates/agent/src/answers.rs", {"rust", "fuzz"}),
+    ("crates/agent/src/kept_answers.rs", {"rust", "fuzz"}),
+    ("docs/specs/prompting.md", {"rust"}),
     ("contrib/check-locales.py", NOTHING),
     ("README.md", NOTHING),
     (".github/SECURITY.md", NOTHING),
@@ -642,6 +652,34 @@ def selftest():
         wanted = ["docs/development/checks.md", "ui/new.ts"]
         checks.append(("a branch is its commits, its edits and its new files, not the base's",
                        got == wanted, got))
+
+    # `check-security` is selected by no area: it is in ALWAYS, which a local run prints whatever
+    # the paths need, including the paths the security audit's Stop hook watches and a change that
+    # needs nothing else (the audit script itself is under agents/).
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch)
+        env, run, write = fixture_git(root)
+        run("init", "-q", "-b", "main")
+        write("README.md", "base\n")
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        for path in (
+            "docs/specs/prompting.md",
+            "crates/agent/src/answers.rs",
+            "crates/agent/src/kept_answers.rs",
+            "agents/skills/security-audit/security-audit.py",
+            "agents/skills/rebase/SKILL.md",
+        ):
+            run("checkout", "-q", "-B", "branch", "main")
+            write(path, "changed\n")
+            run("add", ".")
+            run("commit", "-q", "-m", "change")
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(io.StringIO()):
+                status = local(root, "main", False)
+            gates = printed.getvalue().split()
+            checks.append((f"a local run for a change to {path} runs check-security",
+                           status == 0 and "check-security" in gates, gates))
 
     for area in set(AREAS) - {"build", "installers", "fuzz"}:
         runs = targets({area}, HOST) + targets({area}, CONTAINERS)

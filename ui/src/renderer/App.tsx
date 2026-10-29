@@ -1,7 +1,7 @@
 import { SettingsView, type SettingsPage } from './components/SettingsView'
 import { BotDetails } from './components/BotDetails'
 import type { ComposerFooterProps, ProjectChoice } from './components/Composer'
-import { botHistory } from '../shared/bot-history'
+import { botHistory, homeConversation } from '../shared/bot-history'
 import type { Tab } from '../shared/view'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
@@ -28,11 +28,15 @@ import { Notice } from './components/Notice'
 import { TooltipLayer } from './components/TooltipLayer'
 import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
+import { BugReport } from './components/BugReport'
+import { UpdateBanner } from './components/UpdateBanner'
+import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/update'
 import { conversationModel, rememberModel } from './models'
 import { canSend } from './can-send'
 import { useCommandRouter, usePublishedState } from './commands'
 import { type Fork, forkedSessions } from '../shared/forks'
-import { activeBots, botProjects, type Bot } from '../shared/bots'
+import { activeBots, type Bot } from '../shared/bots'
+import type { Summon } from '../shared/summons'
 import { projectLabel } from '../shared/recents'
 import type { Doing } from './components/BotAvatar'
 import * as t from './transcript'
@@ -43,7 +47,7 @@ import { useBots } from './use-bots'
 import { useTurn } from './use-turn'
 import { useAppearance } from './use-appearance'
 import { conversationKey } from '../shared/experience'
-import { useExperience, conversationPreferences, setConversation, dropConversation, experienceError } from './experience'
+import { useExperience, conversationPreferences, setConversation, setExperience, dropConversation, experienceError } from './experience'
 import { showToast } from './toasts'
 import { planRewind } from './rewind'
 import { call } from './rpc'
@@ -70,6 +74,8 @@ export function App(): React.JSX.Element {
   const liveRef = useRef<Live | null>(null)
   const handleRef = useRef<string | null>(null)
   const openedLives = useRef(new Map<string, Live>())
+  /** The bots whose home conversation is being made, so opening one twice makes one. */
+  const startingHome = useRef(new Set<string>())
   const [livesRevision, refreshLives] = useState(0)
   const preferences = useExperience()
   const setLive = useCallback((action: React.SetStateAction<Live | null>) => {
@@ -106,6 +112,22 @@ export function App(): React.JSX.Element {
   useEffect(() => { void checkBackend() }, [checkBackend])
   const [notice, setNotice] = useState<{ title: string; body: string } | null>(null)
   const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
+  const [bugReportOpen, setBugReportOpen] = useState(false)
+  /** What the last update check found (UPDATE-12). Asked once at start and again when About opens. */
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
+  const readUpdateStatus = useCallback(async () => {
+    try { setUpdateStatus(parseUpdateStatus(await call('update.status'))) } catch { setUpdateStatus(null) }
+  }, [])
+  useEffect(() => { void readUpdateStatus() }, [readUpdateStatus])
+  const dismissedUpdate = preferences.dismissedUpdate
+  const download = useCallback(() => { void window.bravebot.openPage('releases') }, [])
+  const updateNotice = useMemo(() => {
+    const running = updateStatus?.running ?? null
+    return running !== null && bannerShown(updateStatus, dismissedUpdate)
+      ? <UpdateBanner running={running} onDownload={download}
+        onDismiss={() => setExperience('dismissedUpdate', running)} />
+      : null
+  }, [updateStatus, dismissedUpdate, download])
   // The composer's text lives here rather than in `Transcript` because the Send menu item
   // has to be grey when there is nothing to send, and only this component talks to the menu.
   const draftKey = live ? liveKey(live) : ''
@@ -138,6 +160,12 @@ export function App(): React.JSX.Element {
     setForks(await window.bravebot.readForks().catch(() => []))
   }, [])
 
+  // Which bot answered which summoned turn. The main process writes it when such a turn ends.
+  const [summons, setSummons] = useState<Summon[]>([])
+  const readSummons = useCallback(async () => {
+    setSummons(await window.bravebot.readSummons().catch(() => []))
+  }, [])
+
   const refresh = useCallback(async () => {
     try {
       const { sessions } = await call<{ sessions: SessionSummary[] }>('session.list')
@@ -156,13 +184,18 @@ export function App(): React.JSX.Element {
     void refresh()
     void readForks()
     void readBots()
+    void readSummons()
     const stop = window.bravebot.onEvent((message: BridgeEvent) => {
       if (message.event === 'agent.ready') apply(message, setLive, setBuild, refresh)
       else if (message.session) apply(message, (action) => updateSession(message.session!, action), setBuild, refresh)
       // The list holds two things this window did not write — the session behind a bot and how
       // much compaction has taken from it — and a turn is when either can have changed. Read back
-      // rather than assumed, since the main process is the one that saw the agent's answer.
-      if (message.event === 'turn.done' || message.event === 'turn.error') void readBots()
+      // rather than assumed, since the main process is the one that saw the agent's answer. The
+      // summons are written as the turn ends, so they are read back then too.
+      if (message.event === 'turn.done' || message.event === 'turn.error') {
+        void readBots()
+        void readSummons()
+      }
     })
 
     // Turns nobody on this side asked for. The main process answers a compaction by asking the bot
@@ -195,7 +228,7 @@ export function App(): React.JSX.Element {
       stop()
       stopConsolidation()
     }
-  }, [refresh, readForks, readBots])
+  }, [refresh, readForks, readBots, readSummons])
 
   /**
    * Show a stored session, optionally scrolled to one of its prompts.
@@ -336,7 +369,7 @@ export function App(): React.JSX.Element {
   )
 
   const { widths, collapsed, dragging, folding, start, reset, nudge, toggle } = useColumns()
-  const { selectedAudit, openAudit, discloseTurn, auditPanel } = useAudit(live, collapsed, toggle, updateSession)
+  const { openAudit, discloseTurn, auditPanel } = useAudit(live, collapsed, toggle, updateSession)
 
   /** Which sessions in the list came out of another one, for the mark beside their names. */
   const forked = useMemo(() => forkedSessions(forks), [forks])
@@ -357,6 +390,8 @@ export function App(): React.JSX.Element {
   const ownSessions = useStableValue(unstableSessions)
   const ownSessionsRef = useRef(ownSessions)
   ownSessionsRef.current = ownSessions
+  const preferencesRef = useRef(preferences)
+  preferencesRef.current = preferences
   const sessionInfo = useStableValue(unstableInfo)
 
   /** The bot whose session is on screen, if one is — for the header, which names it. */
@@ -465,9 +500,9 @@ export function App(): React.JSX.Element {
       }
       await call('session.delete', { directory: summary.directory, id: summary.id })
       dropConversation(conversationKey(summary.directory, summary.id))
-      await Promise.all([refresh(), readForks(), readBots()])
+      await Promise.all([refresh(), readForks(), readBots(), readSummons()])
     } catch (error) { setProblem(String(error)) }
-  }, [closeSession, refresh, readForks, readBots])
+  }, [closeSession, refresh, readForks, readBots, readSummons])
 
   /** The project whose group menu asked to delete all its chats or to import some, while it asks. */
   const [projectAction, setProjectAction] = useState<{ kind: 'purge' | 'import'; directory: string; opened: ReadonlySet<string> } | null>(null)
@@ -510,11 +545,12 @@ export function App(): React.JSX.Element {
   const about = useCallback(async () => {
     try {
       const info = await call<AboutInfo>('agent.info')
+      await readUpdateStatus()
       setAboutInfo(info)
     } catch (error) {
       setProblem(String(error))
     }
-  }, [])
+  }, [readUpdateStatus])
 
   const doctor = useCallback(async () => {
     try {
@@ -689,26 +725,38 @@ export function App(): React.JSX.Element {
     [live, copy],
   )
 
-  /** Show a bot's own page in place of whatever conversation is open. The conversation stays open. */
+  /**
+   * Open a bot's conversation: the newest one in its home folder, or a new one there when it has
+   * none (MEMORY-14). A bot works in a project by being summoned in that project's chat, so there
+   * is no project to choose here.
+   */
   const openBot = useCallback((bot: Bot) => {
+    const owner = { slug: bot.slug, model: bot.model }
+    const newest = homeConversation(bot, botHistory(bot, ownSessionsRef.current, preferencesRef.current))
+    if (newest?.session) { void showSession(newest.session, undefined, owner); return }
+    // One already open and not archived: an archived one is left where it is, and a new one is made.
+    const waiting = [...openedLives.current.values()].find((item) => item.bot?.slug === bot.slug && item.summary.directory === bot.home
+      && !preferencesRef.current.conversations[liveKey(item)]?.archived)
+    if (waiting) { setLive(waiting); return }
+    // A second open while the first is still being made would make a second home conversation.
+    if (startingHome.current.has(bot.slug)) return
+    startingHome.current.add(bot.slug)
+    void create(bot.home, owner).finally(() => startingHome.current.delete(bot.slug))
+  }, [setLive, showSession, create])
+
+  /** Show a bot's earlier conversations in place of the one open. The conversation stays open. */
+  const openEarlier = useCallback((bot: Bot) => {
     setLive(null)
     setReading(null)
     setBotView(bot.slug)
   }, [setLive])
 
-  /**
-   * Start a conversation with a bot from its page, in a project or in its home folder.
-   *
-   * The prompt is queued rather than sent, so it waits for the trust question a new folder asks,
-   * the same as any queued message. Whether a conversation was made is the answer, so the page
-   * that asked can take its guard off when one was not.
-   */
-  const startBotChat = useCallback(async (bot: Bot, prompt: string, directory: string | null): Promise<boolean> => {
-    const handle = await create(directory ?? bot.home, { slug: bot.slug, model: bot.model })
-    if (!handle) return false
-    updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt, attachments: [], staged: [] }] } : old)
-    return true
-  }, [create, updateSession])
+  /** Open the conversation a "Replied to" card names, at the prompt that summoned the bot. */
+  const openSummon = useCallback((summon: Summon) => {
+    const found = sessionsRef.current.find((each) => each.directory === summon.session.directory && each.id === summon.session.id)
+    if (found) void showSession(found, summon.prompt)
+    else setProblem('That conversation is no longer in the chat list.')
+  }, [showSession])
 
   /** A new chat in the project used last, or the picker when there is none yet. */
   const newChat = useCallback(async () => {
@@ -778,6 +826,7 @@ export function App(): React.JSX.Element {
     focusComposer: () => document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT)),
     about: () => void about(),
     doctor: () => void doctor(),
+    bugReport: () => setBugReportOpen(true),
     openSession,
     closeNamed,
     copyProjectPath,
@@ -812,20 +861,29 @@ export function App(): React.JSX.Element {
   const stableNewChat = useEvent(() => { void newChat() })
   const stableSwitchTab = useEvent(switchTab)
   const stableOpenBot = useEvent(openBot)
+  const stableOpenEarlier = useEvent(openEarlier)
+  const stableOpenSummon = useEvent(openSummon)
   const openSettings = useEvent(() => openSettingsPage())
   const openAgents = useEvent(() => setAgentsOpen(true))
   const stableSwitchProject = useEvent((choice: ProjectChoice) => { void switchProject(choice) })
 
   // A bot's own page, while no conversation is open over it.
   const viewedBot = !live && !reading && botView ? bots.find((each) => each.slug === botView && each.retired === 0) ?? null : null
-  const viewedHistory = useMemo(() => viewedBot ? botHistory(viewedBot, ownSessions, preferences) : [], [viewedBot, ownSessions, preferences])
+  const viewedHistory = useMemo(() => {
+    if (!viewedBot) return []
+    const rows = botHistory(viewedBot, ownSessions, preferences)
+    const current = homeConversation(viewedBot, rows)
+    return rows.filter((row) => row !== current)
+  }, [viewedBot, ownSessions, preferences])
   const botPage = useMemo(() => viewedBot ? { bot: viewedBot, history: viewedHistory } : null, [viewedBot, viewedHistory])
-  const details = useMemo(() => viewedBot
-    ? <BotDetails bot={viewedBot} onSave={saveBot} onArchive={() => void retireBot(viewedBot.slug, true)} />
-    : null, [viewedBot, saveBot, retireBot])
-
-  // A conversation in a bot's home folder has no project, so no branch and no context column.
+  // A conversation in a bot's home folder has no project, so no branch and no files to list.
   const noProject = !!live && homes.has(live.summary.directory)
+  // The right column of a bot's own page and of its home conversation holds the bot, since a home
+  // folder has no project to inspect.
+  const detailed = viewedBot ?? (noProject ? openBotRecord : null)
+  const details = useMemo(() => detailed
+    ? <BotDetails bot={detailed} onSave={saveBot} onArchive={() => void retireBot(detailed.slug, true)} />
+    : null, [detailed, saveBot, retireBot])
   const [recents, setRecents] = useState<string[]>([])
   useEffect(() => { void window.bravebot.readRecents().then(setRecents).catch(() => undefined) }, [live?.handle])
   const fresh = !!live && live.entries.length === 0 && !live.running
@@ -835,9 +893,8 @@ export function App(): React.JSX.Element {
       directory: noProject ? null : live.summary.directory,
       branch: noProject ? null : live.summary.branch,
       // Only a bot is offered no project, and only the folders it may work in; see `worksIn`.
-      choices: !fresh ? null : openBotRecord
-        ? { folders: botProjects(openBotRecord).filter((each) => each !== live.summary.directory), noProject: !noProject }
-        : { folders: recents.filter((each) => each !== live.summary.directory), noProject: false },
+      // A bot's conversation stays where it is; a bot is summoned into a project instead.
+      choices: !fresh || openBotRecord ? null : { folders: recents.filter((each) => each !== live.summary.directory), noProject: false },
       onChoose: stableSwitchProject,
     }
   }, [live, noProject, fresh, openBotRecord, recents, stableSwitchProject])
@@ -847,8 +904,6 @@ export function App(): React.JSX.Element {
       className={[
         'app',
         !live && !viewedBot ? 'no-session' : '',
-        // The column comes back while an audit is open, since that is where it is drawn.
-        noProject && !selectedAudit ? 'no-context' : '',
         settings ? 'in-settings' : '',
         dragging ? 'resizing' : '',
         folding ? 'folding' : '',
@@ -895,6 +950,7 @@ export function App(): React.JSX.Element {
         agentsStarted={live?.agentCounts.started ?? 0}
         agentsWorking={live?.agentCounts.working ?? 0}
         onAgents={openAgents}
+        notice={updateNotice}
       /></SessionInfo.Provider>
       <Gutter
         side="left"
@@ -969,8 +1025,11 @@ export function App(): React.JSX.Element {
         onAnswer={answerQuestions}
         botView={botPage}
         onOpenBotConversation={(bot, summary) => void showSession(summary, undefined, { slug: bot.slug, model: bot.model })}
-        onStartBotChat={startBotChat}
-        onBotModel={(bot, model) => { void window.bravebot.writeBotModel(bot.slug, model).then(() => readBots()) }}
+        onEarlier={stableOpenEarlier}
+        onBackToBot={stableOpenBot}
+        bots={bots}
+        summons={summons}
+        onOpenSummon={stableOpenSummon}
         footer={footer}
         noProject={noProject}
       />
@@ -1007,11 +1066,14 @@ export function App(): React.JSX.Element {
           }}
           session={live?.handle}
           chosen={chosen}
+          running={live?.running ?? false}
           onAppearance={writeAppearance}
           onChanged={() => { void checkBackend() }}
         />
       )}
-      {aboutInfo && <About info={aboutInfo} onClose={() => setAboutInfo(null)} />}
+      {aboutInfo && <About info={aboutInfo} update={updateStatus} onDownload={download}
+        onReportBug={() => { setAboutInfo(null); setBugReportOpen(true) }} onClose={() => setAboutInfo(null)} />}
+      {bugReportOpen && <BugReport onClose={() => setBugReportOpen(false)} />}
       {notice && (
         <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
       )}

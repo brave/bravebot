@@ -432,7 +432,10 @@ fn a_replayed_tool_line_carries_no_outcome() {
         "nothing to imply a result"
     );
 
-    let said = wire::recounted(&[Said::User("hi".into()), Said::Assistant("hello".into())]);
+    let said = wire::recounted(&[
+        Said::User("hi".into(), None),
+        Said::Assistant("hello".into()),
+    ]);
     assert_eq!(said[0]["kind"], json!("user"));
     assert_eq!(said[1]["kind"], json!("assistant"));
 }
@@ -452,7 +455,7 @@ fn a_replayed_tool_line_carries_no_outcome() {
 #[test]
 fn only_prompts_are_numbered_and_they_are_numbered_in_order() {
     let said = wire::recounted(&[
-        Said::User("first".into()),
+        Said::User("first".into(), None),
         Said::Assistant("a reply".into()),
         Said::Tool {
             line: "read(src/main.rs)".into(),
@@ -468,7 +471,7 @@ fn only_prompts_are_numbered_and_they_are_numbered_in_order() {
             why: Composed::Written,
             text: "I ran `ls` in the shell myself. It printed nothing.".into(),
         },
-        Said::User("second".into()),
+        Said::User("second".into(), None),
     ]);
     assert_eq!(said[0]["prompt"], json!(0));
     assert_eq!(said[5]["prompt"], json!(1));
@@ -525,12 +528,12 @@ fn a_message_the_agent_composed_crosses_as_a_tag_and_no_prose() {
 #[test]
 fn a_prompt_a_front_end_composed_crosses_as_a_tag_and_no_prose() {
     let said = wire::recounted(&[
-        Said::User("first".into()),
+        Said::User("first".into(), None),
         Said::Composed {
             why: Composed::Consolidation,
             text: "Look back over this conversation and bring the memory up to date".into(),
         },
-        Said::User("second".into()),
+        Said::User("second".into(), None),
     ]);
     assert_eq!(said[1]["kind"], json!("consolidation"));
     let keys: Vec<&String> = said[1].as_object().expect("an object").keys().collect();
@@ -699,6 +702,43 @@ fn a_write_request_carries_whether_the_path_was_written_since_the_checkout() {
         wire::write_request(1, &request(false))["writtenSinceCheckout"],
         json!(false)
     );
+}
+
+/// PROMPT-13: the desktop is handed a write's rows already spelled, how many characters in the added
+/// and removed lines drew as nothing, and the sentence that says so, or null where none did.
+#[test]
+fn a_write_request_carries_how_many_characters_drew_as_nothing() {
+    let request = |diff: Diff| WriteRequest {
+        written_since_checkout: false,
+        path: "out.txt".into(),
+        contents: "theirs\u{200b}\n".into(),
+        existing: Some("mine\n".into()),
+        diff,
+        intent: Intent::Overwrite,
+        untrusted: true,
+        remark: None,
+        protected: false,
+        credentials: Vec::new(),
+        may_always: false,
+        record: None,
+        may_edit: false,
+    };
+    let hidden = wire::write_request(
+        1,
+        &request(Diff::compute("mine\n", "theirs\u{200b}\n").spelled()),
+    );
+    assert_eq!(hidden["hidden"], json!(1));
+    assert_eq!(
+        hidden["hiddenNote"],
+        json!(bravebot_i18n::t!(write_hidden_characters, count = 1usize).to_string())
+    );
+    assert_eq!(
+        hidden["changes"][1]["text"],
+        json!("theirs\u{2039}U+200B\u{203A}")
+    );
+    let plain = wire::write_request(1, &request(Diff::compute("mine\n", "theirs\n").spelled()));
+    assert_eq!(plain["hidden"], json!(0));
+    assert_eq!(plain["hiddenNote"], json!(null));
 }
 
 /// PROMPT-1: the desktop is handed the name of a write and of a credential read already spelled,
@@ -2099,11 +2139,11 @@ fn the_mcp_questions_carry_what_a_card_draws() {
 fn accepted_composed_prompts_cross_without_their_text() {
     use bravebot_agent::conversation::Composed;
     assert_eq!(
-        wire::submitted("typed", None),
+        wire::submitted("typed", None, None),
         json!({"kind": "user", "text": "typed"})
     );
     assert_eq!(
-        wire::submitted("must not cross", Some(&Composed::Consolidation)),
+        wire::submitted("must not cross", Some(&Composed::Consolidation), None),
         json!({"kind": "consolidation"})
     );
 }

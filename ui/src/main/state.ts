@@ -27,6 +27,7 @@ import { parseView, type StoredView } from '../shared/view'
 import { parseRecents } from '../shared/recents'
 import { parseForks, type Fork } from '../shared/forks'
 import { type Bot } from '../shared/bots'
+import { type Summon } from '../shared/summons'
 import { SYSTEM } from '../shared/theme'
 
 const file = (): string => join(app.getPath('userData'), 'bravebot-ui.json')
@@ -83,6 +84,7 @@ function inherited(): StoredState {
     // than left to `parseState` to default, because `update` writes this literal's shape: a key
     // missing here is a key erased from disk by the next write of any other one.
     bots: [],
+    summons: [],
   }
 }
 
@@ -139,4 +141,9 @@ export function putForks(forks: Fork[]): void {
  */
 export function putBots(bots: Bot[]): void {
   update({ bots })
+}
+
+/** Remember which bot answered which summoned turn. Main-process only; no channel writes it. */
+export function putSummons(summons: Summon[]): void {
+  update({ summons })
 }

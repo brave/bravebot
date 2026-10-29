@@ -120,6 +120,7 @@ pub const DENIED: &[&str] = &[
     "session.list",
     "session.open",
     "session.fork",
+    "session.addressed",
     "session.delete",
     "session.purge",
     "session.import",
@@ -133,6 +134,8 @@ pub const DENIED: &[&str] = &[
     "permissions.list",
     "permissions.revoke",
     "hooks.inspect",
+    "language.get",
+    "language.set",
     "connectors.list",
     "connectors.preview",
     "connectors.connect",
@@ -144,6 +147,10 @@ pub const DENIED: &[&str] = &[
     "bot.servers.read",
     "bot.servers.write",
     "doctor",
+    // Say where the machine keeps its state and what the host's settings name, for the person at
+    // the host to read and post.
+    "bug-report.compose",
+    "update.status",
     // Read files or attach them to a turn.
     "mentions.offer",
     "mentions.named",

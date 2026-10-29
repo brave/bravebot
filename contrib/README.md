@@ -4,6 +4,30 @@ Tools that are useful for working on bravebot but are not part of it. Nothing he
 shipped, and nothing in `crates/` depends on any of it. One is run by CI: `measure-flakes.py`, on a
 weekly schedule, since what it measures takes many runs of an unchanged tree.
 
+## review-ready.py
+
+Lists the open pull requests a reviewer can pick up now, and waits for the ones GitHub has not yet
+computed as mergeable.
+
+A pull request is listed when it is mergeable, is not a draft, has every check passed, skipped or
+neutral, has an approval as the latest review by `REVIEWER`, and has no latest review by anyone that
+requests changes. After main moves, GitHub reports `mergeable` as `UNKNOWN` for every open pull
+request until each has been read, so a single read drops approved, passing pull requests without
+saying so. A pull request that would be listed if it were `MERGEABLE` is pending: the list is read
+again every 3 seconds for up to `WAIT` seconds (30 by default) while any is pending, and stderr
+names them (`waiting for 2 pull requests GitHub has not computed as mergeable (UNKNOWN): #3, #4`).
+A draft, unapproved, failing or conflicting pull request is never waited for. Each pull request is
+printed as `<url>  <title>` on stdout once, as soon as a read shows it mergeable. Any still
+`UNKNOWN` when the wait ends are named on stderr as missing from the list. A failure of `gh` exits 1.
+
+```sh
+make review-ready                            # or contrib/review-ready.py
+make review-ready REPO=owner/name REVIEWER=login LIMIT=1000 WAIT=60
+```
+
+`--interval` sets the seconds between reads. `make check-scripts` runs `review-ready-selftest.py`,
+which serves scripted reads from a stand-in `gh` and runs the script and the make target against it.
+
 ## check-toolchain.py
 
 Answers whether clippy on this machine knows the lints CI will fail on.
@@ -163,29 +187,6 @@ and its untracked files. The
 [narration workflow](../.github/workflows/narration.yml) is separate from `ci.yml` so that editing
 a title or body runs this alone. `--selftest` builds a repository and checks what each source
 contributes; `make check-narration` runs it first.
-
-## check-pr-body.py
-
-Fails a pull request opened by `netzenbot` whose body does not say which cases it leaves undone, with an
-issue for each.
-
-The body has a line `Not covered: none`, or `Not covered:` followed by one bullet per case, each
-naming the issue that tracks it as `#N` or `brave/bravebot#N`. The rule is in
-[commits.md](../docs/development/commits.md). It cannot read whether the list is complete or whether
-an issue is about its case, so a reviewer reads the diff for that
-([GAP-001](../docs/best-practices/gaps.md#GAP-001)), and it does not look a number up. A quoted line
-inside a fenced code block or an HTML comment is not the line.
-
-```sh
-PR_BODY="$(cat body.md)" make check-pr-body   # a draft body
-make check-pr-body                            # the selftest alone, where there is no PR_BODY
-```
-
-In CI the [narration workflow](../.github/workflows/narration.yml) runs it with the event's body and
-author, when the pull request is opened, pushed to or edited. A body that is empty fails there. Only
-pull requests whose `PR_AUTHOR` is `netzenbot` are held to the line, and a run with no author holds the body. `pr-fix.py` loads
-this file to check the body it opens a pull request with. `--selftest` checks the verdict on known
-bodies and that the workflow runs the check on an edit.
 
 ## affected-checks.py
 

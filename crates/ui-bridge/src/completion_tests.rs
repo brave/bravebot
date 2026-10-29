@@ -89,6 +89,7 @@ fn check_completion(ending: &str) -> (bool, bool) {
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
             addressing: None,
+            addressing_standing: false,
             workspace,
             prompt: "hello".into(),
             composed: None,

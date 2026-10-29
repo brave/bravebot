@@ -555,33 +555,16 @@ fn a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule()
     );
 }
 
-/// Names a rule's text cannot spell, each with the issue that tracks it. A path specifier with
-/// whitespace at an end is reported and not read, since the whitespace is as likely padding as part
-/// of the name, so a name with whitespace at an end and a name of whitespace alone have no rule. A
-/// `*` is always a wildcard, so no rule is about the file called `*.md` and nothing else. The test
-/// below fails for a name listed here that a rule can spell, so the list is revised with the fix.
-const NOT_SPELLABLE_IN_A_RULE: &[(&str, &str)] = &[
-    ("a.md ", "#2864"),
-    ("a.md\t", "#2864"),
-    ("a.md\n", "#2864"),
-    ("a.md\u{a0}", "#2864"),
-    ("a.md\u{3000}", "#2864"),
-    ("*.md", "#2864"),
-    (" ", "#2864"),
-    ("\t", "#2864"),
-    ("\u{a0}", "#2864"),
-    ("\u{3000}", "#2864"),
-];
-
 /// A rule about one name is a rule about no other file the volume holds apart from it, whatever
 /// the polarity (TRUST-2, PERM-7). Deny and ask rules are about every canonically equivalent
 /// spelling of a name, which is one group of the awkward names, and an allow rule is about the
 /// spelling it was written in. The key a rule is matched under is built apart from the trust map's,
 /// so a step in it that trims, folds or decodes would join two files there without showing in the
-/// pair tests above.
+/// pair tests above. A name with whitespace at an end or holding a `*` is written in double quotes
+/// (PERM-3), which is the only spelling a rule can give it.
 #[test]
 fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
-    use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject, Unreadable};
+    use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject};
 
     let names = aliases::held_names();
     let mut asked = 0;
@@ -595,12 +578,13 @@ fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
             let folds_case = bravebot_agent::workspace::trust_store(&scratch.path).folds_case();
 
             for (named, other) in [(first, second), (second, first)] {
-                let spellable = !NOT_SPELLABLE_IN_A_RULE
-                    .iter()
-                    .any(|(listed, _)| listed == named);
                 for ruling in [Ruling::Deny, Ruling::Ask, Ruling::Allow] {
                     for (subject, verb) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
-                        let text = vec![format!("{verb}(./{named})")];
+                        let text = vec![if named.trim_end() != *named || named.contains('*') {
+                            format!("{verb}(\"./{named}\")")
+                        } else {
+                            format!("{verb}(./{named})")
+                        }];
                         let none: Vec<String> = Vec::new();
                         let (deny, ask, allow) = match ruling {
                             Ruling::Deny => (&text, &none, &none),
@@ -619,34 +603,6 @@ fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
                         let decides = |path: &str| {
                             permissions.for_path(subject, path) == Decision::Ruled(ruling)
                         };
-                        if !spellable {
-                            let decides_a_file = aliases::AWKWARD_NAMES
-                                .iter()
-                                .any(|(another, _)| decides(another));
-                            if named.trim() != *named {
-                                // Told, and in force for no file, so it is never read as the rule
-                                // about another one.
-                                assert!(
-                                    rejected.len() == 1
-                                        && rejected[0].reason == Unreadable::WhitespaceAtAnEnd
-                                        && !decides_a_file,
-                                    "a rule for {named:?} must be reported for its whitespace and \
-                                     decide no file, and a name a rule can spell is removed from \
-                                     NOT_SPELLABLE_IN_A_RULE"
-                                );
-                                continue;
-                            }
-                            let about_that_file_alone = decides(named)
-                                && names
-                                    .iter()
-                                    .all(|(another, _)| another == named || !decides(another));
-                            assert!(
-                                rejected.is_empty() && !about_that_file_alone,
-                                "a rule for {named:?} is now rejected or is about that file alone: \
-                                 remove it from NOT_SPELLABLE_IN_A_RULE"
-                            );
-                            continue;
-                        }
                         assert!(rejected.is_empty(), "{text:?} did not parse");
                         assert!(decides(named), "{text:?} did not decide {named:?}");
                         let joined = first_group == second_group && ruling != Ruling::Allow;
@@ -5453,6 +5409,392 @@ fn an_attachment_larger_than_the_cap_is_refused_and_the_cap_is_named() {
     assert!(
         error.to_string().contains("MiB"),
         "the cap was not named: {error}"
+    );
+}
+
+/// A PNG of `width` by `height` that does not compress, so its length is close to its pixel count.
+fn noise_png(width: u32, height: u32) -> Vec<u8> {
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    let picture = image::RgbImage::from_fn(width, height, |_, _| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let bytes = state.to_le_bytes();
+        image::Rgb([bytes[0], bytes[3], bytes[6]])
+    });
+    let mut out = Vec::new();
+    picture
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
+}
+
+/// A PNG of one colour, which stays small however many pixels it has.
+fn plain_png(width: u32, height: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    image::RgbImage::from_pixel(width, height, image::Rgb([20, 120, 220]))
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
+}
+
+/// The picture inside a `data:` URI, decoded.
+fn carried_bytes(uri: &str) -> Vec<u8> {
+    use base64::Engine;
+    let (_, encoded) = uri.split_once(";base64,").expect("a base64 data URI");
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .expect("valid base64")
+}
+
+fn picture_of(uri: &str) -> image::DynamicImage {
+    image::load_from_memory(&carried_bytes(uri)).expect("the carried bytes decode")
+}
+
+/// Drop `name` in `scratch` and read it as the window does, returning the URI and the trail. The
+/// drop is vouched for before the read, as `attached::read` and the turn do (DROP-2).
+fn dropped(
+    scratch: &Scratch,
+    name: &str,
+    media: &str,
+) -> (Result<String, WorkspaceError>, Vec<Event>) {
+    dropped_as(scratch, name, media, true)
+}
+
+/// `dropped`, with the grant left out when `vouched` is false, so the read is labelled untrusted.
+fn dropped_as(
+    scratch: &Scratch,
+    name: &str,
+    media: &str,
+    vouched: bool,
+) -> (Result<String, WorkspaceError>, Vec<Event>) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let read = {
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+        let path = scratch.path.join(name).display().to_string();
+        if vouched {
+            // The key the read asks about: a file inside the workspace is keyed by its relative name.
+            policy.vouch_for_named_path(name);
+        }
+        workspace
+            .read_dropped_attachment(&mut policy, &Labelled::trusted(path), media)
+            .map(|attached| {
+                let proof = policy.authorise_display_release("the attachment");
+                attached.declassify(&proof)
+            })
+    };
+    (read, sink.events().to_vec())
+}
+
+fn scaling_events(events: &[Event]) -> Vec<&Event> {
+    events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::GatePassed {
+                    gate: "attachment",
+                    ..
+                }
+            )
+        })
+        .collect()
+}
+
+/// A dropped picture over the cap used to be refused. It is scaled down and carried as a PNG, and
+/// the trail says so (DROP-4).
+#[test]
+fn a_dropped_picture_over_the_cap_is_scaled_down_and_carried() {
+    let scratch = Scratch::new("drop-scaled-bytes");
+    let bytes = noise_png(4000, 1000);
+    assert!(bytes.len() > bravebot_agent::workspace::MAX_ATTACHMENT_BYTES);
+    std::fs::write(scratch.path.join("big.png"), &bytes).unwrap();
+
+    let (read, events) = dropped(&scratch, "big.png", "image/png");
+
+    let uri = read.expect("a picture over the cap is carried once scaled");
+    assert!(uri.starts_with("data:image/png;base64,"), "{uri:.40}");
+    let scaled = carried_bytes(&uri);
+    let carried = picture_of(&uri);
+    assert_eq!(
+        (carried.width(), carried.height()),
+        (bravebot_agent::picture::DOWNSCALED_SIDE, 512),
+        "4000 by 1000 scales to 2048 by 512"
+    );
+    assert!(
+        scaled.len() < bytes.len()
+            && scaled.len() <= bravebot_agent::workspace::MAX_ATTACHMENT_BYTES,
+        "{} bytes from {}",
+        scaled.len(),
+        bytes.len()
+    );
+    let recorded = scaling_events(&events);
+    assert_eq!(recorded.len(), 1, "{events:?}");
+    let Event::GatePassed { detail, .. } = recorded[0] else {
+        unreachable!()
+    };
+    assert!(detail.contains("big.png"), "{detail}");
+    assert!(
+        detail.contains(&format!("picture of {} bytes was scaled", bytes.len())),
+        "{detail}"
+    );
+    assert!(
+        detail.contains(&format!("PNG, {} bytes, before", scaled.len())),
+        "{detail}"
+    );
+}
+
+/// A picture with a long side is scaled though it weighs little, since the endpoint rejects on
+/// pixels as well as on bytes.
+#[test]
+fn a_dropped_picture_with_a_long_side_is_scaled_though_it_is_small() {
+    let scratch = Scratch::new("drop-scaled-side");
+    let bytes = plain_png(5000, 400);
+    assert!(bytes.len() < 1024 * 1024);
+    std::fs::write(scratch.path.join("wide.png"), &bytes).unwrap();
+
+    let (read, events) = dropped(&scratch, "wide.png", "image/png");
+
+    let uri = read.expect("carried");
+    let scaled = carried_bytes(&uri);
+    let carried = picture_of(&uri);
+    assert_eq!(carried.width(), bravebot_agent::picture::DOWNSCALED_SIDE);
+    assert!(
+        (163..=164).contains(&carried.height()),
+        "400 high scales to about 164: {}",
+        carried.height()
+    );
+    assert_eq!(scaling_events(&events).len(), 1, "{events:?}");
+    let Event::GatePassed { detail, .. } = scaling_events(&events)[0] else {
+        unreachable!()
+    };
+    assert!(
+        detail.contains(&format!("picture of {} bytes was scaled", bytes.len())),
+        "{detail}"
+    );
+    assert!(
+        detail.contains(&format!("PNG, {} bytes, before", scaled.len())),
+        "{detail}"
+    );
+}
+
+/// Scaling needs the kernel to have labelled the file trusted, which a drop's grant does (DROP-2).
+/// A read whose path nothing vouched for carries the bytes it has or is refused, and the length and
+/// the header of the file are not looked at.
+#[test]
+fn a_dropped_picture_read_under_an_untrusted_label_is_not_scaled() {
+    use base64::Engine;
+    let scratch = Scratch::new("drop-untrusted-label");
+    let wide = plain_png(5000, 400);
+    std::fs::write(scratch.path.join("wide.png"), &wide).unwrap();
+    let big = noise_png(4000, 1000);
+    assert!(big.len() > bravebot_agent::workspace::MAX_ATTACHMENT_BYTES);
+    std::fs::write(scratch.path.join("big.png"), &big).unwrap();
+
+    let (read, events) = dropped_as(&scratch, "wide.png", "image/png", false);
+    assert_eq!(
+        read.expect("carried as it is"),
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&wide)
+        )
+    );
+    assert!(scaling_events(&events).is_empty(), "{events:?}");
+
+    let (read, events) = dropped_as(&scratch, "big.png", "image/png", false);
+    assert!(
+        matches!(read, Err(WorkspaceError::TooLarge { limit, .. })
+            if limit == bravebot_agent::workspace::MAX_ATTACHMENT_BYTES),
+        "{:?}",
+        read.as_ref().map(String::len)
+    );
+    assert!(scaling_events(&events).is_empty(), "{events:?}");
+}
+
+/// A picture inside both limits is carried as the bytes it has, and nothing is recorded.
+#[test]
+fn a_dropped_picture_inside_both_limits_keeps_its_own_bytes() {
+    use base64::Engine;
+    let scratch = Scratch::new("drop-unscaled");
+    let bytes = plain_png(300, 200);
+    std::fs::write(scratch.path.join("small.png"), &bytes).unwrap();
+
+    let (read, events) = dropped(&scratch, "small.png", "image/png");
+
+    assert_eq!(
+        read.expect("carried"),
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        )
+    );
+    assert!(scaling_events(&events).is_empty(), "{events:?}");
+}
+
+/// Scaling belongs to the gesture. The same picture named in a tool call is carried as it is.
+#[test]
+fn a_picture_a_tool_attaches_is_not_scaled() {
+    use base64::Engine;
+    let scratch = Scratch::new("tool-unscaled");
+    let bytes = plain_png(5000, 400);
+    std::fs::write(scratch.path.join("wide.png"), &bytes).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let attached = workspace
+        .read_attachment(
+            &mut policy,
+            &Labelled::trusted("wide.png".to_string()),
+            "image/png",
+        )
+        .expect("read");
+
+    let proof = policy.authorise_display_release("the attachment");
+    assert_eq!(
+        attached.declassify(&proof),
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        )
+    );
+}
+
+/// Bytes over the cap that are not a picture are refused for their length, not carried and not
+/// replaced by anything.
+#[test]
+fn a_dropped_picture_that_will_not_decode_is_refused_for_its_length() {
+    let scratch = Scratch::new("drop-undecodable");
+    let huge = vec![0u8; bravebot_agent::workspace::MAX_ATTACHMENT_BYTES + 1];
+    std::fs::write(scratch.path.join("broken.png"), huge).unwrap();
+
+    let (read, events) = dropped(&scratch, "broken.png", "image/png");
+
+    let error = read.expect_err("bytes that are no picture are not carried");
+    assert!(
+        matches!(error, WorkspaceError::TooLarge { limit, .. }
+            if limit == bravebot_agent::workspace::MAX_ATTACHMENT_BYTES),
+        "{error:?}"
+    );
+    assert!(scaling_events(&events).is_empty(), "{events:?}");
+}
+
+/// A scaled copy that is still over the cap is not carried: the cap is what a request holds.
+#[test]
+fn a_dropped_picture_still_over_the_cap_once_scaled_is_refused() {
+    let scratch = Scratch::new("drop-still-large");
+    let bytes = noise_png(2048, 2048);
+    assert!(bytes.len() > bravebot_agent::workspace::MAX_ATTACHMENT_BYTES);
+    std::fs::write(scratch.path.join("dense.png"), &bytes).unwrap();
+
+    let (read, events) = dropped(&scratch, "dense.png", "image/png");
+
+    assert!(
+        matches!(read, Err(WorkspaceError::TooLarge { .. })),
+        "{:?}",
+        read.as_ref().map(String::len)
+    );
+    assert!(scaling_events(&events).is_empty(), "{events:?}");
+}
+
+/// A picture is read whole to be scaled, so the file that is read has a ceiling of its own, and
+/// the refusal names that ceiling.
+/// A file whose reported length is over the ceiling is refused before any of it is read. The file
+/// is unreadable (mode 0 on unix), so an implementation that read it first would fail with an I/O
+/// error and not with the refusal that names the ceiling. Only the length from the file system's
+/// metadata can produce that refusal.
+#[test]
+fn a_dropped_picture_over_the_scalable_ceiling_is_refused_unread() {
+    let scratch = Scratch::new("drop-ceiling");
+    let path = scratch.path.join("huge.jpg");
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(bravebot_agent::workspace::MAX_SCALABLE_PICTURE_BYTES as u64 + 1)
+        .unwrap();
+    drop(file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::File::open(&path).is_ok() {
+            // A process that ignores the mode (root) cannot tell a read from no read here.
+            return;
+        }
+    }
+
+    let (read, _) = dropped(&scratch, "huge.jpg", "image/jpeg");
+
+    let error = read.expect_err("over the ceiling");
+    assert!(
+        matches!(error, WorkspaceError::TooLarge { limit, .. }
+            if limit == bravebot_agent::workspace::MAX_SCALABLE_PICTURE_BYTES),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("64 MiB"), "{error}");
+}
+
+/// The cap is what a request holds, so a picture within it that is over 2048 pixels and will not
+/// decode is carried as the bytes it has (DROP-4). Its header declares the canvas and the data after
+/// it is cut short.
+#[test]
+fn a_dropped_picture_within_the_cap_that_will_not_decode_keeps_its_own_bytes() {
+    use base64::Engine;
+    let scratch = Scratch::new("drop-undecodable-small");
+    let whole = plain_png(5000, 400);
+    let cut = whole[..whole.len() / 2].to_vec();
+    assert_eq!(bravebot_agent::picture::longest_side(&cut), Some(5000));
+    assert!(bravebot_agent::picture::downscaled(&cut).is_none());
+    std::fs::write(scratch.path.join("cut.png"), &cut).unwrap();
+
+    let (read, events) = dropped(&scratch, "cut.png", "image/png");
+
+    assert_eq!(
+        read.expect("within the cap, carried as it is"),
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&cut)
+        )
+    );
+    assert!(scaling_events(&events).is_empty(), "{events:?}");
+}
+
+/// Only a PNG or JPEG can be scaled here. A PDF or a GIF over the cap is refused as before, at the
+/// cap.
+#[test]
+fn a_dropped_pdf_or_gif_over_the_cap_is_still_refused() {
+    let scratch = Scratch::new("drop-not-scalable");
+    let huge = vec![0u8; bravebot_agent::workspace::MAX_ATTACHMENT_BYTES + 1];
+    std::fs::write(scratch.path.join("scan.pdf"), &huge).unwrap();
+    std::fs::write(scratch.path.join("loop.gif"), &huge).unwrap();
+
+    for (name, media) in [("scan.pdf", "application/pdf"), ("loop.gif", "image/gif")] {
+        let (read, _) = dropped(&scratch, name, media);
+        assert!(
+            matches!(read, Err(WorkspaceError::TooLarge { limit, .. })
+                if limit == bravebot_agent::workspace::MAX_ATTACHMENT_BYTES),
+            "{name}: {:?}",
+            read.as_ref().map(String::len)
+        );
+    }
+    assert_eq!(
+        bravebot_agent::workspace::dropped_size_limit("image/png"),
+        bravebot_agent::workspace::MAX_SCALABLE_PICTURE_BYTES
+    );
+    assert_eq!(
+        bravebot_agent::workspace::dropped_size_limit("image/webp"),
+        bravebot_agent::workspace::MAX_ATTACHMENT_BYTES
     );
 }
 
@@ -12945,6 +13287,49 @@ fn a_workspace_given_what_the_session_kept_has_the_files_it_touched() {
     assert!(!next_turn.take_telling(".bravebot/rules/rust.md"));
     let stranger = Workspace::new(&scratch.path).expect("workspace");
     assert!(stranger.touched_files().is_empty());
+}
+
+/// INSTR-14, INSTR-16: a workspace given a session's record has the names in it, and the record is a
+/// claim. A name that lands outside the root adds nothing, and the limits that bound a live session
+/// bound a record too, so a hand-edited one cannot make every turn compare thousands of names. A
+/// restore that took the names as they stand would let a record place `../elsewhere` in the set.
+#[test]
+fn a_workspace_restored_from_a_record_places_each_name_under_the_root_and_keeps_the_limits() {
+    use bravebot_agent::workspace::TouchedRecord;
+    let scratch = Scratch::new("restore-touched");
+    let first = Workspace::new(&scratch.path).expect("workspace");
+    first.record_touch("pkg/a.rs");
+    assert!(first.take_telling(".bravebot/rules/rust.md"));
+    let record = first.touched_record();
+    assert_eq!(record.files, ["pkg/a.rs"]);
+    assert_eq!(record.directories, ["pkg"]);
+    assert_eq!(record.told, [".bravebot/rules/rust.md"]);
+
+    let again = Workspace::new(&scratch.path).expect("workspace");
+    again.restore_touched(&TouchedRecord {
+        rules: vec![".bravebot/rules/rust.md".to_string()],
+        ..record.clone()
+    });
+    assert_eq!(again.touched_record().rules, [".bravebot/rules/rust.md"]);
+    assert_eq!(again.touched_record().files, record.files);
+    assert_eq!(again.touched_record().directories, record.directories);
+    assert_eq!(again.touched_record().told, record.told);
+    assert!(!again.take_telling(".bravebot/rules/rust.md"));
+
+    let claim = TouchedRecord {
+        directories: vec!["../outside".to_string(), "inside/deep".to_string()],
+        files: (0..1100)
+            .map(|n| format!("f{n:04}.rs"))
+            .chain(["../outside/x.rs".to_string()])
+            .collect(),
+        ..TouchedRecord::default()
+    };
+    let claimed = Workspace::new(&scratch.path).expect("workspace");
+    claimed.restore_touched(&claim);
+    assert_eq!(claimed.touched_directories(), ["inside", "inside/deep"]);
+    let files = claimed.touched_files();
+    assert_eq!(files.len(), 1024);
+    assert!(files.iter().all(|file| !file.contains("outside")));
 }
 
 /// INSTR-16: a name typed with `@` is a file named only where a file is there. A directory is not a
