@@ -132,7 +132,7 @@ FUZZ_MANIFEST = "fuzz/Cargo.toml"
 # they need a nightly toolchain and cargo-fuzz, so `make check-fuzz` is run by name.
 ALWAYS = (
     "check-scripts", "check-spec", "check-security", "check-locales", "check-versions",
-    "check-narration", "check-pr-body", "check-reviewdog",
+    "check-narration", "check-reviewdog",
 )
 HOST = {
     "rust": ("check",),

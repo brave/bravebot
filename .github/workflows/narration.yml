@@ -1,11 +1,10 @@
 name: Narration
 
 # Whether what a pull request writes narrates its writer's process: its commit messages, its title
-# and body, and every line it adds. Also whether the body of one opened by netzenbot has the Not
-# covered line, with an issue for each case it lists. Its own workflow rather than a job in ci.yml
-# because the title and body are part of what it reads, and an edit to either has to run it again
-# without running every other job in ci.yml with it. Standard library Python over the checkout, so it
-# needs no toolchain and answers in seconds.
+# and body, and every line it adds. Its own workflow rather than a job in ci.yml because the title
+# and body are part of what it reads, and an edit to either has to run it again without running
+# every other job in ci.yml with it. Standard library Python over the checkout, so it needs no
+# toolchain and answers in seconds.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
@@ -37,12 +36,3 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: make check-narration
-
-      # Its own step so that a body failing both checks reports both. It is in this job because the
-      # context a merge is held to is this job's, and the body is read here already.
-      - name: Check the description's Not covered line
-        if: ${{ !cancelled() }}
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-        run: make check-pr-body

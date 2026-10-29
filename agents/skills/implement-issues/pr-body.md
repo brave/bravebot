@@ -5,9 +5,8 @@ minute whether to read the diff. The body answers three questions in that time: 
 bravebot tell this landed, how do they see each problem themselves, and what was wrong. Everything
 else is optional, and the diff is not narrated.
 
-`pr-fix.py open` checks the shape below, and `make check-pr-body` checks the `Not covered:` line
-(`PR_BODY="$(cat <file>)" PR_AUTHOR=netzenbot python3 contrib/check-pr-body.py`). Neither can tell
-whether a reproduction reproduces or a problem statement is true.
+`pr-fix.py open` checks the shape below. It cannot tell whether a reproduction reproduces or a
+problem statement is true.
 
 ## Shape
 
@@ -26,7 +25,6 @@ Part of brave/bravebot#103
 >   "nothing beyond the crate">. Licence and upkeep: <the licence, and who maintains it>.
 
 User impact: <one line: what a person using bravebot can now see, or "none" and why>
-Not covered: none
 
 ## Decisions to confirm
 1. #102: <what was chosen>. Instead: <the alternative>. Why: <reason>. Commit: <subject>.
@@ -83,17 +81,15 @@ stays in the open, since it is the part a reviewer wants most.
 Every `Closes` line comes first, then the `Part of` lines, each in the `brave/bravebot#<n>` form (a
 bare `#<n>` closes nothing in another repository). The first line is the issue number `... open`
 is given. An item gets `Closes` when every row of its checklist is `met`, and that is the default.
-An item with a `blocked` row gets `Part of` and a bullet under `Not covered:` naming the follow-up
-that holds the rest, which is an issue of its own and never the issue the pull request is for:
+An item with a `blocked` row gets `Part of`, and its entry under `## The problem` ends with a
+sentence naming the follow-up that holds the rest, which is an issue of its own and never the issue
+the pull request is for:
 
 ```text
-Not covered:
-- <what is left of #103> (#NNNN)
+Left: <what is left of #103> (#NNNN).
 ```
 
-An item that is blocked and has no commits gets no closing line and the same bullet, and so
-does a test that also fails on the parent commit. With nothing left the line is
-`Not covered: none`.
+An item that is blocked and has no commits gets no closing line and the same sentence.
 
 ## The dependency callout
 
@@ -145,7 +141,7 @@ the failure seen) or the coverage is reasoned only. A passing test count is not 
 Also state, where each applies: the commit the gates ran on and the commit the branch was rebased
 onto afterwards, with the areas that do not reach the diff; each flaky test, with its isolated
 run; a failure that also fails on the parent commit, in a `<details>` block that cites the issue
-tracking it, which is also a bullet under `Not covered:`; and
+tracking it; and
 `Docker gates skipped: host-only`.
 
 ## Never
