@@ -322,6 +322,36 @@ mod tests {
         assert!(installed_in(&path).as_os_str().is_empty());
     }
 
+    /// The regression it rejects: starting with `SearchPath::Inherited`, which leaves `PATH` alone,
+    /// so the names `gcloud`'s own wrapper looks up (its shell, its Python) are searched through
+    /// directories a stage may write ([PATH-005](../../../docs/best-practices/paths.md#PATH-005)).
+    #[test]
+    fn a_started_gcloud_is_given_a_path_the_lookup_has_reduced() {
+        let program = Path::new("/usr/bin/gcloud");
+        for command in [token_command(program), login_command(program)] {
+            let path = command
+                .get_envs()
+                .find(|(name, _)| *name == OsStr::new("PATH"));
+            assert!(path.is_some(), "PATH is left as inherited");
+        }
+    }
+
+    /// The regression it rejects: starting without the credential removal, so the agent's own keys
+    /// reach the CLI ([CRED-14](../../../docs/specs/credential-protection.md#CRED-14)).
+    #[test]
+    fn a_started_gcloud_has_this_agents_credentials_removed() {
+        let names = bravebot_config::scrub::own_credentials();
+        let command = command_for(Path::new("/usr/bin/gcloud"));
+        for name in &names {
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(set, value)| set == OsStr::new(name) && value.is_none()),
+                "{name} is not removed"
+            );
+        }
+    }
+
     #[test]
     fn the_sign_in_reports_each_line_the_cli_writes_and_its_failure() {
         let program = fake_gcloud(
