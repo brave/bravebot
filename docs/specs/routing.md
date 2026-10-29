@@ -6,7 +6,6 @@ governs:
   - crates/core/src/capability.rs
   - crates/core/src/policy.rs
 guards:
-  - symbol: Policy::before_granted_action
   - symbol: Policy::before_endorsed_destination
   - symbol: Policy::promote_confined_read
   - symbol: Policy::accept_reference
@@ -122,9 +121,9 @@ A connector act's content is released only to the place the plan fixed for it.
 A connector act's endorsement is not minted by this driver: the driver records no grant for the
 act, and the person approves it in the authority's popup.
 
-`verified-by: bravebot_core::policy::a_granted_action_needs_a_matching_endorsement`
-`verified-by: bravebot_core::policy::an_endorsement_cannot_be_replayed`
-`verified-by: bravebot_core::policy::an_endorsement_does_not_transfer_to_another_value`
+`verified-by: bravebot_core::policy::an_endorsement_authorises_a_destination_it_does_not_relabel`
+`verified-by: bravebot_core::policy::an_endorsement_does_not_outlive_the_destination_it_authorised`
+`verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_a_different_destination`
 `verified-by: bravebot_core::policy::an_endorsement_does_not_authorise_a_different_line`
 `verified-by: bravebot_core::policy::ungranted_capabilities_are_refused`
 `verified-by: bravebot_core::policy::a_run_needs_the_capability_as_well_as_the_endorsement`
