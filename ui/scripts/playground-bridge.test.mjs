@@ -2,7 +2,7 @@
 // fork cuts and a closed conversation reads back, and a scenario continues only after the reply
 // that carried an answer has resolved.
 
-import test from 'node:test'
+import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
@@ -95,4 +95,28 @@ test('closing a new chat and opening it again reads the replies it wrote', async
   assert.ok(texts.includes('First reply.'), texts.join('\n'))
   assert.ok(texts.includes('Second reply.'), texts.join('\n'))
   assert.ok(!texts.includes(tide), texts.join('\n'))
+})
+
+test('auto-answer ends the scenario when no button can be pressed', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  playground.auto = true
+  const heard = []
+  const created = await request('session.new', { directory: '/work/app' })
+  const handle = created.ok.session
+  const stop = window.bravebot.onEvent((event) => {
+    if (event.event === 'turn.error' && event.session === handle) heard.push(event)
+  })
+  try {
+    play(handle, 'stuck', async (script) => { await script.ask('confirm', 9, 'approve') })
+    for (let step = 0; step < 80 && heard.length === 0; step++) {
+      mock.timers.tick(500)
+      await Promise.resolve()
+    }
+    assert.equal(heard.length, 1)
+    assert.match(heard[0].data.message, /No enabled answer for confirm was on screen within 15 seconds/)
+  } finally {
+    stop()
+    playground.auto = false
+    mock.timers.reset()
+  }
 })

@@ -29,8 +29,9 @@ scenario plays in the conversation that is open. The panel also has these contro
 - **Theme** follows the system, or is forced light or dark.
 - **Speed** scales the pauses between events.
 - **Answer questions for me** presses the buttons on the cards as they appear, so decided cards
-  can be seen. Buttons are still pressed through the page, so the rule that a card cannot be
-  approved before every deciding row has been on screen still applies.
+  can be seen. It scrolls the card and any evidence inside it so each deciding row passes through
+  the viewport, then presses. A card cannot be approved before those rows have been on screen.
+  A card it cannot answer within 15 seconds ends the scenario with that failure.
 - **Backend not set up** shows the screens a person sees before a model is configured.
 
 Typing `play:<id>` as a prompt plays that scenario. Other prompts get a short reply.

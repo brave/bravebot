@@ -104,17 +104,57 @@ function remember(session: Held): void {
 
 // ---------------------------------------------------------------- pressing the buttons
 
-/** Scroll the newest waiting card into view and press its button, as a person would. */
+const enabled = (button: HTMLElement | null): HTMLElement | null =>
+  button && !button.hasAttribute('disabled') && button.getAttribute('aria-disabled') !== 'true' ? button : null
+
+/** Scroll the card through the transcript, and each nested scroller through its range, so a deciding row taller than the viewport is measured. */
+async function reveal(card: HTMLElement, signal: AbortSignal): Promise<void> {
+  const entries = card.closest<HTMLElement>('.entries')
+  if (!entries) {
+    card.scrollIntoView({ block: 'center' })
+    await sleep(32, signal)
+    return
+  }
+  const origin = (): number => card.getBoundingClientRect().top - entries.getBoundingClientRect().top + entries.scrollTop
+  const last = Math.max(0, entries.scrollHeight - entries.clientHeight)
+  const step = Math.max(40, entries.clientHeight * 0.3)
+  const start = Math.max(0, origin() - 24)
+  const end = Math.min(last, origin() + card.offsetHeight)
+  const down: number[] = []
+  for (let at = start; at < end; at += step) down.push(at)
+  down.push(end)
+  for (const at of [...down].reverse().concat(down)) {
+    entries.scrollTo({ top: at })
+    await sleep(32, signal)
+    const boxes = [...card.querySelectorAll<HTMLElement>('*')].filter((element) => {
+      const style = getComputedStyle(element)
+      return /auto|scroll/.test(style.overflowY) && element.scrollHeight > element.clientHeight + 1
+    })
+    for (const element of boxes) {
+      const innerLast = Math.max(0, element.scrollHeight - element.clientHeight)
+      const innerStep = Math.max(16, Math.min(element.clientHeight, 80) * 0.3)
+      for (let top = 0; ; top = Math.min(innerLast, top + innerStep)) {
+        element.scrollTo({ top })
+        await sleep(32, signal)
+        if (top >= innerLast) break
+      }
+    }
+  }
+}
+
+/** Scroll the newest waiting card through view and press its button, as a person would. */
 async function press(kind: Kind, want: Want, signal: AbortSignal): Promise<void> {
   const deadline = Date.now() + 15_000
   await sleep(450, signal)
+  let sweeps = 0
   while (Date.now() < deadline) {
     const waiting = [...document.querySelectorAll<HTMLElement>('.confirm')].filter((card) => card.querySelector('.confirm-actions')).at(-1)
     if (waiting) {
-      waiting.scrollIntoView({ block: 'center' })
-      await sleep(900, signal)
-      const enabled = (button: HTMLElement | null): HTMLElement | null =>
-        button && !button.hasAttribute('disabled') && button.getAttribute('aria-disabled') !== 'true' ? button : null
+      if (sweeps < 2) {
+        await reveal(waiting, signal)
+        sweeps += 1
+        await sleep(500, signal)
+      }
       if (kind === 'ask') {
         const choice = waiting.querySelector<HTMLElement>('.choice')
         choice?.click()
@@ -131,6 +171,7 @@ async function press(kind: Kind, want: Want, signal: AbortSignal): Promise<void>
     }
     await sleep(300, signal)
   }
+  throw new Error(`No enabled answer for ${kind} was on screen within 15 seconds.`)
 }
 
 // ---------------------------------------------------------------- running a scenario
@@ -143,9 +184,16 @@ function scriptFor(session: Held, signal: AbortSignal): Script {
     wait: (ms) => sleep(ms * SPEEDS[playground.speed], signal),
     hold: () => new Promise<never>((_, reject) => signal.addEventListener('abort', () => reject(new Cancelled()), { once: true })),
     ask: (kind, request, want = 'approve') => new Promise<Answered>((resolve, reject) => {
+      const key = `${kind}:${request}`
       signal.addEventListener('abort', () => reject(new Cancelled()), { once: true })
-      session.waiting.set(`${kind}:${request}`, resolve)
-      if (playground.auto) void press(kind, want, signal).catch(() => undefined)
+      session.waiting.set(key, resolve)
+      if (!playground.auto) return
+      void press(kind, want, signal).then(() => undefined, (error: unknown) => {
+        if (error instanceof Cancelled) return
+        if (session.waiting.get(key) !== resolve) return
+        session.waiting.delete(key)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      })
     }),
     start: () => emit('turn.started', { turn: ++session.turn }, session.handle),
     done: (reply, extra = {}) => {
@@ -180,7 +228,7 @@ export function play(handle: string, title: string, scenario: Scenario): boolean
   const script = scriptFor(session, controller.signal)
   void scenario(script).catch((error: unknown) => {
     if (error instanceof Cancelled) script.fail('cancelled', 'Stopped by you.')
-    else script.fail('chat', String(error))
+    else script.fail('chat', error instanceof Error ? error.message : String(error))
   }).finally(() => {
     session.abort = null
     session.waiting.clear()
