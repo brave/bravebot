@@ -12541,6 +12541,83 @@ five
         );
     }
 
+    /// RUN-8: a vouch is for one step, so steps vouched for one at a time are covered when a later
+    /// line puts them in a pipeline, in the other order or joined by `&&`. Recorded as a Known cost
+    /// of RUN-19, whose remembered lines compare the whole line and so do not cover a recombination.
+    #[test]
+    fn steps_vouched_for_one_at_a_time_are_covered_when_recombined() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/git", &["log"]));
+        policy.remember_command(vouched("/usr/bin/head", &["-20"]));
+
+        let piped = plan_of(vec![
+            step_named("git", &["log"]),
+            step_named("head", &["-20"]),
+        ]);
+        let reversed = plan_of(vec![
+            step_named("head", &["-20"]),
+            step_named("git", &["log"]),
+        ]);
+        let mut joined = plan_of(Vec::new());
+        joined.steps = crate::command::Steps::Join {
+            left: Box::new(crate::command::Steps::Pipeline(vec![step_named(
+                "git",
+                &["log"],
+            )])),
+            joiner: crate::command::Joiner::And,
+            right: Box::new(crate::command::Steps::Pipeline(vec![step_named(
+                "head",
+                &["-20"],
+            )])),
+        };
+        for line in [&piped, &reversed, &joined] {
+            assert!(
+                !policy.plan_needs_approval(line),
+                "{} was asked about although each of its steps was vouched for",
+                line.display()
+            );
+        }
+    }
+
+    /// RUN-8, the other side of the test above: a recombined line holding one step that was not
+    /// vouched for is still asked about, in a pipeline, in the other order and joined by `&&`.
+    #[test]
+    fn an_unvouched_step_in_a_recombined_line_is_still_asked_about() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).with_root(std::path::Path::new("/work"));
+        policy.remember_command(vouched("/usr/bin/git", &["log"]));
+        policy.remember_command(vouched("/usr/bin/head", &["-20"]));
+
+        let piped = plan_of(vec![
+            step_named("git", &["log"]),
+            step_named("make", &["build"]),
+        ]);
+        let reversed = plan_of(vec![
+            step_named("make", &["build"]),
+            step_named("head", &["-20"]),
+        ]);
+        let mut joined = plan_of(Vec::new());
+        joined.steps = crate::command::Steps::Join {
+            left: Box::new(crate::command::Steps::Pipeline(vec![step_named(
+                "git",
+                &["log"],
+            )])),
+            joiner: crate::command::Joiner::And,
+            right: Box::new(crate::command::Steps::Pipeline(vec![step_named(
+                "make",
+                &["build"],
+            )])),
+        };
+        for line in [&piped, &reversed, &joined] {
+            assert!(
+                policy.plan_needs_approval(line),
+                "{} ran unasked although one of its steps was never vouched for",
+                line.display()
+            );
+        }
+    }
+
     /// Matched on the resolved path, so an assertion does not follow a name onto a different
     /// binary when `$PATH` or an alias changes what the name means.
     #[test]
