@@ -1060,7 +1060,8 @@ prompts, file contents, credentials, working directory, host name, anything a mo
 said, or an identifier that stays the same from one report to the next. The service sees the network
 address a request came from, as any server does.
 
-Only your own `~/.bravebot/settings.json` is read for this key. A `.bravebot/settings.json` in a
+Only your own `~/.bravebot/settings.json` and the [managed file](managed-settings.md) are read for this
+key, and a managed `false` turns reports off whatever your file says. A `.bravebot/settings.json` in a
 checkout can neither turn reports off nor turn them on again after you did, and a build made without
 a submission address, which is every build from source that did not have one set, sends nothing. A
 session started with `--incognito` has no state directory to leave a report in, so it leaves and

@@ -2311,6 +2311,9 @@ name in the file decides nothing, the signing key and the key id included, save 
 below. A pinned name is resolved from this file alone, and a name it does not pin resolves exactly
 as it would with no such file.
 
+The file may also turn crash reports off with `"crashReports": false`, which outranks the person's
+own file and which `true` does not reverse ([CRASH-4](crash-reports.md#CRASH-4)).
+
 The file may also keep an MCP server from starting, and that is the one thing it decides that is
 not a destination: `"mcp": { "allow": [...], "deny": [...] }` names servers by the host a url
 reaches or the command a program runs, and a session starts none the lists refuse.

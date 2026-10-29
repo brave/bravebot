@@ -98,22 +98,29 @@ the wire.
 <a id="CRASH-4"></a>
 ### CRASH-4: reports are on until a person turns them off
 
-`BRAVEBOT_CRASH_REPORTS=0`, or `crashReports` set to `false` in the person's own settings file,
-turns them off. Either one is enough, and neither turns them back on against the other. Only the
-exact value `0` and a boolean `false` count, so a misspelling leaves reports on. Only the person's
-own file is read: a settings file in a checkout can neither turn reports off for them nor turn them
-on again after they turned them off, and the key is not reported as unread in either. With a switch
+`BRAVEBOT_CRASH_REPORTS=0`, `crashReports` set to `false` in the person's own settings file, or
+`crashReports` set to `false` in the managed file ([managed settings](backends.md)), turns them off.
+Any one is enough, and none turns them back on against another: a managed `false` outranks the
+person's own `true`, and a managed `true` is not read. Only the exact value `0` and a boolean `false`
+count, so a misspelling leaves reports on. Of the settings files only the person's own and the
+managed one are read: a settings file in a checkout can neither turn reports off for them nor turn
+them on again after they turned them off, and the key is not reported as unread in either. With a switch
 off no hook is installed, no report is written, no report is sent and no line is said.
 
 **Why.** The default is on so that a released build tells its maintainers about the crashes people
 have. The two switches are the ones the update check has ([UPDATE-11](updates.md#UPDATE-11)), so
-they are where a person who turned that off will look. The checkout's file is left out for the
+they are where a person who turned that off will look. The managed file is where an administrator
+speaks for every account on a machine, and it can only refuse: the same layer holds the other
+refusals ([PERM-16](permissions.md#PERM-16)), and Brave Browser takes the answer from policy where
+policy manages the setting. The checkout's file is left out for the
 reason `language` leaves it out ([LOCALE-8](localization.md#LOCALE-8)): a layer that arrives with a
 clone is not the person's statement about what their machine sends.
 
 `verified-by: bravebot_backtrace::lib::either_switch_turns_reports_off`
 `verified-by: bravebot_backtrace::lib::either_switch_stops_a_launch_that_would_report`
 `verified-by: bravebot_backtrace::lib::the_settings_file_is_not_read_when_another_answer_has_already_said_no`
+`verified-by: bravebot_backtrace::lib::a_managed_false_outranks_the_persons_own_file`
+`verified-by: bravebot_config::managed::a_managed_crash_reports_false_is_a_pin_and_nothing_else_is`
 `verified-by: bravebot_backtrace::incognito::the_environment_switch_leaves_no_state_directory_and_sends_nothing`
 `verified-by: bravebot_backtrace::incognito::the_persons_settings_file_stops_a_launch_and_a_string_does_not`
 `verified-by: bravebot_config::settings::only_the_persons_own_file_says_whether_crash_reports_go`
@@ -278,17 +285,16 @@ that the project's count of distinct `guid`s is a count of reports.
 - **The service sees the sender's network address.** Nothing in a report holds it, and what the
   service keeps of the connection is the service's.
 
-- **A checkout's settings and a machine's managed settings cannot turn it off.** The environment
-  variable is the one switch an administrator has.
+- **A checkout's settings cannot turn it off.** Only the person's own file and the managed file are
+  read, so a checkout's `crashReports` is ignored in both directions.
 
 - **A debug build with the address baked in reports as well.** A developer's shell that exports
   `BACKTRACE_SUBMIT_URL` bakes it into every build made there. The `debug` attribute is set so
   the project can leave those out.
 
-- **The submission token is not removed from programs the agent starts.** In a shell that exports
-  it, which is how a developer builds with it, a program the planner runs inherits it
-  ([RUN-12](tools/run.md#RUN-12) lists the two credentials that are withheld). The token can add
-  reports to one project and read nothing.
+- **A build the agent starts has no address.** The submission URL is withheld from every program
+  the agent starts ([RUN-12](tools/run.md#RUN-12)), so a build started by `run` bakes none and its
+  binary reports nothing. Build from a terminal to bake it.
 
 - **A command that runs for under three seconds sends nothing.** A person who only runs such
   commands never sends a waiting report. A session sends it.
