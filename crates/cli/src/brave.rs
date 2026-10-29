@@ -207,7 +207,8 @@ fn store(directory: &Path, key: &Secret) -> std::io::Result<()> {
     written
 }
 
-/// Remove the file, and say whether there was one.
+/// Remove the file. A file that is not there is `Ok(false)` and not an error, because logging out is
+/// repeatable (PREM-16).
 fn forget(directory: &Path) -> std::io::Result<bool> {
     match std::fs::remove_file(brave_key::file(directory)) {
         Ok(()) => Ok(true),
