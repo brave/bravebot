@@ -39,12 +39,22 @@ landlock = "0.4"
 libc = "0.2"
 # At 0.8, the version ratatui-image also asks for, so the lock holds one copy of it.
 rand = "0.8"
+# Decrypts a PKCS#8 client key (`BEGIN ENCRYPTED PRIVATE KEY`) given its passphrase (NET-11). Only
+# the `encryption` feature (PBES2 with PBKDF2 or scrypt, AES-CBC) and `pem`; the crate does no I/O.
+# It brings RustCrypto's pkcs5, aes, cbc, pbkdf2, scrypt and their helpers, all pure Rust. The
+# alternative is shelling out to `openssl`, which is not on every machine this runs on.
+pkcs8 = { version = "0.10", default-features = false, features = ["encryption", "pem"] }
 # RSA PKCS#1 v1.5 with SHA-256, which verifies the ID token of a ChatGPT sign-in against the
 # authorization server's key set. Already in Cargo.lock at this version with these features
 # (alloc, dev_urandom_fallback), through rustls-webpki, so the lock gains the one line saying
 # bravebot-skus uses it and nothing is built twice.
 ring = "0.17.14"
 rustix = "1"
+# Compares a client certificate's public key with its private key (`CertifiedKey::keys_match`),
+# which returns an error where the stand-in connection NET-11 used to rely on panicked, and a panic
+# is an abort under `panic = "abort"` in the release profile. Already in Cargo.lock at this version
+# with exactly these features (`ring`, `std`), through ureq, so nothing new is built.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 # The zstd encoder for the body of a request to a ChatGPT account (CHATGPT-10). Pure Rust with no
 # build script and no native code, where the `zstd` crate compiles the C library for every
 # cross-build target. It encodes at one level, `Fastest`, which is roughly zstd level 1. `hash`

@@ -68,6 +68,7 @@ use results::{
     MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
     MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES,
 };
+pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
 pub use volume::{BACKSLASH_SEPARATES, key_of, trust_store, volume_folds_case};
 pub(crate) use volume::{on_disk, one_file};
@@ -280,6 +281,9 @@ pub struct Workspace {
     references: Vec<Referenced>,
     /// The entries of the `references` block that were not opened, and why (REFER-3).
     reference_problems: Vec<(String, ReferenceProblem)>,
+    /// The directories the person's settings named in `sharedSkillDirectories`, as written
+    /// (INSTR-17). Empty until a front end supplies them, which reads none.
+    shared_skills: Vec<String>,
 }
 
 /// A session's checkouts, with the numbers and the write log they are judged by, for a front end
@@ -332,6 +336,11 @@ impl KeptBetweenTurns {
     /// The checkouts the session made and has not removed (CHECKOUT-21).
     pub fn checkouts(&self) -> Vec<SessionCheckout> {
         listed(&self.session_checkouts)
+    }
+
+    /// What the session has touched, for its record to carry (INSTR-14, INSTR-16).
+    pub fn touched_record(&self) -> TouchedRecord {
+        locked(&self.touched).record()
     }
 }
 
@@ -436,7 +445,37 @@ impl Workspace {
             host_grants: Arc::default(),
             references: Vec::new(),
             reference_problems: Vec::new(),
+            shared_skills: Vec::new(),
         })
+    }
+
+    /// Record which of the other agents' skill directories in the person's home they agreed to have
+    /// read (INSTR-17).
+    ///
+    /// The names come from the person's own settings and are compared with a fixed set of paths
+    /// when the skills are found. Without them no such directory is read.
+    #[must_use]
+    pub fn with_shared_skill_directories(mut self, named: &[String]) -> Self {
+        self.shared_skills = named.to_vec();
+        self
+    }
+
+    /// The directories the person agreed to have skills read from, as written (INSTR-17).
+    pub(crate) fn shared_skill_directories(&self) -> &[String] {
+        &self.shared_skills
+    }
+
+    /// Stand in for the environment's profile directory, which a `~` in a shared skill directory
+    /// (INSTR-17) stands for, so a test does not depend on whose machine it runs on.
+    #[must_use]
+    pub fn with_profile_directory(mut self, profile: Option<PathBuf>) -> Self {
+        self.home = profile;
+        self
+    }
+
+    /// The home directory a leading `~` stands for in this workspace.
+    pub(crate) fn profile_directory(&self) -> Option<&Path> {
+        self.home.as_deref()
     }
 
     /// Put a search under the caps somebody configured, keeping the built-in one for each cap
@@ -1285,16 +1324,30 @@ impl Workspace {
     /// value in are of the same version. The first is the pessimistic one for the review; the
     /// second is what [`bravebot_core::policy::Policy::scan_a_write`] reads the pre-image through,
     /// where a path nobody vouched for comes back untrusted and the gate there refuses it.
+    ///
+    /// The third value is whether the file is text in an encoding other than UTF-8 (READ-3), from
+    /// the same bytes and labelled as the trust map holds the path. It is read only through
+    /// [`holds_another_encoding`], which asks the label first.
     pub fn peek_labelled_for_write<S: Sink>(
         &self,
         policy: &Policy<'_, S>,
         relative: &str,
-    ) -> (Labelled<String>, Labelled<String>) {
-        let text = self.peek_for_review(relative).unwrap_or_default();
+    ) -> (Labelled<String>, Labelled<String>, Labelled<bool>) {
+        let bytes = self
+            .resolve(relative)
+            .ok()
+            .and_then(|resolved| std::fs::read(resolved).ok());
+        let other_encoding = bytes.as_deref().is_some_and(|bytes| {
+            std::str::from_utf8(bytes).is_err() && decode_text(bytes.to_vec()).is_some()
+        });
+        let text = bytes
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_default();
         let label = policy.label_in_force(&self.trust_key(relative));
         (
             Labelled::new(text.clone(), read_label()),
             Labelled::new(text, label),
+            Labelled::new(other_encoding, label),
         )
     }
 
@@ -1956,6 +2009,24 @@ pub fn in_the_replaced_files_format<S: Sink>(
     };
     let format = FileFormat::of(&existing);
     policy.render_in_place(tool, &body, |text| format.applied_to(text))
+}
+
+/// Whether a write would replace a file the trust map vouches for with UTF-8 where the file is
+/// text in another encoding (WRITE-8).
+///
+/// A file nobody vouched for answers `false` without the gate being asked: what encoding it uses
+/// is a fact about untrusted bytes, and refusing on it would be the driver deciding from them. The
+/// answer for a vouched file goes through [`Policy::read_trusted_content`], the gate `edit_file`
+/// reads a file through before it compares it.
+pub fn holds_another_encoding<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+    other_encoding: &Labelled<bool>,
+) -> bool {
+    other_encoding.label().is_trusted()
+        && policy
+            .read_trusted_content(tool, other_encoding)
+            .unwrap_or(false)
 }
 
 /// The two things about a file's bytes a whole-file write would otherwise lose.

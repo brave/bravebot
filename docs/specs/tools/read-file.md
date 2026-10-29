@@ -101,8 +101,9 @@ invalid bytes as text in an encoding other than UTF-8, a fact about the file and
 error. The survey a deferred read makes answers for the slot it reserves, so it ignores a byte
 order mark: in a directory nobody vouched for, a UTF-16 file is reported as binary when the
 planner asks, and a Latin-1 file is refused when something needs its bytes. A `write_file` body is
-the planner's own text and replaces the file as [WRITE-1](write-file.md#WRITE-1) says, whatever
-encoding the file had.
+the planner's own text and replaces the file as [WRITE-1](write-file.md#WRITE-1) says, except that
+[WRITE-8](write-file.md#WRITE-8) refuses it over a file the trust map vouches for that is text in
+another encoding, since the body would land as UTF-8.
 
 **Why.** A UTF-16 source file from a Windows tool, and a Latin-1 file with one accented character,
 are text a person reads in an editor. Reported as binary, they leave the planner with no way to read

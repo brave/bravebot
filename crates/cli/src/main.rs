@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod acp;
 mod auth;
 mod background;
 mod brave;
@@ -609,6 +610,15 @@ fn main() -> ExitCode {
             Some(()) => ExitCode::SUCCESS,
             None => {
                 stopped_before_the_turn(as_json, Ending::Argument, t!(cli_completion_needs_a_shell))
+            }
+        },
+        Some("acp") if skip_permissions => {
+            stopped_before_the_turn(as_json, Ending::Argument, t!(cli_acp_refuses_bypass))
+        }
+        Some("acp") => match acp::command(&args[1..]) {
+            Some(()) => ExitCode::SUCCESS,
+            None => {
+                stopped_before_the_turn(as_json, Ending::Argument, t!(cli_acp_takes_nothing_else))
             }
         },
         Some("shell-init") => match shell_init::command(&args[1..]) {
@@ -1879,6 +1889,12 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         .as_ref()
         .map(|record| bravebot_agent::Conversation::restored(record.conversation.clone()))
         .unwrap_or_default();
+    // The names the earlier run's file tools had reached, so the nested instructions and
+    // path-scoped rules they loaded are in force from this run's first request (INSTR-14,
+    // INSTR-16).
+    if let Some(record) = continued.as_ref() {
+        workspace.restore_touched(&record.touched);
+    }
     let begins = conversation.recounted().len();
     let started = bravebot_session::sessions::now();
     let mut rewind = continued.as_ref().map(|record| {
@@ -1955,6 +1971,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
                 agent,
                 started,
                 events: sink.stamped(),
+                touched: workspace.touched_record(),
             },
         );
     }
@@ -2467,6 +2484,7 @@ mod tests {
     #[test]
     fn the_commands_that_start_no_session_refuse_every_flag_that_shapes_one() {
         let commands = [
+            "acp",
             "doctor",
             "update",
             "bug-report",
@@ -4162,6 +4180,7 @@ mod tests {
     #[test]
     fn a_definition_is_refused_where_nothing_would_work_under_it() {
         for first in [
+            "acp",
             "doctor",
             "update",
             "bug-report",
@@ -4289,6 +4308,7 @@ mod tests {
     #[test]
     fn the_system_prompt_flags_are_refused_where_nothing_would_use_them() {
         for first in [
+            "acp",
             "doctor",
             "update",
             "bug-report",

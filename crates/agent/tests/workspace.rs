@@ -13333,6 +13333,49 @@ fn a_workspace_given_what_the_session_kept_has_the_files_it_touched() {
     assert!(stranger.touched_files().is_empty());
 }
 
+/// INSTR-14, INSTR-16: a workspace given a session's record has the names in it, and the record is a
+/// claim. A name that lands outside the root adds nothing, and the limits that bound a live session
+/// bound a record too, so a hand-edited one cannot make every turn compare thousands of names. A
+/// restore that took the names as they stand would let a record place `../elsewhere` in the set.
+#[test]
+fn a_workspace_restored_from_a_record_places_each_name_under_the_root_and_keeps_the_limits() {
+    use bravebot_agent::workspace::TouchedRecord;
+    let scratch = Scratch::new("restore-touched");
+    let first = Workspace::new(&scratch.path).expect("workspace");
+    first.record_touch("pkg/a.rs");
+    assert!(first.take_telling(".bravebot/rules/rust.md"));
+    let record = first.touched_record();
+    assert_eq!(record.files, ["pkg/a.rs"]);
+    assert_eq!(record.directories, ["pkg"]);
+    assert_eq!(record.told, [".bravebot/rules/rust.md"]);
+
+    let again = Workspace::new(&scratch.path).expect("workspace");
+    again.restore_touched(&TouchedRecord {
+        rules: vec![".bravebot/rules/rust.md".to_string()],
+        ..record.clone()
+    });
+    assert_eq!(again.touched_record().rules, [".bravebot/rules/rust.md"]);
+    assert_eq!(again.touched_record().files, record.files);
+    assert_eq!(again.touched_record().directories, record.directories);
+    assert_eq!(again.touched_record().told, record.told);
+    assert!(!again.take_telling(".bravebot/rules/rust.md"));
+
+    let claim = TouchedRecord {
+        directories: vec!["../outside".to_string(), "inside/deep".to_string()],
+        files: (0..1100)
+            .map(|n| format!("f{n:04}.rs"))
+            .chain(["../outside/x.rs".to_string()])
+            .collect(),
+        ..TouchedRecord::default()
+    };
+    let claimed = Workspace::new(&scratch.path).expect("workspace");
+    claimed.restore_touched(&claim);
+    assert_eq!(claimed.touched_directories(), ["inside", "inside/deep"]);
+    let files = claimed.touched_files();
+    assert_eq!(files.len(), 1024);
+    assert!(files.iter().all(|file| !file.contains("outside")));
+}
+
 /// INSTR-16: a name typed with `@` is a file named only where a file is there. A directory is not a
 /// file, and a glob such as `src/**` matches the name of the directory it is for, so recording one
 /// would load a rule for a file nobody named. A name that is nothing is not a file either.

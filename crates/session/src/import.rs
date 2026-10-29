@@ -214,6 +214,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         rewind: Vec::new(),
         server_children_may_run: false,
         checkouts: Vec::new(),
+        touched: Default::default(),
         agent: None,
         skill_mode: None,
     }

@@ -763,6 +763,7 @@ impl<'a> AichatClient<'a> {
                 }
             }
             let mut http = Request::post(gateway.provider.chat_completions_url(), encode(&body)?)
+                .with_client_certificate()
                 .header("content-type", "application/json");
             if let Some(gap) = gateway.provider.patience.idle_timeout {
                 http = http.idle_within(gap);
@@ -790,7 +791,9 @@ impl<'a> AichatClient<'a> {
         let body = encode(&body)?;
         let (url, credential) = self.route()?;
 
-        let http = Request::post(url, body.clone()).header("content-type", "application/json");
+        let http = Request::post(url, body.clone())
+            .with_client_certificate()
+            .header("content-type", "application/json");
         let http = match credential {
             // The premium host authorises on the key alone, so the request is not signed and the
             // key is the one `authorization` it carries. A redirect is answered with its status

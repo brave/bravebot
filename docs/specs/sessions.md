@@ -142,6 +142,12 @@ The record also holds the checkouts a session's delegates were given and it keep
 the delegate given it, the paths the driver recorded a file effect on in it and what it took on
 disk. A record written before they were kept reads as having none.
 
+The record also holds the names of the files the file tools reached and of the rules the session was
+told, which a resume restores so the nested instructions and path-scoped rules the earlier turns
+loaded are in force from the first turn ([INSTR-14](instructions.md#INSTR-14),
+[INSTR-16](instructions.md#INSTR-16)). They are names only, as the paths in the trust map are. A
+record written before they were kept reads as having none.
+
 `verified-by: bravebot_tui::sessions::renaming_a_session_rewrites_the_record_immediately`
 `verified-by: bravebot_tui::sessions::a_chosen_name_survives_the_next_turn`
 `verified-by: bravebot_tui::sessions::a_session_can_be_named_before_it_has_a_record`
@@ -159,6 +165,8 @@ disk. A record written before they were kept reads as having none.
 `verified-by: bravebot_tui::render::sessions_screen::an_empty_list_says_whether_nothing_exists_or_nothing_matches`
 `verified-by: bravebot_cli::running::from_pr_without_a_pull_request_is_refused_rather_than_listing_every_session`
 `verified-by: bravebot_tui::sessions::a_record_from_before_checkouts_were_kept_reads_as_having_none`
+`verified-by: bravebot_session::sessions::the_names_the_file_tools_reached_are_written_and_read_back`
+`verified-by: bravebot_session::sessions::a_record_from_before_touched_names_were_kept_reads_as_having_none`
 
 <a id="SESSION-4"></a>
 ### SESSION-4: a title comes from the prompt, and is cut rather than mangled
@@ -592,7 +600,10 @@ the continuation rule in SESSION-10.
 Both full-record and mid-history forks keep the source's current file decisions and inherit no
 rewind points. Forking does not rewind disk. The source record stays unchanged.
 [CHECKOUT-16](checkouts.md#CHECKOUT-16) keeps a fork from carrying the source's checkouts or the
-rules copied for them.
+rules copied for them. A fork keeps the names of the files touched and the rules told
+([INSTR-14](instructions.md#INSTR-14), [INSTR-16](instructions.md#INSTR-16)), since it keeps the
+conversation those rules were told in. A fork made from an earlier point keeps them as well, because
+the record holds one set for the session and not one per turn.
 
 **Why.** Exploring an alternative technical path from a shared prefix preserves the expensive
 context already built up without polluting the original session. Refusing manifest runs maintains
@@ -600,6 +611,8 @@ the invariant that finished autonomous runs have a definite end.
 
 `verified-by: bravebot_session::sessions::forking_a_manifest_session_is_refused`
 `verified-by: bravebot_session::sessions::a_fork_is_a_new_record_with_the_conversation_the_spend_and_the_trail`
+`verified-by: bravebot_session::sessions::a_fork_carries_the_names_the_file_tools_reached`
+`verified-by: bravebot_ui_bridge::bridge::a_desktop_fork_keeps_the_names_the_parents_file_tools_reached`
 `verified-by: bravebot_tui::undo_tests::terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions`
 
 <a id="SESSION-19"></a>

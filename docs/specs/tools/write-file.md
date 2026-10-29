@@ -201,3 +201,35 @@ person's text and reach the planner as they do for any write.
 `verified-by: bravebot_agent::confirm::a_saved_body_refuses_and_carries_nothing_else`
 `verified-by: bravebot_core::policy::an_edited_body_is_trusted_and_public`
 `verified-by: bravebot_core::policy::a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it`
+
+<a id="WRITE-8"></a>
+### WRITE-8: a file in another encoding is not replaced by UTF-8
+
+Where `path` names a file the trust map vouches for that is text in an encoding other than UTF-8
+([READ-3](read-file.md#READ-3): a UTF-16 or UTF-32 file with a byte order mark, or a file with
+bytes that are not valid UTF-8 and is not binary), the write is refused before the format step, the
+credential scan and the question. The planner is told, as `edit_file` is told, that the file is
+text in an encoding other than UTF-8 and that writing it would change its encoding. The file is
+not touched. The refusal applies to `contents` and to `contents_ref` alike, since the encoding is
+the file's and not the body's, to a write that a manifest step makes, and to a file that
+`apply_checkout` or `/checkouts apply` brings back ([CHECKOUT-14](../checkouts.md#CHECKOUT-14)),
+which takes the gate a `contents_ref` write takes. That file is refused on its own line, before the
+person is asked, and the files after it are still put to them.
+
+A file nobody vouched for is not refused. What encoding it uses is a fact about untrusted bytes, so
+refusing on it would be the driver branching on content, which the rule in `agents/AGENTS.md`
+forbids. The body replaces it as WRITE-1 says, and nothing is recorded as refused. The check
+reads the file's encoding through the same gate that `edit_file` reads a file through, which
+refuses untrusted content. A path with no file yet is written as given.
+
+**Why.** The approval diff for a file in another encoding shows no prior content, so the person
+cannot see that the write turns a UTF-16 file into UTF-8, and a planner that was shown the file
+decoded has no reason to think it would. Re-encoding is not chosen: a Latin-1 file's encoding
+cannot be recovered from its bytes, so only some files could be kept. A person who wants the file
+replaced can ask for it with `run`.
+
+`verified-by: bravebot_agent::turn::a_write_over_a_vouched_file_in_another_encoding_is_refused_before_anyone_is_asked`
+`verified-by: bravebot_agent::turn::a_write_over_an_unvouched_file_in_another_encoding_replaces_it`
+`verified-by: bravebot_agent::turn::a_contents_ref_write_over_a_vouched_file_in_another_encoding_is_refused_before_anyone_is_asked`
+`verified-by: bravebot_agent::turn::a_checkout_file_brought_back_over_a_vouched_file_in_another_encoding_is_refused_before_the_person_is_asked`
+`verified-by: bravebot_agent::manifest::a_planned_write_over_a_vouched_file_in_another_encoding_is_refused`

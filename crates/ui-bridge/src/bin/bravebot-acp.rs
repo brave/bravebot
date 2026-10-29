@@ -2,8 +2,9 @@
 //!
 //! The whole of the transport, as `bravebot-rpc` is for the desktop window: it reads a line, hands
 //! it to [`bravebot_ui_bridge::acp::Acp`] and writes what comes back. What each message means is
-//! decided in the library. An editor starts this program and speaks newline-delimited JSON-RPC to
-//! it.
+//! decided in the library, and the loop is [`bravebot_ui_bridge::acp_loop::serve`], which
+//! `bravebot acp` runs as well. An editor starts this program and speaks newline-delimited
+//! JSON-RPC to it.
 //!
 //! **This file and `bravebot-rpc` are the only ones in the crate allowed to touch stdout or end
 //! the process.** Elsewhere a stray `println!` would interleave with the protocol and no editor
@@ -11,19 +12,7 @@
 
 #![forbid(unsafe_code)]
 
-use bravebot_ui_bridge::acp::Acp;
 use bravebot_ui_bridge::arguments::{Launch, launch};
-use std::io::{BufRead, Write};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
-
-/// What the main loop waits on.
-enum Input {
-    Line(String),
-    /// An event asked for a call that only this thread may make.
-    Wake,
-    End,
-}
 
 fn main() {
     // First of all, before anything else runs: the descriptors this process speaks over exist
@@ -71,55 +60,15 @@ fn main() {
     bravebot_ui_bridge::settings::settle_for_process(&process);
     bravebot_ui_bridge::settings::start_the_sweep_for_process(&process);
 
-    let (input, lines) = mpsc::channel();
-    let out = Arc::new(Mutex::new(std::io::stdout()));
-    let writer = Arc::clone(&out);
-    let waker = input.clone();
-    let mut acp = Acp::new(
-        Box::new(move |message| write_line(&writer, &message)),
-        Box::new(move || {
-            let _ = waker.send(Input::Wake);
-        }),
+    // EOF on stdin ends the loop with every session closed, which refuses anything waiting on an
+    // answer from an editor that has gone away and fires `session-ended`.
+    let finished = bravebot_ui_bridge::acp_loop::serve(
+        std::io::BufReader::new(std::io::stdin()),
+        std::io::stdout(),
         settings,
+        || eprintln!("bravebot-acp: unreadable line"),
     );
-
-    let reader = input.clone();
-    std::thread::spawn(move || {
-        for line in std::io::stdin().lock().lines() {
-            // Invalid UTF-8 on the wire has nobody to be answered to. It is skipped, since an
-            // editor that wrote one bad line will write another and exiting loses the rest.
-            let Ok(line) = line else {
-                eprintln!("bravebot-acp: unreadable line");
-                continue;
-            };
-            if !line.trim().is_empty() && reader.send(Input::Line(line)).is_err() {
-                return;
-            }
-        }
-        let _ = reader.send(Input::End);
-    });
-
-    while let Ok(next) = lines.recv() {
-        match next {
-            Input::Line(line) => acp.handle_line(&line),
-            Input::Wake => acp.drain(),
-            Input::End => break,
-        }
-    }
-
-    // EOF on stdin. Every session is closed, which refuses anything waiting on an answer from an
-    // editor that has gone away and fires `session-ended`, so the process waits a few seconds for
-    // that and for the turns still writing their records.
-    if !acp.finish(std::time::Duration::from_secs(10)) {
+    if !finished {
         eprintln!("bravebot-acp: some sessions were still working when the process stopped");
     }
-}
-
-/// Write one line, or give up on writing altogether. A closed stdout means the editor is gone.
-fn write_line(out: &Arc<Mutex<std::io::Stdout>>, value: &serde_json::Value) {
-    let Ok(mut handle) = out.lock() else {
-        return;
-    };
-    let _ = writeln!(handle, "{value}");
-    let _ = handle.flush();
 }

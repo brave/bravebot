@@ -276,6 +276,7 @@ fn no_session_record_is_written() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 

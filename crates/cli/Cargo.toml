@@ -29,6 +29,7 @@ bravebot-session = { path = "../session" }
 bravebot-skus = { path = "../skus" }
 bravebot-stamp = { path = "../stamp" }
 bravebot-tui = { path = "../tui" }
+bravebot-ui-bridge = { path = "../ui-bridge" }
 
 [dev-dependencies]
 # The seams that point the ChatGPT sign-in, its renewal and the account's requests at a stand-in, for

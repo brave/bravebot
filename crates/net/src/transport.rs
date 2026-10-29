@@ -20,10 +20,6 @@ use ureq::ProxyProtocol;
 use ureq::config::ConfigBuilder;
 use ureq::tls::{Certificate, ClientCert, PemItem, PrivateKey, RootCerts, TlsConfig, parse_pem};
 use ureq::typestate::AgentScope;
-use ureq::unversioned::transport::{
-    Buffers, ConnectionDetails, Connector, LazyBuffers, NextTimeout, RustlsConnector,
-    Transport as WireTransport,
-};
 
 /// The variable naming a file of certificates to trust instead of the built-in set.
 pub const CERTIFICATE_FILE: &str = "SSL_CERT_FILE";
@@ -35,8 +31,13 @@ pub const CERTIFICATE_DIRECTORY: &str = "SSL_CERT_DIR";
 /// server that asks for one.
 pub const CLIENT_CERTIFICATE: &str = "BRAVEBOT_CLIENT_CERT";
 
-/// The variable naming the file that holds that certificate's private key, unencrypted.
+/// The variable naming the file that holds that certificate's private key, unencrypted or
+/// encrypted as PKCS#8 (`BEGIN ENCRYPTED PRIVATE KEY`).
 pub const CLIENT_KEY: &str = "BRAVEBOT_CLIENT_KEY";
+
+/// The variable holding the passphrase of an encrypted [`CLIENT_KEY`]. Read from the environment
+/// only, never from a settings file, and never printed.
+pub const CLIENT_KEY_PASSPHRASE: &str = "BRAVEBOT_CLIENT_KEY_PASSPHRASE";
 
 /// The variables a proxy is named in, in the order the transport reads them. Each is read in lower
 /// case as well, which is the form some networks hand out, and the first one set wins.
@@ -99,6 +100,13 @@ impl TrustRoots {
     }
 }
 
+/// The passphrase the environment states, where it states one. Empty names none.
+fn named_passphrase(lookup: &impl Fn(&str) -> Option<OsString>) -> Option<String> {
+    lookup(CLIENT_KEY_PASSPHRASE)
+        .and_then(|value| value.into_string().ok())
+        .filter(|value| !value.is_empty())
+}
+
 /// A variable that is set but empty names nothing. A shell that exports one unconditionally leaves
 /// it empty rather than unset, and reading that as a path would refuse every connection the machine
 /// makes for a variable nobody meant to set.
@@ -131,6 +139,7 @@ static FROM_FILE: OnceLock<BTreeMap<String, String>> = OnceLock::new();
 static SHARED: OnceLock<Transport> = OnceLock::new();
 
 /// What every HTTP client in this process trusts, and what it goes through.
+#[derive(Clone)]
 pub struct Transport {
     roots: TrustRoots,
     /// The certificates [`TrustRoots::Named`] resolved to, empty where nothing named any.
@@ -156,6 +165,65 @@ pub struct Transport {
     client_paths: ClientPaths,
     /// Every named path that could not be used, in the order the paths are read.
     client_problems: Vec<TrustError>,
+    /// The passphrase of the key, kept to open it again when the files are read again (NET-11).
+    /// Never printed: [`Transport`]'s `Debug` says only whether one was given.
+    client_passphrase: Option<String>,
+}
+
+/// The certificate and key the named files held at one reading, or why they could not be used.
+///
+/// Held by whoever builds clients from it, so a pair read again after a failed handshake replaces
+/// the one in use without the process-wide [`Transport`] changing under every other client.
+#[derive(Clone)]
+pub struct ClientPair {
+    cert: Option<ClientCert>,
+    problems: Vec<TrustError>,
+    /// A hash of the certificate chain and the key, to tell whether a reading found a different
+    /// pair. Zero where there is none.
+    identity: u64,
+}
+
+impl ClientPair {
+    fn of(cert: Option<ClientCert>, problems: Vec<TrustError>) -> Self {
+        use std::hash::{Hash, Hasher};
+        let identity = cert.as_ref().map_or(0, |pair| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for certificate in pair.certs() {
+                certificate.der().hash(&mut hasher);
+            }
+            pair.private_key().der().hash(&mut hasher);
+            hasher.finish()
+        });
+        Self {
+            cert,
+            problems,
+            identity,
+        }
+    }
+
+    /// Whether there is a pair to present.
+    pub fn is_loaded(&self) -> bool {
+        self.cert.is_some()
+    }
+
+    /// Why the files could not be used, where they could not.
+    pub fn problems(&self) -> &[TrustError] {
+        &self.problems
+    }
+
+    /// Whether both hold the same certificate and key, or both hold none.
+    pub fn same_as(&self, other: &ClientPair) -> bool {
+        self.identity == other.identity
+    }
+}
+
+/// What reading the named files again found.
+pub struct Reread {
+    /// The pair to use from here: the one just read, or the one in use where the new reading could
+    /// not be used (NET-11).
+    pub pair: ClientPair,
+    /// Which of the two files could not be used in this reading, named `certificate` or `key`.
+    pub failed: Vec<&'static str>,
 }
 
 /// The two files a client certificate is named by.
@@ -287,7 +355,10 @@ impl Transport {
         };
         // The environment alone: a pair of files is a credential's address, and a settings file is
         // not where NET-11 reads one from.
-        transport.use_client_pair(ClientPaths::from_env(environment));
+        transport.use_client_pair(
+            ClientPaths::from_env(environment),
+            named_passphrase(environment),
+        );
         transport
     }
 
@@ -327,16 +398,90 @@ impl Transport {
     /// that disagree can be held to in a test, as [`Transport::stated`] does for the roots.
     pub fn stated_with_client_pair(certificate: Option<&Path>, key: Option<&Path>) -> Self {
         let mut transport = Self::resolve(TrustRoots::Bundled, None);
-        transport.use_client_pair(ClientPaths {
-            certificate: certificate.map(Path::to_path_buf),
-            key: key.map(Path::to_path_buf),
-        });
+        transport.use_client_pair(
+            ClientPaths {
+                certificate: certificate.map(Path::to_path_buf),
+                key: key.map(Path::to_path_buf),
+            },
+            None,
+        );
         transport
     }
 
-    fn use_client_pair(&mut self, paths: ClientPaths) {
-        (self.client, self.client_problems) = load_client_pair(&paths);
+    /// As [`Transport::stated_with_client_pair`], trusting the roots `roots` names, so that a test
+    /// can connect to a server of its own that asks for a client certificate.
+    pub fn stated_with_roots_and_client_pair(
+        roots: TrustRoots,
+        certificate: Option<&Path>,
+        key: Option<&Path>,
+    ) -> Self {
+        let mut transport = Self::resolve(roots, None);
+        transport.use_client_pair(
+            ClientPaths {
+                certificate: certificate.map(Path::to_path_buf),
+                key: key.map(Path::to_path_buf),
+            },
+            None,
+        );
+        transport
+    }
+
+    /// As [`Transport::stated_with_client_pair`], with the passphrase of an encrypted key.
+    pub fn stated_with_client_pair_and_passphrase(
+        certificate: Option<&Path>,
+        key: Option<&Path>,
+        passphrase: &str,
+    ) -> Self {
+        let mut transport = Self::resolve(TrustRoots::Bundled, None);
+        transport.use_client_pair(
+            ClientPaths {
+                certificate: certificate.map(Path::to_path_buf),
+                key: key.map(Path::to_path_buf),
+            },
+            Some(passphrase.to_string()),
+        );
+        transport
+    }
+
+    fn use_client_pair(&mut self, paths: ClientPaths, passphrase: Option<String>) {
+        (self.client, self.client_problems) = load_client_pair(&paths, passphrase.as_deref());
         self.client_paths = paths;
+        self.client_passphrase = passphrase;
+    }
+
+    /// The pair the files held when the environment was read.
+    pub fn client_pair(&self) -> ClientPair {
+        ClientPair::of(self.client.clone(), self.client_problems.clone())
+    }
+
+    /// Read the named files again.
+    ///
+    /// A reading that cannot be used while `previous` holds a pair keeps `previous`: a certificate
+    /// replaced before its key is, or the reverse, is a rotation half written, and the next reading
+    /// finds the whole of it. Both files are read together and loaded as one pair, so a new
+    /// certificate is never presented with the old key.
+    pub fn reread_client_pair(&self, previous: &ClientPair) -> Reread {
+        let (cert, problems) =
+            load_client_pair(&self.client_paths, self.client_passphrase.as_deref());
+        let failed = problems
+            .iter()
+            .filter_map(|problem| {
+                if Some(&problem.path) == self.client_paths.certificate.as_ref() {
+                    Some("certificate")
+                } else if Some(&problem.path) == self.client_paths.key.as_ref() {
+                    Some("key")
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let fresh = ClientPair::of(cert, problems);
+        let pair = if !fresh.is_loaded() && previous.is_loaded() {
+            previous.clone()
+        } else {
+            fresh
+        };
+        Reread { pair, failed }
     }
 
     fn resolve(roots: TrustRoots, proxy: Option<Proxy>) -> Self {
@@ -368,6 +513,7 @@ impl Transport {
             client: None,
             client_paths: ClientPaths::default(),
             client_problems: Vec::new(),
+            client_passphrase: None,
         }
     }
 
@@ -408,10 +554,22 @@ impl Transport {
         &self.client_paths
     }
 
+    /// Whether the environment named a client certificate or key at all, usable or not. The
+    /// egress gate keeps a pair to read again only then.
+    pub fn names_client_certificate(&self) -> bool {
+        self.client_paths.certificate.is_some() || self.client_paths.key.is_some()
+    }
+
     /// Whether a certificate and key were named, loaded and agree, so that a server asking for one
     /// is given it.
     pub fn presents_client_certificate(&self) -> bool {
         self.client.is_some()
+    }
+
+    /// Whether a passphrase was given for the client key. Whether, never what: the value stays in
+    /// this transport and is shown nowhere.
+    pub fn client_passphrase_given(&self) -> bool {
+        self.client_passphrase.is_some()
     }
 
     /// Why each named path that could not be used cannot be, in the order the paths are read.
@@ -470,26 +628,49 @@ impl Transport {
         self.no_proxy.as_deref()
     }
 
-    /// An agent configuration that trusts what this says and goes where this says.
+    /// An agent configuration that trusts what this says and goes where this says, and presents no
+    /// client certificate.
     ///
-    /// The one place either is set. A caller adds its own timeouts and builds.
+    /// The one place either is set. A caller adds its own timeouts and builds. The certificate is
+    /// presented only by [`Transport::agent_config_builder_presenting`], which the egress gate uses
+    /// for requests to a model provider (NET-11), so a sign-in client built from this one never
+    /// offers it.
     pub fn agent_config_builder(&self) -> ConfigBuilder<AgentScope> {
+        self.config_builder(&self.client_problems, None)
+    }
+
+    /// As [`Transport::agent_config_builder`], presenting `pair` to a server that asks for a
+    /// certificate.
+    pub fn agent_config_builder_presenting(&self, pair: &ClientPair) -> ConfigBuilder<AgentScope> {
+        self.config_builder(&pair.problems, pair.cert.clone())
+    }
+
+    fn config_builder(
+        &self,
+        client_problems: &[TrustError],
+        client: Option<ClientCert>,
+    ) -> ConfigBuilder<AgentScope> {
         ureq::Agent::config_builder()
             .tls_config(
                 TlsConfig::builder()
-                    .root_certs(self.root_certs())
-                    .client_cert(self.client.clone())
+                    .root_certs(self.root_certs_given(client_problems))
+                    .client_cert(client)
                     .build(),
             )
             .proxy(self.proxy.clone())
     }
 
+    #[cfg(test)]
     fn root_certs(&self) -> RootCerts {
+        self.root_certs_given(&self.client_problems)
+    }
+
+    fn root_certs_given(&self, client_problems: &[TrustError]) -> RootCerts {
         // A certificate that was named and cannot be presented refuses every handshake, the way a
         // named root that held nothing does, rather than letting a request go to a server that
         // would have been given it without one. Nothing trusted is the one answer every client
         // built from this configuration, the subscription client included, already understands.
-        if !self.client_problems.is_empty() {
+        if !client_problems.is_empty() {
             return RootCerts::new_with_certs(&[]);
         }
         match self.roots {
@@ -518,6 +699,7 @@ impl fmt::Debug for Transport {
             .field("no_proxy", &self.no_proxy)
             .field("client_paths", &self.client_paths)
             .field("client_problems", &self.client_problems)
+            .field("client_passphrase_given", &self.client_passphrase.is_some())
             .finish()
     }
 }
@@ -527,7 +709,10 @@ impl fmt::Debug for Transport {
 /// Nothing is named, nothing is loaded and nothing is wrong. One named without the other is a
 /// problem on the one that was named: a certificate with no key cannot answer a server, and a
 /// request sent without it is the failure this setting exists to prevent.
-fn load_client_pair(paths: &ClientPaths) -> (Option<ClientCert>, Vec<TrustError>) {
+fn load_client_pair(
+    paths: &ClientPaths,
+    passphrase: Option<&str>,
+) -> (Option<ClientCert>, Vec<TrustError>) {
     let (certificate, key) = match (&paths.certificate, &paths.key) {
         (None, None) => return (None, Vec::new()),
         (Some(certificate), None) => {
@@ -545,7 +730,7 @@ fn load_client_pair(paths: &ClientPaths) -> (Option<ClientCert>, Vec<TrustError>
         });
     let private_key = std::fs::read(key)
         .map_err(|e| unusable(key, e))
-        .and_then(|bytes| private_key_in(key, &bytes));
+        .and_then(|bytes| private_key_in(key, &bytes, passphrase));
 
     match (certificates, private_key) {
         (Ok(certificates), Ok(private_key)) => {
@@ -566,7 +751,56 @@ fn load_client_pair(paths: &ClientPaths) -> (Option<ClientCert>, Vec<TrustError>
     }
 }
 
-fn private_key_in(path: &Path, bytes: &[u8]) -> Result<PrivateKey<'static>, TrustError> {
+/// The key in an `ENCRYPTED PRIVATE KEY` section (PKCS#8 with PBES2), opened with `passphrase`.
+///
+/// The error never carries the passphrase or any byte of the key: a wrong passphrase and a damaged
+/// file read the same, because the cipher cannot tell them apart either.
+fn decrypted_key_in(
+    path: &Path,
+    bytes: &[u8],
+    passphrase: Option<&str>,
+) -> Result<PrivateKey<'static>, TrustError> {
+    use pkcs8::{DecodePrivateKey, SecretDocument};
+    let refused = |detail: String| TrustError {
+        path: path.to_path_buf(),
+        detail,
+    };
+    let Some(passphrase) = passphrase else {
+        return Err(refused(format!(
+            "is an encrypted key, and {CLIENT_KEY_PASSPHRASE} names no passphrase for it"
+        )));
+    };
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| refused("is an encrypted key that is not readable text".to_string()))?;
+    let document = SecretDocument::from_pkcs8_encrypted_pem(text, passphrase).map_err(|_| {
+        refused(format!(
+            "is an encrypted key that {CLIENT_KEY_PASSPHRASE} does not open, or that is damaged"
+        ))
+    })?;
+    let pem = document
+        .to_pem("PRIVATE KEY", pkcs8::LineEnding::LF)
+        .map_err(|_| refused("is an encrypted key that holds no usable key".to_string()))?;
+    PrivateKey::from_pem(pem.as_bytes())
+        .map_err(|_| refused("is an encrypted key that holds no usable key".to_string()))
+}
+
+fn private_key_in(
+    path: &Path,
+    bytes: &[u8],
+    passphrase: Option<&str>,
+) -> Result<PrivateKey<'static>, TrustError> {
+    // The legacy OpenSSL form keeps a `BEGIN RSA PRIVATE KEY` label and says it is encrypted in a
+    // header, so the PEM reader would return its ciphertext as if it were a key. It is looked for
+    // first, and is never decrypted: only PKCS#8 is.
+    if String::from_utf8_lossy(bytes).contains("Proc-Type: 4,ENCRYPTED") {
+        return Err(TrustError {
+            path: path.to_path_buf(),
+            detail:
+                "is a key in OpenSSL's legacy encrypted form, which this build cannot decrypt; \
+                     convert it with `openssl pkcs8 -topk8 -nocrypt`"
+                    .to_string(),
+        });
+    }
     let found = parse_pem(bytes)
         .filter_map(Result::ok)
         .find_map(|item| match item {
@@ -578,12 +812,7 @@ fn private_key_in(path: &Path, bytes: &[u8]) -> Result<PrivateKey<'static>, Trus
         // The PEM reader skips a section it has no kind for, so an encrypted key reads as a file
         // holding none, which would send somebody looking for a key that is plainly there.
         None if String::from_utf8_lossy(bytes).contains("ENCRYPTED PRIVATE KEY") => {
-            Err(TrustError {
-                path: path.to_path_buf(),
-                detail: "is an encrypted key, which this build cannot decrypt; give it an \
-                         unencrypted copy"
-                    .to_string(),
-            })
+            decrypted_key_in(path, bytes, passphrase)
         }
         None => Err(TrustError {
             path: path.to_path_buf(),
@@ -609,94 +838,32 @@ fn mismatched(key: &Path, certificate: &Path) -> TrustError {
     }
 }
 
-thread_local! {
-    /// Set while [`agrees`] expects a panic and has seen to it.
-    static PROBING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Whether the TLS library accepts this certificate with this key.
+/// Whether the TLS library accepts this certificate with this key, and the key is a kind it can
+/// sign with.
 ///
-/// The library checks the two against each other when it builds a connection's configuration, and
-/// answers a pair that disagree by panicking, at the first request. So the build is run here, once,
-/// on a stand-in connection that carries no bytes and goes nowhere, and a panic or an error from it
-/// is a pair that cannot be used. Only an error from the stand-in's own transport, which comes
-/// after the configuration was accepted, is a pair that can.
-///
-/// The panic is caught and its report is withheld, for this thread only: a hook that suppressed
-/// every thread's would hide a real panic that happened to coincide.
+/// Asked of the library's own check, which answers with an error. Building a connection's
+/// configuration from a pair that disagree panics instead, and the release profile aborts on a
+/// panic, so a pair that was only tried by connecting would end the process rather than be refused.
 fn agrees(pair: &ClientCert) -> bool {
-    static HOOK: std::sync::Once = std::sync::Once::new();
-    HOOK.call_once(|| {
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            if !PROBING.with(std::cell::Cell::get) {
-                previous(info);
-            }
-        }));
-    });
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
-    let config = ureq::Agent::config_builder()
-        .tls_config(
-            TlsConfig::builder()
-                .root_certs(RootCerts::new_with_certs(&[]))
-                .client_cert(Some(pair.clone()))
-                .build(),
-        )
-        .proxy(None)
-        .build();
-    let agent = ureq::Agent::with_parts(
-        config,
-        Connector::chain(NowhereConnector, RustlsConnector::default()),
-        ureq::unversioned::resolver::DefaultResolver::default(),
-    );
-    PROBING.with(|probing| probing.set(true));
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        agent.get("https://127.0.0.1/").call()
-    }));
-    PROBING.with(|probing| probing.set(false));
-    matches!(outcome, Ok(Err(ureq::Error::Io(e))) if e.to_string() == NOWHERE)
-}
-
-const NOWHERE: &str = "no connection was made";
-
-/// A connection to nowhere, for [`agrees`] to put TLS on.
-#[derive(Debug)]
-struct NowhereConnector;
-
-impl Connector for NowhereConnector {
-    type Out = Nowhere;
-
-    fn connect(
-        &self,
-        details: &ConnectionDetails,
-        _: Option<()>,
-    ) -> Result<Option<Nowhere>, ureq::Error> {
-        Ok(Some(Nowhere(LazyBuffers::new(
-            details.config.input_buffer_size(),
-            details.config.output_buffer_size(),
-        ))))
+    let Ok(key) = PrivateKeyDer::try_from(pair.private_key().der()) else {
+        return false;
+    };
+    let Ok(signing) = rustls::crypto::ring::sign::any_supported_type(&key) else {
+        return false;
+    };
+    let chain = pair
+        .certs()
+        .iter()
+        .map(|certificate| CertificateDer::from(certificate.der().to_vec()))
+        .collect::<Vec<_>>();
+    if chain.is_empty() {
+        return false;
     }
-}
-
-#[derive(Debug)]
-struct Nowhere(LazyBuffers);
-
-impl WireTransport for Nowhere {
-    fn buffers(&mut self) -> &mut dyn Buffers {
-        &mut self.0
-    }
-
-    fn transmit_output(&mut self, _: usize, _: NextTimeout) -> Result<(), ureq::Error> {
-        Err(ureq::Error::Io(std::io::Error::other(NOWHERE)))
-    }
-
-    fn await_input(&mut self, _: NextTimeout) -> Result<bool, ureq::Error> {
-        Err(ureq::Error::Io(std::io::Error::other(NOWHERE)))
-    }
-
-    fn is_open(&mut self) -> bool {
-        false
-    }
+    rustls::sign::CertifiedKey::new(chain, signing)
+        .keys_match()
+        .is_ok()
 }
 
 /// Every certificate the named paths hold, and every one of them that could not be used.
@@ -1668,8 +1835,13 @@ mod tests {
 
         assert!(transport.client_problems().is_empty());
         assert!(transport.presents_client_certificate());
-        let config = transport.agent_config_builder().build();
+        let config = transport
+            .agent_config_builder_presenting(&transport.client_pair())
+            .build();
         assert!(config.tls_config().client_cert().is_some());
+        // The builder every other client is made from holds none (NET-11).
+        let plain = transport.agent_config_builder().build();
+        assert!(plain.tls_config().client_cert().is_none());
         assert!(!refuses_every_handshake(&transport));
     }
 
@@ -1782,24 +1954,205 @@ mod tests {
         assert!(refuses_every_handshake(&transport));
     }
 
-    /// NET-11: an encrypted key is named as that. The PEM reader skips it, and "holds no private
-    /// key" would send a person looking for a key that is plainly in the file.
+    /// NET-11: an encrypted key with no passphrase named is refused by its path, and the refusal
+    /// names the variable that would open it. Rejects an implementation that reads the key as
+    /// absent, or that keeps the old advice to decrypt the file by hand.
     #[test]
-    fn an_encrypted_key_is_refused_as_encrypted() {
-        let (transport, _, key) = with_client_files(
-            "client-encrypted-key",
-            Some(&client_certificate_a()),
-            Some(&armoured(
-                "ENCRYPTED PRIVATE KEY",
-                &["MIHsMFcGCSqGSIb3DQEFDTBKMCkG"],
-            )),
-        );
+    fn an_encrypted_key_with_no_passphrase_is_refused_naming_the_variable() {
+        let (transport, key) = with_encrypted_key("client-encrypted-key", None);
 
         let [problem] = transport.client_problems() else {
             panic!("one problem expected: {:?}", transport.client_problems());
         };
         assert_eq!(problem.path, key);
         assert!(problem.detail.contains("encrypted"), "{problem}");
+        assert!(problem.detail.contains(CLIENT_KEY_PASSPHRASE), "{problem}");
+        assert!(refuses_every_handshake(&transport));
+    }
+
+    /// NET-11: a wrong passphrase is a refusal that holds neither the passphrase nor any key bytes.
+    /// Rejects an implementation whose error forwards the decryption library's message or the
+    /// value it was given.
+    #[test]
+    fn a_wrong_passphrase_is_refused_without_repeating_it() {
+        let (transport, key) =
+            with_encrypted_key("client-wrong-passphrase", Some("battery-staple"));
+
+        let [problem] = transport.client_problems() else {
+            panic!("one problem expected: {:?}", transport.client_problems());
+        };
+        assert_eq!(problem.path, key);
+        assert!(!problem.to_string().contains("battery-staple"), "{problem}");
+        assert!(!format!("{transport:?}").contains("battery-staple"));
+        assert!(refuses_every_handshake(&transport));
+    }
+
+    /// NET-11: the right passphrase opens the key and the pair is presented. Rejects an
+    /// implementation that decrypts but then fails to hand the key to the pair check.
+    #[test]
+    fn the_right_passphrase_opens_an_encrypted_key_and_the_pair_is_presented() {
+        let (transport, _) = with_encrypted_key("client-right-passphrase", Some(PASSPHRASE));
+
+        assert!(
+            transport.client_problems().is_empty(),
+            "{:?}",
+            transport.client_problems()
+        );
+        assert!(transport.presents_client_certificate());
+        assert!(!format!("{transport:?}").contains(PASSPHRASE));
+    }
+
+    /// NET-11: the passphrase and the two paths are read from the environment only. A settings
+    /// file that states all three leaves the transport naming and presenting nothing, and a
+    /// passphrase the file states does not open a key the environment names. Rejects a reader that
+    /// adds the passphrase or the paths to `SETTINGS_NAMES` or looks them up in the file's names.
+    #[test]
+    fn a_settings_file_cannot_state_the_client_pair_or_its_passphrase() {
+        let directory = scratch("client-pair-from-a-settings-file");
+        let certificate = directory.join("client.crt");
+        let key = directory.join("client.key");
+        std::fs::write(&certificate, certificate_for_encrypted_key()).expect("certificate");
+        std::fs::write(&key, encrypted_key()).expect("key");
+        let stated = vec![
+            (
+                CLIENT_CERTIFICATE.to_string(),
+                certificate.to_str().unwrap().to_string(),
+            ),
+            (CLIENT_KEY.to_string(), key.to_str().unwrap().to_string()),
+            (CLIENT_KEY_PASSPHRASE.to_string(), PASSPHRASE.to_string()),
+        ];
+
+        assert!(stated_names(stated.clone()).is_empty());
+        let by_file = Transport::stated_by_file(stated.clone());
+        assert!(!by_file.names_client_certificate());
+        assert!(!by_file.presents_client_certificate());
+        assert!(by_file.client_problems().is_empty());
+
+        let file = stated
+            .into_iter()
+            .map(|(name, value)| (name, OsString::from(value)))
+            .collect::<HashMap<_, _>>();
+        let transport = Transport::from_sources(
+            &environment(&[
+                (CLIENT_CERTIFICATE, certificate.to_str().unwrap()),
+                (CLIENT_KEY, key.to_str().unwrap()),
+            ]),
+            &|name| file.get(name).cloned(),
+            || None,
+        );
+        assert!(!transport.presents_client_certificate());
+        let [problem] = transport.client_problems() else {
+            panic!("one problem expected: {:?}", transport.client_problems());
+        };
+        assert!(problem.detail.contains(CLIENT_KEY_PASSPHRASE), "{problem}");
+    }
+
+    /// NET-11: a key that opens but belongs to another certificate is refused as any other
+    /// mismatched pair is. Rejects an implementation that skips the agreement check for a key it
+    /// had to decrypt.
+    #[test]
+    fn a_decrypted_key_that_does_not_belong_to_the_certificate_is_refused() {
+        let directory = scratch("client-decrypted-mismatch");
+        std::fs::write(directory.join("client.crt"), client_certificate_a()).expect("certificate");
+        std::fs::write(
+            directory.join("client.key"),
+            encrypted_key_of(&CLIENT_B_KEY),
+        )
+        .expect("key");
+        let transport = Transport::from_sources(
+            &environment(&[
+                (
+                    CLIENT_CERTIFICATE,
+                    directory.join("client.crt").to_str().unwrap(),
+                ),
+                (CLIENT_KEY, directory.join("client.key").to_str().unwrap()),
+                (CLIENT_KEY_PASSPHRASE, PASSPHRASE),
+            ]),
+            &|_| None,
+            || None,
+        );
+
+        assert!(!transport.presents_client_certificate());
+        assert_eq!(transport.client_problems().len(), 1);
+        assert!(refuses_every_handshake(&transport));
+    }
+
+    const PASSPHRASE: &str = "correct-horse";
+
+    /// `CLIENT_A_KEY` as PKCS#8 encrypted with PBES2 (PBKDF2 with HMAC-SHA256, AES-256-CBC), the
+    /// form `openssl pkcs8 -topk8 -v2 aes256 -v2prf hmacWithSHA256` writes.
+    fn encrypted_key() -> String {
+        encrypted_key_of(&CLIENT_A_KEY)
+    }
+
+    fn encrypted_key_of(body: &[&str]) -> String {
+        use pkcs8::pkcs5::pbes2::Parameters;
+        use pkcs8::{DecodePrivateKey, PrivateKeyInfo};
+
+        let plain = pkcs8::SecretDocument::from_pkcs8_pem(&client_key(body))
+            .expect("the fixture key is PKCS#8");
+        let info = plain
+            .decode_msg::<PrivateKeyInfo>()
+            .expect("private key info");
+        let parameters =
+            Parameters::pbkdf2_sha256_aes256cbc(2048, &[7; 16], &[9; 16]).expect("parameters");
+        info.encrypt_with_params(parameters, PASSPHRASE)
+            .expect("encrypts")
+            .to_pem("ENCRYPTED PRIVATE KEY", pkcs8::LineEnding::LF)
+            .expect("pem")
+            .to_string()
+    }
+
+    /// The certificate `encrypted_key` belongs to.
+    fn certificate_for_encrypted_key() -> String {
+        client_certificate_a()
+    }
+
+    fn with_encrypted_key(name: &str, passphrase: Option<&str>) -> (Transport, PathBuf) {
+        let directory = scratch(name);
+        let certificate = directory.join("client.crt");
+        let key = directory.join("client.key");
+        std::fs::write(&certificate, certificate_for_encrypted_key()).expect("certificate");
+        std::fs::write(&key, encrypted_key()).expect("key");
+        let mut pairs = vec![
+            (CLIENT_CERTIFICATE, certificate.to_str().unwrap()),
+            (CLIENT_KEY, key.to_str().unwrap()),
+        ];
+        if let Some(passphrase) = passphrase {
+            pairs.push((CLIENT_KEY_PASSPHRASE, passphrase));
+        }
+        (
+            Transport::from_sources(&environment(&pairs), &|_| None, || None),
+            key,
+        )
+    }
+
+    /// NET-11: a key in OpenSSL's legacy encrypted form keeps a plain key label and says it is
+    /// encrypted in a header. It is reported as that, apart from "does not match the certificate",
+    /// which is what its ciphertext would be reported as if it were read as a key.
+    #[test]
+    fn a_legacy_openssl_encrypted_key_is_reported_as_encrypted_and_named_by_path() {
+        let legacy = armoured(
+            &format!("RSA {} KEY", "PRIVATE"),
+            &[
+                "Proc-Type: 4,ENCRYPTED",
+                "DEK-Info: AES-256-CBC,00112233445566778899AABBCCDDEEFF",
+                "MIHsMFcGCSqGSIb3DQEFDTBKMCkG",
+            ],
+        );
+        let (transport, _, key) = with_client_files(
+            "client-legacy-encrypted-key",
+            Some(&client_certificate_a()),
+            Some(&legacy),
+        );
+
+        let [problem] = transport.client_problems() else {
+            panic!("one problem expected: {:?}", transport.client_problems());
+        };
+        assert_eq!(problem.path, key);
+        assert!(problem.detail.contains("legacy encrypted"), "{problem}");
+        assert!(problem.detail.contains("openssl pkcs8 -topk8"), "{problem}");
+        assert!(!problem.detail.contains("does not match"), "{problem}");
         assert!(refuses_every_handshake(&transport));
     }
 
@@ -1820,5 +2173,34 @@ mod tests {
             assert!(!printed.contains(line), "key material in {printed}");
         }
         assert!(!printed.contains(CLIENT_A_CERTIFICATE[0]));
+        assert!(
+            printed.contains("client_passphrase_given: false"),
+            "{printed}"
+        );
+    }
+
+    /// NET-11: a `Debug` print says whether a passphrase was given and never what it was, which is
+    /// what a trace or a panic message holds. Rejects an implementation that derives `Debug` over
+    /// the field.
+    #[test]
+    fn a_debug_print_of_the_transport_says_a_passphrase_was_given_and_not_what_it_was() {
+        let directory = scratch("client-debug-passphrase");
+        std::fs::write(directory.join("client.crt"), client_certificate_a()).expect("certificate");
+        std::fs::write(directory.join("client.key"), encrypted_key()).expect("key");
+        let transport = Transport::stated_with_client_pair_and_passphrase(
+            Some(&directory.join("client.crt")),
+            Some(&directory.join("client.key")),
+            PASSPHRASE,
+        );
+
+        let printed = format!("{transport:?}");
+
+        assert!(
+            printed.contains("client_passphrase_given: true"),
+            "{printed}"
+        );
+        assert!(!printed.contains(PASSPHRASE), "{printed}");
+        assert!(!printed.contains(&client_certificate_a()), "{printed}");
+        assert!(transport.presents_client_certificate());
     }
 }

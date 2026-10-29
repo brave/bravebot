@@ -701,6 +701,7 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
             },
         );
 
