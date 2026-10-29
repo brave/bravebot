@@ -878,6 +878,7 @@ fn a_record_written_under_bypass_restores_no_trust_and_no_directory() {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
                 answered_by_mode,
             },
         );

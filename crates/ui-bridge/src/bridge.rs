@@ -766,7 +766,18 @@ impl Bridge {
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
         // work is the habit that turns into a stall later.
-        let (snapshot, said, trust, programs, directories, todos, parent, inherited, touched, by_mode) = {
+        let (
+            snapshot,
+            said,
+            trust,
+            programs,
+            directories,
+            todos,
+            parent,
+            inherited,
+            touched,
+            by_mode,
+        ) = {
             let state = open
                 .state
                 .lock()

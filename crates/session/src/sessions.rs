@@ -8104,6 +8104,7 @@ mod tests {
             rewind: &[],
             checkouts: &[],
             touched,
+            answered_by_mode: false,
         };
 
         handle.save("first", standing(Some(&touched)));
