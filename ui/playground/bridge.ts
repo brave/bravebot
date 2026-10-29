@@ -235,7 +235,10 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
     const resolve = session?.waiting.get(`${kind}:${params.request}`)
     if (!resolve) return failed('nothing-waiting', 'Nothing is waiting on that answer.')
     session?.waiting.delete(`${kind}:${params.request}`)
-    resolve({ decision: params.decision === 'reject' ? 'reject' : 'approve', remember: params.remember === true, answers: params.answers as Answered['answers'] })
+    const answered: Answered = { decision: params.decision === 'reject' ? 'reject' : 'approve', remember: params.remember === true, answers: params.answers as Answered['answers'] }
+    // The renderer records the decision after this request resolves, so the scenario continues
+    // on a later turn and its next event sees the answer.
+    setTimeout(() => resolve(answered), 0)
     return ok({ accepted: true })
   }
   switch (method) {

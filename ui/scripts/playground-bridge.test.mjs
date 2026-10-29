@@ -66,6 +66,24 @@ test('a fork at a later prompt includes the earlier reply', async () => {
   assert.equal(forked.ok.said[1].text, 'First reply.')
 })
 
+test('a scenario continues after the answer has been returned', async () => {
+  const created = await request('session.new', { directory: '/work/app' })
+  const handle = created.ok.session
+  const order = []
+  play(handle, 'race', async (script) => {
+    await script.ask('manifest', 4, 'reject')
+    order.push('resumed')
+  })
+  order.push('asked')
+  const pending = request('manifest.reply', { session: handle, request: 4, decision: 'reject' })
+  order.push('called')
+  await pending
+  order.push('returned')
+  assert.deepEqual(order, ['asked', 'called', 'returned'])
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.deepEqual(order, ['asked', 'called', 'returned', 'resumed'])
+})
+
 test('closing a new chat and opening it again reads the replies it wrote', async () => {
   const handle = await conversation()
   const listed = await request('session.list')
