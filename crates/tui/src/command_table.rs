@@ -83,10 +83,10 @@ pub(crate) const MCP_RECONNECT: &str = "reconnect";
 /// The word after `/mcp` that turns the server named after it off for the session.
 pub(crate) const MCP_DISABLE: &str = "disable";
 
-/// The line that reports the sandbox mode, or sets it from the next turn (SANDBOX-22).
+/// The line that reports the sandbox mode, or sets it (SANDBOX-22).
 ///
-/// Typed while a turn runs, every word but `off` is carried out as typed, and the turn keeps the mode
-/// it began with (CMD-8).
+/// Typed while a turn runs, every word is carried out as typed, and the turn follows the mode from
+/// its next call (CMD-8).
 pub(crate) const SANDBOX_COMMAND: &str = "/sandbox";
 
 /// The line that reports what this session is and what it may touch.

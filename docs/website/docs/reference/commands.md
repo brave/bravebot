@@ -40,7 +40,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/detach` | | Leave a background session you attached to, leaving it running |
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
-| `/sandbox` | `[<mode>]` | Show the sandbox mode, or change it from the next turn |
+| `/sandbox` | `[<mode>]` | Show the sandbox mode, or change it |
 | `/loop` | `[[interval] <prompt> \| stop [n]]` | Send a prompt again and again, say what is repeating, or stop it |
 | `/after` | `<delay> <prompt>` | Send a prompt once, after a delay |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
@@ -466,9 +466,9 @@ same file and decides later `git` commands that reach that owner.
 
 Bare, it says the sandbox mode programs `run` starts are held to and what chose it: the default, a
 settings file, the managed file, `--sandbox`, or an earlier `/sandbox`. With a word it sets the mode
-for the rest of the session, starting with the next turn. Typed while a turn runs with nothing
-waiting, a mode is set at once, `off` included, and the turn running keeps the mode it began with, so one turn's `run`
-description, refusals and profile all come from one mode. The mode is
+for the rest of the session. Typed while a turn runs with nothing waiting, a mode is set at once,
+`off` included, and the turn running uses it for each program it starts from then on and tells the
+model the mode changed. A program already started keeps the profile it started under. The mode is
 not written to the session, so a resumed session takes the mode the process started with, and `/resume`
 inside a session keeps the one you set.
 

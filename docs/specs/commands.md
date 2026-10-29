@@ -367,8 +367,8 @@ that line, so it lands where it was typed: `/rename` ahead of a waiting `/clear`
 session `/clear` leaves, `/forget-trust` ahead of a waiting `/cd` would forget the directory `/cd`
 leaves, and `/effort` ahead of a waiting prompt would change the level that prompt was typed under.
 Which lines could change what a command acts on depends on the command. A `/sandbox` line in any
-form waits only behind a line typed before it, and while it waits it sets nothing but the mode the
-next turn is built with ([SANDBOX-22](sandboxing.md#SANDBOX-22)), so it holds back no command but another `/sandbox`:
+form waits only behind a line typed before it, and it sets nothing but the sandbox mode
+([SANDBOX-22](sandboxing.md#SANDBOX-22)), so it holds back no command but another `/sandbox`:
 `/note` typed behind a waiting `/sandbox off` is carried out as it is typed, and `/sandbox strict`
 typed behind it waits, since the mode typed last is the one the person means to end in. `/issue` and
 `/pr` act on the link the record holds ([PANEL-12](info-panel.md#PANEL-12)), which only a line that
@@ -530,12 +530,12 @@ does not read:
   `verified-by: bravebot_tui::app::the_model_command_opens_its_picker_before_the_listing_has_arrived`
   `verified-by: bravebot_tui::app::a_listing_that_fails_after_the_picker_opened_closes_it_and_says_why`
 - **`/sandbox`.** It sets the mode the programs `run` starts are held to
-  ([SANDBOX-22](sandboxing.md#SANDBOX-22)). A turn is built with the mode in force when it begins and
-  does not read it again, so every stage of the running turn, those already started and those yet
-  to start, keeps that mode, and a mode set mid-turn is the next turn's. The reply says so. The bare word reports the mode and says nothing of the turn.
+  ([SANDBOX-22](sandboxing.md#SANDBOX-22)). A turn reads the mode again when each call begins, so a
+  mode set mid-turn applies to every call the turn makes after that, and a program already started
+  keeps its profile. The reply says so. The bare word reports the mode and says nothing of the turn.
   `/sandbox off` is carried out as it is typed, like the other modes, and asks nothing. A managed
   floor refuses a looser mode as at rest, so the refusal is said under the turn. `/status` mid-turn names the mode set
-  meanwhile, which is the one the next request is built with.
+  meanwhile, which is the one the rest of the turn runs its programs under.
 - **`/advisor`.** It names the model a later turn's planner may consult
   ([ADVISOR-9](tools/advisor.md#ADVISOR-9)). A turn is offered its advisor, or none, when it
   begins and does not read the choice again, so one named mid-turn is the next turn's. The bare word
@@ -647,7 +647,7 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
 `verified-by: bravebot_tui::app::an_effort_named_mid_turn_is_set_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_language_named_mid_turn_is_saved_as_it_is_typed`
-`verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_keeps_its_own`
+`verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it`
 `verified-by: bravebot_tui::app::the_sandbox_report_is_given_mid_turn`
 `verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_behind_a_waiting_line_waits_behind_it`

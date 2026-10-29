@@ -329,7 +329,7 @@ fn carry_out_while_working(
             let kept = session.sandbox_mode();
             crate::sandbox_command::run(session, &word, beside.managed);
             if session.sandbox_mode() != kept {
-                session.note(t!(session_sandbox_turn_keeps_its_mode).to_string());
+                session.note(t!(session_sandbox_turn_follows_it).to_string());
             }
         }),
         Action::Advisor(word) => {
@@ -2189,7 +2189,7 @@ impl RunSettings {
             .with_deadlines(self.deadlines)
             .with_confined_runs(true)
             .asking_about_unconfined(true)
-            .with_sandbox_mode(session.sandbox_mode())
+            .with_sandbox_mode(session.live_sandbox_mode())
     }
 }
 
@@ -30636,11 +30636,12 @@ mod tests {
         }
     }
 
-    /// A mode named mid-turn is the session's mode as it is typed (CMD-8), so the next turn is built
-    /// with it, and the running turn is told it keeps the one it began with. The regression it
-    /// rejects is the word left in the queue for the whole turn, which is what a person saw.
+    /// A mode named mid-turn is the session's mode as it is typed (CMD-8), and the handle the
+    /// running turn was given reads it, so the turn follows it from its next call and is told so.
+    /// The regressions it rejects are the word left in the queue for the whole turn, which is what
+    /// a person saw, and a turn whose handle stays on the mode it began with.
     #[test]
-    fn a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_keeps_its_own() {
+    fn a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_follows_it() {
         for (line, mode) in [
             ("/sandbox strict", bravebot_sandbox::SandboxMode::Strict),
             (
@@ -30649,17 +30650,28 @@ mod tests {
             ),
         ] {
             let mut session = a_turn_running_on("first");
+            let given_to_the_turn = session.live_sandbox_mode();
+            assert_ne!(
+                given_to_the_turn.get(),
+                mode,
+                "{line} began in its own mode"
+            );
 
             nothing_beside(|beside| {
                 typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
             });
 
             assert_eq!(session.sandbox_mode(), mode, "{line}");
+            assert_eq!(given_to_the_turn.get(), mode, "{line}: the turn's handle");
             assert!(session.queued.is_empty(), "{line} waited");
             let said = said_under_the_turn(&session);
             assert_eq!(said.len(), 2, "{said:?}");
             assert!(said[0].contains(mode.name()), "{said:?}");
-            assert!(said[1].contains("keeps the mode it began with"), "{said:?}");
+            assert_eq!(
+                said[1],
+                t!(session_sandbox_turn_follows_it).to_string(),
+                "{said:?}"
+            );
         }
     }
 
@@ -30676,6 +30688,7 @@ mod tests {
         let managed = bravebot_config::Managed::at(&file);
         let mut session = a_turn_running_on("first");
         session.set_sandbox_mode(bravebot_sandbox::SandboxMode::Strict);
+        let given_to_the_turn = session.live_sandbox_mode();
         let root = std::path::Path::new("/work");
         let mut stored = bravebot_session::sessions::Handle::begin(
             root,
@@ -30707,8 +30720,13 @@ mod tests {
         assert_eq!(said.len(), 1, "{said:?}");
         assert!(said[0].contains("managed.json"), "{said:?}");
         assert!(
-            !said[0].contains("keeps the mode it began with"),
+            !said[0].contains(&t!(session_sandbox_turn_follows_it).to_string()),
             "{said:?}"
+        );
+        assert_eq!(
+            given_to_the_turn.get(),
+            bravebot_sandbox::SandboxMode::Strict,
+            "a refused mode reached the running turn"
         );
     }
 
@@ -30731,12 +30749,15 @@ mod tests {
     }
 
     /// The move to `off` is carried out as it is typed, as every other mode is (CMD-8,
-    /// SANDBOX-22): nothing is asked, so nothing waits for the turn to end, and the running turn is
-    /// told it keeps the mode it began with. The regression it rejects is `off` left in the queue
-    /// for the whole turn, or carried out with a question put under the turn's own.
+    /// SANDBOX-22): nothing is asked, so nothing waits for the turn to end, and the running turn
+    /// follows it from its next call. The regressions it rejects are `off` left in the queue for
+    /// the whole turn, carried out with a question put under the turn's own, and a turn whose
+    /// handle stays on the mode it began with.
     #[test]
     fn moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed() {
         let mut session = a_turn_running_on("first");
+        let given_to_the_turn = session.live_sandbox_mode();
+        assert_ne!(given_to_the_turn.get(), bravebot_sandbox::SandboxMode::Off);
 
         nothing_beside(|beside| {
             typed_during_a_turn(&mut session, "/sandbox off", key(KeyCode::Enter), beside)
@@ -30745,10 +30766,15 @@ mod tests {
         assert!(session.queued.is_empty(), "{:?}", waiting_prompts(&session));
         assert_eq!(session.sandbox_mode(), bravebot_sandbox::SandboxMode::Off);
         assert_eq!(
+            given_to_the_turn.get(),
+            bravebot_sandbox::SandboxMode::Off,
+            "the running turn's handle"
+        );
+        assert_eq!(
             said_under_the_turn(&session),
             [
                 t!(session_sandbox_set_off).to_string(),
-                t!(session_sandbox_turn_keeps_its_mode).to_string()
+                t!(session_sandbox_turn_follows_it).to_string()
             ]
         );
     }

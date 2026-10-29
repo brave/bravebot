@@ -2117,6 +2117,46 @@ pub fn stated_to_the_planner(
     ))
 }
 
+/// What the planner is told when the person changes the sandbox mode while its turn runs, or `None`
+/// where there is nothing to say (SANDBOX-22).
+///
+/// The `run` description the turn began with still states the mode it began in, so this says the
+/// new one. A mode that confines is given the sentences the description would have carried under
+/// it. `off` is given the one fact there is, because the description says nothing under `off` and
+/// the planner has no other way to learn that the boundary it was told of has ended. A turn that
+/// confines none of its runs was never told of a boundary, so it is told nothing.
+///
+/// Built from the two modes and the platform alone, so it carries nothing a program printed or a
+/// file held.
+pub fn change_notice(
+    confine_runs: bool,
+    from: SandboxMode,
+    to: SandboxMode,
+    requests_offered: bool,
+) -> Option<String> {
+    if !confine_runs || from == to {
+        return None;
+    }
+    let said = match to {
+        SandboxMode::Off => " Programs `run` starts from now on start with no sandbox profile, so \
+             the limits its description states do not apply to them."
+            .to_string(),
+        mode => stated_to_the_planner(confine_runs, mode, requests_offered)
+            .map(|stated| {
+                format!(
+                    " It applies to the programs `run` starts from now on, in place of anything \
+                     the `run` description says of them. {stated}"
+                )
+            })
+            .unwrap_or_default(),
+    };
+    Some(format!(
+        "The user changed the sandbox mode to `{}` while this turn was running.{said} A program \
+         already started keeps the profile it started under.",
+        to.name()
+    ))
+}
+
 /// `said` with the sentence that the person holds the temporary directory back, where a platform
 /// confines and the person did.
 fn with_temporary_held_back_said(
@@ -3120,6 +3160,49 @@ mod tests {
 
     // Not under /home: macOS mounts autofs there, so each lookup beneath it asks the automounter.
     const HOME: &str = "/people/person";
+
+    /// SANDBOX-22: the planner is told of a sandbox mode chosen while its turn runs, in the words
+    /// of the mode it moved to, and of nothing that did not change. A move to `off` is told as the
+    /// end of a boundary, since the description says nothing under `off`; a move to a confining
+    /// mode carries what the description would have said under it. The regressions it rejects are
+    /// a notice for a change that is not one, one for a turn that was never told of a boundary,
+    /// `off` repeating the sentences of the mode it left, and one confining mode's sentences given
+    /// for another's.
+    #[test]
+    fn the_planner_is_told_of_a_sandbox_mode_chosen_while_its_turn_runs() {
+        use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+
+        assert_eq!(change_notice(true, Strict, Strict, true), None, "no change");
+        assert_eq!(
+            change_notice(false, Strict, Off, true),
+            None,
+            "a turn that confines none of its runs"
+        );
+
+        let off = change_notice(true, WorkspaceWrite, Off, true).expect("told of off");
+        assert!(
+            off.contains("to `off`") && off.contains("no sandbox profile"),
+            "{off}"
+        );
+        let stated = stated_to_the_planner(true, WorkspaceWrite, true).expect("stated");
+        assert!(!off.contains(&stated), "{off}");
+
+        for to in [Strict, ReadOnly, WorkspaceWrite] {
+            let notice = change_notice(true, Off, to, true).expect("told");
+            let stated = stated_to_the_planner(true, to, true).expect("stated");
+            assert!(
+                notice.contains(&format!("to `{}`", to.name())) && notice.contains(&stated),
+                "{notice}"
+            );
+        }
+        let strict = change_notice(true, Off, Strict, true).expect("told");
+        let workspace_write = change_notice(true, Off, WorkspaceWrite, true).expect("told");
+        assert!(!strict.contains("may read this machine"), "{strict}");
+        assert!(
+            workspace_write.contains("may read this machine"),
+            "{workspace_write}"
+        );
+    }
 
     fn step(resolved: &str, args: &[&str]) -> Step {
         Step {

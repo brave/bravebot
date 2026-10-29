@@ -26960,6 +26960,165 @@ fn a_run_under_off_starts_with_no_profile_and_says_nothing_of_one() {
     assert!(!result.contains("Confinement:"), "{result}");
 }
 
+/// What a turn did when the sandbox mode was chosen while the first of its two `run` calls was
+/// being asked about.
+#[cfg(unix)]
+struct ModeChosenMidTurn {
+    /// Whether the program of the first and of the second call wrote a file outside the session,
+    /// which a `workspace-write` profile refuses and no profile at all allows.
+    wrote: [bool; 2],
+    /// Every request the planner was sent, in order.
+    requests: Vec<String>,
+}
+
+/// Two `run` calls in successive rounds, each writing outside the session, in a turn that confines
+/// under `held`. `then`, where given, is chosen while the first call is being asked about, as a
+/// person types `/sandbox` over a prompt on screen.
+#[cfg(unix)]
+fn two_writing_runs_while_the_mode_moves(
+    name: &str,
+    held: bravebot_sandbox::SandboxMode,
+    then: Option<bravebot_sandbox::SandboxMode>,
+) -> ModeChosenMidTurn {
+    let scratch = Scratch::new(name);
+    let markers = [
+        outside_the_session(&format!("{name}-first")),
+        outside_the_session(&format!("{name}-second")),
+    ];
+    for marker in &markers {
+        let _ = std::fs::remove_file(marker);
+    }
+    let writing = |marker: &std::path::Path| {
+        tool_request(
+            "run",
+            &serde_json::json!({ "command": format!("sh -c 'echo x > {}'", marker.display()) })
+                .to_string(),
+        )
+    };
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        writing(&markers[0]),
+        writing(&markers[1]),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let live = bravebot_agent::LiveSandbox::new(held);
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    if let Some(then) = then {
+        let typed = live.clone();
+        asked = asked.doing_while_asked(move || typed.set(then));
+    }
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run them")
+            .with_profile(Some(
+                bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
+            ))
+            .with_confined_runs(true)
+            .with_sandbox_mode(live),
+        &mut bravebot_agent::Conversation::new(),
+        &mut asked,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let wrote = [markers[0].exists(), markers[1].exists()];
+    for marker in &markers {
+        let _ = std::fs::remove_file(marker);
+    }
+    ModeChosenMidTurn {
+        wrote,
+        requests: every_request(&received),
+    }
+}
+
+/// The start of what the planner is told when the person changes the sandbox mode during its turn.
+#[cfg(unix)]
+const TOLD_THE_MODE_CHANGED: &str = "The user changed the sandbox mode to";
+
+/// SANDBOX-22: a sandbox mode chosen while a turn runs is the mode each call that begins after it is
+/// decided under, whichever way it moves, and the call the person was being asked about keeps the
+/// mode it began under, so one call is never decided under two. The planner is told before its next
+/// request, once, in the words of the mode it moved to. The controls are the same turns with no
+/// change: a test of the change alone passes on a build where the second program is simply allowed
+/// or simply refused. The regressions it rejects are a handle copied when the task was made, which
+/// leaves the turn on the mode it began with, and a planner left believing the `run` description it
+/// started with.
+#[cfg(unix)]
+#[test]
+fn a_sandbox_mode_chosen_during_a_turn_applies_to_the_calls_after_it() {
+    use bravebot_sandbox::SandboxMode::{Off, WorkspaceWrite};
+    if cannot_confine_here() {
+        return;
+    }
+
+    let loosened = two_writing_runs_while_the_mode_moves("moved-to-off", WorkspaceWrite, Some(Off));
+    assert_eq!(
+        loosened.wrote,
+        [false, true],
+        "workspace-write then off: the first call was refused and the second was not"
+    );
+    assert_eq!(loosened.requests.len(), 3);
+    assert!(
+        !loosened.requests[0].contains(TOLD_THE_MODE_CHANGED),
+        "told before it changed"
+    );
+    assert!(
+        loosened.requests[1].contains("The user changed the sandbox mode to `off`")
+            && loosened.requests[1].contains("no sandbox profile"),
+        "the planner was not told of off before its next request: {}",
+        loosened.requests[1]
+    );
+    assert_eq!(
+        loosened.requests[2].matches(TOLD_THE_MODE_CHANGED).count(),
+        1,
+        "told again each round"
+    );
+
+    let tightened = two_writing_runs_while_the_mode_moves(
+        "moved-to-workspace-write",
+        Off,
+        Some(WorkspaceWrite),
+    );
+    assert_eq!(
+        tightened.wrote,
+        [true, false],
+        "off then workspace-write: the first call was allowed and the second was refused"
+    );
+    assert!(
+        !tightened.requests[0].contains(TOLD_CONFINED),
+        "told of a boundary under off"
+    );
+    assert!(
+        tightened.requests[1].contains("The user changed the sandbox mode to `workspace-write`")
+            && tightened.requests[1].contains(TOLD_CONFINED),
+        "the planner was not told of the boundary: {}",
+        tightened.requests[1]
+    );
+
+    for held in [WorkspaceWrite, Off] {
+        let unchanged = two_writing_runs_while_the_mode_moves("not-moved", held, None);
+        assert_eq!(unchanged.wrote, [held == Off; 2], "{held} and no change");
+        assert!(
+            unchanged
+                .requests
+                .iter()
+                .all(|request| !request.contains(TOLD_THE_MODE_CHANGED)),
+            "told of a change under {held} when there was none"
+        );
+    }
+}
+
 /// SANDBOX-22: `read-only` reads the machine as `workspace-write` does and writes nothing in the
 /// session's directory, and a failure says what it ran under. The controls are the same write under
 /// `workspace-write`, which lands, and a read of a file outside the session under `read-only`, which
@@ -39314,6 +39473,92 @@ fn a_delegate_runs_its_programs_under_the_mode_of_the_turn_that_spawned_it() {
             written,
             "mode {mode}, and the delegate's program {} outside the session",
             if written { "did not write" } else { "wrote" }
+        );
+        let _ = std::fs::remove_dir_all(&top);
+    }
+}
+
+/// SANDBOX-22: a delegate holds the handle on the mode of the turn that spawned it, so a mode chosen
+/// while it runs applies to the calls it makes after that. The mode moves to `off` while the
+/// delegate's first program is being asked about, so that program is still refused and the second is
+/// not. The control is the same delegate with no change. The regression it rejects is a delegate
+/// given the mode the turn held when it was spawned, which a person who types `/sandbox off` to let
+/// a stuck delegate through would find still refused.
+#[cfg(unix)]
+#[test]
+fn a_delegate_follows_a_sandbox_mode_chosen_while_it_runs() {
+    use bravebot_sandbox::SandboxMode::{Off, WorkspaceWrite};
+    if cannot_confine_here() {
+        return;
+    }
+    for (then, expected) in [(None, [false, false]), (Some(Off), [false, true])] {
+        let word = then.map_or("nothing", |mode| mode.name());
+        let top = outside_the_session(&format!("delegate-follows-{word}"));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("session")).unwrap();
+        let top = top.canonicalize().unwrap();
+        let markers = [top.join("first.txt"), top.join("second.txt")];
+        let workspace = Workspace::new(top.join("session")).expect("workspace");
+        let touching = |marker: &std::path::Path| {
+            tool_request(
+                "run",
+                &serde_json::json!({ "command": format!("touch {}", marker.display()) })
+                    .to_string(),
+            )
+        };
+        let (endpoint, _received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-RUN-TWICE",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"TOUCH-TWO-FILES-AS-THE-MODE-MOVES"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "TOUCH-TWO-FILES-AS-THE-MODE-MOVES",
+                vec![
+                    touching(&markers[0]),
+                    touching(&markers[1]),
+                    reply_with("tried"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let live = bravebot_agent::LiveSandbox::new(WorkspaceWrite);
+        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        if let Some(then) = then {
+            let typed = live.clone();
+            asked = asked.doing_while_asked(move || typed.set(then));
+        }
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("HAVE-A-DELEGATE-RUN-TWICE")
+                .with_confined_runs(true)
+                .with_sandbox_mode(live),
+            &mut bravebot_agent::Conversation::new(),
+            &mut asked,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        assert_eq!(
+            [markers[0].exists(), markers[1].exists()],
+            expected,
+            "the delegate's programs with the mode moved to {word}"
         );
         let _ = std::fs::remove_dir_all(&top);
     }

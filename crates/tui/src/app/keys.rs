@@ -168,8 +168,8 @@ pub enum Action {
     /// Carries the argument unparsed, since what it says back goes in the transcript, and needs the
     /// servers the session holds and the terminal to ask on, which the loop owns.
     Mcp(String),
-    /// Report the sandbox mode, or move it from the next turn. Carries the word unparsed, since the
-    /// answer depends on the managed file and may need the screen to ask.
+    /// Report the sandbox mode, or move it. Carries the word unparsed, since the answer depends on
+    /// the managed file.
     Sandbox(String),
     /// Withdraw the remembered answer about the working directory. Needs the workspace, which the
     /// loop owns, and leaves this session's map as it is.

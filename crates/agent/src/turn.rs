@@ -2237,6 +2237,9 @@ struct State<'s> {
     confined_failures: tools::ConfinedFailures,
     spent: Elapsed,
     told_mode: crate::permission_mode::PermissionMode,
+    /// The sandbox mode the planner was last told of, which is what its `run` description states
+    /// until a change is told to it (SANDBOX-22).
+    told_sandbox: bravebot_sandbox::SandboxMode,
     turn_model: Option<String>,
     effort: Option<Effort>,
     switched_by: Option<(String, String)>,
@@ -2656,14 +2659,18 @@ where
 
     // Decided as the turn starts, from the same facts a `scopes` argument and a `request_path` call
     // are refused on, so the description does not name a route the session turns down. A turn is
-    // built for each message, so a workspace trusted since the last one is named from the next.
+    // built for each message, so a workspace trusted since the last one is named from the next. The
+    // mode is read once, so the description and the record of what the planner has been told are of
+    // the same one; a mode chosen later in the turn is told to the planner as it is chosen
+    // (SANDBOX-22).
+    let sandbox_at_start = task.sandbox.get();
     tools::state_confinement(
         &mut offered,
         task.confine_runs,
-        task.sandbox,
+        sandbox_at_start,
         tools::requests_are_accepted(
             task.confine_runs,
-            task.sandbox,
+            sandbox_at_start,
             tools::workspace_is_trusted(policy, workspace),
         ),
     );
@@ -3160,6 +3167,7 @@ where
         confined_failures: tools::ConfinedFailures::default(),
         spent: Elapsed::default(),
         told_mode: started_in,
+        told_sandbox: sandbox_at_start,
         turn_model,
         effort,
         switched_by,
