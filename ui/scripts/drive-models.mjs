@@ -206,11 +206,29 @@ try {
   await braveGroup.click()
   await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length === 3)
   assert.equal(await models.getByRole('option').count(), 3, 'clicking again expands the section')
-  // PageDown jumps PAGE_SIZE rows
+  // PageDown / PageUp / Home / End: with 3 rows and PAGE_SIZE 6, PageDown from row 0 clamps to the last row.
   await search.press('Home')
   await search.press('PageDown')
-  const afterPageDown = await page.locator('.model-menu leo-option.active').count()
-  assert.ok(afterPageDown <= 1, 'PageDown moves the highlight down')
+  // After Home then PageDown the highlight must be on the last visible row (Brave model, index 2).
+  assert.match(
+    await page.locator('.model-menu leo-option.active').innerText(),
+    /Brave model/,
+    'PageDown from first row clamps to last row',
+  )
+  // PageUp from last row clamps back to first row (Sonnet was chosen, ranks first).
+  await search.press('PageUp')
+  assert.match(
+    await page.locator('.model-menu leo-option.active').innerText(),
+    /Claude Sonnet/,
+    'PageUp from last row clamps to first row',
+  )
+  // End key jumps to the last visible row.
+  await search.press('End')
+  assert.match(
+    await page.locator('.model-menu leo-option.active').innerText(),
+    /Brave model/,
+    'End key lands on last visible row',
+  )
   // Search clears collapsed state
   await braveGroup.click() // collapse Brave
   await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)

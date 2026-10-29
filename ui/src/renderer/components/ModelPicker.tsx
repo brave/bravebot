@@ -235,33 +235,46 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       return true
     }
     if (key === 'ArrowLeft') {
+      // Only claim the key when the query is empty: when there is text in the
+      // field the caret should move normally, and the user navigates by editing.
+      if (query) return false
       // Collapse the active row's provider section.
       const provider = options[active]?.provider
       if (provider && !collapsedProviders.has(provider)) {
         byKeyboard.current = true
         collapseProvider(provider)
-        // Move active to the first visible row at or after the current one
-        // after collapse. Compute on next tick so visibleIndices reflects the update.
+        // Move active to the nearest visible row that belongs to a different
+        // provider. Compute inline so we don't depend on the next render.
         setActive((index) => {
           const remaining = options.map((r, i) => ({ r, i }))
             .filter(({ r }) => r.provider !== provider)
             .map(({ i }) => i)
           return nearestVisible(index, remaining)
         })
+        return true
       }
-      return true
+      return false
     }
     if (key === 'ArrowRight') {
-      // Expand the active row's provider section if it is collapsed.
-      const provider = options[active]?.provider
-      if (provider && collapsedProviders.has(provider)) {
-        byKeyboard.current = true
-        expandProvider(provider)
+      // Only claim the key when the query is empty.
+      if (query) return false
+      // Expand the nearest collapsed provider that appears before the active row
+      // in the options list (the one just collapsed by ArrowLeft). If nothing is
+      // collapsed above the active row, expand the first collapsed provider overall.
+      if (collapsedProviders.size === 0) return false
+      byKeyboard.current = true
+      // Walk backwards from active to find the closest collapsed provider heading.
+      let target: string | null = null
+      for (let i = active; i >= 0; i--) {
+        const p = options[i]?.provider
+        if (p && collapsedProviders.has(p) && p !== target) { target = p; break }
       }
+      if (!target) target = [...collapsedProviders][0] ?? null
+      if (target) expandProvider(target)
       return true
     }
     return false
-  }, [visibleIndices, options, active, collapsedProviders, collapseProvider, expandProvider, nearestVisible])
+  }, [visibleIndices, options, active, query, collapsedProviders, collapseProvider, expandProvider, nearestVisible])
 
   return <div className="model-picker">
     <ButtonMenu
