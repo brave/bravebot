@@ -1842,6 +1842,19 @@ struct Switch {
     sandbox: crate::sandbox_command::Sandboxed,
 }
 
+/// What `run` settled for one session before `event_loop` begins it, carried from `run` through
+/// `event_loop` to `begin_session`. A `/resume` begins another session with a new one of these.
+struct Startup {
+    confinement: String,
+    sockets_with_a_path_reachable: bool,
+    sandbox: crate::sandbox_command::Sandboxed,
+    start: Start,
+    named: Option<String>,
+    links: Links,
+    skip_permissions: bool,
+    prompts: bravebot_agent::turn::SystemPrompts,
+}
+
 /// Run the interface until the user leaves.
 #[expect(
     clippy::too_many_arguments,
@@ -1918,15 +1931,17 @@ pub fn run(
                     &mut terminal,
                     config,
                     &workspace,
-                    confinement.clone(),
-                    sockets_with_a_path_reachable,
-                    sandbox.clone(),
                     &mut servers,
-                    start,
-                    named.take(),
-                    std::mem::take(&mut links),
-                    skip_permissions,
-                    prompts.clone(),
+                    Startup {
+                        confinement: confinement.clone(),
+                        sockets_with_a_path_reachable,
+                        sandbox: sandbox.clone(),
+                        start,
+                        named: named.take(),
+                        links: std::mem::take(&mut links),
+                        skip_permissions,
+                        prompts: prompts.clone(),
+                    },
                     moments,
                     &mut switch,
                 );
@@ -2363,24 +2378,23 @@ fn adopt_settings(
 ///
 /// `Err` is a session that ended before it began: the person left at one of the questions, the
 /// definition it was started under was refused, or the record to resume is held by another process.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "`event_loop` forwards the arguments it was given, and `begin_session` has that one caller"
-)]
 fn begin_session(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
     workspace: &Workspace,
-    confinement: String,
-    sockets_with_a_path_reachable: bool,
-    sandbox: crate::sandbox_command::Sandboxed,
     servers: &mut crate::state::Servers,
-    start: Start,
-    named: Option<String>,
-    links: Links,
-    skip_permissions: bool,
-    prompts: bravebot_agent::turn::SystemPrompts,
+    startup: Startup,
 ) -> Result<Begun, Ended> {
+    let Startup {
+        confinement,
+        sockets_with_a_path_reachable,
+        sandbox,
+        start,
+        named,
+        links,
+        skip_permissions,
+        prompts,
+    } = startup;
     // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
     // the turns after it must see one. The primary root never changes, so nothing keyed on it
     // (the session record, where AGENTS.md is looked for) moves underneath.
@@ -2699,26 +2713,16 @@ fn start_the_session(
 /// terminal, and a generic backend's error type carries no bounds to convert from.
 ///
 /// Returns the session left behind, where there is one to pick up again.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "`run` forwards the arguments it was given and the switch, and `event_loop` has that one caller"
-)]
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
     workspace: &Workspace,
-    confinement: String,
-    sockets_with_a_path_reachable: bool,
-    sandbox: crate::sandbox_command::Sandboxed,
     servers: &mut crate::state::Servers,
-    start: Start,
-    named: Option<String>,
-    links: Links,
-    skip_permissions: bool,
-    prompts: bravebot_agent::turn::SystemPrompts,
+    startup: Startup,
     moments: &mut bravebot_agent::hooks::SessionMoments,
     switch: &mut Option<Switch>,
 ) -> io::Result<Ended> {
+    let skip_permissions = startup.skip_permissions;
     let Begun {
         mut workspace,
         settings,
@@ -2728,20 +2732,7 @@ fn event_loop(
         mut stored,
         mut scratch,
         mut answers,
-    } = match begin_session(
-        terminal,
-        config,
-        workspace,
-        confinement,
-        sockets_with_a_path_reachable,
-        sandbox,
-        servers,
-        start,
-        named,
-        links,
-        skip_permissions,
-        prompts,
-    ) {
+    } = match begin_session(terminal, config, workspace, servers, startup) {
         Ok(begun) => begun,
         Err(ended) => return Ok(ended),
     };
