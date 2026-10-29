@@ -1108,10 +1108,22 @@ resume, a fork, the session `/clear` begins and the copy `/branch` carries on in
 ([SESSION-31](sessions.md#SESSION-31)) each open a new directory, and the one belonging to the
 session they followed is removed rather than handed on.
 
+Ending the session waits a quarter of a second at most for the directory to go. The removal runs on
+a thread of its own that keeps the directory's lock until it has finished, so a directory too large
+to go in that time is still being removed while the process runs, and a session opening beside it
+does not take it for a leftover ([TRUST-25](#TRUST-25)). If the process ends first, what remains is
+what a killed session leaves, and the next session to open takes it. On Windows, where nothing takes
+what a session leaves, ending the session waits for the whole removal.
+
 **Why.** A resume can come days later, and bytes surviving that gap are a cache nothing evicts.
 There is nothing to reconstruct anyway, since the name carries what tells one directory from its
 neighbours rather than the session's identifier. What a cleared context wrote is not something the
 session after it should find lying there either.
+
+**Why the wait is bounded.** A directory can hold a large tree, and a person leaving should not wait
+on removing one. The sweep ([TRUST-25](#TRUST-25)) already takes a directory whose session is gone,
+so handing it the remainder adds no way for one to be left that a killed session did not already
+have.
 
 A `/cd` needs nothing done to the directory, which is the one lifetime rule this location removes
 rather than restates: the directory is not under the working directory, so a move does not leave it
@@ -1119,6 +1131,9 @@ behind, and there is no ordering to get right between removing it and still bein
 (TRUST-13).
 
 `verified-by: bravebot_agent::scratch::nothing_written_in_it_outlives_the_session`
+`verified-by: bravebot_agent::scratch::ending_a_session_does_not_wait_for_a_directory_that_is_slow_to_go`
+`verified-by: bravebot_agent::scratch::leaving_waits_for_a_directory_that_goes_quickly`
+`verified-by: bravebot_agent::scratch::a_directory_being_removed_stays_held_until_it_is_gone`
 `verified-by: bravebot_agent::scratch::no_two_sessions_are_given_the_same_directory`
 
 <a id="TRUST-16"></a>
