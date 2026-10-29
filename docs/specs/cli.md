@@ -2517,6 +2517,6 @@ The `bravebot-acp` program stays, because the tests of the loop start it.
 `verified-by: bravebot_cli::acp::acp_refuses_flags_and_words_that_shape_nothing_it_starts`
 `verified-by: bravebot_cli::acp::acp_reads_the_named_settings_and_sends_a_slash_word_to_the_model_as_text`
 `verified-by: bravebot_cli::acp::acp_treats_an_option_never_offered_as_a_refusal`
-`verified-by: bravebot_cli::acp::acp_ending_its_input_refuses_the_question_waiting_and_exits`
+`verified-by: bravebot_cli::acp::acp_ending_its_input_with_a_question_waiting_writes_nothing_and_exits`
 `verified-by: bravebot_cli::acp::acp_waits_for_the_end_of_an_open_session_before_it_exits`
 `verified-by: bravebot_cli::flags::exactly_the_fifteen_commands_that_start_no_session_are_named`

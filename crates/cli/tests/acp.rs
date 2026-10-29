@@ -352,18 +352,16 @@ fn acp_waits_for_the_end_of_an_open_session_before_it_exits() {
     );
 }
 
-/// CLI-39 with ACP-4: the end of the input refuses a question still waiting, so a write waiting on
-/// the editor does not happen, and the program ends with the status 0 and nothing but protocol
-/// messages on standard output. The write question is put after the trust question was rejected, so
-/// the file stays unwritten for a rejected trust answer too, and the end of the input also cancels
-/// the turn, which stops it before it could send the model a refusal. What this test shows is the
-/// observable part of the behaviour: the write question had been put, the file is not written, the
-/// sessions all ended within the wait and nothing but protocol messages was written. It does not
-/// tell a refusal of the waiting question from the cancellation of its turn: with the refusal
-/// removed from `Bridge::close`, and with `stop_all` removed from `Bridge::shut_down`, it still
-/// passed, because the end of the input cancels the turn and nothing is written either way.
+/// CLI-39: an input that ends while a write waits on the editor leaves the write unwritten, the
+/// program ends with the status 0 and nothing but protocol messages is on standard output. The
+/// write question is put after the trust question was rejected, so the file stays unwritten for a
+/// rejected trust answer too. This test does not tell the refusal of the waiting question from the
+/// cancellation of its turn: the end of the input cancels the turn, so nothing is written either
+/// way, and the process ends before a model request that follows a refusal could be observed. The
+/// refusal itself is pinned in process by
+/// `bravebot_ui_bridge::acp::the_end_of_the_input_refuses_a_question_still_waiting` (ACP-4).
 #[test]
-fn acp_ending_its_input_refuses_the_question_waiting_and_exits() {
+fn acp_ending_its_input_with_a_question_waiting_writes_nothing_and_exits() {
     let (home, project) = scratch("ends");
     let (config, _requests, _server) = endpoint::endpoint(
         vec![
@@ -399,6 +397,6 @@ fn acp_ending_its_input_refuses_the_question_waiting_and_exits() {
     );
     assert!(
         !stderr.contains("still working"),
-        "the question waiting was not refused when the input ended: {stderr}"
+        "a session was still working when the program ended: {stderr}"
     );
 }

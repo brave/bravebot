@@ -108,7 +108,6 @@ the input refuses every question still waiting, so a write that was waiting does
 
 `verified-by: bravebot_ui_bridge::acp::cancelling_a_prompt_that_waits_on_a_question_refuses_the_question`
 `verified-by: bravebot_ui_bridge::acp::the_end_of_the_input_refuses_a_question_still_waiting`
-`verified-by: bravebot_cli::acp::acp_ending_its_input_refuses_the_question_waiting_and_exits`
 
 <a id="ACP-5"></a>
 ### ACP-5: the trust question comes first, and the planner's own questions are not permissions
