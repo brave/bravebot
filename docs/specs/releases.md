@@ -635,6 +635,7 @@ is hashed after it is stapled ([RELEASE-8](#RELEASE-8)).
 `verified-by: bravebot_cli::app_signing::an_accepted_app_is_stapled_then_assessed_as_an_executable`
 `verified-by: bravebot_cli::app_signing::a_rejected_submission_stops_before_stapling`
 `verified-by: bravebot_cli::app_signing::an_accepted_image_is_signed_stapled_and_assessed_as_an_installer`
+`verified-by: bravebot_cli::app_signing::the_sub_targets_run_in_the_order_that_puts_the_ticket_in_the_image`
 `verified-by: by-construction (the identity, the profile and the Apple account are the job's; the tests run the targets against stand-ins for the signing and notary tools, so whether the real tools accept the result, and whether the notary service accepts the app, is first seen by the job that runs them)`
 
 ## Known costs

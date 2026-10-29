@@ -606,6 +606,66 @@ fn an_accepted_image_is_signed_stapled_and_assessed_as_an_installer() {
     }
 }
 
+/// The sub-targets of `app-release-signed` run in the order that puts a stapled ticket inside each
+/// image: every app is signed before any is submitted, every app is stapled before an image is
+/// built, and every image is built before one is signed and stapled.
+///
+/// The regression it rejects: swapping `app-dmg` above `app-notarize`, which builds images holding
+/// apps with no ticket, and `app-notarize` above `app-sign`, which submits an unsigned app. The
+/// tests that run one sub-target alone pass either way.
+#[test]
+fn the_sub_targets_run_in_the_order_that_puts_the_ticket_in_the_image() {
+    if !tools_available() {
+        return;
+    }
+    let tree = Tree::new("release-order");
+    let output = tree.run("app-release-signed");
+    assert!(output.status.success(), "{}", stderr(&output));
+    let calls = tree.calls();
+    let is = |tool: &'static str, word: &'static str| {
+        move |call: &[String]| call[0] == tool && call.iter().any(|a| a == word)
+    };
+    let last = |wanted: &dyn Fn(&[String]) -> bool, what: &str| {
+        calls
+            .iter()
+            .rposition(|call| wanted(call))
+            .unwrap_or_else(|| panic!("no call for {what} in {calls:?}"))
+    };
+    let app_sign = last(
+        &|call| is("codesign", "--sign")(call) && target(call).ends_with("Brave Bot.app"),
+        "signing an app",
+    );
+    let submit_app = position(&calls, is("xcrun", "submit"), "the first submission");
+    let app_staple = last(
+        &|call| is("xcrun", "staple")(call) && target(call).ends_with("Brave Bot.app"),
+        "stapling an app",
+    );
+    let first_image = position(&calls, |call| call[0] == "hdiutil", "building an image");
+    let last_image = last(&|call| call[0] == "hdiutil", "building an image");
+    let image_sign = position(
+        &calls,
+        |call| is("codesign", "--sign")(call) && target(call).ends_with(".dmg"),
+        "signing an image",
+    );
+    let image_staple = position(
+        &calls,
+        |call| is("xcrun", "staple")(call) && target(call).ends_with(".dmg"),
+        "stapling an image",
+    );
+    assert!(
+        app_sign < submit_app,
+        "an app was submitted before it was signed: {calls:?}"
+    );
+    assert!(
+        app_staple < first_image,
+        "an image was built before an app was stapled: {calls:?}"
+    );
+    assert!(
+        last_image < image_sign && last_image < image_staple,
+        "an image was signed or stapled before all were built: {calls:?}"
+    );
+}
+
 /// After the whole sequence each image has a `.sha256` holding the digest of the bytes the image
 /// has then, after stapling changed them, and nothing but the digest.
 ///
