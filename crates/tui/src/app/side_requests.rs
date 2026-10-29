@@ -386,8 +386,10 @@ pub(super) fn ask_animated(
     session.begin_aside();
 
     let worker = thread::spawn(move || {
+        // Dropped when this thread ends, which is how the loop driving it learns it has: it draws
+        // frames until every sender is gone.
+        let _ends_with_the_worker = to_main;
         let mut sink = Trail::new();
-        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
         let egress = Egress::new();
         // Before the question's own policy exists, which is the whole point: that one holds
         // `WebFetch` alone and reaches no workspace, so what reads a dropped file is a policy of its
@@ -415,7 +417,6 @@ pub(super) fn ask_animated(
             &account,
             asking,
             model.as_deref(),
-            &mut reporter,
             &mut sink,
             worker_trust.clone(),
             // Taken and dropped. An answer has to be released to be looked at, and the one place
@@ -501,8 +502,10 @@ pub(super) fn commit_message_animated(
     session.begin_aside();
 
     let worker = thread::spawn(move || {
+        // Dropped when this thread ends, which is how the loop driving it learns it has: it draws
+        // frames until every sender is gone.
+        let _ends_with_the_worker = to_main;
         let mut sink = Trail::new();
-        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
         let egress = Egress::new();
         // Reduced to what a person can be told before it crosses back, since the error types are
         // the kernel's and this thread is the only place they mean anything.
@@ -514,7 +517,6 @@ pub(super) fn commit_message_animated(
             &asked.source,
             asked.format.as_deref(),
             model.as_deref(),
-            &mut reporter,
             &mut sink,
             worker_trust,
             &worker_cancel,
@@ -775,8 +777,10 @@ pub(super) fn ask_aside_beside_a_turn(
     );
 
     let worker = thread::spawn(move || {
+        // Dropped when this thread ends, which is how the loop driving it learns it has: it draws
+        // frames until every sender is gone.
+        let _ends_with_the_worker = to_main;
         let mut sink = Trail::new();
-        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
         let egress = Egress::new();
         turn::aside_sharing(
             &worker_config,
@@ -784,7 +788,6 @@ pub(super) fn ask_aside_beside_a_turn(
             &account,
             asking,
             model.as_deref(),
-            &mut reporter,
             &mut sink,
             files,
             |_written| {},
@@ -803,9 +806,8 @@ pub(super) fn ask_aside_beside_a_turn(
 
 /// Take what the question asked beside the running turn has done since the last frame.
 ///
-/// Run on every frame of the turn. What the worker says while it works is dropped: its phase and
-/// notices are the question's and the turn's own are already on the screen. Once the worker has
-/// ended, the answer becomes a row in the agents list without opening the view, which would take
+/// Run on every frame of the turn. The worker says nothing while it works, and its end is what the
+/// channel reports. Once the worker has ended, the answer becomes a row in the agents list without opening the view, which would take
 /// the screen from a person reading the turn (WATCH-19), and what it cost is charged to the turn it
 /// interrupted (SESSION-11). A stop of the turn stops the question with it (INPUT-4).
 pub(super) fn settle_aside_beside_a_turn(session: &mut Session, turn_cancel: &Cancel) {
@@ -817,9 +819,8 @@ pub(super) fn settle_aside_beside_a_turn(session: &mut Session, turn_cancel: &Ca
     };
     loop {
         match flight.from_worker.try_recv() {
-            // Nothing the worker can send waits for an answer, because `RemoteReporter` holds a
-            // `Sender` and no receiver, and `aside_sharing` takes no confirmer, so no `Reply` is
-            // owed.
+            // The worker holds the `Sender` to end with it and sends nothing, and `aside_sharing`
+            // takes no confirmer, so no `Reply` is owed for anything that did arrive.
             Ok(_) => {}
             Err(mpsc::TryRecvError::Empty) => {
                 session.begin_aside_beside_a_turn(flight);
@@ -998,19 +999,13 @@ pub(super) fn check_the_goal_on_a_worker(
     cancel: &Cancel,
     to_main: mpsc::Sender<crate::remote_confirm::ToMain>,
 ) -> (Result<bravebot_agent::goal::Assessed, String>, Trail) {
+    // Dropped when this returns, which is how the loop driving it learns it has: it draws frames
+    // until every sender is gone.
+    let _ends_with_the_worker = to_main;
     let mut sink = Trail::new();
-    let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
     let egress = Egress::new();
     let done = turn::goal(
-        config,
-        &egress,
-        account,
-        check,
-        model,
-        &mut reporter,
-        &mut sink,
-        trust,
-        cancel,
+        config, &egress, account, check, model, &mut sink, trust, cancel,
     )
     .map_err(|e| e.to_string());
     (done, sink)

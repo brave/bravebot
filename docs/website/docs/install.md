@@ -133,7 +133,7 @@ bravebot doctor
 ```
 configuration OK
   endpoint  https://ai-chat.bsg.brave.com/v1/chat/completions
-  premium   https://ai-chat-premium.bsg.brave.com/v1/chat/completions
+  premium   https://ai-chat-premium.bsg.brave.software/v1/chat/completions, without a premium key, so requests go to the endpoint above
   key id    …
   model     automatic-bravebot (default)
   key       … (never transmitted)
@@ -219,7 +219,7 @@ that held it if nothing else is in it. The script added that directory to your u
 `BRAVEBOT_NO_MODIFY_PATH` was set, so remove that entry too.
 
 No route touches `~/.bravebot`. It holds your settings, prompt history, session records, themes,
-MCP declarations and any imported subscription, so removing the binary leaves all of that for a later
+MCP declarations and any stored sign-ins, so removing the binary leaves all of that for a later
 install to find. To remove it too:
 
 ```sh

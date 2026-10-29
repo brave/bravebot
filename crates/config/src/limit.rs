@@ -8,7 +8,7 @@
 pub enum Unit {
     /// Tokens the backends reported.
     Tokens,
-    /// Leo Premium credentials spent, one for each premium request.
+    /// Premium requests, counted as credits: one for each request that presents the premium key.
     Credits,
 }
 

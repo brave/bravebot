@@ -351,7 +351,7 @@ impl Session {
         self.served_names_are_comparable = comparable;
     }
 
-    /// Whether the last turn spent a subscription credential, or `None` before one has run.
+    /// Whether the last turn presented the premium key, or `None` before one has run.
     pub fn premium(&self) -> Option<bool> {
         self.premium
     }

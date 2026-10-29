@@ -51,11 +51,6 @@ impl Scratch {
         }
     }
 
-    /// Where an imported subscription is kept under this home.
-    fn credentials(&self) -> PathBuf {
-        self.path.join(".bravebot").join("leo-premium.json")
-    }
-
     /// Write the settings file this home's runs read, and return this scratch for chaining.
     ///
     /// What a test writes here is what cannot be stated in the environment: a `provider` block,
@@ -265,7 +260,7 @@ fn a_first_run_with_no_service_configured_says_how_to_configure_one() {
         "OpenRouter",
         "bravebot auth login chatgpt",
         "bravebot auth login xai",
-        "bravebot auth login leo",
+        "bravebot auth login brave",
     ] {
         assert!(
             stderr.contains(route),
@@ -418,7 +413,7 @@ fn a_stored_chatgpt_sign_in_beside_a_configured_gateway_leaves_the_line_that_nam
         "A ChatGPT sign-in is stored",
         "Name one of the account's models",
         "amazon-bedrock",
-        "bravebot auth login leo",
+        "bravebot auth login brave",
     ] {
         assert!(
             !stderr.contains(replaced),
@@ -467,7 +462,7 @@ fn doctor_treats_a_stored_chatgpt_sign_in_as_a_service_configured() {
             && stdout.contains(r#"`bravebot "<task>" --model chatgpt/<model>`"#),
         "the report did not say how to use the sign-in: {stdout}"
     );
-    for offered in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
+    for offered in ["amazon-bedrock", "OpenRouter", "bravebot auth login brave"] {
         assert!(
             !stdout.contains(offered),
             "the report offered {offered} to somebody who signed in: {stdout}"
@@ -1118,7 +1113,7 @@ fn a_service_configured_with_no_model_of_its_own_named_says_to_name_one() {
         "the run refused without saying which key names a model: {stderr}"
     );
     assert!(
-        !stderr.contains("bravebot auth login leo"),
+        !stderr.contains("bravebot auth login brave"),
         "somebody who has configured a service was sent to configure another: {stderr}"
     );
 }
@@ -1347,19 +1342,10 @@ fn doctor_names_each_filesystem_rule_with_where_it_came_from() {
     );
 }
 
-/// An imported subscription as the store keeps one, for a test that needs `doctor` to find it.
-const AN_IMPORTED_BATCH: &str = r#"{"version": 1,
-    "order_id": "aaaaaaaa-1111-4222-8333-444444444444",
-    "environment": "production",
-    "item_id": "b7114ccc-b3a5-4951-9a5d-8b7a28731111",
-    "issuer": "brave.com?sku=brave-leo-premium",
-    "credentials": [{"unblinded": "a-token", "valid_from": "2020-01-01T00:00:00Z",
-                     "valid_to": "2099-01-01T00:00:00Z", "spent": false, "rfc": true}]}"#;
-
 /// STATE-2: a directory named in `BRAVEBOT_HOME` is the state directory, and `doctor` says so. The
-/// settings and the imported subscription are read from it and not from `~/.bravebot`, which holds
-/// different ones here, so a crate that kept resolving the directory from `HOME` is the one the
-/// report would name a settings file or a subscription from the wrong place for.
+/// settings and the ChatGPT sign-in are read from it and not from `~/.bravebot`, which holds
+/// different settings here, so a crate that kept resolving the directory from `HOME` is the one the
+/// report would name a settings file or a sign-in from the wrong place for.
 ///
 /// A property of the process: the variable is read from the environment by three crates that cannot
 /// share a resolver, and only a run of the binary joins all three to one report. Each in-crate test
@@ -1372,7 +1358,10 @@ fn doctor_reads_the_state_directory_a_person_named_and_says_which_variable_named
             "moved/settings.json",
             r#"{"sandbox": {"filesystem": {"denyRead": ["~/from-the-named-directory"]}}}"#,
         )
-        .with_file("moved/leo-premium.json", AN_IMPORTED_BATCH);
+        .with_file(
+            "moved/chatgpt-account.json",
+            &a_chatgpt_sign_in(1_792_703_127),
+        );
     let moved = scratch.path.join("moved");
     let mut environment = BRAVES_HOSTS_AND_A_GATEWAY_TOKEN.to_vec();
     environment.push((
@@ -1399,8 +1388,8 @@ fn doctor_reads_the_state_directory_a_person_named_and_says_which_variable_named
         "the settings under the profile directory were read as well: {stdout}"
     );
     assert!(
-        stdout.contains("subscription's credential"),
-        "the subscription imported into the named directory was not found: {stdout}{stderr}"
+        stdout.contains("signed in, the access token expires"),
+        "the sign-in stored in the named directory was not found: {stdout}{stderr}"
     );
     assert!(
         !stdout.contains("not an absolute path"),
@@ -1660,41 +1649,6 @@ fn doctor_says_a_checkouts_strict_does_not_lift_the_persons_read_only() {
     );
 }
 
-/// A machine with nowhere to keep credentials has none imported, rather than a batch that could
-/// not be read.
-///
-/// An absent profile directory is a state this program supports, and the store answers "there is
-/// nowhere to keep them" with the same error it uses for a file that would not read. Reported as
-/// the second, the refusal told somebody on a machine that has never held a subscription that
-/// theirs could not be used, and sent them to import it again.
-///
-/// Run as a process because the answer comes from the environment the program starts in, and a
-/// test that set a variable would set it for every other test sharing the binary.
-#[test]
-fn a_machine_with_no_profile_directory_has_nothing_imported() {
-    let output = Command::new(env!("CARGO_BIN_EXE_bravebot"))
-        .env_clear()
-        .env("BRAVEBOT_LOCALE", "en-US")
-        .env("SERVICES_KEY_AICHAT", "a-services-key")
-        .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
-        .env("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com")
-        .env(
-            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
-            "https://ai-chat-premium.bsg.brave.com",
-        )
-        .args(["-p", "say something"])
-        .stdin(Stdio::null())
-        .output()
-        .expect("the built binary runs");
-
-    let (_, stderr) = said(&output);
-    assert_eq!(output.status.code(), Some(3), "{stderr}");
-    assert!(
-        !stderr.contains("subscription that is stored"),
-        "a machine with no profile directory was told its stored subscription is unusable: {stderr}"
-    );
-}
-
 /// An argument the program refuses ends the run the same way, whichever way it is refused: an
 /// option the program does not have, a flag given none of what it needs, and an option a
 /// subcommand parsing its own does not have.
@@ -1709,10 +1663,6 @@ fn a_refused_argument_exits_non_zero() {
     for (arguments, refused) in [
         (&["--not-an-option"][..], "--not-an-option"),
         (&["--fork"][..], "--fork"),
-        (
-            &["import-leo-creds", "--not-an-option"][..],
-            "--not-an-option",
-        ),
         (&["--settings"][..], "--settings"),
         // A run told to configure itself from a file that is not there is refused rather than run
         // under whatever the directory carried. The path is what it says, since a mistyped one is
@@ -3310,7 +3260,7 @@ fn doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn() {
     // And the report still says it, in the section CLI-7 puts it in: a status is what a caller
     // reads and the routes out are what the person in front of the screen reads, so the fix is
     // not the report losing one to gain the other.
-    for route in ["bravebot auth login chatgpt", "bravebot auth login leo"] {
+    for route in ["bravebot auth login chatgpt", "bravebot auth login brave"] {
         assert!(
             stdout.contains(route),
             "the report stopped saying how to configure a service with {route}: {stdout}"
@@ -3829,8 +3779,7 @@ fn a_streamed_run_that_stops_before_the_turn_writes_only_the_result_object() {
 ///
 /// An aichat build with an AWS account, so three credentials are accounted for, and all three stand
 /// at Held: the session credential is the one that reads as briefer than the rest, and CRED-9 puts
-/// it beside them. A report printing one tier for every credential is caught where a credential
-/// stands above Held, which is the imported subscription below.
+/// it beside them.
 #[test]
 fn doctor_names_the_tier_of_every_credential_it_accounts_for() {
     let scratch = Scratch::new("cli-running-tiers");
@@ -3885,58 +3834,83 @@ fn doctor_names_the_tier_of_every_credential_it_accounts_for() {
     }
 }
 
-/// CRED-2: an imported subscription's credential batch is a credential in use, so the report
-/// accounts for it and names the tier its walk stopped at. It is the one credential here that
-/// stops above Held, so a report that defaulted every tier to the bottom of the scale passes
-/// everything else and fails this.
+/// A premium key as `bravebot auth login brave` stores it, for a test that needs a key held.
+const A_PREMIUM_KEY: &str = "placeholder-premium-key";
+
+fn a_stored_premium_key() -> String {
+    format!(r#"{{"version": 1, "key": "{A_PREMIUM_KEY}"}}"#)
+}
+
+/// CRED-2: the premium key is a credential in use, so the report accounts for it and names the
+/// tier its walk stopped at, without printing it.
 ///
-/// Both directions from one fixture, because the account is owed for custody rather than for the
-/// configuration: the same build with nothing imported holds one credential fewer, and a rule that
-/// listed the batch unconditionally would send somebody to forget an import they never made.
+/// Four homes from one fixture, because the account is owed for custody of a key that is stored
+/// and for no other: the same build with no key holds one credential fewer, a key stored on a
+/// machine whose build reaches no Brave backend has nowhere to go and is dropped, and a file that
+/// cannot be read is said rather than read as no key.
 #[test]
-fn doctor_accounts_for_an_imported_subscription_at_the_tier_its_walk_stopped_at() {
-    let scratch = Scratch::new("cli-running-batch-tier");
+fn doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at() {
     let configured = [
         ("SERVICES_KEY_AICHAT", "a-services-key"),
         ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
         ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
     ];
+    let bedrock_only = [("BRAVEBOT_USE_BEDROCK", "1"), ("AWS_REGION", "us-west-2")];
 
-    let (before, stderr) = said(&bravebot(&scratch.path, &configured, &["doctor"]));
+    let report = |scratch: &Scratch, environment: &[(&str, &str)]| {
+        let output = bravebot(&scratch.path, environment, &["doctor"]);
+        let (stdout, stderr) = said(&output);
+        assert!(
+            !stdout.contains(A_PREMIUM_KEY) && !stderr.contains(A_PREMIUM_KEY),
+            "doctor printed the premium key: {stdout}{stderr}"
+        );
+        (output.status.code(), stdout, stderr)
+    };
+    let account_of_the_key = |stdout: &str| {
+        let lines: Vec<String> = stdout.lines().map(|line| line.trim().to_string()).collect();
+        lines
+            .iter()
+            .position(|line| line.starts_with("ends ") && line.contains("premium key"))
+            .map(|at| lines[at + 1].clone())
+    };
+
+    let nothing = Scratch::new("cli-running-premium-key-none");
+    let (code, without, stderr) = report(&nothing, &configured);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(
+        account_of_the_key(&without),
+        None,
+        "a build with no key is accounted for one: {without}"
+    );
+    assert!(without.contains("without a premium key"), "{without}");
+
+    let held = Scratch::new("cli-running-premium-key-held")
+        .with_state("brave-key.json", &a_stored_premium_key());
+    let (code, with, stderr) = report(&held, &configured);
+    assert_eq!(code, Some(0), "{stderr}");
+    let tier = account_of_the_key(&with)
+        .unwrap_or_else(|| panic!("the premium key is not accounted for: {with}"));
     assert!(
-        !before.contains("subscription's credential"),
-        "a machine with nothing imported is accounted for a batch: {before}{stderr}"
+        tier.starts_with("tier ") && tier.contains("held:"),
+        "the key is accounted for at a tier its walk did not stop at: {tier}"
+    );
+    assert!(with.contains("with a premium key"), "{with}");
+
+    let nowhere_to_go = Scratch::new("cli-running-premium-key-no-backend")
+        .with_state("brave-key.json", &a_stored_premium_key());
+    let (_, dropped, _) = report(&nowhere_to_go, &bedrock_only);
+    assert_eq!(
+        account_of_the_key(&dropped),
+        None,
+        "a key with no Brave backend to go to is accounted for: {dropped}"
     );
 
-    let stored = scratch.credentials();
-    std::fs::create_dir_all(stored.parent().expect("the state directory"))
-        .expect("create the state directory");
-    std::fs::write(
-        &stored,
-        r#"{"version": 1,
-            "order_id": "aaaaaaaa-1111-4222-8333-444444444444",
-            "environment": "production",
-            "item_id": "b7114ccc-b3a5-4951-9a5d-8b7a28731111",
-            "issuer": "brave.com?sku=brave-leo-premium",
-            "credentials": [{"unblinded": "a-token", "valid_from": "2020-01-01T00:00:00Z",
-                             "valid_to": "2099-01-01T00:00:00Z", "spent": false, "rfc": true}]}"#,
-    )
-    .expect("write an imported batch");
-
-    let output = bravebot(&scratch.path, &configured, &["doctor"]);
-    let (stdout, stderr) = said(&output);
-    assert!(output.status.success(), "doctor did not run: {stderr}");
-
-    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
-    let at = lines
-        .iter()
-        .position(|line| line.starts_with("ends ") && line.contains("subscription's credential"))
-        .unwrap_or_else(|| panic!("the batch is accounted for: {stdout}"));
-    assert!(
-        lines[at + 1].starts_with("tier ") && lines[at + 1].contains("granted"),
-        "the batch is accounted for at a tier its walk did not stop at: {}",
-        lines[at + 1]
-    );
+    let garbled =
+        Scratch::new("cli-running-premium-key-garbled").with_state("brave-key.json", "not a key");
+    let (code, said_of_it, _) = report(&garbled, &configured);
+    assert_eq!(code, Some(1), "{said_of_it}");
+    assert!(said_of_it.contains("brave-key.json"), "{said_of_it}");
+    assert_eq!(account_of_the_key(&said_of_it), None);
 }
 
 /// CRED-10: the figure sizing the one brief window reaches the person, under the account of what
@@ -4928,7 +4902,7 @@ fn a_session_in_lines_with_no_service_configured_says_how_to_configure_one() {
         "amazon-bedrock",
         "OpenRouter",
         "bravebot auth login chatgpt",
-        "bravebot auth login leo",
+        "bravebot auth login brave",
     ] {
         assert!(
             transcript.contains(route),
@@ -4970,7 +4944,7 @@ fn a_background_session_with_no_service_configured_says_how_to_configure_one() {
         "amazon-bedrock",
         "OpenRouter",
         "bravebot auth login chatgpt",
-        "bravebot auth login leo",
+        "bravebot auth login brave",
     ] {
         assert!(
             transcript.contains(route),
@@ -5105,7 +5079,7 @@ fn a_session_in_lines_with_a_configured_gateway_opens() {
         "a configured gateway was refused as no service at all: {transcript}"
     );
     assert!(
-        !transcript.contains("bravebot auth login leo"),
+        !transcript.contains("bravebot auth login brave"),
         "somebody who has configured a service was sent to configure another: {transcript}"
     );
     // The end of the input in place of an answer to the startup question starts no session and
@@ -5286,107 +5260,37 @@ fn a_session_in_lines_draws_a_checkouts_settings_as_pictures_before_the_startup_
     );
 }
 
-/// An import is a write by definition, so an incognito session refuses it rather than doing it
-/// and discarding the result: that would mint a batch on Brave's service that nothing could ever
-/// spend. Refused before the device is registered, which is what the empty reply stream says:
-/// the search for an order prints as it goes.
+/// `import-leo-creds` is retired: it says so and names the variable that replaced it, with whatever
+/// followed it, in an incognito session or not, and it starts no work. Left as a word that is
+/// nothing, it would be taken as the task a one-shot run was asked to do and sent to a model.
 #[test]
-fn an_import_is_refused_in_an_incognito_session() {
-    let scratch = Scratch::new("cli-running-incognito-import");
-    let output = bravebot(
-        &scratch.path,
-        &[],
-        &["--incognito", "import-leo-creds", "stable"],
-    );
-
-    let (stdout, stderr) = said(&output);
-    assert!(
-        !output.status.success(),
-        "an import in an incognito session exited successfully: {stderr}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "the import started work before refusing: {stdout}"
-    );
-    assert!(
-        stderr.contains("incognito"),
-        "the run stopped without saying the mode is why: {stderr}"
-    );
-    assert!(
-        !scratch.credentials().exists(),
-        "an incognito session left credentials behind"
-    );
-}
-
-/// Forgetting is permitted where importing is not: removing a stored secret leaves less behind
-/// rather than more, which is the direction the mode points. A mode that refused every command
-/// with a subscription in its name would take the private session away from anyone who wanted to
-/// stop spending one.
-#[test]
-fn forgetting_an_import_is_allowed_in_an_incognito_session() {
-    let scratch = Scratch::new("cli-running-incognito-forget");
-    let stored = scratch.credentials();
-    std::fs::create_dir_all(stored.parent().expect("the state directory"))
-        .expect("create the state directory");
-    std::fs::write(&stored, "{}").expect("write credentials to forget");
-
-    let output = bravebot(
-        &scratch.path,
-        &[],
-        &["--incognito", "import-leo-creds", "--forget"],
-    );
-
-    let (_, stderr) = said(&output);
-    assert!(
-        output.status.success(),
-        "forgetting an import was refused: {stderr}"
-    );
-    assert!(
-        !stored.exists(),
-        "the credentials are still at {}",
-        stored.display()
-    );
-}
-
-/// A stored subscription is one batch for every channel, so `--forget` naming one is refused
-/// rather than read as forgetting only that channel's import, and nothing is removed.
-#[test]
-fn forgetting_takes_no_channel() {
-    let scratch = Scratch::new("cli-running-forget-channel");
-    let stored = scratch.credentials();
-    std::fs::create_dir_all(stored.parent().expect("the state directory"))
-        .expect("create the state directory");
-    std::fs::write(&stored, "{}").expect("write credentials to keep");
+fn the_retired_import_command_says_so_and_starts_no_work() {
+    let scratch = Scratch::new("cli-running-retired-import");
 
     for arguments in [
-        &["import-leo-creds", "--forget", "nightly"][..],
-        &["import-leo-creds", "nightly", "--forget"][..],
+        &["import-leo-creds"][..],
+        &["import-leo-creds", "nightly"][..],
+        &["import-leo-creds", "--forget"][..],
+        &["--incognito", "import-leo-creds", "stable"][..],
     ] {
         let output = bravebot(&scratch.path, &[], arguments);
-        let (stdout, stderr) = said(&output);
 
+        let (stdout, stderr) = said(&output);
         assert_eq!(
             output.status.code(),
             Some(2),
             "{arguments:?} was not refused as an argument: {stderr}"
         );
+        assert!(stdout.is_empty(), "{arguments:?} started work: {stdout}");
         assert!(
-            stderr.contains("--forget takes no channel"),
-            "{arguments:?} did not say why: {stderr}"
-        );
-        assert!(
-            stdout.is_empty(),
-            "{arguments:?} reported a forget: {stdout}"
-        );
-        assert!(
-            stored.exists(),
-            "{arguments:?} removed the stored subscription"
+            stderr.contains("no longer imports") && stderr.contains("bravebot auth login brave"),
+            "{arguments:?} did not say what replaced it: {stderr}"
         );
     }
-
-    let output = bravebot(&scratch.path, &[], &["import-leo-creds", "--forget"]);
-    assert!(output.status.success(), "forgetting with no channel failed");
-    assert!(!stored.exists(), "forgetting left the subscription behind");
+    assert!(
+        !scratch.path.join(".bravebot").exists(),
+        "a retired command wrote to the state directory"
+    );
 }
 
 /// A gateway that answers one roster and keeps what was asked of it.
@@ -8257,7 +8161,7 @@ fn auth_login_naming_no_way_is_refused_where_nobody_can_pick_one() {
         "the list was printed for nobody: {stdout}"
     );
     for form in [
-        "bravebot auth login leo",
+        "bravebot auth login brave",
         "bravebot auth login bedrock",
         "bravebot auth login import",
         "bravebot auth login gateway",
@@ -8266,8 +8170,8 @@ fn auth_login_naming_no_way_is_refused_where_nobody_can_pick_one() {
     }
 }
 
-/// CLI-18: a word that names no way, a flag after `leo` or a second channel, and a word after a way
-/// that takes none are refused before anything runs, each naming what it refused.
+/// CLI-18: a word that names no way, including the retired `leo`, and a word after a way that takes
+/// none are refused before anything runs, each naming what it refused.
 #[test]
 fn auth_refuses_what_names_no_way_to_sign_in() {
     let scratch = Scratch::new("cli-running-auth-refused");
@@ -8276,13 +8180,16 @@ fn auth_refuses_what_names_no_way_to_sign_in() {
         (&["auth"][..], "bravebot auth login"),
         (&["auth", "signin"][..], "signin"),
         (&["auth", "login", "openrouter"][..], "openrouter"),
-        (&["auth", "login", "LEO", "--forget"][..], "--forget"),
-        (&["auth", "login", "leo", "beta", "nightly"][..], "nightly"),
+        (&["auth", "login", "LEO"][..], "LEO"),
+        (&["auth", "login", "leo", "beta"][..], "leo"),
+        (&["auth", "status", "leo"][..], "leo"),
+        (&["auth", "login", "brave", "now"][..], "now"),
+        (&["auth", "logout", "brave", "now"][..], "now"),
         (&["auth", "login", "bedrock", "us-east-1"][..], "us-east-1"),
-        (&["auth", "logout"][..], "bravebot auth logout leo"),
+        (&["auth", "logout"][..], "bravebot auth logout gateway"),
         (&["auth", "logout", "bedrock"][..], "aws sso logout"),
         (&["auth", "logout", "openrouter", "now"][..], "openrouter"),
-        (&["auth", "logout", "leo", "now"][..], "now"),
+        (&["auth", "logout", "leo"][..], "leo"),
     ] {
         let output = bravebot(&scratch.path, NOTHING_CONFIGURED, arguments);
 
@@ -8295,37 +8202,35 @@ fn auth_refuses_what_names_no_way_to_sign_in() {
         );
     }
     assert!(
-        !scratch.credentials().exists(),
+        !scratch.path.join(".bravebot").exists(),
         "a refused sign-in left credentials behind"
     );
 }
 
-/// CLI-18: in an incognito session Leo and the import are refused by the checks their own commands
-/// make, with the same words, and the Bedrock way is not, since the AWS session it starts is the
-/// AWS CLI's and a session in that mode starts one too.
+/// CLI-18: in an incognito session the import is refused by the check its own command makes, with
+/// the same words, and the Bedrock way is not, since the AWS session it starts is the AWS CLI's and
+/// a session in that mode starts one too.
 #[test]
 fn auth_login_in_an_incognito_session_refuses_what_its_command_refuses() {
     let scratch = Scratch::new("cli-running-auth-incognito");
 
-    for (way, command) in [("leo", "import-leo-creds"), ("import", "import-providers")] {
-        let through_auth = bravebot(
-            &scratch.path,
-            NOTHING_CONFIGURED,
-            &["--incognito", "auth", "login", way],
-        );
-        let direct = bravebot(&scratch.path, NOTHING_CONFIGURED, &["--incognito", command]);
+    let (way, command) = ("import", "import-providers");
+    let through_auth = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "auth", "login", way],
+    );
+    let direct = bravebot(&scratch.path, NOTHING_CONFIGURED, &["--incognito", command]);
 
-        let (stdout, stderr) = said(&through_auth);
-        assert_eq!(through_auth.status.code(), Some(1), "{way}: {stderr}");
-        assert!(stdout.is_empty(), "{way} started work: {stdout}");
-        assert!(stderr.contains("incognito"), "{way}: {stderr}");
-        assert_eq!(
-            stderr,
-            said(&direct).1,
-            "{way} is not refused as {command} is"
-        );
-    }
-    assert!(!scratch.credentials().exists());
+    let (stdout, stderr) = said(&through_auth);
+    assert_eq!(through_auth.status.code(), Some(1), "{way}: {stderr}");
+    assert!(stdout.is_empty(), "{way} started work: {stdout}");
+    assert!(stderr.contains("incognito"), "{way}: {stderr}");
+    assert_eq!(
+        stderr,
+        said(&direct).1,
+        "{way} is not refused as {command} is"
+    );
     assert!(!scratch.settings().exists());
 
     // Past any refusal for the mode, to the check that there is an account to sign in to.
@@ -8763,31 +8668,6 @@ fn doctor_names_no_sign_in_for_a_missing_aws_cli_or_an_unknown_profile() {
     );
 }
 
-/// CLI-18: signing out of Leo is forgetting the import, which an incognito session allows since it
-/// leaves less behind.
-#[test]
-fn auth_logout_leo_forgets_the_import_in_an_incognito_session() {
-    let scratch = Scratch::new("cli-running-auth-logout");
-    let stored = scratch.credentials();
-    std::fs::create_dir_all(stored.parent().expect("the state directory"))
-        .expect("create the state directory");
-    std::fs::write(&stored, "{}").expect("write credentials to forget");
-
-    let output = bravebot(
-        &scratch.path,
-        NOTHING_CONFIGURED,
-        &["--incognito", "auth", "logout", "leo"],
-    );
-
-    let (_, stderr) = said(&output);
-    assert!(output.status.success(), "signing out was refused: {stderr}");
-    assert!(
-        !stored.exists(),
-        "the credentials are still at {}",
-        stored.display()
-    );
-}
-
 /// CLI-18: the Bedrock way signs in to an account the configuration names, so where it names none
 /// it is a configuration failure that says what to set, and no AWS command is run. The switch is not
 /// among what to set, since picking the way is the opt-in, unless a file or an export sets it to
@@ -9092,25 +8972,6 @@ fn auth_logout_gateway_forgets_a_key_stored_for_a_known_service_no_block_names()
     );
 }
 
-/// A batch imported for `environment`, holding one spent and one unspent credential. The tokens are
-/// placeholders, and [`A_LEO_TOKEN`] is the one a test looks for in what was printed.
-const A_LEO_TOKEN: &str = "placeholder-leo-token";
-
-fn a_batch_for(environment: &str) -> String {
-    format!(
-        r#"{{"version": 1,
-            "order_id": "aaaaaaaa-1111-4222-8333-444444444444",
-            "environment": "{environment}",
-            "item_id": "b7114ccc-b3a5-4951-9a5d-8b7a28731111",
-            "issuer": "brave.com?sku=brave-leo-premium",
-            "credentials": [
-                {{"unblinded": "{A_LEO_TOKEN}", "valid_from": "2020-01-01T00:00:00Z",
-                  "valid_to": "2099-01-01T00:00:00Z", "spent": true, "rfc": true}},
-                {{"unblinded": "{A_LEO_TOKEN}", "valid_from": "2020-01-01T00:00:00Z",
-                  "valid_to": "2099-01-01T00:00:00Z", "spent": false, "rfc": true}}]}}"#
-    )
-}
-
 /// What `auth status` printed and exited with, for the arguments after `auth status`.
 fn status_of(
     scratch: &Scratch,
@@ -9122,12 +8983,12 @@ fn status_of(
     let output = bravebot(&scratch.path, environment, &command);
     let (stdout, stderr) = said(&output);
     assert!(
-        !stdout.contains(A_LEO_TOKEN) && !stderr.contains(A_LEO_TOKEN),
-        "{arguments:?} printed a Leo credential: {stdout}{stderr}"
-    );
-    assert!(
         !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
         "{arguments:?} printed a gateway key: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains(A_PREMIUM_KEY) && !stderr.contains(A_PREMIUM_KEY),
+        "{arguments:?} printed the premium key: {stdout}{stderr}"
     );
     for held in [
         A_CHATGPT_ACCESS_TOKEN,
@@ -9143,93 +9004,117 @@ fn status_of(
     (output.status.code(), stdout, stderr)
 }
 
-/// CLI-23: with nothing imported Leo is not signed in, which is a failure a script can test for, and
-/// the line says how to sign in.
+/// CLI-23: with no key stored the Brave way is not signed in, which is a failure a script can test
+/// for, and the line says how to store one. Reading writes nothing, so an incognito session may ask.
 #[test]
-fn auth_status_leo_with_nothing_imported_is_not_signed_in_and_exits_nonzero() {
-    let scratch = Scratch::new("cli-running-auth-status-none");
+fn auth_status_brave_with_no_key_is_not_signed_in_and_exits_nonzero() {
+    let scratch = Scratch::new("cli-running-auth-status-brave-none");
 
-    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["leo"]);
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["brave"]);
 
     assert_eq!(code, Some(1), "{stdout}{stderr}");
-    assert!(
-        stdout.contains("leo: not signed in: no Leo subscription is imported"),
-        "{stdout}"
+    assert_eq!(
+        stdout,
+        "brave: not signed in: no premium key is stored; run bravebot auth login brave\n"
     );
-    assert!(stdout.contains("bravebot auth login leo"), "{stdout}");
     assert!(stderr.starts_with("BB1001: "), "{stderr}");
-
-    // Reading writes nothing, so an incognito session may ask.
     let incognito = bravebot(
         &scratch.path,
         NOTHING_CONFIGURED,
-        &["--incognito", "auth", "status", "leo"],
+        &["--incognito", "auth", "status", "brave"],
     );
     assert_eq!(said(&incognito), (stdout, stderr));
 }
 
-/// CLI-23: an imported batch is signed in, reported by its environment and the count of what is
-/// unspent, and nothing of it is printed.
+/// CLI-23: a stored key is signed in, said without the key, and one that cannot be read is unusable
+/// and names the file.
 #[test]
-fn auth_status_leo_with_a_usable_batch_reports_counts_only() {
-    let scratch = Scratch::new("cli-running-auth-status-leo")
-        .with_state("leo-premium.json", &a_batch_for("production"));
+fn auth_status_brave_reports_a_stored_key_without_the_key() {
+    let held = Scratch::new("cli-running-auth-status-brave-held")
+        .with_state("brave-key.json", &a_stored_premium_key());
 
-    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["leo"]);
+    let (code, stdout, stderr) = status_of(&held, NOTHING_CONFIGURED, &["brave"]);
 
     assert_eq!(code, Some(0), "{stdout}{stderr}");
     assert_eq!(
         stdout,
-        "leo: signed in: production subscription imported, 1 of 2 credentials unspent\n"
+        "brave: signed in: a premium key is stored and is sent to Brave's premium service alone\n"
     );
     assert_eq!(stderr, "");
+
+    let garbled = Scratch::new("cli-running-auth-status-brave-garbled")
+        .with_state("brave-key.json", "not a key");
+    let (code, stdout, stderr) = status_of(&garbled, NOTHING_CONFIGURED, &["brave"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stdout.starts_with("brave: unusable: "), "{stdout}");
+    assert!(stdout.contains("brave-key.json"), "{stdout}");
 }
 
-/// CLI-23 and PREM-8: a batch for an environment the endpoint does not accept is unusable and says
-/// what a turn would say, remedy included; against an endpoint that belongs to no environment the
-/// same batch is not refused, as it is not in a turn.
+/// CLI-18: logging out of Brave removes the one file, in an incognito session as well since it
+/// leaves less behind, says what it leaves at Brave, is not an error where nothing is stored, and
+/// leaves the other files of the state directory where they are.
 #[test]
-fn auth_status_leo_for_another_environment_prints_the_remedy_a_turn_would() {
-    let scratch = Scratch::new("cli-running-auth-status-mismatch")
-        .with_state("leo-premium.json", &a_batch_for("staging"));
+fn auth_logout_brave_forgets_the_key_and_only_that_one() {
+    let scratch = Scratch::new("cli-running-auth-logout-brave")
+        .with_state("brave-key.json", &a_stored_premium_key())
+        .with_state("gateway-keys.json", &stored_keys(&["work"]));
 
-    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["leo"]);
-
-    assert_eq!(code, Some(1), "{stdout}{stderr}");
-    assert!(
-        stdout.contains("leo: unusable: the imported subscription is for staging"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("run `bravebot auth login leo` with the matching Brave channel"),
-        "the remedy is missing: {stdout}"
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "auth", "logout", "brave"],
     );
 
-    let local = [
-        ("SERVICES_KEY_AICHAT", "a-services-key"),
-        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
-        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
-        ("BRAVE_AI_CHAT_PREMIUM_ENDPOINT", "http://127.0.0.1:1"),
-    ];
-    let (code, stdout, stderr) = status_of(&scratch, &local, &["leo"]);
-    assert_eq!(code, Some(0), "{stdout}{stderr}");
-    assert!(stdout.contains("signed in"), "{stdout}");
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("forgot the stored premium key"), "{stdout}");
+    assert!(stdout.contains("still works"), "{stdout}");
+    assert!(!stdout.contains(A_PREMIUM_KEY), "{stdout}");
+    let state = scratch.path.join(".bravebot");
+    assert!(!state.join("brave-key.json").exists());
+    assert!(state.join("gateway-keys.json").exists());
+
+    let again = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["auth", "logout", "brave"],
+    );
+    let (stdout, stderr) = said(&again);
+    assert!(again.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("no premium key is stored"), "{stdout}");
 }
 
-/// CLI-23 and PREM-8: a file that cannot be read as a batch is unusable rather than absent, with the
-/// store's own refusal text, which names the remedy.
+/// CLI-18: the Brave key is asked for on a terminal, so a pipe is refused as an argument and nothing
+/// is stored, and an incognito session stores nothing either.
 #[test]
-fn auth_status_leo_with_an_unreadable_batch_is_unusable_with_the_stores_remedy() {
-    let scratch = Scratch::new("cli-running-auth-status-unreadable")
-        .with_state("leo-premium.json", "not a batch");
+fn auth_login_brave_is_refused_where_a_key_cannot_be_typed_or_kept() {
+    let scratch = Scratch::new("cli-running-auth-login-brave-refused");
 
-    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["leo"]);
+    let piped = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["auth", "login", "brave"],
+    );
+    let (stdout, stderr) = said(&piped);
+    assert_eq!(piped.status.code(), Some(2), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("needs a terminal"), "{stderr}");
 
-    assert_eq!(code, Some(1), "{stdout}{stderr}");
-    assert!(stdout.starts_with("leo: unusable: "), "{stdout}");
+    let incognito = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "auth", "login", "brave"],
+    );
+    let (stdout, stderr) = said(&incognito);
+    assert_eq!(incognito.status.code(), Some(1), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("incognito"), "{stderr}");
     assert!(
-        stdout.contains("run `bravebot auth login leo` again to replace it"),
-        "{stdout}"
+        !scratch
+            .path
+            .join(".bravebot")
+            .join("brave-key.json")
+            .exists()
     );
 }
 
@@ -9431,14 +9316,14 @@ fn auth_status_with_no_way_named_succeeds_when_any_sign_in_is_usable() {
     let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &[]);
     assert_eq!(code, Some(0), "{stdout}{stderr}");
     for expected in [
-        "leo: not signed in",
+        "brave: not signed in",
         "bedrock: not signed in",
         "gateway openrouter: signed in",
     ] {
         assert!(stdout.contains(expected), "{expected} is missing: {stdout}");
     }
 
-    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["leo"]);
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["bedrock"]);
     assert_eq!(code, Some(1), "{stdout}{stderr}");
 
     let nothing = Scratch::new("cli-running-auth-status-nothing");
@@ -9451,8 +9336,8 @@ fn auth_status_with_no_way_named_succeeds_when_any_sign_in_is_usable() {
 }
 
 /// CLI-23 and CLI-6: a configuration that cannot be read leaves the question without an answer,
-/// which is the configuration ending rather than a plain failure, and Leo with nothing imported
-/// does not need the configuration to be told apart.
+/// which is the configuration ending rather than a plain failure, and a ChatGPT sign-in that is not
+/// stored does not need the configuration to be told apart.
 #[test]
 fn auth_status_in_an_unconfigured_build_is_a_configuration_failure() {
     let scratch = Scratch::new("cli-running-auth-status-unconfigured");
@@ -9461,7 +9346,7 @@ fn auth_status_in_an_unconfigured_build_is_a_configuration_failure() {
     assert_eq!(code, Some(3), "{stdout}{stderr}");
     assert!(stderr.starts_with("BB1003: "), "{stderr}");
 
-    let (code, stdout, _) = status_of(&scratch, &[], &["leo"]);
+    let (code, stdout, _) = status_of(&scratch, &[], &["chatgpt"]);
     assert_eq!(code, Some(1), "{stdout}");
 }
 
@@ -9474,11 +9359,12 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
     for arguments in [
         &["import"][..],
         &["elsewhere"],
-        &["leo", "now"],
+        &["xai", "now"],
+        &["brave", "now"],
         &["bedrock", "now"],
         &["gateway", "work", "now"],
         &["--json"],
-        &["leo", "--json"],
+        &["chatgpt", "--json"],
         &["gateway", "--json"],
     ] {
         let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, arguments);
@@ -9488,7 +9374,7 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
     }
     let (_, _, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["elsewhere"]);
     assert!(
-        stderr.contains("bravebot auth status [leo|bedrock|gateway [id]|chatgpt|xai]"),
+        stderr.contains("bravebot auth status [brave|bedrock|gateway [id]|chatgpt|xai]"),
         "{stderr}"
     );
 
@@ -9496,13 +9382,13 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
     // the language the interface is in.
     let (_, _, english) = status_of(&scratch, NOTHING_CONFIGURED, &["import"]);
     assert!(
-        english.contains("name leo, bedrock, gateway, chatgpt or xai"),
+        english.contains("name brave, bedrock, gateway, chatgpt or xai"),
         "{english}"
     );
     let in_french = [NOTHING_CONFIGURED, &[("BRAVEBOT_LOCALE", "fr")]].concat();
     let (_, _, french) = status_of(&scratch, &in_french, &["import"]);
     assert!(
-        french.contains("nommez leo, bedrock, gateway, chatgpt ou xai"),
+        french.contains("nommez brave, bedrock, gateway, chatgpt ou xai"),
         "{french}"
     );
 }
@@ -9552,7 +9438,7 @@ fn auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request(
     let (code, stdout, stderr) = status_of(&held, NOTHING_CONFIGURED, &[]);
     assert_eq!(code, Some(0), "{stdout}{stderr}");
     assert!(stdout.contains("chatgpt: signed in: "), "{stdout}");
-    assert!(stdout.contains("leo: not signed in: "), "{stdout}");
+    assert!(stdout.contains("bedrock: not signed in: "), "{stdout}");
 
     let lapsed = Scratch::new("cli-running-auth-status-chatgpt-lapsed")
         .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1));
@@ -10087,13 +9973,13 @@ fn a_gateway_listing_a_chatgpt_name_does_not_take_a_turn_chosen_as_the_accounts(
 }
 
 /// CHATGPT-11: logging out removes the one file and says what it leaves, is allowed in an
-/// incognito session, is not an error where nothing is stored, leaves the Leo credentials where
-/// they are, and leaves no claim or temporary behind.
+/// incognito session, is not an error where nothing is stored, leaves the other sign-in's file where
+/// it is, and leaves no claim or temporary behind.
 #[test]
 fn auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one() {
     let scratch = Scratch::new("cli-running-auth-logout-chatgpt")
         .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1_792_703_127))
-        .with_state("leo-premium.json", &a_batch_for("production"));
+        .with_state("gateway-keys.json", &stored_keys(&["work"]));
 
     let output = bravebot(
         &scratch.path,
@@ -10112,8 +9998,8 @@ fn auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one() {
     let state = scratch.path.join(".bravebot");
     assert!(!state.join("chatgpt-account.json").exists());
     assert!(
-        scratch.credentials().exists(),
-        "the Leo credentials went too"
+        state.join("gateway-keys.json").exists(),
+        "the gateway keys went too"
     );
     let mut left: Vec<String> = std::fs::read_dir(&state)
         .expect("the state directory")
@@ -10128,7 +10014,7 @@ fn auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one() {
     left.sort();
     assert_eq!(
         left,
-        ["leo-premium.json"],
+        ["gateway-keys.json"],
         "something was left beside the credentials"
     );
 

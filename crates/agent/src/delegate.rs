@@ -578,7 +578,7 @@ pub fn seed<S: Sink>(
 /// Run one delegate to completion.
 ///
 /// Takes nothing belonging to the run that spawned it. The trail, the reporter, the confirmer and
-/// the wallet are lent rather than owned, and the language servers come as a handle onto the
+/// the premium key are lent rather than owned, and the language servers come as a handle onto the
 /// session's set, because there is one of each however many runs are going: one trail records
 /// them all, one screen shows them all, one person answers for them all, one subscription pays for
 /// them all, and one index serves them all.
@@ -642,12 +642,10 @@ pub fn run(
     confirmer: &mut (dyn Confirmer + Send),
     reporter: &mut (dyn Reporter + Send),
     sink: &mut (dyn Sink + Send),
-    // The credential store the spawning turn is spending from, where it found one. Lent for the
-    // same reason the three above are, and it is the one that would cost the person money twice:
-    // a spend is held in memory until the wallet is written back, so a delegate that opened its
-    // own would read the file as the turn found it and present the credential the turn is
-    // presenting right now (PREM-5).
-    wallet: Option<&dyn crate::shared::Spends>,
+    // The premium key the spawning turn is presenting, where it found one. Lent for the same
+    // reason the three above are: a delegate that took the key from the configuration itself would
+    // present it without being counted against the session's limit in credits (TURN-8).
+    premium_key: Option<&dyn crate::shared::Spends>,
     // The spawning turn's language servers. A set of its own would put the same language to the
     // person a second time and index the same tree twice, beside the server already doing it
     // (LSP-8).
@@ -783,7 +781,7 @@ pub fn run(
         &mut notices,
         &mut rounds,
         &mut worked,
-        wallet,
+        premium_key,
         servers.as_mut(),
     ) {
         Ok(outcome) => outcome,

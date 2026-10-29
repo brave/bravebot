@@ -1321,7 +1321,8 @@ fn unparseable_frames_do_not_lose_the_reply() {
     assert_eq!(completion.content.declassify(&proof), "still here");
 }
 
-/// A stub subscription handing out one credential, so routing can be tested without a real store.
+/// A stub source handing out the premium key a fixed number of times, so routing can be tested
+/// without the caller that owns the real one.
 struct StubSubscription {
     remaining: usize,
 }
@@ -1329,12 +1330,11 @@ struct StubSubscription {
 impl bravebot_aichat::Subscription for StubSubscription {
     fn next_credential(&mut self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
         if self.remaining == 0 {
-            return Err("the imported credentials are used up".to_string());
+            return Err("the key is not held".to_string());
         }
         self.remaining -= 1;
         Ok(bravebot_aichat::SubscriptionCredential {
-            cookie_name: "__Secure-sku#brave-leo-premium".to_string(),
-            cookie_value: "presented-credential".to_string(),
+            key: bravebot_config::Secret::new("presented-key"),
         })
     }
 }
@@ -1350,10 +1350,11 @@ fn premium_config(endpoint: &str, premium: &str) -> Config {
     .expect("config")
 }
 
-/// With a subscription, the request must go to the premium host and carry the credential as the
-/// cookie the backend reads. This is what the whole import exists to produce.
+/// PREM-10: with a premium key, the request goes to the premium host and carries the key as its
+/// bearer token. The premium host authorises on the key alone, so the request is not signed: a
+/// signature beside the key, or the key in a cookie, is a request the host does not read.
 #[test]
-fn a_subscribed_request_goes_to_the_premium_host_with_the_credential() {
+fn a_premium_request_goes_to_the_premium_host_with_the_key_as_its_bearer_token() {
     let (premium_endpoint, received) = serve(REPLY);
     // The base host is a port nothing is listening on, so reaching it would fail rather than
     // quietly pass.
@@ -1377,16 +1378,28 @@ fn a_subscribed_request_goes_to_the_premium_host_with_the_credential() {
 
     let captured = received.recv().expect("request captured");
     assert_eq!(
-        captured.header("cookie"),
-        Some("__Secure-sku#brave-leo-premium=presented-credential")
+        captured.header("authorization"),
+        Some("Bearer presented-key")
+    );
+    assert_eq!(captured.header("cookie"), None, "the key is not a cookie");
+    assert_eq!(captured.header("digest"), None, "the request is not signed");
+    assert_eq!(captured.header("brave-product"), Some("bravebot"));
+    assert_eq!(
+        captured
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .count(),
+        1,
+        "the signature and the key both went"
     );
 }
 
-/// Once the batch is spent the request must fail rather than quietly going out with no credential.
-/// A downgrade nobody was told about is indistinguishable from the service getting worse, and it
+/// PREM-10: a request that cannot present the key fails rather than quietly going out without it. A
+/// downgrade nobody was told about is indistinguishable from the service getting worse, and it
 /// would also spend a premium-tier allowance the user thought they had paid past.
 #[test]
-fn an_exhausted_subscription_fails_rather_than_downgrading() {
+fn an_unusable_premium_key_fails_rather_than_downgrading() {
     // Both hosts point at a listener, so a fallback would succeed and this would pass wrongly.
     let (base_endpoint, _received) = serve(REPLY);
     let config = premium_config(&base_endpoint, &base_endpoint);
@@ -1406,21 +1419,24 @@ fn an_exhausted_subscription_fails_rather_than_downgrading() {
 
     let err = client
         .complete(&mut policy, &request)
-        .expect_err("an unusable subscription must fail the request");
+        .expect_err("an unusable key must fail the request");
     let shown = err.to_string();
-    assert!(shown.contains("subscription"), "unclear error: {shown}");
+    assert!(shown.contains("premium key"), "unclear error: {shown}");
     assert!(
-        shown.contains("bravebot auth login leo"),
+        shown.contains("bravebot auth login brave"),
         "no remedy offered: {shown}"
     );
 }
 
-/// A build with no premium host must attach no credential even when credentials exist, rather
-/// than sending one to an endpoint that did not issue it.
+/// PREM-2: a configuration with no premium host attaches no key even when a source of one is lent,
+/// rather than sending it to an endpoint it was not issued for. The request is the free endpoint's,
+/// signed as it always was. The host is compiled in for every build that reaches Brave, so the case
+/// is one a configuration is handed, here by clearing it.
 #[test]
-fn without_a_premium_host_no_credential_is_attached() {
+fn without_a_premium_host_no_key_is_attached() {
     let (base_endpoint, received) = serve(REPLY);
-    let config = config_for(&base_endpoint);
+    let mut config = config_for(&base_endpoint);
+    config.premium_endpoint = None;
     let egress = Egress::new();
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
@@ -1439,9 +1455,56 @@ fn without_a_premium_host_no_credential_is_attached() {
         .expect("completion succeeds");
 
     let captured = received.recv().expect("request captured");
-    assert_eq!(captured.header("cookie"), None);
-    // The credential must not have been spent either, since it was never usable here.
+    let authorization = captured.header("authorization").expect("a signed request");
+    assert!(
+        authorization.starts_with("Signature keyId=\"test-key-id\""),
+        "{authorization}"
+    );
+    assert!(captured.header("digest").is_some());
+    assert!(!authorization.contains("presented-key"));
+    // The key must not have been asked for either, since it was never usable here.
     assert_eq!(subscription.remaining, 5);
+}
+
+/// PREM-10: a redirect in answer to a premium request is a failure and nothing is sent to the host
+/// it names. A redirect re-sends the request, and the conversation with it, and the key is a bearer
+/// secret that belongs to the host it was configured for.
+#[test]
+fn a_redirect_from_the_premium_host_is_a_failure_and_goes_nowhere() {
+    let (elsewhere, landed) = serve(REPLY);
+    let (premium_endpoint, received) = serve_redirect(format!("{elsewhere}/v1/chat/completions"));
+    let config = premium_config("http://127.0.0.1:1", &premium_endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut subscription = StubSubscription { remaining: 1 };
+    let mut client = AichatClient::new(&config, &egress)
+        .with_subscription(&mut subscription)
+        .with_backoff(Duration::from_millis(1));
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("a private conversation")]);
+
+    let error = client
+        .complete(&mut policy, &request)
+        .expect_err("a redirect is not an answer");
+    assert!(
+        matches!(
+            &error,
+            ChatError::Egress(bravebot_net::EgressError::Status { status: 307, .. })
+        ),
+        "{error:?}"
+    );
+    received.recv().expect("the premium host was asked");
+    assert!(
+        landed.recv_timeout(Duration::from_millis(300)).is_err(),
+        "the redirect was followed"
+    );
 }
 
 /// A stop landing in the pause between attempts has nothing to stop but a sleep, and slept in one

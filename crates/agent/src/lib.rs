@@ -121,6 +121,6 @@ pub use processor::ProcessorError;
 pub use report::{Activity, IgnoreReports, Reporter};
 pub use scratch::{ScratchDirectory, SessionScratch};
 pub use spend_limit::SpendLimit;
-pub use subscription::{Discovery, ImportedSubscription};
+pub use subscription::PremiumKey;
 pub use turn::{Outcome, Task, TurnError};
 pub use workspace::{Workspace, WorkspaceError};

@@ -289,7 +289,7 @@ a value of a closed set. Both read bytes this program did not write, which are t
 server. The crate compares and parses them and hands none of them to a turn, a trace or a message to the
 planner. A turn's request adds the status of the serving host's reply and nothing else of it
 ([XAI-18](#XAI-18)). That is the argument
-[premium-credentials.md](premium-credentials.md) makes for its own flow. It is checked against
+[chatgpt-sign-in.md](chatgpt-sign-in.md) makes for its own flow. It is checked against
 [reviewing-for-the-rule.md](../development/reviewing-for-the-rule.md), shape by shape:
 
 - **A branch on untrusted bytes.** The comparisons are a reply's status, the fields the next step needs, the
@@ -351,14 +351,13 @@ is a constant, the request is the conversation the turn built, and the reply's t
 The sign-in is kept in `xai-account.json` in the state directory. It holds a version, the access token, the
 refresh token and the instant the access token expires, and nothing else: not the client, which is a constant
 of the program, and not a field of a reply. The file is created before anything is written to it, reachable
-by the account that signed in and by no other, with the protection the Leo credentials file has: mode 0600
-on Unix and an access-control list for one account on Windows, with nothing inherited. A platform with
-neither has the sign-in refused. It is written beside the file and renamed over it, so a write that stops
+by the account that signed in and by no other: mode 0600 on Unix and an access-control list for one
+account on Windows, with nothing inherited. A platform with neither has the sign-in refused. It is written beside the file and renamed over it, so a write that stops
 part way leaves the last good file. No settings layer, `provider` block or environment variable holds a token
 or names one, and the file is not `settings.json`.
 
 The file, and the claim `xai-account.lock` taken for every write and every removal of it, are this sign-in's
-own. A claim the Leo credentials or the ChatGPT sign-in hold does not hold up a write of this file, and this
+own. A claim the ChatGPT sign-in holds does not hold up a write of this file, and this
 sign-in never writes another's file.
 
 A file that cannot be read, is empty, or holds the fields of another version is reported with the remedy
@@ -370,8 +369,7 @@ is refused the file and its claim: the run base reads the session records and no
 directory.
 
 **Why.** A file of its own because the shape differs from the gateway keys, which are one string under an id
-with no expiry, from the Leo batch, which is spent a credential at a time, and from the ChatGPT account,
-which holds the client OpenAI issued. A claim of its own so that a write is held up only by another write of
+with no expiry, and from the ChatGPT account, which holds the client OpenAI issued. A claim of its own so that a write is held up only by another write of
 this file, which a refresh holds across a request. A file that cannot be read is not read as absent, because
 the next sign-in would then write over what a person may want to look at, and `auth status` would say "not
 signed in" over a file that is there.
@@ -608,14 +606,14 @@ token.
 <a id="XAI-10"></a>
 ### XAI-10: signing in is refused where it cannot be done
 
-`auth login xai` is refused in an incognito session before the code is asked for, as importing a subscription
-is refused there: the sign-in is a write to `~/.bravebot` that the mode exists to decline. It is refused with
+`auth login xai` is refused in an incognito session before the code is asked for, as storing a gateway key
+is refused there ([INCOG-7](incognito.md#INCOG-7)): the sign-in is a write to `~/.bravebot` that the mode exists to decline. It is refused with
 the argument status where stderr is not a terminal, since the address and the code are shown there, and says
 to run it at one. Where both apply, the incognito refusal is the one given. Neither refusal sends a request or
 writes a file. The command asks nothing, so it needs no terminal on stdin.
 
-**Why.** Refusing the sign-in is the same argument as the import's: doing it and discarding the result would
-leave a session that was signed in once and never again. A code shown where nobody reads it is a code that
+**Why.** Refusing the sign-in is the argument [INCOG-7](incognito.md#INCOG-7) makes for every sign-in: doing it
+and discarding the result would leave a session that was signed in once and never again. A code shown where nobody reads it is a code that
 stops working unused.
 
 `verified-by: bravebot_cli::xai::each_condition_that_cannot_be_answered_stops_the_command_with_its_own_ending`
@@ -1302,7 +1300,7 @@ No source states these, and the clauses state no value for them:
 ## Known costs
 
 - The refresh token is a bearer secret in a file for as long as the sign-in lasts. Anything running as the
-  person can read it, as it can read the Leo credentials and the gateway keys.
+  person can read it, as it can read the ChatGPT sign-in and the gateway keys.
 - A code of another shape than the one the service gave, that holds a space, is refused as unreadable and shown to
   nobody, and the sign-in ends ([XAI-3](#XAI-3)).
 - The address and the code are shown to the person as the reply gave them, after a check that they are

@@ -222,11 +222,10 @@ fn mark_row(
 /// `sockets_with_a_path_reachable` says this kernel leaves every unix socket that has a path open to
 /// a stage, which the screen says under `read-only` and `workspace-write` (SANDBOX-3).
 ///
-/// `tier` says whether this build can reach the premium host, and is deliberately about the
-/// configuration rather than about the credentials: a batch on disk may be expired, exhausted, or
-/// issued for another environment, so finding one would not settle the tier either. What was
-/// actually spent is settled by the first turn, which says so if it could not spend anything, and by
-/// `/status` afterwards.
+/// `tier` says whether this build holds a premium key, and is deliberately about the configuration
+/// rather than about a request: a key that is held may still be refused, so holding one would not
+/// settle the tier either. What was actually sent is settled by the first turn, and by `/status`
+/// afterwards.
 ///
 /// Stops at the name because whatever the session has to report about starting up goes next, and
 /// [`invitation`] closes the screen underneath that.

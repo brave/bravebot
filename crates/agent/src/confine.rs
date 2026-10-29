@@ -4358,6 +4358,7 @@ mod tests {
             assert!(reads(&policy, "/"), "{prelude:?}");
             for held_back in [
                 format!("{HOME}/.bravebot/gateway-keys.json"),
+                format!("{HOME}/.bravebot/brave-key.json"),
                 format!("{HOME}/.bravebot/leo-premium.json"),
                 format!("{HOME}/.bravebot/chatgpt-account.json"),
                 format!("{HOME}/.bravebot/xai-account.json"),

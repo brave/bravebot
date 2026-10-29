@@ -69,9 +69,10 @@ address its host resolves to, by [FETCH-8](tools/fetch-url.md#FETCH-8).
 
 A request may instead refuse redirects (`Request::refusing_redirects`). A redirect in answer to it is
 returned as the failure it is, with the status it came with, and nothing is sent to the address it names,
-so there is no hop to revalidate. It is for a request that carries a credential to a destination compiled
-into the program, such as the serving host of a ChatGPT account ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)) and of
-an xAI account ([XAI-16](xai-sign-in.md#XAI-16)).
+so there is no hop to revalidate. It is for a request that carries a credential to a destination fixed by the
+program or by the person's own configuration, such as the serving host of a ChatGPT account
+([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)) and of an xAI account ([XAI-16](xai-sign-in.md#XAI-16)), and Brave's
+premium host, which the premium key is presented to ([PREM-10](premium-credentials.md#PREM-10)).
 
 `verified-by: bravebot_net::egress::every_redirect_hop_is_revalidated`
 `verified-by: bravebot_core::policy::a_fetch_cannot_be_redirected_to_a_host_nobody_approved`
@@ -81,6 +82,7 @@ an xAI account ([XAI-16](xai-sign-in.md#XAI-16)).
 `verified-by: bravebot_net::lib::path_absolute_redirects_keep_the_authority`
 `verified-by: bravebot_aichat::client::a_gateway_client_refusing_redirects_goes_nowhere_a_reply_names`
 `verified-by: bravebot_aichat::client::a_redirect_in_answer_to_the_xai_listing_is_a_failure_and_goes_nowhere`
+`verified-by: bravebot_aichat::client::a_redirect_from_the_premium_host_is_a_failure_and_goes_nowhere`
 `verified-by: bravebot_net::lib::relative_redirects_resolve_against_the_parent_path`
 `verified-by: bravebot_net::lib::scheme_relative_redirects_keep_the_scheme`
 `verified-by: bravebot_net::lib::a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further`
@@ -476,25 +478,20 @@ failed request.
   default, and a token replacement or a backoff waits behind it. A stop ends the wait where the request was
   made with a way to stop it, and a request made without one waits it out.
 - **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds HTTP clients
-  of its own: one for the subscription service and one for each of the ChatGPT and xAI sign-ins. That traffic carries
-  credentials, an order id, an authorization code and tokens, never workspace content or model
-  output, so no labelled value escapes the gate. NET-1 is about everything carrying labelled
+  of its own: one for each of the ChatGPT and xAI sign-ins. That traffic carries an authorization
+  code, a device code and tokens, never workspace content or model output, so no labelled value
+  escapes the gate. NET-1 is about everything carrying labelled
   content. A second egress in this process that ever carried content would be a violation. Its
-  clients are its own; its transport is not. `register`, the ChatGPT and xAI sign-ins and the renewal of an
+  clients are its own; its transport is not. The ChatGPT and xAI sign-ins and the renewal of an
   access token are handed the transport configuration this module resolved, by a caller that
   depends on both crates, so NET-7, NET-8 and NET-11 hold of them too and a machine whose authority
   or route off it is stated in the environment reaches each service on the terms it reaches
   everything else. What stays separate is the policy gate, which those clients have nothing to put
-  to, and the redirect loop, so NET-9 does not reach them either. What each does with a redirect
-  differs:
-  - The ChatGPT clients follow none. A redirect in answer to a request that carries an
-    authorization code, a verifier or a token is a failure, and nothing is sent to the address it
-    names ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)). The xAI client follows none either, for a
-    request that carries a device code or a refresh token ([XAI-1](xai-sign-in.md#XAI-1)).
-  - The subscription client follows its hops through its library's default, which refuses nothing,
-    so the subscription service can redirect its own traffic into cleartext and put an order id and
-    a credential on the wire. Holding it to the same rule means either following its redirects here
-    or configuring that client to follow none, and neither is decided in this document.
+  to, and the redirect loop, so NET-9 does not reach them either. Neither follows a redirect. A
+  redirect in answer to a ChatGPT request that carries an authorization code, a verifier or a token
+  is a failure, and nothing is sent to the address it names
+  ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)). The xAI client follows none either, for a request
+  that carries a device code or a refresh token ([XAI-1](xai-sign-in.md#XAI-1)).
 
   This bullet is the register, and it is read rather than only written: `make check-security` takes
   the crates it names out of it and fails on any manifest under `crates/` that declares a network
@@ -609,7 +606,7 @@ failed request.
   that does.** The TLS library presents it to whichever server requests a certificate during a
   handshake, and nothing records the host it was configured for, so an endpoint that redirects to
   another host ([NET-2](#NET-2) revalidates the hop and no more) is offered it there too. The
-  clients built by `bravebot-skus`, for the subscription service and for the ChatGPT sign-in, are
+  clients built by `bravebot-skus`, for the ChatGPT and xAI sign-ins, are
   handed the same configuration and present it alike. What would bound it is a setting naming the
   hosts, which is not decided here. Pinning that a server demanding a certificate receives this one
   needs a TLS server in the test, and `bravebot-net` has no dependency that is one; the tests pin what

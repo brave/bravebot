@@ -12,10 +12,10 @@ description: What to check when something is not working, and why some behaviour
 bravebot doctor
 ```
 
-It reports the endpoint, whether a premium host is configured, the key id, the model in force and
-whether it was chosen or defaulted, the confinement available on this platform, and the state of any
-imported subscription. It changes nothing, and a configuration error makes it **fail** rather than pass
-with a warning.
+It reports the endpoint, the premium host and whether a premium key is stored, the
+key id, the model in force and whether it was chosen or defaulted, and the confinement available on this
+platform. It changes nothing, and a configuration error makes it **fail** rather than pass with a
+warning.
 
 Inside a session, `/status` reports the same session-level facts plus every trust rule and every
 vouched-for command.
@@ -31,10 +31,6 @@ from debugging will override a working release binary. See
 another it returns 401: the signature is well formed, the credential is not accepted there. For
 a source build, check that `BRAVEBOT_ENV`, the key and the hosts all agree.
 
-**A Leo Premium credential returns 401.** A credential only verifies against the deployment that
-issued it. Import from the Brave channel matching the environment the binary is configured for. See
-[Leo Premium](customize/premium.md#requirements-and-limits).
-
 **`no model service is configured yet`**. Nothing is set up to send the request, so the run stops
 instead of starting work that has no service to do it. It lists the ways to configure one, each
 naming what to type or write. `doctor` says the same and fails. With a ChatGPT or an xAI sign-in
@@ -42,7 +38,8 @@ stored, or both, and no other service configured, it says so instead of listing 
 commands that use the account: `bravebot -i "<prompt>" --model chatgpt/<model>` and `bravebot "<task>" --model
 chatgpt/<model>`, or the same with `xai/<model>`. Started in a terminal outside an incognito session with no
 `--model`, `bravebot` first asks which of the accounts' models to use, where an account lists them. See
-[Configuration](customize/configuration.md).
+[Configuration](customize/configuration.md). A premium key stored with `bravebot auth login brave` is one of the ways; see
+[Brave's premium service](customize/premium.md).
 
 ## When a turn fails
 

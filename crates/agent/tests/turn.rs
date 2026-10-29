@@ -37507,7 +37507,6 @@ fn a_check_runs_on_the_summary_model_the_settings_name() {
             bravebot_agent::Work::default(),
         ),
         Some("an-expensive-session-model"),
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
@@ -37543,7 +37542,6 @@ fn a_check_with_no_summary_model_runs_on_the_sessions_own() {
             bravebot_agent::Work::default(),
         ),
         Some("an-expensive-session-model"),
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
@@ -37592,7 +37590,6 @@ fn a_summary_model_needing_a_sign_in_sends_no_check() {
             bravebot_agent::Work::default(),
         ),
         Some("an-expensive-session-model"),
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
@@ -37643,7 +37640,6 @@ fn a_summary_model_the_machine_excludes_sends_no_check() {
             bravebot_agent::Work::default(),
         ),
         Some("an-expensive-session-model"),
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
@@ -37679,7 +37675,6 @@ fn a_summary_model_the_machine_excludes_sends_no_check() {
             bravebot_agent::Work::default(),
         ),
         Some("an-expensive-session-model"),
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
@@ -37711,7 +37706,6 @@ fn a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_b
             bravebot_agent::Work::default(),
         ),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         &cancel,
@@ -37756,7 +37750,6 @@ fn a_goal_check_reaches_the_model_and_comes_back_as_a_verdict() {
             bravebot_agent::Work::default(),
         ),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
@@ -37817,7 +37810,6 @@ fn a_check_over_an_exchange_that_met_something_untrusted_comes_back_quarantined(
             bravebot_agent::Work::default(),
         ),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
@@ -37849,7 +37841,6 @@ fn asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone() 
             Vec::new(),
         ),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |written| watched.push_str(written),
@@ -37906,7 +37897,6 @@ fn a_stop_pressed_during_a_question_reaches_the_request_and_nothing_is_answered(
             Vec::new(),
         ),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |written| watched.push_str(written),
@@ -37947,7 +37937,6 @@ fn a_recap_is_cut_to_its_limit_and_leaves_the_conversation_alone() {
         &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::recap(&conversation),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
@@ -38004,7 +37993,6 @@ fn an_enhancement_asks_for_the_draft_over_the_exchange_and_leaves_the_conversati
         &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::enhance(&conversation, "fix the recursion"),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
@@ -38059,7 +38047,6 @@ fn an_enhancement_over_an_untrusted_exchange_is_not_offered_for_the_box() {
         &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::enhance(&conversation, "fix the parser"),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
@@ -38096,7 +38083,6 @@ fn a_picture_pasted_into_a_question_reaches_the_model_with_it() {
             }],
         ),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
@@ -38151,7 +38137,6 @@ fn a_picture_dropped_onto_a_question_reaches_the_model_with_it() {
         )
         .carrying(carried),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
@@ -38196,7 +38181,6 @@ fn a_picture_pasted_into_a_question_is_named_in_the_audit_trail() {
             }],
         ),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
@@ -38238,7 +38222,6 @@ fn the_judge_asks_for_no_cache_of_the_exchange_it_judges() {
             bravebot_agent::Work::default(),
         ),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         &bravebot_core::cancel::Cancel::new(),
@@ -38268,7 +38251,6 @@ fn a_question_asked_beside_the_work_asks_for_no_cache_of_the_exchange() {
             Vec::new(),
         ),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
@@ -38299,7 +38281,6 @@ fn an_answer_over_a_trusted_exchange_may_be_written_down() {
             Vec::new(),
         ),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
@@ -38333,7 +38314,6 @@ fn an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down() {
         &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(&conversation, "why recursive?", Vec::new()),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
@@ -38382,7 +38362,6 @@ fn a_question_beside_a_turn_leaves_the_turns_file_authority_as_it_was() {
             Vec::new(),
         ),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         turns.clone(),
         |_| {},
@@ -41562,11 +41541,11 @@ fn two_delegates_work_at_the_same_time() {
     );
 }
 
-/// One credential store for the whole run, standing in for the wallet a turn opens.
+/// One source of the premium key for the whole run, standing in for the one a turn opens.
 ///
-/// Hands out a different value each time it is asked, so what was spent says which spend it was.
-/// A run that opened a wallet of its own would ask this one nothing; a run handed a copy of the
-/// batch would be given the first value a second time.
+/// Hands out a different value each time it is asked, so what was presented says which request it
+/// was. A run that took the key for itself would ask this one nothing; a run handed a copy of the
+/// source would be given the first value a second time.
 #[derive(Default)]
 struct OneWallet {
     handed: std::sync::Mutex<Vec<String>>,
@@ -41578,14 +41557,13 @@ impl bravebot_agent::shared::Spends for OneWallet {
         let value = format!("credential-{}", handed.len() + 1);
         handed.push(value.clone());
         Ok(bravebot_aichat::SubscriptionCredential {
-            cookie_name: "creds".to_string(),
-            cookie_value: value,
+            key: bravebot_config::Secret::new(value),
         })
     }
 }
 
-/// A build that knows a premium host, both hosts being the mock server, so a request that spends
-/// a credential is answered here rather than reaching the deployment that issued it.
+/// A build that knows a premium host, both hosts being the mock server, so a request that presents
+/// the key is answered here rather than reaching the deployment that issued it.
 fn premium_config_for(endpoint: &str) -> Config {
     Config::from_lookup(|key| match key {
         "SERVICES_KEY_AICHAT" => Some("test-key".into()),
@@ -41628,15 +41606,13 @@ fn seeded_reader(task: &str) -> bravebot_agent::delegate::Seeded {
     seeded
 }
 
-/// PREM-5: the credential a delegate spends comes from the turn's wallet, and is the one after
-/// whatever the turn has already presented.
+/// TURN-8: the key a delegate presents comes from the source the turn lent it, so a delegate's
+/// premium requests are counted with the turn's against a session's limit in credits.
 ///
-/// A spend is held in memory until the wallet is written back (PREM-6), so a delegate that opened
-/// a second wallet over the same file would read every credential the turn had spent as unspent
-/// and present the one the turn is presenting right now. The wallet here hands out a different
-/// value per call, so the two ways of getting this wrong are told apart: a delegate that opened
-/// its own asks this wallet nothing and its request goes out on the free tier, and a delegate
-/// handed a copy of the batch is given `credential-1` a second time.
+/// The source here hands out a different value per call, so the two ways of getting this wrong are
+/// told apart: a delegate that took the key from the configuration itself asks this source nothing
+/// and its request is never counted, and a delegate handed a copy of the source is given
+/// `credential-1` a second time.
 #[test]
 fn a_delegate_spends_the_wallet_the_turn_lent_it() {
     let scratch = Scratch::new("delegate-one-wallet");
@@ -41687,7 +41663,7 @@ fn a_delegate_spends_the_wallet_the_turn_lent_it() {
     assert_eq!(
         *wallet.handed.lock().expect("the wallet"),
         vec!["credential-1".to_string(), "credential-2".to_string()],
-        "the delegate's request did not spend the wallet the turn lent it"
+        "the delegate's request did not ask the source the turn lent it"
     );
 }
 
@@ -67896,7 +67872,6 @@ fn messages_an_aside_over(
         &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::over(fork, question, Vec::new()),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},
@@ -72989,7 +72964,6 @@ fn an_asides_cut_is_made_inside_the_kernel() {
         &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::recap(&conversation),
         None,
-        &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
         bravebot_core::trust::TrustStore::new("/work"),
         |_| {},

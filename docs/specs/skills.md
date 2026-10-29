@@ -647,10 +647,10 @@ a project was vouched for from outliving the vouching.
   written into the project after that turn has no later one: the names said were the ones found
   then, and nothing says the count changed.
 
-- **A subscription is looked for once per turn, from the model the turn starts on, so a skill that
-  moves the rounds onto a model needing one finds none in hand.** Such a round is answered by a
+- **The premium key is handed to a turn once, from the model the turn starts on, so a skill that
+  moves the rounds onto a model of Brave's finds none in hand.** Such a round is answered by a
   weaker model than the file asked for, and the turn reports the substitution per
-  [SKILL-15](#SKILL-15). It happens only where the model the turn started on needs no subscription
-  and the one a skill names does. Looking for one up front because some skill in the directory names
-  a premium model would read the credential store, and report an unreadable batch, on every turn in
-  that project, including the ones that never load it.
+  [SKILL-15](#SKILL-15). It happens only where the model the turn started on is served by another
+  backend and the one a skill names is Brave's. Handing the key to every turn because some skill in
+  the directory names a premium model would hand it to turns on other backends, which
+  [PREM-13](premium-credentials.md#PREM-13) forbids.

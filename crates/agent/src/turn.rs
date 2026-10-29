@@ -367,9 +367,9 @@ pub(crate) fn delegated(
     rounds: &mut usize,
     // What it did to its workspace, written however the turn ended, for the parent's TURN-4 lines.
     worked: &mut Worked,
-    // The wallet the turn that started this one is spending from, where it found one. A delegate
-    // opens none of its own (PREM-5).
-    wallet: Option<&dyn crate::shared::Spends>,
+    // The premium key the turn that started this one is presenting, where it found one. A delegate
+    // looks for none of its own, so its requests are counted with the turn's (TURN-8).
+    premium_key: Option<&dyn crate::shared::Spends>,
     // The session's language servers, shared with the turn that started this one (LSP-8).
     servers: Option<&mut crate::lsp::LanguageServers>,
 ) -> Result<Outcome, TurnError> {
@@ -397,7 +397,7 @@ pub(crate) fn delegated(
             said_about_hooks: Some(notices),
             rounds_taken: Some(rounds),
             worked: Some(worked),
-            lent_wallet: wallet,
+            lent_premium_key: premium_key,
         },
     );
     *vouched = Vouched {
@@ -462,7 +462,7 @@ pub fn compact<S: Sink, R: Reporter>(
 
     reporter.phase(Phase::Compacting);
 
-    let mut subscription = discover_subscription(config, egress, model, reporter);
+    let mut subscription = discover_subscription(config, egress, model);
     let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
@@ -611,13 +611,12 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
     clippy::too_many_arguments,
     reason = "aside takes the same model-call collaborators as compact, plus the question and a watching callback"
 )]
-pub fn aside<S: Sink, R: Reporter>(
+pub fn aside<S: Sink>(
     config: &Config,
     egress: &Egress,
     session: &crate::chatgpt::AccountSession,
     question: crate::aside::Question,
     model: Option<&str>,
-    reporter: &mut R,
     sink: &mut S,
     trust: TrustStore,
     watching: impl FnMut(&str),
@@ -629,7 +628,6 @@ pub fn aside<S: Sink, R: Reporter>(
         session,
         question,
         model,
-        reporter,
         sink,
         bravebot_core::file_authority::FileAuthority::new(trust),
         watching,
@@ -648,13 +646,12 @@ pub fn aside<S: Sink, R: Reporter>(
     clippy::too_many_arguments,
     reason = "aside_sharing takes aside's collaborators with the turn's file authority in place of a trust map"
 )]
-pub fn aside_sharing<S: Sink, R: Reporter>(
+pub fn aside_sharing<S: Sink>(
     config: &Config,
     egress: &Egress,
     session: &crate::chatgpt::AccountSession,
     question: crate::aside::Question,
     model: Option<&str>,
-    reporter: &mut R,
     sink: &mut S,
     files: bravebot_core::file_authority::FileAuthority,
     watching: impl FnMut(&str),
@@ -668,7 +665,7 @@ pub fn aside_sharing<S: Sink, R: Reporter>(
         .with_file_authority(files)
         .resuming(question.context());
 
-    let mut subscription = discover_subscription(config, egress, model, reporter);
+    let mut subscription = discover_subscription(config, egress, model);
     let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
@@ -700,13 +697,12 @@ pub fn aside_sharing<S: Sink, R: Reporter>(
     clippy::too_many_arguments,
     reason = "goal takes the model-call collaborators compact does, plus the check the person's condition made"
 )]
-pub fn goal<S: Sink, R: Reporter>(
+pub fn goal<S: Sink>(
     config: &Config,
     egress: &Egress,
     session: &crate::chatgpt::AccountSession,
     check: crate::goal::Check,
     model: Option<&str>,
-    reporter: &mut R,
     sink: &mut S,
     trust: TrustStore,
     cancel: &Cancel,
@@ -722,7 +718,7 @@ pub fn goal<S: Sink, R: Reporter>(
         .with_trust(trust)
         .resuming(check.context());
 
-    let mut subscription = discover_subscription(config, egress, model, reporter);
+    let mut subscription = discover_subscription(config, egress, model);
     let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
@@ -749,7 +745,7 @@ pub fn goal<S: Sink, R: Reporter>(
     clippy::too_many_arguments,
     reason = "the source and format come from the person's command, beside the workspace and model-call collaborators"
 )]
-pub fn commit_message<S: Sink, R: Reporter>(
+pub fn commit_message<S: Sink>(
     config: &Config,
     egress: &Egress,
     session: &crate::chatgpt::AccountSession,
@@ -757,7 +753,6 @@ pub fn commit_message<S: Sink, R: Reporter>(
     source: &crate::commit_message::Source,
     format: Option<&str>,
     model: Option<&str>,
-    reporter: &mut R,
     sink: &mut S,
     trust: TrustStore,
     cancel: &Cancel,
@@ -773,7 +768,7 @@ pub fn commit_message<S: Sink, R: Reporter>(
         .with_scratch(workspace.scratch())
         .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
 
-    let mut subscription = discover_subscription(config, egress, model, reporter);
+    let mut subscription = discover_subscription(config, egress, model);
     let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
@@ -784,38 +779,25 @@ pub fn commit_message<S: Sink, R: Reporter>(
     done
 }
 
-/// Find the subscription this turn will spend, and say so where one could not be read.
+/// Find the premium key this turn will present.
 ///
-/// Shared with [`crate::manifest`] rather than written twice, because the thing worth reporting is
-/// the same in both and a mode that skipped the line would be the silent downgrade again in one
-/// place.
-///
-/// A batch that exists and cannot be read is worth a line of its own. The request goes out with no
-/// credential, the endpoint answers a premium model name with a weaker model rather than an error,
-/// and the only visible symptom is a worse answer. Nothing about that points at the credential
-/// store, so it has to be said outright.
+/// Shared with [`crate::manifest`] rather than written twice, so that both modes send the same
+/// request for the same configuration.
 ///
 /// Asked of the model rather than of the configuration, because the model is what decides the
-/// backend. A turn on Bedrock or on a gateway cannot spend a Leo credential at all, so the store is
-/// not read for one: the line it would produce says the turn spent no subscription, which is not
-/// what happened to such a turn, and it sends somebody to re-import a subscription that would have
-/// changed nothing.
-pub fn discover_subscription<R: Reporter>(
+/// backend. A turn on Bedrock or on a gateway cannot present a premium key at all, and handing one
+/// to its client would be sending a credential to a service that did not issue it.
+pub fn discover_subscription(
     config: &Config,
     egress: &Egress,
     model: Option<&str>,
-    reporter: &mut R,
-) -> Option<crate::ImportedSubscription> {
+) -> Option<crate::PremiumKey> {
     let asked_for = model.unwrap_or(&config.default_model);
     if !crate::backend::Backend::select(config, egress, asked_for).spends_a_subscription() {
         return None;
     }
 
-    let discovery = crate::ImportedSubscription::discover(config.premium_endpoint.as_deref()?);
-    if let Some(problem) = discovery.complaint() {
-        reporter.notice(t!(subscription_unusable, problem = problem));
-    }
-    discovery.found()
+    crate::PremiumKey::held(config)
 }
 
 /// Take what a loaded skill's file asks its rounds to run as, and say what changed.
@@ -1952,8 +1934,8 @@ fn reads_that_run_together(
 /// What a delegate's caller takes back from [`run_inner`], each written however the turn ended.
 ///
 /// The default, with every field `None`, is a turn a person asked for: it has no parent to hand
-/// anything back to and it opens the run's wallet rather than being lent one, because it is the
-/// run.
+/// anything back to and it takes the premium key for the run rather than being lent it, because it
+/// is the run.
 #[derive(Default)]
 struct Handback<'a> {
     /// What the hooks had to say, written whether or not the rounds produced an outcome, and for
@@ -1967,12 +1949,11 @@ struct Handback<'a> {
     /// What the turn did to its workspace, written however it ended. A delegate's caller passes
     /// one for the turn that spawned it (TURN-4), and [`resume`] for a goal's record (GROUND-4).
     worked: Option<&'a mut Worked>,
-    /// The credential store the run that started this one is spending from. Only a delegate's
-    /// caller passes one, and a delegate spends nothing else: there is one subscription per
-    /// process and a credential is single-use, so a second wallet opened here would re-read a
-    /// file the parent's spends have not reached and hand out the credential it is already
-    /// presenting (PREM-5).
-    lent_wallet: Option<&'a dyn crate::shared::Spends>,
+    /// The premium key the run that started this one is presenting. Only a delegate's caller
+    /// passes one, and a delegate presents nothing else: its requests are counted against the
+    /// session's limit in credits with the turn's, and a delegate that took the key from the
+    /// configuration itself would present it without being counted (TURN-8).
+    lent_premium_key: Option<&'a dyn crate::shared::Spends>,
 }
 
 /// One turn, with the hooks a person attached to its beginning and its end around it.
@@ -2006,7 +1987,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
         said_about_hooks,
         rounds_taken,
         worked,
-        lent_wallet,
+        lent_premium_key,
     } = handback;
     // Read once, here, rather than at each moment. What the file says is a property of the machine
     // and not of a round, and a turn whose hooks changed halfway through would be the harder thing
@@ -2095,7 +2076,7 @@ fn run_inner<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter 
             hooks: &hooks,
             prompt_notices: &prompt_notices,
             advisor: advisor.as_deref(),
-            lent_wallet,
+            lent_premium_key,
         },
         conversation,
         confirmer,
@@ -2175,9 +2156,9 @@ struct Inputs<'a> {
     prompt_notices: &'a std::sync::Mutex<Vec<String>>,
     /// The model the planner may consult, where it may consult one. See [`advisor_for`].
     advisor: Option<&'a str>,
-    /// The wallet the run that started this one is spending from, where this is a delegate's turn.
-    /// See [`run_inner`].
-    lent_wallet: Option<&'a dyn crate::shared::Spends>,
+    /// The premium key the run that started this one is presenting, where this is a delegate's
+    /// turn. See [`run_inner`].
+    lent_premium_key: Option<&'a dyn crate::shared::Spends>,
 }
 
 /// What the turn reports through, and the conversation it adds to. The three `Lent` values are
@@ -2223,8 +2204,8 @@ struct Plan<'p> {
     arming: crate::watch::Arming,
     catalogue: crate::skills::Catalogue,
     addressed: Option<bravebot_core::delegate::Addressed>,
-    /// The wallet this turn spends from, its own or the one lent to it.
-    wallet: Option<&'p dyn crate::shared::Spends>,
+    /// The premium key this turn presents, its own or the one lent to it.
+    premium_key: Option<&'p dyn crate::shared::Spends>,
     /// Whether the turn was offered `read_output`, which decides who answers a read of what a run
     /// printed.
     offers_read_output: bool,
@@ -2485,7 +2466,7 @@ where
         hooks: _,
         prompt_notices: _,
         advisor,
-        lent_wallet,
+        lent_premium_key,
     } = inputs;
     let Opening {
         began,
@@ -3014,39 +2995,30 @@ where
         }
     }
 
-    // Premium is used when a subscription has been imported and this build knows the premium
-    // host. Discovery happens per turn so an import mid-session takes effect on the next one, and
-    // only for a turn a person asked for: a delegate spends the wallet that turn lent it and never
-    // looks for one. One wallet per process is what makes a credential single-use in a run with
-    // delegates in it, since a spend is recorded in memory until the wallet is written back
-    // (PREM-5, PREM-6) and a second wallet over the same file would read every one of them as
-    // unspent.
-    //
-    // A batch that exists and could not be read is reported rather than skipped. It used to be
-    // silent, and the only symptom was the endpoint substituting a weaker model for the premium one
-    // that was asked for, which reads as the model getting worse for no reason: nobody attributes a
-    // worse answer to an unreadable credential file. Said once, by the run that looked: a delegate
-    // repeating it would say it again for every delegate the turn started.
+    // Premium is used when this configuration holds a key and a premium host that is Brave's. It is
+    // looked for per turn, and only for a turn a person asked for: a delegate presents the key
+    // that turn lent it and never looks for one, so every premium request of the run is counted
+    // once, against the session's limit in credits (TURN-8).
     let mut discovered = match task.delegate.is_some() {
         true => None,
-        false => discover_subscription(config, egress, turn_model.as_deref(), reporter),
+        false => discover_subscription(config, egress, turn_model.as_deref()),
     };
 
     // Lent for the same reason the confirmer, the reporter and the trail above are, and it is the
-    // one of the four whose copies would be spending the user's money twice.
+    // one of the four whose copies would be counted twice or not at all.
     let opened = discovered.as_mut().map(crate::shared::Lent::new);
-    // Counted only where it was opened: a delegate is lent the turn's wallet, spends from it
-    // through the turn's own count, and would count each credential twice if it wrapped it.
+    // Counted only where it was opened: a delegate is lent the turn's key, presents it through the
+    // turn's own count, and would count each request twice if it wrapped it.
     let counted = opened.as_ref().map(|lent| {
         crate::shared::Counted::new(lent as &dyn crate::shared::Spends, task.spend_limit.clone())
     });
-    let wallet: Option<&dyn crate::shared::Spends> = match lent_wallet {
+    let premium_key: Option<&dyn crate::shared::Spends> = match lent_premium_key {
         Some(lent) => Some(lent),
         None => counted
             .as_ref()
             .map(|counted| counted as &dyn crate::shared::Spends),
     };
-    let mut subscription = wallet.map(crate::shared::Spending::new);
+    let mut subscription = premium_key.map(crate::shared::Spending::new);
 
     // The lists of the servers this session reached, settled for this turn (SERVERS-8).
     let mcp = setup::settle_servers(
@@ -3100,7 +3072,7 @@ where
         arming,
         catalogue,
         addressed,
-        wallet,
+        premium_key,
         offers_read_output,
     };
     let mut state = State {
@@ -3328,7 +3300,7 @@ where
         hooks,
         prompt_notices: _,
         advisor: _,
-        lent_wallet: _,
+        lent_premium_key: _,
     } = inputs;
     let (confirming, reporting, recording) =
         (channels.confirming, channels.reporting, channels.recording);
@@ -6125,7 +6097,6 @@ mod tests {
                 &session,
                 crate::aside::Question::recap(&conversation),
                 Some(ACCOUNT_MODEL),
-                &mut reporter,
                 &mut sink,
                 TrustStore::new("/work"),
                 |_| {},
@@ -6142,7 +6113,6 @@ mod tests {
                     crate::outcome::Work::default(),
                 ),
                 Some(ACCOUNT_MODEL),
-                &mut reporter,
                 &mut sink,
                 TrustStore::new("/work"),
                 &Cancel::new(),
@@ -6254,7 +6224,6 @@ mod tests {
                 &crate::commit_message::Source::Range("HEAD~1..HEAD".into()),
                 None,
                 Some(ACCOUNT_MODEL),
-                &mut crate::report::RecordingReporter::default(),
                 &mut bravebot_core::event::RecordingSink::new(),
                 trust,
                 &Cancel::new(),

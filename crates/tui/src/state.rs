@@ -653,9 +653,9 @@ pub struct Session {
     /// What the configuration says about the tier, drawn beside the confinement on the opening
     /// screen.
     ///
-    /// The configuration rather than the credentials, because a stored batch may be expired or for
-    /// the wrong environment, so its presence would not settle the tier. See
-    /// [`crate::status::configured_tier`]. What was actually spent is settled by the first turn.
+    /// The configuration rather than a request, because a key that is held may still be refused,
+    /// so holding one would not settle the tier. See [`crate::status::configured_tier`]. What was
+    /// actually sent is settled by the first turn.
     pub tier: String,
     /// How many turns have been submitted, which picks the indicator's word.
     pub turns: usize,
@@ -700,7 +700,7 @@ pub struct Session {
     /// `None` until a turn has run, which is the honest reading: whether premium is in use is not a
     /// fact about the configuration, it is a fact about a request, and before the first one there is
     /// nothing to report. Reporting the build's premium host instead said "premium configured" for a
-    /// whole session that never spent a credential.
+    /// whole session that never presented a key.
     ///
     /// Both halves, because the interesting case is when they differ: the endpoint answers a model
     /// name it will not serve by substituting a weaker one rather than by failing, so a session can
@@ -719,7 +719,7 @@ pub struct Session {
     /// the reply then names something different every time and nothing is wrong. Recorded by the
     /// caller, which knows which backend answered, rather than inferred from how a name is spelled.
     served_names_are_comparable: bool,
-    /// Whether the last turn actually spent a subscription credential.
+    /// Whether the last turn actually presented the premium key.
     ///
     /// `None` until a turn has run. Observed rather than derived from the configuration, which is
     /// the same reasoning as [`Session::served`]: whether premium is in use is a fact about a

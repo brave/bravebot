@@ -1,4 +1,4 @@
-//! Imports a Leo Premium subscription from a locally installed Brave Browser.
+//! Signing in to the model services that sign in with an account, and keeping the sign-ins.
 //!
 //! # Why this crate has no labels
 //!
@@ -7,33 +7,15 @@
 //! nothing here for a gate to protect.
 //!
 //! A label answers "may this value influence what happens next", and the whole apparatus exists
-//! because a turn mixes the user's instructions with bytes an attacker may have written. This
-//! runs before any of that: a person types `bravebot import-leo-creds` at a shell, no planner exists,
-//! no model has a context, and no untrusted document is in play. The subscription lives in the
-//! user's own browser profile, the endpoint is a compiled-in constant, and the result goes into a
-//! file in the user's own directory. Nothing an attacker controls is anywhere in that path.
+//! because a turn mixes the user's instructions with bytes an attacker may have written. A sign-in
+//! runs before any of that: a person types `bravebot auth login` at a shell, no planner exists, no
+//! model has a context, and no untrusted document is in play. The endpoints are compiled-in
+//! constants, and the result goes into a file in the user's own directory. Nothing an attacker
+//! controls is anywhere in that path.
 //!
 //! So this is provisioning, not a turn. Do not wire it into [`bravebot_net::Egress`] or hand it a
 //! `Policy`: that would add ceremony that protects nothing and would suggest, wrongly, that a
-//! credential import is the kind of thing the information-flow rules were written about.
-//!
-//! What *does* apply is the rule in CLAUDE.md about not deciding from untrusted content, and it
-//! is satisfied here for a stronger reason than a gate: the only value taken out of the browser
-//! profile is an order id, which is checked against a UUID shape before it is used, and the only
-//! value taken off the network is a credential batch that is verified cryptographically. Neither
-//! is a decision an attacker can steer.
-//!
-//! # What is taken from the browser, and what is not
-//!
-//! Only the order id. Not the browser's credentials.
-//!
-//! That distinction is the point of the whole design. A subscription permits a limited number of
-//! devices, so copying the stored credentials would spend the browser's own allocation and the
-//! two installs would then fight over it. Instead this mints its own random tokens and has the
-//! server sign them, which is exactly what a second browser on another machine does. See
-//! [`device`] for the protocol.
-//!
-//! The profile is opened read-only and nothing is ever written back to it.
+//! sign-in is the kind of thing the information-flow rules were written about.
 
 #![deny(unsafe_code)]
 
@@ -50,101 +32,17 @@ compile_error!(
 );
 
 pub mod chatgpt;
-pub mod device;
 pub mod oauth;
-pub mod profile;
 pub mod secret;
 pub mod store;
 #[cfg(test)]
 mod testutil;
 pub mod xai;
 
-pub use device::{DeviceError, Registration};
-pub use profile::{Channel, LeoOrder, ProfileError, find_leo_order};
 pub use secret::Secret;
-pub use store::{StoreError, StoredCredentials};
+pub use store::StoreError;
 
-/// Where the credential endpoints live, per environment.
-///
-/// Fixed destinations rather than configuration: an environment variable here would let something
-/// outside redirect where a subscription is verified. Which one applies is decided by the order's
-/// own location, so it follows the subscription rather than being chosen.
-pub const PRODUCTION_PAYMENT_URL: &str = "https://payment.rewards.brave.com";
-pub const STAGING_PAYMENT_URL: &str = "https://payment.rewards.bravesoftware.com";
-pub const DEVELOPMENT_PAYMENT_URL: &str = "https://payment.rewards.brave.software";
-
-/// The SKU a Leo Premium subscription is sold under.
-pub const LEO_SKU: &str = "brave-leo-premium";
-
-/// The order `location` values that mark an order as Leo's, one per environment.
-///
-/// A subscription to Brave VPN or Brave Search Premium sits in the same store, so the product is
-/// identified by this rather than by being the only order present. Every environment is listed
-/// because a developer build holds staging orders, and matching only production would find nothing
-/// there while reporting it as "no subscription".
-pub const LEO_LOCATIONS: [&str; 3] = [
-    "leo.brave.com",
-    "leo.bravesoftware.com",
-    "leo.brave.software",
-];
-
-/// Which deployment a subscription belongs to.
-///
-/// Derived from the order's own location, never chosen: a credential only verifies against the
-/// environment that issued it, so guessing would produce a batch that cannot be used.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Environment {
-    Production,
-    Staging,
-    Development,
-}
-
-impl Environment {
-    /// The environment an order's `location` implies.
-    pub fn of_location(location: &str) -> Option<Self> {
-        match location {
-            "leo.brave.com" => Some(Self::Production),
-            "leo.bravesoftware.com" => Some(Self::Staging),
-            "leo.brave.software" => Some(Self::Development),
-            _ => None,
-        }
-    }
-
-    /// Where this environment's credential endpoints live.
-    pub fn payment_url(self) -> &'static str {
-        match self {
-            Self::Production => PRODUCTION_PAYMENT_URL,
-            Self::Staging => STAGING_PAYMENT_URL,
-            Self::Development => DEVELOPMENT_PAYMENT_URL,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Production => "production",
-            Self::Staging => "staging",
-            Self::Development => "development",
-        }
-    }
-
-    /// The inverse of [`Environment::as_str`], for reading a stored batch back.
-    pub fn of_name(name: &str) -> Option<Self> {
-        match name {
-            "production" => Some(Self::Production),
-            "staging" => Some(Self::Staging),
-            "development" => Some(Self::Development),
-            _ => None,
-        }
-    }
-}
-
-/// The cookie the aichat backend reads a subscription credential from.
-pub const CREDENTIAL_COOKIE_NAME: &str = "__Secure-sku#brave-leo-premium";
-
-/// A random uuid identifying one device's credential batch.
-///
-/// A fresh one is what distinguishes registering a new device from claiming an existing device's
-/// batch, so it must never be reused or derived from anything predictable.
+/// A random uuid, for an identifier that must not be reused or derived from anything predictable.
 ///
 /// Written out rather than adding a uuid dependency for one value; only the randomness matters, and
 /// that comes from the OS.
@@ -170,8 +68,8 @@ pub fn new_request_id() -> String {
 
 /// Fill `bytes` from the OS random source.
 ///
-/// A failure is not survivable: a predictable request id could collide with another device's batch,
-/// so there is no sensible fallback to a weaker source.
+/// A failure is not survivable: a predictable id could collide with another, so there is no
+/// sensible fallback to a weaker source.
 pub(crate) fn fill_random(bytes: &mut [u8]) {
     use rand::RngCore;
     rand::rngs::OsRng.fill_bytes(bytes);

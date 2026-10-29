@@ -8,8 +8,8 @@ description: What is baked into the binary, what lives in ~/.bravebot and beside
 
 There is one thing to set up before the first session, and it is which service answers a turn. A
 released binary arrives pointed at Brave's own endpoint, which is not the same as having a service
-configured to do this work: no account was named, no gateway was written down, and no subscription
-was imported. So rather than open a session with nothing set up to answer it, a first run **says
+configured to do this work: no account was named, no gateway was written down, and no premium key
+was stored. So rather than open a session with nothing set up to answer it, a first run **says
 what to configure and stops**. It names five routes, each by the thing to type or write:
 
 | Route | Where |
@@ -18,7 +18,7 @@ what to configure and stops**. It names five routes, each by the thing to type o
 | an OpenAI-compatible gateway, including a local one | [Reaching an OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway) |
 | a ChatGPT Plus or Pro account | [Reaching a model with a ChatGPT account](providers/chatgpt.md) |
 | an xAI SuperGrok subscription | [Reaching a model with an xAI SuperGrok subscription](providers/xai.md) |
-| a Leo Premium subscription you already have | [Leo Premium](premium.md) |
+| a premium key for Brave's premium service, stored with `bravebot auth login brave` | [Brave's premium service](premium.md) |
 
 `bravebot doctor` says the same thing and fails while it holds. A run whose model a configured
 service serves is not this case, whatever the Brave fields hold, and neither is a build pointed at a
@@ -54,7 +54,7 @@ bravebot doctor
 configuration OK
   offers    Brave Leo
   endpoint  https://ai-chat.bsg.brave.com/v1/chat/completions
-  premium   https://ai-chat-premium.bsg.brave.com/v1/chat/completions
+  premium   https://ai-chat-premium.bsg.brave.software/v1/chat/completions, without a premium key, so requests go to the endpoint above
   key id    …
   model     automatic-bravebot (default)
   key       … (never transmitted)
@@ -107,8 +107,8 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/themes/<name>.json` | themes you wrote yourself |
 | `~/.bravebot/settings.json` | long-lived settings (see [below](#settingsjson)) |
 
-An imported Leo Premium subscription is kept here too, in a file only you can read. See
-[Leo Premium](premium.md#where-they-are-kept).
+A premium key stored with `bravebot auth login brave` is kept here too, in `brave-key.json`, a file only
+you can read. See [Brave's premium service](premium.md#storing-the-key).
 
 **Nobody else on the machine can read any of it.** On Unix, every directory bravebot makes under
 `~/.bravebot` is reachable by you alone and every file it writes there is readable by you alone,
@@ -161,7 +161,7 @@ rather than obeyed.
 ### Moving the state directory
 
 `BRAVEBOT_HOME` names the state directory itself, so two accounts or a CI job can each keep their own
-settings, sessions, history, skills and imported subscription without changing `HOME` for everything
+settings, sessions, history, skills and stored sign-ins without changing `HOME` for everything
 else the process starts:
 
 ```sh
@@ -187,7 +187,7 @@ as your shell sources the hook, so export it before the line in your shell's sta
 evaluates the hook, and the hook records in that directory.
 
 :::warning
-A program a `run` starts is refused `~/.bravebot`, where the gateway keys and the premium token are,
+A program a `run` starts is refused `~/.bravebot`, where the gateway keys and the premium key are,
 and not a directory `BRAVEBOT_HOME` puts anywhere else
 ([what a stage cannot reach](../security/security.md)). Keep it somewhere you would not mind a
 program a `run` starts reading, or leave the variable unset.
@@ -227,7 +227,7 @@ without rebuilding it. The one exception is `BRAVEBOT_DEFAULT_MODEL`, which a
 | Variable | What it sets |
 |---|---|
 | `BRAVE_AI_CHAT_ENDPOINT` | the host requests go to |
-| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, used once a subscription is imported |
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, in place of the one compiled in ([Brave's premium service](premium.md#what-is-sent-and-where)) |
 | `SERVICES_KEY_AICHAT` | the services key requests are signed with |
 | `BRAVE_SERVICES_KEY_ID` | the key id that goes with it |
 | `BRAVEBOT_DEFAULT_MODEL` | the model to request when no settings file or `/model` choice names one |
@@ -355,7 +355,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
 | `language` | the language the interface is in: a locale tag such as `fr`, or `auto`. Read from your own file only ([details](language.md)) |
 | `style` | the output style a session starts in: `concise`, `explanatory`, `proactive` or a file in `~/.bravebot/styles`. Read from your own file and the file `--settings` names only, and it cannot name a project's style from `.bravebot/styles` (pick that with `/style`) |
-| `limit` | the most tokens or Leo Premium credits a session may spend before it asks ([below](#limit)) |
+| `limit` | the most tokens or premium requests a session may spend before it asks ([below](#limit)) |
 | `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |
 | `permissions` | which actions to refuse, and which to ask about ([below](#permissions)) |
@@ -747,10 +747,10 @@ a checkout, which is why a file in a repository is the weaker claim.
 { "limit": "500k" }
 ```
 
-The most tokens or Leo Premium credits a session may spend before the terminal client asks whether to
+The most tokens or premium requests a session may spend before the terminal client asks whether to
 stop, to go on without a limit or to go on under a new one. A whole number of tokens, or a string with
 `k` or `m` after it for thousands or millions. Put `credits` after the figure, as in `"200 credits"`,
-to count the credentials a Leo Premium subscription spends, one per request, instead. A value that is
+to count premium requests instead, one for each request that presents the premium key. A value that is
 none of these, and zero, sets no limit. The nearest settings file that names it wins, and
 [`/limit`](../reference/commands.md#limit-amount--off) changes it for one session. Tokens are
 the usage the model service reports, so a limit in tokens is a bound on tokens and not on money. The

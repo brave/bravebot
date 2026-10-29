@@ -3080,7 +3080,6 @@ fn suggest_next(
                         &account,
                         asking,
                         Some(model.as_ref()),
-                        &mut bravebot_agent::report::IgnoreReports,
                         &mut sink,
                         trust,
                         |_written| {},
@@ -4101,7 +4100,7 @@ mod tests {
         assert!(!models.iter().any(|model| model.is_automatic()));
     }
 
-    /// Premium means a Leo subscription. Reaching a model through somebody's own AWS account does
+    /// Premium means the premium key. Reaching a model through somebody's own AWS account does
     /// not involve one, and marking it premium would ask them to import a subscription to use what
     /// they already pay for.
     #[test]
@@ -4325,7 +4324,7 @@ mod tests {
         );
     }
 
-    /// Premium means a Leo subscription. A gateway reached with somebody's own bearer token does not
+    /// Premium means the premium key. A gateway reached with somebody's own bearer token does not
     /// involve one, and marking it premium would ask them to import a subscription to use what they
     /// already pay for.
     #[test]
@@ -20652,8 +20651,7 @@ mod tests {
         impl bravebot_agent::shared::Spends for Wallet {
             fn spend_one(&self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
                 Ok(bravebot_aichat::SubscriptionCredential {
-                    cookie_name: "creds".to_string(),
-                    cookie_value: "value".to_string(),
+                    key: bravebot_config::Secret::new("value"),
                 })
             }
         }

@@ -227,8 +227,7 @@ pub(crate) fn work_towards<C: Confirmer + Send>(
         }
         let made = reporter.calls().len() - calls_before;
 
-        // The check goes out under the trust the round ended with, as it does in a session, and
-        // reports to nobody: what a turn says about its subscription it has said.
+        // The check goes out under the trust the round ended with, as it does in a session.
         let check = goal::Check::of(conversation, towards.condition, running.record());
         let judged = turn::goal(
             towards.config,
@@ -236,7 +235,6 @@ pub(crate) fn work_towards<C: Confirmer + Send>(
             towards.task.account_session(),
             check,
             Some(towards.model),
-            &mut Progress::new(std::io::sink()),
             sink,
             completed.decisions.trust.clone(),
             towards.cancel,

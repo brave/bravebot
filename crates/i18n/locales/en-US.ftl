@@ -37,10 +37,11 @@ cli-usage-doctor = Check configuration and confinement
 cli-usage-doctor-sandbox = Run everyday workflows under the sandbox and report which work
 cli-usage-update = Print the command that updates this copy
 cli-usage-bug-report = Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
-cli-usage-import = Import a Leo Premium subscription
+# Said when the retired `bravebot import-leo-creds` is typed, in place of starting a task named by that word.
+cli-import-leo-creds-retired = bravebot no longer imports a Leo subscription from Brave. Premium requests use a key stored with `bravebot auth login brave`
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
 cli-usage-auth-login = Sign in to a model service, listing every way when none is named
-cli-usage-auth-logout = Forget an imported Leo Premium subscription, a stored gateway key, or a ChatGPT or xAI sign-in
+cli-usage-auth-logout = Forget the stored Brave premium key, a gateway key, or a ChatGPT or xAI sign-in
 cli-usage-auth-status = Say whether a sign-in is usable, exiting 0 only if it is
 cli-usage-mcp = Declare, list and approve MCP servers
 cli-usage-completion = Print a shell completion script
@@ -397,9 +398,6 @@ cli-piped-input-too-large =
 # being poor rather than as nothing having been set up yet, so the first run says what to configure
 # instead of starting work that has no service to do it.
 onboarding-no-model = no model service is configured yet
-# Said beside it where a subscription is stored and could not be read, because somebody in that
-# case is one import away rather than a whole configuration away.
-onboarding-subscription-unusable = the subscription that is stored could not be used: { $problem }
 # Said before the routes where Claude Code or opencode configures a service bravebot can use, or a
 # running Ollama, LM Studio or llama-server serves one, and nobody was there to be asked about it: a
 # one-shot run, --json, a pipe, or doctor.
@@ -444,10 +442,10 @@ onboarding-chatgpt =
 onboarding-xai =
     An xAI SuperGrok subscription, if you have one: run `bravebot auth login xai` in a terminal and open the address it prints on any device. Its models are then offered in /model as xai/<model>.
 # Last of the five, and said to be last, because these models are reached through Brave's AI
-# gateway, which has open problems of its own. It is still the shortest route for somebody who
-# already subscribes, so it is offered rather than left out.
-onboarding-leo =
-    Brave Leo Premium, if you already subscribe: run `bravebot auth login leo` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the four above for now.
+# gateway, which is still in development. It is offered rather than left out because it is the
+# route a build made with the key set already takes.
+onboarding-premium =
+    Brave's premium service, if you have a key for it: run `bravebot auth login brave` in a terminal and type the key. Its AI gateway is still in development, so prefer one of the four above for now.
 # Said after either, so it reads after the routes and after the one line alike.
 onboarding-where-to-read =
     There are worked examples in https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
@@ -470,6 +468,8 @@ doctor-configuration-ok = configuration OK
 doctor-endpoint = endpoint
 doctor-premium = premium
 doctor-premium-absent = not configured
+doctor-premium-keyed = { $url }, with a premium key
+doctor-premium-unkeyed = { $url }, without a premium key, so requests go to the endpoint above
 doctor-key-id = key id
 doctor-model = model
 doctor-model-chosen = { $model } (chosen with /model)
@@ -496,10 +496,10 @@ doctor-ends-aws-access-key =
     a long-lived access key: issued by AWS IAM to the user the profile names; ended with `aws iam delete-access-key`
 doctor-ends-aws-session =
     a session credential: issued by AWS STS for the profile, and this program asks the AWS CLI for another as it builds each request, so the expiry ends that copy rather than this program's access; ended at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it, and the next one is minted from whatever the profile chains to, for as long as that lasts
+doctor-ends-premium-key =
+    the premium key: issued by Brave's premium service, which is also the only surface that revokes it; `bravebot auth logout brave` ends this machine's custody and leaves the key live there
 doctor-ends-gateway-token =
     a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
-doctor-ends-subscription-batch =
-    an imported subscription's credential batch: minted by Brave's subscription service against the order this install registered as a device on; each credential is spent by one premium request and the batch stops working when its last window closes, and nothing revokes an unspent one, so `bravebot auth logout leo` ends this machine's custody and leaves the batch spendable by whatever copied the file
 doctor-ends-chatgpt-account =
     a ChatGPT sign-in: issued by OpenAI to the account that signed in, and the refresh token replaces the access token without asking anybody, so the access token's expiry ends that copy rather than this program's access; ended at OpenAI by signing out of the account or removing this program's access in its settings, since `bravebot auth logout chatgpt` ends this machine's custody and leaves the tokens live there
 doctor-ends-xai-account =
@@ -575,10 +575,14 @@ doctor-dropped-gateway-token-nothing-decides-each-use =
     gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since the token goes in a header this process sends and no performer exists for the request
 doctor-dropped-gateway-token-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the token may do is fixed before it is issued, since the block names a host and a variable and never an issuer, so there is nothing here to ask for a narrower one
+doctor-dropped-premium-key-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents the key itself and nothing is asked to authorise the request
+doctor-dropped-premium-key-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since the premium service issues one key and nothing here asks it for a narrower one
+doctor-dropped-premium-key-not-minted-for-one-step =
+    gate { $gate }, { $answer }: it is not minted for one step, since the key is whatever `bravebot auth login brave` stored, and it is held for the whole run
 doctor-dropped-gateway-token-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
-doctor-dropped-subscription-batch-nothing-decides-each-use =
-    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents a credential from the batch itself and nothing is asked to authorise the request
 doctor-dropped-chatgpt-account-nothing-decides-each-use =
     gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this process presents the access token itself and nothing is asked to authorise the request
 doctor-dropped-chatgpt-account-no-bound-fixed-before-issue =
@@ -825,9 +829,6 @@ doctor-managed-nothing = { $path }, pinning nothing
 # The heading over what `bravebot mcp list` reports, which `doctor` reports too.
 doctor-mcp-servers = MCP servers declared in { $path }, for a session started in { $project }
 doctor-mcp-none = no MCP server is declared in { $path }, for a session started in { $project }
-doctor-leo = leo
-doctor-subscription =
-    { $environment } subscription imported, { $unspent } of { $total } credentials unspent
 # Which variable answered as well as where the directory is: more than one can name a profile
 # directory, and the one that won is what somebody has to change to put the directory elsewhere.
 doctor-state-directory = state directory { $path }, from { $variable }
@@ -932,29 +933,6 @@ permission-rule-not-a-tool-rule = needs a server, or a server and one of its too
 # The rules another settings file wrote still apply, which is what "removes none" says.
 permission-rule-not-a-list = sets no rules and removes none; rules go in a list, such as "deny": ["Read(./.env)"]
 
-
-## Importing a Leo Premium subscription
-
-leo-no-premium-endpoint =
-    warning: this build has no premium endpoint, so imported credentials will not be used
-leo-set-and-rebuild = set { $variable } and rebuild
-leo-unknown-channel = unknown channel: { $channel }
-leo-expected-channel = expected one of: stable, beta, nightly, development
-leo-forgotten = forgot the imported subscription
-leo-forget-takes-no-channel = --forget takes no channel: one subscription is stored for every channel
-leo-not-while-incognito = an import stores credentials on disk, which an incognito session will not do
-leo-looking = looking for a Leo subscription in Brave { $channel }
-leo-found = found a { $environment } subscription: { $order }
-leo-registering = registering this install as a new device
-leo-stored = stored { $count } credentials in { $path }, valid through { $expiry }
-leo-browser-untouched =
-    premium requests will now use them; the browser's own credentials were untouched
-
-# Said when a subscription is stored but could not be read. Worth a line because the request
-# then goes out with no subscription, where a premium model name is answered by a weaker model
-# rather than by an error, so the only symptom is a worse answer.
-subscription-unusable =
-    the imported subscription could not be used ({ $problem }), so this turn spends none
 
 # Said when a background job exits. The line drawn when it started said only that something had
 # been started, and nothing else in the transcript ever says it is over, so a build that failed
@@ -1131,10 +1109,10 @@ auth-unexpected-argument = { $command } does not take { $argument }
 auth-needs-a-terminal =
     bravebot auth login asks which way to sign in, so it needs a terminal to ask on, or the name of a way
 auth-logout-needs-a-way = bravebot auth logout needs the name of the way to sign out of
-# The heading over the list. Each line under it starts with a number and a word, leo, bedrock,
-# import or gateway, which a script types and which are not translated.
+# The heading over the list. Each line under it starts with a number and a word, bedrock,
+# import, gateway, chatgpt or xai, which a script types and which are not translated.
 auth-ways-heading = Ways to sign in to a model service:
-auth-way-leo = Brave Leo Premium, from a Brave install that subscribes
+auth-way-brave = Brave's premium service, with a key typed here and kept by bravebot
 auth-way-bedrock = An AWS account, for Amazon Bedrock
 auth-way-import = A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
 # The services are the ids bravebot knows an endpoint for, such as openrouter, comma separated.
@@ -1150,13 +1128,6 @@ auth-signed-in = signed in
 auth-which-way = Which one? Type its number or its name, or nothing to stop:
 # Said where the answer to auth-which-way names none of the ways listed.
 auth-not-a-listed-way = { $answer } is not one of the ways listed
-auth-which-channel =
-    Which Brave channel subscribes? stable, beta, nightly or development, or nothing for stable:
-# Said before auth-sign-in-again. The status is doctor-subscription.
-auth-leo-held =
-    Brave Leo Premium is signed in: { $status }. bravebot auth logout leo signs out.
-# A second sign-in registers this machine with Brave as one more device.
-auth-sign-in-again = Sign in again, as a new device?
 # The region is AWS_REGION, and the tiers are the variables naming a model, such as
 # ANTHROPIC_DEFAULT_OPUS_MODEL.
 auth-no-aws-account =
@@ -1267,16 +1238,17 @@ auth-logout-gateway-forgotten =
 auth-logout-gateway-forgotten-elsewhere =
     the key for { $id } is forgotten here, and still works at the service that issued it until it is revoked there
 
-# bravebot auth status prints one line per sign-in, as "leo: signed in: <detail>". The detail is a
+# bravebot auth status prints one line per sign-in, as "bedrock: signed in: <detail>". The detail is a
 # count or a fixed sentence, never a credential.
 auth-status-signed-in = signed in: { $detail }
 auth-status-not-signed-in = not signed in: { $detail }
 auth-status-unusable = unusable: { $detail }
 auth-status-none-usable = no sign-in is usable
 auth-status-not-all-usable = a sign-in asked about is not usable
-auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock, gateway, chatgpt or xai
-auth-status-leo-none = no Leo subscription is imported; run bravebot auth login leo
-auth-status-leo-nowhere = this machine has nowhere to keep credentials, so none is imported
+auth-status-brave-held = a premium key is stored and is sent to Brave's premium service alone
+auth-status-brave-none = no premium key is stored; run bravebot auth login brave
+auth-status-brave-nowhere = this machine has nowhere to keep a key, so none is stored
+auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name brave, bedrock, gateway, chatgpt or xai
 # Said of a gateway when no key is stored for any service and no provider block names a gateway.
 auth-status-gateway-none = no gateway key is stored; run bravebot auth login gateway
 # The id is a service bravebot knows that no provider block names, so no session sends a key to it.
@@ -1389,6 +1361,26 @@ chatgpt-defect-no-expiry = it has no expiry
 # port. They are shown in the browser, not in the terminal.
 chatgpt-page-done = You can close this tab and return to bravebot, which says whether the sign-in worked.
 chatgpt-page-not-found = Not found.
+
+## Signing in to Brave's premium service
+
+# `bravebot auth login brave` asks for one key and keeps it in a file of its own. The key is never
+# said back, and the premium host it goes to is compiled in.
+brave-not-while-incognito = a premium key is kept on disk, which an incognito session will not do
+brave-needs-a-terminal = bravebot auth login brave asks for the key without showing it, so it needs a terminal to ask on
+brave-no-home = there is nowhere to keep a key: neither BRAVEBOT_HOME nor the profile directory names one
+brave-key-unreadable = the premium key file { $path } cannot be read, so it is left as it is; delete it to store a key again
+brave-key-held = a premium key is stored already
+brave-replace = Replace it?
+brave-key-question = Brave premium key (nothing is shown as you type):
+brave-nothing-stored = no key was typed, so nothing was stored
+brave-not-read = the key could not be read: { $error }
+brave-not-stored = the key could not be stored in { $path }: { $error }
+brave-stored = stored the premium key in { $path }; premium requests will now use it
+brave-forgotten = forgot the stored premium key; it still works at Brave's premium service until it is revoked there
+brave-nothing-to-forget = no premium key is stored
+brave-not-forgotten = the stored premium key in { $path } could not be removed: { $error }
+doctor-brave-key = premium key
 
 ## Signing in to xAI with a SuperGrok subscription
 
@@ -2600,9 +2592,9 @@ status-served-instead = served instead of { $asked }, which that turn asked for
 status-endpoint = Endpoint
 # Which tier the last turn actually ran on, not what this build was compiled knowing about.
 status-premium-available = premium available, nothing sent yet
-status-premium-in-use = premium, a credential was spent
-status-premium-not-spent = no subscription was spent
-status-no-subscription = no subscription configured
+status-premium-in-use = premium, the premium key was sent
+status-premium-not-spent = the premium key was not sent
+status-no-subscription = no premium key configured
 status-confinement = Confinement
 # Beside the level, because the level alone reads as a boundary the session is inside. The level
 # is what this platform can enforce over a process running code we did not write, and the session
@@ -2788,7 +2780,7 @@ session-limit-in-force = the session limit is { $limit } { $unit }, and { $spent
 session-limit-set = the session limit is { $limit } { $unit }, and { $spent } are spent
 session-limit-set-below-spent = the session limit is { $limit } { $unit }, and { $spent } are already spent, so the next request asks whether to go on
 session-limit-cleared = the session has no spend limit
-session-limit-unknown = { $figure } is not a limit. Use a whole number, with k or m after it for thousands or millions, and credits after that to count Leo Premium credits instead of tokens, or off to remove the limit
+session-limit-unknown = { $figure } is not a limit. Use a whole number, with k or m after it for thousands or millions, and credits after that to count premium requests instead of tokens, or off to remove the limit
 request-none-yet = No request has been sent to the model in this session yet.
 # What /context reports. The section names are fixed words, and none is read from a file or a result.
 context-not-measured = The context has not been measured yet, so there is no breakdown.

@@ -16,9 +16,6 @@ use bravebot_config::keys::{self, Keys};
 use bravebot_config::provider::{Credential, Provider, Source, known_ids};
 use bravebot_config::{Config, ConfigError, Managed, Secret, Settings, env_var};
 use bravebot_i18n::t;
-use bravebot_net::Transport;
-use bravebot_skus::StoredCredentials;
-use bravebot_skus::store::StoreError;
 use std::borrow::Cow;
 use std::fmt::Display;
 use std::io::{BufRead, IsTerminal, Write};
@@ -28,7 +25,7 @@ use std::process::ExitCode;
 /// A way to sign in, in the order the list shows them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Way {
-    Leo,
+    Brave,
     Bedrock,
     Import,
     Gateway,
@@ -38,7 +35,7 @@ enum Way {
 
 impl Way {
     const ALL: [Way; 6] = [
-        Way::Leo,
+        Way::Brave,
         Way::Bedrock,
         Way::Import,
         Way::Gateway,
@@ -49,7 +46,7 @@ impl Way {
     /// The word that names this way on the command line. Not translated, because a script types it.
     fn name(self) -> &'static str {
         match self {
-            Way::Leo => "leo",
+            Way::Brave => "brave",
             Way::Bedrock => "bedrock",
             Way::Import => "import",
             Way::Gateway => "gateway",
@@ -68,7 +65,7 @@ impl Way {
     /// from the same table a session reaches them by.
     fn description(self) -> String {
         match self {
-            Way::Leo => t!(auth_way_leo).to_string(),
+            Way::Brave => t!(auth_way_brave).to_string(),
             Way::Bedrock => t!(auth_way_bedrock).to_string(),
             Way::Import => t!(auth_way_import).to_string(),
             Way::Gateway => t!(auth_way_gateway, services = listed(known_ids())),
@@ -98,17 +95,17 @@ fn refused_with_the_forms(message: impl std::fmt::Display) -> ExitCode {
     said.push_str(t!(auth_forms_heading));
     for form in [
         "bravebot auth login",
-        "bravebot auth login leo [stable|beta|nightly|development]",
+        "bravebot auth login brave",
         "bravebot auth login bedrock",
         "bravebot auth login import",
         "bravebot auth login gateway [id]",
         "bravebot auth login chatgpt",
         "bravebot auth login xai",
-        "bravebot auth logout leo",
+        "bravebot auth logout brave",
         "bravebot auth logout gateway [id]",
         "bravebot auth logout chatgpt",
         "bravebot auth logout xai",
-        "bravebot auth status [leo|bedrock|gateway [id]|chatgpt|xai]",
+        "bravebot auth status [brave|bedrock|gateway [id]|chatgpt|xai]",
     ] {
         said.push_str("\n  ");
         said.push_str(form);
@@ -118,8 +115,8 @@ fn refused_with_the_forms(message: impl std::fmt::Display) -> ExitCode {
 
 /// `bravebot auth login [way]`: the way named, or the list and a question where none is.
 fn login(args: &[String]) -> ExitCode {
-    // No incognito check of its own: Leo, the import and a gateway key are refused by the checks
-    // their own code makes, and an AWS session is the AWS CLI's, which a session in that mode signs
+    // No incognito check of its own: the Brave key, the import and a gateway key are refused by the
+    // checks their own code makes, and an AWS session is the AWS CLI's, which a session in that mode signs
     // in to as well.
     if let Some((word, rest)) = args.split_first() {
         return match Way::named(word) {
@@ -152,18 +149,15 @@ type Picked = Result<Option<(Way, Vec<String>)>, String>;
 
 /// List the ways, ask which, and return what was picked.
 ///
-/// A Leo sign-in already held is asked about again before it is repeated, because a second one
-/// registers this machine with Brave as one more device. The other two repeat harmlessly: an AWS
-/// session that is still good is left alone, and an import says when it has nothing new.
+/// What a way already holds is shown beside it. Repeating one is harmless: an AWS session that is
+/// still good is left alone, and an import says when it has nothing new.
 fn picked<R: BufRead, W: Write>(
     asking: &mut Prompting<R, W>,
     held: &dyn Fn(Way) -> Option<String>,
 ) -> Picked {
-    // Asked once per way, so the question about a held sign-in is about the one the list showed.
-    let holding = Way::ALL.map(|way| (way, held(way)));
     asking.say(t!(auth_ways_heading));
-    for (number, (way, status)) in (1..).zip(&holding) {
-        let description = match status {
+    for (number, way) in (1..).zip(Way::ALL) {
+        let description = match held(way) {
             Some(status) => t!(
                 auth_way_held,
                 description = way.description(),
@@ -181,44 +175,20 @@ fn picked<R: BufRead, W: Write>(
     let way = crate::plain::numbered_row(&answer, &Way::ALL)
         .copied()
         .or_else(|| Way::named(&answer));
-    let Some(way) = way else {
-        return Err(t!(auth_not_a_listed_way, answer = printable(&answer)));
-    };
-    if way != Way::Leo {
-        return Ok(Some((way, Vec::new())));
-    }
-
-    if let Some((_, Some(status))) = holding.iter().find(|(listed, _)| *listed == way) {
-        asking.say(&t!(auth_leo_held, status = status));
-        if asking.ask(&[], t!(auth_sign_in_again)) != Decision::Approve {
-            return Ok(None);
-        }
-    }
-    // Passed on rather than checked here, so a word that names no channel is refused by the check
-    // `import-leo-creds` makes, with its message. Made printable first, because that message
-    // repeats the word.
-    match asking.answer(t!(auth_which_channel)) {
-        None => Ok(None),
-        Some(channel) if channel.is_empty() => Ok(Some((way, Vec::new()))),
-        Some(channel) => Ok(Some((way, vec![printable(&channel)]))),
+    match way {
+        Some(way) => Ok(Some((way, Vec::new()))),
+        None => Err(t!(auth_not_a_listed_way, answer = printable(&answer))),
     }
 }
 
 /// What a way already holds, as the list shows it, or `None` where it holds nothing.
 ///
-/// Never the credential: the Leo line is the one `doctor` prints, a count of what is left, and an
-/// AWS account is reported only as signed in. `directory` is the state directory the keys are kept
-/// in, where there is one.
+/// Never the credential: an AWS account is reported only as signed in. `directory` is the state
+/// directory the keys are kept in, where there is one.
 fn held(way: Way, directory: Option<&Path>) -> Option<String> {
     match way {
-        Way::Leo => bravebot_skus::store::load().ok().map(|stored| {
-            t!(
-                doctor_subscription,
-                environment = stored.environment.as_str(),
-                unspent = stored.remaining(),
-                total = stored.credentials.len()
-            )
-        }),
+        Way::Brave => matches!(crate::brave::standing(), crate::brave::Standing::Held)
+            .then(|| t!(auth_signed_in).to_string()),
         Way::Bedrock => {
             let config = bedrock_config(&Settings::load(), &Managed::load()).ok()?;
             let accounts = accounts(&config, inherited_profile().as_deref());
@@ -260,20 +230,10 @@ fn gateways_held(stored: Result<Keys, keys::Unreadable>) -> Option<String> {
 /// Run one way with the arguments that followed its name.
 fn sign_in(way: Way, rest: &[String]) -> ExitCode {
     match way {
-        // `--forget` included: signing out is `logout`, and a sign-in that forgot would be the
-        // opposite of what was typed.
-        Way::Leo => match rest {
-            [flag, ..] if flag.starts_with('-') => fail(
-                Ending::Argument,
-                t!(cli_unknown_option, flag = printable(flag)),
-            ),
-            // One channel, where `import-leo-creds` would take the last of several.
-            [_, extra, ..] => unexpected(way, extra),
-            _ => import_leo_creds(rest),
-        },
-        Way::Bedrock | Way::Import | Way::ChatGpt | Way::Xai if !rest.is_empty() => {
+        Way::Brave | Way::Bedrock | Way::Import | Way::ChatGpt | Way::Xai if !rest.is_empty() => {
             unexpected(way, &rest[0])
         }
+        Way::Brave => crate::brave::login(),
         Way::Bedrock => bedrock(),
         Way::Import => crate::import::providers(&[]),
         Way::ChatGpt => crate::chatgpt::login(),
@@ -1119,8 +1079,8 @@ fn variable_in_force(provider: &Provider, lookup: impl Fn(&str) -> Option<String
 
 /// Write `stored` over the file of keys in `directory`, or remove the file where nothing is left.
 ///
-/// Written beside the file and renamed over it, as the Leo batch is, so a write that stops part way
-/// leaves the keys that were there. Created by the call that gives the Leo batch its protection,
+/// Written beside the file and renamed over it, as the sign-ins are, so a write that stops part way
+/// leaves the keys that were there. Created by the call that gives them their protection,
 /// 0600 on Unix and granted to this account alone on Windows (STATE-1), because a gateway key is a
 /// bearer token too.
 fn store(directory: &Path, stored: &Keys) -> std::io::Result<()> {
@@ -1192,7 +1152,13 @@ type Line = (String, Standing);
 fn status(args: &[String]) -> ExitCode {
     let Some((word, rest)) = args.split_first() else {
         return report(
-            &[Way::Leo, Way::Bedrock, Way::Gateway, Way::ChatGpt, Way::Xai],
+            &[
+                Way::Brave,
+                Way::Bedrock,
+                Way::Gateway,
+                Way::ChatGpt,
+                Way::Xai,
+            ],
             None,
             false,
         );
@@ -1237,7 +1203,7 @@ fn report(ways: &[Way], gateway_id: Option<&str>, named: bool) -> ExitCode {
     let mut lines: Vec<Line> = Vec::new();
     for way in ways {
         match way {
-            Way::Leo => lines.push(("leo".into(), leo())),
+            Way::Brave => lines.push(("brave".into(), brave())),
             Way::Bedrock => lines.extend(bedrock_standings(
                 bedrock_config(&Settings::load(), &Managed::load()),
                 inherited_profile().as_deref(),
@@ -1298,46 +1264,15 @@ fn verdict(lines: &[Line], named: bool) -> Ending {
     }
 }
 
-/// The imported Leo subscription, read from the store a turn reads.
-fn leo() -> Standing {
-    // The store answers this the way it answers a file it could not read, so it is asked on its
-    // own, as `ImportedSubscription::discover` does: somebody who never held a subscription is not
-    // told theirs is unusable.
-    if bravebot_skus::store::path().is_err() {
-        return Standing::NotSignedIn(t!(auth_status_leo_nowhere).into());
+/// The stored Brave premium key, read from the file a turn would read.
+fn brave() -> Standing {
+    use crate::brave::Standing as Stored;
+    match crate::brave::standing() {
+        Stored::Held => Standing::SignedIn(t!(auth_status_brave_held).into()),
+        Stored::NotHeld => Standing::NotSignedIn(t!(auth_status_brave_none).into()),
+        Stored::Nowhere => Standing::NotSignedIn(t!(auth_status_brave_nowhere).into()),
+        Stored::Unusable(reason) => Standing::Unusable(reason),
     }
-    leo_standing(bravebot_skus::store::load(), || {
-        Config::from_env().map(|config| config.premium_endpoint)
-    })
-}
-
-/// [`leo`] from what the store answered, with the endpoint a turn would spend against asked for
-/// only where there is a batch to check it against.
-fn leo_standing(
-    loaded: Result<StoredCredentials, StoreError>,
-    endpoint: impl FnOnce() -> Result<Option<String>, ConfigError>,
-) -> Standing {
-    let stored = match loaded {
-        Ok(stored) => stored,
-        Err(StoreError::NotFound) => return Standing::NotSignedIn(t!(auth_status_leo_none).into()),
-        // Its text carries the remedy (PREM-8).
-        Err(other) => return Standing::Unusable(printable(&other.to_string())),
-    };
-    let endpoint = match endpoint() {
-        Ok(endpoint) => endpoint,
-        Err(problem) => return Standing::Misconfigured(printable(&problem.to_string())),
-    };
-    if let Some(refusal) = endpoint.as_deref().and_then(|endpoint| {
-        bravebot_agent::subscription::environment_mismatch(endpoint, stored.environment)
-    }) {
-        return Standing::Unusable(printable(&refusal));
-    }
-    Standing::SignedIn(t!(
-        doctor_subscription,
-        environment = stored.environment.as_str(),
-        unspent = stored.remaining(),
-        total = stored.credentials.len()
-    ))
 }
 
 /// The stored ChatGPT sign-in, read from the file a turn would read.
@@ -1539,8 +1474,8 @@ fn listed<'n>(names: impl Iterator<Item = &'n str>) -> String {
     names.map(printable).collect::<Vec<_>>().join(", ")
 }
 
-/// `bravebot auth logout <way>`. Leo, a gateway, ChatGPT and xAI keep a credential of their own, so
-/// they are the ways signed out of here; the other two say where what they left is kept.
+/// `bravebot auth logout <way>`. The Brave key, a gateway, ChatGPT and xAI keep a credential of their
+/// own, so they are the ways signed out of here; the other two say where what they left is kept.
 fn logout(args: &[String]) -> ExitCode {
     let Some((word, rest)) = args.split_first() else {
         return refused_with_the_forms(t!(auth_logout_needs_a_way));
@@ -1570,9 +1505,7 @@ fn logout(args: &[String]) -> ExitCode {
         );
     }
     match way {
-        // Allowed in an incognito session, as INCOG-7 allows forgetting an import: it leaves less
-        // behind, not more. The gateway key on the same footing.
-        Way::Leo => import_leo_creds(&["--forget".to_string()]),
+        Way::Brave => crate::brave::logout(),
         Way::Bedrock => fail(Ending::Argument, t!(auth_logout_bedrock)),
         Way::Import => fail(Ending::Argument, t!(auth_logout_import)),
         Way::Gateway => forget_gateway(rest.first().map(String::as_str)),
@@ -1659,141 +1592,6 @@ fn forgotten(stored: &Keys, named: Option<&str>) -> Result<String, String> {
     }
 }
 
-/// Import a Leo Premium subscription from a local Brave install.
-///
-/// This registers as an *additional* device rather than taking the browser's credentials, so the
-/// browser keeps its own and nothing it holds is spent. Only the order id is read from the
-/// profile; the credentials themselves are minted here and signed by Brave's service.
-pub(crate) fn import_leo_creds(args: &[String]) -> ExitCode {
-    let mut channel = None;
-    let mut forget = false;
-
-    for arg in args {
-        match arg.as_str() {
-            "--forget" => forget = true,
-            other if other.starts_with('-') => {
-                return fail(Ending::Argument, t!(cli_unknown_option, flag = other));
-            }
-            other => match bravebot_skus::Channel::parse(other) {
-                Some(parsed) => channel = Some(parsed),
-                None => {
-                    let refused = fail(Ending::Argument, t!(leo_unknown_channel, channel = other));
-                    eprintln!("{}", t!(leo_expected_channel));
-                    return refused;
-                }
-            },
-        }
-    }
-
-    // There is one stored batch, so forgetting takes no channel: naming one would suggest
-    // `--forget nightly` leaves a stable import in place, and it does not. It is refused rather
-    // than ignored, before anything is removed.
-    if forget {
-        if channel.is_some() {
-            return fail(Ending::Argument, t!(leo_forget_takes_no_channel));
-        }
-        return match bravebot_skus::store::clear() {
-            Ok(()) => {
-                println!("{}", t!(leo_forgotten));
-                ExitCode::SUCCESS
-            }
-            Err(err) => fail(Ending::Failed, err),
-        };
-    }
-
-    // Stable is what someone importing without saying which install means.
-    let channel = channel.unwrap_or(bravebot_skus::Channel::Stable);
-
-    // Refused rather than silently skipped, and refused before the device is registered so a
-    // batch is not minted that nothing will ever be able to spend. An import is a write by
-    // definition: a credential that did not outlive the session would not be an import. It is the
-    // one command an incognito session cannot carry out rather than merely decline to record.
-    // Forgetting above is allowed: removing a stored secret leaves less behind, not more.
-    if bravebot_core::incognito::engaged() {
-        return fail(Ending::Failed, t!(leo_not_while_incognito));
-    }
-
-    // Warned about early: the import would otherwise succeed and then never be used, since a
-    // credential is only ever sent to the premium host.
-    match Config::from_env() {
-        Ok(config) if config.premium_endpoint.is_none() => {
-            eprintln!("{}", t!(leo_no_premium_endpoint));
-            eprintln!(
-                "         {}",
-                t!(
-                    leo_set_and_rebuild,
-                    variable = bravebot_config::env_var::PREMIUM_ENDPOINT
-                )
-            );
-        }
-        _ => {}
-    }
-
-    println!("{}", t!(leo_looking, channel = channel.as_str()));
-
-    let order = match bravebot_skus::find_leo_order(channel) {
-        Ok(order) => order,
-        Err(err) => return fail(Ending::Failed, err),
-    };
-
-    println!(
-        "{}",
-        t!(
-            leo_found,
-            environment = order.environment.as_str(),
-            order = &order.order_id
-        )
-    );
-    println!("{}", t!(leo_registering));
-
-    // A fresh request id is what makes this a new device rather than a claim on an existing
-    // device's batch.
-    let request_id = bravebot_skus::new_request_id();
-
-    let registration = match bravebot_skus::device::register(
-        order.environment,
-        &order.order_id,
-        &request_id,
-        Transport::shared().agent_config_builder(),
-    ) {
-        Ok(registration) => registration,
-        Err(err) => return fail(Ending::Failed, err),
-    };
-
-    let credentials: bravebot_skus::StoredCredentials = registration.into();
-    let count = credentials.credentials.len();
-    let last = credentials
-        .credentials
-        .iter()
-        .map(|c| c.valid_to.as_str())
-        .max()
-        .unwrap_or("unknown")
-        .to_string();
-
-    if let Err(err) = bravebot_skus::store::save(&credentials) {
-        return fail(Ending::Failed, err);
-    }
-
-    // Named so the user knows where the secret went: it is an ordinary file now, and one they may
-    // want to inspect, exclude from a backup, or delete by hand.
-    let where_stored = match bravebot_skus::store::path() {
-        Ok(path) => path.display().to_string(),
-        Err(err) => return fail(Ending::Failed, err),
-    };
-
-    println!(
-        "{}",
-        t!(
-            leo_stored,
-            count = count,
-            path = where_stored,
-            expiry = last
-        )
-    );
-    println!("{}", t!(leo_browser_untouched));
-    ExitCode::SUCCESS
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1813,15 +1611,15 @@ mod tests {
         None
     }
 
-    fn leo_held(way: Way) -> Option<String> {
-        (way == Way::Leo).then(|| "production subscription imported, 3 of 20".to_string())
+    fn gateway_held(way: Way) -> Option<String> {
+        (way == Way::Gateway).then(|| "a key held for openai".to_string())
     }
 
     /// CLI-18: every way is on the list by the word that names it, and only one that holds
     /// something says what it holds.
     #[test]
     fn every_way_is_listed_and_only_a_held_one_says_what_it_holds() {
-        let (said, _) = asked("\n", &leo_held);
+        let (said, _) = asked("\n", &gateway_held);
 
         let lines: Vec<&str> = said.lines().collect();
         for (number, way) in (1..).zip(Way::ALL) {
@@ -1830,8 +1628,8 @@ mod tests {
                 .find(|line| line.starts_with(&format!("  {number}. {}", way.name())))
                 .unwrap_or_else(|| panic!("{} is not listed: {said}", way.name()));
             assert_eq!(
-                line.contains("3 of 20"),
-                way == Way::Leo,
+                line.contains("a key held for openai"),
+                way == Way::Gateway,
                 "{} says the wrong thing about what it holds: {line}",
                 way.name()
             );
@@ -1896,11 +1694,13 @@ mod tests {
     #[test]
     fn a_way_is_picked_by_its_number_or_its_name() {
         for (answers, expected) in [
+            ("1\n", Some(Way::Brave)),
             ("2\n", Some(Way::Bedrock)),
             ("3\n", Some(Way::Import)),
             ("4\n", Some(Way::Gateway)),
             ("5\n", Some(Way::ChatGpt)),
             ("6\n", Some(Way::Xai)),
+            ("brave\n", Some(Way::Brave)),
             ("bedrock\n", Some(Way::Bedrock)),
             ("gateway\n", Some(Way::Gateway)),
             ("ChatGPT\n", Some(Way::ChatGpt)),
@@ -1917,7 +1717,7 @@ mod tests {
                 "{answers:?}: {said}"
             );
         }
-        for refused in ["0\n", "7\n", "aws\n"] {
+        for refused in ["0\n", "7\n", "aws\n", "leo\n"] {
             let (said, picked) = asked(refused, &nothing_held);
             let complaint = picked.expect_err(refused);
             assert!(
@@ -1927,41 +1727,18 @@ mod tests {
         }
     }
 
-    /// CLI-18: Leo is asked which channel, and nothing typed is stable, which is what
-    /// `import-leo-creds` takes no channel to mean.
+    /// CLI-18: what a way holds is asked once, so the list shows the state of the sign-in it names
+    /// and a line that looked twice could disagree with itself.
     #[test]
-    fn leo_is_asked_which_channel_and_passes_the_word_on() {
-        let (_, picked) = asked("1\n\n", &nothing_held);
-        assert_eq!(picked, Ok(Some((Way::Leo, Vec::new()))));
-
-        let (_, picked) = asked("leo\nnightly\n", &nothing_held);
-        assert_eq!(picked, Ok(Some((Way::Leo, vec!["nightly".to_string()]))));
-
-        let (_, picked) = asked("leo\n", &nothing_held);
-        assert_eq!(picked, Ok(None), "the end of the input picked a channel");
-    }
-
-    /// CLI-18: a Leo sign-in already held is repeated only on a yes, since a second one registers
-    /// another device, and the question names the command that signs out instead. What each way
-    /// holds is asked once, so the question is about the sign-in the list showed.
-    #[test]
-    fn a_held_leo_sign_in_is_repeated_only_when_asked_to() {
+    fn what_each_way_holds_is_asked_once() {
         let looked = std::cell::Cell::new(0);
         let counted = |way| {
             looked.set(looked.get() + 1);
-            leo_held(way)
+            gateway_held(way)
         };
-        let (said, picked) = asked("1\n\n", &counted);
+        let (said, picked) = asked("\n", &counted);
         assert_eq!(picked, Ok(None), "{said}");
-        assert!(said.contains("bravebot auth logout leo"), "{said}");
         assert_eq!(looked.get(), Way::ALL.len(), "a way was looked at twice");
-
-        let (said, picked) = asked("1\ny\nbeta\n", &leo_held);
-        assert_eq!(
-            picked,
-            Ok(Some((Way::Leo, vec!["beta".to_string()]))),
-            "{said}"
-        );
     }
 
     /// The tier variables' account on `profile`, beside an `amazon-bedrock` block on
@@ -3484,26 +3261,6 @@ mod tests {
                 _ => panic!("a failure was reported as usable"),
             };
             assert!(!line.contains(account), "{line}");
-        }
-    }
-
-    /// CLI-23 and PREM-8: nothing imported is told from a store that could not be read, and the
-    /// endpoint is asked for only once there is a batch to check it against.
-    #[test]
-    fn nothing_imported_is_told_from_a_store_that_could_not_be_read() {
-        let never = || -> Result<Option<String>, ConfigError> {
-            panic!("the endpoint was asked for with no batch to check")
-        };
-        assert!(matches!(
-            leo_standing(Err(StoreError::NotFound), never),
-            Standing::NotSignedIn(_)
-        ));
-        let unreadable = StoreError::Malformed {
-            detail: "not valid JSON".into(),
-        };
-        match leo_standing(Err(unreadable), never) {
-            Standing::Unusable(why) => assert!(why.contains("bravebot auth login leo"), "{why}"),
-            other => panic!("an unreadable store was reported as {other:?}"),
         }
     }
 }

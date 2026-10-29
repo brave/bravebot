@@ -6,11 +6,13 @@
 pub const SIGNING_KEY: &str = "SERVICES_KEY_AICHAT";
 pub const KEY_ID: &str = "BRAVE_SERVICES_KEY_ID";
 pub const ENDPOINT: &str = "BRAVE_AI_CHAT_ENDPOINT";
-/// Host for the premium tier, used once a subscription has been imported.
+/// Host for the premium tier, in place of the one compiled in.
 ///
-/// A separate variable rather than a prefix swap on ENDPOINT: the two are independent
-/// deployments, and deriving one host from another by string substitution would break
-/// the moment either name changed.
+/// Optional: with nothing set the host is [`crate::DEV_PREMIUM_ENDPOINT`] or
+/// [`crate::PROD_PREMIUM_ENDPOINT`], whichever the free endpoint's environment calls for. A
+/// separate variable rather than a prefix swap on ENDPOINT: the two are independent deployments,
+/// and deriving one host from another by string substitution would break the moment either name
+/// changed.
 pub const PREMIUM_ENDPOINT: &str = "BRAVE_AI_CHAT_PREMIUM_ENDPOINT";
 /// The model to request when the user has not chosen one.
 ///
@@ -116,8 +118,8 @@ pub const ALL: [&str; 6] = [
 
 /// Names a build must have.
 ///
-/// DEFAULT_MODEL is absent because it has a default. PREMIUM_ENDPOINT is absent because a build
-/// without it still works for everyone who has not imported a subscription.
+/// DEFAULT_MODEL is absent because it has a default. PREMIUM_ENDPOINT is absent because the premium
+/// host is compiled in.
 pub const REQUIRED: [&str; 3] = [SIGNING_KEY, KEY_ID, ENDPOINT];
 
 /// Set to `1` to build without configuration, producing a binary that must be given

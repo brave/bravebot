@@ -693,7 +693,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     }
 
     let mut subscription =
-        crate::turn::discover_subscription(config, egress, task.model.as_deref(), reporter);
+        crate::turn::discover_subscription(config, egress, task.model.as_deref());
 
     // Owned here rather than inside either half, so a failure in either one still comes back
     // with everything that got as far as existing.
@@ -869,7 +869,7 @@ fn plan<S: Sink, R: Reporter>(
     dropped: &[crate::attached::Carried],
     reporter: &mut R,
     sink: &mut S,
-    mut subscription: Option<&mut crate::ImportedSubscription>,
+    mut subscription: Option<&mut crate::PremiumKey>,
     cancel: &Cancel,
     attempt: &mut Attempt,
     accounting: &mut Accounting,
@@ -1126,7 +1126,7 @@ fn ask<S: Sink, R: Reporter>(
     session: &crate::chatgpt::AccountSession,
     policy: &mut Policy<'_, S>,
     reporter: &mut R,
-    subscription: Option<&mut crate::ImportedSubscription>,
+    subscription: Option<&mut crate::PremiumKey>,
     cancel: &Cancel,
     chosen: &str,
     effort: Option<Effort>,
@@ -1204,7 +1204,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     reporter: &mut R,
     sink: &mut S,
     authority: bravebot_core::file_authority::FileAuthority,
-    subscription: Option<&mut crate::ImportedSubscription>,
+    subscription: Option<&mut crate::PremiumKey>,
     cancel: &Cancel,
     chosen_model: Option<&str>,
     task: &str,

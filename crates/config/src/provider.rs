@@ -276,7 +276,7 @@ pub(crate) fn known_endpoint(id: &str) -> Option<&'static str> {
 ///
 /// The authority is read as [`without_userinfo`] reads it, so a `user:token@` is not part of the
 /// host.
-fn reached_at(url: &str) -> Option<(String, u16)> {
+pub(crate) fn reached_at(url: &str) -> Option<(String, u16)> {
     let (scheme, rest) = url.split_once("://")?;
     let default = match scheme.to_ascii_lowercase().as_str() {
         "https" => 443,

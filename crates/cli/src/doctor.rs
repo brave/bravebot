@@ -737,11 +737,8 @@ fn report_permissions(
 }
 
 /// The backends a person can choose from and what would end each credential this build holds for
-/// itself. Returns the stored subscription it loaded, which the model section reports.
-fn report_backends(
-    config: &Config,
-    ending: &mut Ending,
-) -> Option<bravebot_skus::StoredCredentials> {
+/// itself.
+fn report_backends(config: &Config, ending: &mut Ending) {
     // Both, where both are reachable, because both are offered to a person choosing and a
     // report naming one of them explains only the half of the picker they happened to use.
     if config.serves_aichat() {
@@ -769,21 +766,31 @@ fn report_backends(
         );
     }
 
+    // A premium key file that cannot be read is read as no key, so every premium request goes to the
+    // free endpoint, and this says why. The same footing as the file of gateway keys above.
+    if let Some(directory) = bravebot_agent::home::directory()
+        && bravebot_config::brave_key::read(&directory).is_err()
+    {
+        *ending = ends_on(*ending, Ending::Failed);
+        fact(
+            t!(doctor_brave_key),
+            t!(
+                brave_key_unreadable,
+                path = bravebot_config::brave_key::file(&directory).display()
+            ),
+        );
+    }
+
     // What would end each credential this build holds for itself, and which tier the gate
     // walk left it on. Reported beside the backends rather than kept for a leak, because it
     // can only be written down while the arrangement is still understood, and the person
     // reading it after a key appears somewhere public needs the surface that revokes it
     // rather than the expiry, which is all anything here kept before.
-    //
-    // The batch is asked for here rather than inside the record, because the record is
-    // configuration and the file the batch sits in is a fact about the machine.
-    let subscription = bravebot_skus::store::load().ok();
-    for held in config.held(subscription.is_some()) {
+    for held in config.held() {
         report_held(held);
     }
     report_chatgpt_sign_in(ending);
     report_xai_sign_in(ending);
-    subscription
 }
 
 /// The account of one held credential: what would end it, the tier its walk stopped at, and the
@@ -857,12 +864,8 @@ fn report_xai_sign_in(ending: &mut Ending) {
     }
 }
 
-/// What a run would actually request, and the subscription where one means something.
-fn report_model(
-    config: &Config,
-    settings: &bravebot_config::Settings,
-    subscription: Option<&bravebot_skus::StoredCredentials>,
-) {
+/// What a run would actually request.
+fn report_model(config: &Config, settings: &bravebot_config::Settings) {
     // What a run would actually request, since a choice made with `/model` overrides the
     // configured default and reporting only the default would explain the wrong thing. Not
     // where a checkout's settings outrank the choice, since naming it then would explain
@@ -911,12 +914,6 @@ fn report_model(
             t!(doctor_model_default, model = &config.default_model),
         ),
     }
-
-    // Only where a subscription means something. A Leo credential is what the premium half of
-    // the Brave roster needs, and it means nothing to Bedrock.
-    if config.serves_aichat() {
-        report_subscription(subscription);
-    }
 }
 
 /// Last of the configuration section, and a failure, because a report that said "configuration OK"
@@ -929,7 +926,6 @@ fn report_serving(config: &Config, ending: &mut Ending) {
     let model = model_for_this_run(None, config);
     match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model) {
         bravebot_agent::backend::Serving::NothingConfigured {
-            subscription,
             a_service_is_configured,
             chatgpt,
             xai,
@@ -946,7 +942,6 @@ fn report_serving(config: &Config, ending: &mut Ending) {
             println!(
                 "{}",
                 how_to_configure_a_model(
-                    subscription.as_deref(),
                     a_service_is_configured,
                     chatgpt,
                     xai,
@@ -1006,8 +1001,8 @@ pub(crate) fn doctor() -> ExitCode {
             }
 
             report_permissions(&settings, &granted, &mut ending);
-            let subscription = report_backends(&config, &mut ending);
-            report_model(&config, &settings, subscription.as_ref());
+            report_backends(&config, &mut ending);
+            report_model(&config, &settings);
             report_serving(&config, &mut ending);
         }
         Err(err) => {
@@ -1462,7 +1457,7 @@ pub(crate) fn what_would_end(held: bravebot_config::Held<'_>) -> String {
         bravebot_config::Held::GatewayToken { host } => {
             t!(doctor_ends_gateway_token, gateway = host)
         }
-        bravebot_config::Held::SubscriptionBatch => t!(doctor_ends_subscription_batch).to_string(),
+        bravebot_config::Held::PremiumKey => t!(doctor_ends_premium_key).to_string(),
         bravebot_config::Held::ChatgptAccount => t!(doctor_ends_chatgpt_account).to_string(),
         bravebot_config::Held::XaiAccount => t!(doctor_ends_xai_account).to_string(),
     }
@@ -1512,7 +1507,7 @@ pub(crate) fn how_soon_a_leak_is_noticed(held: bravebot_config::Held<'_>) -> Opt
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsAccessKey
         | bravebot_config::Held::GatewayToken { .. }
-        | bravebot_config::Held::SubscriptionBatch
+        | bravebot_config::Held::PremiumKey
         | bravebot_config::Held::ChatgptAccount
         | bravebot_config::Held::XaiAccount => None,
     }
@@ -1625,8 +1620,18 @@ pub(crate) fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
-        (Held::SubscriptionBatch, Condition::NothingDecidesEachUse) => t!(
-            doctor_dropped_subscription_batch_nothing_decides_each_use,
+        (Held::PremiumKey, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_premium_key_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::PremiumKey, Condition::NoBoundFixedBeforeIssue) => t!(
+            doctor_dropped_premium_key_no_bound_fixed_before_issue,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::PremiumKey, Condition::NotMintedForOneStep) => t!(
+            doctor_dropped_premium_key_not_minted_for_one_step,
             gate = gate,
             answer = answer
         ),
@@ -1660,12 +1665,11 @@ pub(crate) fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
-        // The conditions each credential's walk does not hold. Gate 2 is passed by the
-        // subscription batch, which is why it has no account of the gates below the one it
-        // stopped at; the rest are the other conditions of the gates each credential does drop
-        // at, and a drop recorded on one of them is an account nobody has written.
+        // The conditions each credential's walk does not hold: the other conditions of the gates
+        // each credential does drop at, and a drop recorded on one of them is an account nobody
+        // has written.
         (
-            Held::SigningKey | Held::AwsAccessKey | Held::GatewayToken { .. },
+            Held::SigningKey | Held::AwsAccessKey | Held::GatewayToken { .. } | Held::PremiumKey,
             Condition::NothingCanRefuseAUse
             | Condition::BoundEnforcedWithinReach
             | Condition::BoundWithNoEnd
@@ -1687,16 +1691,6 @@ pub(crate) fn why_it_dropped(
             | Condition::BoundWithNoEnd
             | Condition::NotMintedForOneStep
             | Condition::IssuerEndsNothing,
-        )
-        | (
-            Held::SubscriptionBatch,
-            Condition::NothingCanRefuseAUse
-            | Condition::NoBoundFixedBeforeIssue
-            | Condition::BoundEnforcedWithinReach
-            | Condition::BoundWithNoEnd
-            | Condition::NotMintedForOneStep
-            | Condition::IssuerEndsNothing
-            | Condition::RenewableWithoutAuthority,
         ) => return None,
     })
 }
@@ -1731,7 +1725,7 @@ pub(crate) fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsSession
         | bravebot_config::Held::GatewayToken { .. }
-        | bravebot_config::Held::SubscriptionBatch => None,
+        | bravebot_config::Held::PremiumKey => None,
     }
 }
 
@@ -1741,7 +1735,10 @@ fn report_aichat(config: &Config) {
     let (endpoint, premium) = aichat_endpoints(config);
     fact(t!(doctor_endpoint), endpoint);
     match premium {
-        Some(url) => fact(t!(doctor_premium), &url),
+        Some(url) if config.premium_key.is_some() => {
+            fact(t!(doctor_premium), t!(doctor_premium_keyed, url = url))
+        }
+        Some(url) => fact(t!(doctor_premium), t!(doctor_premium_unkeyed, url = url)),
         None => fact(t!(doctor_premium), t!(doctor_premium_absent)),
     }
     fact(t!(doctor_key_id), &config.key_id);
@@ -1799,29 +1796,6 @@ pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
         },
         FACT,
     )]
-}
-
-/// Report the imported subscription, and how much of it is left.
-///
-/// Counts only: a credential is a bearer secret, so none of it is printed. The environment rather
-/// than the channel it came from, because that is what decides whether the batch can be spent
-/// against the endpoint this build talks to, and it is what the file records.
-///
-/// The batch arrives rather than being loaded here, because the record of what would end each
-/// credential needs the same answer and a second load would let the two halves of one report
-/// disagree about whether a subscription is held.
-fn report_subscription(stored: Option<&bravebot_skus::StoredCredentials>) {
-    if let Some(stored) = stored {
-        fact(
-            t!(doctor_leo),
-            t!(
-                doctor_subscription,
-                environment = stored.environment.as_str(),
-                unspent = stored.remaining(),
-                total = stored.credentials.len()
-            ),
-        );
-    }
 }
 
 /// Whether a file created under the state directory is reachable only by the account that owns it.
@@ -3045,7 +3019,7 @@ mod tests {
         // record separates are separated in the report. Reported alike, the tier line would be
         // decoration beside an account that already names the credential.
         assert_ne!(
-            what_tier_it_stands_at(bravebot_config::Held::SubscriptionBatch.tier()),
+            what_tier_it_stands_at(bravebot_config::Tier::Granted),
             what_tier_it_stands_at(bravebot_config::Held::SigningKey.tier()),
             "a bounded credential and a permanent one are reported alike"
         );
@@ -3053,7 +3027,7 @@ mod tests {
 
     /// CRED-26: the binding reaches the person reading the record, for exactly the credentials the
     /// record gives one, and each answer reads as itself. A session STS offers no bound form of and
-    /// a batch nobody asked a bound form of are different facts, and only the second is a decision
+    /// a sign-in nobody asked a bound form of are different facts, and only the second is a decision
     /// made here, so a report that printed one sentence for both would hide which one to revisit.
     /// Both say bearer, since that is the word the clause asks the record to use.
     #[test]
@@ -3068,11 +3042,11 @@ mod tests {
 
         let session =
             how_it_is_bound(bravebot_config::Held::AwsSession).expect("a derived credential");
-        let batch = how_it_is_bound(bravebot_config::Held::SubscriptionBatch)
-            .expect("a derived credential");
+        let sign_in =
+            how_it_is_bound(bravebot_config::Held::ChatgptAccount).expect("a derived credential");
         assert!(session.contains("bearer"), "{session}");
-        assert!(batch.contains("bearer"), "{batch}");
-        assert_ne!(session, batch);
+        assert!(sign_in.contains("bearer"), "{sign_in}");
+        assert_ne!(session, sign_in);
         assert_ne!(
             how_it_is_bound(bravebot_config::Held::SigningKey),
             Some(session)
@@ -3107,9 +3081,9 @@ mod tests {
     /// CRED-3: a reason is reported for exactly the drops the record holds. A credential whose
     /// drops go unreported leaves the tier an assertion, which is the state the clause exists to
     /// end. A reason reported for a drop the record does not hold is the other half and the worse
-    /// one: the subscription batch's bound is enforced by the backend that verifies it, and a line
-    /// saying it failed gate 2 sends somebody looking for a bound nothing is missing, while a gate
-    /// 3 line naming a condition the walk did not fail is a stated reason that is not the reason.
+    /// one: a line saying a gate was failed that the walk passed sends somebody looking for a bound
+    /// nothing is missing, while a gate 3 line naming a condition the walk did not fail is a stated
+    /// reason that is not the reason.
     ///
     /// Asked of every condition of every gate rather than of the walk alone, since the walk is
     /// what both sides read and a report keyed on something coarser agrees with it by accident.

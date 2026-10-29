@@ -436,7 +436,7 @@ pub(super) fn in_reading_order(
 /// request names one model and gets it or an error. The entry still reaches the picker, from the Brave
 /// half of the roster, where it is a choice that backend can honour.
 ///
-/// Every entry is marked free. Premium here means a Leo subscription, and reaching a model through
+/// Every entry is marked free. Premium here means the premium key, and reaching a model through
 /// somebody's own AWS account does not involve one.
 ///
 /// Every entry says whose account answers. Both rosters are offered together and a bare tier name
@@ -484,7 +484,7 @@ pub(super) fn bedrock_models(
 /// across upstreams most people will never use, so asking it would produce a listing nobody could
 /// pick from, and asking it at all would cost a round trip on a path that must still work offline.
 ///
-/// Every entry is marked free. Premium means a Leo subscription, and a gateway reached with somebody's
+/// Every entry is marked free. Premium means the premium key, and a gateway reached with somebody's
 /// own bearer token does not involve one. What it costs them is between them and the gateway.
 ///
 /// Every entry says which service answers it, because the same slug may be reachable more than one
