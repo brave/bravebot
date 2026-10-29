@@ -23,18 +23,31 @@ import type { Answered, Kind, Scenario, Script, Want } from './script'
 
 export type Speed = 'instant' | 'fast' | 'normal' | 'slow'
 const SPEEDS: Record<Speed, number> = { instant: 0, fast: 0.25, normal: 1, slow: 2.5 }
+const CONFIGURED_KEY = 'playground:configured'
+
+/** Whether a backend is configured, as last chosen. Absent means configured. */
+export function readConfigured(): boolean {
+  return localStorage.getItem(CONFIGURED_KEY) !== 'false'
+}
 
 /** What the panel can change and watch. */
 export const playground = {
   speed: 'normal' as Speed,
   /** Press the answer buttons for the person, so a whole transcript of decided cards can be drawn. */
   auto: false,
-  configured: true,
+  configured: readConfigured(),
   /** Which scenario a typed prompt gets as its reply. */
   reply: QUICK as Scenario,
   running: null as string | null,
   listeners: new Set<() => void>(),
   changed(): void { for (const listen of this.listeners) listen() },
+}
+
+/** Keep the choice and publish it. A reload reads it back through `readConfigured`. */
+export function writeConfigured(configured: boolean): void {
+  playground.configured = configured
+  localStorage.setItem(CONFIGURED_KEY, String(configured))
+  playground.changed()
 }
 
 class Cancelled extends Error {}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { Button, Checkbox, Icon } from '../src/renderer/nala'
-import { onScreen, play, playground, playing, stop, type Speed } from './bridge'
+import { onScreen, play, playground, playing, stop, writeConfigured, type Speed } from './bridge'
 import { SCENARIOS } from './scenarios'
 
 const SPEEDS: Speed[] = ['instant', 'fast', 'normal', 'slow']
@@ -81,7 +81,7 @@ export function Panel(): React.JSX.Element {
           <Checkbox checked={playground.auto} size="small" onChange={({ checked }) => { playground.auto = checked; playground.changed() }}>Answer questions for me</Checkbox>
         </div>
         <div className="pg-row">
-          <Checkbox checked={!playground.configured} size="small" onChange={({ checked }) => { playground.configured = !checked; playground.changed() }}>Backend not set up (reload to see it)</Checkbox>
+          <Checkbox checked={!playground.configured} size="small" onChange={({ checked }) => writeConfigured(!checked)}>Backend not set up (reload to see it)</Checkbox>
         </div>
         <p className="pg-hint">Type <code>play:tour</code> in the composer to run a scenario by id. Anything else gets a short reply.</p>
         {busy && handle && (

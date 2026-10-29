@@ -35,7 +35,7 @@ function load(path) {
   return module.exports
 }
 
-const { install, play, playground } = load('playground/bridge.ts')
+const { install, play, playground, readConfigured } = load('playground/bridge.ts')
 install()
 
 const request = (method, params) => window.bravebot.request(method, params)
@@ -95,6 +95,17 @@ test('closing a new chat and opening it again reads the replies it wrote', async
   assert.ok(texts.includes('First reply.'), texts.join('\n'))
   assert.ok(texts.includes('Second reply.'), texts.join('\n'))
   assert.ok(!texts.includes(tide), texts.join('\n'))
+})
+
+test('a reload reads the unconfigured choice', () => {
+  localStorage.setItem('playground:configured', 'false')
+  const again = load('playground/bridge.ts')
+  assert.equal(again.playground.configured, false)
+  assert.equal(again.readConfigured(), false)
+  again.writeConfigured(true)
+  const restored = load('playground/bridge.ts')
+  assert.equal(restored.playground.configured, true)
+  assert.equal(readConfigured(), true)
 })
 
 test('auto-answer ends the scenario when no button can be pressed', async () => {

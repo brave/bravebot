@@ -32,7 +32,7 @@ scenario plays in the conversation that is open. The panel also has these contro
   can be seen. It scrolls the card and any evidence inside it so each deciding row passes through
   the viewport, then presses. A card cannot be approved before those rows have been on screen.
   A card it cannot answer within 15 seconds ends the scenario with that failure.
-- **Backend not set up** shows the screens a person sees before a model is configured.
+- **Backend not set up** shows the screens a person sees before a model is configured. The choice is kept, and a reload shows it.
 
 Typing `play:<id>` as a prompt plays that scenario. Other prompts get a short reply.
 
@@ -50,6 +50,6 @@ playground.settings.auto = true
 
 - Native context menus, the file picker and the menu bar commands do not exist in a browser.
 - Nothing is read from or written to disk. Sessions, bots and settings live in memory and are lost
-  on reload. Theme, layout and the panel state are kept in `localStorage`.
+  on reload. Theme, layout, the panel state and whether a backend is configured are kept in `localStorage`.
 - The scenarios are the ones this repository knows about. A new event needs a fixture and a
   scenario added by hand.
