@@ -44,7 +44,7 @@ interface Live {
 export const Context = memo(function Context({ live, audit, details }: {
   live: Live | null
   audit?: React.ReactNode
-  /** Drawn in place of the panels, for a bot's own page, which has no session to inspect. */
+  /** Drawn in place of the panels, for a bot's own page and its home conversation, which have no project to inspect. */
   details?: React.ReactNode
 }): React.JSX.Element {
   const [tab, setTab] = useState<'overview' | 'files'>('overview')
@@ -55,7 +55,8 @@ export const Context = memo(function Context({ live, audit, details }: {
     if (entry) document.dispatchEvent(new CustomEvent('bravebot:reveal-entry', { detail: entry.id }))
   }
 
-  if (details) return <aside className="context" id="context-column">{details}</aside>
+  // An open audit still takes the column, since that is where it is drawn.
+  if (details) return <aside className="context" id="context-column">{audit || details}</aside>
   if (!live) return <aside className={`context ${tab === 'files' ? 'context-files' : ''}`} id="context-column" />
 
   const files = touched(live.entries)

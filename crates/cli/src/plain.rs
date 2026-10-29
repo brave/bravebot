@@ -968,6 +968,7 @@ impl Running<'_> {
             .with_inbox(self.inbox.clone())
             .with_courier(self.courier.clone())
             .addressing(self.agent.as_ref().map(|agent| agent.name.clone()))
+            .addressing_standing(true)
     }
 }
 

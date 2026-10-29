@@ -23,19 +23,27 @@ use std::path::{Path, PathBuf};
 /// the terminal, so the window splices them rather than working out where the word begins or how a
 /// name is written (NAME-9).
 ///
-/// `sources` is asked for only once a name is being typed, because it opens the session's
-/// workspace and the window asks about every line, most of which name nothing.
+/// The definitions a message may be addressed to come first, the rows `bravebot-mentions` builds
+/// from `definitions` ([ADDRESS-2](../../../docs/specs/addressing-a-definition.md#ADDRESS-2)), and
+/// the files after them. Every entry carries `kind` (`file`, `directory`, `session` or
+/// `definition`) and `description`, which is a definition's own words and null for the rest. The
+/// window draws both and decides nothing from either.
+///
+/// `sources` and `definitions` are asked for only once a name is being typed, because they open the
+/// session's workspace and the window asks about every line, most of which name nothing.
 pub fn offer(
     project: &Path,
     line: &str,
     cursor: usize,
     sources: impl FnOnce() -> Result<Vec<(String, PathBuf)>, Failure>,
+    definitions: impl FnOnce() -> Vec<bravebot_mentions::Entry>,
 ) -> Result<Value, Failure> {
     let Some(typed) = bravebot_mentions::typed_reference(line) else {
         return Ok(json!({ "typed": null, "word": null, "entries": [], "completes": false }));
     };
     let sources = sources()?;
-    let entries = bravebot_mentions::matching(project, &typed, &sources);
+    let mut entries = bravebot_mentions::definitions_matching(&typed, &definitions());
+    entries.extend(bravebot_mentions::matching(project, &typed, &sources));
     let completes = bravebot_mentions::enter_completes(project, &typed, &entries, cursor, &sources);
     let entries: Vec<Value> = entries
         .into_iter()
@@ -44,6 +52,11 @@ pub fn offer(
                 "path": entry.path,
                 "written": bravebot_mentions::escape(&entry.path),
                 "directory": entry.is_directory,
+                "kind": entry.kind.as_str(),
+                "description": match entry.kind {
+                    bravebot_mentions::Kind::Definition => entry.note.clone(),
+                    _ => None,
+                },
             })
         })
         .collect();
@@ -99,7 +112,14 @@ mod tests {
             .tempdir()
             .expect("a scratch project");
         std::fs::create_dir_all(root.path().join("My Documents")).expect("directory");
-        let answer = offer(root.path(), "read @My\\ Doc", 0, || Ok(Vec::new())).expect("answers");
+        let answer = offer(
+            root.path(),
+            "read @My\\ Doc",
+            0,
+            || Ok(Vec::new()),
+            Vec::new,
+        )
+        .expect("answers");
         assert_eq!(answer["word"], "@My\\ Doc");
         assert_eq!(answer["entries"][0]["path"], "My Documents/");
         assert_eq!(answer["entries"][0]["written"], "My\\ Documents/");
@@ -116,11 +136,46 @@ mod tests {
             .expect("a scratch project");
         std::fs::create_dir_all(root.path().join("crates/cli/src")).expect("directory");
         std::fs::write(root.path().join("crates/cli/src/main.rs"), "").expect("file");
-        let answer = offer(root.path(), "read @mainrs", 0, || Ok(Vec::new())).expect("answers");
+        let answer =
+            offer(root.path(), "read @mainrs", 0, || Ok(Vec::new()), Vec::new).expect("answers");
         assert_eq!(answer["entries"][0]["path"], "crates/cli/src/main.rs");
         assert_eq!(answer["entries"][0]["written"], "crates/cli/src/main.rs");
         assert_eq!(answer["entries"][0]["directory"], false);
         assert_eq!(answer["completes"], true);
+    }
+
+    /// ADDRESS-2: the definitions come ahead of the files, each says what it is and what it is for,
+    /// and a file says neither more nor less than it did. The first row is the one the window's
+    /// cursor starts on, so a definition is what Enter picks.
+    #[test]
+    fn definitions_are_offered_ahead_of_the_files_with_their_kind_and_description() {
+        let root = tempfile::Builder::new()
+            .prefix("bravebot-offer-definitions-")
+            .tempdir()
+            .expect("a scratch project");
+        std::fs::write(root.path().join("review-notes.md"), "").expect("file");
+        let answer = offer(
+            root.path(),
+            "ask @rev",
+            0,
+            || Ok(Vec::new()),
+            || {
+                vec![
+                    bravebot_mentions::definition_entry("reviewer", "Reviews a diff."),
+                    bravebot_mentions::definition_entry("lantern", "Keeps the lights."),
+                ]
+            },
+        )
+        .expect("answers");
+        let rows = answer["entries"].as_array().expect("rows");
+        assert_eq!(rows.len(), 2, "lantern does not hold the word: {rows:?}");
+        assert_eq!(rows[0]["path"], "reviewer");
+        assert_eq!(rows[0]["kind"], "definition");
+        assert_eq!(rows[0]["description"], "Reviews a diff.");
+        assert_eq!(rows[1]["path"], "review-notes.md");
+        assert_eq!(rows[1]["kind"], "file");
+        assert_eq!(rows[1]["description"], Value::Null);
+        assert_eq!(answer["completes"], true, "Enter on a definition picks it");
     }
 
     /// The window asks about every line it holds, and opening the session's workspace for each one
@@ -128,12 +183,24 @@ mod tests {
     #[test]
     fn a_line_naming_nothing_does_not_open_the_workspace() {
         let asked = Cell::new(false);
-        let answer = offer(Path::new("."), "no reference here", 0, || {
-            asked.set(true);
-            Ok(Vec::new())
-        })
+        let answer = offer(
+            Path::new("."),
+            "no reference here",
+            0,
+            || {
+                asked.set(true);
+                Ok(Vec::new())
+            },
+            || {
+                asked.set(true);
+                Vec::new()
+            },
+        )
         .expect("answers");
-        assert!(!asked.get(), "the workspace was opened for a plain line");
+        assert!(
+            !asked.get(),
+            "the workspace or the definitions were read for a plain line"
+        );
         assert_eq!(answer["typed"], Value::Null);
     }
 
@@ -141,9 +208,13 @@ mod tests {
     /// not an empty list that looks like nothing matched.
     #[test]
     fn a_name_being_typed_reports_a_workspace_that_will_not_open() {
-        let refused = offer(Path::new("."), "read @par", 0, || {
-            Err(Failure::new(ErrorCode::Internal, "no workspace"))
-        })
+        let refused = offer(
+            Path::new("."),
+            "read @par",
+            0,
+            || Err(Failure::new(ErrorCode::Internal, "no workspace")),
+            Vec::new,
+        )
         .expect_err("refused");
         assert_eq!(refused.message, "no workspace");
     }

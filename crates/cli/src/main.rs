@@ -1154,6 +1154,7 @@ fn prepare_the_run(
         // was refused above, so this task is a turn's.
         .with_system_prompts(prompts)
         .addressing(agent.clone())
+        .addressing_standing(true)
         .model_outranks_a_definition(named_on_the_command_line)
         // Every round is told the condition it is judged against, the first one included (GOAL-14).
         .working_towards(goal.clone());

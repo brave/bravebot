@@ -34,6 +34,13 @@ test('a window’s turn reaches the agent with no picture and no path it named',
   assert.deepEqual(forwarded, { session: 's1', prompt: 'look', model: 'm', files: [] })
 })
 
+// MEMORY-14: a summon names a definition for one turn, which only the main process may do.
+test('a window’s turn reaches the agent addressed to no definition it named for that turn', () => {
+  const forwarded = sanitised('turn.send', { session: 's1', prompt: 'look', address: 'someone-else' })
+
+  assert.deepEqual(forwarded, { session: 's1', prompt: 'look', files: [] })
+})
+
 test('a window naming a path where an attachment id goes sends nothing', () => {
   assert.throws(() => sanitised('turn.send', { session: 's1', prompt: 'look', attachments: ['/Users/me/Pictures/private.png'] }))
 })

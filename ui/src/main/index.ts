@@ -71,6 +71,8 @@ import { parseAppearance } from '../shared/theme'
 import { readExperience, removeConversation, writeExperience } from './experience'
 import { compose as composeReport, openPage, save as saveReport, showLog, type Ask } from './bug-report'
 import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
+import { forgetSummons, noteTurnEnded, summons } from './summons'
+import { Summoning, sendSummonedTurn, type Answer } from './summon-turn'
 
 /**
  * Which live session belongs to which bot, for the length of this run.
@@ -107,11 +109,8 @@ const consolidating = new Set<string>()
  */
 const owedCarryOver = new Set<string>()
 
-/** Why a bot's turn could not be sent, in the shape `bravebot:request` already answers with. */
-interface BotFailure {
-  code: string
-  message: string
-}
+/** The handles running a turn a person summoned a bot for (MEMORY-14). See `Summoning`. */
+const summoning = new Summoning()
 
 let window: BrowserWindow | null = null
 
@@ -194,7 +193,7 @@ async function sendBotTurn(
     composed?: 'consolidation'
     staged?: { drops?: unknown; pastes?: unknown }
   },
-): Promise<{ ok?: unknown; error?: BotFailure }> {
+): Promise<Answer> {
   const { grounded, nudge = false, recall = true, model, attachments, composed, staged } = options
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
@@ -268,6 +267,51 @@ async function sendBotTurn(
     }
     return { error: { code: 'internal', message: String(error) } }
   }
+}
+
+/**
+ * Send one turn addressed to a bot a person picked in the composer (MEMORY-14), with this
+ * process's own services. The send is `sendSummonedTurn`.
+ */
+function summonedTurn(
+  session: string,
+  summoned: Bot,
+  prompt: string,
+  options: { model?: string | null; attachments?: unknown; staged?: { drops?: unknown; pastes?: unknown } },
+): Promise<Answer> {
+  return sendSummonedTurn(
+    {
+      request: bridge ? (method, params) => bridge!.request(method, params) : null,
+      summoning,
+      folderOf: rootForSession,
+      ownerOf: (handle, folder) => botHandles.get(handle) ?? bots().find((each) => each.home === folder)?.slug,
+      adopt: (handle, slug) => { botHandles.set(handle, slug) },
+      migrate: migrateBot,
+      host: async (handle, slug, folder, request) => {
+        const held = bot(slug)
+        if (!held) return null
+        // As `sendBotTurn` does: the old notes are recorded before a definition replaces them, and
+        // are asked about once the turn that gave the bot one has ended.
+        const owes = owesCarryOver(held, folder)
+        const migrated = await migrateBot(held, request)
+        if (owes) owedCarryOver.add(handle)
+        return migrated
+      },
+      carry: (handle, params, carried) => {
+        params.files = attachmentPaths(handle, carried.attachments)
+        return withPastes(handle, carried.pastes, withDrops(handle, carried.drops, params))
+      },
+      failure: (error) => {
+        if (error instanceof SendRefused) return { code: 'bad_request', message: error.message }
+        if (error instanceof BridgeError) return { code: error.code, message: error.message }
+        return { code: 'internal', message: String(error) }
+      },
+    },
+    session,
+    summoned,
+    prompt,
+    { model: options.model, attachments: options.attachments, drops: options.staged?.drops, pastes: options.staged?.pastes },
+  )
 }
 
 /**
@@ -385,8 +429,13 @@ function createWindow(): void {
       const handle = message.session
       const slug = botHandles.get(handle)
       const folder = rootForSession(handle)
+      const pending = summoning.finish(handle)
+      // Which bot answered is the pick's, and where is the agent's answer (MEMORY-14). The reply is
+      // carried for the card and nothing here reads it.
+      const { id, prompt } = message.data
+      if (folder && id && typeof prompt === 'number') noteTurnEnded({ directory: folder, id }, prompt, pending, message.data.reply)
       if (slug && folder) {
-        if (message.data.id) noteBotSession(slug, message.data.id, folder)
+        if (message.data.id) noteBotSession(slug, message.data.id, folder, prompt ?? undefined)
         // Read before `noteBotArchived` moves it, because the comparison *is* the signal: the
         // archive rises exactly once per compaction that actually happened, which is the only
         // reliable way to learn that one did. See the note on `Bot.archived`.
@@ -422,6 +471,7 @@ function createWindow(): void {
     // ordinary `turn.error` it is about to receive.
     if (message.event === 'turn.error' && typeof message.session === 'string') {
       const handle = message.session
+      summoning.abandon(handle)
       const slug = botHandles.get(handle)
       const folder = rootForSession(handle)
       if (slug && folder && message.data.id) noteBotSession(slug, message.data.id, folder)
@@ -648,6 +698,7 @@ app.whenReady().then(() => {
         removeConversation(conversationKey(directory, id))
         forgetFork({ directory, id })
         forgetBotConversation(directory, id)
+        forgetSummons({ directory, id })
       }
       if (method === 'session.close') {
         const closing = (params as { session?: unknown } | null)?.session
@@ -656,6 +707,7 @@ app.whenReady().then(() => {
           forgetDrops(closing)
           forgetPastes(closing)
           botHandles.delete(closing)
+          summoning.abandon(closing)
           // A session being released takes any turn of its with it, this app's own included.
           consolidating.delete(closing)
           owedCarryOver.delete(closing)
@@ -871,7 +923,7 @@ app.whenReady().then(() => {
    */
   ipcMain.handle(
     'bravebot:bots:send',
-    async (_event, value: unknown): Promise<{ ok?: unknown; error?: BotFailure }> => {
+    async (_event, value: unknown): Promise<Answer> => {
       if (typeof value !== 'object' || value === null) {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
@@ -906,6 +958,37 @@ app.whenReady().then(() => {
       })
     },
   )
+
+  /**
+   * Send one turn addressed to a bot a person picked in the composer (MEMORY-14), in a project's
+   * chat or in another bot's conversation. The window names the bot; this process names its
+   * definition. See `sendSummonedTurn` in `summon-turn.ts`.
+   */
+  ipcMain.handle(
+    'bravebot:bots:summon',
+    async (_event, value: unknown): Promise<Answer> => {
+      if (typeof value !== 'object' || value === null) {
+        return { error: { code: 'bad_request', message: 'not a request' } }
+      }
+      const { session, slug, prompt, model, attachments, drops, pastes } = value as Record<string, unknown>
+      if (!isSessionId(session) || typeof prompt !== 'string') {
+        return { error: { code: 'bad_request', message: 'not a request' } }
+      }
+      if (model !== undefined && model !== null && typeof model !== 'string') {
+        return { error: { code: 'bad_request', message: 'invalid model' } }
+      }
+      const held = bot(slug)
+      if (!held) return { error: { code: 'no_such_bot', message: 'no bot by that name' } }
+      if (held.retired !== 0) return { error: { code: 'bot_archived', message: 'that bot is archived' } }
+      return summonedTurn(session, held, prompt, {
+        model: model as string | null | undefined,
+        attachments,
+        staged: { drops, pastes },
+      })
+    },
+  )
+
+  ipcMain.handle('bravebot:summons:read', () => summons())
 
   // Appearance: System / Light / Dark. The name is a key in the same file as the columns;
   // Electron's nativeTheme is told so scrollbars and vibrancy follow the page.

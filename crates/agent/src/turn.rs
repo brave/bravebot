@@ -2927,6 +2927,15 @@ where
         None if has_attachments => conversation.push_from(submitted, Provenance::TypedWithFiles),
         None => conversation.push_from(submitted, Provenance::Typed),
     }
+    // Which definition the turn was addressed to, from the name the caller addressed it under and
+    // from nothing in the prompt, so a surface can say who answered once the turn is over
+    // (ADDRESS-12).
+    if let Some(definition) = &task.addressing {
+        conversation.address_last(crate::conversation::Address {
+            definition: definition.clone(),
+            standing: task.addressing_is_standing,
+        });
+    }
 
     // The skills the person named, in front of the planner for this turn in place of a `load_skill`
     // call it is never offered (SKILL-20). After the line that named them, so a cut that falls in

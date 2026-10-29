@@ -2792,6 +2792,13 @@ fn event_loop(
         });
         // The same for the sessions an `@` offers after the files.
         session.settle_sessions(|| past_sessions_offered(workspace.root(), stored.id()));
+        session.settle_definitions(|| {
+            definitions_offered(
+                &workspace,
+                answers.trust.clone(),
+                answers.rules.permissions.clone(),
+            )
+        });
         // A picture decoded since the last pass is drawn on this one rather than at the next key.
         needs_draw |= session.settle_previews();
         // The rows of a model picker still being listed are drawn on the pass they arrive.
@@ -42950,6 +42957,7 @@ mod tests {
     mod scrollbar;
     mod selection;
     mod standing;
+    mod summoning;
     mod wide;
     mod wrapped;
 }

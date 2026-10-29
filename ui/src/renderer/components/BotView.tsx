@@ -1,17 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { botProjects, type Bot } from '../../shared/bots'
+import type { Bot } from '../../shared/bots'
 import type { BotConversation } from '../../shared/bot-history'
 import type { SessionSummary } from '../../shared/protocol'
 import { projectLabel } from '../../shared/recents'
 import { shortAgo } from '../time'
 import { Icon, Input } from '../nala'
-import { BotAvatar } from './BotAvatar'
 import { PullRequestMark, PullRequestRoom } from './PullRequestMark'
 import { pullRequestLink } from '../../shared/pull-request'
-import { Composer, type ComposerFooterProps, type ProjectChoice } from './Composer'
-
-const noop = () => {}
 
 /**
  * How many conversations are drawn before the list asks to draw more. Each row is a button with
@@ -83,7 +79,7 @@ const BotHistory = memo(function BotHistory({ rows, home, name, query, onOpen }:
       {rows.length === 0 && (
         <p className="bot-history-empty">
           <Icon name="message-bubble" />
-          {query.trim() ? `No conversation matches “${query}”.` : 'No conversations yet. Send a message below to start one.'}
+          {query.trim() ? `No conversation matches “${query}”.` : 'No earlier conversations.'}
         </p>
       )}
     </div>
@@ -91,35 +87,21 @@ const BotHistory = memo(function BotHistory({ rows, home, name, query, onOpen }:
 })
 
 /**
- * A bot's own page, before any one conversation is open: its recent conversations, and a composer
- * that starts a new one.
- *
- * The project is chosen in the composer's footer and defaults to none, which runs the conversation
- * in the bot's home folder. Only folders this bot has worked in, or one picked here, are offered,
- * because those are the only ones the main process lets a bot work in.
+ * A bot's earlier conversations, in its home folder and in the projects it worked in before it
+ * was summoned there instead (MEMORY-14). Reached from the header of the bot's conversation, which
+ * is where talking to it happens, so this page has no composer.
  */
-export function BotView({ notices, bot, history, filtering, backendReady, onOpen, onStart, onModel, onSetup, onCheckBackend, onDiagnostics }: {
-  /** Errors and confirmations, shown above the composer. */
+export function BotView({ notices, bot, history, filtering, onOpen }: {
+  /** Errors and confirmations. */
   notices: React.ReactNode
   bot: Bot
   history: BotConversation[]
   /** Whether the header's search is open, which filters the list. */
   filtering: boolean
-  backendReady: boolean | null
   onOpen: (summary: SessionSummary) => void
-  /** Whether a conversation was made. Resolves once the attempt is over, so the page knows when to allow another. */
-  onStart: (prompt: string, directory: string | null) => Promise<boolean>
-  onModel: (model: string) => void
-  onSetup: () => void
-  onCheckBackend: () => void
-  onDiagnostics: () => void
 }): React.JSX.Element {
-  const input = useRef<HTMLElement>(null)
-  const [draft, setDraft] = useState('')
-  const [project, setProject] = useState<string | null>(null)
-  const [picked, setPicked] = useState<string[]>([])
   const [query, setQuery] = useState('')
-  useEffect(() => { setDraft(''); setProject(null); setPicked([]); setQuery('') }, [bot.slug])
+  useEffect(() => { setQuery('') }, [bot.slug])
   useEffect(() => { if (!filtering) setQuery('') }, [filtering])
 
   const shown = useMemo(() => {
@@ -128,96 +110,11 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
       `${row.session?.title ?? row.id} ${row.directory === bot.home ? 'No project' : projectLabel(row.directory)} ${row.session?.branch ?? ''} ${pullRequestLink(row.session?.pullRequest)?.text ?? ''}`.toLowerCase().includes(term)))
   }, [history, query, bot.home])
 
-  // Set on the first send and read by the next, which can come before a render shows `starting`.
-  const startingNow = useRef(false)
-  const [starting, setStarting] = useState(false)
-  const start = () => {
-    const prompt = draft.trim()
-    if (!prompt || backendReady === false || startingNow.current) return
-    startingNow.current = true
-    setStarting(true)
-    // The draft stays: a conversation that opens replaces this page, and one that fails to open
-    // leaves the message here to send again.
-    void onStart(prompt, project).catch(() => false).finally(() => {
-      startingNow.current = false
-      setStarting(false)
-    })
-  }
   // The list is given one function for as long as this page is open, so a new `onOpen` from above
   // does not redraw it.
   const open = useRef(onOpen)
   open.current = onOpen
   const openConversation = useCallback((summary: SessionSummary) => open.current(summary), [])
-  const footer: ComposerFooterProps = {
-    directory: project,
-    branch: null,
-    choices: { folders: [...new Set([...picked, ...botProjects(bot)])], noProject: true },
-    onChoose: (choice: ProjectChoice) => {
-      if (choice.kind === 'none') setProject(null)
-      else if (choice.kind === 'folder') setProject(choice.directory)
-      else void window.bravebot.chooseDirectory().then((folder) => {
-        if (!folder) return
-        setPicked((old) => [folder, ...old.filter((each) => each !== folder)])
-        setProject(folder)
-      })
-    },
-  }
-
-  const composer = (
-    <Composer
-      input={input}
-      session=""
-      model={bot.model}
-      running={false}
-      askingTrust={false}
-      compacting={false}
-      pending={false}
-      starting={starting}
-      scope="bot"
-      draft={draft}
-      onDraft={setDraft}
-      onSend={start}
-      onQueue={start}
-      onInterject={start}
-      interjected={[]}
-      onCancel={noop}
-      onModel={onModel}
-      attachments={[]}
-      onAttach={noop}
-      onRemoveAttachment={noop}
-      staged={[]}
-      onRemoveStaged={noop}
-      onPreview={noop}
-      queued={[]}
-      queuePaused={false}
-      onResumeQueued={noop}
-      onRemoveQueued={noop}
-      refusal={null}
-      onDismissRefusal={noop}
-      backendReady={backendReady}
-      onSetup={onSetup}
-      onCheckBackend={onCheckBackend}
-      onDiagnostics={onDiagnostics}
-      canAttach={false}
-      footer={footer}
-    />
-  )
-
-  // A bot nobody has talked to yet: its face, that it is ready, and the box to start with.
-  if (history.length === 0) {
-    return (
-      <div className="entries bot-view-body bot-first" data-test="bot-page">
-        <div className="bot-first-column">
-          <div className="bot-first-hero">
-            <BotAvatar seed={bot.avatar} size={160} doing="open" />
-            <h1>{bot.name} is ready</h1>
-            <p>Get started with your bot. Add it to a project or just chat with it.</p>
-          </div>
-          <div className="composer-dock" data-veil="before"><div className="dock-float">{notices}</div>{composer}</div>
-        </div>
-      </div>
-    )
-  }
 
   return (
     <>
@@ -229,11 +126,11 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
               <Icon name="search" slot="left-icon" />
             </Input>
           )}
-          <h2 className="bot-view-title">Recent conversations</h2>
+          <h2 className="bot-view-title">Earlier conversations</h2>
           <BotHistory rows={shown} home={bot.home} name={bot.name} query={query} onOpen={openConversation} />
         </div>
       </div>
-      <div className="composer-dock" data-veil="before"><div className="dock-float">{notices}</div>{composer}</div>
+      <div className="toast-stack">{notices}</div>
     </>
   )
 }

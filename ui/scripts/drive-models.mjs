@@ -42,7 +42,12 @@ try {
         ] } }
       }
       if (method === 'session.list') return { ok: { sessions: rows } }
-      if (method === 'session.new') return { ok: { session: 's-new', directory, shownDirectory: directory, branch: null, model: defaultModel } }
+      if (method === 'session.new') {
+        globalThis.modelTest.made = (globalThis.modelTest.made ?? 0) + 1
+        const made = globalThis.modelTest.made
+        const where = params?.directory ?? directory
+        return { ok: { session: made === 1 ? 's-new' : `s-new-${made}`, directory: where, shownDirectory: where, branch: null, model: defaultModel } }
+      }
       if (method === 'session.open') return { ok: { session: `s-${params.id}`, model: defaultModel,
         record: { ...rows.find((row) => row.id === params.id), started: 1, turns: 0, tokens: 0, build: 'fixture' },
         said: [], todos: {}, context: '', trust: { known: true, rules: [] }, archived: 0,
@@ -288,10 +293,13 @@ try {
   assert.equal(stored.model, null)
   assert.equal(stored.avatar, 'v4:diamond/cyan-indigo')
   assert.equal(await botRow.locator('[data-avatar]').getAttribute('data-avatar'), chosenFace)
-  // The bot's own page has a composer that starts its next conversation, and picks the bot's model.
+  // Opening the bot opens its conversation in its home folder, and the composer there picks the
+  // bot's model.
   await botRow.locator(BOT_OPEN_BUTTON).click()
-  await page.locator('[data-test="bot-page"]').waitFor()
-  // The details panel edits the face with the same editor, drawn over the panel rather than cut off by it.
+  await page.getByRole('button', { name: "Don't trust", exact: true }).click()
+  await page.getByRole('dialog').waitFor({ state: 'hidden' })
+  await page.locator('[data-test="bot-greeting"]').waitFor()
+  // The details in the conversation's right column edit the face with the same editor, drawn over the column rather than cut off by it.
   // The window is back at its own size, where the details are a column rather than an overlay.
   await page.setViewportSize(normal)
   const contextToggle = page.getByRole('button', { name: 'Context panel', exact: true })
@@ -325,7 +333,7 @@ try {
   await detailsEditor.getByRole('button', { name: 'Block', exact: true }).click()
   await detailsEditor.getByRole('button', { name: 'Chartreuse to teal', exact: true }).click()
   await page.waitForFunction(async () => (await window.bravebot.readBots())[0]?.avatar === 'v4:block/chartreuse-teal')
-  await page.locator('[data-test="bot-page"]').click({ position: { x: 20, y: 200 } })
+  await page.locator('[data-test="bot-greeting"]').click()
   await detailsEditor.waitFor({ state: 'hidden' })
   await botRow.locator('[data-avatar^="pixel-chartreuse-teal-"][data-avatar*="-block-"]').waitFor()
   const botTrigger = page.locator('.composer .model-trigger')
@@ -344,12 +352,12 @@ try {
   await page.reload()
   await page.locator('[data-test="sidebar-tabs"]').getByText('Bots', { exact: true }).click()
   await botRow.locator(BOT_OPEN_BUTTON).click()
-  await page.locator('[data-test="bot-page"]').waitFor()
+  await page.getByRole('button', { name: "Don't trust", exact: true }).click()
+  await page.getByRole('dialog').waitFor({ state: 'hidden' })
+  await page.locator('[data-test="bot-greeting"]').waitFor()
   await page.waitForFunction(() => /haiku/.test(document.querySelector('.composer .model-trigger')?.getAttribute('aria-label') ?? ''))
   await page.locator(COMPOSER_INPUT).fill('Use the saved bot model')
   await page.locator(COMPOSER_SEND).click()
-  await page.getByRole('button', { name: "Don't trust", exact: true }).click()
-  await page.getByRole('dialog').waitFor({state:'hidden'})
   await page.waitForFunction(() => document.querySelector('.composer .model-trigger')?.shadowRoot?.querySelector('button')?.disabled)
   const botSent = await app.evaluate(() => globalThis.modelTest.botSent)
   assert.equal(botSent.model, 'openrouter/anthropic/claude-haiku-4.5')

@@ -30,7 +30,7 @@
 // perturbs `bravebot-ui.json`, and it puts its own keys back.
 
 import { checker, launch, COMPOSER_INPUT, BOT_OPEN_BUTTON } from './drive-support.mjs'
-import { appState, forgetCheckoutSessions, locateProfile, openBot, scratchCheckout, settle } from './drive-profile.mjs'
+import { appState, forgetCheckoutSessions, locateProfile, openBot, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -41,7 +41,6 @@ const { check, problems } = checker()
 const { userData, stateFile } = await locateProfile()
 const { readState, putKey } = appState(stateFile)
 const hadView = readState().view
-const checkout = scratchCheckout('bravebot-ui-drive-bot-memory')
 
 // This driver's own row and no more. `bots` holds somebody's actual bots, so clearing it to make
 // room is a destructive act one interrupted run away from happening. It adds one and removes one.
@@ -68,26 +67,19 @@ await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
 await page.waitForTimeout(2500)
 
-await openBot(app, page, {
+const home = await openBot(page, {
   name: 'Archivist',
   row: /^Archivist$/,
-  purpose: 'You are the archivist of this checkout. Keep your answers to one short sentence.',
-  checkout,
+  purpose: 'You are the archivist of this folder. Keep your answers to one short sentence.',
   check,
 })
 
 // --- one ordinary turn, to ground the session --------------------------------------------
 
-// Sent from the bot's page, which starts the conversation; the message waits for the trust
-// question a new folder asks.
-await page.locator(COMPOSER_INPUT).fill('Name one file in this checkout.')
+// Sent in the bot's conversation, which runs in its home folder.
+await page.locator(COMPOSER_INPUT).fill('Name one file in this folder.')
 await page.locator('.send').click()
 await page.waitForTimeout(1500)
-const trust = page.locator('.trust button').first()
-if (await trust.isVisible().catch(() => false)) {
-  await trust.click()
-  await page.waitForTimeout(600)
-}
 console.log('  ..   sent the first turn; waiting…')
 const first = await settle(page)
 // Asked before anything is asserted. A machine with no credentials has not failed this driver, it
@@ -98,13 +90,13 @@ if (first === 'unconfigured') {
   await app.close()
   putKey('bots', withoutMine())
   putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
-  rmSync(checkout, { recursive: true, force: true })
+  rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
   process.exit(0)
 }
 check(first === 'done', `the first turn finished (${first})`)
 
 const groundFile = join(userData, 'bots', MINE, 'ground.md')
-check(existsSync(groundFile), 'the briefing was composed as a file outside the checkout')
+check(existsSync(groundFile), 'the briefing was composed as a file outside the home folder')
 check(
   !readFileSync(groundFile, 'utf8').includes('not changed it in a while'),
   'and says nothing about a quiet memory, this bot having only just started',
@@ -122,7 +114,7 @@ putKey(
   'bots',
   (readState().bots ?? []).map((bot) =>
     bot.slug === MINE
-      ? { ...bot, quiet: 9, remembered: statSync(join(checkout, '.bravebot-ui', 'bots', `${MINE}.md`)).mtimeMs }
+      ? { ...bot, quiet: 9, remembered: statSync(join(home, '.bravebot-ui', 'bots', `${MINE}.md`)).mtimeMs }
       : bot,
   ),
 )
@@ -163,7 +155,7 @@ check(
 )
 await page.screenshot({ path: '/tmp/bravebot-ui/26-bot-memory-nudged.png' })
 
-const memory = join(checkout, '.bravebot-ui', 'bots', `${MINE}.md`)
+const memory = join(home, '.bravebot-ui', 'bots', `${MINE}.md`)
 check(existsSync(memory), 'the memory file is still where the bot can edit it')
 // Whether the model took the hint is not this driver's to assert — nothing here can make it write,
 // and a check that demanded it would fail on a model having an off day rather than on a bug. What
@@ -187,7 +179,6 @@ await page2
   .filter({ has: page2.locator('.bot-name', { hasText: /^Archivist$/ }) })
   .locator(BOT_OPEN_BUTTON)
   .click()
-await page2.locator('[data-test="bot-conversations"] .bot-history-row').first().click()
 await page2.waitForTimeout(2500)
 
 // LAYER-6. Nothing in this session was composed by the app, so nothing in it is drawn as the row
@@ -219,10 +210,9 @@ await back.close()
 
 putKey('bots', withoutMine())
 putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
-rmSync(checkout, { recursive: true, force: true })
 rmSync(join(userData, 'bots', MINE), { recursive: true, force: true })
 rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
-forgetCheckoutSessions(checkout)
+forgetCheckoutSessions(home)
 
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
 process.exit(problems.length ? 1 : 0)

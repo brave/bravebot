@@ -154,7 +154,7 @@ fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Option<Entry> {
             bravebot_agent::messages::heading(false, to, name, label),
             Some(text),
         ),
-        Said::User(text) | Said::Composed { text, .. } => Entry::user(text),
+        Said::User(text, _) | Said::Composed { text, .. } => Entry::user(text),
         Said::Assistant(text) => {
             let text = crate::reasoning::spoken(text);
             if text.trim().is_empty() {
@@ -164,6 +164,48 @@ fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Option<Entry> {
         }
         Said::Tool { line, why } => Entry::recalled_tool(line, why),
     })
+}
+
+/// Draw the definition a turn was addressed to over the last reply `entries` holds from `from` on,
+/// as a live turn does (ADDRESS-12).
+///
+/// The name is the one the driver recorded beside the prompt, and no reply chooses it. A turn that
+/// said nothing has no reply to carry it.
+fn label_the_reply(
+    entries: &mut [Entry],
+    from: usize,
+    address: Option<&bravebot_agent::conversation::Address>,
+) {
+    let Some(address) = address else { return };
+    if let Some(reply) = entries
+        .iter_mut()
+        .skip(from)
+        .rev()
+        .find(|entry| entry.speaker == Speaker::Assistant)
+    {
+        reply.answered_as = Some(address.definition.clone());
+    }
+}
+
+/// The entries a conversation read back from a record draws, with the reply of each addressed turn
+/// labelled by the definition the record says it was addressed to.
+fn recalled_entries(said: &[bravebot_agent::conversation::Said]) -> Vec<Entry> {
+    use bravebot_agent::conversation::Said;
+    let mut entries: Vec<Entry> = Vec::new();
+    let mut turn: Option<(usize, &bravebot_agent::conversation::Address)> = None;
+    for line in said {
+        if let Said::User(_, address) = line {
+            if let Some((from, address)) = turn.take() {
+                label_the_reply(&mut entries, from, Some(address));
+            }
+            turn = address.as_ref().map(|address| (entries.len(), address));
+        }
+        entries.extend(recalled_entry(line));
+    }
+    if let Some((from, address)) = turn {
+        label_the_reply(&mut entries, from, Some(address));
+    }
+    entries
 }
 
 /// What the session is doing.
@@ -1205,6 +1247,13 @@ pub struct Session {
     /// Held and let go as [`Session::skills`] are, so that offering the list reads no directory
     /// per frame and constructing a session reads none at all.
     past_sessions: Option<Vec<bravebot_mentions::Entry>>,
+    /// The definitions an `@` could address the message to, held while a reference is typed, as
+    /// [`Session::past_sessions`] are.
+    definitions_offered: Option<Vec<bravebot_mentions::Entry>>,
+    /// The definition picked from that list for the line in the box, until the line is sent or the
+    /// marker the pick wrote is taken out of it. Staged as a dropped file is (DROP-6): it lives
+    /// beside the line and the line says it stands.
+    pick: Option<completion::Pick>,
     /// What [`Session::offered`] last answered, so a frame and the callers behind a key press ask
     /// the disk once between them.
     offered_memo: Kept<completion::OfferedFor>,
@@ -1449,6 +1498,8 @@ impl Session {
             project_styles: Vec::new(),
             project_styles_read: false,
             past_sessions: None,
+            definitions_offered: None,
+            pick: None,
             offered_memo: Kept::default(),
             offered_epoch: 0,
             attached: Vec::new(),
@@ -2425,6 +2476,7 @@ impl Session {
                             .adopt(&self.recallable(prompt), recalled.started);
                     }
                     self.transcript.push(Entry::user(prompt));
+                    let replies_from = self.transcript.len();
                     for (offset, line) in said.iter().enumerate().take(end).skip(start) {
                         // Only the submitted prompt is replaced by its display copy. Context,
                         // corrections and delegate reports can also have the user role.
@@ -2433,6 +2485,17 @@ impl Session {
                         }
                         self.transcript.extend(recalled_entry(line));
                     }
+                    // Under the definition the turn was addressed to, from the record (ADDRESS-12).
+                    let address = match turn
+                        .prompt_offset
+                        .and_then(|offset| said.get(start + offset))
+                    {
+                        Some(bravebot_agent::conversation::Said::User(_, address)) => {
+                            address.as_ref()
+                        }
+                        _ => None,
+                    };
+                    label_the_reply(&mut self.transcript, replies_from, address);
                     match &turn.outcome {
                         Some(StoredOutcome::Failed { reason }) => {
                             self.transcript.push(Entry::failure(reason))
@@ -2472,7 +2535,7 @@ impl Session {
         // prompts. None of those roles establish turn ownership. Keep the messages unassigned
         // and preserve the recorded count rather than saving guessed boundaries as history.
         self.transcript
-            .extend(conversation.recounted().iter().filter_map(recalled_entry));
+            .extend(recalled_entries(&conversation.recounted()));
         self.turns = recalled.turns.unwrap_or(0);
 
         // Into the view and not into the transcript, which is the whole of what an aside is: the
@@ -14369,6 +14432,82 @@ mod tests {
             .expect("a composed message is always drawn");
             assert_eq!(fired.speaker, Speaker::User);
             assert_eq!(fired.text, sentence);
+        }
+
+        /// ADDRESS-12: a resumed session draws the label over the reply of each turn the record says
+        /// was addressed, from the record's field and not from anything the reply says, and over no
+        /// other reply. The two ways a record is drawn, with and without its turn boundaries, both
+        /// do.
+        #[test]
+        fn a_resumed_reply_is_drawn_under_the_definition_its_prompt_was_addressed_to() {
+            use bravebot_agent::conversation::Address;
+            use bravebot_agent::request_view::Provenance;
+
+            let mut conversation = Conversation::new();
+            let mut turns = Vec::new();
+            let exchanges = [
+                ("plain question", None),
+                ("reviewed question", Some(("reviewer", false))),
+                ("standing question", Some(("keeper", true))),
+            ];
+            for (number, (prompt, address)) in exchanges.into_iter().enumerate() {
+                let begins = conversation.recounted().len();
+                conversation.push_from(Message::user(prompt), Provenance::Typed);
+                if let Some((definition, standing)) = address {
+                    conversation.address_last(Address {
+                        definition: definition.to_string(),
+                        standing,
+                    });
+                }
+                // A reply that says it is another definition's, which must decide nothing.
+                conversation.push(Message::assistant("I am the lantern bot."));
+                turns.push(bravebot_session::sessions::StoredTurn::completed(
+                    number + 1,
+                    prompt,
+                    begins,
+                    conversation.recounted().len(),
+                    Some(begins),
+                ));
+            }
+            let labels = |entries: Vec<Entry>| -> Vec<Option<String>> {
+                entries
+                    .into_iter()
+                    .filter(|entry| entry.speaker == Speaker::Assistant)
+                    .map(|entry| entry.answered_as)
+                    .collect()
+            };
+            let expected = vec![
+                None,
+                Some("reviewer".to_string()),
+                Some("keeper".to_string()),
+            ];
+
+            let mut recorded = session();
+            recorded.replay(
+                &conversation,
+                "t",
+                &bravebot_session::sessions::Recalled {
+                    history: Some(turns),
+                    turns: Some(3),
+                    trails: BTreeMap::new(),
+                    todos: BTreeMap::new(),
+                    asides: Vec::new(),
+                    started: None,
+                },
+            );
+            assert_eq!(
+                labels(recorded.transcript.iter().cloned().collect()),
+                expected,
+                "a record with its turn boundaries"
+            );
+
+            let mut legacy = session();
+            legacy.replay(&conversation, "t", &Default::default());
+            assert_eq!(
+                labels(legacy.transcript.iter().cloned().collect()),
+                expected,
+                "a record without its turn boundaries"
+            );
         }
 
         /// MSG-11: a message from another session is drawn from the tag's fields as a block marked

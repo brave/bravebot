@@ -93,8 +93,10 @@ try {
   await emit('turn.done',{id:idA,turn:5,reply:'Memory updated.',model:'sample/deep',steps:1,clean:true,tokens:10,outputTokens:10,notices:[],trust:{rules:[]},archived:1,consolidating:true});await page.waitForTimeout(250);assert.equal((await app.evaluate(()=>globalThis.ux.sent)).length,beforeMaintenance)
   await app.evaluate(({BrowserWindow},session)=>BrowserWindow.getAllWindows()[0].webContents.send('bravebot:bots:consolidated',{session,slug:'review-bot',delivered:true}),'s-'+idA)
   await page.waitForFunction(()=>document.querySelector('.queued-messages')===null);assert.equal((await app.evaluate(()=>globalThis.ux.sent)).length,beforeMaintenance+1);await done()
-  // A bot's own page: its conversations in the middle, its details and memory on the right.
-  await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator('[data-test="bot-conversations"]').waitFor();await snap('19-bot-overview')
+  // Opening a bot opens its conversation in its home folder. Its earlier conversations are a page
+  // reached from that conversation's header: the list in the middle, its details and memory on the right.
+  await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator('[data-test="bot-greeting"]').waitFor()
+  await page.locator('[data-test="earlier-conversations"]').click();await page.locator('[data-test="bot-conversations"]').waitFor();await snap('19-bot-overview')
   await page.locator('[data-test="bot-details"]').getByRole('button',{name:'Edit memory',exact:true}).waitFor();await snap('20-bot-editor')
   await page.getByRole('button',{name:'Edit memory',exact:true}).click();await page.getByRole('textbox',{name:'Edit memory'}).fill('# Saved preference\n\n- Use a blue accent.');await page.getByRole('button',{name:'Save memory'}).click();await page.locator('.bot-memory').getByText('Saved preference',{exact:false}).waitFor();await snap('21-memory-read')
   await page.getByRole('button',{name:'Edit memory',exact:true}).click();await page.getByRole('button',{name:'Reset…',exact:true}).click();await snap('23-memory-reset');await page.getByRole('button',{name:'Reset saved memory'}).click()
@@ -105,15 +107,21 @@ try {
   await page.reload();await page.getByRole('button',{name:'Chats',exact:true}).click();await page.locator('.session').filter({hasText:'Plan the next iteration'}).click();await page.getByText('Backend not set up',{exact:true}).waitFor();assert.equal(await composer.inputValue(),'Independent draft.');await snap('35-backend-not-ready');await page.getByRole('button',{name:'Diagnostics',exact:true}).click();await snap('38-diagnostics');await page.keyboard.press('Escape')
   await page.getByRole('button',{name:'Setup help'}).click();await snap('36-setup-help');await page.keyboard.press('Escape')
   await app.evaluate(()=>globalThis.ux.configured=true);await page.getByRole('button',{name:'Check again'}).click();await page.getByText('Backend not set up',{exact:true}).waitFor({state:'hidden'})
-  const openBot=async()=>{await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator('[data-test="bot-conversations"]').waitFor()}
-  await openBot();await page.locator('.bot-conversations .bot-history-row').filter({hasText:'Review the sample project'}).click();await page.locator('.transcript-head .where').waitFor()
-  // A new bot conversation starts from the bot's page by sending to it; the message waits for the trust question.
-  await openBot();await composer.fill('First turn failure fixture');await page.getByRole('button',{name:'Send',exact:true}).click();await page.getByRole('button',{name:"Don't trust",exact:true}).click();await snap('39-new-bot-conversation')
-  await emit('turn.error',{kind:'chat',category:'unauthorized',message:'401 credentials rejected',turn:1,id:'33333333-3333-4333-8333-333333333333'},'s-new');await page.getByText('Authentication failed',{exact:true}).waitFor()
+  const openBot=async()=>{await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator('[data-test="earlier-conversations"]').waitFor()}
+  await openBot();await page.locator('[data-test="bot-greeting"]').waitFor()
+  await page.locator('[data-test="earlier-conversations"]').click();await page.locator('.bot-conversations .bot-history-row').filter({hasText:'Review the sample project'}).click();await page.locator('.transcript-head .where').waitFor()
+  // Opening the bot again goes back to its home conversation, where a message goes to the bot.
+  await openBot();await page.locator('[data-test="bot-greeting"]').waitFor();await composer.fill('First turn failure fixture');await page.getByRole('button',{name:'Send',exact:true}).click();await snap('39-new-bot-conversation')
+  await emit('turn.error',{kind:'chat',category:'unauthorized',message:'401 credentials rejected',turn:1,id:'33333333-3333-4333-8333-333333333333'},'s-home');await page.getByText('Authentication failed',{exact:true}).waitFor()
   await page.getByRole('button',{name:'Chats',exact:true}).click();assert.equal(await page.locator('.session').filter({hasText:'First turn failure fixture'}).count(),1);await snap('40-first-turn-failure')
-  // A bot is not pinned to a project: the next conversation's project is picked in the composer.
-  await openBot();await app.evaluate(()=>globalThis.ux.choose+='-copy');await page.locator('[data-test="project-trigger"]').click();await page.locator('[data-test="project-pick"]').click()
-  await page.waitForFunction(()=>/-copy$/.test(document.querySelector('[data-test="project-trigger"]')?.textContent?.trim()??''));await snap('41-bot-project-picked')
+  // A bot works in a project by being summoned in that project's chat, for one message (MEMORY-14).
+  await page.locator('[data-test="new-project"]').click();await page.getByRole('button',{name:"Don't trust",exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'})
+  await composer.click();await page.keyboard.type('Ask @Rev');await page.locator('[data-test="mention-bot"]',{hasText:'Review Bot'}).waitFor();await page.keyboard.press('Enter')
+  for(let tries=0;tries<100&&!(await composer.inputValue()).includes('[@Review Bot]');tries++)await page.waitForTimeout(50)
+  assert.equal(await composer.inputValue(),'Ask [@Review Bot] ');assert.equal(await page.locator('[data-test="summon-chip"]').count(),0)
+  await page.keyboard.type('to check this');await page.keyboard.press('Enter')
+  const summoned=(await app.evaluate(()=>globalThis.ux.sent)).at(-1);assert.deepEqual([summoned.summoned,summoned.slug,summoned.session,summoned.prompt],[true,'review-bot','s-new','Ask [@Review Bot] to check this'])
+  await done('s-new','Checked.');await page.locator('[data-test="summon-label"]',{hasText:'Review Bot'}).waitFor();await snap('41-bot-summoned')
   const home = join(profile, 'bot-homes', 'review-bot')
   const localHistory = await page.evaluate(home => window.bravebot.readMemoryHistory('review-bot', home), home);
   assert.ok(localHistory.length > 0, 'fixture has local memory revisions before removal');

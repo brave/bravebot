@@ -1,7 +1,7 @@
 import { Watches } from './Watches'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
-import { memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
@@ -21,7 +21,7 @@ import { Toasts } from './Toasts'
 import { ForkIcon } from './ForkIcon'
 import { ago, contextMenu } from './Sessions'
 import { Markdown } from './Markdown'
-import { BotAvatar, type Doing } from './BotAvatar'
+import { BotAvatar, BotFace, type Doing } from './BotAvatar'
 import type { Bot } from '../../shared/bots'
 import { projectLabel } from '../../shared/recents'
 import { conversationPreferences, setConversation } from '../experience'
@@ -39,14 +39,15 @@ import { middleTruncate } from '../truncate'
 import { pointForPrompt, undoRow } from '../rewind'
 import { ShownContext, leftWords, mayAnswer, useShown, type OnScreen } from '../shown'
 import { showToast } from '../toasts'
-import { EMPTY_STAGING, named, stageDrop, stagePaste, withoutMarker, type Staging } from '../staging'
+import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, withoutMarker, type Staging, type SummonedBot } from '../staging'
+import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
 import type { Drop } from '../../shared/drops'
 import type { Paste } from '../../shared/pastes'
 
 interface Live {
   model: string | null
   handle: string
-  summary: { title: string; project: string; branch: string | null; directory: string }
+  summary: { id?: string | null; title: string; project: string; branch: string | null; directory: string }
   entries: t.Entry[]
   turns: Turns
   todos: TodoRow[]
@@ -157,11 +158,19 @@ interface Props {
   onExport: (format: ExportFormat) => void
   /** The kept yes about this directory as Permissions last read it, which another session may have changed. */
   onTrustRemembered: (session: string, kept: KeptTrust | null) => void
-  /** A bot's own page, shown when no conversation is open. */
+  /** A bot's earlier conversations, shown in place of a conversation when asked for. */
   botView?: { bot: Bot; history: BotConversation[] } | null
   onOpenBotConversation: (bot: Bot, summary: SessionSummary) => void
-  onStartBotChat: (bot: Bot, prompt: string, directory: string | null) => Promise<boolean>
-  onBotModel: (bot: Bot, model: string) => void
+  /** Show the open bot's earlier conversations. */
+  onEarlier: (bot: Bot) => void
+  /** Go back from the earlier conversations to the bot's current one. */
+  onBackToBot: (bot: Bot) => void
+  /** Every bot, for the faces over summoned replies and the bots the `@` list offers (MEMORY-14). */
+  bots: Bot[]
+  /** Which bot answered which summoned turn, as the main process recorded it. */
+  summons: Summon[]
+  /** Open the conversation a "Replied to" card names, at the summoned prompt. */
+  onOpenSummon: (summon: Summon) => void
   /** The composer's footer for the open conversation: its project and branch. */
   footer?: ComposerFooterProps
   /** Whether the open conversation runs in a bot's home folder, which has no project to show. */
@@ -327,8 +336,11 @@ export function Transcript({
   onTrustRemembered,
   botView,
   onOpenBotConversation,
-  onStartBotChat,
-  onBotModel,
+  onEarlier,
+  onBackToBot,
+  bots,
+  summons,
+  onOpenSummon,
   footer,
   noProject,
 }: Props): React.JSX.Element {
@@ -470,7 +482,9 @@ export function Transcript({
     onDraft(next.draft)
     requestAnimationFrame(() => {
       input.current?.focus()
-      input.current?.shadowRoot?.querySelector('textarea')?.setSelectionRange(next.caret, next.caret)
+      const area = input.current?.shadowRoot?.querySelector('textarea')
+      // A key typed before this frame has already put the caret where it belongs.
+      if (area?.value === next.draft) area.setSelectionRange(next.caret, next.caret)
     })
   }
   const dropped = useEvent((drop: Drop) => {
@@ -492,6 +506,34 @@ export function Transcript({
     restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))
   })
   useEffect(() => window.bravebot.onPaste(pasted), [pasted])
+  /** Stage a bot picked from the `@` list to answer this message (MEMORY-14). */
+  const summon = useEvent((picked: SummonedBot, word: string | null) => {
+    if (!live) return
+    const next = stageSummon(live.staging ?? EMPTY_STAGING, picked, draft, word)
+    if (next) restage(live.handle, next)
+  })
+  // The bots a message here may summon: every one in use but the one whose conversation this is.
+  const summonable = useMemo(() => bots
+    .filter((each) => each.retired === 0 && each.slug !== bot?.slug)
+    .map((each) => ({ slug: each.slug, name: each.name, avatar: each.avatar })), [bots, bot?.slug])
+  const faces = useMemo(() => new Map(bots.map((each) => [each.slug, { name: each.name, avatar: each.avatar }])), [bots])
+  // In a bot's own conversation, its replies elsewhere, each placed after the turn its
+  // conversation had reached when it was summoned.
+  const cards = useMemo(() => bot && live && live.summary.directory === bot.home
+    ? placeCards(summons, bot.slug, live.summary.id ?? null, live.entries)
+    : null, [bot, live?.summary.directory, live?.summary.id, live?.entries, summons])
+  const openSummon = useEvent(onOpenSummon)
+  // A reopened conversation's prompts are marked with the bots that answered them from the main
+  // process's record, which is the only place that survives the window.
+  const recorded = useMemo(() => summonedIn(summons, live?.summary.id ? { directory: live.summary.directory, id: live.summary.id } : null),
+    [summons, live?.summary.directory, live?.summary.id])
+  const entries = useMemo(() => live ? t.summonedAt(live.entries, recorded) : NO_ENTRIES, [live?.entries, recorded])
+  // The face over the working row is the bot answering the turn that runs: the one summoned for
+  // its prompt where there is one.
+  const answering = useMemo(() => {
+    const slug = live?.running ? t.summonedFor(entries) : undefined
+    return slug ? faces.get(slug) ?? null : bot
+  }, [live?.running, entries, faces, bot])
   // Entered and left once per element crossed, so counted rather than toggled.
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
@@ -555,10 +597,9 @@ export function Transcript({
   // The search belongs to what is on screen: a bot's page filters its list, a conversation finds
   // in its transcript. Moving between them closes it.
   useEffect(() => { setSearching(false) }, [viewing?.bot.slug, live?.handle])
-  // The right toggle goes with the column: a bot's conversation with no project has none worth
-  // drawing (`.app.no-context`), and neither does a window with nothing open, which is not a bot's
-  // page either (`.app.no-session`).
-  const contextless = live ? noProject : !botView
+  // The right toggle goes with the column, and a window with nothing open, which is not a bot's
+  // page either, has none (`.app.no-session`).
+  const contextless = !live && !botView
   const head = (
     <header className="transcript-head">
       <div className="drag" />
@@ -578,6 +619,8 @@ export function Transcript({
           )}
           {viewing && (
             <>
+              <IconButton icon="arrow-left" label={`Back to ${viewing.bot.name}`} tooltip={`Back to the conversation with ${viewing.bot.name}`}
+                className="earlier-back" data-test="earlier-back" onClick={() => onBackToBot(viewing.bot)} />
               <BotAvatar seed={viewing.bot.avatar} size={16} doing="open" />
               <h1>{viewing.bot.name}</h1>
             </>
@@ -608,6 +651,8 @@ export function Transcript({
             className="find-open" onClick={() => setSearching((value) => !value)} />
         </div>}
         {live && <div className="conversation-toolbar">
+          {bot && <IconButton icon="history" label="Earlier conversations" tooltip={`${bot.name}’s earlier conversations`}
+            className="earlier-open" data-test="earlier-conversations" onClick={() => onEarlier(bot)} />}
           <IconButton icon="search" label="Find" tooltip="Find in conversation" shortcut="⌘F" pressed={searching}
             className="find-open" onClick={() => setSearching((value) => !value)} />
           <ExportMenu canExport={canExport} includeTools={includeTools} onToggleTools={onToggleTools} onExport={onExport} />
@@ -670,13 +715,7 @@ export function Transcript({
           bot={viewing.bot}
           history={viewing.history}
           filtering={searching}
-          backendReady={backendReady}
           onOpen={(summary) => onOpenBotConversation(viewing.bot, summary)}
-          onStart={(prompt, directory) => onStartBotChat(viewing.bot, prompt, directory)}
-          onModel={(model) => onBotModel(viewing.bot, model)}
-          onSetup={setup}
-          onCheckBackend={checkBackend}
-          onDiagnostics={diagnostics}
         />
       </main>
     )
@@ -718,8 +757,9 @@ export function Transcript({
     )
   }
 
-  // Nothing said yet and nothing running: the composer is the whole of the page.
-  const fresh = live.entries.length === 0 && !live.running
+  // Nothing said yet, nothing running and no reply from elsewhere to show: the composer is the
+  // whole of the page.
+  const fresh = live.entries.length === 0 && !live.running && !(cards && (cards.end.length > 0 || cards.before.size > 0))
   return (
     <main className={`transcript${fresh ? ' fresh' : ''}`} data-drop-session={live.handle}
       onDragEnter={(event) => { if (carriesFiles(event) && ++dragDepth.current === 1) setDragging(true) }}
@@ -745,9 +785,15 @@ export function Transcript({
       }}>
         {fresh && (
           <div className="fresh-greeting">
-            {noProject ? <>
-              <h1>{bot ? `Talk to ${bot.name}` : 'Ready'}</h1>
-              <p>This conversation has no project. Pick one below to work in a folder.</p>
+            {bot && noProject ? (
+              <div className="bot-first-hero" data-test="bot-greeting">
+                <BotAvatar seed={bot.avatar} size={160} doing="open" />
+                <h1>Talk to {bot.name}</h1>
+                <p>One conversation that carries on. Type @ to bring in another bot, or summon {bot.name} from a project’s chat to work there.</p>
+              </div>
+            ) : noProject ? <>
+              <h1>Ready</h1>
+              <p>This conversation has no project.</p>
             </> : <>
               <h1>Ready in {footer?.choices
                 ? <ProjectMenu directory={footer.directory} choices={footer.choices} onChoose={footer.onChoose} disabled={live.running} variant="title" />
@@ -765,7 +811,7 @@ export function Transcript({
           onManage={() => setPermissions(true)}
         />
         <EntryList
-          entries={live.entries}
+          entries={entries}
           turns={live.turns}
           running={live.running}
           focused={focused}
@@ -780,12 +826,15 @@ export function Transcript({
           onFork={stableFork}
           rewind={live.rewind ?? NO_POINTS}
           onRewind={stableRewind}
+          faces={faces}
+          cards={cards}
+          onOpenSummon={openSummon}
         />
 
         {live.running && (
           <WorkingRow
             key={live.handle}
-            bot={bot}
+            bot={answering}
             word={workingWord(live.phase, live.checking, live.composing, live.hook)}
             tokens={live.tokens}
             turn={Object.values(live.turns).filter((turn) => turn.status === 'running').at(-1)?.turn ?? null}
@@ -849,6 +898,8 @@ export function Transcript({
           onRemoveAttachment={removeAttachment}
           staged={named(live.staging, draft)}
           onRemoveStaged={removeStaged}
+          summonable={summonable}
+          onSummon={summon}
           onPreview={preview}
           queued={queued}
           queuePaused={queuePaused}
@@ -981,7 +1032,8 @@ export function workingWord(phase: Waiting | null, checking: Checking | null, co
  * a second Cancel here was one more thing to aim at for the same act.
  */
 export function WorkingRow({ bot, word, tokens, turn, onAudit, thinking, showThinking, offerThinking, onThinking }: {
-  bot: Bot | null
+  /** The face of the bot answering, or `null` for a turn no bot answers. */
+  bot: { avatar: string } | null
   word: string
   tokens: number
   turn: number | null
@@ -1070,7 +1122,13 @@ export function runs(entries: t.Entry[]): Run[] {
 const EntryList = memo(function EntryList({
   entries, turns, running, focused, matched, marked,
   onTurnDisclosure, onAudit, onRecover, onChooseModel, onDecide, onAnswer, onFork, rewind, onRewind,
+  faces, cards, onOpenSummon,
 }: {
+  /** Each bot's name and face, by slug. */
+  faces: Map<string, Face>
+  /** Where the "Replied to" cards go, in a bot's own conversation. */
+  cards: Placement | null
+  onOpenSummon: (summon: Summon) => void
   entries: t.Entry[]
   turns: Turns
   running: boolean
@@ -1098,16 +1156,21 @@ const EntryList = memo(function EntryList({
   const lastReply = useMemo(() => [...entries].reverse().find((entry) => entry.kind === 'assistant')?.id, [entries])
   const undoing = useMemo(() => undoRow(entries, rewind), [entries, rewind])
   const undo = useMemo(() => rewind[0] && { running, onUndo: () => onRewind(rewind[0]!.steps) }, [rewind, running, onRewind])
+  const answeredBy = useMemo(() => t.summonedReplies(entries), [entries])
   return <>
-    {grouped.map((run) =>
-      run.kind === 'run' ? (
-        <ToolRun key={run.id} entries={run.entries} active={current?.has(run.id) ?? false} />
+    {grouped.map((run) => {
+      const id = run.kind === 'run' ? run.id : run.entry.id
+      const placed = cards?.before.get(id)
+      const summoner = run.kind === 'one' ? answeredBy.get(run.entry.id) : undefined
+      return <Fragment key={id}>
+      {placed?.map((summon) => <RepliedCard key={`${summon.session.id}#${summon.prompt}`} summon={summon} faces={faces} onOpen={onOpenSummon} />)}
+      {run.kind === 'run' ? (
+        <ToolRun entries={run.entries} active={current?.has(run.id) ?? false} />
       ) : (
         // Wrapped only to catch the right-click. `display: contents` keeps the wrapper
         // out of the layout entirely, so the bubbles flow exactly as they did — the
         // alternative was an `onContextMenu` on each of the eleven shapes `Row` returns.
         <div
-          key={run.entry.id}
           data-entry-id={run.entry.id}
           className={`entry-hit${run.entry.id === focused || run.entry.id === matched ? ' focused' : ''}${run.entry.id === lastReply ? ' last-reply' : ''}`}
           ref={run.entry.id === focused ? marked : undefined}
@@ -1120,6 +1183,7 @@ const EntryList = memo(function EntryList({
             run.entry.id,
           )}
         >
+          {summoner !== undefined && <SummonLabel slug={summoner} faces={faces} />}
           {run.entry.kind === 'turn-start' ? <TurnNotices details={turns[run.entry.number]} onDisclosure={onTurnDisclosure} /> : <Row
             entry={run.entry}
             onRecover={onRecover}
@@ -1132,19 +1196,97 @@ const EntryList = memo(function EntryList({
             // too for a prompt this window has sent and not yet been told the ordinal of:
             // that prompt is in the conversation, but nothing here knows where.
             forkable={!running && (run.entry.kind !== 'user' || run.entry.prompt !== undefined)}
+            face={run.entry.kind === 'user' && run.entry.summoned !== undefined ? faces.get(run.entry.summoned) : undefined}
           />}
           {(run.entry.kind === 'assistant' || (run.entry.kind === 'error' && run.entry.turn !== undefined)) &&
             <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onDisclosure={onTurnDisclosure} onAudit={onAudit}
               copy={run.entry.kind === 'assistant' ? run.entry.text : undefined}
               undo={run.entry.id === undoing ? undo : undefined} />}
         </div>
-      ),
-    )}
+      )}
+      </Fragment>
+    })}
+    {cards?.end.map((summon) => <RepliedCard key={`${summon.session.id}#${summon.prompt}`} summon={summon} faces={faces} onOpen={onOpenSummon} />)}
   </>
 })
 
+/**
+ * A bot as the transcript draws it, from the bot rows. A bot deleted after it was summoned has no
+ * row and so no `Face`; its label names it by slug with a generic icon.
+ */
+interface Face {
+  name: string
+  avatar: string
+}
+
+/** A bot's face and name in a Nala label. A bot since deleted is named by its slug, with no face. */
+function BotLabel({ name, face, tooltip, test }: { name: string; face: Face | undefined; tooltip: string; test: string }): React.JSX.Element {
+  return (
+    <Label color="neutral" className="bot-label" data-test={test} data-tooltip={tooltip}>
+      <span slot="icon-before" className="bot-label-face">
+        {face ? <BotFace seed={face.avatar} size={16} /> : <Icon name="robot" />}
+      </span>
+      <span className="bot-label-name">{name}</span>
+    </Label>
+  )
+}
+
+/** The bot that answered, over its reply. */
+function SummonLabel({ slug, faces }: { slug: string; faces: Map<string, Face> }): React.JSX.Element {
+  const face = faces.get(slug)
+  const name = face?.name ?? slug
+  return (
+    <div className="summon-label">
+      <BotLabel name={name} face={face} tooltip={`Answered by ${name}`} test="summon-label" />
+    </div>
+  )
+}
+
+/**
+ * A message's words, with the marker of the bot it summoned drawn as that bot's label where the
+ * person typed it. The marker is looked up by the name the bot has now, so a message that was
+ * sent under another name is shown as typed.
+ */
+function SaidText({ text, summoned, face }: { text: string; summoned: string | undefined; face: Face | undefined }): React.JSX.Element {
+  const marker = summoned !== undefined && face ? summonMarker(face.name, summoned) : null
+  const at = marker === null ? -1 : text.indexOf(marker)
+  if (marker === null || at < 0 || !face) return <>{text}</>
+  return <>
+    {text.slice(0, at)}
+    <BotLabel name={face.name} face={face} tooltip={`${face.name} answers this message`} test="summon-mention" />
+    {text.slice(at + marker.length)}
+  </>
+}
+
+/**
+ * A reply this bot gave in another conversation, drawn in its own (MEMORY-14). Not an entry and
+ * never part of what the bot is sent: it is drawn from the main process's record, and pressing it
+ * opens the conversation the reply is in, at the prompt that summoned it.
+ */
+function RepliedCard({ summon, faces, onOpen }: { summon: Summon; faces: Map<string, Face>; onOpen: (summon: Summon) => void }): React.JSX.Element {
+  const host = summon.host.kind === 'bot' ? faces.get(summon.host.slug) : undefined
+  const where = summon.host.kind === 'bot' ? host?.name ?? summon.host.slug : projectLabel(summon.session.directory)
+  return (
+    <button type="button" className="replied-card" data-test="replied-card"
+      data-tooltip={summon.host.kind === 'bot' ? `Open the conversation with ${where}` : `Open the chat in ${summon.session.directory}`}
+      onClick={() => onOpen(summon)}>
+      <span className="replied-head">
+        <Icon name="message-bubble" />
+        <span className="replied-to">Replied to</span>
+        {summon.host.kind === 'bot'
+          ? host ? <BotFace seed={host.avatar} size={14} /> : <Icon name="robot" />
+          : <Icon name="folder-open" />}
+        <span className="replied-where">{where}</span>
+        <span className="replied-when num">{ago(Math.floor(summon.at / 1000))}</span>
+      </span>
+      <span className="replied-text">{summon.reply}</span>
+    </button>
+  )
+}
+
 const nothing = (): undefined => undefined
 const NO_POINTS: RewindPoint[] = []
+const NO_ENTRIES: t.Entry[] = []
 
 /**
  * What a run did, in the agent's own verbs: "Read 3, Edit 1". Counted as sent rather than sorted
@@ -1791,6 +1933,8 @@ type RowProps = {
   onFork: (id: string) => void
   /** Whether a fork can be taken at all right now: false while a turn is running. */
   forkable: boolean
+  /** The bot a prompt summoned, for its label in the message. */
+  face?: Face
 }
 
 /**
@@ -1808,6 +1952,7 @@ export const Row = memo(function Row({
   onAnswer,
   onFork,
   forkable,
+  face,
 }: RowProps): React.JSX.Element {
   const card = (
     <Card
@@ -1818,6 +1963,7 @@ export const Row = memo(function Row({
       onAnswer={onAnswer}
       onFork={onFork}
       forkable={forkable}
+      face={face}
     />
   )
   if (!entry.interrupted) return card
@@ -1852,6 +1998,7 @@ function Card({
   onAnswer,
   onFork,
   forkable,
+  face,
 }: RowProps): React.JSX.Element {
   const answerable = entry.interrupted !== true
   switch (entry.kind) {
@@ -1859,7 +2006,7 @@ function Card({
     case 'user':
       return (
         <div className="bubble user">
-          <div className="bubble-text">{entry.text}</div>
+          <div className="bubble-text"><SaidText text={entry.text} summoned={entry.summoned} face={face} /></div>
           {/* Inside the row rather than beside it. The wrapper this row sits in is
               `display: contents` and has no box to hang anything off, and the bubble is the
               only thing here that knows where the row actually is on screen. */}

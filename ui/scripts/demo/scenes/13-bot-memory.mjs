@@ -14,7 +14,7 @@ import { BOT_NAME, botRow, openBotsTab } from '../bots.mjs'
 //     It is *not* an approval card, and this scene waited for one at first and reported that no
 //     write had been offered while the file on disk said otherwise. The agent's write gate is about
 //     integrity rather than about which file it is: trusted data to a trusted path is written
-//     without asking, and a bot that has only read its own checkout is exactly that case. So what
+//     without asking, and a bot that has only read its own folder is exactly that case. So what
 //     is filmed is the record of the write, which is what actually happens.
 //  3. **The briefing is a file, not a prompt.** Reopened, the transcript draws it as a file that
 //     was read rather than as something somebody typed into the composer.
@@ -41,36 +41,30 @@ export default {
     const row = botRow(page, BOT_NAME)
     if (!(await row.count())) s.skip(`"${BOT_NAME}" is not in the list — 12-bots makes it`)
 
-    await s.say('Open it', 'Its page lists its conversations and starts a new one from the composer.', 2.4)
+    await s.say('Open it', 'A bot has one conversation that carries on, in a folder of its own.', 2.4)
     await s.click(row.locator(BOT_OPEN_BUTTON))
-    await page.locator('[data-test="bot-page"]').waitFor()
-
-    // The project is picked per conversation, in the composer's footer. The stage answers the
-    // native picker with one of the world's fixture checkouts.
-    await s.say('Pick a project', 'Or none: a bot can talk without a checkout too.', 2.2)
-    await s.click('[data-test="project-trigger"]')
-    await s.click('[data-test="project-pick"]')
-    await page.waitForTimeout(600)
-
-    // --- the purpose, which nobody typed ----------------------------------------------------
-
-    await s.say('Ask it something ordinary', 'Nothing in the prompt says what this bot is for.')
-    await s.slowType(COMPOSER_INPUT, 'What should I know about this checkout?')
-    await s.click(COMPOSER_SEND)
-    await page.waitForTimeout(1200)
+    await page.locator('[data-test="bot-greeting"]').waitFor()
+    await page.waitForTimeout(800)
 
     if (await page.locator('.trust').isVisible().catch(() => false)) {
-      await s.say('Trust the directory', 'The same question any new chat asks, once per checkout.', 2.2)
+      await s.say('Trust the folder', 'The same question any new chat asks, once per folder.', 2.2)
       await s.click(TRUST_APPROVE)
       await page.waitForTimeout(800)
     }
 
-    // The bot's face in the header says whose conversation this is, beside the project and the
-    // title. Now that this is the bot on screen it looks at the reader rather than about the room.
+    // --- the purpose, which nobody typed ----------------------------------------------------
+
+    await s.say('Ask it something ordinary', 'Nothing in the prompt says what this bot is for.')
+    await s.slowType(COMPOSER_INPUT, 'What are you here for?')
+    await s.click(COMPOSER_SEND)
+    await page.waitForTimeout(1200)
+
+    // The bot's face in the header says whose conversation this is, beside the title. Now that
+    // this is the bot on screen it looks at the reader rather than about the room.
     const head = page.locator('.transcript-head .head-titles')
     if (await head.locator('.bot-avatar').count()) {
       await s.glideTo(head)
-      await s.say('It is the bot speaking', 'Its face leads the header, before the project and the title.', 2.6)
+      await s.say('It is the bot speaking', 'Its face leads the header, before the title.', 2.6)
       await s.spotlight(head, 1.8)
       await s.unspot()
       await s.say('And it looks at you', 'The one on screen faces the reader. The others, in the list, look about.', 2.6)
@@ -109,7 +103,7 @@ export default {
     // and write nothing, which is a fine answer and a wasted take — the shot is the approval card,
     // and the approval card only exists if a write is actually proposed. Asking for the file by
     // name is also what a person does once they know their bot keeps one.
-    await s.say('Now ask it to remember', 'Memory is a file in the checkout, and the bot edits it.')
+    await s.say('Now ask it to remember', 'Memory is a file in its folder, and the bot edits it.')
     await s.slowType(
       COMPOSER_INPUT,
       'Add two things to your memory file: the tide tables are regenerated every Thursday, ' +
@@ -156,14 +150,12 @@ export default {
 
     // --- resumed -----------------------------------------------------------------------------
 
-    await s.say('Leave, and come back', 'Its page lists the conversation, and opening it resumes it.', 2.6)
+    await s.say('Leave, and come back', 'Opening the bot again resumes the same conversation.', 2.6)
     await s.click(page.locator(SIDEBAR_TAB).first())
     await page.waitForTimeout(600)
     await s.click(page.locator(SIDEBAR_TAB).nth(1))
     await page.waitForTimeout(500)
     await s.click(row.locator(BOT_OPEN_BUTTON))
-    await page.locator('[data-test="bot-conversations"] .bot-history-row').first().waitFor()
-    await s.click(page.locator('[data-test="bot-conversations"] .bot-history-row').first())
     await page.waitForTimeout(2000)
 
     await s.say('The same conversation', 'With its purpose and its memory read back in at the top.', 2.6)

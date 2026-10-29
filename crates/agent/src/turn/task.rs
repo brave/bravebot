@@ -432,6 +432,12 @@ pub struct Task {
     /// routing table, and the kernel matches it against the set this turn resolves, so a name
     /// matching nothing ends the turn before anything is sent.
     pub addressing: Option<String>,
+    /// Whether [`Task::addressing`] is the definition the session stands under (a bot's
+    /// conversation, a session started with `--agent`) and not one named for this turn alone.
+    ///
+    /// Recorded beside the prompt so a surface can tell the two apart once the turn is over
+    /// (ADDRESS-12). It decides nothing about the turn itself.
+    pub addressing_is_standing: bool,
     /// Whether [`Task::model`] outranks the model an addressed definition names.
     ///
     /// Set only by a caller whose model was named on its own command line. CLI-9 ranks that flag
@@ -596,6 +602,7 @@ impl Task {
             skill_mode: None,
             delegate: None,
             addressing: None,
+            addressing_is_standing: false,
             model_outranks_a_definition: false,
             servers: Vec::new(),
             mcp: None,
@@ -785,6 +792,13 @@ impl Task {
     /// Address a definition by the name a person typed, or `None` for the session's own planner.
     pub fn addressing(mut self, name: Option<String>) -> Self {
         self.addressing = name;
+        self
+    }
+
+    /// Say that the definition [`Task::addressing`] names is the one the session stands under,
+    /// and not one named for this turn alone.
+    pub fn addressing_standing(mut self, standing: bool) -> Self {
+        self.addressing_is_standing = standing;
         self
     }
 

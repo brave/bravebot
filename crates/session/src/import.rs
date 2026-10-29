@@ -195,6 +195,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
                         Spoken::Agent(text) => Message::assistant(text.as_str()),
                     },
                     composed: Some(Composed::Imported),
+                    address: None,
                     source: None,
                 })
                 .collect(),
@@ -761,7 +762,7 @@ mod tests {
             matches!(
                 drawn.as_slice(),
                 [
-                    bravebot_agent::conversation::Said::User(_),
+                    bravebot_agent::conversation::Said::User(..),
                     bravebot_agent::conversation::Said::Assistant(_),
                     bravebot_agent::conversation::Said::Assistant(_)
                 ]
