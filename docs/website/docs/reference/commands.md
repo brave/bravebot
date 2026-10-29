@@ -489,7 +489,9 @@ Sends one prompt once, after a delay, and then forgets it.
 /after 45m check whether the integration tests passed
 ```
 
-The delay is the first word: a number and `s`, `m`, `h` or `d`, from five seconds to seven days. The
+The delay is the first word: a number and `s`, `m`, `h` or `d`, from five seconds to seven days. It
+counts from when you typed the line, so one typed during a turn is sent as soon as the turn ends if
+the delay has already passed. The
 rest of the line is sent unchanged, as a prompt, when the delay is up and the session is idle. It
 takes the place of a loop, so `/loop stop`, Ctrl-C, `/clear` and leaving end it, `/loop` says what is
 pending, and it is not kept in the session record.

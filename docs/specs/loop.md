@@ -473,8 +473,11 @@ one behind it for longer than its own turn.
 ### LOOP-18: `/after` sends a line once, after a delay, and keeps nothing
 
 `/after 5m check the deploy` sends `check the deploy` once, when the delay has passed and the
-session is idle ([LOOP-6](#LOOP-6)), and then nothing is left. A line typed during a turn is sent
-after that turn ends. The delay is read off the front of the argument as [LOOP-3](#LOOP-3) reads an
+session is idle ([LOOP-6](#LOOP-6)), and then nothing is left. The delay counts from when the line
+was typed. A line typed during a turn is armed when that turn ends and keeps the time it was typed,
+so a delay that has already passed by then is due at once, and one that has not is due when the
+rest of it has passed. The note that says the line is armed gives that time left and not the
+whole delay. The delay is read off the front of the argument as [LOOP-3](#LOOP-3) reads an
 interval, and only there: an `every` clause at the end is repetition, which this is not, so a line
 without a leading delay, and a delay with nothing after it, start nothing and say what the command
 needs. The delay is held to the bounds [LOOP-7](#LOOP-7) sets for an interval, and a person who
@@ -508,6 +511,11 @@ of them a tick belongs to, and the person asked for neither.
 `verified-by: bravebot_tui::render::the_hint_line_counts_loops_and_not_a_held_after_line`
 `verified-by: bravebot_tui::app::a_loop_stop_typed_behind_a_waiting_after_waits_behind_it`
 `verified-by: bravebot_tui::app::what_an_after_line_named_is_held_as_words_and_names_and_not_as_markers`
+`verified-by: bravebot_tui::app::an_after_line_typed_during_a_turn_is_due_at_once_when_its_delay_passed_before_the_turn_ended`
+`verified-by: bravebot_tui::app::an_after_line_typed_during_a_turn_waits_for_what_is_left_of_its_delay`
+`verified-by: bravebot_tui::app::an_after_line_typed_at_rest_counts_its_delay_from_now`
+`verified-by: bravebot_tui::app::an_after_line_queued_by_the_command_path_counts_its_delay_from_now`
+`verified-by: bravebot_tui::state::the_note_for_an_after_line_typed_earlier_says_the_time_left`
 
 ## Known costs
 

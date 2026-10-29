@@ -333,8 +333,12 @@ that program.
 ### CHATGPT-4: the listener takes the one callback that carries its state
 
 The listener binds `127.0.0.1`, and nothing else, on a port the operating system chooses, and the redirect
-URI is `http://127.0.0.1:<port>/auth/callback` with that port. The authorization server accepts a redirect
-to any such port for a client registered this way. Where the listener cannot start, the sign-in says so,
+URI is `http://127.0.0.1:<port>/auth/callback` with that port. The authorization server was seen to accept a
+redirect to two such ports for clients registered this way. Two sign-ins on other ports were tried and not
+answered in time, so nothing is claimed of those two
+([What the exchange has to record](#what-the-exchange-has-to-record)). OpenAI's documentation says later
+sign-ins may use another available port, and this program relies on that for the port the operating system
+chooses next. Where the listener cannot start, the sign-in says so,
 opens no browser and stops. The port is stated to the person once it is bound ([CHATGPT-13](#CHATGPT-13)).
 
 A request is the callback only if it is a `GET` for `/auth/callback` whose `state` equals the one
@@ -2425,6 +2429,16 @@ These are the places where another spec states something about this service, eac
   system error or cause, so a full disk and a folder that cannot be written get the same advice.
 - A person on a machine with no browser forwards the listener's port, which changes at every sign-in, and
   no device-code route is available to this program.
+- The listener binds a port the operating system chooses, and the authorization server was seen to accept two
+  such ports. Two sign-ins on other ports were tried and not answered in time, and nothing is claimed of
+  those two ([CHATGPT-4](#CHATGPT-4)). Why they were not answered was not seen. If the server refused a
+  port, the sign-in would end at the time bound ([CHATGPT-13](#CHATGPT-13)) with no callback, which is also
+  what a sign-in that is not answered in time looks like. A fixed port with a fallback is not
+  built, because no observation shows that a port the operating system chooses fails. Codex uses port 1455
+  and falls back to 1457 for its own client, and nothing read says those ports apply to the clients this
+  program registers. Observing other ports, the ID token of the code exchange, a narrower scope, a proof at
+  the code exchange and the clients per host identifier needs a person with a browser and a ChatGPT account
+  (#3390).
 - Where the listing cannot be read the pickers list the compiled names ([CHATGPT-9](#CHATGPT-9)), and a
   person who wants another types `chatgpt/<name>`. The names are the eight one account's listing offered on
   2026-10-25 and 2026-10-26, so another account may be offered others and one may name a model the account

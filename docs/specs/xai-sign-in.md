@@ -447,7 +447,8 @@ sign-in leaves `auth status` saying what is true. One refresh made with one acco
 with a refresh token that differed from the one presented ([What has been observed](#what-has-been-observed)),
 so the claim and the early write are kept for a server that replaces the refresh token on use. Whether the
 previous one still works after that was not tried, since a replay may end the sign-in, and the refresh token's
-own lifetime was not observed ([Not observed](#not-observed)).
+own lifetime was not observed. Users of other programs state that the refresh token is single use, which is
+not confirmed ([Not observed](#not-observed)), and is the case the claim and the early write are kept for.
 
 `verified-by: bravebot_skus::xai::renew::a_token_with_more_than_a_minute_left_is_used_and_nothing_is_asked`
 `verified-by: bravebot_skus::xai::renew::a_refresh_presents_the_stored_refresh_token_under_the_client_and_writes_what_it_is_given`
@@ -981,11 +982,20 @@ request is: refused with a 400, a 401 or a 403 it is asked for again once with a
 offers nothing for the account ([XAI-19](#XAI-19)).
 
 **What the account's refusal rests on.** The 403 of step 5 is the one a request gets that a renewal did not mend.
-Nothing observed produced it: the account this was built against was accepted, and an account on a plan that
-cannot use this sign-in was not observed (to be observed under brave/bravebot#3377). The sentence of step 5 for a
+Bravebot has not observed it: the account this was built against was accepted, and an account on a plan that
+cannot use this sign-in was not observed (tracked by brave/bravebot#3377). The sentence of step 5 for a
 403 after a renewal is therefore a reading of a status that is not confirmed. A 403 that outlives a renewal for
 another reason is told the same way, and a person told to check the plan would be told something that may not be
-so. A 403 on a token refresh is the authorization server's, and is told as a refresh that failed
+so.
+
+Other parties report refusals of signed-in accounts, in programs that are not bravebot, and those reports are
+the whole of the evidence for step 5 ([Not observed](#not-observed) lists them). They state a 403 for
+`GET /models` and `POST /chat/completions` on a standard SuperGrok account (Hermes Agent issue 26847), and the
+same refusal text with a 402 on an account with an active SuperGrok sign-in (broccoli-core issue 23). A 402
+falls under step 6 and is told as the status it is. The reports disagree about whether the cause is the plan or a
+quota, so they do not confirm that a person told to check the plan is told the cause.
+
+A 403 on a token refresh is the authorization server's, and is told as a refresh that failed
 ([XAI-3](#XAI-3)), not by that sentence. The sentence says only that the request was refused for this account,
 that signing in again will not change it, and that a person can check the plan at xAI or choose another model.
 
@@ -1155,8 +1165,9 @@ These are a person's to decide, and no test can settle them.
   ([XAI-18](#XAI-18)). The alternatives are to end the turn at the first 403 with the sentence for the account,
   which tells a person whose token was merely invalid that their plan is the problem, and to treat a second 403
   as a 401, which tells a person to sign in again for what a fresh token did not mend. The sentence for the
-  account after a renewal rests on a refusal that was not observed (a plan that cannot use this sign-in was not
-  tried, brave/bravebot#3377), and a 403 for another reason is told the same way. The cost is a refresh and a
+  account after a renewal rests on a refusal that bravebot has not observed (a plan that cannot use this sign-in
+  was not tried, brave/bravebot#3377) and that other programs' users report with a 403
+  ([XAI-18](#XAI-18)), and a 403 for another reason is told the same way. The cost is a refresh and a
   request for a refusal that is the account's. Reversing it takes the statuses of
   `MAY_BE_THE_TOKEN` and the `NOT_PERMITTED` arm of `presenting` in `crates/agent/src/xai.rs`, the value
   `XaiFailure::NotPermitted` and its two sentences.
@@ -1252,11 +1263,23 @@ shapes were recorded, and no token, subject, email or name.
 
 ## Not observed
 
-No source states these, and the clauses state no value for them:
+Bravebot has not observed these, and the clauses state no value for them. Where another party has reported
+something about one, the report is named under it. A report is stated but not confirmed: it comes from a program
+other than bravebot and from an account bravebot does not hold, and no clause depends on it for a value.
 
-- how long a refresh token lasts (to be observed under brave/bravebot#3377);
+- how long a refresh token lasts (tracked by brave/bravebot#3377). No source found states a lifetime. xAI's
+  documentation pages for the X subscription and its discovery document state none. xAI's open-source client
+  `xai-org/grok-build` says in `crates/codegen/xai-grok-login/src/error.rs` that `invalid_grant` means the refresh
+  token is expired, reused or revoked and that the issuer does not distinguish these, so a refusal alone does not
+  show a lifetime;
 - whether the previous refresh token still works after a refresh replaced it, which was not tried because a
-  replay may end the sign-in;
+  replay may end the sign-in. Reported, not confirmed: the refresh token is single use, and the previous one is
+  refused with `invalid_grant` ("Refresh token has been revoked") after another process refreshed (opencode issue
+  37059, Hermes Agent issues 43589 and 95431). `xai-org/grok-build` comments that a refresh token can be used only
+  once (`xai-grok-login/src/storage.rs`) and that re-sending a rotated token trips the issuer's reuse detection and
+  revokes its successor (`xai-grok-login/src/oidc/refresh.rs`). That client's `ROTATION_GRACE_MS` of 60 seconds is
+  its own conservative bound, and no source states whether the server accepts the previous token for a grace
+  period;
 - the codes `slow_down`, `access_denied` and `authorization_denied`;
 - how long an access token issued before a revocation keeps being accepted;
 - what the serving host answers an access token that has passed its expiry, and a 401 to any token (an altered
@@ -1264,7 +1287,17 @@ No source states these, and the clauses state no value for them:
   was tried on `GET /models` alone;
 - what the service answers an account on a plan that cannot use this, since the one signed in was accepted.
   [XAI-18](#XAI-18) tells a 403 that outlives a renewal as a refusal for the account, and that sentence rests on
-  this being unobserved (to be observed under brave/bravebot#3377);
+  this being unobserved (tracked by brave/bravebot#3377). Reported, not confirmed, by users of other programs
+  that sign in the same way: a 403 for `GET /models` and `POST /chat/completions` on a standard SuperGrok account,
+  with a body saying the caller lacks permission or has no active Grok subscription (Hermes Agent issue 26847,
+  opened 2026-05-16, whose later comments dispute that the plan is the cause and name a monthly quota); a 403 with
+  the code `personal-team-blocked:spending-limit` (Hermes Agent issue 70203); a 402 with that code on an active
+  SuperGrok session (broccoli-core issue 23, opened 2026-09-01); and a 403 with the code
+  `unauthenticated:bad-credentials` for a stale access token, where a refresh is the remedy (Hermes Agent issue
+  108122). Hermes Agent's xAI guide says the service "has been seen to restrict OAuth API access to specific
+  SuperGrok tiers" without a status, and xAI's page `x.ai/news/grok-hermes` says that connecting Grok to Hermes is
+  "available on every tier". No source states what the service answers a free or X Basic account, or the status of
+  a refresh for an account whose plan is refused;
 - streaming and tool calls on the serving host, and a request that carries an effort level;
 - `https://cli-chat-proxy.grok.com`, the host xAI's own command line client uses with headers of its own, which
   opencode does not use and this program does not ask;
@@ -1344,12 +1377,13 @@ No source states these, and the clauses state no value for them:
   with in what a person is told, so a prompt that is too long is not shortened.
 - A request the service answers with a 403 renews the token once and is sent again, as a 400 or a 401 is, and
   only a 403 after that is told as a refusal for the account ([XAI-18](#XAI-18)). A refusal for a plan, if the
-  service makes one, costs a refresh and one more request before it is told, and was not observed. The rule reads
+  service makes one, costs a refresh and one more request before it is told, and was not observed by bravebot
+  (users of other programs state it, which is not confirmed, [Not observed](#not-observed)). The rule reads
   the status alone, so a 403 for another reason is told the same way and a person is sent to check a plan that may
   not be at fault. A 403 on a token refresh is told as a refresh that failed. A listing refused with a 403 is
   asked again once with a new token like a turn's request, and refused again is said as a listing that could not be
   read, in the sentence that suggests signing in again, which does not change a refusal for the account. What
-  xAI answers an account on a plan that cannot use this is to be observed under brave/bravebot#3377.
+  xAI answers an account on a plan that cannot use this is tracked by brave/bravebot#3377.
 - A start that asks which model to use sends the stored token to the serving host for the listing before the
   person has chosen anything ([BACKEND-39](backends.md#BACKEND-39)). It does so only in a terminal outside an
   incognito session, with the sign-in stored, nothing else configured and no model named, so it is the one place

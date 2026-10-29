@@ -942,7 +942,15 @@ their jobs per turn, so a job cannot outlive the turn that started one: a backgr
 running after its turn ended would be an effect nobody is watching, nobody is being asked about, and
 nobody can stop. An interactive session in the terminal
 interface owns them instead, so a job survives the end of its turn and is killed when the session
-ends, when `/clear` begins another conversation, or when the person stops it.
+ends, when `/clear` begins another conversation, or when the person stops it. `/branch` is none of
+these: the copy is the same process, so a job started before it keeps running with the profile it
+started under ([SANDBOX-22](../sandboxing.md#SANDBOX-22)) and is listed and stopped from the copy.
+The copy forgets the reach and host answers the job started with ([PROMPT-8](../prompting.md#PROMPT-8)),
+so a `run` started in the copy is asked about them again, while the programs vouched for come across
+with the record ([RUN-9](#RUN-9)) and are not asked about
+`verified-by: bravebot_tui::app::a_branch_keeps_what_the_record_holds_and_forgets_the_rest`.
+That test pins the answers the copy keeps and forgets. No test starts a job and then branches, so
+no test covers a job surviving `/branch`.
 
 **What makes that watched.** The person can see a job between turns, on the hint line and in the
 rows of [RUN-26](#RUN-26), and stop it with `/jobs stop` ([RUN-27](#RUN-27)), which is carried out
@@ -1410,6 +1418,17 @@ pressing `r` is a decision about the tree as much as about the command.
 
 **Other known costs.** A binary replaced in place at the recorded path is covered without anybody
 being asked again, which is a longer exposure than a session's and is what the answer lasting costs.
+A `git switch` that rewrites a file the line takes its work from is covered the same way.
+Steps that were each answered for separately are not covered as a line when they are recombined:
+this record compares the whole line, joins included, so a pipeline or a `&&` of two remembered
+steps is not covered by it
+`verified-by: bravebot_core::remembered::how_the_steps_are_joined_is_part_of_the_line`.
+The vouched list of the session that gave the yes is keyed by step ([RUN-8](#RUN-8)), and `a` or `r`
+adds each step of the line to it, so in that session steps answered for one at a time run unasked
+in any pipeline, order or join that holds only vouched steps
+`verified-by: bravebot_core::policy::steps_vouched_for_one_at_a_time_are_covered_when_recombined`.
+A line holding a step that was not vouched for is still asked about
+`verified-by: bravebot_core::policy::an_unvouched_step_in_a_recombined_line_is_still_asked_about`.
 A directory removed and made again at the same path is covered by what was recorded for the one
 before it, since an entry names its directory by path and holds nothing that identifies the
 directory standing there, where the startup answer holds its identity

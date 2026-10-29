@@ -858,12 +858,15 @@ mod tests {
     /// nothing asked of the authorization server. A 403 is among the three: the host refused an access
     /// token it could not validate with one, so a first 403 asks for a new token. The regression it
     /// rejects is a first 403 that renews nothing, which ends a turn for a token a renewal would mend.
+    /// A 402 is among the failures that renew nothing and come back as they were, which is how it is
+    /// told as the status it is.
     #[test]
     fn only_a_400_a_401_or_a_403_asks_for_a_replacement_token() {
         type Make = fn() -> BackendError;
-        let cases: [(&str, Make, bool); 11] = [
+        let cases: [(&str, Make, bool); 12] = [
             ("400", || refused_with(400), true),
             ("401", || refused_with(401), true),
+            ("402", || refused_with(402), false),
             ("403", || refused_with(403), true),
             ("404", || refused_with(404), false),
             ("422", || refused_with(422), false),

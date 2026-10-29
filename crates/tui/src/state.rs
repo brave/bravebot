@@ -9009,10 +9009,13 @@ mod tests {
     #[test]
     fn an_after_line_is_sent_once_when_its_delay_is_up_and_leaves_no_schedule() {
         let mut s = session();
-        s.start_after(match crate::loops::parse_after("5m /exit") {
-            crate::loops::Delayed::Start(request) => request,
-            _ => panic!("unread"),
-        });
+        s.start_after(
+            match crate::loops::parse_after("5m /exit") {
+                crate::loops::Delayed::Start(request) => request,
+                _ => panic!("unread"),
+            },
+            Instant::now(),
+        );
         assert_eq!(s.status, Status::Idle, "a turn started at once");
         assert!(s.looping().is_some());
 
@@ -9034,10 +9037,13 @@ mod tests {
     #[test]
     fn a_prompt_typed_while_an_after_line_waits_does_not_use_it_up() {
         let mut s = session();
-        s.start_after(match crate::loops::parse_after("5m later") {
-            crate::loops::Delayed::Start(request) => request,
-            _ => panic!("unread"),
-        });
+        s.start_after(
+            match crate::loops::parse_after("5m later") {
+                crate::loops::Delayed::Start(request) => request,
+                _ => panic!("unread"),
+            },
+            Instant::now(),
+        );
         s.begin_turn("now".to_string(), (Vec::new(), Vec::new()), Vec::new());
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(None);
@@ -10492,7 +10498,7 @@ mod tests {
         let mut s = two_loops();
         s.transcript.clear();
         let after = |s: &mut Session, line: &str| match crate::loops::parse_after(line) {
-            crate::loops::Delayed::Start(request) => s.start_after(request),
+            crate::loops::Delayed::Start(request) => s.start_after(request, Instant::now()),
             _ => panic!("unread"),
         };
 
@@ -10525,6 +10531,35 @@ mod tests {
         assert_eq!(
             said(&s),
             [t!(loop_full, count = crate::loops::MAX_LIVE).to_string()]
+        );
+    }
+
+    /// LOOP-18: the note that announces an `/after` line says the time left of its delay, counted
+    /// from when the line was typed. A line typed two minutes ago with `5m` is due in three, and one
+    /// typed six minutes ago is due at once. The regression it rejects is the note saying the whole
+    /// delay for a line that has already spent part of it.
+    #[test]
+    fn the_note_for_an_after_line_typed_earlier_says_the_time_left() {
+        let typed = |ago: Duration| Instant::now().checked_sub(ago).expect("an earlier instant");
+        let start = |s: &mut Session, ago: Duration| match crate::loops::parse_after("5m tail") {
+            crate::loops::Delayed::Start(request) => s.start_after(request, typed(ago)),
+            _ => panic!("unread"),
+        };
+
+        let mut s = session();
+        start(&mut s, Duration::from_secs(2 * 60));
+        let heard = said(&s);
+        assert_eq!(
+            heard,
+            [t!(after_started, number = 1, delay = "3m").to_string()],
+            "the whole delay was said for a line typed earlier"
+        );
+
+        let mut s = session();
+        start(&mut s, Duration::from_secs(6 * 60));
+        assert_eq!(
+            said(&s),
+            [t!(after_started, number = 1, delay = "0s").to_string()]
         );
     }
 
