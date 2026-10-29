@@ -172,6 +172,54 @@ try {
   assert.equal(await trigger.evaluate((element) => element === document.activeElement), true)
   assert.match(await trigger.getAttribute('aria-label'), /Sonnet|sonnet/)
   assert.equal(await page.locator('.model-current').innerText(), 'Claude Sonnet 4.5')
+
+  // Collapsible provider sections: ArrowLeft collapses, ArrowRight expands.
+  await trigger.click()
+  await page.getByRole('option', { name: /Claude Haiku/ }).waitFor()
+  // All three models visible: 2 OpenRouter + 1 Brave
+  assert.equal(await models.getByRole('option').count(), 3, 'all models visible on open')
+  // Provider groups are present as collapsible buttons
+  const openrouterGroup = page.locator('[data-test="model-group-OpenRouter"]')
+  const braveGroup = page.locator('[data-test="model-group-Brave"]')
+  await openrouterGroup.waitFor()
+  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'OpenRouter group starts expanded')
+  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'true', 'Brave group starts expanded')
+  // ArrowLeft on a row collapses its provider section
+  await search.fill('')
+  await search.press('ArrowDown') // move to first model row (index 0)
+  await search.press('ArrowLeft')
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
+  assert.equal(await models.getByRole('option').count(), 1, 'ArrowLeft collapses the active provider, hiding its rows')
+  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'false', 'OpenRouter group is now collapsed')
+  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'true', 'Brave group remains expanded')
+  // ArrowRight on a collapsed section expands it
+  await search.press('ArrowRight')
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length === 3)
+  assert.equal(await models.getByRole('option').count(), 3, 'ArrowRight expands the collapsed provider section')
+  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'OpenRouter group is expanded again')
+  // Clicking a provider heading collapses it
+  await braveGroup.click()
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
+  assert.equal(await models.getByRole('option').count(), 2, 'clicking a provider heading collapses it')
+  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'false', 'Brave group collapsed by click')
+  // Clicking again expands it
+  await braveGroup.click()
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length === 3)
+  assert.equal(await models.getByRole('option').count(), 3, 'clicking again expands the section')
+  // PageDown jumps PAGE_SIZE rows
+  await search.press('Home')
+  await search.press('PageDown')
+  const afterPageDown = await page.locator('.model-menu leo-option.active').count()
+  assert.ok(afterPageDown <= 1, 'PageDown moves the highlight down')
+  // Search clears collapsed state
+  await braveGroup.click() // collapse Brave
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
+  await search.fill('a') // any search
+  await page.waitForFunction(() => document.querySelector('[data-test="model-group-Brave"]')?.getAttribute('aria-expanded') !== 'false')
+  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'true', 'search resets collapsed state')
+  await search.press('Escape')
+  await page.locator('.model-popover').waitFor({ state: 'hidden' })
+  console.log('PASS: collapsible provider sections (ArrowLeft/ArrowRight/click), PageDown, and search resets collapse')
   await page.screenshot({ path: '/tmp/bravebot-model-label.png' })
 
   const entry = page.locator(COMPOSER_INPUT)

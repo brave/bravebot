@@ -76,8 +76,23 @@
 .model-name { font: var(--type-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-detail { font: var(--type-meta); color: var(--ink-tertiary); }
 .model-detail:empty { display: none; }
-/* Provider heading: a caption above its models, not a selectable row. */
-.model-group { margin: 0 var(--leo-spacing-s); padding: var(--leo-spacing-m) var(--leo-spacing-m) var(--leo-spacing-xs); font: var(--type-caption-strong); color: var(--ink-tertiary); }
+/* Provider heading: a caption above its models. Clicking collapses/expands the section. */
+.model-group {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  margin: 0 var(--leo-spacing-s);
+  padding: var(--leo-spacing-m) var(--leo-spacing-m) var(--leo-spacing-xs);
+  font: var(--type-caption-strong);
+  color: var(--ink-tertiary);
+  cursor: pointer;
+  border-radius: var(--leo-radius-m);
+  user-select: none;
+}
+.model-group:hover { color: var(--ink-secondary); background: var(--leo-color-container-highlight); }
+.model-group:first-child { padding-top: var(--leo-spacing-s); }
+.model-group-chevron { display: flex; flex: none; --leo-icon-size: 12px; }
+.model-group-collapsed { color: var(--ink-tertiary); }
 .model-capabilities { display: flex; flex: none; gap: var(--leo-spacing-s); color: var(--ink-tertiary); --leo-icon-size: var(--icon-hero); }
 .model-capability { display: inline-flex; }
 .model-menu .model-capability,
