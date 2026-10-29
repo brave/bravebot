@@ -333,8 +333,12 @@ that program.
 ### CHATGPT-4: the listener takes the one callback that carries its state
 
 The listener binds `127.0.0.1`, and nothing else, on a port the operating system chooses, and the redirect
-URI is `http://127.0.0.1:<port>/auth/callback` with that port. The authorization server accepts a redirect
-to any such port for a client registered this way. Where the listener cannot start, the sign-in says so,
+URI is `http://127.0.0.1:<port>/auth/callback` with that port. The authorization server was seen to accept a
+redirect to two such ports for clients registered this way. Two sign-ins on other ports were tried and not
+answered in time, so nothing is claimed of those two
+([What the exchange has to record](#what-the-exchange-has-to-record)). OpenAI's documentation says later
+sign-ins may use another available port, and this program relies on that for the port the operating system
+chooses next. Where the listener cannot start, the sign-in says so,
 opens no browser and stops. The port is stated to the person once it is bound ([CHATGPT-13](#CHATGPT-13)).
 
 A request is the callback only if it is a `GET` for `/auth/callback` whose `state` equals the one
