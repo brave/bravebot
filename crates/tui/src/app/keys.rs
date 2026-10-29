@@ -1250,13 +1250,23 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // ending the session as soon as the thought was short enough. Ctrl-C is the way out.
         //
         // Over an enhancement it puts back the line the person wrote and clears nothing (INPUT-48).
+        //
+        // Excluded where a settings file has moved stash, undo, trail, panel, watch or suspend
+        // onto this exact chord: `alt-esc` and `ctrl-esc` carry a modifier, which nothing above
+        // reads, so without this guard they matched here before the ladder further down ever
+        // read the chord the action was moved to, and the action never fired (#2924).
         KeyCode::Esc
-            if session.editing() == crate::vim::Editing::Ordinary && session.enhanced_pending() =>
+            if session.editing() == crate::vim::Editing::Ordinary
+                && session.enhanced_pending()
+                && !session.bindings().claims(&key) =>
         {
             session.restore_unenhanced();
             Action::Redraw
         }
-        KeyCode::Esc if session.editing() == crate::vim::Editing::Ordinary => {
+        KeyCode::Esc
+            if session.editing() == crate::vim::Editing::Ordinary
+                && !session.bindings().claims(&key) =>
+        {
             session.clear_input();
             Action::Redraw
         }

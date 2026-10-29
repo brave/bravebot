@@ -16861,6 +16861,59 @@ mod tests {
         );
     }
 
+    /// A chord moved onto Alt-Escape or Ctrl-Escape used to be read as plain Escape at rest,
+    /// because the arms that clear the box and that put it away over an enhancement matched on
+    /// `KeyCode::Esc` alone and never looked at the modifiers carried with it. So the box was
+    /// cleared instead of stashed, and the round trip back never ran (#2924).
+    #[test]
+    fn stash_moved_onto_alt_escape_stashes_instead_of_clearing_the_box() {
+        let alt_esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::ALT);
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("stash".to_string(), "alt-esc".to_string());
+        session.adopt_keybindings(&moved);
+        assert!(session.bindings().is_stash(&alt_esc));
+
+        type_line(&mut session, "a thought");
+        assert_eq!(handle_key(&mut session, alt_esc), Action::Redraw);
+        assert_eq!(
+            session.input(),
+            "",
+            "the stash chord moved onto alt-esc did not stash"
+        );
+        handle_key(&mut session, alt_esc);
+        assert_eq!(
+            session.input(),
+            "a thought",
+            "the stash chord moved onto alt-esc did not bring the line back, \
+             as plain escape clearing the box would have lost it"
+        );
+    }
+
+    /// The same chord with Ctrl in place of Alt, over the same bug: `undo` moved onto `ctrl-esc`
+    /// must reach `undo`'s own handler rather than the plain-Escape arm that clears the box.
+    #[test]
+    fn undo_moved_onto_ctrl_escape_fires_instead_of_clearing_the_box() {
+        let ctrl_esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::CONTROL);
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("undo".to_string(), "ctrl-esc".to_string());
+        session.adopt_keybindings(&moved);
+        assert!(session.bindings().is_undo(&ctrl_esc));
+
+        type_line(&mut session, "one two three");
+        handle_key(&mut session, ctrl('w'));
+        assert_eq!(session.input(), "one two ");
+
+        handle_key(&mut session, ctrl_esc);
+        assert_eq!(
+            session.input(),
+            "one two three",
+            "ctrl-esc moved onto undo did not put back what the delete took, \
+             as if plain escape had cleared the box instead"
+        );
+    }
+
     /// A session editing vi's way. The choice is recorded nowhere, since a session that does not
     /// persist reads no file and writes none.
     fn editing_vis_way() -> Session {
