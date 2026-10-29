@@ -216,12 +216,18 @@ never from the words of the note. `/add-dir` writes a done note for a directory 
 refused note for a path it refuses or asks for. `/add-dir close` writes a done note for a directory
 it closed and a refused note for a name it cannot close or asks for. The opening of the directories
 a settings file names goes through the `/add-dir` handler, so it writes the same done note for a
-directory it opens and the same refused note for a name that does not open. Every other note has
-the shared-ink tone and is drawn in the shared ink, whether it is written by `Session::note` or
-built as an entry directly. Neither tone is a failed turn: an export, the failure the status area
-repeats and the reason a turn is recorded under are read from the entry's speaker, which the choice
-leaves as it was. Where every ink is the terminal's own, the wording ("added", "could not add") is
-what tells them apart. Under `brave`, neither ink is the one that marks untrusted content.
+directory it opens and the same refused note for a name that does not open. `/cd` writes a done
+note for the directory it moved to and a refused note for an empty path or one it could not move
+to. `/checkouts remove` writes a done note for a checkout it removed and a refused note for one it
+does not keep, one kept because the person declined, or one it could not remove. `/export` writes a
+done note for the path it wrote to and a refused note for a path it could not write. `/rename`
+writes a done note for the name it took and a refused note for an empty name or one with nothing in
+it. Every other note has the shared-ink tone and is drawn in the shared ink, whether it is written
+by `Session::note` or built as an entry directly. Neither tone is a failed turn: an export, the
+failure the status area repeats and the reason a turn is recorded under are read from the entry's
+speaker, which the choice leaves as it was. Where every ink is the terminal's own, the wording
+("added", "could not add") is what tells them apart. Under `brave`, neither ink is the one that
+marks untrusted content.
 
 **Why.** That ink is spoken for twice over: a call still running, and the margin down every block
 of content the planner may not read. Drawing a note in it said the trust answer was quarantined.
@@ -244,6 +250,10 @@ outside a block.
 `verified-by: bravebot_tui::app::under_a_palette_without_colour_the_wording_tells_what_add_dir_did_from_what_it_refused`
 `verified-by: bravebot_tui::app::the_directories_a_settings_file_names_are_told_in_the_tones_of_add_dir`
 `verified-by: bravebot_tui::app::a_refused_command_is_not_taken_for_the_failure_of_the_turn_around_it`
+`verified-by: bravebot_tui::app::cd_draws_the_directory_it_moved_to_apart_from_what_it_refused`
+`verified-by: bravebot_tui::app::checkouts_remove_draws_what_it_removed_apart_from_what_it_refused`
+`verified-by: bravebot_tui::app::export_draws_what_it_wrote_apart_from_what_it_refused`
+`verified-by: bravebot_tui::app::rename_draws_the_name_it_took_apart_from_what_it_refused`
 
 <a id="VIEW-9"></a>
 ### VIEW-9: under `brave`, an ink that carries meaning is mixed, not chosen by the terminal

@@ -55,10 +55,11 @@ you to approve text, a block's heading, and a file name draw every byte, colour 
 
 **What the session says in its own voice is drawn in an ink of its own**: the trust question, a
 confinement that is unavailable, a status report. It is never the ink that marks untrusted content.
-The exception is the notes `/add-dir` and `/add-dir close` write, and the notes about the
-directories a settings file names: one that says a directory was opened or closed is drawn in the
-ink for finished, and one that refuses a path or asks for one in the ink for failed, so a directory
-that was added is not read as another error.
+The exception is the notes `/add-dir`, `/add-dir close`, `/cd`, `/checkouts remove`, `/export` and
+`/rename` write, and the notes about the directories a settings file names: one that says the
+command succeeded is drawn in the ink for finished, and one that refuses or fails in the ink for
+failed, so a directory that was added, a move, a checkout removed, a transcript exported or a
+session renamed is not read as another error.
 
 Colour is never what makes that marking hold. A colour can be imitated by the content beside it, so
 quarantine stands on the margin instead: no ink tells you whether something is quarantined, and a
