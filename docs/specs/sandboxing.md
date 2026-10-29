@@ -2140,9 +2140,9 @@ refused. The refusal comes before the
 permission mode is reached, as a deny rule's does ([MODE-6](permission-modes.md#MODE-6)), so no
 mode answers it.
 
-**What it costs.** A turn that follows the mode is no longer decided under one: its `run` description states the mode
-it began in until the notice that follows the change, and a program already started keeps its
-profile, so a move to `strict` does not stop a program that is running. `strict` fails any program that reads a place its binary's list and its argv do
+**What it costs.** A turn that follows the mode can be decided under more than one: its `run`
+description states the mode it began in until the notice that follows the change, and a program
+already started keeps its profile, so a move to `strict` does not stop a program that is running. `strict` fails any program that reads a place its binary's list and its argv do
 not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and chooses `workspace-write` or
 adds the directory. `off` is the whole of the confinement removed: a window never offers it, and
 the command line prints it on its opening line. On Windows, where `read-only` reads no more than
