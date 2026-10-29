@@ -198,9 +198,11 @@ the premium host chose, and the key is a bearer secret meant for the host it was
 The premium host is compiled in, so no variable or settings file decides where a key a person typed
 is sent. A build whose free endpoint is under `brave.software` or `bravesoftware.com` has the
 development host, and every other build has the production host. The two are one value while the
-premium service is live only in development. A build that names no premium host has the one compiled
-in, and a build that reaches no Brave backend has none, since it has no free endpoint to say whose
-environment it is in.
+premium service is live only in development. Both are `https://ai-gateway-api.bsg.brave.software`,
+the host that accepts a key. `ai-chat-premium.bsg.brave.software` answers a request carrying one with
+a 401, so it is not used. A build that names no premium host has the one compiled in, and a build
+that reaches no Brave backend has none, since it has no free endpoint to say whose environment it is
+in.
 
 `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is an optional override of the host. It is resolved by the order
 every other name is ([BACKEND-35](backends.md#BACKEND-35)): an exported variable, then the build,
@@ -222,6 +224,7 @@ same host. A key with no premium host would have to be sent to the free endpoint
 the free endpoint is a deployment the key does not belong to.
 
 `verified-by: bravebot_config::lib::a_build_that_names_no_premium_host_has_the_one_compiled_in`
+`verified-by: bravebot_config::lib::the_compiled_in_premium_host_is_the_one_that_accepts_a_key`
 `verified-by: bravebot_config::lib::a_build_that_reaches_no_brave_backend_has_no_premium_host`
 `verified-by: bravebot_config::lib::a_stored_premium_key_is_held_with_the_host_compiled_in`
 `verified-by: bravebot_config::lib::a_stored_premium_key_is_dropped_where_there_is_no_brave_backend`

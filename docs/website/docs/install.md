@@ -133,7 +133,7 @@ bravebot doctor
 ```
 configuration OK
   endpoint  https://ai-chat.bsg.brave.com/v1/chat/completions
-  premium   https://ai-chat-premium.bsg.brave.software/v1/chat/completions, without a premium key, so requests go to the endpoint above
+  premium   https://ai-gateway-api.bsg.brave.software/v1/chat/completions, without a premium key, so requests go to the endpoint above
   key id    …
   model     automatic-bravebot (default)
   key       … (never transmitted)

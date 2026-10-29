@@ -85,10 +85,10 @@ pub const DEFAULT_MODEL: &str = "automatic-bravebot";
 /// to this host, so no variable or settings file is what decides where it goes. The two constants
 /// below are one value while the premium service is live only in development, and are two so that
 /// production can move without touching how the choice is made.
-pub const DEV_PREMIUM_ENDPOINT: &str = "https://ai-chat-premium.bsg.brave.software";
+pub const DEV_PREMIUM_ENDPOINT: &str = "https://ai-gateway-api.bsg.brave.software";
 
 /// Where Brave's premium service is, for every other build.
-pub const PROD_PREMIUM_ENDPOINT: &str = "https://ai-chat-premium.bsg.brave.software";
+pub const PROD_PREMIUM_ENDPOINT: &str = "https://ai-gateway-api.bsg.brave.software";
 
 /// The premium host compiled in for a build whose free endpoint is `free`.
 ///
@@ -5862,6 +5862,29 @@ mod tests {
         assert_eq!(
             development.premium_endpoint.as_deref(),
             Some(DEV_PREMIUM_ENDPOINT)
+        );
+    }
+
+    /// PREM-11: the compiled-in host is the one that accepts a premium key. `ai-chat-premium` answers
+    /// a request carrying one with a 401, so a constant moved back to it would leave every key
+    /// refused while the assertions above, which compare against the constants, still held.
+    #[test]
+    fn the_compiled_in_premium_host_is_the_one_that_accepts_a_key() {
+        let gateway = "https://ai-gateway-api.bsg.brave.software/v1/chat/completions";
+        let production = Config::from_lookup(complete_env).unwrap();
+        assert_eq!(
+            production.premium_chat_completions_url().as_deref(),
+            Some(gateway)
+        );
+
+        let development = Config::from_lookup(|k| match k {
+            env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.software".into()),
+            other => complete_env(other),
+        })
+        .unwrap();
+        assert_eq!(
+            development.premium_chat_completions_url().as_deref(),
+            Some(gateway)
         );
     }
 
