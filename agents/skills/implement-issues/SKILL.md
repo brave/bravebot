@@ -235,8 +235,9 @@ each item it holds one row for each thing the issue asks for, in the issue's wor
 that asks for something, every numbered plan point, and every open decision that code can settle.
 Three further sources add rows. Where the issue is governed by a spec, each clause it names, each
 place that spec says something is not built, and each item of its list of edits to other specs.
-Where earlier pull requests worked on the issue, each bullet of their `Not covered:` lines and each
-follow-up they cite. A row reads `id | requirement | source | state | evidence | cause`. The state
+Where earlier pull requests worked on the issue, each follow-up they cite, including each bullet of
+the `Not covered:` line an older one carries. A row reads
+`id | requirement | source | state | evidence | cause`. The state
 is `unmet` at the start, `met` with evidence (a commit and the test that pins it, or a file and line), or
 `blocked` with a cause from [What is blocked](#what-is-blocked) and the person who can unblock it.
 A row is never narrowed to what is convenient, and a worker never removes or rewords one. A
@@ -444,7 +445,7 @@ costliest thing this skill can do.
    in the test plan. If it fails alone and also fails on the parent commit, it is not this pull
    request's, and it is a defect found and left: file it with the
    [issue-poster](../../agents/issue-poster.md) definition, which finds an existing issue first,
-   and cite that issue in a `<details>` block and as a bullet under `Not covered:`
+   and cite that issue in a `<details>` block
    ([GAP-001](../../../docs/best-practices/gaps.md#GAP-001)). A compile error, a lint or a formatting diff is never
    a flake. Never re-run the whole gate hoping for green.
 10. A rebase after the gates leaves the result standing only when it had no conflict, upstream
@@ -479,7 +480,7 @@ title as one sentence naming what changes for a person, with no prefix, issue nu
 `... open <first-line-issue> --branch fix-<batch-name> --title <title> --body-file <file>` pushes
 the integration branch and opens the pull request, not a draft, with no labels, assigned to `@me`.
 `<first-line-issue>` is the number on the body's first line. It stops when the worktree is dirty,
-the branch is not on `upstream/main`, or the body lacks the shape or the `Not covered:` line; fix
+the branch is not on `upstream/main`, or the body lacks the shape; fix
 what it says. Where a commit bypassed the hook, the body opens with the callout, and a comment on
 the pull request repeats it once the pull request is open
 ([Dependency changes](#dependency-changes-and-hook-bypasses), item 5).
@@ -673,8 +674,9 @@ not causes. They are the work.
 
 For each blocked row, file the follow-up before the body, describing what remains, why it cannot be
 done here and who or what would unblock it. The item then has `Part of` where some of it landed,
-or no closing line where nothing did, and `Not covered:` names the follow-up. A follow-up that
-cites the issue this pull request is for does not count: a row is parked on its own issue.
+or no closing line where nothing did, and the item's entry in the body names the follow-up. A
+follow-up that cites the issue this pull request is for does not count: a row is parked on its own
+issue.
 The one other issue this skill files is for a test that also fails on the parent commit (step 6,
 item 9).
 
