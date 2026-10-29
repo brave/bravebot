@@ -1200,7 +1200,7 @@ const EntryList = memo(function EntryList({
             revealed={run.entry.id === focused || run.entry.id === matched}
           />}
           {(run.entry.kind === 'assistant' || (run.entry.kind === 'error' && run.entry.turn !== undefined)) &&
-            <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onDisclosure={onTurnDisclosure} onAudit={onAudit}
+            <TurnFooter details={run.entry.turn === undefined ? undefined : turns[run.entry.turn]} onAudit={onAudit}
               copy={run.entry.kind === 'assistant' ? run.entry.text : undefined}
               undo={run.entry.id === undoing ? undo : undefined} />}
         </div>

@@ -134,8 +134,11 @@ alone carries.
 
 `TooltipLayer` is the only tooltip in the window: one Leo `Tooltip` laid over whichever
 `[data-tooltip]` element the pointer rests on or the keyboard reaches, with a 1s first delay
-and no delay while moving along a toolbar. Use `data-tooltip` on anything else that needs one
-rather than a native `title`, which would draw a second box. A tooltip supplements the accessible
+and no delay while moving along a toolbar. `data-tooltip-trigger="click"` opens that one
+from a click instead, and leaves it closed while the pointer rests on it. Use `data-tooltip`
+on anything else that needs one rather than a native `title`, which would draw a second box.
+A newline in the attribute is drawn
+as a line break; otherwise the text stays on one line. A tooltip supplements the accessible
 name and never replaces it, and a disabled control shows none.
 
 Hit targets are at least 28px (`--hit`), even when the glyph is 14px.

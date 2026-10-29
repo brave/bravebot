@@ -395,10 +395,8 @@
 .entry-hit.last-reply > .turn-footer,
 .turn-footer:focus-within,
 .turn-footer.has-refusal,
-.turn-footer.stats-open,
 .turn-footer:has(.copied) { opacity: 1; }
 
-.turn-statistics,
 .turn-notices {
   min-width: 0;
   max-width: 100%;
@@ -418,25 +416,30 @@
   --leo-font-heading-h3: var(--type-caption);
   font: var(--type-caption);
 }
-.turn-statistics-body {
-  margin-top: var(--leo-spacing-s);
-  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
-  border: 1px solid var(--border-hairline);
+.turn-usage {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  min-height: var(--hit);
+  padding-block: 0;
+  padding-inline: var(--leo-spacing-s);
+  border: 0;
   border-radius: var(--radius-control);
-  background: var(--surface-sunken);
-  font: var(--type-meta);
-  color: var(--ink-primary);
+  appearance: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
 }
-.turn-statistics-body strong { font: var(--type-meta-strong); }
-.turn-statistics-body dl {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--leo-spacing-s) var(--leo-spacing-xl);
-  margin: var(--leo-spacing-m) 0;
+.turn-usage-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.turn-statistics-body dt { color: var(--ink-secondary); }
-.turn-statistics-body dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.turn-statistics-body p { margin: var(--leo-spacing-m) 0 0; color: var(--ink-secondary); }
+.turn-usage:hover { color: var(--ink-secondary); }
+.turn-usage:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
 .turn-usage-missing { padding-inline: var(--leo-spacing-m); }
 
 /* What the runtime told the reader about a turn, folded under the reply it belongs to. */
