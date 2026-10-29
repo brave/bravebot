@@ -632,6 +632,22 @@ mod tests {
         assert_eq!(plural::category("ja", 1), "other");
     }
 
+    /// French and English both give `other` above one. `pt` has no rule because `pt-BR` and
+    /// `pt-PT` disagree about zero. A language with no rule gives `other` for every count,
+    /// including 1.
+    #[test]
+    fn french_english_and_unknown_languages_get_the_categories_their_rules_give() {
+        assert_eq!(plural::category("fr", 1), "one");
+        assert_eq!(plural::category("fr", 2), "other");
+        assert_eq!(plural::category("en", 2), "other");
+        assert!(plural::is_known("ja"));
+        assert!(!plural::is_known("pt"));
+        assert!(!plural::is_known("pt-BR"));
+        for count in [0, 1, 2] {
+            assert_eq!(plural::category("qq", count), "other", "{count}");
+        }
+    }
+
     /// `auto` in any case gives the choice back, a word a catalog answers is that catalog under its
     /// own tag, and anything else is refused rather than read as the reference.
     #[test]
