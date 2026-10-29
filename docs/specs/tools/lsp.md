@@ -725,6 +725,19 @@ only through a processor.
 
 ## Known costs
 
+- **The `path` of a query is not confined to the workspace.** The tool joins `path` onto the root the
+  server was started in, so an absolute path or one with `..` names a file outside it, and a link
+  inside the root that leads out is followed. Only the deny rules are consulted
+  (`refuse_denied_path`). A server for the file's extension is asked about it and reads it with the
+  person's own access ([LSP-5](#LSP-5)). What comes back is labelled as for any query
+  ([LSP-3](#LSP-3)): hover text is untrusted, and a location in an outside file is shown as outside
+  the workspace and not readable ([LSP-4](#LSP-4)). The locations, line numbers and diagnostic counts
+  of an outside file still reach the planner as structure. The file tools resolve a path through
+  the workspace and refuse one outside the added directories; this tool does not, and no test
+  passes it an outside path. This is a defect and not an accepted cost: LSP-4 says nothing outside
+  the workspace becomes readable by being named here, and the unconfined `path` goes against that.
+  It is filed as [#3519](https://github.com/brave/bravebot/issues/3519).
+
 - **A declared server's own build tooling is unknown, so the prompt cannot say what it runs.**
   [LSP-11](#LSP-11) says that it is unknown. A person who declares a server wrapping a build tool
   approves one that may run the dependency tree's code as [LSP-5](#LSP-5) describes for the table,

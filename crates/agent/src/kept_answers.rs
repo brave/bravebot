@@ -327,6 +327,135 @@ fn another_tool_alias_or_project_after_a_standing_answer_to_an_mcp_tool() -> boo
         && !standing.covers("weather", "get_current_conditions", Path::new("/work"))
 }
 
+/// Run `git` in `root`, with the person's own configuration left out so a signing key or a hook of
+/// theirs cannot change what the fixture does.
+#[cfg(unix)]
+fn git_in(root: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+        ])
+        .args(args)
+        .current_dir(root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .expect("git is installed");
+    assert!(
+        status.success(),
+        "git {args:?} failed in {}",
+        root.display()
+    );
+}
+
+/// A checkout whose `main` branch has `link` leading to `a` and whose `other` branch has it leading
+/// to `b`, left on `main`.
+#[cfg(unix)]
+fn checkout_with_a_link_that_a_branch_retargets(name: &str) -> Workspace {
+    let workspace = checkout_with_a_link(name);
+    let root = workspace.root().to_path_buf();
+    git_in(&root, &["init", "-q", "-b", "main"]);
+    git_in(&root, &["add", "link"]);
+    git_in(&root, &["commit", "-q", "-m", "link to a"]);
+    git_in(&root, &["switch", "-q", "-c", "other"]);
+    point_the_link_at(&root, "b");
+    git_in(&root, &["add", "link"]);
+    git_in(&root, &["commit", "-q", "-m", "link to b"]);
+    git_in(&root, &["switch", "-q", "main"]);
+    workspace
+}
+
+#[cfg(unix)]
+fn a_branch_switch_under_a_credential_write_agreed_to() -> bool {
+    let workspace = checkout_with_a_link_that_a_branch_retargets("kept-answers-created-branch");
+    let mut agreed = Exposed::new();
+    let before = where_the_write_lands(&workspace);
+    agreed.allow_creating(&before);
+    assert!(
+        agreed.allows_creating(&where_the_write_lands(&workspace)),
+        "the answer did not hold before the change"
+    );
+
+    git_in(workspace.root(), &["switch", "-q", "other"]);
+
+    let after = where_the_write_lands(&workspace);
+    assert_ne!(before, after, "the branch switch did not retarget the link");
+    let asked = !agreed.allows_creating(&after);
+    std::fs::remove_dir_all(workspace.root()).ok();
+    asked
+}
+
+#[cfg(unix)]
+fn a_branch_switch_under_a_credential_write_remembered() -> bool {
+    let workspace = checkout_with_a_link_that_a_branch_retargets("kept-answers-remembered-branch");
+    let home = scratch("kept-answers-remembered-branch-home");
+    let record = crate::remembered::Store::new(&home, workspace.root());
+    let before = where_the_write_lands(&workspace);
+    record.remember_file(&before, "a-session");
+    assert!(
+        record.read().covers_file(&before),
+        "the answer did not hold before the change"
+    );
+
+    git_in(workspace.root(), &["switch", "-q", "other"]);
+
+    let after = where_the_write_lands(&workspace);
+    assert_ne!(before, after, "the branch switch did not retarget the link");
+    let asked = !record.read().covers_file(&after);
+    std::fs::remove_dir_all(workspace.root()).ok();
+    std::fs::remove_dir_all(&home).ok();
+    asked
+}
+
+/// A rule granted from a settings file on one branch, and the branch then switched to one whose
+/// settings file proposes other text. The proposal is the text the file holds after the switch.
+#[cfg(unix)]
+fn a_branch_switch_that_rewrites_the_settings_file_a_rule_was_granted_from() -> bool {
+    let root = scratch("kept-answers-granted-branch");
+    let home = scratch("kept-answers-granted-branch-home");
+    let file = root.join("settings.json");
+    git_in(&root, &["init", "-q", "-b", "main"]);
+    std::fs::write(&file, "Bash(bash scripts/check.sh)").expect("settings on main");
+    git_in(&root, &["add", "settings.json"]);
+    git_in(&root, &["commit", "-q", "-m", "check"]);
+    git_in(&root, &["switch", "-q", "-c", "other"]);
+    std::fs::write(&file, "Bash(bash scripts/deploy.sh)").expect("settings on other");
+    git_in(&root, &["commit", "-q", "-a", "-m", "deploy"]);
+    git_in(&root, &["switch", "-q", "main"]);
+
+    let proposal = |file: &Path| {
+        let text = std::fs::read_to_string(file).expect("the settings file");
+        granted::Proposed::new(file, &text)
+    };
+    let store = granted::Store::new(&home, &root);
+    let read = proposal(&file);
+    store.grant(&[&read], "a-session");
+    assert_eq!(
+        store.granted(std::slice::from_ref(&read)),
+        [&read],
+        "the answer did not hold before the change"
+    );
+
+    git_in(&root, &["switch", "-q", "other"]);
+
+    let switched = proposal(&file);
+    assert_ne!(read, switched, "the branch switch did not change the file");
+    let asked = store.granted(&[switched]).is_empty();
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&home).ok();
+    asked
+}
+
 /// A rule granted as the person read it, and then the same file proposing it with its text edited
 /// or extended.
 fn a_rule_whose_text_was_edited_after_it_was_granted() -> bool {
@@ -446,6 +575,21 @@ fn changing_the_world_under_a_yes_asks_again() {
             row: "credential writes remembered past the session",
             change: "Subject replaced",
             asked_again: a_link_retargeted_under_a_credential_write_remembered,
+        },
+        Case {
+            row: "credential writes agreed to for the session",
+            change: "Subject replaced",
+            asked_again: a_branch_switch_under_a_credential_write_agreed_to,
+        },
+        Case {
+            row: "credential writes remembered past the session",
+            change: "Subject replaced",
+            asked_again: a_branch_switch_under_a_credential_write_remembered,
+        },
+        Case {
+            row: "granted rules",
+            change: "Subject replaced",
+            asked_again: a_branch_switch_that_rewrites_the_settings_file_a_rule_was_granted_from,
         },
     ]);
 
