@@ -628,7 +628,6 @@ pub fn aside<S: Sink>(
         session,
         question,
         model,
-        reporter,
         sink,
         bravebot_core::file_authority::FileAuthority::new(trust),
         watching,
@@ -647,13 +646,12 @@ pub fn aside<S: Sink>(
     clippy::too_many_arguments,
     reason = "aside_sharing takes aside's collaborators with the turn's file authority in place of a trust map"
 )]
-pub fn aside_sharing<S: Sink, R: Reporter>(
+pub fn aside_sharing<S: Sink>(
     config: &Config,
     egress: &Egress,
     session: &crate::chatgpt::AccountSession,
     question: crate::aside::Question,
     model: Option<&str>,
-    reporter: &mut R,
     sink: &mut S,
     files: bravebot_core::file_authority::FileAuthority,
     watching: impl FnMut(&str),
