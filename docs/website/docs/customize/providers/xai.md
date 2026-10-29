@@ -144,4 +144,9 @@ what xAI answers an account on a plan that cannot use this, what happens to an a
 what a chat request answers an altered token (only the listing was tried, and it answered a 403), whether xAI
 answers a request that names an alias such as `grok-code-fast-1` under the canonical id, and
 `https://cli-chat-proxy.grok.com`, the host xAI's own command line client uses. The observations that could not
-be made are to be made under brave/bravebot#3377.
+be made are tracked by brave/bravebot#3377.
+
+Users of other programs that sign in to xAI the same way report a 403, and in one case a 402, for an account
+whose plan or quota does not allow the use, and report that a refresh token can be used once. These reports are
+not confirmed here, and no source states how long a refresh token lasts. The "Not observed" section of
+`docs/specs/xai-sign-in.md` names them.

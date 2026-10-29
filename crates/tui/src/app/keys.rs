@@ -2403,6 +2403,7 @@ fn click_command(session: &mut Session, line: &str) -> Action {
         line: line.to_string(),
         pasted: Vec::new(),
         attached: Vec::new(),
+        typed_at: std::time::Instant::now(),
     };
     if !matches!(session.status, Status::Working | Status::Running) {
         return dispatch_command(session, commanded);
