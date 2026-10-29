@@ -156,6 +156,7 @@ fn problem(reason: Unreadable) -> &'static str {
         Unreadable::UnclosedBracket => t!(permission_rule_unclosed_bracket),
         Unreadable::UnknownFamily => t!(permission_rule_unknown_family),
         Unreadable::EmptyBrackets => t!(permission_rule_empty_brackets),
+        Unreadable::EmptyQuotedName => t!(permission_rule_empty_quoted_name),
         Unreadable::WhitespaceAtAnEnd => t!(permission_rule_whitespace_at_an_end),
         Unreadable::Unanchored => t!(permission_rule_unanchored),
         Unreadable::NotADomainRule => t!(permission_rule_not_a_domain_rule),
@@ -825,6 +826,29 @@ mod tests {
         assert!(said[1].starts_with("' Read(.env' "), "{}", said[1]);
     }
 
+    /// A quoted name with nothing in it is not the bare family, so the advice to drop the brackets
+    /// for every use is not given alone: the report says the quotes hold nothing and says where the
+    /// name goes. Empty brackets keep their own sentence.
+    #[test]
+    fn a_rule_with_quotes_around_nothing_is_not_told_to_mean_every_use_alone() {
+        let settings = Settings::parse(r#"{"permissions": {"deny": ["Read(\"\")", "Read()"]}}"#);
+        let (permissions, rejected) = from_settings(
+            &settings,
+            Some(&PathBuf::from("/home/x")),
+            Path::new("/nonexistent"),
+        );
+        assert!(permissions.is_empty());
+        let said = rejected.iter().map(describe).collect::<Vec<_>>();
+        assert_eq!(
+            said,
+            [
+                "'Read(\"\")' has double quotes around nothing, and no file has an empty name; \
+                 drop the brackets to mean every use, or put the file's name between the quotes",
+                "'Read()' has empty brackets; drop them to mean every use",
+            ]
+        );
+    }
+
     /// Every reason a rule can be dropped for has words of its own. An arm is easy to copy and
     /// leave pointing at the message above it, and a report that gave a mistyped bracket the
     /// wording for a misspelled family would send somebody looking at the wrong part of their
@@ -838,6 +862,7 @@ mod tests {
             Unreadable::UnclosedBracket,
             Unreadable::UnknownFamily,
             Unreadable::EmptyBrackets,
+            Unreadable::EmptyQuotedName,
             Unreadable::WhitespaceAtAnEnd,
             Unreadable::Unanchored,
             Unreadable::NotADomainRule,

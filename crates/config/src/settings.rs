@@ -3870,14 +3870,22 @@ fn anchor_slash_rule(rule: &str, anchor: &str) -> String {
         return rule.to_string();
     };
     let name = name.trim_end();
-    let mut characters = specifier.chars();
+    // A quoted name (PERM-3) is anchored by what is inside the quotes and stays quoted.
+    let (quote, inner) = match specifier
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    {
+        Some(inner) => ("\"", inner),
+        None => ("", specifier),
+    };
+    let mut characters = inner.chars();
     let single_slash =
         characters.next().is_some_and(separates) && !characters.next().is_some_and(separates);
     if !(name == "Read" || name == "Edit") || !single_slash {
         return rule.to_string();
     }
-    let below = specifier.trim_start_matches(separates);
-    format!("{name}({anchor}/{below})")
+    let below = inner.trim_start_matches(separates);
+    format!("{name}({quote}{anchor}/{below}{quote})")
 }
 
 /// What the managed file wrote of `permissions.deny` and `permissions.ask` (PERM-19).
@@ -5952,11 +5960,17 @@ mod tests {
     #[test]
     fn a_slash_rule_keeps_the_whitespace_at_an_end_of_its_specifier() {
         let settings = Layers::new("slash-rule-whitespace")
-            .project(r#"{"permissions": {"deny": ["Read(/secrets \t)", "Edit( /notes.md)"]}}"#)
+            .project(
+                r#"{"permissions": {"deny": ["Read(/secrets \t)", "Edit( /notes.md)", "Read(\"/a.md \")"]}}"#,
+            )
             .read();
         assert_eq!(
             settings.permissions().deny,
-            ["Read(./secrets \t)", "Edit( /notes.md)"]
+            [
+                "Read(./secrets \t)",
+                "Edit( /notes.md)",
+                "Read(\"./a.md \")"
+            ]
         );
     }
 

@@ -1299,10 +1299,15 @@ starts inside the workspace is a relative one, so `Read(/secrets/**)` in a proje
 
 Whitespace at either end of a path specifier makes the rule unreadable, since it could be padding or
 part of a file's name, and `doctor` names the rule. `Read( .env )` is dropped for that reason. Write
-a name that starts with whitespace from `./`, as `Read(./ notes.md)`. A name that ends with whitespace
-has no spelling, since `Read(./notes.md*)` covers it along with other names. Whitespace inside a name
-is fine: `Read(./my notes.md)` is about the file `my notes.md`. A `*` is always a wildcard, so no rule
-is about a file whose name holds one and nothing else.
+a name that starts with whitespace from `./`, as `Read(./ notes.md)`. Whitespace inside a name is
+fine: `Read(./my notes.md)` is about the file `my notes.md`.
+
+A path in double quotes is one name, taken as written. Use it for a name that ends with whitespace, a
+name of whitespace alone, or a name that holds a `*`: `Read("./notes.md ")` is about the file
+`notes.md ` alone, and `Read("./*.md")` is about the file called `*.md` and no other. Whitespace and
+`*` between the quotes are ordinary characters, and a name with no slash still matches at any depth.
+A name that itself begins and ends with a quote is written in one more pair. Whitespace outside the
+quotes is still reported.
 
 On Windows a path on a drive is a full path, with the drive as its first segment:
 `Read(//D:/work/secrets/**)` covers `D:\work\secrets\key` whichever separator the path is written
