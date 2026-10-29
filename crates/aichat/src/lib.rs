@@ -506,6 +506,9 @@ struct Gateway<'a> {
     /// one the gateway has never heard of.
     model: String,
     token: Option<Secret>,
+    /// Whether the token is an OAuth access token, sent as a bearer whatever header the provider
+    /// puts its own key in ([`AichatClient::with_access_token`]).
+    access_token: bool,
     /// Whether a redirect in answer is a failure and nothing is sent to the address it names, as it
     /// is for a request to a host this program compiled in
     /// ([`AichatClient::refusing_redirects`]).
@@ -570,9 +573,19 @@ impl<'a> AichatClient<'a> {
             provider,
             model: model.into(),
             token,
+            access_token: false,
             redirects_refused: false,
             headers: Vec::new(),
         });
+        self
+    }
+
+    /// Send the gateway's token as an OAuth bearer, as a Google Cloud access token is, rather than in
+    /// the header the provider takes its key in. Does nothing where no gateway is set.
+    pub fn with_access_token(mut self) -> Self {
+        if let Some(gateway) = self.gateway.as_mut() {
+            gateway.access_token = true;
+        }
         self
     }
 
@@ -772,7 +785,11 @@ impl<'a> AichatClient<'a> {
                 http = http.refusing_redirects();
             }
             if let Some(token) = gateway.token.as_ref().map(Secret::expose) {
-                let (name, value) = gateway.provider.credential_header(token);
+                let (name, value) = if gateway.access_token {
+                    bravebot_config::provider::Provider::bearer_header(token)
+                } else {
+                    gateway.provider.credential_header(token)
+                };
                 http = if gateway.redirects_refused {
                     http.socket_header(name, value)
                 } else {
@@ -1767,6 +1784,30 @@ mod tests {
             .expect("prepared");
 
         assert_eq!(header(&http, "authorization"), Some("Bearer a-token"));
+        assert_eq!(header(&http, "x-goog-api-key"), None);
+    }
+
+    /// BACKEND-65: a Google Cloud access token is an OAuth credential, and the service reads it as
+    /// a bearer. It is not the key header's value, which the service refuses a token in.
+    #[test]
+    fn a_google_vertex_access_token_is_sent_as_a_bearer_and_not_in_the_key_header() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = vertex_provider();
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(
+                &provider,
+                "google/gemini-2.5-flash",
+                Some(Secret::new("placeholder-access-token")),
+            )
+            .with_access_token()
+            .prepare(&request("google-vertex/google/gemini-2.5-flash"))
+            .expect("prepared");
+
+        assert_eq!(
+            header(&http, "authorization"),
+            Some("Bearer placeholder-access-token")
+        );
         assert_eq!(header(&http, "x-goog-api-key"), None);
     }
 

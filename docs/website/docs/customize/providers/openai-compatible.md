@@ -114,7 +114,7 @@ models it offers, and how an entry reaches the Responses API.
 
 ### Google Vertex AI
 
-[Reaching Google Vertex AI with an API key](google-vertex.md) says how an entry keyed `google-vertex`
+[Reaching Google Vertex AI](google-vertex.md) says how an entry keyed `google-vertex`
 reaches Vertex AI with or without a project, and what express mode is.
 
 ### The credential

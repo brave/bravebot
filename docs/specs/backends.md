@@ -23,6 +23,7 @@ governs:
   - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/bedrock/src/credentials.rs
+  - crates/agent/src/gcloud.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/turns.rs
   - crates/tui/src/app/models.rs
@@ -3096,8 +3097,10 @@ exactly what is offered, as for any other gateway.
 ### BACKEND-50: the environment names a Google Vertex service when no block does
 
 `GOOGLE_API_KEY` configures the `google-vertex` service, whether it is exported or set in the `env`
-block of the person's own settings file ([BACKEND-33](#BACKEND-33) withholds the three names from a checkout's), and has to hold a value: a missing or blank key configures nothing. With
-`GOOGLE_CLOUD_PROJECT` beside it, and `VERTEX_LOCATION` where the location is not `global`, the
+block of the person's own settings file ([BACKEND-33](#BACKEND-33) withholds the three names from a checkout's), and has to hold a value: a missing or blank key configures nothing, unless
+`GOOGLE_CLOUD_PROJECT` is set, which configures the service of [BACKEND-49](#BACKEND-49) with no key
+([BACKEND-65](#BACKEND-65)). With
+`GOOGLE_CLOUD_PROJECT` beside the key, and `VERTEX_LOCATION` where the location is not `global`, the
 service is the one of [BACKEND-49](#BACKEND-49), and a project or location that BACKEND-49 refuses
 configures nothing. With no project, or a blank one, it is the express service of
 [BACKEND-58](#BACKEND-58), and `VERTEX_LOCATION` is not read. The service it configures lists no
@@ -4126,6 +4129,56 @@ others.
 `verified-by: bravebot_tui::app::a_lookup_about_a_model_that_is_no_longer_in_force_is_dropped_and_not_waited_for`
 `verified-by: bravebot_tui::app::a_turn_waits_for_a_lookup_once_and_the_loop_still_takes_its_late_answer`
 `verified-by: bravebot_tui::app::a_turn_waits_for_the_window_it_is_sized_against_for_a_bounded_time`
+
+<a id="BACKEND-65"></a>
+### BACKEND-65: a Vertex AI project with no key is signed in by the Google Cloud CLI
+
+Where a request goes to a `google-vertex` service that a project builds ([BACKEND-49](#BACKEND-49)), at
+a Google Vertex host over `https`, and no key resolves ([BACKEND-50](#BACKEND-50)) and the block states no
+`authorization` header, bravebot asks the Google Cloud CLI for an access token with
+`gcloud auth application-default print-access-token` and sends it as `authorization: Bearer <token>`.
+A key that resolves is sent as [BACKEND-51](#BACKEND-51) says and the program is not started. Express
+mode, and an entry whose `baseURL` is not a Google Vertex host, are never sent a token.
+
+The environment names the service by `GOOGLE_CLOUD_PROJECT` alone ([BACKEND-50](#BACKEND-50)). The
+program is `gcloud`, found on `PATH` without the directories a stage may write, started with fixed arguments and
+this agent's own credentials taken off its environment, and no value from a settings file, a model or the
+workspace reaches it ([BACKEND-1](#BACKEND-1), [SANDBOX-30](sandboxing.md#SANDBOX-30)). It is not named by
+a file. `GOOGLE_APPLICATION_CREDENTIALS` is read by the CLI and not by bravebot.
+
+The sign-in is asked for before work starts, and only for a model this service answers
+([BACKEND-9](#BACKEND-9)): where the CLI gives no token, `gcloud auth application-default login` is run and
+each line it writes is shown as it arrives. A CLI that is missing, or that gives no token, ends the request before
+anything is sent, naming `gcloud auth application-default login`, and the output it printed is not quoted.
+The token is in no trace, no error and no session record.
+
+**Why.** An organisation can disallow API keys for a project, and a person who is signed in with `gcloud`
+has no key to give. The CLI resolves the credential file, impersonation and refresh, which are Google's to
+change, and the token is a bearer at the host the project and location build, which is a destination
+somebody reviewed ([routing.md](routing.md)). A `baseURL` that names a proxy would send the person's
+Google sign-in to a host the program did not compile in, so it is sent a key or nothing.
+
+No answer is kept, where [BACKEND-10](#BACKEND-10) keeps one until near its expiry: the command
+states no expiry, and an answer without one is not kept. A token is asked for with each request and the
+check before a turn is one more run of the program.
+
+`verified-by: bravebot_config::provider::only_a_project_reached_at_a_google_vertex_host_takes_the_google_cloud_token`
+`verified-by: bravebot_config::provider::a_key_or_an_authorization_header_of_the_blocks_own_leaves_no_need_for_a_token`
+`verified-by: bravebot_config::lib::a_project_alone_names_the_service_the_google_cloud_cli_signs_in`
+`verified-by: bravebot_aichat::lib::a_google_vertex_access_token_is_sent_as_a_bearer_and_not_in_the_key_header`
+`verified-by: bravebot_agent::backend::a_vertex_project_with_no_key_is_sent_the_token_the_cli_gives`
+`verified-by: bravebot_agent::backend::a_vertex_project_with_a_key_never_asks_the_cli`
+`verified-by: bravebot_agent::backend::a_refusal_by_the_cli_ends_the_request_naming_the_cli`
+`verified-by: bravebot_agent::backend::only_a_vertex_project_at_a_google_host_with_no_other_credential_is_given_the_cli_token`
+`verified-by: bravebot_agent::backend::the_cli_sign_in_is_due_only_for_a_vertex_project_with_no_key`
+`verified-by: bravebot_cli::doctor::a_vertex_project_with_no_key_is_reported_as_signed_in_by_the_google_cloud_cli`
+`verified-by: bravebot_agent::gcloud::the_token_is_asked_for_with_the_application_default_credentials_command`
+`verified-by: bravebot_agent::gcloud::the_program_is_given_the_application_default_credentials_arguments`
+`verified-by: bravebot_agent::gcloud::a_token_the_cli_prints_is_returned_without_its_newline`
+`verified-by: bravebot_agent::gcloud::a_refusal_reports_the_first_line_of_stderr_and_never_a_token_it_printed`
+`verified-by: bravebot_agent::gcloud::a_reply_that_is_not_one_token_is_refused_and_not_quoted`
+`verified-by: bravebot_agent::gcloud::a_gcloud_a_stage_may_write_is_not_the_one_run`
+`verified-by: bravebot_agent::gcloud::the_sign_in_reports_each_line_the_cli_writes_and_its_failure`
 
 ## Known costs
 

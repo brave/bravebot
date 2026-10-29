@@ -819,16 +819,18 @@ impl Provider {
 
     /// The Vertex AI service the environment names, where it names one.
     ///
-    /// The key has to hold a value, and a project that is set has to be one the service's host can
-    /// be built from. A key with no project is express mode, which the native API serves with the
-    /// key alone; a project with no key is a service nobody could sign in to. The entry names
-    /// `GOOGLE_API_KEY` in `env`, so an exported key is read again when a request needs it, and
+    /// A project that is set has to be one the service's host can be built from, and a service is
+    /// named by a key, a project or both. A key with no project is express mode, which the native
+    /// API serves with the key alone; a project with no key is signed in by the Google Cloud CLI
+    /// ([BACKEND-65]). The entry names `GOOGLE_API_KEY` in `env`, so an exported key is read again when a request needs it, and
     /// holds the value `lookup` found for the case where the key lives only in a settings file.
     pub(crate) fn from_environment(lookup: &impl Fn(&str) -> Option<String>) -> Option<Self> {
         let filled = |name: &str| lookup(name).filter(|value| !value.trim().is_empty());
-        let mut key = filled(crate::env_var::GOOGLE_API_KEY)?;
-        let token = Secret::new(key.trim());
-        crate::scrub(&mut key);
+        let token = filled(crate::env_var::GOOGLE_API_KEY).map(|mut key| {
+            let token = Secret::new(key.trim());
+            crate::scrub(&mut key);
+            token
+        });
         let (base_url, protocol) = match filled(crate::env_var::GOOGLE_CLOUD_PROJECT) {
             Some(project) => {
                 let location = filled(crate::env_var::VERTEX_LOCATION);
@@ -836,10 +838,12 @@ impl Provider {
                     vertex_endpoint(Some(project.trim()), location.as_deref().map(str::trim))?;
                 (base_url, Protocol::ChatCompletions)
             }
-            None => (
+            // Express mode takes a key and nothing else.
+            None if token.is_some() => (
                 VERTEX_EXPRESS_ENDPOINT.to_string(),
                 Protocol::GenerateContent,
             ),
+            None => return None,
         };
 
         Some(Self {
@@ -847,7 +851,7 @@ impl Provider {
             name: None,
             base_url,
             env: vec![crate::env_var::GOOGLE_API_KEY.to_string()],
-            api_key: Some(token),
+            api_key: token,
             stored_key: None,
             endpoint_compiled_in: false,
             models: Vec::new(),
@@ -1024,6 +1028,60 @@ impl Provider {
         } else {
             ("authorization", format!("Bearer {token}"))
         }
+    }
+
+    /// Whether a request to this service may carry a Google Cloud access token in place of a key
+    /// ([BACKEND-65]).
+    ///
+    /// Only a Vertex AI entry on the chat completions route, which a project builds, and only while
+    /// its requests reach a Google Vertex host over `https` on the default port. An entry whose
+    /// `baseURL` names a proxy is left out, since the token is the person's Google sign-in and goes to
+    /// Google's host alone. Express mode takes a key and no token.
+    ///
+    /// [BACKEND-65]: ../../../docs/specs/backends.md#BACKEND-65
+    pub fn takes_google_cloud_token(&self) -> bool {
+        if self.id != GOOGLE_VERTEX_ID
+            || self.protocol != Protocol::ChatCompletions
+            || !self.base_url.starts_with("https://")
+        {
+            return false;
+        }
+        reached_at(&self.base_url).is_some_and(|(host, port)| {
+            port == 443
+                && (host == "aiplatform.googleapis.com"
+                    || host
+                        .strip_suffix("-aiplatform.googleapis.com")
+                        .is_some_and(|location| {
+                            !location.is_empty()
+                                && location.chars().all(|c| {
+                                    c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'
+                                })
+                        }))
+        })
+    }
+
+    /// Whether a request to this service is sent a Google Cloud access token because nothing else
+    /// authenticates it ([BACKEND-65]): [`Self::takes_google_cloud_token`], no key resolving through
+    /// `lookup`, the entry or a stored key, and no `authorization` or `x-goog-api-key` header of the
+    /// block's own.
+    ///
+    /// A block that names no variable and no key counts as having none, which is how a project that
+    /// disallows keys is written.
+    ///
+    /// [BACKEND-65]: ../../../docs/specs/backends.md#BACKEND-65
+    pub fn needs_google_cloud_token(&self, lookup: impl Fn(&str) -> Option<String>) -> bool {
+        self.takes_google_cloud_token()
+            && !matches!(self.credential(lookup), Credential::Token(_))
+            && !self.headers.iter().any(|held| {
+                held.name.eq_ignore_ascii_case("authorization")
+                    || held.name.eq_ignore_ascii_case(VERTEX_KEY_HEADER)
+            })
+    }
+
+    /// The header an OAuth access token goes in: `authorization`, as a bearer, where
+    /// [`Self::credential_header`] puts a Vertex key in `x-goog-api-key`.
+    pub fn bearer_header(token: &str) -> (&'static str, String) {
+        ("authorization", format!("Bearer {token}"))
     }
 
     /// The headers this service takes on every request whatever the credential, with their values.
@@ -1845,6 +1903,76 @@ mod tests {
             "https://us-central1-aiplatform.googleapis.com/v1/projects/example-project-1/locations/us-central1/endpoints/openapi"
         );
         assert_eq!(all[0].host(), "us-central1-aiplatform.googleapis.com");
+    }
+
+    /// BACKEND-65: a token goes to a Google Vertex host over https and to no other, whatever the
+    /// entry states as its endpoint.
+    #[test]
+    fn only_a_project_reached_at_a_google_vertex_host_takes_the_google_cloud_token() {
+        let takes = |options: String| vertex(&options)[0].takes_google_cloud_token();
+        assert!(takes(format!(r#"{{"project": "{PLACEHOLDER_PROJECT}"}}"#)));
+        assert!(takes(format!(
+            r#"{{"project": "{PLACEHOLDER_PROJECT}", "location": "us-central1"}}"#
+        )));
+        // Express mode takes a key and no token.
+        assert!(!takes("{}".to_string()));
+        for stated in [
+            "https://proxy.example.invalid/v1",
+            "http://aiplatform.googleapis.com/v1",
+            "https://aiplatform.googleapis.com.evil.invalid/v1",
+            "https://aiplatform.googleapis.com@evil.invalid/v1",
+            "https://evil.invalid/-aiplatform.googleapis.com",
+            "https://aiplatform.googleapis.com:8443/v1",
+            "https://evil-aiplatform.example.invalid/v1",
+        ] {
+            assert!(
+                !takes(format!(
+                    r#"{{"project": "{PLACEHOLDER_PROJECT}", "baseURL": "{stated}"}}"#
+                )),
+                "{stated}"
+            );
+        }
+        assert!(takes(format!(
+            r#"{{"project": "{PLACEHOLDER_PROJECT}", "baseURL": "https://europe-west4-aiplatform.googleapis.com/v1"}}"#
+        )));
+    }
+
+    /// BACKEND-65: a key, or an `authorization` header the block wrote, is what authenticates the
+    /// request, and no token is asked for beside it.
+    #[test]
+    fn a_key_or_an_authorization_header_of_the_blocks_own_leaves_no_need_for_a_token() {
+        let none = |_: &str| None;
+        let project = format!(r#""project": "{PLACEHOLDER_PROJECT}""#);
+        let needs = |entry: String, lookup: &dyn Fn(&str) -> Option<String>| {
+            let root: serde_json::Value =
+                serde_json::from_str(&format!(r#"{{"provider": {{"google-vertex": {entry}}}}}"#))
+                    .expect("json");
+            let serde_json::Value::Object(root) = root else {
+                panic!("not an object")
+            };
+            Provider::all(&root)[0].needs_google_cloud_token(lookup)
+        };
+        assert!(needs(format!(r#"{{"options": {{{project}}}}}"#), &none));
+        assert!(!needs(
+            format!(r#"{{"options": {{{project}, "apiKey": "a-key"}}}}"#),
+            &none
+        ));
+        assert!(!needs(
+            format!(r#"{{"env": ["GOOGLE_API_KEY"], "options": {{{project}}}}}"#),
+            &|name| (name == "GOOGLE_API_KEY").then(|| "a-key".to_string())
+        ));
+        assert!(!needs(
+            format!(r#"{{"options": {{{project}, "headers": {{"Authorization": "Bearer x"}}}}}}"#),
+            &none
+        ));
+        assert!(!needs(
+            format!(r#"{{"options": {{{project}, "headers": {{"X-Goog-Api-Key": "a-key"}}}}}}"#),
+            &none
+        ));
+        assert_eq!(
+            Provider::bearer_header("placeholder-t"),
+            ("authorization", "Bearer placeholder-t".to_string())
+        );
     }
 
     #[test]
