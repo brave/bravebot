@@ -4780,17 +4780,35 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // Whether there is a file here at all is a separate question, answered from the path and
     // `stat`, because the labelled peek cannot say: it reports a file it could not decode as
     // text the same way it reports one that is not there.
-    let (existing, pre_image, replaces, approved_revision) =
+    let (existing, pre_image, other_encoding, replaces, approved_revision) =
         policy.capture_files(|policy, capture| {
             let key = workspace.trust_key(&proposed_path);
             let peeks = workspace.peek_labelled_for_write(policy, &proposed_path);
             (
                 peeks.0,
                 peeks.1,
+                peeks.2,
                 workspace.names_a_file(&proposed_path),
                 capture.revision_of(&key),
             )
         });
+    // A file the trust map vouches for that is text in an encoding other than UTF-8 is not replaced
+    // by a body that lands as UTF-8 (WRITE-8). Refused before the format step, the scan and the
+    // question, since no answer changes what the file is. A file nobody vouched for is not asked
+    // about: its encoding is a fact about untrusted bytes, and the write replaces it as WRITE-1
+    // says.
+    if replaces && crate::workspace::holds_another_encoding(policy, call, &other_encoding) {
+        return write_refused(
+            policy,
+            tools,
+            call,
+            destination,
+            &crate::workspace::WorkspaceError::NotUtf8 {
+                path: shown_path.clone(),
+            },
+            &shown_path,
+        );
+    }
     // The same bytes, so the comparison below can be made inside the kernel. Taken from the one
     // peek rather than read a second time: two reads of a file somebody else may be writing can
     // disagree, and then the diff a person approves is of a version that never existed.

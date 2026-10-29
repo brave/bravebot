@@ -1285,16 +1285,30 @@ impl Workspace {
     /// value in are of the same version. The first is the pessimistic one for the review; the
     /// second is what [`bravebot_core::policy::Policy::scan_a_write`] reads the pre-image through,
     /// where a path nobody vouched for comes back untrusted and the gate there refuses it.
+    ///
+    /// The third value is whether the file is text in an encoding other than UTF-8 (READ-3), from
+    /// the same bytes and labelled as the trust map holds the path. It is read only through
+    /// [`holds_another_encoding`], which asks the label first.
     pub fn peek_labelled_for_write<S: Sink>(
         &self,
         policy: &Policy<'_, S>,
         relative: &str,
-    ) -> (Labelled<String>, Labelled<String>) {
-        let text = self.peek_for_review(relative).unwrap_or_default();
+    ) -> (Labelled<String>, Labelled<String>, Labelled<bool>) {
+        let bytes = self
+            .resolve(relative)
+            .ok()
+            .and_then(|resolved| std::fs::read(resolved).ok());
+        let other_encoding = bytes.as_deref().is_some_and(|bytes| {
+            std::str::from_utf8(bytes).is_err() && decode_text(bytes.to_vec()).is_some()
+        });
+        let text = bytes
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_default();
         let label = policy.label_in_force(&self.trust_key(relative));
         (
             Labelled::new(text.clone(), read_label()),
             Labelled::new(text, label),
+            Labelled::new(other_encoding, label),
         )
     }
 
@@ -1956,6 +1970,24 @@ pub fn in_the_replaced_files_format<S: Sink>(
     };
     let format = FileFormat::of(&existing);
     policy.render_in_place(tool, &body, |text| format.applied_to(text))
+}
+
+/// Whether a write would replace a file the trust map vouches for with UTF-8 where the file is
+/// text in another encoding (WRITE-8).
+///
+/// A file nobody vouched for answers `false` without the gate being asked: what encoding it uses
+/// is a fact about untrusted bytes, and refusing on it would be the driver deciding from them. The
+/// answer for a vouched file goes through [`Policy::read_trusted_content`], the gate `edit_file`
+/// reads a file through before it compares it.
+pub fn holds_another_encoding<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+    other_encoding: &Labelled<bool>,
+) -> bool {
+    other_encoding.label().is_trusted()
+        && policy
+            .read_trusted_content(tool, other_encoding)
+            .unwrap_or(false)
 }
 
 /// The two things about a file's bytes a whole-file write would otherwise lose.

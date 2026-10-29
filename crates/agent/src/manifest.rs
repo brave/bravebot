@@ -2202,17 +2202,25 @@ fn write<S: Sink, C: Confirmer>(
     // The pre-image and the version it was read at, taken together, exactly as a turn's write
     // takes them: prior bytes a sibling effect left untrusted cannot answer for a credential in
     // this body, and the approval minted below is spent only on the version shown here.
-    let (existing, pre_image, replaces, approved_revision) =
+    let (existing, pre_image, other_encoding, replaces, approved_revision) =
         policy.capture_files(|policy, capture| {
             let key = workspace.trust_key(&path);
             let peeks = workspace.peek_labelled_for_write(policy, &path);
             (
                 peeks.0,
                 peeks.1,
+                peeks.2,
                 workspace.names_a_file(&path),
                 capture.revision_of(&key),
             )
         });
+    // The same refusal a turn's write makes (WRITE-8): a vouched file in another encoding is not
+    // replaced by a body that lands as UTF-8.
+    if replaces && crate::workspace::holds_another_encoding(policy, "write_file", &other_encoding) {
+        return Err(
+            crate::workspace::WorkspaceError::NotUtf8 { path: path.clone() }.describe(&path),
+        );
+    }
     // Taken from the one peek, as a turn's write does it, so the comparison below can be made
     // inside the kernel on a value the driver never holds as a string.
     let replaced = crate::workspace::peeked_for_review(&existing, replaces);

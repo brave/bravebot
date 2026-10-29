@@ -19,7 +19,7 @@ guards:
       - crates/agent/src/skills.rs: 1
       - crates/agent/src/tools.rs: 30
       - crates/agent/src/turn.rs: 1
-      - crates/agent/src/workspace.rs: 15
+      - crates/agent/src/workspace.rs: 16
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/src/anthropic.rs: 8
@@ -883,6 +883,13 @@ arrives at all.
   `bravebot-agent`, which is the driver too ([LABEL-4](#LABEL-4)), and in the `filetype` crate it
   calls. That crate holds no `declassify`, so no pinned count moves when it changes. Where the path is vouched for, the bytes are trusted and the comparison is the case
   [LABEL-5](#LABEL-5) allows. The rest of this entry is about a path nobody vouched for.
+
+  `Workspace::peek_labelled_for_write` also sniffs file bytes, for [WRITE-8](tools/write-file.md#WRITE-8):
+  whether the file is valid UTF-8 and, if not, whether `decode_text` reads it. It reads the file
+  whichever label the path has, and labels the answer as the trust map holds the path.
+  `holds_another_encoding` consults the answer only when that label is trusted, so the sniff
+  decides something only for a file the trust map vouches for, and nothing follows from the bytes
+  of a file nobody vouched for.
 
   Suppose an attacker owns the file. Everything that buys them is on this list:
 
