@@ -186,6 +186,10 @@ fn login_from(program: &Path, mut say: impl FnMut(String)) -> Result<(), GcloudE
         say(line);
     }
     for reader in readers {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "a reader that panicked has only lost lines of display, and the exit status decides the outcome"
+        )]
         let _ = reader.join();
     }
     let status = child.wait().map_err(|e| GcloudError::Refused {
