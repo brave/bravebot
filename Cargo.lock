@@ -136,7 +136,7 @@ dependencies = [
 name = "bravebot-agent"
 version = "0.19.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bravebot-aichat",
  "bravebot-bedrock",
  "bravebot-config",
@@ -219,7 +219,7 @@ dependencies = [
 name = "bravebot-browser"
 version = "0.19.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "rand 0.8.7",
  "rustix 1.1.4",
  "serde_json",
@@ -350,7 +350,7 @@ dependencies = [
 name = "bravebot-session"
 version = "0.19.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bravebot-agent",
  "bravebot-aichat",
  "bravebot-config",
@@ -367,7 +367,7 @@ dependencies = [
 name = "bravebot-signing"
 version = "0.19.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "hmac",
  "sha2",
 ]
@@ -393,7 +393,7 @@ version = "0.19.0"
 name = "bravebot-tui"
 version = "0.19.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bravebot-agent",
  "bravebot-aichat",
  "bravebot-backtrace",
@@ -424,7 +424,7 @@ dependencies = [
 name = "bravebot-ui-bridge"
 version = "0.19.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bravebot-agent",
  "bravebot-aichat",
  "bravebot-approval",
