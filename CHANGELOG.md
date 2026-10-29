@@ -1,5 +1,6 @@
 ## Unreleased
 
+ - Changed leaving a session to wait a quarter of a second at most for its temporary directory to be removed, where it waited for the whole removal. A directory still being removed when bravebot exits is removed by the next session you open, as one left by a killed session is. On Windows the removal is still waited for in full.
  - Changed leaving a session to stop its language servers beside each other. It waited for each server in turn.
  - Added a `model` key in a prompt file's front matter. Typing the file's name puts its text in the box and opens the `/model` picker with the cursor on that model, and nothing is chosen until you press Enter on a row. A `model` of more than one word, and a file that names both `agent` and `model`, are refused. ([#1590](https://github.com/brave/bravebot/issues/1590))
  - Fixed `read-only` starting a `run` stage on a Linux kernel below Landlock ABI 9, where the stage reaches every unix socket that has a path, such as the session bus, the ssh agent and `docker.sock`, and so could write through them. It is refused there as `strict` is, naming the kernel it needs. `/status` and the opening screen no longer say the sockets are reachable under `read-only`. ([#2237](https://github.com/brave/bravebot/issues/2237))
