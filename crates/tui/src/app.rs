@@ -2114,6 +2114,8 @@ pub(crate) fn ask_which_model(session: &mut Session) -> Action {
         ))
     }) {
         session.note(refused);
+        // A model a prompt file named has nowhere to open, and is not kept for a later picker.
+        session.take_model_to_offer();
         return Action::Redraw;
     }
     Action::ChooseModel
@@ -20326,6 +20328,167 @@ mod tests {
 
         handle_key_while_working(&mut session, key(KeyCode::Enter));
         assert_eq!(waiting_prompts(&session), ["Review parser"]);
+    }
+
+    /// CMD-17: a file naming a `model` puts its body in the box and asks for the model picker, and
+    /// changes nothing itself. The regressions it rejects are the model being applied by the
+    /// expansion, the model name being put in the box where the next Enter would send it, and the
+    /// body being lost.
+    #[test]
+    fn a_prompt_file_naming_a_model_fills_the_box_and_asks_for_the_picker() {
+        let mut session = with_prompt_files(
+            "prompt-files-model-picker",
+            &[(
+                "audit.md",
+                "---\nmodel: some-model\n---\nAudit $ARGUMENTS\n",
+            )],
+        );
+
+        assert_eq!(
+            enter_line(&mut session, "/audit the parser"),
+            Action::ChooseModel
+        );
+        assert_eq!(session.input(), "Audit the parser");
+        assert_eq!(session.model(), None, "the expansion chose the model");
+        assert_eq!(session.status, Status::Idle, "the expansion began a turn");
+        assert!(session.has_model_to_offer());
+
+        // The loop opens the picker, which takes the name once and puts the cursor on its row.
+        let config = a_config_with_a_named_roster();
+        let (answer, listing) = std::sync::mpsc::channel();
+        open_model_picker_awaiting(&mut session, &config, listing);
+        assert!(
+            !session.has_model_to_offer(),
+            "the name would open a second picker"
+        );
+        answer
+            .send(Ok((
+                vec![listed("opus-arn", None), listed("some-model", None)],
+                Vec::new(),
+            )))
+            .unwrap();
+        assert!(session.settle_picking());
+        let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker is open");
+        };
+        assert_eq!(picker.chosen().expect("a row").key, "some-model");
+        assert_eq!(session.model(), None, "opening the picker chose the model");
+        assert_eq!(session.input(), "Audit the parser");
+    }
+
+    /// CMD-17: Esc on the picker a file's `model` opened leaves the model as it was, closes the
+    /// picker and keeps the file's text in the box. The regression it rejects is a cancel that takes
+    /// the row under the cursor, which is the model the file named.
+    #[test]
+    fn escape_on_the_picker_a_prompt_file_opened_leaves_the_model_and_the_text() {
+        let mut session = with_prompt_files(
+            "prompt-files-model-escape",
+            &[("audit.md", "---\nmodel: some-model\n---\nAudit\n")],
+        );
+        assert_eq!(enter_line(&mut session, "/audit"), Action::ChooseModel);
+        let config = a_config_with_a_named_roster();
+        let (answer, listing) = std::sync::mpsc::channel();
+        open_model_picker_awaiting(&mut session, &config, listing);
+        answer
+            .send(Ok((
+                vec![listed("opus-arn", None), listed("some-model", None)],
+                Vec::new(),
+            )))
+            .unwrap();
+        assert!(session.settle_picking());
+        assert!(session.picking().is_some(), "the picker did not open");
+
+        session.press_in_picking(KeyCode::Esc, KeyModifiers::NONE);
+
+        assert!(session.picking().is_none(), "Esc left the picker open");
+        assert!(session.take_pick().is_none(), "Esc picked a row");
+        assert_eq!(session.model(), None, "Esc changed the model");
+        assert_eq!(session.input(), "Audit");
+    }
+
+    /// CMD-17, CLI-17: under a definition that fixes the model the file's `model` opens no picker,
+    /// says why, and leaves the body in the box. The regression it rejects is a picker whose pick
+    /// no turn would ask for.
+    #[test]
+    fn a_prompt_file_naming_a_model_opens_no_picker_under_a_definition_that_names_one() {
+        let mut session = with_prompt_files(
+            "prompt-files-model-definition",
+            &[("audit.md", "---\nmodel: some-model\n---\nAudit\n")],
+        );
+        session.work_under(crate::state::Addressed {
+            model: Some("the-definitions-model".to_string()),
+            ..standing()
+        });
+
+        assert_eq!(enter_line(&mut session, "/audit"), Action::Redraw);
+
+        assert_eq!(session.input(), "Audit");
+        assert!(!session.has_model_to_offer(), "the name was kept for later");
+        assert!(
+            last_note(&session).contains("has nothing to change"),
+            "{}",
+            last_note(&session)
+        );
+    }
+
+    /// CMD-17, CMD-8: a file naming a `model` asks for the picker mid-turn as `/model` does, and the
+    /// body waits in the box unqueued.
+    #[test]
+    fn a_prompt_file_naming_a_model_asks_for_the_picker_while_a_turn_is_running() {
+        let mut session = with_prompt_files(
+            "prompt-files-model-working",
+            &[("audit.md", "---\nmodel: some-model\n---\nAudit\n")],
+        );
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.status, Status::Working);
+
+        for c in "/audit".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::ChooseModel
+        );
+        assert_eq!(session.input(), "Audit");
+        assert!(session.queued.is_empty(), "the expansion was queued unread");
+    }
+
+    /// CMD-17, CLI-17: mid-turn under a definition that fixes the model the refusal is recorded as
+    /// said while the turn ran, and nothing is queued. The regression it rejects is the note being
+    /// added outside `answer_while_working`, which leaves a stop counting it as the turn's own
+    /// output and leaves the scroll where it was.
+    #[test]
+    fn a_prompt_file_naming_a_model_under_a_definition_that_names_one_is_said_while_a_turn_runs() {
+        let mut session = with_prompt_files(
+            "prompt-files-model-definition-working",
+            &[("audit.md", "---\nmodel: some-model\n---\nAudit\n")],
+        );
+        session.work_under(crate::state::Addressed {
+            model: Some("the-definitions-model".to_string()),
+            ..standing()
+        });
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(session.status, Status::Working);
+
+        for c in "/audit".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+
+        assert_eq!(session.input(), "Audit");
+        assert!(session.queued.is_empty(), "the expansion was queued unread");
+        let said = session.said_while_working();
+        assert_eq!(said.len(), 1, "the refusal was not kept apart");
+        assert!(
+            said[0].text.contains("has nothing to change"),
+            "{}",
+            said[0].text
+        );
     }
 
     /// Naming a level on the line takes it without opening the picker.

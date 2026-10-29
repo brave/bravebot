@@ -1742,6 +1742,7 @@ model-picker-search-placeholder = Rechercher
 model-picker-nothing-matches = aucune correspondance
 model-picker-loading = chargement des modèles…
 model-picker-listing-lost = la liste des modèles n'a pas été reçue
+model-picker-unknown-name = le fichier d'invite nomme { $model }, que la liste des modèles ne contient pas
 picker-current = actuel
 
 config-picker-title = mode d'édition
@@ -3493,6 +3494,10 @@ prompt-file-empty =
     /{ $name } est un fichier d'invite vide, donc la ligne n'a pas été envoyée : { $path }
 prompt-file-agent-not-a-name =
     /{ $name } est un fichier d'invite dont l'agent n'est pas un seul mot, donc la ligne n'a pas été envoyée : { $path }
+prompt-file-model-not-a-name =
+    /{ $name } est un fichier d'invite dont le modèle n'est pas un seul mot, donc la ligne n'a pas été envoyée : { $path }
+prompt-file-agent-and-model =
+    /{ $name } est un fichier d'invite qui nomme un agent et un modèle, alors que la zone de saisie ne tient qu'une forme, donc la ligne n'a pas été envoyée : { $path }
 prompt-file-begins-with-a-command =
     /{ $name } est un fichier d'invite qui commence par une commande, ce qu'un fichier ne peut pas lancer, donc la ligne n'a pas été envoyée : { $path }
 paste-folded = { $lines ->

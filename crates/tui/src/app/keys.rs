@@ -1356,7 +1356,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // A line whose first word names a file in the person's prompt directory: the file's text
         // replaces the line and waits in the box (CMD-17). After every command, so a file cannot
         // shadow one, and before completion, so `/review the diff` is not read as a half-typed word.
-        KeyCode::Enter if session.expand_prompt_file() => Action::Redraw,
+        KeyCode::Enter if session.expand_prompt_file() => offering_a_model(session),
         // A line that runs a prompt of an MCP server with words that are not its arguments is said
         // so and not sent (CMD-26).
         KeyCode::Enter if session.refuse_unparsable_server_prompt() => Action::Redraw,
@@ -1375,6 +1375,17 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             None => Action::None,
         },
         _ => navigate(session, key),
+    }
+}
+
+/// What follows a prompt file expanding into the box: a redraw, or the model picker opened on the
+/// model the file named, which asks first whether the definition in force has fixed the model
+/// (CLI-17). The picker chooses nothing until Enter is pressed on a row (CMD-17).
+fn offering_a_model(session: &mut Session) -> Action {
+    if session.has_model_to_offer() {
+        super::ask_which_model(session)
+    } else {
+        Action::Redraw
     }
 }
 
@@ -1801,7 +1812,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     if key.code == KeyCode::Enter
         && session.answer_while_working(|session| session.expand_prompt_file())
     {
-        return Action::Redraw;
+        return session.answer_while_working(offering_a_model);
     }
 
     // And a line running a prompt of a server that could not be sent is refused as it is at rest,

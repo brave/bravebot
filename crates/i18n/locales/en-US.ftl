@@ -1989,6 +1989,7 @@ model-picker-search-placeholder = Search
 model-picker-nothing-matches = nothing matches that
 model-picker-loading = loading models…
 model-picker-listing-lost = the model list was not delivered
+model-picker-unknown-name = the prompt file names { $model }, which the model list does not hold
 picker-current = current
 
 # Choosing how hard to think. The level names are the words sent and stored, so they are not
@@ -4213,6 +4214,10 @@ prompt-file-empty =
     /{ $name } is a prompt file with nothing in it, so the line was not sent: { $path }
 prompt-file-agent-not-a-name =
     /{ $name } is a prompt file whose agent is not a single word, so the line was not sent: { $path }
+prompt-file-model-not-a-name =
+    /{ $name } is a prompt file whose model is not a single word, so the line was not sent: { $path }
+prompt-file-agent-and-model =
+    /{ $name } is a prompt file that names both an agent and a model, and the box holds one form, so the line was not sent: { $path }
 prompt-file-begins-with-a-command =
     /{ $name } is a prompt file that begins with a command, which a file may not start, so the line was not sent: { $path }
 paste-folded = { $lines ->

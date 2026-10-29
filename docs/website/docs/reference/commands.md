@@ -207,6 +207,10 @@ them. See [Choosing a model](../customize/model.md).
 In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
 every turn uses that model, so `/model` opens no picker and says so.
 
+`/model` takes no argument, so `/model foo` is a prompt. A [prompt file](#prompt-files) whose front
+matter has a `model` key opens this picker with the cursor on that model, and leaves the file's text
+in the box.
+
 ## `/theme [name]`
 
 Opens a picker on the palette in force. With a name, `/theme nord` applies it without opening the
@@ -1642,6 +1646,11 @@ Review $1 for races, with attention to $ARGUMENTS.
   empty.
 - `agent` makes the box `/agent reviewer <text>`, which runs when you press Enter on it. `description`
   is not used yet.
+- `model` leaves the text in the box and opens the `/model` picker with the cursor on that model, by
+  its key or name. Nothing is chosen until you press Enter on a row, and Esc keeps the current
+  model. A name the list lacks is said. Under `--agent` with a definition that names a model the
+  picker does not open, as `/model` does not. A file with both `agent` and `model`, or a value of
+  more than one word, is refused. `/model <name>` stays a prompt.
 - Only your own `~/.bravebot/prompts` is read, never a project's. A file cannot take a command's name,
   and a file whose text begins with a command word or would run an MCP prompt is refused, so no file
   carries out a command.

@@ -63,6 +63,8 @@ pub struct Picker {
     /// same model. A key, a turn of the wheel or a letter typed lets go of it, and the list moves as
     /// it always did.
     held_from: Option<usize>,
+    /// A model a prompt file named, for the cursor to open on instead of the one in use (CMD-17).
+    wanted: Option<String>,
 }
 
 impl Picker {
@@ -75,6 +77,7 @@ impl Picker {
             current: current.map(str::to_string),
             listing: None,
             held_from: None,
+            wanted: None,
         };
         picker.select_current();
         picker
@@ -89,6 +92,13 @@ impl Picker {
             listing: Some(listing),
             ..Self::new(Vec::new(), current)
         }
+    }
+
+    /// Open the cursor on the model with this key or name once the rows are here, where the list
+    /// has one, and say so where it has not. The model in use stays marked as current.
+    pub fn wanting(mut self, model: Option<String>) -> Self {
+        self.wanted = model;
+        self
     }
 
     /// Whether the rows are still being waited for.
@@ -110,6 +120,12 @@ impl Picker {
                 self.listing = None;
                 self.models = models;
                 self.select_current();
+                let mut problems = problems;
+                if let Some(wanted) = &self.wanted
+                    && !self.holds(wanted)
+                {
+                    problems.push(t!(model_picker_unknown_name, model = wanted).to_string());
+                }
                 Arrival::Rows(problems)
             }
             Ok(Err(problem)) => {
@@ -124,14 +140,39 @@ impl Picker {
         }
     }
 
-    /// Put the cursor on the model in use, or the first row where it is not among the matches.
+    /// Put the cursor on the model a prompt file named, or the model in use, or the first row where
+    /// neither is among the matches.
     fn select_current(&mut self) {
         let selected = self
-            .matching()
-            .iter()
-            .position(|model| self.is_current(model))
+            .wanted_position()
+            .or_else(|| {
+                self.matching()
+                    .iter()
+                    .position(|model| self.is_current(model))
+            })
             .unwrap_or(0);
         self.selected = selected;
+    }
+
+    /// Whether any model on offer, matching what has been typed or not, has this key or name.
+    fn holds(&self, name: &str) -> bool {
+        self.models
+            .iter()
+            .any(|model| model.key == name || model.display_name == name)
+    }
+
+    /// Where the model a prompt file named is among the matches, by its key and then its name.
+    fn wanted_position(&self) -> Option<usize> {
+        let wanted = self.wanted.as_deref()?;
+        let matching = self.matching();
+        matching
+            .iter()
+            .position(|model| model.key == wanted)
+            .or_else(|| {
+                matching
+                    .iter()
+                    .position(|model| model.display_name == wanted)
+            })
     }
 
     /// The models matching what has been typed, grouped by the service that answers them.
@@ -1112,6 +1153,70 @@ mod tests {
         let mut picker = Picker::new(offered(), None);
         typing(&mut picker, "nothing named this");
         assert!(picker.chosen().is_none());
+    }
+
+    /// CMD-17: a picker opened for a model a prompt file named puts the cursor on it, by key or by
+    /// name, once the rows arrive, and keeps the model in use marked as current. The regressions it
+    /// rejects are a cursor left on the model in use, which would make Enter keep the model the file
+    /// asked to change, and a model picked without Enter.
+    #[test]
+    fn a_picker_opened_for_a_named_model_puts_the_cursor_on_it_when_the_rows_arrive() {
+        for wanted in ["llama-3-8b-instruct", "Llama 3 8B"] {
+            let (answer, listing) = mpsc::channel();
+            let mut picker =
+                Picker::loading(Some("claude-3-sonnet"), listing).wanting(Some(wanted.to_string()));
+            answer.send(Ok((offered(), Vec::new()))).unwrap();
+
+            assert_eq!(picker.settle(), Arrival::Rows(Vec::new()));
+
+            assert_eq!(
+                picker.chosen().expect("a model").key,
+                "llama-3-8b-instruct",
+                "{wanted}"
+            );
+            let in_use = picker.matching().into_iter().find(|m| picker.is_current(m));
+            assert_eq!(in_use.expect("a current model").key, "claude-3-sonnet");
+        }
+    }
+
+    /// CMD-17: a name the list does not hold is said, and the cursor is where it would have been
+    /// with no name. The regression it rejects is a silent open on the wrong row, which reads as
+    /// though the file's model were the one under the cursor.
+    #[test]
+    fn a_named_model_the_list_lacks_is_said_and_the_cursor_stays_on_the_one_in_use() {
+        let (answer, listing) = mpsc::channel();
+        let mut picker =
+            Picker::loading(Some("claude-3-sonnet"), listing).wanting(Some("no-such".to_string()));
+        answer.send(Ok((offered(), Vec::new()))).unwrap();
+
+        let Arrival::Rows(said) = picker.settle() else {
+            panic!("the rows did not arrive");
+        };
+
+        assert_eq!(said, [t!(model_picker_unknown_name, model = "no-such")]);
+        assert_eq!(picker.chosen().expect("a model").key, "claude-3-sonnet");
+    }
+
+    /// CMD-17: a named model the list holds but a typed search filters out is not said to be
+    /// missing. The regression it rejects is an unknown-name check made among the rows the search
+    /// leaves, which tells a person the list lacks a model that is one keystroke from showing.
+    #[test]
+    fn a_named_model_the_search_filters_out_is_not_said_to_be_missing() {
+        for wanted in ["llama-3-8b-instruct", "Llama 3 8B"] {
+            let (answer, listing) = mpsc::channel();
+            let mut picker =
+                Picker::loading(Some("claude-3-sonnet"), listing).wanting(Some(wanted.to_string()));
+            typing(&mut picker, "claude");
+            answer.send(Ok((offered(), Vec::new()))).unwrap();
+
+            assert_eq!(picker.settle(), Arrival::Rows(Vec::new()), "{wanted}");
+
+            assert_eq!(
+                picker.chosen().expect("a model").key,
+                "claude-3-sonnet",
+                "{wanted}: the cursor left the rows the search shows"
+            );
+        }
     }
 
     /// A picker that has not been given its rows draws a line saying so, and the line goes when they
