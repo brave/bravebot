@@ -113,7 +113,8 @@ file that is not text is reported as binary, a picture being the exception. A UT
 file that begins with a byte order mark is shown decoded, and so is a file with a few bytes that
 are not UTF-8, such as Latin-1 text, with each such byte shown as U+FFFD. The result says when it
 decoded the file, and `edit_file` refuses a file that is not UTF-8, since it would write the file
-back as UTF-8.
+back as UTF-8. `write_file` refuses the same file when the trust map vouches for it, since the body
+would replace it as UTF-8, and replaces a file nobody vouched for as it would any other.
 
 **A picture is quarantined whatever the trust map says, and leaves quarantine only through
 [`vet_content`](#vet_content).** A file whose extension names a picture or a PDF comes back as a

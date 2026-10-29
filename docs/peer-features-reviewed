@@ -78,7 +78,7 @@ parity-session-insights filed #1583 9f14c42a3bf4 2026-10-05 Filed from a first p
 parity-session-recap filed #1580 9f14c42a3bf4 2026-10-05 Filed from a first pass over the peer tools, before this ledger recorded it; issue 1580 cites the gap id.
 parity-session-spend-limit filed #1575 9f14c42a3bf4 2026-10-05 Filed from a first pass over the peer tools, before this ledger recorded it; issue 1575 cites the gap id.
 parity-session-worktree filed #1571 9f14c42a3bf4 2026-10-05 Filed from a first pass over the peer tools, before this ledger recorded it; issue 1571 cites the gap id.
-parity-shared-skill-directories filed #1557 9f14c42a3bf4 2026-10-05 Filed from a first pass over the peer tools, before this ledger recorded it; issue 1557 cites the gap id.
+parity-shared-skill-directories filed #1557 9f14c42a3bf4 2026-10-05 Filed from a first pass over the peer tools, before this ledger recorded it; issue 1557 cites the gap id. The project half is INSTR-13 and the user half is INSTR-17 (read only for a directory named in sharedSkillDirectories).
 parity-shell-integration filed #1589 9f14c42a3bf4 2026-10-05 Filed from a first pass over the peer tools, before this ledger recorded it; issue 1589 cites the gap id.
 parity-skill-as-mode filed #1558 9f14c42a3bf4 2026-10-05 Filed from a first pass over the peer tools, before this ledger recorded it; issue 1558 cites the gap id.
 parity-skill-permission-rules covered - 9f14c42a3bf4 2026-10-04 A Read deny rule such as Read(.bravebot/skills/release-*/**) already keeps a skill from the prompt and from load_skill by name (docs/specs/permissions.md PERM-7, the paragraph on skills and definitions a rule covers, verified by...

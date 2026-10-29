@@ -75,6 +75,11 @@ would be laundering.
 Nothing is assumed from silence. An empty directory offers nothing, and putting a file there is
 the grant, on the same footing as the configuration that picks the model and the endpoint.
 
+The same provenance label applies to `~/.agents/skills` and `~/.claude/skills`, but only for a
+directory the person's settings name ([INSTR-17](instructions.md#INSTR-17)); an unnamed one is not
+read, so a file put there is no grant. The workspace exception below applies to each directory read
+this way, and the notice names the directory it counts.
+
 A skill file there whose path goes through the workspace is not read from provenance at all,
 because a turn can write it. The workspace here is every directory the file tools may write to:
 the working directory, a directory opened beside it ([TRUST-9](trust-map.md#TRUST-9)), and the
@@ -114,6 +119,10 @@ A workspace `AGENTS.md` and a project's skill directories are labelled as worksp
 TRUST decides. Each skill directory is checked for trust **before it is enumerated at all**,
 because a directory name is content too. Which directories those are, and in what order, is
 [INSTR-13](instructions.md#INSTR-13).
+
+The directories of another agent in the person's home are not read through the trust map. They are
+read by provenance for a directory the person named ([INSTR-17](instructions.md#INSTR-17),
+[SKILL-3](#SKILL-3)).
 
 `verified-by: bravebot_agent::skills::a_skill_in_an_untrusted_project_is_not_named_to_the_planner`
 `verified-by: bravebot_agent::skills::a_skill_the_trust_map_distrusts_stops_being_offered`
@@ -305,7 +314,8 @@ wording of a rule is answered from its heading, and the program holds the clause
 Where the interface lists skills for a person, it reads them through the same gate a turn does,
 under the session's trust map and its rules, so a skill a turn would drop is never listed and one a
 turn would offer is. Each skill records whether it was found in the project, in the person's own
-directory or in this program, and one that shadowed another records where it was found, not where
+directory (`~/.bravebot/skills` or a shared one they named, [INSTR-17](instructions.md#INSTR-17))
+or in this program, and one that shadowed another records where it was found, not where
 the one it shadowed was.
 
 The list draws names, descriptions and argument hints and loads no skill, so it does not list the
@@ -403,7 +413,10 @@ another agent carries one, and a line repeated every turn about something that i
 notice stops being read; but a key dropped in silence is a line whose author believes it is in force,
 which is how the next field added becomes another quiet no-op. `doctor` reads the set the way a turn
 would, so no skill a turn would drop is named there, and says nothing about a skill whose every key
-is read.
+is read. That includes a skill from a shared directory the person named
+([INSTR-17](instructions.md#INSTR-17)). `doctor` also names a shared directory that exists and is not
+named, in the same section, since a person who keeps skills for another agent would otherwise not
+learn that this program found the directory and left it alone.
 
 `verified-by: bravebot_agent::skills::an_effort_word_that_names_no_level_leaves_the_session_its_own`
 `verified-by: bravebot_agent::skills::an_effort_word_naming_no_level_is_reported_and_the_skill_still_loads`
@@ -411,6 +424,8 @@ is read.
 `verified-by: bravebot_cli::running::doctor_names_a_skill_key_nothing_reads`
 `verified-by: bravebot_cli::running::doctor_says_nothing_of_a_skill_with_every_key_read_or_one_a_turn_drops`
 `verified-by: bravebot_cli::running::doctor_names_a_projects_unread_key_only_where_the_directory_is_trusted`
+`verified-by: bravebot_cli::running::doctor_names_a_shared_skill_directory_it_left_alone`
+`verified-by: bravebot_cli::running::doctor_reads_a_named_shared_skill_directory_and_names_an_unread_key_in_it`
 `verified-by: bravebot_agent::turn::a_skill_whose_model_needs_a_sign_in_keeps_the_sessions_model_and_says_so`
 
 <a id="SKILL-18"></a>

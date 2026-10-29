@@ -33,6 +33,9 @@ pub(crate) fn current_workspace(
         .map(|workspace| {
             workspace.with_references(settings.references(), settings.references_unread())
         })
+        .map(|workspace| {
+            workspace.with_shared_skill_directories(settings.shared_skill_directories())
+        })
 }
 
 /// The directory this run writes what is not part of the project into, made and reachable.

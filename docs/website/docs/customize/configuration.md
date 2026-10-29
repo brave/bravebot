@@ -303,7 +303,7 @@ one thing leaves everything else in force:
 | `env`, `keybindings`, `sessionsKeys` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `agent`, `style`, `sharedSkillDirectories`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
 | `references` | your own file and a `--settings` file outside the project; a project or local file's block, and a `--settings` file that resolves inside the project, is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
@@ -358,6 +358,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `editorMode` | whether the input box edits the ordinary way or vi's ([below](#editormode)) |
 | `language` | the language the interface is in: a locale tag such as `fr`, or `auto`. Read from your own file only ([details](language.md)) |
 | `style` | the output style a session starts in: `concise`, `explanatory`, `proactive` or a file in `~/.bravebot/styles`. Read from your own file and the file `--settings` names only, and it cannot name a project's style from `.bravebot/styles` (pick that with `/style`) |
+| `sharedSkillDirectories` | the directories of skills kept for other agents to read: `~/.agents/skills`, `~/.claude/skills`, or both. Neither is read until named. Read from your own file and the file `--settings` names only ([details](skills.md#trust)) |
 | `limit` | the most tokens or premium requests a session may spend before it asks ([below](#limit)) |
 | `maxRunningDelegates` | the most delegates one turn may have running at once ([below](#maxrunningdelegates)) |
 | `env` | variables, in Claude Code's own shape |

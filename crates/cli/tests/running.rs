@@ -10813,6 +10813,82 @@ fn doctor_says_nothing_of_a_skill_with_every_key_read_or_one_a_turn_drops() {
     );
 }
 
+/// SKILL-16 with INSTR-17. A shared skill directory that exists and that `sharedSkillDirectories`
+/// does not name is said to be left alone, and the one that is absent is not mentioned. A `doctor`
+/// that said nothing leaves a person who keeps skills for another agent unable to tell the
+/// directory was found; one that listed both names a directory that is not there.
+#[test]
+fn doctor_names_a_shared_skill_directory_it_left_alone() {
+    let scratch = Scratch::new("cli-running-skill-shared-left-alone").with_file(
+        ".agents/skills/other/SKILL.md",
+        "---\nname: other\ndescription: kept for another agent\nallowed-tools: Read\n---\n\nbody\n",
+    );
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("~/.agents/skills exists and is not read"),
+        "doctor did not say the directory was left alone: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("~/.claude/skills"),
+        "doctor named a directory that is not there: {stdout}"
+    );
+    assert!(
+        !stdout.contains("skills/other/SKILL.md"),
+        "doctor read a skill from a directory nobody named: {stdout}"
+    );
+}
+
+/// SKILL-16 with INSTR-17. Once the directory is named it is read the way a turn would read it: the
+/// notice that it was left alone is gone, and a key nothing reads in a skill there is reported with
+/// the directory it was found in.
+#[test]
+fn doctor_reads_a_named_shared_skill_directory_and_names_an_unread_key_in_it() {
+    let scratch = Scratch::new("cli-running-skill-shared-named")
+        .with_settings(r#"{"sharedSkillDirectories": ["~/.claude/skills"]}"#)
+        .with_file(
+            ".claude/skills/imported/SKILL.md",
+            "---\nname: imported\ndescription: kept for another agent\nallowed-tools: \
+             Read\n---\n\nbody\n",
+        );
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        stdout.contains("~/.claude/skills/imported/SKILL.md") && stdout.contains("allowed-tools"),
+        "doctor did not name the unread key in the named directory: {stdout}{stderr}"
+    );
+    assert!(
+        !stdout.contains("exists and is not read"),
+        "doctor said a named directory was left alone: {stdout}"
+    );
+}
+
 /// SKILL-16 with SKILL-4 and TRUST-23. `doctor` reads a project's skills the way a turn there
 /// would, so it names one's unread key only where the directory has been vouched for. A skill with
 /// no description is one reason a turn drops a file and an unvouched directory is another, and a
@@ -11108,6 +11184,54 @@ fn a_run_given_the_workspace_flag_reads_a_project_file_as_trusted_and_writes_no_
         !scratch.path.join(".bravebot").join("trusted").exists(),
         "the flag kept an answer for later runs"
     );
+}
+
+/// INSTR-14, INSTR-16: a run carrying a session on has the path-scoped rule the earlier run's file
+/// read loaded in its first request, and a run carrying on a session that read nothing has not.
+/// A resume that dropped the names the record keeps would leave the rule out until the file was
+/// read again. The control is the second session, which makes the rule's absence mean something.
+#[test]
+fn a_continued_run_has_the_rule_the_earlier_runs_file_read_loaded() {
+    let (gateway, scratch, cwd) =
+        a_project_whose_notes_the_model_reads("cli-running-rule-continued");
+    std::fs::create_dir_all(cwd.join(".bravebot/rules")).expect("create the rules");
+    std::fs::write(
+        cwd.join(".bravebot/rules/notes.md"),
+        "---\npaths: [\"**/*.md\"]\n---\nTHE-RULE-FOR-NOTES\n",
+    )
+    .expect("write the rule");
+    let earlier = |prompt: &str| {
+        let run = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--trust-workspace", "--json", "-p", prompt],
+        );
+        let (stdout, stderr) = said(&run);
+        assert!(run.status.success(), "{stderr}");
+        session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"))
+    };
+    let read_it = earlier("read the notes");
+    let read_nothing = earlier("hello");
+    let _ = requests(&gateway);
+
+    for (session, expects_the_rule) in [(&read_nothing, false), (&read_it, true)] {
+        let run = bravebot_started_in(
+            &scratch.path,
+            &cwd,
+            AT_A_GATEWAY,
+            &["--trust-workspace", "--resume", session, "-p", "and again"],
+        );
+        let (_, stderr) = said(&run);
+        assert!(run.status.success(), "{stderr}");
+        let sent = requests(&gateway);
+        let first = sent.first().expect("the run sent a request");
+        assert_eq!(
+            first.contains("THE-RULE-FOR-NOTES"),
+            expects_the_rule,
+            "the first request of the run continuing {session}: {first}"
+        );
+    }
 }
 
 /// TRUST-26. A run carrying on an earlier session keeps the map that session recorded and adds the

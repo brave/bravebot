@@ -202,6 +202,7 @@ fn a_session_is_named_once_there_is_a_record_to_name() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -256,6 +257,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
     handle.append_audit(
@@ -339,6 +341,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
     assert_eq!(sessions::list(&scratch.project).len(), 1);
@@ -375,6 +378,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
     assert_eq!(sessions::list(&elsewhere).len(), 1);
@@ -412,6 +416,7 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
     let listed = sessions::list(&scratch.project);
@@ -593,6 +598,7 @@ fn the_audit_keeps_the_time_each_event_happened() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -662,6 +668,7 @@ fn renaming_a_session_rewrites_the_record_immediately() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
     let derived = sessions::list(&scratch.project)[0].title.clone();
@@ -711,6 +718,7 @@ fn a_chosen_name_survives_the_next_turn() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -786,6 +794,7 @@ fn a_resumed_session_can_still_open_the_directory_it_added() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -856,6 +865,7 @@ fn a_directory_that_has_gone_since_is_reported_on_resume() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
     std::fs::remove_dir_all(&notes).expect("the directory goes away between sessions");
@@ -912,6 +922,7 @@ fn a_manifest_run_is_recorded_and_cannot_be_resumed() {
             manifest: Some(&stored),
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -961,6 +972,7 @@ fn the_session_continued_is_the_one_written_here() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -1004,6 +1016,7 @@ fn the_session_continued_is_the_one_written_here() {
             manifest: Some(&stored),
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -1054,6 +1067,7 @@ fn a_session_that_changes_directory_is_recorded_where_it_moved_to() {
         manifest: None,
         rewind: &[],
         checkouts: &[],
+        touched: None,
     };
 
     let nothing_vouched_for = TrustStore::new("/work");
@@ -1132,6 +1146,7 @@ fn a_session_that_moves_before_anything_is_written_is_recorded_where_it_moved_to
         manifest: None,
         rewind: &[],
         checkouts: &[],
+        touched: None,
     };
 
     let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
@@ -1204,6 +1219,7 @@ fn a_record_written_before_the_first_turn_follows_the_session_when_it_moves() {
         manifest: None,
         rewind: &[],
         checkouts: &[],
+        touched: None,
     };
 
     let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
@@ -1262,6 +1278,7 @@ fn session_records_and_audit_trails_are_written_mode_0600() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -1372,6 +1389,7 @@ fn pre_existing_session_files_and_directories_are_tightened_on_write() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -1461,6 +1479,7 @@ fn forking_narrows_the_session_directory_it_writes_into() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
     handle.append_audit(
@@ -1525,6 +1544,7 @@ fn a_question_asked_beside_the_work_survives_a_resume() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -1598,6 +1618,7 @@ fn a_pasted_picture_is_kept_with_the_session_and_comes_back_on_a_resume() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -1661,6 +1682,7 @@ fn an_answer_the_planner_could_not_have_held_is_not_written_down() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -1731,6 +1753,7 @@ fn a_rewind_point_survives_being_written_and_read_back() {
             manifest: None,
             rewind: &[point],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -1822,6 +1845,7 @@ fn what_a_file_nobody_vouched_for_held_is_not_written_down() {
             manifest: None,
             rewind: &[point],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -1961,6 +1985,7 @@ fn backup_capture_trust_overrides_a_stale_pre_turn_grant() {
             manifest: None,
             rewind: &[point],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -2079,6 +2104,7 @@ fn a_path_vouched_for_inside_the_turn_keeps_what_it_held_out_of_the_record() {
             manifest: None,
             rewind: &[point],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -2156,6 +2182,7 @@ fn a_rewind_point_keeps_no_cache_figure_in_the_record() {
             manifest: None,
             rewind: &[point],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -2229,6 +2256,7 @@ fn a_rename_takes_the_points_it_gave_up_out_of_the_record() {
             manifest: None,
             rewind: &[point],
             checkouts: &[],
+            touched: None,
         },
     );
 
@@ -2367,6 +2395,7 @@ fn completed_failed_and_stopped_usage_survives_session_storage() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
     let record = sessions::load(&scratch.project, handle.id()).unwrap();
@@ -2568,6 +2597,7 @@ mod completed_usage {
                     manifest: None,
                     rewind: &[],
                     checkouts: &[],
+                    touched: None,
                 },
             );
             let record = sessions::load(root, stored.id()).unwrap();
@@ -2635,6 +2665,7 @@ mod preserved_history {
                 manifest: None,
                 rewind: session.rewind.points(),
                 checkouts: &[],
+                touched: None,
             },
         );
         sessions::load(root, handle.id()).unwrap()
@@ -4943,6 +4974,7 @@ fn failed_and_stopped_manifest_usage_survives_session_reload() {
                     manifest: None,
                     rewind: &[],
                     checkouts: &[],
+                    touched: None,
                 },
                 &[],
             )
@@ -5223,6 +5255,7 @@ mod manifest_file_trust {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
             },
             &[],
         );
@@ -5344,6 +5377,7 @@ fn a_record_keeps_the_checkouts_a_resume_reads_back_and_a_fork_does_not_carry() 
             manifest: None,
             rewind: &[],
             checkouts: std::slice::from_ref(&kept),
+            touched: None,
         },
     );
 
@@ -5422,6 +5456,7 @@ fn the_checkouts_the_records_list_are_every_id_and_none_where_one_cannot_be_read
             manifest: None,
             rewind: &[],
             checkouts: std::slice::from_ref(&kept),
+            touched: None,
         },
     );
     assert_eq!(
@@ -5476,6 +5511,7 @@ fn the_checkouts_no_record_lists_are_named_and_nothing_is_named_where_a_record_i
             manifest: None,
             rewind: &[],
             checkouts: std::slice::from_ref(&kept),
+            touched: None,
         },
     );
 
@@ -5527,6 +5563,7 @@ fn a_record_from_before_checkouts_were_kept_reads_as_having_none() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
     let path = sessions::project_directory(&scratch.project)
@@ -5571,6 +5608,7 @@ fn a_checkout_that_is_not_where_the_record_put_it_is_named_on_resume() {
                 manifest: None,
                 rewind: &[],
                 checkouts,
+                touched: None,
             },
         );
     };
@@ -5649,6 +5687,7 @@ fn a_resume_that_restores_no_checkout_still_writes_the_records_checkouts_back() 
                 manifest: None,
                 rewind: &[],
                 checkouts,
+                touched: None,
             },
         );
     };
@@ -5717,6 +5756,7 @@ fn recorded(project: &Path, title: &str, manifest: bool) -> String {
             manifest: manifest.then_some(&stored),
             rewind: &[],
             checkouts: &[],
+            touched: None,
         },
     );
     handle.id().to_string()
@@ -5864,6 +5904,7 @@ fn a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only() {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
             }
         };
     }

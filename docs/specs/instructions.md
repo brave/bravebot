@@ -25,7 +25,11 @@ It does not cover what a skill file looks like or what any source is trusted for
 ## The sources
 
 <a id="INSTR-1"></a>
-### INSTR-1: thirteen sources kept as files, and no others
+### INSTR-1: thirteen sources kept as files, two more only when named, and no others
+
+The table lists the files read without being asked. Two more, `~/.agents/skills/<name>/SKILL.md` and
+`~/.claude/skills/<name>/SKILL.md`, apply to every project and are read only for the directory
+the person's settings name ([INSTR-17](#INSTR-17)).
 
 | File | Applies to |
 |---|---|
@@ -51,8 +55,9 @@ way in a dotted directory rather than at the root where `AGENTS.md` sits.
 wrote its skills for another agent should not have them ignored over the spelling, and copying or
 symlinking each one into `.bravebot/skills` is work the project should not have to do.
 [INSTR-13](#INSTR-13) is their order and the root they are read at. The user's own
-`~/.claude/skills` and `~/.agents/skills` are not sources, because [INSTR-2](#INSTR-2) tries no
-user directory but `~/.bravebot`.
+`~/.claude/skills` and `~/.agents/skills` are sources only once the person's own settings name them
+([INSTR-17](#INSTR-17)); until then they are not read, because [INSTR-2](#INSTR-2) tries no user
+directory but `~/.bravebot` without that agreement.
 
 The command line is a source that is not a file, and [INSTR-10](#INSTR-10) is the whole of it.
 
@@ -95,6 +100,9 @@ It is `.bravebot` inside the home directory the environment gives. When there is
 name is empty, there is no user directory and everything kept there is simply absent. Nothing is
 guessed and no other location is tried.
 
+The one addition is a directory the person has named in `sharedSkillDirectories`
+([INSTR-17](#INSTR-17)). That is the person choosing the directory, which is what a fallback lacks.
+
 **Why.** A fallback would read instructions from a directory the user never chose, and this is
 the one place whose contents are trusted for being the user's own. Daemons and containers run
 without a home, and everything kept there is optional, so absence is a case to do without rather
@@ -127,6 +135,8 @@ this" is what keeps that unambiguous.
 
 The user's own directory is read before the project. Both `AGENTS.md` files are read and both
 reach the planner, in that order, and a project skill replaces a global one of the same name.
+A skill in `~/.bravebot/skills` replaces one of the same name in a shared directory the person
+named ([INSTR-17](#INSTR-17)), and a project skill replaces both.
 This is the same "most specific wins" rule the trust map uses for paths.
 
 **Why.** A habit carried between projects should hold until the project says otherwise. Shadowing
@@ -497,14 +507,15 @@ after the skipped one, including a directory [INSTR-14](#INSTR-14) adds. It leav
 with the directory name of a skill on the list from such a root. That skill is on the list a person
 can see, so counting the entry as not loaded would contradict what is in front of them. The
 untrusted root is asked only whether it holds an entry of each such name, and none of its own names
-is held or compared. A built-in skill, a skill from `~/.bravebot` and a skill from a less specific
+is held or compared. A built-in skill, a skill from `~/.bravebot`, a skill from a shared directory
+the person named ([INSTR-17](#INSTR-17)) and a skill from a less specific
 root leave the count as it is, and so does a skill that a more specific one of the same name took
 off the list. A root whose every skill was covered that way is not reported at all.
 
-**Why not the user's own `~/.claude/skills` and `~/.agents/skills`.** [INSTR-2](#INSTR-2) tries no
-user directory but `~/.bravebot`, and reading instructions from a directory the person never chose
-here is the fallback that clause refuses. Adding them is a separate decision and is not settled
-here.
+**Why not the user's own `~/.claude/skills` and `~/.agents/skills` by default.** [INSTR-2](#INSTR-2)
+tries no user directory but `~/.bravebot`, and reading instructions from a directory the person never
+chose is the fallback that clause refuses. They are read only when the person names them
+([INSTR-17](#INSTR-17)).
 
 `verified-by: bravebot_agent::skills::a_bravebot_skill_shadows_a_foreign_one_of_the_same_name`
 `verified-by: bravebot_agent::skills::a_foreign_skills_directory_below_the_root_is_not_a_source`
@@ -539,8 +550,12 @@ file, or which skills directory with a count, and never what it holds ([SKILL-4]
 
 Composed per turn like every other source ([INSTR-7](#INSTR-7)): a file read in a turn takes effect
 from the next turn, and the turn that read it keeps the instructions it started with. The record is
-the session's, so it is empty again in a resumed session and after `/cd`. [INSTR-16](#INSTR-16)
-reads the files of the same record.
+the session's, so it is empty after `/cd`. The session's record keeps the directories as names, and a
+resumed session places each by its spelling under the root again, so a name that now lands outside
+the root adds nothing. The text of the files they name is read on the first turn of the resumed
+session as on any other, through the trust map. A fork carries the names with the conversation it
+copies ([SESSION-3](sessions.md#SESSION-3)). [INSTR-16](#INSTR-16) reads the files of the same
+record.
 
 **Why.** A package in a monorepo has conventions the project's root file cannot state without
 every turn carrying every package's. Reading downward only into directories the planner chose, and
@@ -562,6 +577,12 @@ which file is read.
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_and_not_named`
 `verified-by: bravebot_agent::skills::a_distrusted_nested_skill_is_counted_beside_a_shallower_one_of_its_name`
 `verified-by: bravebot_agent::skills::a_nested_skill_on_the_list_covers_a_distrusted_project_entry_of_its_name`
+`verified-by: bravebot_agent::preamble::a_workspace_restored_from_a_record_composes_the_nested_file_and_the_rule_of_the_run_before`
+`verified-by: bravebot_agent::workspace::a_workspace_restored_from_a_record_places_each_name_under_the_root_and_keeps_the_limits`
+`verified-by: bravebot_session::sessions::the_names_the_file_tools_reached_are_written_and_read_back`
+`verified-by: bravebot_session::sessions::a_record_from_before_touched_names_were_kept_reads_as_having_none`
+`verified-by: bravebot_session::sessions::a_fork_carries_the_names_the_file_tools_reached`
+`verified-by: bravebot_cli::running::a_continued_run_has_the_rule_the_earlier_runs_file_read_loaded`
 `verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_read`
 `verified-by: bravebot_agent::turn::a_nested_agents_file_reaches_the_turn_after_a_file_beside_it_is_written`
 `verified-by: bravebot_agent::workspace::moving_the_working_directory_forgets_the_directories_worked_in`
@@ -675,8 +696,8 @@ during a turn takes effect on the next one. A rule in force on every turn, and a
 has already brought in when the turn begins, is measured by [INSTR-15](#INSTR-15) as an
 `AGENTS.md` is.
 
-The record of touched files is INSTR-14's, kept beside its directories: the session's, empty again
-in a resumed session and after `/cd`, and at most 1024 files, which are compared with a held rule's
+The record of touched files is INSTR-14's, kept beside its directories: the session's, empty after
+`/cd`, and at most 1024 files, which are compared with a held rule's
 globs once when a turn begins and once more for each file touched after. A front end that builds a
 workspace for each turn hands it on with the checkouts the session keeps
 ([CHECKOUT-16](checkouts.md#CHECKOUT-16)), so the record outlives a turn there too.
@@ -696,8 +717,11 @@ rule for the 1025th. A rule that arrives while a turn runs changes the system me
 where [BACKEND-27](backends.md#BACKEND-27) and [BACKEND-32](backends.md#BACKEND-32) put their first
 breakpoint, so the next request reads the system prompt and the history in front of it again at
 full price, once per request that adds a rule. A rule that arrives while a turn runs is not
-measured by [INSTR-15](#INSTR-15) until the next turn begins. A resumed session loads a path-scoped
-rule again only when a file it matches is touched again.
+measured by [INSTR-15](#INSTR-15) until the next turn begins. The session's record keeps the names
+of the files touched and of the rules told, so a resumed session has the rules its earlier turns
+loaded from its first turn, read again through the trust map and the `deny` rules. A name in a
+record is placed under the root by its spelling as a typed name is, and the 1024-file limit holds
+for a record as for a live session.
 
 `verified-by: bravebot_agent::preamble::a_rule_with_paths_is_in_the_prompt_only_after_a_file_it_matches_is_touched`
 `verified-by: bravebot_agent::preamble::a_loaded_rule_goes_after_everything_else_in_the_prompt`
@@ -710,6 +734,9 @@ rule again only when a file it matches is touched again.
 `verified-by: bravebot_agent::preamble::a_rule_whose_frontmatter_or_paths_list_never_closes_is_left_out_with_a_notice`
 `verified-by: bravebot_agent::preamble::the_persons_rules_are_not_read_by_a_way_that_goes_through_the_workspace`
 `verified-by: bravebot_agent::preamble::a_rule_stays_in_force_for_the_turns_after_the_file_that_loaded_it`
+`verified-by: bravebot_agent::preamble::a_workspace_restored_from_a_record_composes_the_nested_file_and_the_rule_of_the_run_before`
+`verified-by: bravebot_session::sessions::the_names_the_file_tools_reached_are_written_and_read_back`
+`verified-by: bravebot_cli::running::a_continued_run_has_the_rule_the_earlier_runs_file_read_loaded`
 `verified-by: bravebot_agent::preamble::a_long_rule_file_in_force_is_measured_like_an_instructions_file`
 `verified-by: bravebot_agent::preamble::a_rule_file_whose_name_is_not_text_is_not_read_as_the_one_its_lossy_spelling_names`
 `verified-by: bravebot_agent::rules::a_block_list_names_one_glob_a_line`
@@ -745,6 +772,44 @@ rule again only when a file it matches is touched again.
 `verified-by: bravebot_agent::workspace::a_workspace_given_what_the_session_kept_has_the_files_it_touched`
 `verified-by: bravebot_agent::workspace::the_files_touched_stop_at_a_thousand_and_twenty_four`
 `verified-by: bravebot_agent::safe::a_safe_session_reads_no_rule_file`
+
+<a id="INSTR-17"></a>
+### INSTR-17: the user's `~/.agents/skills` and `~/.claude/skills` are read only for a directory the person's settings name
+
+`sharedSkillDirectories` is a list of strings in `~/.bravebot/settings.json` or the file `--settings`
+names. Each entry is compared, after trimming white space and a trailing `/`, with the two strings
+`~/.agents/skills` and `~/.claude/skills`, and a directory that matches is read from the home
+directory. An entry matching neither names nothing, and no other directory can be reached through the
+key. With the key absent, empty or not a list, neither directory is read. This is the default and it
+is the only consent there is: no question is put to the person, and no answer to one is kept.
+
+A project's settings files cannot set it, as they cannot set `style` ([INSTR-12](#INSTR-12)). Naming
+a directory puts every skill in it in front of the planner, so a checkout choosing it would be
+choosing what the person's home contributes to the prompt. A layer that wrote it is listed by
+`doctor` and the Sessions screen as ignored.
+
+A named directory is the person's own, so its skills are labelled from provenance as the skills in
+`~/.bravebot/skills` are, with the exception [SKILL-3](skills.md#SKILL-3) makes for a path the
+workspace can write to or reach through. They are read before `~/.bravebot/skills`, `.agents/skills`
+first, so a skill in `~/.bravebot/skills` shadows one of the same name in either, and a project skill
+shadows all of them ([INSTR-4](#INSTR-4)).
+
+`doctor` names a directory of the two that exists and is not named, so a person who keeps skills for
+another agent is told they were found and left alone. That is decided from the two fixed paths and
+the key, and nothing a directory holds is read to decide it.
+
+**Why.** [INSTR-2](#INSTR-2) refuses a fallback to a directory the person never chose. Reading the
+two directories by default would be one, and a person may keep skills there for another agent
+without wanting this program to offer them. Naming a directory is the person choosing it.
+
+`verified-by: bravebot_config::settings::a_project_layer_cannot_name_a_shared_skill_directory`
+`verified-by: bravebot_agent::skills::a_shared_skill_directory_the_person_did_not_name_is_not_read`
+`verified-by: bravebot_agent::skills::a_named_shared_skill_directory_is_read_and_the_other_is_not`
+`verified-by: bravebot_agent::skills::a_bravebot_skill_shadows_a_shared_one_and_the_projects_shadows_both`
+`verified-by: bravebot_agent::skills::the_agents_shared_directory_is_read_before_the_claude_one`
+`verified-by: bravebot_agent::skills::a_named_shared_skill_can_be_kept_by_a_definition_and_reaches_its_own_directory`
+`verified-by: bravebot_agent::skills::a_named_shared_skill_directory_reached_through_the_workspace_is_not_read_and_is_said`
+`verified-by: bravebot_agent::safe::a_safe_session_reads_no_named_shared_skill_directory`
 
 ## Known costs
 

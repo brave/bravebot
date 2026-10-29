@@ -554,6 +554,17 @@ pub struct Record {
     /// `None` for a record written before this was kept, and for a session in no mode.
     #[serde(default)]
     pub skill_mode: Option<String>,
+    /// The names the session's file tools reached, with the rule files they brought into the
+    /// prompt and the ones the person was told of (INSTR-14, INSTR-16).
+    ///
+    /// Names the driver recorded from what the planner and the person typed, and nothing a file
+    /// holds. A resume places each by its spelling under the root again and the text of what they
+    /// name is read on the first turn as on any other, so a name that is gone or not vouched for
+    /// adds nothing. A fork carries it with the conversation it copies (SESSION-3).
+    ///
+    /// Empty for a record written before this was kept, and for a session that touched nothing.
+    #[serde(default)]
+    pub touched: bravebot_agent::workspace::TouchedRecord,
 }
 
 /// A kept checkout as it is written down.
@@ -1516,6 +1527,7 @@ pub fn record_manifest_run(
             rewind: &[],
             // None: a manifest run starts no delegate in a checkout of its own.
             checkouts: &[],
+            touched: None,
         },
     );
     Some(handle.id().to_string())
@@ -1875,6 +1887,9 @@ pub struct Standing<'a> {
     pub rewind: &'a [RewindPoint],
     /// The checkouts the session keeps (CHECKOUT-15).
     pub checkouts: &'a [bravebot_agent::workspace::SessionCheckout],
+    /// What the session's file tools reached, for the record to carry (INSTR-14, INSTR-16). `None`
+    /// writes none, which is what a front end that keeps no workspace of its own has.
+    pub touched: Option<&'a bravebot_agent::workspace::TouchedRecord>,
 }
 
 /// One turn, as it is added to a record that already exists.
@@ -1978,6 +1993,9 @@ pub struct Handle {
     agent: Option<String>,
     /// The skill `/mode` has in force, for the record to carry (SKILL-21).
     skill_mode: Option<String>,
+    /// What the session's file tools reached as of the last save that gave it, written again by a
+    /// save that gives none (INSTR-14, INSTR-16).
+    touched: bravebot_agent::workspace::TouchedRecord,
     /// Whether a record for this id is on disk yet.
     ///
     /// An id exists from the first moment, but a session that was opened and abandoned leaves
@@ -2157,6 +2175,7 @@ impl Handle {
             written: Vec::new(),
             agent: None,
             skill_mode: None,
+            touched: bravebot_agent::workspace::TouchedRecord::default(),
             wrote: false,
             server_children_may_run: false,
             build: build.to_string(),
@@ -2231,6 +2250,7 @@ impl Handle {
             written: record.written.clone(),
             agent: record.agent.clone(),
             skill_mode: record.skill_mode.clone(),
+            touched: record.touched.clone(),
             // The record it came from is the one being written back to.
             wrote: true,
             server_children_may_run: record.server_children_may_run(),
@@ -2402,6 +2422,12 @@ impl Handle {
     /// (SKILL-21). Written with the next save.
     pub fn set_skill_mode(&mut self, name: Option<String>) {
         self.skill_mode = name;
+    }
+
+    /// Record what the session's file tools have reached, for the next save to write when it
+    /// gives none of its own (INSTR-14, INSTR-16).
+    pub fn set_touched(&mut self, touched: bravebot_agent::workspace::TouchedRecord) {
+        self.touched = touched;
     }
 
     /// Only a name: each turn resolves it again, so it can name a skill that has since gone.
@@ -2625,6 +2651,10 @@ impl Handle {
                 .collect(),
             agent: self.agent.clone(),
             skill_mode: self.skill_mode.clone(),
+            touched: match standing.touched {
+                Some(touched) => touched.clone(),
+                None => self.touched.clone(),
+            },
         };
 
         self.write(&directory, &mut record);
@@ -2719,6 +2749,7 @@ impl Handle {
         record.front = Some(self.front.recorded().to_string());
         record.agent = self.agent.clone();
         record.skill_mode = self.skill_mode.clone();
+        record.touched = self.touched.clone();
         // The handle holds every note typed on this session, including ones added after the record
         // this continuation was read from.
         record.notes = self.notes.clone();
@@ -6314,6 +6345,7 @@ mod tests {
             manifest: None,
             rewind: Vec::new(),
             checkouts: Vec::new(),
+            touched: Default::default(),
             agent: None,
             skill_mode: None,
         }
@@ -6501,6 +6533,7 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
             },
         );
     }
@@ -6697,6 +6730,7 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
             },
         );
         source.append_audit(
@@ -6986,6 +7020,7 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
             },
         );
         handle.append_audit(
@@ -7042,6 +7077,7 @@ mod tests {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
         };
         let recorded = |handle: &Handle| load(&root, handle.id()).expect("the record").title;
 
@@ -7098,6 +7134,7 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
             },
         );
 
@@ -7149,6 +7186,7 @@ mod tests {
                     manifest: None,
                     rewind: &[],
                     checkouts: &[],
+                    touched: None,
                 },
             );
             handle.append_audit(
@@ -7557,6 +7595,7 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
             },
         );
         let record = load(&root, handle.id()).expect("the record was written");
@@ -7974,6 +8013,106 @@ mod tests {
         assert!(record.notes.is_empty());
     }
 
+    /// A touched record with one of each kind of name.
+    fn a_touched_record() -> bravebot_agent::workspace::TouchedRecord {
+        bravebot_agent::workspace::TouchedRecord {
+            directories: vec!["pkg".to_string()],
+            files: vec!["pkg/a.rs".to_string()],
+            rules: vec![".bravebot/rules/rust.md".to_string()],
+            told: vec![".bravebot/rules/rust.md".to_string()],
+        }
+    }
+
+    /// INSTR-14, INSTR-16: a save that gives the names the file tools reached writes them, a resume
+    /// reads them back, and a later save that gives none writes the ones the handle holds. A
+    /// record that dropped them would put a resumed session back with no nested instructions and
+    /// no path-scoped rule until it touched the file again.
+    #[test]
+    fn the_names_the_file_tools_reached_are_written_and_read_back() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-touched");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        let touched = a_touched_record();
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        let trust = a_vouched_root(&root);
+        let (spend, timing, todos) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let programs = TrustedPrograms::default();
+        let standing = |touched| Standing {
+            history: None,
+            conversation: &snapshot,
+            turns: 1,
+            tokens: 0,
+            split: Default::default(),
+            spend: &spend,
+            timing: &timing,
+            model: None,
+            todos: &todos,
+            asides: &[],
+            trust: &trust,
+            programs: &programs,
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+            checkouts: &[],
+            touched,
+        };
+
+        handle.save("first", standing(Some(&touched)));
+        assert_eq!(
+            load(&root, handle.id()).expect("the record").touched,
+            touched
+        );
+
+        let id = handle.id().to_string();
+        // The first handle holds the record's lock for as long as it lives (SESSION-38).
+        drop(handle);
+        let record = load(&root, &id).expect("the record");
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
+        resumed.save("second", standing(None));
+        assert_eq!(
+            load(&root, &id).expect("the record").touched,
+            touched,
+            "a save that gave none wrote over what the record held"
+        );
+    }
+
+    /// INSTR-14, INSTR-16: a record written before the names were kept has no field for them, and
+    /// reads as having touched nothing rather than failing.
+    #[test]
+    fn a_record_from_before_touched_names_were_kept_reads_as_having_none() {
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        written
+            .as_object_mut()
+            .expect("an object")
+            .remove("touched")
+            .expect("the touched names are written");
+
+        let record: Record = serde_json::from_value(written).expect("an older record reads");
+
+        assert!(record.touched.is_empty());
+    }
+
+    /// SESSION-18, INSTR-16: a fork carries the touched names with the conversation it copies. The
+    /// copy's first request is a continuation of that conversation, and the rules the original had
+    /// loaded are the ones that conversation was written under.
+    #[test]
+    fn a_fork_carries_the_names_the_file_tools_reached() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-touched-fork");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_touched(a_touched_record());
+        save_a_turn_session(&mut handle);
+
+        let copy = fork(&root, handle.id()).expect("a fork");
+
+        assert_eq!(copy.touched, a_touched_record());
+    }
+
     /// Save turn `turns` of `handle` with the trust map `trust`, as a turn of a resumed session does.
     fn save_a_turn_with(handle: &mut Handle, turns: usize, prompt: &str, trust: &TrustStore) {
         let snapshot = bravebot_agent::Conversation::new().snapshot();
@@ -7996,6 +8135,7 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
             },
         );
     }
@@ -8251,6 +8391,7 @@ mod tests {
                 manifest: None,
                 rewind: &[],
                 checkouts: &[],
+                touched: None,
             },
         );
 

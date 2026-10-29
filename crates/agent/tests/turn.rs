@@ -9072,6 +9072,231 @@ fn an_untrusted_pre_image_converts_nothing() {
     );
 }
 
+/// WRITE-8. A `write_file` over a file the trust map vouches for that is text in another encoding
+/// (UTF-16 with a mark, Latin-1) is refused before anyone is asked, as `edit_file` refuses it, and
+/// the file keeps its bytes. Without the refusal the approved body lands as UTF-8 and the file's
+/// encoding is gone.
+#[test]
+fn a_write_over_a_vouched_file_in_another_encoding_is_refused_before_anyone_is_asked() {
+    let utf16: Vec<u8> = [0xFFu8, 0xFE]
+        .into_iter()
+        .chain("alpha\r\n".encode_utf16().flat_map(u16::to_le_bytes))
+        .collect();
+    let latin1: Vec<u8> = b"caf\xe9 au lait\n".to_vec();
+    for (name, original) in [("wide.txt", utf16), ("latin1.txt", latin1)] {
+        let scratch = Scratch::new("write-other-encoding-vouched");
+        std::fs::write(scratch.path.join(name), &original).unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2(
+                "write_file",
+                &format!(r#"{{"path":"{name}","contents":"new text\n"}}"#),
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut confirmer = RecordingConfirmer::approving();
+
+        let mut trust = bravebot_core::trust::TrustStore::new("/work");
+        trust.trust(".");
+        let task = Task::new("rewrite the file");
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut confirmer,
+            &mut sink,
+            trust,
+        )
+        .expect("turn runs");
+
+        assert_eq!(
+            std::fs::read(scratch.path.join(name)).unwrap(),
+            original,
+            "{name}: a write replaced a file in another encoding with UTF-8"
+        );
+        assert!(
+            confirmer.seen.is_empty(),
+            "{name}: the person was asked to approve a write that could not land"
+        );
+        let last = received.try_iter().last().expect("a final request");
+        let (_, result) = last
+            .split_once("Result of write_file")
+            .expect("the write's result was sent");
+        assert!(
+            result.contains("encoding other than UTF-8"),
+            "{name}: the planner was not told why: {result}"
+        );
+    }
+}
+
+/// WRITE-8. What encoding a file uses is a fact about its bytes, so only a file the trust map
+/// vouches for is refused on it. Over a file nobody vouched for the body replaces the file as
+/// WRITE-1 says, which is unchanged behaviour. What the new code decides here is that the gate is
+/// not asked: `holds_another_encoding` answers `false` from the label, and a version that asked
+/// `read_trusted_content` about untrusted bytes would record a blocked gate, so `outcome.clean`
+/// is the assertion that rejects it.
+#[test]
+fn a_write_over_an_unvouched_file_in_another_encoding_replaces_it() {
+    let scratch = Scratch::new("write-other-encoding-unvouched");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    let wide: Vec<u8> = [0xFFu8, 0xFE]
+        .into_iter()
+        .chain("alpha\r\n".encode_utf16().flat_map(u16::to_le_bytes))
+        .collect();
+    std::fs::write(scratch.path.join("vendor/wide.txt"), wide).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2(
+            "write_file",
+            r#"{"path":"vendor/wide.txt","contents":"new text\n"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    trust.distrust("vendor");
+    let task = Task::new("rewrite vendor/wide.txt");
+    let outcome = turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read(scratch.path.join("vendor/wide.txt")).unwrap(),
+        b"new text\n",
+        "a file nobody vouched for was refused on its encoding"
+    );
+    assert!(
+        outcome.clean,
+        "an ordinary write over an unvouched file recorded a blocked gate"
+    );
+}
+
+/// WRITE-8. A `contents_ref` write over a vouched file in another encoding is refused as a
+/// `contents` write is: the encoding is the file's, not the body's. The reference names a read of
+/// an unvouched file, so the body is quarantined and the destination is the only vouched side.
+/// Without the refusal the quarantined text lands as UTF-8 over the Latin-1 file.
+#[test]
+fn a_contents_ref_write_over_a_vouched_file_in_another_encoding_is_refused_before_anyone_is_asked()
+{
+    let scratch = Scratch::new("write-other-encoding-contents-ref");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(scratch.path.join("vendor/source.txt"), "from vendor\n").unwrap();
+    let original: Vec<u8> = b"caf\xe9 au lait\n".to_vec();
+    std::fs::write(scratch.path.join("a.txt"), &original).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"vendor/source.txt"}"#),
+        tool_request_2("write_file", r#"{"path":"a.txt","contents_ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let mut trust = bravebot_core::trust::TrustStore::new("/work");
+    trust.trust(".");
+    trust.distrust("vendor");
+    let task = Task::new("replace a.txt with the quarantined text from vendor/source.txt");
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+        trust,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        std::fs::read(scratch.path.join("a.txt")).unwrap(),
+        original,
+        "a contents_ref write replaced a file in another encoding with UTF-8"
+    );
+    assert!(
+        confirmer.seen.is_empty(),
+        "the person was asked to approve a write that could not land: {:?}",
+        confirmer.seen
+    );
+    let last = received.try_iter().last().expect("a final request");
+    let (_, result) = last
+        .split_once("Result of write_file")
+        .expect("the write's result was sent");
+    assert!(
+        result.contains("encoding other than UTF-8"),
+        "the planner was not told why: {result}"
+    );
+}
+
+/// WRITE-8, CHECKOUT-14. A file of a kept checkout brought back over a vouched file in another
+/// encoding is refused on its own line before the person is asked, since it takes the gate a
+/// `contents_ref` write takes and lands as UTF-8. The working directory's file keeps its bytes.
+#[test]
+fn a_checkout_file_brought_back_over_a_vouched_file_in_another_encoding_is_refused_before_the_person_is_asked()
+ {
+    let (workspace, scratch, home, trust) = a_checkout_kept_after_a_worker_wrote(
+        "checkout-apply-other-encoding",
+        &[("out.txt", "from the delegate")],
+    );
+    let original: Vec<u8> = b"caf\xe9 au lait\n".to_vec();
+    std::fs::write(scratch.path.join("out.txt"), &original).unwrap();
+    let config = config_for("http://127.0.0.1:1");
+    let egress = bravebot_net::Egress::new();
+    let task = Task::new("/checkouts apply c1").with_home(Some(home.path.clone()));
+
+    let mut approving = RecordingConfirmer::approving();
+    let mut sink = RecordingSink::new();
+    let applied = turn::apply_checkout_asked_for(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        "c1",
+        &[],
+        &mut approving,
+        &mut sink,
+        trust,
+    )
+    .expect("a kept checkout is applied");
+
+    assert!(
+        approving.seen.is_empty(),
+        "the person was asked about a file that cannot land: {:?}",
+        approving.seen
+    );
+    assert!(!applied.applied, "{}", applied.text);
+    assert!(
+        applied.text.contains("encoding other than UTF-8"),
+        "{}",
+        applied.text
+    );
+    assert_eq!(
+        std::fs::read(scratch.path.join("out.txt")).unwrap(),
+        original,
+        "an apply replaced a file in another encoding with UTF-8"
+    );
+}
+
 /// WRITE-6. A `contents_ref` body is bytes nobody has read, over a file the trust map vouches
 /// for and whose format WRITE-6 would otherwise take. The quarantined text lands exactly as it
 /// was quarantined, not reformatted into the file it replaces: converting it would be reading a
@@ -13883,7 +14108,7 @@ fn a_write_creating_a_file_releases_nothing_of_the_file_it_does_not_replace() {
 #[test]
 fn a_write_over_a_file_that_is_not_text_says_it_replaced_it() {
     let scratch = Scratch::new("write-over-binary");
-    std::fs::write(scratch.path.join("notes.md"), [0xff, 0xfe, 0x00, 0x01]).unwrap();
+    std::fs::write(scratch.path.join("notes.md"), [0x89, 0x00, 0x01, 0x00]).unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
     let (endpoint, received) = serve_sequence(vec![

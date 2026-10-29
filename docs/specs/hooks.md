@@ -30,6 +30,7 @@ governs:
   - crates/ui-bridge/src/acp.rs
   - crates/ui-bridge/src/bin/bravebot-rpc.rs
   - crates/ui-bridge/src/bin/bravebot-acp.rs
+  - crates/ui-bridge/src/acp_loop.rs
   - crates/ui-files/src/main.rs
   - ui/src/shared/agent-settings.ts
   - ui/src/main/agent-settings.ts

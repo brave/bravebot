@@ -36,6 +36,7 @@ pub(crate) fn print_help() {
             t!(cli_usage_continue_task),
         ),
         ("bravebot --fork <id>", t!(cli_usage_fork)),
+        ("bravebot acp", t!(cli_usage_acp)),
         ("bravebot doctor", t!(cli_usage_doctor)),
         (
             "bravebot doctor --sandbox-check",
