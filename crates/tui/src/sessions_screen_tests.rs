@@ -939,6 +939,7 @@ fn the_sessions_screen_command_opens_the_sessions_screen_as_the_key_does() {
         line: SESSIONS_COMMAND.to_string(),
         pasted: Vec::new(),
         attached: Vec::new(),
+        typed_at: std::time::Instant::now(),
     };
     assert_eq!(
         dispatch_command(&mut session, commanded),

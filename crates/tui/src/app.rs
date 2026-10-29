@@ -478,6 +478,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         line,
         pasted,
         attached,
+        typed_at,
     } = match carries(&commanded.line) {
         Carries::Everything => commanded,
         Carries::Bytes => crate::state::without_text_files(commanded),
@@ -758,7 +759,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // clock, as a prompt and never as a command.
     if let Some(argument) = argument_to(line, AFTER_COMMAND) {
         match crate::loops::parse_after(argument) {
-            crate::loops::Delayed::Start(request) => session.start_after(request),
+            crate::loops::Delayed::Start(request) => session.start_after(request, typed_at),
             crate::loops::Delayed::Unreadable => session.note(t!(after_needs_a_delay)),
         }
         return Action::Redraw;
@@ -9472,6 +9473,7 @@ mod tests {
                         shown: "/home/me/shot.png".to_string(),
                         kind: bravebot_filetype::by_name::Kind::Attachment("image/png"),
                     }],
+                    typed_at: std::time::Instant::now(),
                 },
             );
 
@@ -17951,6 +17953,7 @@ mod tests {
             attached: Vec::new(),
             line: line.to_string(),
             pasted: Vec::new(),
+            typed_at: std::time::Instant::now(),
         }
     }
 
@@ -30515,6 +30518,93 @@ mod tests {
             waiting_prompts(&session),
             vec!["/after 5m check the deploy", "/loop stop"]
         );
+    }
+
+    /// LOOP-18: the delay of an `/after` line typed during a turn counts from when it was typed. Six
+    /// minutes into the turn, an `/after 5m` line is due the moment the turn ends. The regression it
+    /// rejects is arming the line from the moment the queue reaches it, which makes it wait five
+    /// more minutes.
+    #[test]
+    fn an_after_line_typed_during_a_turn_is_due_at_once_when_its_delay_passed_before_the_turn_ended()
+     {
+        let mut session = a_turn_running_on("first");
+        type_while_working(&mut session, "/after 5m check the deploy");
+        assert!(
+            session.looping().is_none(),
+            "the line was armed while queued"
+        );
+
+        session.backdate_queued(Duration::from_secs(6 * 60));
+        session.complete("done", Vec::new(), 0);
+        assert_eq!(queued_next(&mut session), Some(Action::Redraw));
+
+        assert_eq!(
+            session.loop_tick().as_deref(),
+            Some("check the deploy"),
+            "the delay was counted from the end of the turn"
+        );
+    }
+
+    /// LOOP-18, LOOP-6: a delay that has not passed when the turn ends is what is left of it, and
+    /// the row that counts down shows that remainder. The regressions it rejects are counting the
+    /// whole delay again, and sending the line before its delay is up.
+    #[test]
+    fn an_after_line_typed_during_a_turn_waits_for_what_is_left_of_its_delay() {
+        let mut session = a_turn_running_on("first");
+        type_while_working(&mut session, "/after 5m check the deploy");
+
+        session.backdate_queued(Duration::from_secs(2 * 60));
+        session.complete("done", Vec::new(), 0);
+        assert_eq!(queued_next(&mut session), Some(Action::Redraw));
+
+        assert_eq!(session.loop_tick(), None, "sent before the delay was up");
+        let left = session
+            .looping()
+            .and_then(|running| running.until(Instant::now()))
+            .expect("the line is armed");
+        assert!(
+            left > Duration::from_secs(2 * 60) && left <= Duration::from_secs(3 * 60),
+            "{left:?} is not what is left of five minutes after two"
+        );
+    }
+
+    /// LOOP-18: a line typed at rest counts its delay from now. The regression it rejects is a
+    /// typing time taken from somewhere older than the line.
+    #[test]
+    fn an_after_line_typed_at_rest_counts_its_delay_from_now() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "/after 5m check the deploy");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+
+        let left = session
+            .looping()
+            .and_then(|running| running.until(Instant::now()))
+            .expect("the line is armed");
+        assert!(left > Duration::from_secs(5 * 60 - 5), "{left:?}");
+        assert_eq!(session.loop_tick(), None, "sent before the delay was up");
+    }
+
+    /// LOOP-18: a command line queued without being typed, which is what a click on a hint does
+    /// through `queue_command_line`, has no typing time of its own and counts its delay from when it
+    /// was queued. The regression it rejects is a typing time older than the line. A click only ever
+    /// queues the fixed command lines of `click_command`, so this drives the queue entry point
+    /// directly and not a click.
+    #[test]
+    fn an_after_line_queued_by_the_command_path_counts_its_delay_from_now() {
+        let mut session = a_turn_running_on("first");
+        assert!(session.queue_command_line("/after 5m check the deploy"));
+
+        session.complete("done", Vec::new(), 0);
+        assert_eq!(queued_next(&mut session), Some(Action::Redraw));
+
+        let left = session
+            .looping()
+            .and_then(|running| running.until(Instant::now()))
+            .expect("the line is armed");
+        assert!(left > Duration::from_secs(5 * 60 - 5), "{left:?}");
     }
 
     /// A command that rewrites the conversation or the workspace waits and says why, so the line

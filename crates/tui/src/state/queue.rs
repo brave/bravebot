@@ -43,6 +43,11 @@ pub struct Queued {
     /// when it was made: one typed after it was not part of that, and one taken back with Up is no
     /// longer anywhere to be sent.
     hurried: bool,
+    /// When the line was queued, which is when the person typed it.
+    ///
+    /// Carried to the command it becomes so that a delay the line names counts from here and not
+    /// from the moment the turn ends and the queue reaches it ([LOOP-18](../../../../docs/specs/loop.md#LOOP-18)).
+    typed_at: std::time::Instant,
 }
 
 impl Queued {
@@ -171,6 +176,18 @@ impl Session {
             .map(|line| line.prompt.as_str())
     }
 
+    /// Move the time every waiting line was typed back by `by`, for a test that needs a turn to have
+    /// run longer than the real clock can be made to.
+    #[cfg(test)]
+    pub(crate) fn backdate_queued(&mut self, by: Duration) {
+        for line in &mut self.queued {
+            line.typed_at = line
+                .typed_at
+                .checked_sub(by)
+                .expect("the clock reaches back that far");
+        }
+    }
+
     /// Take the current line as a command line to run when the turn in flight has finished.
     ///
     /// The same wait the other two get, for the same reason, and what is different is again at the
@@ -235,6 +252,7 @@ impl Session {
             waiting,
             recall: Some(recall),
             hurried: false,
+            typed_at: std::time::Instant::now(),
         });
         self.scroll = 0;
         true
@@ -260,6 +278,7 @@ impl Session {
             waiting: Waiting::Command,
             recall: None,
             hurried: false,
+            typed_at: std::time::Instant::now(),
         });
         self.scroll = 0;
         true
@@ -435,6 +454,7 @@ impl Session {
             line: taken.prompt,
             pasted: taken.pasted,
             attached: taken.attached,
+            typed_at: taken.typed_at,
         })
     }
 

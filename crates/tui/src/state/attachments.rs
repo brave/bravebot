@@ -48,6 +48,11 @@ pub struct Commanded {
     /// different routes: a picture is bytes that never touched the filesystem, and a dropped file is
     /// a path something has to read through a gate.
     pub attached: Vec<Attached>,
+    /// When the person typed the line: the moment Enter took it at rest, or the moment it joined
+    /// the queue while a turn ran.
+    ///
+    /// What a delay in the line counts from ([LOOP-18](../../../../docs/specs/loop.md#LOOP-18)).
+    pub typed_at: std::time::Instant,
 }
 
 /// A thumbnail of a dropped picture, read for the screen and for nothing else.
@@ -185,6 +190,7 @@ pub fn without_text_files(commanded: Commanded) -> Commanded {
         line: put_back_to_names(&commanded.line, &text),
         pasted: commanded.pasted,
         attached: carried,
+        typed_at: commanded.typed_at,
     }
 }
 
@@ -609,6 +615,7 @@ impl Session {
             line,
             pasted,
             attached,
+            typed_at: std::time::Instant::now(),
         }
     }
 
@@ -635,6 +642,7 @@ impl Session {
             ),
             pasted: Vec::new(),
             attached: Vec::new(),
+            typed_at: commanded.typed_at,
         }
     }
 

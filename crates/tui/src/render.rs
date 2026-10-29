@@ -6672,7 +6672,10 @@ mod tests {
     #[test]
     fn the_hint_line_says_a_held_after_line_is_sending_later_and_not_looping() {
         let mut session = Session::new("kernel-enforced");
-        session.start_after(crate::loops::request_after("5m check the deploy"));
+        session.start_after(
+            crate::loops::request_after("5m check the deploy"),
+            std::time::Instant::now(),
+        );
         let hint = hint_row_at(&session, 120, 24);
         assert!(
             hint.contains(t!(after_hint_next, next = "").trim()),
@@ -6693,7 +6696,10 @@ mod tests {
         );
         session.complete("done", Vec::new(), 0);
         session.loop_turn_ended(None);
-        session.start_after(crate::loops::request_after("5m tail the log"));
+        session.start_after(
+            crate::loops::request_after("5m tail the log"),
+            std::time::Instant::now(),
+        );
         assert_eq!(session.loops().len(), 2);
         let hint = hint_row_at(&session, 120, 24);
         assert!(
