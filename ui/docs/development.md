@@ -262,6 +262,9 @@ main UI are visible and the Rust bridge responds, then saves a screenshot under
 `/tmp/bravebot-ui/`. To check a Linux package, run
 `pnpm run drive:smoke -- "./dist/Brave Bot-linux-x64/Brave Bot"`.
 
+`pnpm run playground` runs the renderer in a browser against a scripted bridge, with an example of
+every piece the conversation can show. See [playground](playground.md).
+
 `scripts/build-bridge.sh` builds the Rust bridge and secure-file helper. TypeScript
 then checks the code and electron-vite bundles the main process, preload and React
 renderer into `out/`. Development executables are in the workspace `../target/debug/`.

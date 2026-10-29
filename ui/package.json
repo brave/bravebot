@@ -17,6 +17,7 @@
     "pretypecheck": "pnpm run deps",
     "typecheck": "node scripts/check-nala.mjs && tsc --noEmit",
     "start": "electron-vite preview",
+    "playground": "vite --config playground/vite.config.ts",
     "drive:smoke": "node scripts/drive-smoke.mjs",
     "drive": "pnpm run bridge && electron-vite build && node scripts/drive.mjs",
     "drive:markdown": "pnpm run bridge && electron-vite build && node scripts/drive-markdown.mjs",

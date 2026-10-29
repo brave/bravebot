@@ -1,0 +1,54 @@
+# Playground
+
+The playground runs the real renderer in a browser with a scripted bridge in place of the Rust
+backend. It shows every piece the conversation area can render, so a change to one can be looked at
+without a model, a key or an Electron window.
+
+```bash
+pnpm run playground
+```
+
+This serves `http://localhost:5199`. It opens the conversation "Everything the conversation can
+show". Pass `?welcome` to start on the welcome screen.
+
+## What it is
+
+- `playground/bridge.ts` implements `BravebotApi` and installs it as `window.bravebot`. Requests
+  are answered from `playground/fixtures.ts`. Events are emitted by the scenarios in
+  `playground/scenarios.ts`.
+- Nothing in `src/` is changed or imported conditionally. The renderer cannot tell the bridge from
+  the real one.
+- Stored histories cover every kind of stored message. Scenarios cover everything that is only
+  produced live: decision cards, the working row, failures and plan runs.
+
+## Using it
+
+The Playground button at the bottom right opens a panel that lists the scenarios in groups. Each
+scenario plays in the conversation that is open. The panel also has these controls.
+
+- **Theme** follows the system, or is forced light or dark.
+- **Speed** scales the pauses between events.
+- **Answer questions for me** presses the buttons on the cards as they appear, so decided cards
+  can be seen. Buttons are still pressed through the page, so the rule that a card cannot be
+  approved before every deciding row has been on screen still applies.
+- **Backend not set up** shows the screens a person sees before a model is configured.
+
+Typing `play:<id>` as a prompt plays that scenario. Other prompts get a short reply.
+
+The console has the same controls:
+
+```js
+playground.play('tour')
+playground.stop()
+playground.scroll('top') // or 'end', or a number
+playground.scenarios     // every id
+playground.settings.auto = true
+```
+
+## Limits
+
+- Native context menus, the file picker and the menu bar commands do not exist in a browser.
+- Nothing is read from or written to disk. Sessions, bots and settings live in memory and are lost
+  on reload. Theme, layout and the panel state are kept in `localStorage`.
+- The scenarios are the ones this repository knows about. A new event needs a fixture and a
+  scenario added by hand.
