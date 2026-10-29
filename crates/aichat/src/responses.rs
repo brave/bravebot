@@ -343,6 +343,7 @@ impl<'a> ResponsesClient<'a> {
     /// The request for one attempt, addressed and authenticated.
     fn build(&self, body: Vec<u8>, token: Option<&Secret>) -> Request {
         let mut http = Request::post(self.provider.completion_url(), body)
+            .with_client_certificate()
             .header("content-type", "application/json")
             .header("accept", "text/event-stream");
         for (name, value) in self.provider.fixed_headers() {

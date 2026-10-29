@@ -215,8 +215,11 @@ pub fn list<S: Sink>(
     config: &Config,
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
-    let request =
-        crate::as_brave_bot(Request::get(config.models_url()).header("accept", "application/json"));
+    let request = crate::as_brave_bot(
+        Request::get(config.models_url())
+            .with_client_certificate()
+            .header("accept", "application/json"),
+    );
 
     // Through the egress gate like everything else, because that gate is the only way out to the
     // network. The label records where the bytes came from; nothing here branches on them beyond
@@ -410,7 +413,9 @@ fn fetch_listing<S: Sink>(
     headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<ListedByGateway>, ChatError> {
-    let mut request = Request::get(&url).header("accept", "application/json");
+    let mut request = Request::get(&url)
+        .with_client_certificate()
+        .header("accept", "application/json");
     for (name, value) in provider.fixed_headers() {
         request = request.header(*name, *value);
     }
@@ -516,6 +521,7 @@ pub fn list_from_account<S: Sink>(
     let url = provider.models_url();
     let (name, value) = provider.credential_header(token);
     let request = Request::get(&url)
+        .with_client_certificate()
         .header("accept", "application/json")
         .socket_header(name, value)
         .refusing_redirects()
@@ -717,6 +723,7 @@ pub fn list_from_xai_account<S: Sink>(
     let url = provider.models_url();
     let (name, value) = provider.credential_header(token);
     let request = Request::get(&url)
+        .with_client_certificate()
         .header("accept", "application/json")
         .socket_header(name, value)
         .refusing_redirects();

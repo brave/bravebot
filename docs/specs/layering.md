@@ -313,7 +313,10 @@ turn it is the context that turn worked from.
   `bravebot-agent` or `bravebot-cli` and depends on `bravebot-net` already. That is the one thing
   about the clients that must not differ ([NET-7](network-egress.md#NET-7),
   [NET-8](network-egress.md#NET-8), [NET-11](network-egress.md#NET-11)), since a machine states one
-  certificate authority, one route off it and one client certificate, not one per client. Passing it
+  certificate authority, one route off it and one client certificate, not one per client. The client
+  certificate is the exception to passing it to every client: it is presented only by a provider
+  request marked `with_client_certificate`, and only to the socket of that request's URL, so the
+  `bravebot-skus` clients present none. Passing it
   in rather than depending on `bravebot-net` keeps this crate at no dependencies, which is what makes
   "auth only" checkable by reading its manifest. What each client does with a redirect is the egress
   register's ([network-egress.md](network-egress.md#known-costs)): the ChatGPT and xAI clients follow none.

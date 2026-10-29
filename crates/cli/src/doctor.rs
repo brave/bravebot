@@ -1989,6 +1989,17 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
             ));
         }
     }
+    // Whether a passphrase was given for the key, on the same terms as the row above: only where a
+    // file is named. Yes or no, and never the value.
+    if transport.names_client_certificate() {
+        let variable = bravebot_net::transport::CLIENT_KEY_PASSPHRASE;
+        let detail = if transport.client_passphrase_given() {
+            t!(doctor_client_passphrase_given, variable = variable)
+        } else {
+            t!(doctor_client_passphrase_absent, variable = variable)
+        };
+        lines.push(aligned(t!(doctor_client_passphrase), detail, DETAIL));
+    }
 
     // Which hosts the proxy is not used for, since that is what decides whether a proxy in force
     // applies to the host that is failing, and `NO_PROXY=*` leaves one configured and used for
@@ -2441,6 +2452,158 @@ mod tests {
         assert!(named[0].contains("absent.crt"), "{lines:?}");
         assert!(named[1].contains("absent.key"), "{lines:?}");
         assert!(lines.join("\n").contains("refused"), "{lines:?}");
+    }
+
+    const CLIENT_CERTIFICATE_PEM: [&str; 10] = [
+        "MIIBmTCCAT+gAwIBAgIUGoEm4tLRujtRq+Z9SYoo7mpaVTgwCgYIKoZIzj0EAwIw",
+        "ITEfMB0GA1UEAwwWYnJhdmVib3QtdGVzdC1jbGllbnQtYTAgFw0yNjEwMjIxNjQ5",
+        "MjJaGA8yMTI2MDkyODE2NDkyMlowITEfMB0GA1UEAwwWYnJhdmVib3QtdGVzdC1j",
+        "bGllbnQtYTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABC/GcNDcBgcN5ka3+sg2",
+        "SitB1Hb2ewhYttjW1f288agg+KLdGhEfad2e7iq/fmlM4vlk+hPpbxkXi0S57YrN",
+        "pbujUzBRMB0GA1UdDgQWBBSiEIAHwsbVA0ZZsQ1BDSeQ1FBAfjAfBgNVHSMEGDAW",
+        "gBSiEIAHwsbVA0ZZsQ1BDSeQ1FBAfjAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49",
+        "BAMCA0gAMEUCIQDV/pEMcyED9IfcGuf4pke2It4Kj4yubw6uM0lrqz5ymgIgRKEK",
+        "slJ1+wh5R7cmgoS2bui3Umrk+r+pU9FokD8FYZM=",
+        "",
+    ];
+    /// The private key `CLIENT_CERTIFICATE_PEM` belongs to, encrypted as PKCS#8 under
+    /// `CLIENT_PASSPHRASE` (PBES2: PBKDF2 with HMAC-SHA256, AES-256-CBC).
+    const CLIENT_ENCRYPTED_KEY_PEM: [&str; 7] = [
+        "MIH0MF8GCSqGSIb3DQEFDTBSMDEGCSqGSIb3DQEFDDAkBBAHBwcHBwcHBwcHBwcH",
+        "BwcHAgIIADAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQCQkJCQkJCQkJCQkJ",
+        "CQkJCQSBkAfpHAg6UBxIbFEVMKGkwQVAEEreKFPNXgbLfkLyQqd4QgT7rRumDNlh",
+        "dmT2QhpYuBV68SCOBjF3OU6U+h9qfNK79uBAsw+jpRodFGQHaMBVWhUucEOmTLyR",
+        "rW7dVneyfXwIlfAsA+l7QUtHc8i9qzGU7xYbuVJkH4zqqKvjDXCG0YKkMEHY2erk",
+        "hgeuMnNYVg==",
+        "",
+    ];
+    /// A key that does not belong to `CLIENT_CERTIFICATE_PEM`.
+    const OTHER_KEY_PEM: [&str; 4] = [
+        "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgelZvU4tWD/NVOwfb",
+        "DUI00URNX/zgu9ybKgXU2Pkdqj+hRANCAASN8kQiMv+SDHgFjaKHKIt5KF7D8gLJ",
+        "SYjcDrZ4lZT8NTj0TPvc+G/EN5tEtwRz/9/RGamARW++a28XqN8cntww",
+        "",
+    ];
+    const CLIENT_PASSPHRASE: &str = "correct-horse";
+    const PASSPHRASE_VARIABLE: &str = "BRAVEBOT_CLIENT_KEY_PASSPHRASE";
+
+    fn armoured(kind: &str, body: &[&str]) -> String {
+        let lines: Vec<&str> = body
+            .iter()
+            .copied()
+            .filter(|line| !line.is_empty())
+            .collect();
+        format!(
+            "-----BEGIN {kind}-----\n{}\n-----END {kind}-----\n",
+            lines.join("\n")
+        )
+    }
+
+    /// Writes the certificate and a key file with `key` as its contents, returning their paths.
+    fn client_files(name: &str, key: &str) -> (PathBuf, PathBuf) {
+        let root = scratch(name);
+        let certificate = root.join("client.crt");
+        let key_path = root.join("client.key");
+        std::fs::write(
+            &certificate,
+            armoured("CERTIFICATE", &CLIENT_CERTIFICATE_PEM),
+        )
+        .expect("certificate");
+        std::fs::write(&key_path, key).expect("key");
+        (certificate, key_path)
+    }
+
+    fn encrypted_key_text() -> String {
+        armoured("ENCRYPTED PRIVATE KEY", &CLIENT_ENCRYPTED_KEY_PEM)
+    }
+
+    /// NET-11: where a file is named the report says whether a passphrase was given and where it
+    /// is read from, and never the passphrase. A machine naming none has no such row.
+    #[test]
+    fn the_network_section_says_whether_a_passphrase_was_given_and_never_its_value() {
+        let (certificate, key) = client_files("doctor-client-given", &encrypted_key_text());
+        let given = Transport::stated_with_client_pair_and_passphrase(
+            Some(&certificate),
+            Some(&key),
+            CLIENT_PASSPHRASE,
+        );
+        let absent = Transport::stated_with_client_pair(Some(&certificate), Some(&key));
+
+        let given = network(&given, &Default::default()).join("\n");
+        let absent = network(&absent, &Default::default()).join("\n");
+        let bare = network(
+            &Transport::stated(TrustRoots::Bundled, None, None),
+            &Default::default(),
+        )
+        .join("\n");
+
+        assert!(given.contains("loaded"), "{given}");
+        assert!(given.contains("key passphrase"), "{given}");
+        assert!(given.contains("given in"), "{given}");
+        assert!(!given.contains("none given"), "{given}");
+        assert!(given.contains(PASSPHRASE_VARIABLE), "{given}");
+        assert!(!given.contains(CLIENT_PASSPHRASE), "{given}");
+        assert!(absent.contains("key passphrase"), "{absent}");
+        assert!(absent.contains("none given in"), "{absent}");
+        assert!(!bare.contains("passphrase"), "{bare}");
+    }
+
+    /// NET-11: a legacy encrypted key, a missing passphrase, a wrong one and a pair that disagrees
+    /// are four causes with four different fixes, so each is reported as itself and by the key's
+    /// path, and none repeats the passphrase.
+    #[test]
+    fn the_network_section_tells_the_reasons_a_client_key_cannot_be_used_apart() {
+        let report_for = |name: &str, key: String, passphrase: Option<&str>| {
+            let (certificate, key_path) = client_files(name, &key);
+            let transport = match passphrase {
+                Some(passphrase) => Transport::stated_with_client_pair_and_passphrase(
+                    Some(&certificate),
+                    Some(&key_path),
+                    passphrase,
+                ),
+                None => Transport::stated_with_client_pair(Some(&certificate), Some(&key_path)),
+            };
+            (
+                network(&transport, &Default::default()).join("\n"),
+                key_path.display().to_string(),
+            )
+        };
+        let legacy = armoured(
+            &format!("RSA {} KEY", "PRIVATE"),
+            &[
+                "Proc-Type: 4,ENCRYPTED",
+                "DEK-Info: AES-256-CBC,00112233445566778899AABBCCDDEEFF",
+                "MIHsMFcGCSqGSIb3DQEFDTBKMCkG",
+            ],
+        );
+
+        let (missing, missing_path) = report_for("doctor-key-missing", encrypted_key_text(), None);
+        let (wrong, wrong_path) = report_for(
+            "doctor-key-wrong",
+            encrypted_key_text(),
+            Some("battery-staple"),
+        );
+        let (old, old_path) = report_for("doctor-key-legacy", legacy, None);
+        let (differs, differs_path) = report_for(
+            "doctor-key-differs",
+            armoured(&format!("{} KEY", "PRIVATE"), &OTHER_KEY_PEM),
+            None,
+        );
+
+        assert!(missing.contains(&missing_path), "{missing}");
+        assert!(missing.contains(PASSPHRASE_VARIABLE), "{missing}");
+        assert!(missing.contains("names no passphrase"), "{missing}");
+        assert!(wrong.contains(&wrong_path), "{wrong}");
+        assert!(wrong.contains("does not open"), "{wrong}");
+        assert!(!wrong.contains("battery-staple"), "{wrong}");
+        assert!(!wrong.contains("names no passphrase"), "{wrong}");
+        assert!(old.contains(&old_path), "{old}");
+        assert!(old.contains("legacy encrypted"), "{old}");
+        assert!(old.contains("openssl pkcs8 -topk8"), "{old}");
+        assert!(!old.contains("does not match"), "{old}");
+        assert!(differs.contains(&differs_path), "{differs}");
+        assert!(differs.contains("does not match"), "{differs}");
+        assert!(!differs.contains("legacy encrypted"), "{differs}");
     }
 
     /// A protocol this build cannot connect through is not the route requests take, so naming it as
