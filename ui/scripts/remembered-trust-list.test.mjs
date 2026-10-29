@@ -8,6 +8,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
 
@@ -92,4 +93,12 @@ test('a long kept path is shortened in the middle and the full spelling stays on
   assert.ok(markup.includes(`for ${cutRoot}`), markup)
   assert.ok(markup.includes(`data-tooltip="${shownRoot}"`), markup)
   assert.ok(markup.includes(`aria-label="for ${shownRoot}"`), markup)
+})
+
+test('a grant reason wraps inside the row', () => {
+  const css = readFileSync(new URL('../src/renderer/styles/dialogs.css', import.meta.url), 'utf8')
+  const block = css.match(/\.grant-state\s*\{[^}]*\}/)?.[0] ?? ''
+  assert.match(block, /overflow-wrap:\s*anywhere/)
+  assert.doesNotMatch(block, /white-space:\s*nowrap/)
+  assert.doesNotMatch(block, /text-overflow:\s*ellipsis/)
 })

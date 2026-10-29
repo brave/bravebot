@@ -167,7 +167,7 @@
 .grant-text > code:focus-visible,
 .grant-meta span:focus-visible { outline-offset: -2px; }
 .grant-row > leo-button { flex: none; margin-left: auto; }
-.grant-state { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; padding-right: var(--leo-spacing-m); font: var(--type-caption); color: var(--ink-tertiary); }
+.grant-state { flex: 1 1 auto; min-width: 0; margin-left: auto; padding-right: var(--leo-spacing-m); font: var(--type-caption); color: var(--ink-tertiary); overflow-wrap: anywhere; text-align: end; }
 .grant-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .grant-path,
 .grant-text > code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-code); color: var(--ink-primary); }
