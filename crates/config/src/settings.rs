@@ -981,10 +981,7 @@ impl Settings {
     /// As [`Settings::written_crash_reports`], for a named home, so a test needs no ambient one.
     fn crash_reports_in(home: Option<PathBuf>) -> Option<bool> {
         let document = read(&user_settings_file(&home?))?;
-        match document.root.get(CRASH_REPORTS_KEY) {
-            Some(serde_json::Value::Bool(on)) => Some(*on),
-            _ => None,
-        }
+        flag(&document.root, CRASH_REPORTS_KEY)
     }
 
     /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
@@ -1518,16 +1515,17 @@ impl Settings {
     /// afterwards would need this logic twice, once per block, and the second copy is where the two
     /// would drift.
     pub(crate) fn from_map(root: &serde_json::Map<String, serde_json::Value>) -> Self {
-        let env = match root.get("env") {
-            Some(serde_json::Value::Object(block)) => block
-                .iter()
-                .filter_map(|(name, value)| match value {
-                    serde_json::Value::String(value) => Some((name.clone(), value.clone())),
-                    _ => None,
-                })
-                .collect(),
-            _ => BTreeMap::new(),
-        };
+        let env: BTreeMap<String, String> = object(root, "env")
+            .map(|block| {
+                block
+                    .iter()
+                    .filter_map(|(name, value)| match value {
+                        serde_json::Value::String(value) => Some((name.clone(), value.clone())),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let (references, references_unread) = reference_entries(root);
         Self {
             env,
@@ -1572,37 +1570,16 @@ impl Settings {
                 Some(serde_json::Value::String(text)) => crate::limit::parse_count(text),
                 _ => None,
             },
-            terminal_title: match root.get("terminalTitle") {
-                Some(serde_json::Value::Bool(on)) => Some(*on),
-                _ => None,
-            },
-            suggestions: match root.get("suggestions") {
-                Some(serde_json::Value::Bool(on)) => Some(*on),
-                _ => None,
-            },
-            update_check: match root.get("updateCheck") {
-                Some(serde_json::Value::Bool(on)) => Some(*on),
-                _ => None,
-            },
-            away_summary_enabled: match root.get("awaySummaryEnabled") {
-                Some(serde_json::Value::Bool(on)) => Some(*on),
-                _ => None,
-            },
-            away_summary_idle_seconds: root
-                .get("awaySummaryIdleSeconds")
-                .and_then(serde_json::Value::as_u64)
-                .filter(|seconds| *seconds > 0),
-            ask_idle_seconds: root
-                .get("askIdleSeconds")
-                .and_then(serde_json::Value::as_u64)
-                .filter(|seconds| *seconds > 0),
+            terminal_title: flag(root, "terminalTitle"),
+            suggestions: flag(root, "suggestions"),
+            update_check: flag(root, "updateCheck"),
+            away_summary_enabled: flag(root, "awaySummaryEnabled"),
+            away_summary_idle_seconds: positive(root.get("awaySummaryIdleSeconds")),
+            ask_idle_seconds: positive(root.get("askIdleSeconds")),
             ask_idle_ignored: Vec::new(),
             // A count past what a `u32` holds is more delegates than a turn could start, which is
             // no bound at all, so it is read as the largest the kernel counts rather than dropped.
-            max_running_delegates: root
-                .get("maxRunningDelegates")
-                .and_then(serde_json::Value::as_u64)
-                .filter(|count| *count > 0)
+            max_running_delegates: positive(root.get("maxRunningDelegates"))
                 .map(|count| u32::try_from(count).unwrap_or(u32::MAX)),
             notification_method: word(root, "notificationMethod"),
             notification_condition: word(root, "notificationCondition"),
@@ -1649,7 +1626,7 @@ impl Settings {
             wheel_rows: wheel_rows(root),
             tui_mouse: tui_mouse(root),
             tui_context_menu: tui_context_menu(root),
-            deep_links: root.get("deepLinks").and_then(serde_json::Value::as_bool),
+            deep_links: flag(root, "deepLinks"),
             // The word one root states, there being no file to name. [`Settings::layered`]
             // overwrites it with what the layers come to.
             run_network: match network_word(root) {
@@ -2987,6 +2964,35 @@ pub(crate) fn word(root: &serde_json::Map<String, serde_json::Value>, key: &str)
     }
 }
 
+/// The object under `key` in `root`, or `None` where the key is absent or holds anything else: an
+/// array, a string, a number, a boolean or `null`.
+pub(crate) fn object<'a>(
+    root: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    match root.get(key) {
+        Some(serde_json::Value::Object(block)) => Some(block),
+        _ => None,
+    }
+}
+
+/// The boolean under `key` in `root`, or `None` where the key is absent or holds anything else.
+///
+/// A real boolean and nothing else: `"true"`, `1` and `null` are absence, with no coercion.
+pub(crate) fn flag(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<bool> {
+    root.get(key).and_then(serde_json::Value::as_bool)
+}
+
+/// A whole number above zero, where the value is one.
+///
+/// Zero is absence, since it is the number somebody writes meaning "no cap". A negative number, a
+/// fractional one, a string and a missing value are absence too.
+pub(crate) fn positive(value: Option<&serde_json::Value>) -> Option<u64> {
+    value
+        .and_then(serde_json::Value::as_u64)
+        .filter(|figure| *figure > 0)
+}
+
 /// The `vetting` block's `auto` key, as a boolean and nothing else.
 ///
 /// A boolean rather than a word, because this is the one value here that is not a name being passed
@@ -2995,13 +3001,7 @@ pub(crate) fn word(root: &serde_json::Map<String, serde_json::Value>, key: &str)
 /// the `env` block gets, and deliberately: a file that meant to turn this on and mistyped the value
 /// leaves the prompt appearing, which is the direction to be wrong in.
 fn auto_vetting(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
-    match root.get(VETTING_BLOCK) {
-        Some(serde_json::Value::Object(block)) => match block.get("auto") {
-            Some(serde_json::Value::Bool(auto)) => Some(*auto),
-            _ => None,
-        },
-        _ => None,
-    }
+    object(root, VETTING_BLOCK).and_then(|block| flag(block, "auto"))
 }
 
 /// The `permissions` keys that only ever refuse, as one layer stated them.
@@ -3108,7 +3108,7 @@ fn strictest(one: Option<bool>, other: Option<bool>) -> Option<bool> {
 pub(crate) fn narrowing_stated(
     root: &serde_json::Map<String, serde_json::Value>,
 ) -> (Narrowing, Vec<&'static str>) {
-    let Some(serde_json::Value::Object(block)) = root.get(PERMISSIONS_BLOCK) else {
+    let Some(block) = object(root, PERMISSIONS_BLOCK) else {
         return (Narrowing::default(), Vec::new());
     };
     let mut unreadable = Vec::new();
@@ -3215,25 +3215,23 @@ fn requested_servers(root: &serde_json::Map<String, serde_json::Value>) -> Vec<S
 
 /// What one layer's `env` block set a name to, when it set it to a string.
 fn env_string(root: &serde_json::Map<String, serde_json::Value>, name: &str) -> Option<String> {
-    match root.get("env") {
-        Some(serde_json::Value::Object(block)) => match block.get(name) {
-            Some(serde_json::Value::String(value)) => Some(value.clone()),
-            _ => None,
-        },
+    match object(root, "env")?.get(name) {
+        Some(serde_json::Value::String(value)) => Some(value.clone()),
         _ => None,
     }
 }
 
 /// The variables one layer's `env` block sets, for working out which layer won a name.
 fn env_names(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
-    match root.get("env") {
-        Some(serde_json::Value::Object(block)) => block
-            .iter()
-            .filter(|(_, value)| value.is_string())
-            .map(|(name, _)| name.clone())
-            .collect(),
-        _ => Vec::new(),
-    }
+    object(root, "env")
+        .map(|block| {
+            block
+                .iter()
+                .filter(|(_, value)| value.is_string())
+                .map(|(name, _)| name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The top-level keys one layer set that nothing here reads (BACKEND-36).
@@ -3420,7 +3418,7 @@ fn merge_run(
 /// dropped rather than refused, on the same footing as everything else here: a half-typed file must
 /// not stop a session, and the built-in set still holds whatever this says.
 fn scrub_list(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
-    let Some(serde_json::Value::Object(run)) = root.get("run") else {
+    let Some(run) = object(root, "run") else {
         return Vec::new();
     };
     let Some(serde_json::Value::Array(names)) = run.get("scrubEnv") else {
@@ -3477,7 +3475,7 @@ fn reference_entries(
 ) -> (Vec<Reference>, Vec<(String, ReferenceFault)>) {
     let mut used = Vec::new();
     let mut unread = Vec::new();
-    let Some(serde_json::Value::Object(block)) = root.get(REFERENCES_BLOCK) else {
+    let Some(block) = object(root, REFERENCES_BLOCK) else {
         return (used, unread);
     };
     for (alias, entry) in block {
@@ -3522,7 +3520,7 @@ fn reference_entries(
 /// carry nothing. Anything that is not a string is absence, on the same footing as everything else
 /// here: a half-typed file leaves the layers under it in force rather than refusing to start.
 fn attribution_block(root: &serde_json::Map<String, serde_json::Value>) -> Attribution {
-    let Some(serde_json::Value::Object(block)) = root.get("attribution") else {
+    let Some(block) = object(root, "attribution") else {
         return Attribution::default();
     };
     let text = |name: &str| match block.get(name) {
@@ -3552,7 +3550,7 @@ fn strings_block(
     root: &serde_json::Map<String, serde_json::Value>,
     name: &str,
 ) -> BTreeMap<String, String> {
-    let Some(serde_json::Value::Object(block)) = root.get(name) else {
+    let Some(block) = object(root, name) else {
         return BTreeMap::new();
     };
     block
@@ -3573,18 +3571,12 @@ fn strings_block(
 /// Zero is absence too. It is the number somebody writes meaning "no cap", and read literally it
 /// is a search permitted to open no file at all, which answers every pattern with nothing found.
 fn search_caps(root: &serde_json::Map<String, serde_json::Value>) -> SearchCaps {
-    let Some(serde_json::Value::Object(block)) = root.get("search") else {
+    let Some(block) = object(root, "search") else {
         return SearchCaps::default();
     };
-    let count = |name: &str| {
-        block
-            .get(name)
-            .and_then(serde_json::Value::as_u64)
-            .filter(|cap| *cap > 0)
-    };
     SearchCaps {
-        files: count("maxFiles").and_then(|files| usize::try_from(files).ok()),
-        time: count("maxSeconds").map(Duration::from_secs),
+        files: positive(block.get("maxFiles")).and_then(|files| usize::try_from(files).ok()),
+        time: positive(block.get("maxSeconds")).map(Duration::from_secs),
     }
 }
 
@@ -3596,13 +3588,7 @@ fn search_caps(root: &serde_json::Map<String, serde_json::Value>) -> SearchCaps 
 /// count is absence too, so a half-typed file leaves the built-in cap in force rather than stopping
 /// a session.
 fn run_output_cap(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize> {
-    let serde_json::Value::Object(run) = root.get("run")? else {
-        return None;
-    };
-    run.get("maxOutput")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|cap| *cap > 0)
-        .and_then(|cap| usize::try_from(cap).ok())
+    positive(object(root, "run")?.get("maxOutput")).and_then(|cap| usize::try_from(cap).ok())
 }
 
 /// The `download.maxBytes` value: the most one `download_url` call may write to a file.
@@ -3612,14 +3598,7 @@ fn run_output_cap(root: &serde_json::Map<String, serde_json::Value>) -> Option<u
 /// every one. A value that is not a whole count is absence too, so a half-typed file leaves the
 /// built-in cap in force rather than stopping a session.
 fn download_max_bytes(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize> {
-    let serde_json::Value::Object(download) = root.get("download")? else {
-        return None;
-    };
-    download
-        .get("maxBytes")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|cap| *cap > 0)
-        .and_then(|cap| usize::try_from(cap).ok())
+    positive(object(root, "download")?.get("maxBytes")).and_then(|cap| usize::try_from(cap).ok())
 }
 
 /// The `run.defaultSeconds` and `run.maxSeconds` figures: how long a command may run.
@@ -3633,18 +3612,12 @@ fn download_max_bytes(root: &serde_json::Map<String, serde_json::Value>) -> Opti
 /// Each is read on its own. A file raising the ceiling says nothing about the default, which is what
 /// lets somebody allow one long run without giving up on noticing a program that hangs.
 fn run_deadlines(root: &serde_json::Map<String, serde_json::Value>) -> RunDeadlines {
-    let Some(serde_json::Value::Object(run)) = root.get("run") else {
+    let Some(run) = object(root, "run") else {
         return RunDeadlines::default();
     };
-    let seconds = |name: &str| {
-        run.get(name)
-            .and_then(serde_json::Value::as_u64)
-            .filter(|count| *count > 0)
-            .map(Duration::from_secs)
-    };
     RunDeadlines {
-        default: seconds("defaultSeconds"),
-        ceiling: seconds("maxSeconds"),
+        default: positive(run.get("defaultSeconds")).map(Duration::from_secs),
+        ceiling: positive(run.get("maxSeconds")).map(Duration::from_secs),
     }
 }
 
@@ -3664,7 +3637,7 @@ pub(crate) enum NetworkStated {
 /// something a reader has to know the polarity of. Anything else is reported by `doctor` and is
 /// absence, which leaves the network as open as it was.
 pub(crate) fn network_word(root: &serde_json::Map<String, serde_json::Value>) -> NetworkStated {
-    let Some(serde_json::Value::Object(run)) = root.get("run") else {
+    let Some(run) = object(root, "run") else {
         return NetworkStated::Absent;
     };
     match run.get("network") {
@@ -3706,10 +3679,10 @@ pub(crate) fn filesystem_list(
     root: &serde_json::Map<String, serde_json::Value>,
     list: bravebot_sandbox::rules::List,
 ) -> ListStated {
-    let Some(serde_json::Value::Object(sandbox)) = root.get("sandbox") else {
+    let Some(sandbox) = object(root, "sandbox") else {
         return ListStated::Absent;
     };
-    let Some(serde_json::Value::Object(filesystem)) = sandbox.get("filesystem") else {
+    let Some(filesystem) = object(sandbox, "filesystem") else {
         return ListStated::Absent;
     };
     match filesystem.get(list.key()) {
@@ -3773,29 +3746,17 @@ fn filesystem_target(
 /// interface that moves the view, so the bound is applied there rather than here, which keeps the
 /// range written down once.
 fn wheel_rows(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize> {
-    let serde_json::Value::Object(tui) = root.get("tui")? else {
-        return None;
-    };
-    tui.get("wheelRows")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|rows| *rows > 0)
-        .and_then(|rows| usize::try_from(rows).ok())
+    positive(object(root, "tui")?.get("wheelRows")).and_then(|rows| usize::try_from(rows).ok())
 }
 
 /// The `tui.mouse` switch, read the way the top-level booleans are: only a real boolean counts.
 fn tui_mouse(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
-    let serde_json::Value::Object(tui) = root.get("tui")? else {
-        return None;
-    };
-    tui.get("mouse").and_then(serde_json::Value::as_bool)
+    object(root, "tui").and_then(|tui| flag(tui, "mouse"))
 }
 
 /// The `tui.contextMenu` switch, read as `tui.mouse` is: only a real boolean counts.
 fn tui_context_menu(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
-    let serde_json::Value::Object(tui) = root.get("tui")? else {
-        return None;
-    };
-    tui.get("contextMenu").and_then(serde_json::Value::as_bool)
+    object(root, "tui").and_then(|tui| flag(tui, "contextMenu"))
 }
 
 /// Whether `character` separates one segment of a path from the next on this host.
@@ -3913,7 +3874,7 @@ impl ManagedRules {
 
 pub(crate) fn managed_rules(root: &serde_json::Map<String, serde_json::Value>) -> ManagedRules {
     let misshapen = misshapen_rule_lists(root, &["deny", "ask"]);
-    let Some(serde_json::Value::Object(block)) = root.get(PERMISSIONS_BLOCK) else {
+    let Some(block) = object(root, PERMISSIONS_BLOCK) else {
         return ManagedRules {
             misshapen,
             ..ManagedRules::default()
@@ -3945,7 +3906,7 @@ pub(crate) fn managed_rules(root: &serde_json::Map<String, serde_json::Value>) -
 /// [`narrowing_stated`] instead, and are not rules: neither names a family, a path or a host, so
 /// neither is a line this hands to the rule language. See [`Narrowing`].
 fn permission_lists(root: &serde_json::Map<String, serde_json::Value>) -> PermissionLists {
-    let Some(serde_json::Value::Object(block)) = root.get(PERMISSIONS_BLOCK) else {
+    let Some(block) = object(root, PERMISSIONS_BLOCK) else {
         return PermissionLists::default();
     };
     let mut unreadable = Vec::new();
@@ -4136,6 +4097,76 @@ mod tests {
         match stated {
             serde_json::Value::Object(root) => root,
             _ => panic!("a layer is a document"),
+        }
+    }
+
+    /// `object` returns a block only for a JSON object, so an array, a string, a number, a
+    /// boolean, `null` or a missing key does not read as an empty block.
+    #[test]
+    fn object_reads_only_a_json_object() {
+        let root = layer(serde_json::json!({
+            "block": {"inner": 1},
+            "empty": {},
+            "list": [],
+            "text": "{}",
+            "count": 1,
+            "on": true,
+            "nothing": null,
+        }));
+        assert_eq!(
+            object(&root, "block").map(|block| block.len()),
+            Some(1),
+            "an object is read"
+        );
+        assert!(object(&root, "empty").is_some_and(serde_json::Map::is_empty));
+        for key in ["list", "text", "count", "on", "nothing", "absent"] {
+            assert!(object(&root, key).is_none(), "{key} is not an object");
+        }
+    }
+
+    /// `flag` returns a value only for a real boolean, so a quoted `"true"`, a number and `null`
+    /// are absence, and `false` is kept as a stated answer.
+    #[test]
+    fn flag_reads_only_a_real_boolean() {
+        let root = layer(serde_json::json!({
+            "yes": true,
+            "no": false,
+            "quoted": "true",
+            "one": 1,
+            "nothing": null,
+            "block": {},
+        }));
+        assert_eq!(flag(&root, "yes"), Some(true));
+        assert_eq!(flag(&root, "no"), Some(false));
+        for key in ["quoted", "one", "nothing", "block", "absent"] {
+            assert_eq!(flag(&root, key), None, "{key} is not a boolean");
+        }
+    }
+
+    /// `positive` returns a count only for a whole number above zero, so zero, a negative, a
+    /// fraction, a string and a missing value are absence, and the largest `u64` is kept.
+    #[test]
+    fn positive_reads_only_a_whole_number_above_zero() {
+        let root = layer(serde_json::json!({
+            "one": 1,
+            "largest": u64::MAX,
+            "zero": 0,
+            "negative": -1,
+            "fraction": 1.5,
+            "text": "5",
+            "nothing": null,
+            "on": true,
+        }));
+        assert_eq!(positive(root.get("one")), Some(1));
+        assert_eq!(positive(root.get("largest")), Some(u64::MAX));
+        for key in [
+            "zero", "negative", "fraction", "text", "nothing", "on", "absent",
+        ] {
+            assert_eq!(
+                positive(root.get(key)),
+                None,
+                "{key} is not a positive count"
+            );
         }
     }
 
