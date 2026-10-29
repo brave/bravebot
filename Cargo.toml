@@ -31,7 +31,7 @@ allow_attributes_without_reason = "deny"
 
 [workspace.dependencies]
 base64 = "0.22"
-hmac = "0.12"
+hmac = "0.13"
 # Secret storage for the imported subscription credentials. Default features only:
 # the sync-secret-service backend would pull in C libdbus and break the cross-builds,
 # whereas the default zbus backend is pure Rust on every target here.
