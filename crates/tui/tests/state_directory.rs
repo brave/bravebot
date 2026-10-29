@@ -258,6 +258,7 @@ fn writing_a_session_narrows_the_state_directory() {
             rewind: &[],
             checkouts: &[],
             touched: None,
+            answered_by_mode: false,
         },
     );
 
