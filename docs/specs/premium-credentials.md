@@ -310,6 +310,7 @@ use of and that only Brave's premium service revokes, which is the Held tier.
 `verified-by: bravebot_config::brave_key::a_stored_key_is_read_back`
 `verified-by: bravebot_config::brave_key::no_file_is_no_key_and_a_written_file_is_read`
 `verified-by: bravebot_config::brave_key::a_file_that_is_not_this_shape_is_refused`
+`verified-by: bravebot_config::brave_key::a_file_over_the_bound_is_refused_and_not_read_as_no_key`
 `verified-by: bravebot_config::brave_key::a_key_that_needs_escaping_round_trips`
 `verified-by: bravebot_cli::brave::a_typed_key_is_stored_private_and_never_said`
 `verified-by: bravebot_skus::store::the_file_is_not_readable_by_anyone_else`
@@ -382,6 +383,7 @@ that never used the premium tier has no use for the file, and `doctor` is where 
 `verified-by: bravebot_cli::brave::a_typed_key_is_stored_private_and_never_said`
 `verified-by: bravebot_cli::brave::no_key_typed_stores_nothing`
 `verified-by: bravebot_cli::brave::a_stored_key_is_replaced_only_on_a_yes`
+`verified-by: bravebot_cli::brave::a_yes_and_no_key_typed_leaves_the_stored_key`
 `verified-by: bravebot_cli::brave::an_unreadable_file_is_refused_and_left`
 `verified-by: bravebot_cli::brave::the_sign_in_is_refused_where_a_key_cannot_be_asked_for_or_kept`
 `verified-by: bravebot_cli::brave::forgetting_removes_the_file_and_is_repeatable`

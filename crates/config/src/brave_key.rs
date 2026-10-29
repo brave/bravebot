@@ -167,6 +167,40 @@ mod tests {
         }
     }
 
+    /// PREM-14: a file over the bound is refused rather than read as no key, since a login that took
+    /// it for none would write over it. The text is a key the parse would accept, so the size is
+    /// what refuses it, and a file of exactly the bound is still read.
+    #[test]
+    fn a_file_over_the_bound_is_refused_and_not_read_as_no_key() {
+        let directory =
+            std::env::temp_dir().join(format!("bravebot-brave-key-bound-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a directory");
+
+        let padded = |length: u64| {
+            let mut text = to_text(&Secret::new(PLACEHOLDER))
+                .expose()
+                .trim_end()
+                .to_string();
+            let padding = usize::try_from(length).expect("a size") - text.len();
+            text.push_str(&" ".repeat(padding));
+            text
+        };
+
+        std::fs::write(file(&directory), padded(MAX_BYTES)).expect("a file at the bound");
+        assert_eq!(
+            read(&directory)
+                .expect("a file at the bound")
+                .map(|key| key.expose().to_string()),
+            Some(PLACEHOLDER.to_string())
+        );
+
+        std::fs::write(file(&directory), padded(MAX_BYTES + 1)).expect("a file over the bound");
+        assert_eq!(read(&directory).err(), Some(Unreadable));
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
     /// The text of the file never holds a key twice or an escape the reader cannot undo: a key with
     /// quotes and control characters round-trips.
     #[test]

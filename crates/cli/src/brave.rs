@@ -315,13 +315,29 @@ mod tests {
         assert_eq!(left, [std::ffi::OsString::from(brave_key::FILE)]);
     }
 
-    /// CLI-18: nothing typed stores nothing and is not a failure, and a key already stored is left.
+    /// CLI-18: nothing typed stores nothing and is not a failure.
     #[test]
     fn no_key_typed_stores_nothing() {
         let scratch = Scratch::new("nothing");
         let (ending, _, _) = signed_in(&task(Some(&scratch.0)), "", None);
         assert_eq!(ending, Ending::Done);
         assert_eq!(the_stored_key(&scratch.0), None);
+    }
+
+    /// CLI-18: a yes to replacing a key, followed by nothing typed, leaves the key that was stored.
+    #[test]
+    fn a_yes_and_no_key_typed_leaves_the_stored_key() {
+        let scratch = Scratch::new("yes-and-nothing");
+        store(&scratch.0, &Secret::new(THE_KEY)).expect("a first key");
+
+        let (ending, _, err) = signed_in(&task(Some(&scratch.0)), "y\n", None);
+
+        assert_eq!(ending, Ending::Done, "{err}");
+        assert_eq!(
+            the_stored_key(&scratch.0).as_deref(),
+            Some(THE_KEY),
+            "nothing typed replaced the key"
+        );
     }
 
     /// CLI-18: a stored key is replaced only on a yes, since the one replaced is gone once the file is
