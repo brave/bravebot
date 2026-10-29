@@ -14513,6 +14513,7 @@ mod tests {
                     conversation.address_last(Address {
                         definition: definition.to_string(),
                         standing,
+                        at: None,
                     });
                 }
                 // A reply that says it is another definition's, which must decide nothing.

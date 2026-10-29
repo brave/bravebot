@@ -232,6 +232,7 @@ impl Bridge {
             "session.new" => self.new_session(request),
             "session.view.start" => self.start_view(request),
             "session.fork" => self.fork_session(request),
+            "session.addressed" => addressed_sessions(request),
             "session.delete" => self.delete_session(request),
             "session.purge" => self.purge_sessions(request),
             "session.import" => import_sessions(request),
@@ -1448,6 +1449,7 @@ impl Bridge {
                     .map(|definition| Address {
                         definition: definition.clone(),
                         standing: addressing_standing,
+                        at: None,
                     })
                     .as_ref(),
             ),
@@ -2414,6 +2416,52 @@ fn strings(request: &Request, name: &str) -> Result<Vec<String>, Failure> {
         .ok_or_else(|| Failure::bad_request(format!("`{name}` must be a list of strings")))
 }
 
+/// The turns addressed to one definition for that turn alone, newest first, in one project or in
+/// every project with a store ([SESSION-39](../../../docs/specs/sessions.md#SESSION-39)).
+///
+/// Each carries the rows of its exchange as `session.open` sends them, so a reply is the text that
+/// path already gives a window for display.
+fn addressed_sessions(request: &Request) -> Result<Value, Failure> {
+    let definition = wire::definition(request.params.get("definition"))?
+        .ok_or_else(|| Failure::bad_request("`definition` names the definition to look for"))?;
+    let projects = match request.optional_string("directory") {
+        Some(directory) => vec![PathBuf::from(directory)],
+        None => store::projects(),
+    };
+    let mut found: Vec<(PathBuf, bravebot_session::sessions::AddressedForOneTurn)> = projects
+        .into_iter()
+        .flat_map(|project| {
+            bravebot_session::sessions::addressed_for_one_turn(&project, &definition)
+                .into_iter()
+                .map(move |found| (project.clone(), found))
+        })
+        .collect();
+    found.sort_by_key(|(_, found)| std::cmp::Reverse(found.at));
+
+    let mut recounted: HashMap<(PathBuf, String), Vec<bravebot_agent::conversation::Said>> =
+        HashMap::new();
+    let exchanges: Vec<Value> = found
+        .into_iter()
+        .filter_map(|(project, found)| {
+            let key = (project, found.id.clone());
+            if !recounted.contains_key(&key) {
+                let record = store::load(&key.0, &key.1)?;
+                let said = bravebot_agent::Conversation::restored(record.conversation).recounted();
+                recounted.insert(key.clone(), said);
+            }
+            Some(json!({
+                "id": found.id,
+                "title": found.title,
+                "directory": found.directory,
+                "prompt": found.prompt,
+                "at": found.at,
+                "said": wire::exchange(&recounted[&key], found.prompt),
+            }))
+        })
+        .collect();
+    Ok(json!({ "exchanges": exchanges }))
+}
+
 /// List Claude Code's sessions for a project, or copy the ones named (SESSION-32).
 ///
 /// The names are matched exactly, never as the beginning of one, since a window sends back a name
@@ -3107,6 +3155,7 @@ fn work(work: Work) {
                             .map(|addressed| Address {
                                 definition: addressed.name().to_string(),
                                 standing: addressing_standing,
+                                at: None,
                             })
                             .as_ref(),
                     ),

@@ -3010,6 +3010,83 @@ pub fn load(project: &Path, id: &str) -> Option<Record> {
     read(&directory.join(format!("{id}.json")))
 }
 
+/// A turn of a session in this project that was addressed to a definition for that turn alone
+/// ([SESSION-39](../../../docs/specs/sessions.md#SESSION-39)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressedForOneTurn {
+    /// The record that holds it.
+    pub id: String,
+    pub title: String,
+    /// The working directory the record says the session ran in.
+    pub directory: String,
+    /// Where its prompt is among the things the user said, which is the ordinal `session.fork`
+    /// cuts on and `session.open` numbers a user row with.
+    pub prompt: usize,
+    /// When its prompt was said, in seconds since the epoch.
+    pub at: u64,
+    /// The last thing the assistant said before the next prompt, or `None` where it said nothing.
+    pub replied: Option<String>,
+}
+
+/// Every turn of a session in this project that was addressed to `definition` for that turn
+/// alone, newest first ([SESSION-39](../../../docs/specs/sessions.md#SESSION-39)).
+///
+/// Read from what the driver recorded on each turn's opening line, so a session deleted, rewound
+/// or resent says what it holds now. A fork copies the exchanges before its cut with the times
+/// they were said, and an exchange said before its record started is the source's, so a fork
+/// lists only its own turns. A line recorded before the time was kept is not listed.
+pub fn addressed_for_one_turn(project: &Path, definition: &str) -> Vec<AddressedForOneTurn> {
+    let mut found: Vec<AddressedForOneTurn> = list(project)
+        .into_iter()
+        .filter(|summary| !summary.manifest)
+        .filter_map(|summary| load(project, &summary.id))
+        .flat_map(|record| addressed_for_one_turn_in(&record, definition))
+        .collect();
+    found.sort_by_key(|found| std::cmp::Reverse(found.at));
+    found
+}
+
+fn addressed_for_one_turn_in(record: &Record, definition: &str) -> Vec<AddressedForOneTurn> {
+    use bravebot_agent::conversation::Said;
+    let recounted = bravebot_agent::Conversation::restored(record.conversation.clone()).recounted();
+    recounted
+        .iter()
+        .enumerate()
+        .filter(|(_, said)| matches!(said, Said::User(..)))
+        .enumerate()
+        .filter_map(|(prompt, (index, said))| match said {
+            Said::User(_, Some(address))
+                if !address.standing
+                    && address.definition == definition
+                    && address.at.is_some_and(|at| at >= record.started) =>
+            {
+                Some(AddressedForOneTurn {
+                    id: record.id.clone(),
+                    title: record.title.clone(),
+                    directory: record.directory.clone(),
+                    prompt,
+                    at: address.at?,
+                    replied: replied_after(&recounted[index + 1..]),
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The last thing the assistant said in `after` before the next prompt.
+fn replied_after(after: &[bravebot_agent::conversation::Said]) -> Option<String> {
+    use bravebot_agent::conversation::Said;
+    after
+        .iter()
+        .take_while(|said| !matches!(said, Said::User(..)))
+        .filter_map(|said| match said {
+            Said::Assistant(text) => Some(text.clone()),
+            _ => None,
+        })
+        .last()
+}
+
 /// Why a session was not deleted.
 #[derive(Debug)]
 pub enum Deletion {
@@ -6826,6 +6903,98 @@ mod tests {
             before,
             "the source record changed"
         );
+    }
+
+    /// SESSION-39: the turns addressed to a definition for that turn alone are listed from the
+    /// record, with their prompt's ordinal and time, newest first. A turn under a standing
+    /// definition, one addressed to another definition, and one said before its record started
+    /// are not, so a fork lists none of the exchanges it copied.
+    #[test]
+    fn the_turns_addressed_to_a_definition_for_one_turn_are_listed_and_a_forks_copies_are_not() {
+        use bravebot_agent::conversation::Address;
+        use bravebot_agent::request_view::Provenance;
+        use bravebot_aichat::protocol::Message;
+
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-addressed-for-one-turn");
+        let mut conversation = bravebot_agent::Conversation::new();
+        let mut say = |text: &str, definition: &str, standing: bool, at: u64| {
+            conversation.push_from(Message::user(text), Provenance::Typed);
+            conversation.address_last(Address {
+                definition: definition.to_string(),
+                standing,
+                at: Some(at),
+            });
+            conversation.push(Message::assistant(format!("answer to {text}")));
+        };
+        say("said before the record began", "reviewer", false, 900);
+        say("review the diff", "reviewer", false, 2_000);
+        say("carry on", "reviewer", true, 2_001);
+        say("test it", "tester", false, 2_002);
+        say("review it again", "reviewer", false, 2_003);
+        let snapshot = conversation.snapshot();
+
+        let mut source = Handle::begin(&root, Front::Terminal, A_BUILD);
+        source.save(
+            "said before the record began",
+            Standing {
+                history: None,
+                conversation: &snapshot,
+                turns: 5,
+                tokens: 0,
+                split: Default::default(),
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &TrustStore::new("/work"),
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+                touched: None,
+                answered_by_mode: false,
+            },
+        );
+        let source_id = source.id().to_string();
+        let path = project_directory(&root)
+            .expect("a directory")
+            .join(format!("{source_id}.json"));
+        let mut aged = load(&root, &source_id).expect("the source record");
+        aged.started = 1_000;
+        std::fs::write(&path, serde_json::to_vec_pretty(&aged).unwrap()).expect("age the record");
+        fork(&root, &source_id).expect("the session forks");
+
+        let listed = addressed_for_one_turn(&root, "reviewer");
+        let shown: Vec<(&str, usize, u64)> = listed
+            .iter()
+            .map(|found| (found.id.as_str(), found.prompt, found.at))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                (source_id.as_str(), 4, 2_003),
+                (source_id.as_str(), 1, 2_000)
+            ]
+        );
+        let replies: Vec<Option<&str>> = listed
+            .iter()
+            .map(|found| found.replied.as_deref())
+            .collect();
+        assert_eq!(
+            replies,
+            vec![
+                Some("answer to review it again"),
+                Some("answer to review the diff")
+            ]
+        );
+        assert_eq!(listed[0].title, "said before the record began");
+        assert_eq!(listed[0].directory, aged.directory);
+        assert!(addressed_for_one_turn(&root, "nobody").is_empty());
     }
 
     #[test]

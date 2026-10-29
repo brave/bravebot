@@ -291,13 +291,20 @@ pub fn submitted(text: &str, composed: Option<&Composed>, address: Option<&Addre
 /// addressed to none ([ADDRESS-12](../../../docs/specs/addressing-a-definition.md#ADDRESS-12)).
 ///
 /// `standing` says whether it was the definition the session stands under, which a bot's
-/// conversation has for every turn, or one named for the turn alone.
+/// conversation has for every turn, or one named for the turn alone. `at` is when the line was said,
+/// where the record says.
 pub fn addressed_to(address: Option<&Address>) -> Value {
     match address {
-        Some(address) => json!({
-            "definition": address.definition,
-            "standing": address.standing,
-        }),
+        Some(address) => {
+            let mut value = json!({
+                "definition": address.definition,
+                "standing": address.standing,
+            });
+            if let Some(at) = address.at {
+                value["at"] = json!(at);
+            }
+            value
+        }
         None => Value::Null,
     }
 }
@@ -324,6 +331,19 @@ pub fn recounted(said: &[Said]) -> Vec<Value> {
             }
             value
         })
+        .collect()
+}
+
+/// The rows of one exchange of a recounted conversation: its `prompt`th user row and what was said
+/// after it up to the next, in the shape [`recounted`] gives them
+/// ([SESSION-39](../../../docs/specs/sessions.md#SESSION-39)).
+pub fn exchange(said: &[Said], prompt: usize) -> Vec<Value> {
+    recounted(said)
+        .into_iter()
+        .skip_while(|row| row["prompt"] != json!(prompt))
+        .enumerate()
+        .take_while(|(index, row)| *index == 0 || row.get("prompt").is_none())
+        .map(|(_, row)| row)
         .collect()
 }
 

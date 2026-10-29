@@ -3581,6 +3581,13 @@ session-working-under =
 # raison suit à la ligne suivante. Le nom est celui que le pilote a enregistré depuis --agent.
 session-working-under-by-setting =
     le réglage agent a choisi cette définition ; --agent <nom> en choisit une autre pour la session
+session-addressed-elsewhere = { $definition } a répondu dans « { $title } » { $when } : { $reply }
+session-addressed-elsewhere-unanswered = { $definition } a été sollicitée dans « { $title } » { $when } et n'a pas répondu
+session-addressed-elsewhere-more =
+    { $count ->
+        [one] et 1 autre tour ; /resume liste les sessions
+       *[other] et { $count } autres tours ; /resume liste les sessions
+    }
 session-agent-setting-gone =
     le réglage agent désigne { $definition }, que cette session n'a pas résolue : chaque tour est
     celui de la session elle-même, avec les outils et le modèle qu'elle aurait sans --agent

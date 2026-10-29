@@ -581,30 +581,96 @@ fn a_turn_and_a_reopened_session_say_which_definition_was_addressed_and_whether_
     let said = reopened["ok"]["said"].as_array().unwrap_or_else(|| {
         panic!("a reopened session returned no transcript: {reopened}");
     });
-    let prompts: Vec<(&str, &Value)> = said
+    let prompts: Vec<(&str, Value, bool)> = said
         .iter()
         .filter(|row| row["kind"] == "user")
-        .map(|row| (row["text"].as_str().unwrap(), &row["address"]))
+        .map(|row| {
+            let mut address = row["address"].clone();
+            let said_at = address
+                .as_object_mut()
+                .and_then(|fields| fields.remove("at"))
+                .is_some_and(|at| at.as_u64().is_some_and(|at| at > 0));
+            (row["text"].as_str().unwrap(), address, said_at)
+        })
         .collect();
     assert_eq!(
         prompts,
         vec![
-            ("PLAIN-TURN", &Value::Null),
+            ("PLAIN-TURN", Value::Null, false),
             (
                 "SUMMONED-ALONE",
-                &json!({"definition": "lantern", "standing": false})
+                json!({"definition": "lantern", "standing": false}),
+                true
             ),
             (
                 "OWN-TURN",
-                &json!({"definition": "harbour", "standing": true})
+                json!({"definition": "harbour", "standing": true}),
+                true
             ),
             (
                 "GUEST-TURN",
-                &json!({"definition": "lantern", "standing": false})
+                json!({"definition": "lantern", "standing": false}),
+                true
             ),
         ],
-        "{said:?}"
+        "a reopened prompt row names its definition and, for an addressed turn, when it was said: {said:?}"
     );
+}
+
+/// SESSION-39: `session.addressed` lists the turns addressed to a definition for that turn alone,
+/// with the rows of each exchange as `session.open` sends them. A plain turn, and every turn of a
+/// conversation that belongs to the definition, are not listed, and a name that is no slug is
+/// refused.
+#[test]
+fn the_turns_addressed_to_a_definition_for_one_turn_are_listed_with_their_reply() {
+    let scratch = Scratch::new("bridge-addressing-listed");
+    scratch.define("harbour");
+    let (endpoint, _received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+    window.turn(json!({"prompt": "PLAIN-TURN"}));
+    let done = window.turn(json!({"prompt": "SUMMONED-TURN", "address": "harbour"}));
+    let id = done["data"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no record id: {done}"))
+        .to_string();
+    window.turn(json!({"prompt": "AFTER-TURN"}));
+    drop(window);
+    let mut owned = Window::open(&scratch, &endpoint);
+    owned.turn(json!({"prompt": "OWN-TURN", "definition": "harbour"}));
+    owned.turn(json!({"prompt": "OWN-AGAIN", "definition": "harbour", "address": "harbour"}));
+
+    let directory = scratch.project().display().to_string();
+    for params in [
+        json!({"definition": "harbour", "directory": directory}),
+        json!({"definition": "harbour"}),
+    ] {
+        let listed = owned.call("session.addressed", params);
+        let exchanges = listed["ok"]["exchanges"]
+            .as_array()
+            .unwrap_or_else(|| panic!("nothing listed: {listed}"));
+        assert_eq!(exchanges.len(), 1, "{listed}");
+        let exchange = &exchanges[0];
+        assert_eq!(exchange["id"], json!(id), "{listed}");
+        assert_eq!(exchange["prompt"], json!(1), "{listed}");
+        assert!(exchange["at"].as_u64().is_some(), "{listed}");
+        let said: Vec<(Value, Value)> = exchange["said"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no rows: {listed}"))
+            .iter()
+            .map(|row| (row["kind"].clone(), row["text"].clone()))
+            .collect();
+        assert_eq!(
+            said,
+            vec![
+                (json!("user"), json!("SUMMONED-TURN")),
+                (json!("assistant"), json!("done")),
+            ],
+            "{listed}"
+        );
+    }
+
+    let refused = owned.call("session.addressed", json!({"definition": "../harbour"}));
+    assert!(refused.get("error").is_some(), "{refused}");
 }
 
 /// MEMORY-10: the turn a watch fires in a bot's conversation is addressed, though no request

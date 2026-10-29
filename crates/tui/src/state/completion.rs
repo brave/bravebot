@@ -469,8 +469,9 @@ impl Session {
     /// the pick, and the definition is staged beside the line (ADDRESS-2, MEMORY-14).
     ///
     /// Nothing is named in the line, so what the pick adds is the marker alone, written where the
-    /// word was and followed by a space. The name is one the list offered, taken from the set the
-    /// session resolved, and is checked against that set again when the line is sent.
+    /// word was and followed by a space. A line holds one pick: the marker of an earlier one is
+    /// taken out. The name is one the list offered, taken from the set the session resolved, and is
+    /// checked against that set again when the line is sent.
     fn pick_definition(&mut self, name: &str) {
         let start = bravebot_mentions::last_word_starts_at(&self.input);
         let Some((kept, word)) = self.input.split_at_checked(start) else {
@@ -480,7 +481,18 @@ impl Session {
             return;
         }
         let marker = bravebot_mentions::marker(name, name);
-        let kept = kept.to_string();
+        // A line holds one pick, so a second takes the first one's marker out of the line.
+        let kept = match self.pick.take() {
+            Some(earlier) if bravebot_mentions::marker_in(kept, &earlier.marker) => {
+                let without = bravebot_mentions::without_marker(kept, &earlier.marker);
+                if without.is_empty() {
+                    without
+                } else {
+                    format!("{without} ")
+                }
+            }
+            _ => kept.to_string(),
+        };
         self.put_in_the_box(format!("{kept}{marker} "));
         self.pick = Some(Pick {
             name: name.to_string(),

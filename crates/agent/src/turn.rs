@@ -2934,6 +2934,7 @@ where
         conversation.address_last(crate::conversation::Address {
             definition: definition.clone(),
             standing: task.addressing_is_standing,
+            at: Some(crate::trusted::seconds_now()),
         });
     }
 

@@ -161,7 +161,10 @@ them cannot read a pick differently from the terminal
 `[@Name]` marker and stages the definition beside the line, as a dropped file is staged
 ([DROP-6](dropping.md#DROP-6)), so in the text of a prompt `@` still names only a file. Enter on a
 line whose marker is still in it addresses the definition exactly as `/agent <name> <task>` would,
-with the marker taken out of the task. The row a person picks says which kind of thing it is, and
+with the marker taken out of the task. A line holds one pick: taking a second row takes the first
+marker out of the line, so the name sent is the second and the first marker is not left in the task.
+Shift-Enter starts a line in the box and does not send it, so it leaves the marker and the pick as
+they are. The row a person picks says which kind of thing it is, and
 the list is the cost: a person typing `@` is offered names that a directory's files do not
 contain, and has to read which kind each row is.
 
@@ -181,6 +184,8 @@ it already addresses the definition.
 `verified-by: bravebot_ui_bridge::mentions_running_tests::offering_definitions_during_a_turn_uses_the_last_list`
 `verified-by: bravebot_tui::app::tests::summoning::the_definitions_are_listed_ahead_of_the_files_with_what_each_is_for`
 `verified-by: bravebot_tui::app::tests::summoning::a_picked_definition_addresses_the_line_as_the_agent_command_does`
+`verified-by: bravebot_tui::app::tests::summoning::a_second_definition_picked_replaces_the_first_and_only_it_is_sent`
+`verified-by: bravebot_tui::app::tests::summoning::shift_enter_on_a_picked_definition_starts_a_line_and_keeps_the_pick`
 
 <a id="ADDRESS-3"></a>
 ### ADDRESS-3: only a line a person typed into the box, or the command line that started the session
@@ -477,10 +482,12 @@ A reply produced by an addressed run is drawn under the definition's name, and t
 the driver resolved rather than anything the reply says about itself.
 
 The driver records the name beside the prompt it addressed. The session record's row for that
-prompt carries `address`, holding the definition and whether it is the one the session stands under
+prompt carries `address`, holding the definition, whether it is the one the session stands under
 (`standing`), as [MEMORY-10](definition-memory.md#MEMORY-10) makes a bot's conversation stand
-under its own. `turn.done` carries the same field for the turn that ended, and the rows of a
-reopened or recounted session carry it on the prompt's row. The terminal draws the reply's label
+under its own, and when the line was sent in seconds since the Unix epoch (`at`). `turn.done`
+carries the definition and `standing` for the turn that ended, and the rows of a reopened or
+recounted session carry all three on the prompt's row. A record written before `at` was kept has
+none, and no list built from the times includes its turns. The terminal draws the reply's label
 from the field and from nothing the reply holds. A record written before the field existed has none
 and is drawn as it always was. The terminal sets the label on a resumed session from the field, so
 a resumed reply is drawn under the name it was given.

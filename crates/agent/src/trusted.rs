@@ -198,8 +198,9 @@ pub fn keep_a_yes(
     yes.then(|| store.keep(identity, session, seconds_now(), confined_lines))
 }
 
-/// Seconds since the epoch, which is how a kept answer says when it was given.
-fn seconds_now() -> u64 {
+/// Seconds since the epoch, which is how a kept answer says when it was given and an addressed
+/// turn's opening line says when it was sent.
+pub(crate) fn seconds_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
