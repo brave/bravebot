@@ -39,6 +39,15 @@ not a command. A picture you attach arrives as a pasted picture and a file you l
 dropped file. An embedded selection or other resource is refused, because it could only be carried
 by putting its text in your words. MCP servers an editor lists are not started.
 
+## Several workspace roots
+
+Where the editor has more than one workspace root, it sends one as the session's directory and
+the rest in `session/new`'s `additionalDirectories`. Each of those is opened the same way
+`--add-dir` opens one on the command line: reachable for the session, but nothing in it is
+vouched for, so a write there is still asked about as any write outside the session's directory
+is. An entry that is not an absolute path to a directory that exists refuses the whole session
+before it starts.
+
 ## Approvals
 
 The first prompt in a directory asks whether to trust it, as the terminal does, and nothing runs

@@ -691,6 +691,21 @@ impl Bridge {
             ));
         }
 
+        // Opened as `--add-dir` opens one: reachable, and vouched for by nobody. An entry that is
+        // not an absolute path to an existing directory refuses the whole request before anything
+        // is minted, rather than opening the session with some of the list silently missing.
+        let mut additional = Vec::new();
+        if !request.param("directories").is_null() {
+            let mut probe = Workspace::new(&directory)
+                .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
+            for path in strings(request, "directories")? {
+                let canonical = probe
+                    .add_directory(&path)
+                    .map_err(|error| Failure::bad_request(error.to_string()))?;
+                additional.push(canonical);
+            }
+        }
+
         let branch = bravebot_session::sessions::branch_of(&directory);
         let auto_vetting = self.auto_vetting(&directory);
         // Nothing carried in, whatever an earlier session here answered, unless a kept yes settles
@@ -698,9 +713,11 @@ impl Bridge {
         // never the map a turn uses.
         let opening = Opening::of(&directory, None);
         let reported = opening.json(&directory);
+        let mut state = State::fresh(opening.trust);
+        state.directories = additional;
         let handle = self.mint(Open::opened(
             directory.clone(),
-            State::fresh(opening.trust),
+            state,
             opening.answered,
             opening.keeping,
             auto_vetting,
@@ -4345,6 +4362,57 @@ mod permissions_tests {
             ErrorCode::BadRequest
         );
         assert_eq!(bridge.dispatch(&list).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod additional_directories_tests {
+    use super::*;
+
+    /// ACP-9. `session.new`'s `directories` opens each one as `--add-dir` does: reachable, kept
+    /// on the session so a later turn's workspace opens it too, and refusing nothing about it.
+    #[test]
+    fn session_new_opens_every_directory_it_is_given() {
+        let project = tempfile::tempdir().unwrap();
+        let beside = tempfile::tempdir().unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.new", "params": {
+                "directory": project.path(),
+                "directories": [beside.path()],
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let made = bridge.dispatch(&request).unwrap();
+        let handle = made["session"].as_str().unwrap().to_string();
+
+        let open = bridge.open.get(&handle).unwrap();
+        let state = open.state.lock().unwrap();
+        assert_eq!(
+            state.directories,
+            vec![beside.path().canonicalize().unwrap()],
+            "the directory session.new was given was not kept on the session"
+        );
+    }
+
+    /// A `directories` entry that is not an absolute path to an existing directory refuses the
+    /// whole request before anything is minted, as a name `--add-dir` cannot open does.
+    #[test]
+    fn session_new_refuses_a_directory_that_does_not_exist() {
+        let project = tempfile::tempdir().unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.new", "params": {
+                "directory": project.path(),
+                "directories": ["/nowhere/that/exists"],
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let refused = bridge.dispatch(&request).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest);
+        assert!(bridge.open.is_empty(), "a refused session.new minted one");
     }
 }
 
