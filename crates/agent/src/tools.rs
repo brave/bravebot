@@ -7805,8 +7805,10 @@ fn request_path<S: Sink, C: Confirmer>(
                 ),
             };
             Produced::new(
+                // The path as the planner typed it: where a link landed is a name whoever made the
+                // link chose, and this sentence is the driver's own words (PATHREQ-2).
                 Labelled::trusted(format!(
-                    "approved: programs you start with run may {access} {shown} for the rest of \
+                    "approved: programs you start with run may {access} {path} for the rest of \
                      this session. Run the command again.{file_tools}"
                 )),
                 String::new(),
