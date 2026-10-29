@@ -54,6 +54,8 @@ interface Held {
 }
 
 const held = new Map<string, Held>()
+/** Transcripts kept after a session is closed, keyed by conversation id. */
+const saved = new Map<string, Said[]>()
 const eventListeners = new Set<(event: BridgeEvent) => void>()
 const themeListeners = new Set<(state: ThemeState) => void>()
 let rows: SessionSummary[] = SESSIONS()
@@ -93,6 +95,11 @@ function hold(directory: string, id: string | null, said: Said[], extra: Partial
   }
   held.set(handle, entry)
   return entry
+}
+
+/** Keep the transcript under the conversation id, so a later open reads this copy. */
+function remember(session: Held): void {
+  if (session.id) saved.set(session.id, structuredClone(session.said))
 }
 
 // ---------------------------------------------------------------- pressing the buttons
@@ -148,6 +155,8 @@ function scriptFor(session: Held, signal: AbortSignal): Script {
         rows = [{ id, directory: session.directory, project: session.directory.split('/').at(-1) ?? '', branch: 'main', title: session.title, updated: Math.floor(Date.now() / 1000), bytes: 2000 }, ...rows]
       }
       if (extra.rewind) session.rewind = [{ steps: 1, turn: session.turn, prompt: session.prompts - 1, text: session.title, paths: ['src/cache.ts', 'tests/cache.test.ts'], gaps: [] }, ...session.rewind.map((point) => ({ ...point, steps: point.steps + 1 }))]
+      session.said.push({ kind: 'assistant', text: reply })
+      remember(session)
       emit('turn.done', {
         id, turn: session.turn, prompt: session.prompts - 1, reply, model: 'sample/fast', service: 'Sample gateway', sessionModel: true, steps: extra.steps ?? 4, clean: true,
         tokens: 18_342, outputTokens: 1_204, contextTokens: 64_000, notices: extra.notices ?? [], trust: { rules: [] }, archived: session.archived,
@@ -249,7 +258,8 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
       const id = String(params.id)
       const record = rows.find((row) => row.id === id)
       if (!record) return failed('not-found', 'That conversation is not in this playground.')
-      return ok(opened(hold(String(params.directory), id, structuredClone(saidFor(id))), record))
+      const said = saved.get(id) ?? saidFor(id)
+      return ok(opened(hold(String(params.directory), id, structuredClone(said)), record))
     }
     case 'session.new': {
       const directory = String(params.directory)
@@ -261,7 +271,9 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
       })
     }
     case 'trust.reply': return ok({ trusted: params.trusted === true, kept: params.trusted === true })
-    case 'session.close': if (session) { session.abort?.abort(); held.delete(session.handle) } return ok({})
+    case 'session.close':
+      if (session) { remember(session); session.abort?.abort(); held.delete(session.handle) }
+      return ok({})
     case 'session.mode': return ok({ permissionMode: params.mode })
     case 'session.sandbox': return ok({ sandboxMode: params.mode })
     case 'turn.send': {
@@ -304,7 +316,10 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
       }
       return ok(rewound)
     }
-    case 'session.delete': rows = rows.filter((row) => row.id !== params.id); return ok({})
+    case 'session.delete':
+      rows = rows.filter((row) => row.id !== params.id)
+      if (typeof params.id === 'string') saved.delete(params.id)
+      return ok({})
     case 'session.purge': return ok({ sessions: 0, bytes: 0, ids: [], skipped: [] })
     case 'session.import': return ok({ found: [], copied: [] })
     case 'permissions.list': return ok({
