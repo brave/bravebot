@@ -208,9 +208,9 @@ try {
   assert.equal(await trigger.getAttribute('aria-label'), labelBefore, 'Enter on a collapsed row does not change the model')
   await braveGroup.click()        // expand again for the rest of the test
   await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length === 3)
-  // ArrowLeft on a row collapses its provider section
-  await search.fill('')
-  await search.press('ArrowDown') // move to first model row (index 0)
+  // ArrowLeft on a row collapses its provider section. Home puts the highlight
+  // on the first visible row (Sonnet, OpenRouter) regardless of prior state.
+  await search.press('Home')
   await search.press('ArrowLeft')
   await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
   assert.equal(await models.getByRole('option').count(), 1, 'ArrowLeft collapses the active provider, hiding its rows')
