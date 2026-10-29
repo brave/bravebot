@@ -202,7 +202,7 @@ written inside one more pair, as `Read(""a"")` for the file `"a"`, and `Read("a"
 `a"b`. A lone `"` has a quote at one end only and is the pattern for the file called `"`. Quotes
 holding nothing are reported ([PERM-11](#PERM-11)), since no file has an empty name.
 Padding outside the quotes, as in `Read( "./a.md" )`, is whitespace at an end and is reported. A
-specifier with a quote at only one of its ends is a pattern, as it always was.
+specifier with a quote at only one of its ends is a pattern.
 
 **Why a quoted name.** The escape has to be a spelling no file with a legal name needs, and a byte
 of a name cannot be set aside for it: only `/` and NUL are excluded from names where a path is
