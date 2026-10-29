@@ -2948,7 +2948,9 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   held path with a link on either backend. For macOS, a comment in `crates/sandbox/src/macos.rs`
   about refusal rows says the path a process ends up opening is the one matched, and no test checks
   that. For Linux, the risk is that the row is opened by following the link, so it may widen to the
-  link's target. That has not been checked either. This differs from a directory given by `/reach`,
+  link's target. That has not been checked either.
+  [#2914](https://github.com/brave/bravebot/issues/2914) tracks the case and the two missing
+  tests. This differs from a directory given by `/reach`,
   which is judged again when it is used ([SANDBOX-23](#SANDBOX-23)). The session holds the grant
   only, so a `git switch` changes what is at the path and leaves the grant in place.
 - **Not delegated.** A delegate is offered no `request_path`, and one it names anyway is answered
