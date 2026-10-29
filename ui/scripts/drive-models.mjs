@@ -172,6 +172,95 @@ try {
   assert.equal(await trigger.evaluate((element) => element === document.activeElement), true)
   assert.match(await trigger.getAttribute('aria-label'), /Sonnet|sonnet/)
   assert.equal(await page.locator('.model-current').innerText(), 'Claude Sonnet 4.5')
+
+  // Collapsible provider sections: ArrowLeft collapses, ArrowRight expands.
+  await trigger.click()
+  await page.getByRole('option', { name: /Claude Haiku/ }).waitFor()
+  // All three models visible: 2 OpenRouter + 1 Brave
+  assert.equal(await models.getByRole('option').count(), 3, 'all models visible on open')
+  // Provider groups are present as collapsible buttons
+  const openrouterGroup = page.locator('[data-test="model-group-OpenRouter"]')
+  const braveGroup = page.locator('[data-test="model-group-Brave"]')
+  await openrouterGroup.waitFor()
+  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'OpenRouter group starts expanded')
+  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'true', 'Brave group starts expanded')
+  // Refusal: ArrowLeft/Right with a non-empty query must not collapse any section.
+  await search.fill('sonnet')
+  const innerInput = page.locator('.model-search').locator('input')
+  // Position caret at end to give ArrowLeft room to move.
+  await innerInput.evaluate((el) => { el.selectionStart = el.selectionEnd = el.value.length })
+  const caretBefore = await innerInput.evaluate((el) => el.selectionStart)
+  await search.press('ArrowLeft')
+  const caretAfter = await innerInput.evaluate((el) => el.selectionStart)
+  assert.ok(caretAfter < caretBefore, 'ArrowLeft with a query moves the caret rather than collapsing a section')
+  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'query present: ArrowLeft leaves sections expanded')
+  await search.press('ArrowRight')
+  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'query present: ArrowRight leaves sections expanded')
+  // Refusal: Enter with a collapsed section must not choose a model.
+  await search.fill('')
+  await search.press('ArrowDown') // Sonnet is first (recently chosen)
+  await search.press('End')       // jump to Brave model (last row)
+  await braveGroup.click()        // collapse Brave so Brave model is hidden
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
+  const labelBefore = await trigger.getAttribute('aria-label')
+  await search.press('Enter')     // active row is collapsed — should be ignored
+  assert.equal(await page.locator('.model-popover').isVisible(), true, 'Enter on a collapsed row leaves the menu open')
+  assert.equal(await trigger.getAttribute('aria-label'), labelBefore, 'Enter on a collapsed row does not change the model')
+  await braveGroup.click()        // expand again for the rest of the test
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length === 3)
+  // ArrowLeft on a row collapses its provider section. Home puts the highlight
+  // on the first visible row (Sonnet, OpenRouter) regardless of prior state.
+  await search.press('Home')
+  await search.press('ArrowLeft')
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
+  assert.equal(await models.getByRole('option').count(), 1, 'ArrowLeft collapses the active provider, hiding its rows')
+  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'false', 'OpenRouter group is now collapsed')
+  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'true', 'Brave group remains expanded')
+  // ArrowRight on a collapsed section expands it
+  await search.press('ArrowRight')
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length === 3)
+  assert.equal(await models.getByRole('option').count(), 3, 'ArrowRight expands the collapsed provider section')
+  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'OpenRouter group is expanded again')
+  // Clicking a provider heading collapses it
+  await braveGroup.click()
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
+  assert.equal(await models.getByRole('option').count(), 2, 'clicking a provider heading collapses it')
+  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'false', 'Brave group collapsed by click')
+  // Clicking again expands it
+  await braveGroup.click()
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length === 3)
+  assert.equal(await models.getByRole('option').count(), 3, 'clicking again expands the section')
+  // PageDown / PageUp / Home / End: with 3 rows and PAGE_SIZE 6, PageDown from row 0 clamps to the last row.
+  await search.press('Home')
+  await search.press('PageDown')
+  // After Home then PageDown the highlight must be on the last visible row (Brave model, index 2).
+  assert.match(
+    await page.locator('.model-menu leo-option.active').innerText(),
+    /Brave model/,
+    'PageDown from first row clamps to last row',
+  )
+  // PageUp from last row clamps back to first row (Sonnet was chosen, ranks first).
+  await search.press('PageUp')
+  assert.match(
+    await page.locator('.model-menu leo-option.active').innerText(),
+    /Claude Sonnet/,
+    'PageUp from last row clamps to first row',
+  )
+  await search.press('End')
+  assert.match(
+    await page.locator('.model-menu leo-option.active').innerText(),
+    /Brave model/,
+    'End key lands on last visible row',
+  )
+  // Search clears collapsed state
+  await braveGroup.click() // collapse Brave
+  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
+  await search.fill('a') // any search
+  await page.waitForFunction(() => document.querySelector('[data-test="model-group-Brave"]')?.getAttribute('aria-expanded') !== 'false')
+  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'true', 'search resets collapsed state')
+  await search.press('Escape')
+  await page.locator('.model-popover').waitFor({ state: 'hidden' })
+  console.log('PASS: collapsible provider sections (ArrowLeft/ArrowRight/click), PageDown, and search resets collapse')
   await page.screenshot({ path: '/tmp/bravebot-model-label.png' })
 
   const entry = page.locator(COMPOSER_INPUT)

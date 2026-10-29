@@ -173,8 +173,13 @@ settings and the managed file give, never in another session's choice.
 
 The model control in the composer opens the conversation's model picker.
 Search by name, provider, or reported capability (for example, `text` or `tools`),
-then click a model or use the arrow keys and Enter. Escape
-closes the picker. New conversations use the agent's configured default when available;
+then click a model or use the arrow keys and Enter. Escape closes the picker.
+
+Models are grouped by provider. **ArrowLeft** on any row collapses that provider's section;
+**ArrowRight** on a collapsed section expands it. Clicking the provider heading toggles
+it the same way. **PageDown** and **PageUp** jump six rows at a time through the visible
+list. **Home** and **End** jump to the first and last visible row. Changing the search
+query resets all collapsed sections. New conversations use the agent's configured default when available;
 the default is also marked in the list. A choice applies to subsequent messages and is
 remembered locally for that conversation across app restarts. Forks inherit the current
 choice. The picker is disabled while a turn is running.
