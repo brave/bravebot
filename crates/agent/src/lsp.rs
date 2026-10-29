@@ -213,6 +213,7 @@ impl LanguageServers {
             };
             let (decision, answered_by) = confirmer.confirm_server_noting_the_mode(&request);
             if decision != Decision::Approve {
+                policy.refuse_unapproved_server(&request.language);
                 return false;
             }
             // Before the launch, as the gap below is, so a start that hangs while the index builds

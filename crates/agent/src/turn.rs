@@ -2858,7 +2858,7 @@ where
     } else {
         let mut parts = vec![Part::Text { text: said }];
 
-        for index in 0..task.attachments.len() {
+        for (index, attachment) in task.attachments.iter().enumerate() {
             let key = format!("attachment_{index}");
             // The routing table was precommitted from these same indices.
             // nosemgrep: trailofbits.rs.panic-in-function-returning-result.panic-in-function-returning-result
@@ -2870,7 +2870,7 @@ where
             if left_out_by_rule(workspace, policy, reporter, &mut notices, &path) {
                 continue;
             }
-            let media = task.attachments[index].media.clone();
+            let media = attachment.media.clone();
 
             // Attaching the file is the grant, exactly as naming one with `@` is. Recorded before
             // the read so the read sees it, and under the name the read will ask about.

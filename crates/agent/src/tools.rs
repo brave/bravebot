@@ -3440,6 +3440,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             credentials: described(&found),
         };
         if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+            policy.refuse_unapproved_exposure("read_file");
             // The planner is told that much and no more. Enough to stop it reading the same file
             // a second way, and nothing about what was found, because a finding may not enter a
             // model's context however the question was answered.
@@ -6003,6 +6004,7 @@ fn edit_file<S: Sink, C: Confirmer>(
                         credentials: described(&exposed),
                     };
                     if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+                        policy.refuse_unapproved_exposure("edit_file");
                         // The planner is told its edit landed and why the lines are missing, and
                         // nothing about what was found: a finding may not enter a model's context
                         // however the question was answered.
@@ -6941,6 +6943,7 @@ fn release_output<S: Sink, C: Confirmer>(
         // for, nobody was asked and a check answered in their place, so naming the user would be a
         // false claim and naming the check would hand the planner the word it must not read.
         if confirmer.confirm_read_output(&request) == Decision::Reject {
+            policy.refuse_unapproved_release("read_output", &slot.to_string());
             return Err(Box::new(Produced::problem(format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, or say in your reply what you needed from it."
@@ -7194,6 +7197,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // carries: under bypass with screening asked for the answer came from a check rather than
         // from a person, and neither fact is the planner's to be told.
         if confirmer.confirm_vetted_read(&request) == Decision::Reject {
+            policy.refuse_unapproved_release("vet_content", &slot.to_string());
             return Produced::problem(format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, pass {slot} to spawn_processor, or say in your reply what you needed \
@@ -12410,6 +12414,7 @@ fn read_git<S: Sink, C: Confirmer>(
             credentials: describe_all(&pending),
         };
         if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+            policy.refuse_unapproved_exposure("read_git");
             return Produced::refused_with_a_note(
                 format!(
                     "refused: what read_git would show from {git_shown} holds what looks like a \
