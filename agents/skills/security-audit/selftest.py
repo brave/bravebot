@@ -4376,6 +4376,7 @@ def test_the_checkout_lane_starts_from_the_layers():
             "    /// A doc line.",
             "    model: Option<String>,",
             "    model_ignored: Vec<PathBuf>,",
+            "    not_obeyed: BTreeMap<&'static str, Vec<PathBuf>>,",
             "    unread: Vec<(PathBuf, String)>,",
             "    layers: Vec<PathBuf>,",
             "    run_network: Option<Network>,",
