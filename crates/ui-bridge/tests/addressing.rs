@@ -581,29 +581,39 @@ fn a_turn_and_a_reopened_session_say_which_definition_was_addressed_and_whether_
     let said = reopened["ok"]["said"].as_array().unwrap_or_else(|| {
         panic!("a reopened session returned no transcript: {reopened}");
     });
-    let prompts: Vec<(&str, &Value)> = said
+    let prompts: Vec<(&str, Value, bool)> = said
         .iter()
         .filter(|row| row["kind"] == "user")
-        .map(|row| (row["text"].as_str().unwrap(), &row["address"]))
+        .map(|row| {
+            let mut address = row["address"].clone();
+            let said_at = address
+                .as_object_mut()
+                .and_then(|fields| fields.remove("at"))
+                .is_some_and(|at| at.as_u64().is_some_and(|at| at > 0));
+            (row["text"].as_str().unwrap(), address, said_at)
+        })
         .collect();
     assert_eq!(
         prompts,
         vec![
-            ("PLAIN-TURN", &Value::Null),
+            ("PLAIN-TURN", Value::Null, false),
             (
                 "SUMMONED-ALONE",
-                &json!({"definition": "lantern", "standing": false})
+                json!({"definition": "lantern", "standing": false}),
+                true
             ),
             (
                 "OWN-TURN",
-                &json!({"definition": "harbour", "standing": true})
+                json!({"definition": "harbour", "standing": true}),
+                true
             ),
             (
                 "GUEST-TURN",
-                &json!({"definition": "lantern", "standing": false})
+                json!({"definition": "lantern", "standing": false}),
+                true
             ),
         ],
-        "{said:?}"
+        "a reopened prompt row names its definition and, for an addressed turn, when it was said: {said:?}"
     );
 }
 

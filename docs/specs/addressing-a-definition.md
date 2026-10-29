@@ -477,10 +477,12 @@ A reply produced by an addressed run is drawn under the definition's name, and t
 the driver resolved rather than anything the reply says about itself.
 
 The driver records the name beside the prompt it addressed. The session record's row for that
-prompt carries `address`, holding the definition and whether it is the one the session stands under
+prompt carries `address`, holding the definition, whether it is the one the session stands under
 (`standing`), as [MEMORY-10](definition-memory.md#MEMORY-10) makes a bot's conversation stand
-under its own. `turn.done` carries the same field for the turn that ended, and the rows of a
-reopened or recounted session carry it on the prompt's row. The terminal draws the reply's label
+under its own, and when the line was sent in seconds since the Unix epoch (`at`). `turn.done`
+carries the definition and `standing` for the turn that ended, and the rows of a reopened or
+recounted session carry all three on the prompt's row. A record written before `at` was kept has
+none, and no list built from the times includes its turns. The terminal draws the reply's label
 from the field and from nothing the reply holds. A record written before the field existed has none
 and is drawn as it always was. The terminal sets the label on a resumed session from the field, so
 a resumed reply is drawn under the name it was given.

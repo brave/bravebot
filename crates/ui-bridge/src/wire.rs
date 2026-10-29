@@ -291,13 +291,20 @@ pub fn submitted(text: &str, composed: Option<&Composed>, address: Option<&Addre
 /// addressed to none ([ADDRESS-12](../../../docs/specs/addressing-a-definition.md#ADDRESS-12)).
 ///
 /// `standing` says whether it was the definition the session stands under, which a bot's
-/// conversation has for every turn, or one named for the turn alone.
+/// conversation has for every turn, or one named for the turn alone. `at` is when the line was said,
+/// where the record says.
 pub fn addressed_to(address: Option<&Address>) -> Value {
     match address {
-        Some(address) => json!({
-            "definition": address.definition,
-            "standing": address.standing,
-        }),
+        Some(address) => {
+            let mut value = json!({
+                "definition": address.definition,
+                "standing": address.standing,
+            });
+            if let Some(at) = address.at {
+                value["at"] = json!(at);
+            }
+            value
+        }
         None => Value::Null,
     }
 }

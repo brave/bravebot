@@ -40201,18 +40201,38 @@ fn the_record_keeps_which_definition_each_prompt_was_addressed_to() {
             _ => None,
         })
         .collect();
-    let named = |definition: &str, standing| {
+    let said_at: Vec<Option<u64>> = recorded
+        .iter()
+        .map(|(_, address)| address.as_ref().and_then(|address| address.at))
+        .collect();
+    assert!(
+        said_at[1].is_some_and(|at| at > 0) && said_at[2].is_some_and(|at| at > 0),
+        "an addressed turn's opening line did not record when it was sent: {said_at:?}"
+    );
+    assert_eq!(
+        (said_at[0], said_at[3]),
+        (None, None),
+        "a turn nobody addressed recorded a time"
+    );
+    let named = |definition: &str, standing, at| {
         Some(Address {
             definition: definition.to_string(),
             standing,
+            at,
         })
     };
     assert_eq!(
         recorded,
         vec![
             ("PLAIN-BEFORE".to_string(), None),
-            ("ONE-TURN-ONLY".to_string(), named("rule-reviewer", false)),
-            ("STANDING-TURN".to_string(), named("lantern", true)),
+            (
+                "ONE-TURN-ONLY".to_string(),
+                named("rule-reviewer", false, said_at[1])
+            ),
+            (
+                "STANDING-TURN".to_string(),
+                named("lantern", true, said_at[2])
+            ),
             ("PLAIN-AFTER".to_string(), None),
         ]
     );
@@ -40240,6 +40260,7 @@ fn a_record_without_an_address_still_loads_and_one_with_it_round_trips() {
     conversation.address_last(Address {
         definition: "lantern".to_string(),
         standing: false,
+        at: Some(1_700_000_000),
     });
     let written = serde_json::to_string(&conversation.snapshot()).expect("serialises");
     let read: bravebot_agent::conversation::Snapshot =
@@ -40250,9 +40271,30 @@ fn a_record_without_an_address_still_loads_and_one_with_it_round_trips() {
             "addressed".to_string(),
             Some(Address {
                 definition: "lantern".to_string(),
-                standing: false
+                standing: false,
+                at: Some(1_700_000_000),
             })
         )]
+    );
+
+    // A record that kept the name before it kept the time reads as addressed at no known time.
+    let before_the_time: Stored = serde_json::from_str(
+        r#"{"role":"user","content":"x","address":{"definition":"lantern","standing":false}}"#,
+    )
+    .expect("a record with a name and no time loads");
+    assert_eq!(
+        before_the_time.address,
+        Some(Address {
+            definition: "lantern".to_string(),
+            standing: false,
+            at: None,
+        })
+    );
+    assert!(
+        !serde_json::to_string(&before_the_time)
+            .unwrap()
+            .contains("\"at\""),
+        "an address with no time wrote one"
     );
 }
 

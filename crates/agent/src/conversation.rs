@@ -231,6 +231,12 @@ pub struct Address {
     /// not say whether another definition was named for the turn.
     #[serde(default)]
     pub standing: bool,
+    /// When the line that addressed the turn was sent, in seconds since the Unix epoch.
+    ///
+    /// The driver's clock, set with the name and on no other message. Absent in a record written
+    /// before the time was kept, and in an address a live event is built from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<u64>,
 }
 
 /// One message as the record holds it: what was sent, and why the agent wrote it.

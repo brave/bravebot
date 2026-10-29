@@ -1418,6 +1418,7 @@ impl Bridge {
                     .map(|definition| Address {
                         definition: definition.clone(),
                         standing: addressing_standing,
+                        at: None,
                     })
                     .as_ref(),
             ),
@@ -3056,6 +3057,7 @@ fn work(work: Work) {
                             .map(|addressed| Address {
                                 definition: addressed.name().to_string(),
                                 standing: addressing_standing,
+                                at: None,
                             })
                             .as_ref(),
                     ),
