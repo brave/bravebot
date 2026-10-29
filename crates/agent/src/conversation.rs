@@ -214,6 +214,31 @@ impl Composed {
     }
 }
 
+/// The definition a turn was addressed to, as the driver matched it
+/// ([ADDRESS-12](../../../docs/specs/addressing-a-definition.md#ADDRESS-12)).
+///
+/// Set from the name the turn was addressed under and never from the words of the prompt or the
+/// reply, so a surface that shows which definition answered reads a field the driver wrote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Address {
+    /// The definition's name.
+    pub definition: String,
+    /// Whether the definition is the one the session stands under, as a bot's conversation does
+    /// ([MEMORY-10](../../../docs/specs/definition-memory.md#MEMORY-10)) or a session started with
+    /// `--agent` does, and not one a person named for this turn alone.
+    ///
+    /// A bot's conversation addresses every turn to the bot's definition, so the name alone does
+    /// not say whether another definition was named for the turn.
+    #[serde(default)]
+    pub standing: bool,
+    /// When the line that addressed the turn was sent, in seconds since the Unix epoch.
+    ///
+    /// The driver's clock, set with the name and on no other message. Absent in a record written
+    /// before the time was kept, and in an address a live event is built from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<u64>,
+}
+
 /// One message as the record holds it: what was sent, and why the agent wrote it.
 ///
 /// A pair rather than two lists kept in step. Everything that walks the exchange would have to
@@ -230,6 +255,13 @@ pub struct Stored {
     /// Absent for a prompt, an answer and a result, which is nearly all of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composed: Option<Composed>,
+    /// The definition the turn this message begins was addressed to, on the user message of an
+    /// addressed turn and absent everywhere else.
+    ///
+    /// Set by the driver from the name the turn was addressed under (ADDRESS-12), so a record
+    /// written before this field existed reads as an unaddressed turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<Address>,
     /// Whose words these are, as the composer recorded it, for the view of a request.
     ///
     /// Not written down: a saved session is a record of the exchange and not of this process's
@@ -245,6 +277,7 @@ impl Stored {
         Self {
             message,
             composed: None,
+            address: None,
             source: None,
         }
     }
@@ -584,6 +617,7 @@ impl Conversation {
         self.messages.push(Stored {
             message,
             composed: Some(composed),
+            address: None,
             source: None,
         });
     }
@@ -593,8 +627,19 @@ impl Conversation {
         self.messages.push(Stored {
             message,
             composed: Some(composed),
+            address: None,
             source: Some(source),
         });
+    }
+
+    /// Record the definition the turn whose prompt was pushed last is addressed to.
+    ///
+    /// Called by the driver with the name the turn was addressed under, right after the prompt is
+    /// pushed. It does nothing on an empty conversation.
+    pub fn address_last(&mut self, address: Address) {
+        if let Some(last) = self.messages.last_mut() {
+            last.address = Some(address);
+        }
     }
 
     /// Add the result of a `load_skill` call that was shown, tagged with the skill it loaded.
@@ -636,6 +681,7 @@ impl Conversation {
         self.messages.push(Stored {
             message,
             composed: None,
+            address: None,
             source: Some(source),
         });
     }
@@ -951,6 +997,7 @@ impl Conversation {
             carried.push(Stored {
                 message: Message::user(kept_skill(name, shown, cut, named)),
                 composed: Some(Composed::SkillKept { name: name.clone() }),
+                address: None,
                 source: stored.source.clone(),
             });
         }
@@ -1149,6 +1196,7 @@ impl Conversation {
             Stored {
                 message: Message::user(note),
                 composed: Some(Composed::Summary),
+                address: None,
                 source: None,
             },
         );
@@ -1208,8 +1256,8 @@ impl Conversation {
 /// is for the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Said {
-    /// What the user asked.
-    User(String),
+    /// What the user asked, and the definition the turn was addressed to where it was.
+    User(String, Option<Address>),
     /// What the model answered, where the kernel let it be seen at all.
     Assistant(String),
     /// A call the turn made, in the words it was announced with while it ran.
@@ -1363,6 +1411,7 @@ impl Conversation {
         self.messages.push(Stored {
             message: Message::user(UNFINISHED_TURN),
             composed: Some(Composed::Resumed),
+            address: None,
             source: None,
         });
     }
@@ -1400,6 +1449,7 @@ impl Conversation {
             messages.push(Stored {
                 message: Message::user(note),
                 composed: Some(Composed::Resumed),
+                address: None,
                 source: None,
             });
         }
@@ -1482,7 +1532,7 @@ impl Conversation {
             match message.role {
                 // `text` rather than the whole content: an attachment is drawn from what the
                 // interface recorded about it, and a data URI in the scrollback is not a transcript.
-                Role::User => said.push(Said::User(message.content.text())),
+                Role::User => said.push(Said::User(message.content.text(), stored.address.clone())),
                 Role::Assistant => {
                     // What the model said on its way to a call, which the live transcript shows
                     // above the call it introduces.
@@ -1946,7 +1996,7 @@ mod tests {
         assert_eq!(
             Conversation::restored(restored).recounted(),
             vec![
-                Said::User("read the briefing and carry on".into()),
+                Said::User("read the briefing and carry on".into(), None),
                 Said::Composed {
                     why: Composed::Attached {
                         path: "readme.md".into()
@@ -1974,7 +2024,7 @@ mod tests {
         assert_eq!(
             conversation.recounted(),
             vec![
-                Said::User("typed words".into()),
+                Said::User("typed words".into(), None),
                 Said::Composed {
                     why: Composed::Written,
                     text: "carry on".into()
@@ -2119,7 +2169,7 @@ mod tests {
         assert_eq!(
             conversation.recounted(),
             vec![
-                Said::User("what is in main.rs?".to_string()),
+                Said::User("what is in main.rs?".to_string(), None),
                 Said::Assistant("let me look".to_string()),
                 said_tool("Read(src/main.rs)", "to see the entry point"),
                 Said::Assistant("it is a hello world".to_string()),
@@ -2163,7 +2213,10 @@ mod tests {
 
             assert_eq!(
                 conversation.recounted(),
-                vec![Said::User(prompt.clone()), Said::Assistant("done".into())],
+                vec![
+                    Said::User(prompt.clone(), None),
+                    Said::Assistant("done".into())
+                ],
                 "prefix {prefix:?}"
             );
             assert_eq!(
@@ -2204,7 +2257,7 @@ mod tests {
             conversation
                 .recounted()
                 .iter()
-                .filter(|said| matches!(said, Said::User(_)))
+                .filter(|said| matches!(said, Said::User(..)))
                 .count(),
             4,
             "the summary was drawn as a prompt or a typed one was dropped"
@@ -2263,7 +2316,7 @@ mod tests {
         let restored = Conversation::restored(conversation.snapshot());
         assert_eq!(
             restored.recounted(),
-            vec![Said::User("summarise notes.md".to_string())]
+            vec![Said::User("summarise notes.md".to_string(), None)]
         );
     }
 
@@ -2931,13 +2984,13 @@ mod tests {
         assert_eq!(
             conversation.recounted(),
             vec![
-                Said::User("first".to_string()),
+                Said::User("first".to_string(), None),
                 Said::Assistant("a".to_string()),
-                Said::User("second".to_string()),
+                Said::User("second".to_string(), None),
                 Said::Assistant("b".to_string()),
-                Said::User("third".to_string()),
+                Said::User("third".to_string(), None),
                 Said::Assistant("c".to_string()),
-                Said::User("fourth".to_string()),
+                Said::User("fourth".to_string(), None),
                 Said::Assistant("d".to_string()),
             ]
         );
@@ -2954,9 +3007,10 @@ mod tests {
         conversation.compacted(boundary, "they asked about the first thing");
 
         assert!(
-            !conversation.recounted().contains(&Said::User(format!(
-                "{COMPACTED_PREFIX}\n\nthey asked about the first thing"
-            ))),
+            !conversation.recounted().contains(&Said::User(
+                format!("{COMPACTED_PREFIX}\n\nthey asked about the first thing"),
+                None
+            )),
             "the summary was drawn as a prompt"
         );
     }
@@ -3711,6 +3765,7 @@ mod tests {
             composed: Some(Composed::SkillNamed {
                 name: "ship-it".to_string(),
             }),
+            address: None,
             source: None,
         };
 

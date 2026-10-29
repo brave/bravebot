@@ -83,7 +83,7 @@ To file an issue, use the [issue-poster](agents/agents/issue-poster.md) definiti
 `/agent issue-poster`, and a session or a skill hands it the draft as a delegate. No script files
 an issue. The definition searches open and closed
 issues, applies the labels `docs/development/labelling-issues.md` describes, cites or files an
-issue for each case the body says is left undone, and reads the issue back, none of which a bare
+issue for each defect the body says is left unfixed, and reads the issue back, none of which a bare
 `gh issue create` does.
 
 [docs/best_practices.md](docs/best_practices.md) is what a pull request is reviewed against,

@@ -61,7 +61,6 @@ help:
 	@echo "  make check-versions        Whether every file stating the version states the same one"
 	@echo "  make check-lint-increase   Whether this branch adds sites of the clippy lints held to the base"
 	@echo "  make check-narration       Whether this branch's commits and lines narrate their writer's process [BASE=ref]"
-	@echo "  make check-pr-body         Whether a pull request body (PR_BODY) has a Not covered line, with an issue per case"
 	@echo "  make check-docs            Build the documentation website under docs/website"
 	@echo "  make docs-changes          What has landed in the specs since the site was updated"
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
@@ -574,7 +573,7 @@ clean-worktrees:
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
 .PHONY: check-all-local check-all
-check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-pr-body check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
+check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
 # The gates this branch's changes need, against its merge base with BASE, which check-reviewdog
@@ -725,16 +724,6 @@ locales:
 check-narration:
 	python3 contrib/check-narration.py --selftest
 	python3 contrib/check-narration.py $(if $(BASE),--base '$(BASE)')
-
-# Whether a pull request body has a Not covered line, which is `none` or a bullet per case, each
-# naming the issue that tracks it. The body is read from PR_BODY, as check-narration reads it, and
-# a run with no PR_BODY and not in a pull request has no body to read, so locally this runs the
-# selftest and checks a draft only where it is given one: PR_BODY="$(cat body.md)" make check-pr-body.
-# Only pull requests opened by netzenbot are held to the line, and PR_AUTHOR says who opened one.
-.PHONY: check-pr-body
-check-pr-body:
-	python3 contrib/check-pr-body.py --selftest
-	python3 contrib/check-pr-body.py
 
 # Whether every catalog matches contrib/untranslated-messages.txt, which records the messages each
 # translation is knowingly missing. A gap is allowed and silence about one is not: falling back to

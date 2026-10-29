@@ -11,7 +11,10 @@
 # the dependencies trusted to run a script on install. None of these was owned, so the one approval
 # the protection requires for a change that moves a pinned step onto a movable tag was owed to
 # nobody in particular. required-checks.txt is here for the same reason: it is the tree's statement of
-# which checks hold a merge.
+# which checks hold a merge. contrib/affected-checks.py is here because it decides which of those
+# checks a pull request skips as passing, and the Makefile because every make target a workflow runs
+# is a recipe in it. So is every other file a workflow step runs by path, which `make check-security`
+# holds this file to.
 #
 # Last matching pattern wins, so keep the more specific rules below the general ones.
 
@@ -51,3 +54,9 @@
 /mobile/ios/Bravebot.xcodeproj/ @bbondy
 /Cargo.lock @bbondy
 /contrib/required-checks.txt @bbondy
+/contrib/affected-checks.py @bbondy
+/Makefile @bbondy
+/contrib/check-pnpm-lockfiles.py @bbondy
+/contrib/measure-mutants.py @bbondy
+/ui/scripts/check-windows-install.mjs @bbondy
+/ui/scripts/windows-installer.mjs @bbondy

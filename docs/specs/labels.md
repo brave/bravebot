@@ -19,7 +19,7 @@ guards:
       - crates/agent/src/skills.rs: 1
       - crates/agent/src/tools.rs: 30
       - crates/agent/src/turn.rs: 1
-      - crates/agent/src/workspace.rs: 15
+      - crates/agent/src/workspace.rs: 16
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/src/anthropic.rs: 8
@@ -198,7 +198,7 @@ guards:
       - crates/mcp/src/http.rs: 1
       - crates/net/src/lib.rs: 1
       - crates/net/tests/egress.rs: 3
-      - crates/tui/src/update.rs: 1
+      - crates/update/src/lib.rs: 1
 documented-by: docs/website/docs/how-it-works.md
 ---
 
@@ -631,7 +631,14 @@ arrives at all.
   processor writes and where it puts the mark. Everything that buys them is on this list:
 
   - **Leave the mark out.** Then there is no document and the write is refused. They stopped
-    something from happening, which is the direction this is built to fail in.
+    something from happening, which is the direction this is built to fail in. It still decides
+    which of two driver-worded sentences the planner is shown next: a reference to the document,
+    or a sentence saying that answer marked no document and asking the planner to process it
+    again. That is one bit, no larger than the sizes a reference already carries for any
+    document the attacker's file produces, and no byte of the reply is in either sentence. In a
+    manifest, where there is no planner to ask again, the same bit makes the driver retry the
+    `process` step once itself, with the plan's instruction plus one fixed sentence, which is a
+    second paid call to the model for every file an attacker can make answer unmarked.
   - **Put the mark somewhere else, or more than once.** That shifts where the text is cut, so
     their words land in the document rather than in the remark. But the document becomes the body
     of a file the planner named and a person approved from a diff, and its contents were already
@@ -876,6 +883,13 @@ arrives at all.
   `bravebot-agent`, which is the driver too ([LABEL-4](#LABEL-4)), and in the `filetype` crate it
   calls. That crate holds no `declassify`, so no pinned count moves when it changes. Where the path is vouched for, the bytes are trusted and the comparison is the case
   [LABEL-5](#LABEL-5) allows. The rest of this entry is about a path nobody vouched for.
+
+  `Workspace::peek_labelled_for_write` also sniffs file bytes, for [WRITE-8](tools/write-file.md#WRITE-8):
+  whether the file is valid UTF-8 and, if not, whether `decode_text` reads it. It reads the file
+  whichever label the path has, and labels the answer as the trust map holds the path.
+  `holds_another_encoding` consults the answer only when that label is trusted, so the sniff
+  decides something only for a file the trust map vouches for, and nothing follows from the bytes
+  of a file nobody vouched for.
 
   Suppose an attacker owns the file. Everything that buys them is on this list:
 

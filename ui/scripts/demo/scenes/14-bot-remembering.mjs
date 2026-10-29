@@ -39,16 +39,10 @@ export default {
     // --- what it has kept ---------------------------------------------------------------------
 
     await s.say('What a bot has kept', 'The memory is a file, and its details show it as it stands.', 2.6)
+    // Opening a bot opens its conversation; its details are on the page of earlier ones.
     await s.click(row.locator(BOT_OPEN_BUTTON))
+    await s.click(page.locator('[data-test="earlier-conversations"]'))
     await page.locator('[data-test="bot-details"]').waitFor()
-    // A bot keeps one memory per folder; `13-bot-memory` worked in a project, so that one is shown.
-    const folder = page.locator('[data-test="memory-folder"]')
-    if (await folder.count()) {
-      await s.click(folder)
-      const project = page.locator('leo-option').filter({ hasNotText: 'No project' }).first()
-      if (await project.count()) await s.click(project)
-      await page.waitForTimeout(600)
-    }
 
     const shown = page.locator('[data-test="bot-details"] [data-test="bot-memory"]')
     if (!(await shown.count())) s.skip('this build shows no memory in the bot details')

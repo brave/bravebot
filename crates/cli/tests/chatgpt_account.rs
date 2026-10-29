@@ -198,6 +198,8 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         logs: Vec<(String, Vec<u8>)>,
         seen: std::collections::BTreeSet<PathBuf>,
         turns: usize,
+        /// How many of the turns were made with no sign-in stored, and so left no log.
+        quiet_turns: usize,
     }
     impl Runs<'_> {
         fn hook_runs(&self) -> usize {
@@ -240,6 +242,19 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         }
 
         fn turn(&mut self, name: &str, format: &[&str]) -> Output {
+            self.turn_leaving(name, format, 1)
+        }
+
+        /// A turn made while no sign-in is stored. The model is the account's, so no other service
+        /// is asked for its window, and with nothing to sign with the account is not asked either:
+        /// the turn asks the stand-in nothing and leaves no log. Its output and trace are still
+        /// searched.
+        fn turn_with_no_sign_in(&mut self, name: &str, format: &[&str]) -> Output {
+            self.quiet_turns += 1;
+            self.turn_leaving(name, format, 0)
+        }
+
+        fn turn_leaving(&mut self, name: &str, format: &[&str], logs: usize) -> Output {
             let before = self.hook_runs();
             let mut arguments = vec!["--trace", "-p", "say something", "--model", MODEL];
             arguments.extend_from_slice(format);
@@ -252,7 +267,10 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
                 "{name}: the hooks of the turn did not both start a program"
             );
             let logged = self.collect_logs(name);
-            assert_eq!(logged, 1, "{name} left {logged} debug logs and not one");
+            assert_eq!(
+                logged, logs,
+                "{name} left {logged} debug logs and not {logs}"
+            );
             output
         }
     }
@@ -264,6 +282,7 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         logs: Vec::new(),
         seen: std::collections::BTreeSet::new(),
         turns: 0,
+        quiet_turns: 0,
     };
     assert_eq!(
         runs.collect_logs("the sign-in"),
@@ -427,9 +446,9 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         "the ended sign-in was not removed"
     );
     // With the sign-in ended, a turn is told so, and a script reads that as a result.
-    let ended = runs.turn("the turn after the sign-in ended, as JSON", &["--json"]);
+    let ended = runs.turn_with_no_sign_in("the turn after the sign-in ended, as JSON", &["--json"]);
     assert!(!ended.status.success(), "{}", said(&ended));
-    let ended = runs.turn(
+    let ended = runs.turn_with_no_sign_in(
         "the turn after the sign-in ended, as a JSON stream",
         &["--json-stream"],
     );
@@ -474,13 +493,14 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         5,
         "the five turns that were answered did not leave a trail each: {left:?}"
     );
-    // A log is written by a run that logged something, and the sign-in and each turn ask something of
-    // the stand-in. `auth status` and `doctor` ask nothing of it and leave none.
+    // A log is written by a run that logged something, and the sign-in and each turn that has a
+    // sign-in to ask with ask something of the stand-in. `auth status`, `doctor` and the turns made
+    // once the sign-in ended ask nothing of it and leave none.
     assert_eq!(
         runs.logs.len(),
-        runs.turns + 1,
-        "a debug log for the sign-in and for each of the {} turns",
-        runs.turns
+        runs.turns + 1 - runs.quiet_turns,
+        "a debug log for the sign-in and for each of the {} turns that had a sign-in",
+        runs.turns - runs.quiet_turns
     );
     let logs = std::mem::take(&mut runs.logs);
 

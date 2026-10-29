@@ -218,6 +218,23 @@
   white-space: nowrap;
 }
 .mention-parent { color: var(--ink-tertiary); }
+.mention-section {
+  display: flex;
+  align-items: center;
+  min-height: var(--hit);
+  padding-inline: var(--leo-spacing-m);
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  user-select: none;
+}
+.mention-bot-name {
+  min-width: 0;
+  overflow: hidden;
+  font: var(--type-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-foot.summon { --leo-icon-color: var(--ink-tertiary); }
 .mention-foot {
   display: flex;
   align-items: center;
@@ -225,7 +242,7 @@
   padding: var(--leo-spacing-s) var(--leo-spacing-l);
   font: var(--type-caption);
   color: var(--ink-tertiary);
-  --leo-icon-size: var(--icon-meta);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--status-warning);
 }
 .mention-keys { margin-inline-start: auto; }
@@ -321,7 +338,7 @@
   gap: var(--leo-spacing-s);
   font: var(--type-caption);
   color: var(--ink-tertiary);
-  --leo-icon-size: var(--icon-caption);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--status-warning);
 }
 .attachment-trust:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; border-radius: var(--radius-chip); }
@@ -369,7 +386,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--leo-spacing-s) var(--leo-spacing-m);
-  --leo-icon-size: var(--icon-meta);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--status-warning);
 }
 .composer-notice strong { font: var(--type-caption-strong); color: var(--ink-primary); }
@@ -413,7 +430,7 @@
   cursor: pointer;
   pointer-events: auto;
   animation: pill-in var(--motion-fast);
-  --leo-icon-size: var(--icon-meta);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: currentColor;
 }
 .attention-pill:hover { background: var(--surface-hover); }
@@ -436,7 +453,7 @@
   transition: flex-grow var(--motion-panel);
 }
 .transcript.fresh .composer-spacer { flex-grow: 1; }
-.transcript.fresh .entries { justify-content: flex-end; contain: none; }
+.transcript.fresh .entries { justify-content: safe flex-end; contain: none; }
 .fresh-greeting { text-align: center; padding-bottom: var(--leo-spacing-4xl); }
 .fresh-greeting h1 { margin: 0 0 var(--leo-spacing-xl); font: var(--type-page-title); color: var(--ink-primary); text-wrap: balance; }
 .fresh-project { font: inherit; color: inherit; text-decoration: underline; text-underline-offset: 0.12em; }
@@ -466,7 +483,7 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
 .fresh-greeting p { margin: 0; font: var(--type-lede); color: var(--ink-secondary); text-wrap: pretty; }
 /* The notes under the greeting are centred lines in caption ink, 40px over the box. */
 .transcript.fresh .session-notices { align-items: center; margin-bottom: var(--leo-spacing-4xl); }
-.transcript.fresh .session-notice { justify-content: center; gap: var(--leo-spacing-s); font: var(--type-meta); color: var(--ink-tertiary); --leo-icon-size: var(--icon-control); }
+.transcript.fresh .session-notice { justify-content: center; gap: var(--leo-spacing-s); font: var(--type-meta); color: var(--ink-tertiary); }
 /* ---- no session: the welcome */
 
 .empty-body {

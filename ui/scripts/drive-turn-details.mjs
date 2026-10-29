@@ -69,7 +69,7 @@ try {
   await page.screenshot({ path: join(output, 'conversation-row.png') })
   await page.getByRole('button', { name: 'Audit unavailable', exact: false }).click()
   await page.getByText('Audit details aren’t available for this saved reply.').waitFor()
-  assert.equal(await page.locator('.turn-statistics').count(), 0, 'session total is not a turn statistic')
+  assert.equal(await page.locator('[data-test="turn-usage"]').count(), 0, 'session total is not a turn statistic')
   await page.getByRole('button', { name: 'Close audit inspector' }).click()
 
   await send('Improve the empty state')
@@ -95,17 +95,46 @@ try {
   assert.equal(await notices.evaluate(el => el.shadowRoot.querySelector('details').open), true)
   assert.equal(await notices.locator('li').count(), 2)
   const footer = page.locator('.turn-footer').last()
-  await footer.locator('summary').click()
-  await footer.locator('.turn-statistics-body').waitFor()
-  assert.match(await footer.innerText(), /12,840/)
-  assert.match(await footer.innerText(), /1,620/)
-  assert.match(await footer.innerText(), /Tool-calling rounds/)
-  assert.match(await footer.innerText(), /sample\/actual/)
-  assert.doesNotMatch(await footer.innerText(), /sample\/selected/)
-  assert.match(await footer.innerText(), /Answered by\s*Brave/)
+  const usage = footer.locator('[data-test="turn-usage"]')
+  await usage.waitFor()
+  const tip = await usage.getAttribute('data-tooltip')
+  assert.match(tip, /12,840/)
+  assert.match(tip, /1,620/)
+  assert.match(tip, /Tool-calling rounds/)
+  assert.match(tip, /sample\/actual/)
+  assert.doesNotMatch(tip, /sample\/selected/)
+  assert.match(tip, /Answered by · Brave/)
+  assert.match(await usage.locator('.turn-usage-line').innerText(), /sample\/actual/)
+  assert.doesNotMatch(await usage.locator('.turn-usage-line').innerText(), /Answered by/)
+  assert.equal(await footer.locator('summary').count(), 0)
+  const placed = await footer.evaluate(el => {
+    const audit = el.querySelector('[data-test="turn-audit"]').getBoundingClientRect()
+    const line = el.querySelector('[data-test="turn-usage"]').getBoundingClientRect()
+    const box = el.getBoundingClientRect()
+    const copy = el.querySelector('[data-test="copy-message"]')?.getBoundingClientRect()
+    return {
+      shieldBefore: audit.right <= line.left + 1,
+      withTheActions: audit.left - (copy?.right ?? box.left) < 80,
+      notAtEnd: box.right - line.right > 24,
+    }
+  })
+  assert.equal(placed.shieldBefore, true, 'the audit control sits left of the model line')
+  assert.equal(placed.withTheActions, true, 'the audit control stays with the other actions')
+  assert.equal(placed.notAtEnd, true, 'the model line is not pushed to the right edge')
+  assert.equal(await usage.evaluate(el => getComputedStyle(el).cursor), 'pointer')
+  await usage.hover()
+  let openedOnHover = false
+  try {
+    await page.locator('.tooltip-text').waitFor({ timeout: 1200 })
+    openedOnHover = true
+  } catch { /* the hover delay passed with no tooltip */ }
+  assert.equal(openedOnHover, false, 'the usage tooltip stays closed until the line is clicked')
+  await usage.click()
+  await page.locator('.tooltip-text').filter({ hasText: '12,840' }).waitFor()
   await page.screenshot({ path: join(output, 'answered-by.png') })
+  await page.mouse.move(5, 5)
   await selectConversation('b'); await selectConversation('a')
-  assert.equal(await page.locator('.turn-statistics').last().evaluate(el => el.shadowRoot.querySelector('details').open), true)
+  assert.match(await page.locator('[data-test="turn-usage"]').last().getAttribute('data-tooltip'), /12,840/)
   await footer.getByRole('button', { name: 'Policy blocked an action', exact: false }).click()
   const inspector = page.locator('.audit-inspector')
   await inspector.getByText('Recorded evidence', { exact: true }).first().click()
@@ -121,9 +150,9 @@ try {
   await done(3, { clean: true, model: 'sample/second', tokens: 0, outputTokens: 0, steps: 0 })
   await page.getByText('Finished turn 3.', { exact: true }).waitFor()
   assert.equal(await page.locator('.turn-notices').last().evaluate(el => el.shadowRoot.querySelector('details').open), false)
-  assert.match(await page.locator('.turn-statistics summary').last().innerText(), /0 tokens/)
+  assert.match(await page.locator('[data-test="turn-usage"]').last().locator('.turn-usage-line').innerText(), /0 tokens/)
   // Turn 3 named no service, as one the fallback model answered would not.
-  assert.doesNotMatch(await page.locator('.turn-footer').last().innerText(), /Answered by/)
+  assert.doesNotMatch(await page.locator('[data-test="turn-usage"]').last().getAttribute('data-tooltip'), /Answered by/)
   await page.getByText('No policy refusals recorded for this turn.').waitFor()
   await page.getByRole('button', { name: 'Close audit inspector' }).click()
   assert.equal(await page.locator('.turn-footer').last().getByRole('button', { name: 'Audit', exact: false }).evaluate(el => el === document.activeElement || el.getRootNode().host === document.activeElement), true, 'completed footer replaces the live audit trigger')

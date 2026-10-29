@@ -166,6 +166,8 @@ fn a_session_is_written_to_the_named_directory() {
             manifest: None,
             rewind: &[],
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
         },
     );
 

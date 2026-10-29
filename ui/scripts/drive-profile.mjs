@@ -11,7 +11,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { launch, SIDEBAR_TAB, BOT_OPEN_BUTTON } from './drive-support.mjs'
+import { launch, SIDEBAR_TAB, BOT_OPEN_BUTTON, TRUST_APPROVE } from './drive-support.mjs'
 
 /**
  * Where the app keeps what it remembers, asked of the app rather than composed here: `userData`
@@ -82,15 +82,12 @@ export function forgetCheckoutSessions(checkout) {
 }
 
 /**
- * Make a bot and open its page with the scratch checkout picked as its project. The conversation
- * runs in `checkout`, picked in the composer's project menu; the picker is native, so the dialog
- * it opens is answered here. `row` is the `/^Name$/` pattern the caller already writes.
+ * Make a bot and open its conversation, which runs in the bot's home folder (MEMORY-14), and
+ * answer the trust question a new folder asks. `row` is the `/^Name$/` pattern the caller already
+ * writes. Returns the bot's home folder.
  */
-export async function openBot(app, page, { name, row, purpose, checkout, check }) {
-  await app.evaluate(({ dialog }, directory) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
-  }, checkout)
-  await page.evaluate(([name, purpose]) => window.bravebot.writeBot({ name, purpose }), [name, purpose])
+export async function openBot(page, { name, row, purpose, check }) {
+  const made = await page.evaluate(([name, purpose]) => window.bravebot.writeBot({ name, purpose }), [name, purpose])
   await page.reload()
   await page.waitForTimeout(2000)
   await page.locator(SIDEBAR_TAB).nth(1).click()
@@ -99,8 +96,9 @@ export async function openBot(app, page, { name, row, purpose, checkout, check }
   const mine = page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: row }) })
   check((await mine.count()) === 1, 'the bot is in the list')
   await mine.locator(BOT_OPEN_BUTTON).click()
-  await page.locator('[data-test="bot-page"]').waitFor()
-  await page.locator('[data-test="project-trigger"]').click()
-  await page.locator('[data-test="project-pick"]').click()
+  await page.locator('[data-test="bot-greeting"]').waitFor()
+  const trust = page.locator(TRUST_APPROVE)
+  if (await trust.isVisible().catch(() => false)) await trust.click()
   await page.waitForTimeout(400)
+  return made?.home
 }

@@ -2945,6 +2945,7 @@ int main(int argc, char **argv) {
             a_home_and_a_temporary_directory("bravebot-sandbox-run-base-table");
         let held_back = [
             ".bravebot/gateway-keys.json",
+            ".bravebot/brave-key.json",
             ".bravebot/leo-premium.json",
             ".bravebot/chatgpt-account.json",
             ".bravebot/xai-account.json",

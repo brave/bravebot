@@ -199,10 +199,10 @@ happens, the clause quoted, the code it happens in, where the bytes come from an
 code does with them, how to reproduce it, what it buys an attacker, the argument for its own
 kind label, and the fix. Read none of them.
 
-A body never says a case is left undone without citing the issue that tracks it. It is written
+A body never says a defect is left unfixed without citing the issue that tracks it. It is written
 from the candidate's fields and the verifier's verdict, so a lane covers every site with the same
 weakness in the candidate or reports it as a candidate of its own, and neither a lane nor a verifier
-writes one into a field as a case left for later. The poster reads each body for such a statement
+writes one into a field as a defect left for later. The poster reads each body for such a statement
 in step 9.
 
 ### Step 8: capture the screens that were asked for
@@ -242,8 +242,8 @@ Hand each draft to the [issue-poster](../../agents/issue-poster.md) definition, 
 time and no more than twelve in a run, with the draft's title, its body file, the labels the
 draft names, the assignee only where the user named somebody, and this instruction: the issue is
 a finding nobody has read, so apply no `importance`, `urgency` or `size`, and where its body says a
-case is left undone that no issue covers, file nothing for the case, post nothing and report the
-statement. A lane that malfunctions malfunctions at scale and a shared tracker is the wrong place to
+defect is left unfixed that no issue covers, file nothing for the defect, post nothing and report
+the statement. A lane that malfunctions malfunctions at scale and a shared tracker is the wrong place to
 find that out, so stop at twelve and list the titles left.
 
 The poster does what no model can be relied on to do here:

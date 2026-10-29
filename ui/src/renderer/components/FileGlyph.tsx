@@ -78,7 +78,7 @@ export function FileGlyph({ name }: { name: string }): React.JSX.Element {
   const { family } = glyphOf(name)
   return (
     <span className={`tree-glyph ${family}`} aria-hidden="true">
-      <Icon name={ICONS[family] ?? 'file-text'} style={{ '--leo-icon-size': '14px' } as React.CSSProperties} />
+      <Icon name={ICONS[family] ?? 'file-text'} />
     </span>
   )
 }

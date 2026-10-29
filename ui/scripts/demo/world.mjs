@@ -80,8 +80,7 @@ export const projectsIn = (world) =>
  *
  * A list of one is not a list, and the scene's own bot is made and unmade every take. These two
  * stay, so the tab opens on a column with faces already in it and the one made on camera joins
- * them — three faces, told apart at a glance, which is the claim the faces make. Each in one of
- * the two checkouts, so the second line under a name differs too.
+ * them: three faces, told apart at a glance, which is the claim the faces make.
  *
  * One of them has been spoken to and the other has not, and that is the point of having two. A
  * bot with a session looks slowly about in the list where one that has never spoken faces forward
@@ -102,7 +101,6 @@ export const projectsIn = (world) =>
 export const RESIDENT_BOTS = [
   {
     name: 'Release Notes',
-    project: 'harbour-lights',
     purpose:
       'You write the release notes for the harbour-lights checkout. Keep them short, in the past ' +
       'tense, and grouped by what a user would notice.',
@@ -111,7 +109,6 @@ export const RESIDENT_BOTS = [
   },
   {
     name: 'Night Watch',
-    project: 'tide-tables',
     purpose:
       'You look after the tide-tables checkout overnight. Say what changed since yesterday and ' +
       'whether any of it needs a person.',
@@ -119,9 +116,8 @@ export const RESIDENT_BOTS = [
     // to "remember", a bot may say it will and write nothing, which is a fine answer and no record.
     // Asked for a line in the file, it writes one, and the write is what the scene points at.
     prompts: [
-      'Run `ls data` here, then add one line to your memory file: the tables under data/ are ' +
-        'generated, and a failure there overnight is the one thing that needs a person by morning. ' +
-        'Change nothing else.',
+      'Add one line to your memory file: the tables under tide-tables/data/ are generated, and a ' +
+        'failure there overnight is the one thing that needs a person by morning. Change nothing else.',
     ],
   },
 ]
@@ -210,7 +206,6 @@ async function ensureResidents(world) {
     await page.waitForTimeout(1500)
 
     if (missing.length) {
-      // A bot has no folder of its own to pick; each conversation is started in a project.
       await page.evaluate(
         async (bots) => {
           for (const bot of bots) await window.bravebot.writeBot({ name: bot.name, purpose: bot.purpose })
@@ -242,28 +237,18 @@ async function ensureResidents(world) {
           console.log(`  ${bot.name} is not in the list; leaving it unspoken to`)
           continue
         }
-        // The bot's page starts a conversation from its composer, in the project picked in its
-        // footer. The picker is native, so it is answered with the bot's own fixture checkout.
+        // Opening the bot opens its conversation in its home folder, which asks the trust question
+        // a new folder asks.
         await row.locator(BOT_OPEN_BUTTON).click()
-        await page.locator('[data-test="bot-page"]').waitFor()
-        await app.evaluate(({ dialog }, where) => {
-          dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [where] })
-        }, join(world, 'projects', bot.project))
-        await page.locator('[data-test="project-trigger"]').click()
-        await page.locator('[data-test="project-pick"]').click()
-        await page.waitForTimeout(400)
-        for (const [index, prompt] of bot.prompts.entries()) {
+        await page.locator('[data-test="bot-greeting"]').waitFor()
+        if (await page.locator('.trust').isVisible().catch(() => false)) {
+          await page.locator(TRUST_APPROVE).click()
+          await page.waitForTimeout(800)
+        }
+        for (const prompt of bot.prompts) {
           console.log(`  ${bot.name}: ${prompt.slice(0, 62)}…`)
           await page.locator(COMPOSER_INPUT).fill(prompt)
           await page.locator(COMPOSER_SEND).click()
-          // The first message starts the conversation, which asks the trust question first.
-          if (index === 0) {
-            await page.waitForTimeout(1600)
-            if (await page.locator('.trust').isVisible().catch(() => false)) {
-              await page.locator(TRUST_APPROVE).click()
-              await page.waitForTimeout(800)
-            }
-          }
           if (!(await settle(page))) {
             console.log('    the turn did not finish in time; keeping what it managed')
             break

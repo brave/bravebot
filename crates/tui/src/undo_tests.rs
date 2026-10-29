@@ -37,6 +37,8 @@ fn save(
             manifest: None,
             rewind: session.rewind.points(),
             checkouts: &[],
+            touched: None,
+            answered_by_mode: false,
         },
     );
 }

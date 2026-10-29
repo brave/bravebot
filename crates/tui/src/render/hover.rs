@@ -105,6 +105,9 @@ fn says(session: &Session, laid: &Laid, hit: Hit) -> Option<Says> {
         })
     };
     match hit {
+        // The rows and tabs of the Sessions screen are listed as they are drawn, and a note about each would
+        // say what the screen already shows.
+        Hit::SessionsScreen(_) => None,
         Hit::Back => said(t!(hover_back)),
         Hit::Reply(_) => said(t!(hover_reply)),
         Hit::Block(..) => said(t!(hover_block)),

@@ -14,11 +14,20 @@
 
 import type { DropOutcome, DroppedFile } from '../shared/drops'
 import type { PastedPicture } from '../shared/pastes'
+import { summonMarker } from '../shared/summons'
+
+/** A bot picked from the `@` list for one message (MEMORY-14). */
+export interface SummonedBot {
+  slug: string
+  name: string
+  avatar: string
+}
 
 /** One staged thing and the marker that stands for it. */
 export type Staged =
   | { marker: string; via: 'drop'; file: DroppedFile }
   | { marker: string; via: 'paste'; picture: PastedPicture }
+  | { marker: string; via: 'summon'; bot: SummonedBot }
 
 export interface Staging {
   /** How many markers this composer has ever written. */
@@ -78,6 +87,30 @@ function writtenAt(draft: string, caret: number, written: string[]): { draft: st
   const lead = before.length > 0 && !/\s$/.test(before) ? ' ' : ''
   const text = `${lead}${written.join(' ')} `
   return { draft: before + text + draft.slice(at), caret: at + text.length }
+}
+
+/**
+ * Summon `bot` for the message: the half-typed `word` at the end of `draft` becomes the bot's
+ * marker. A message summons one bot, so a bot picked before is taken off, marker and all.
+ * `null` where the draft does not end in `word`, as `acceptMention` leaves such a draft alone.
+ */
+export function stageSummon(staging: Staging, bot: SummonedBot, draft: string, word: string | null): StagedPaste | null {
+  if (word === null || !word.startsWith('@') || !draft.endsWith(word)) return null
+  const marker = summonMarker(bot.name, bot.slug)
+  let kept = draft.slice(0, draft.length - word.length)
+  const staged = staging.staged.filter((item) => {
+    if (item.via !== 'summon') return true
+    kept = withoutMarker(kept, item.marker)
+    return false
+  })
+  const text = `${marker} `
+  return { staging: { made: staging.made, staged: [...staged, { marker, via: 'summon', bot }] }, draft: kept + text, caret: kept.length + text.length }
+}
+
+/** The bot a send summons, if its draft still names one. */
+export function summonOf(items: Staged[]): SummonedBot | null {
+  for (const item of items) if (item.via === 'summon') return item.bot
+  return null
 }
 
 /** The grants a send names, split the way the main process takes them: `drops` and `pastes`. */

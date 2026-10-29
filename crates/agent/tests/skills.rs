@@ -1732,6 +1732,236 @@ fn each_skill_records_which_of_the_three_places_it_came_from() {
     );
 }
 
+/// INSTR-17: the other agents' skill directories in the home directory are read only once the
+/// person's settings name them. The failure this rejects is reading `~/.agents/skills` and
+/// `~/.claude/skills` because they exist.
+#[test]
+fn a_shared_skill_directory_the_person_did_not_name_is_not_read() {
+    let scratch = Scratch::new("shared-unnamed");
+    let profile = scratch.home();
+    write_skill(
+        &profile.join(".agents"),
+        "agents-one",
+        "agents-one",
+        "d",
+        "b",
+    );
+    write_skill(
+        &profile.join(".claude"),
+        "claude-one",
+        "claude-one",
+        "d",
+        "b",
+    );
+    let workspace = Workspace::new(scratch.workspace())
+        .expect("workspace")
+        .with_profile_directory(Some(profile.clone()));
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert!(
+        from_disk(&catalogue).is_empty(),
+        "a directory nobody named was read"
+    );
+    assert_eq!(
+        skills::shared_directories_not_read(&workspace),
+        ["~/.agents/skills", "~/.claude/skills"]
+    );
+}
+
+/// INSTR-17: naming one directory reads that one and leaves the other. The failure this rejects is
+/// a name that switches on every shared directory, or on none.
+#[test]
+fn a_named_shared_skill_directory_is_read_and_the_other_is_not() {
+    let scratch = Scratch::new("shared-named");
+    let profile = scratch.home();
+    write_skill(
+        &profile.join(".agents"),
+        "agents-one",
+        "agents-one",
+        "d",
+        "b",
+    );
+    write_skill(
+        &profile.join(".claude"),
+        "claude-one",
+        "claude-one",
+        "d",
+        "b",
+    );
+    let workspace = Workspace::new(scratch.workspace())
+        .expect("workspace")
+        .with_profile_directory(Some(profile.clone()))
+        .with_shared_skill_directories(&["~/.claude/skills/".to_string()]);
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    let offered = from_disk(&catalogue);
+    assert_eq!(offered.len(), 1, "{} skills offered", offered.len());
+    assert_eq!(
+        catalogue.get("claude-one").expect("offered").source,
+        skills::Source::Home
+    );
+    assert!(catalogue.get("agents-one").is_none());
+    assert_eq!(
+        skills::shared_directories_not_read(&workspace),
+        ["~/.agents/skills"]
+    );
+}
+
+/// INSTR-17: a skill of the person's own in `~/.bravebot/skills` shadows one of the same name in a
+/// shared directory, and the project's shadows both.
+#[test]
+fn a_bravebot_skill_shadows_a_shared_one_and_the_projects_shadows_both() {
+    let scratch = Scratch::new("shared-shadow");
+    let profile = scratch.home();
+    let project = scratch.workspace();
+    write_skill(&profile.join(".agents"), "same", "same", "shared", "b");
+    write_skill(&profile.join(".claude"), "same", "same", "shared", "b");
+    write_skill(&profile.join(".bravebot"), "same", "same", "bravebot", "b");
+    write_skill(&profile.join(".agents"), "other", "other", "shared", "b");
+    write_skill(&profile.join(".claude"), "other", "other", "shared", "b");
+    write_skill(&project.join(".bravebot"), "other", "other", "project", "b");
+    let workspace = Workspace::new(&project)
+        .expect("workspace")
+        .with_profile_directory(Some(profile.clone()))
+        .with_shared_skill_directories(&[
+            "~/.agents/skills".to_string(),
+            "~/.claude/skills".to_string(),
+        ]);
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, Some(&profile.join(".bravebot")))
+    };
+
+    assert_eq!(
+        catalogue.get("same").expect("offered").description,
+        "bravebot"
+    );
+    assert_eq!(
+        catalogue.get("other").expect("offered").description,
+        "project"
+    );
+}
+
+/// INSTR-17: where both shared directories are named and hold a skill of the same name, the one in
+/// `~/.claude/skills` is the one offered, since `~/.agents/skills` is read before it and a later
+/// directory shadows an earlier one, as the project's `.agents/skills` and `.claude/skills` are
+/// ordered. The failure this rejects is reading `.claude` first, which would offer the `.agents`
+/// skill. The order of the names in the setting is reversed so it cannot be what decides.
+#[test]
+fn the_agents_shared_directory_is_read_before_the_claude_one() {
+    let scratch = Scratch::new("shared-order");
+    let profile = scratch.home();
+    write_skill(&profile.join(".agents"), "same", "same", "from-agents", "b");
+    write_skill(&profile.join(".claude"), "same", "same", "from-claude", "b");
+    let workspace = Workspace::new(scratch.workspace())
+        .expect("workspace")
+        .with_profile_directory(Some(profile.clone()))
+        .with_shared_skill_directories(&[
+            "~/.claude/skills".to_string(),
+            "~/.agents/skills".to_string(),
+        ]);
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, Some(&profile.join(".bravebot")))
+    };
+
+    assert_eq!(
+        catalogue.get("same").expect("offered").description,
+        "from-claude",
+        "~/.claude/skills was read before ~/.agents/skills"
+    );
+}
+
+/// INSTR-17: a skill in a named shared directory is the person's own, so a definition's `skills:`
+/// line can keep it, and loading it reaches into its directory as `~/.bravebot/skills` does. The
+/// failures this rejects are a curated list that drops a skill from a shared root and a reach left
+/// unset, which would make its bundled files unreadable.
+#[test]
+fn a_named_shared_skill_can_be_kept_by_a_definition_and_reaches_its_own_directory() {
+    let scratch = Scratch::new("shared-curated-reach");
+    let profile = scratch.home();
+    write_skill(&profile.join(".agents"), "kept", "kept", "d", "b");
+    write_skill(&profile.join(".agents"), "dropped", "dropped", "d", "b");
+    let workspace = Workspace::new(scratch.workspace())
+        .expect("workspace")
+        .with_profile_directory(Some(profile.clone()))
+        .with_shared_skill_directories(&["~/.agents/skills".to_string()]);
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, _) = {
+        let mut policy = policy(&mut sink, &["."]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    let curated = catalogue.only(&["kept".to_string()]);
+    assert!(curated.get("kept").is_some(), "the kept skill was dropped");
+    assert!(
+        curated.get("dropped").is_none(),
+        "a skill the definition did not name was kept"
+    );
+    let skill = curated.get("kept").expect("kept");
+    assert_eq!(skill.origin, "~/.agents/skills/kept/SKILL.md");
+    assert_eq!(
+        skill.reach(),
+        Some(profile.join(".agents/skills/kept").as_path()),
+        "loading the skill would not reach its directory"
+    );
+}
+
+/// INSTR-17 with SKILL-3: a named shared directory that is a link through the workspace is not
+/// read, and the person is told which directory and how many skills. The failure this rejects is
+/// reading it because the person named it: the way to the file is one a turn can write.
+#[cfg(unix)]
+#[test]
+fn a_named_shared_skill_directory_reached_through_the_workspace_is_not_read_and_is_said() {
+    let scratch = Scratch::new("shared-through-workspace");
+    let workspace = Workspace::new(scratch.workspace()).expect("workspace");
+    let elsewhere = scratch.path.join("elsewhere");
+    write_skill(&elsewhere, "planted", "planted", "INJECTED", "body");
+    let hop = workspace.root().join("skills-link");
+    std::os::unix::fs::symlink(elsewhere.join("skills"), &hop).expect("link out");
+    let profile = scratch.home();
+    std::fs::create_dir_all(profile.join(".claude")).expect("create the shared parent");
+    std::os::unix::fs::symlink(&hop, profile.join(".claude/skills")).expect("link in");
+    let workspace = workspace
+        .with_profile_directory(Some(profile.clone()))
+        .with_shared_skill_directories(&["~/.claude/skills".to_string()]);
+
+    let mut sink = RecordingSink::new();
+    let (catalogue, notices) = {
+        let mut policy = policy(&mut sink, &[]);
+        skills::discover(&mut policy, &workspace, None)
+    };
+
+    assert!(
+        from_disk(&catalogue).is_empty(),
+        "a skill reached through a workspace link was offered as the person's own"
+    );
+    let told: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert_eq!(
+        told,
+        [
+            "1 skill in ~/.claude/skills was not loaded: the way to its file goes through a \
+          directory this session can write to"
+        ],
+        "the person was not told"
+    );
+}
+
 /// Write a skill whose frontmatter is exactly the lines given, so a test can say what a file
 /// declares beyond its name and description.
 fn write_declaring(root: &Path, dir: &str, lines: &str) {

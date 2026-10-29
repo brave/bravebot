@@ -22,7 +22,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [grounding.md](grounding.md) | `GROUND` | 6 | counting what a delegate or a goal's turns actually ran and wrote, and telling the planner and the goal judge (proposed: not built) |
 | [delegation.md](delegation.md) | `DELEGATE` | 30 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
-| [definition-memory.md](definition-memory.md) | `MEMORY` | 13 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
+| [definition-memory.md](definition-memory.md) | `MEMORY` | 14 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
 | [recall.md](recall.md) | `RECALL` | 11 | what a person's sessions remember across projects: rules loaded in full every turn, facts ranked and recalled, and how neither lets untrusted content in (proposed: built, thresholds not yet measured on a bravebot store) |
 | [checkouts.md](checkouts.md) | `CHECKOUT` | 23 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (partly built) |
 | [worktrees.md](worktrees.md) | `WORKTREE` | 10 | a session working in a worktree the driver made for it: asking for one, its name, what the session keeps of it, resuming into it and leaving it (proposed, nothing built) |
@@ -37,8 +37,8 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [shell-mode.md](shell-mode.md) | `SHELL` | 7 | the `!` prompt: a line the user typed, and why the planner can never reach it |
 | [shell-integration.md](shell-integration.md) | `SHELLINT` | 5 | `bravebot shell-init`: a hook that gives `@bravebot` the commands run in a terminal, as quarantined input |
 | [skills.md](skills.md) | `SKILL` | 19 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for, and what a skill kept as a mode adds to every turn |
-| [instructions.md](instructions.md) | `INSTR` | 16 | which instruction files are looked for, where, in what order, and where what they say ends up |
-| [cli.md](cli.md) | `CLI` | 38 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
+| [instructions.md](instructions.md) | `INSTR` | 17 | which instruction files are looked for, where, in what order, and where what they say ends up |
+| [cli.md](cli.md) | `CLI` | 39 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
 | [manifest.md](manifest.md) | `MANIFEST` | 14 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 49 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 30 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, what `/help` asks the planner to answer from the documentation, what `/changelog` shows, what `/todos` prints, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/lsp` says, what `/open` lists, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, how a prompt file is expanded, how a line that starts with the word of an MCP server's prompt runs it, and what `/mode` keeps applied |
@@ -48,7 +48,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [watching.md](watching.md) | `WATCH` | 24 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, the mode Ctrl-L opens over the delegates and the questions, and `/outputs` and Alt-L, which open it over what commands printed |
 | [scroller.md](scroller.md) | `SCROLL` | 10 | reading back through what happened: the mode Ctrl-O opens over the transcript, and the keys inside it |
 | [credential-protection.md](credential-protection.md) | `CRED` | 25 | where credentials come from, which of them may be held at all, and what each tier owes |
-| [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | importing a Leo Premium subscription and spending its credentials |
+| [premium-credentials.md](premium-credentials.md) | `PREM` | 9 | the key Brave's premium service authorises a request with: how a person stores it, where it is sent, what it is counted against and who may read it |
 | [chatgpt-sign-in.md](chatgpt-sign-in.md) | `CHATGPT` | 14 | signing in to OpenAI with a ChatGPT account through a browser, and offering the account's models in the picker (proposed, built and exercised against a real account; whether OpenAI's terms allow it is undecided, and what that account did not show is listed in the spec) |
 | [xai-sign-in.md](xai-sign-in.md) | `XAI` | 19 | signing in to xAI with a SuperGrok subscription through a code a person enters on any device, the file the tokens are kept in, replacing an access token before it expires, and how the account's models are named (proposed; the command, the turn's request and the account's models are built) |
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 32 | operating-system confinement for processes running code we did not write |
@@ -58,30 +58,31 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [browser.md](browser.md) | `BROWSER` | 17 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 10 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 12 | every request that leaves this process, and what comes back |
-| [backends.md](backends.md) | `BACKEND` | 63 | which service answers a request, and what a person may choose between |
+| [backends.md](backends.md) | `BACKEND` | 64 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 12 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama, LM Studio or llama-server serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 18 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 18 | sending a prompt again and again until somebody stops it, or once after a delay |
 | [goal.md](goal.md) | `GOAL` | 20 | one condition a person set, judged after every turn, until it holds |
 | [open-loops.md](open-loops.md) | `OPEN` | 7 | proposed, nothing built: the unfinished business a session leaves, found by fixed rules, shown when it changes, and told to the planner |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
-| [sessions.md](sessions.md) | `SESSION` | 38 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
+| [sessions.md](sessions.md) | `SESSION` | 39 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
 | [commits.md](commits.md) | `COMMIT` | 11 | a commit of the files each turn wrote: which paths, what message, how git is started, and how `/undo` takes the commit back (proposed, nothing built) |
 | [mouse.md](mouse.md) | `MOUSE` | 53 | dragging, double and triple clicking and shift-clicking to copy text: which cells a selection may take, how a wrapped line and a wide character copy, how a selection of the transcript stays on its text as the view scrolls and goes when the text under it changes, copies in full past the screen and scrolls the view when it is dragged outside it, Escape putting it away, and the notice of a copy naming the pane, clicking a call or a delegate in the scroller, clicking a delegate at the plain prompt and while work runs, leaving a delegate's view with a click, opening the scroller on a call at the plain prompt, copying a reply by its marker, copying a fenced block by its word, taking back a prompt waiting behind a turn, and clicking the name, the model, effort, context, MCP server, language server or plan row or the Files section of the info panel, the whole words of a finished task, the permission mode and the hints under the box, the panel's hide row, a place in the prompt box's text, the rows of the `/effort`, `/config`, `/theme` and `/model` pickers, of the history search, of the lists of sessions and of what is offered under the box, the wheel in them and a press outside them, a file of the list, the close control and the edit bar in the files state of the info panel and the wheel over that state, and a web address with ctrl held and a file path, shown or opened in the editor with ctrl held, in the assistant's words, and the pull request and issue links of the info panel, that no mouse event answers a question, that a press on a panel drawn over the frame reaches nothing beneath it, the scrollbar beside the transcript, what a click acts on being found in one record the frame wrote, the target the pointer is over being held, the menu a right click opens, and a report past column 223 being the cell it names, with what a multiplexer has to forward |
 | [info-panel.md](info-panel.md) | `PANEL` | 15 | telling many sessions apart: the terminal's title and the info panel |
 | [files-mode.md](files-mode.md) | `FILES` | 10 | a state of the info panel that lists the files the session wrote and every edit to the highlighted one |
 | [background-sessions.md](background-sessions.md) | `BG` | 16 | proposed, the roster, its list (grouped by state on a terminal) and stop, `--bg`, `/bg`, attach, reply and the supervisor that restarts an idle process built: sessions that keep running after the terminal closes, with a list, attach and reply |
+| [sessions-screen.md](sessions-screen.md) | `SCREEN` | 17 | the Sessions screen: one list of every session on the machine, opened with Left over an empty box, `/sessions`, `/resume` or `--resume`, its status tabs, grouping, search, pins and the keys and clicks that open, copy, begin, stop, rename, archive and delete one |
 | [session-messages.md](session-messages.md) | `MSG` | 12 | proposed, built: one background session sending text to another, put to a person and never starting a turn |
 | [plugins.md](plugins.md) | `PLUGIN` | 10 | proposed, nothing built: a bundle of skills, definitions, hooks and servers installed by one command a person types, and the marketplace index it may come from |
 | [state-directory.md](state-directory.md) | `STATE` | 4 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
-| [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 8 | a file of hosts, statuses and counts, never content, for a person to attach to a bug report, and `bug-report`, which names it |
+| [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 9 | a file of hosts, statuses and counts, never content, for a person to attach to a bug report, and the bug report that names it, from the terminal or the desktop app |
 | [trace.md](trace.md) | `TRACE` | 11 | what is recorded about every decision the system makes, what that record may contain, and the view of the request a turn built |
 | [localization.md](localization.md) | `LOCALE` | 8 | every word said to a person, and which of them change with the reader's language |
 | [acp.md](acp.md) | `ACP` | 8 | an editor hosting a session over the Agent Client Protocol: what a prompt, an attachment and an answer may carry, and what a failed turn says |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
 | [releases.md](releases.md) | `RELEASE` | 21 | what names a version, what starts a release, and what an installer trusts about what it fetched |
-| [updates.md](updates.md) | `UPDATE` | 11 | learning that a newer version is out, and the line that installs it |
+| [updates.md](updates.md) | `UPDATE` | 12 | learning that a newer version is out, and the line or link that installs it |
 | [crash-reports.md](crash-reports.md) | `CRASH` | 10 | what a panic tells the maintainers: the one file it leaves, what the file may hold, when and where it is sent, and how a person stops it |
 
 ## The tools
@@ -98,7 +99,7 @@ the routing-versus-content split they share.
 | [tools/repo-map.md](tools/repo-map.md) | `MAP` | 5 | `repo_map` |
 | [tools/read-git.md](tools/read-git.md) | `GIT` | 15 | `read_git` |
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 13 | `lsp` |
-| [tools/write-file.md](tools/write-file.md) | `WRITE` | 7 | `write_file` |
+| [tools/write-file.md](tools/write-file.md) | `WRITE` | 8 | `write_file` |
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 8 | `edit_file` |
 | [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 5 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 7 | `spawn_agent` |

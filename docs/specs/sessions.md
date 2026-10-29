@@ -29,6 +29,9 @@ governs:
   - crates/agent/src/aside.rs
   - crates/ui-bridge/src/store.rs
   - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/wire.rs
+  - crates/ui-bridge/src/allowlist.rs
+  - crates/tui/src/app/opening.rs
 documented-by:
   - docs/website/docs/using/sessions.md
   - docs/website/docs/using/manifest-mode.md
@@ -61,7 +64,7 @@ is recorded as a session of one turn, and carrying one on with a task is
 
 Records live under one directory per working directory, so the list worth seeing when resuming in
 one project is not the list from another. Each session is two files: the record, holding what the
-picker shows and what a resume needs, and the trail, appended a turn at a time.
+Sessions screen shows and what a resume needs, and the trail, appended a turn at a time.
 
 A session is named by a version 4 UUID, and the two files are named after it. Random rather than
 counted or clocked, so two sessions cannot collide however many are running, and opaque because the
@@ -118,19 +121,19 @@ written before they were kept reads as having neither.
 
 The list carries the branch and both links beside the title, as optional fields, so a record
 without them is listed as before and the desktop list ([SESSION-28](#SESSION-28)) is unaffected. The
-resume picker narrows on what is typed against the title, the branch and either link, without
+Sessions screen narrows on what is typed against the title, the branch and either link, without
 regard to case. Typing the whole of a session's link stops other links matching by containing it,
 so a pasted pull request address finds the session that was given it and not also the one whose
 pull request number starts with the same digits. A title or a branch still matches by what it
 contains. The links are addresses the person typed to
 `/issue` and `/pr`, so matching them reads no untrusted content.
 
-`bravebot --from-pr <number or address>` opens the same picker already narrowed to the sessions whose
+`bravebot --from-pr <number or address>` opens the same screen already narrowed to the sessions whose
 pull request is the one named: its address, or its number, which is whole rather than a prefix, so
 `127` does not find the session linked to `1270`. An issue link is never taken for a pull request.
 What is typed then narrows the opened list further. A missing or blank value is refused by name
 rather than read as a plain `--resume`, and where no session is linked to the pull request the
-picker says nothing matches rather than starting a session.
+screen says nothing matches rather than starting a session.
 
 What the record says about each individual turn is SESSION-23.
 
@@ -139,6 +142,12 @@ The record also holds the checkouts a session's delegates were given and it keep
 the delegate given it, the paths the driver recorded a file effect on in it and what it took on
 disk. A record written before they were kept reads as having none.
 
+The record also holds the names of the files the file tools reached and of the rules the session was
+told, which a resume restores so the nested instructions and path-scoped rules the earlier turns
+loaded are in force from the first turn ([INSTR-14](instructions.md#INSTR-14),
+[INSTR-16](instructions.md#INSTR-16)). They are names only, as the paths in the trust map are. A
+record written before they were kept reads as having none.
+
 `verified-by: bravebot_tui::sessions::renaming_a_session_rewrites_the_record_immediately`
 `verified-by: bravebot_tui::sessions::a_chosen_name_survives_the_next_turn`
 `verified-by: bravebot_tui::sessions::a_session_can_be_named_before_it_has_a_record`
@@ -146,17 +155,18 @@ disk. A record written before they were kept reads as having none.
 `verified-by: bravebot_session::sessions::a_link_is_written_at_once_and_a_resume_and_a_fork_keep_it`
 `verified-by: bravebot_session::sessions::a_record_from_before_the_links_reads_as_having_none`
 `verified-by: bravebot_session::sessions::the_list_carries_the_links_and_lists_a_record_without_them`
-`verified-by: bravebot_tui::resume::typing_part_of_a_branch_finds_the_session_that_ran_on_it`
-`verified-by: bravebot_tui::resume::typing_part_of_an_issue_link_finds_the_session_given_it`
-`verified-by: bravebot_tui::resume::a_pasted_pull_request_link_leaves_only_the_session_that_holds_it`
-`verified-by: bravebot_tui::resume::a_pasted_link_keeps_a_session_whose_title_holds_it`
-`verified-by: bravebot_tui::resume::part_of_a_pull_request_link_keeps_every_session_it_is_part_of`
-`verified-by: bravebot_tui::resume::a_pull_request_number_leaves_only_the_session_linked_to_that_number`
-`verified-by: bravebot_tui::resume::a_pull_request_address_leaves_only_the_session_linked_to_it`
-`verified-by: bravebot_tui::resume::the_pull_request_opening_ignores_issue_links_and_typing_narrows_it_further`
-`verified-by: bravebot_tui::resume::with_no_sessions_only_from_pr_opens_the_list_and_it_says_nothing_matches`
+`verified-by: bravebot_tui::sessions_screen::typing_part_of_a_branch_finds_the_session_that_ran_on_it`
+`verified-by: bravebot_tui::sessions_screen::typing_part_of_an_issue_link_finds_the_session_given_it`
+`verified-by: bravebot_tui::sessions_screen::a_pasted_pull_request_link_leaves_only_the_session_that_holds_it`
+`verified-by: bravebot_tui::sessions_screen::a_pasted_link_keeps_a_session_whose_title_holds_it`
+`verified-by: bravebot_tui::sessions_screen::part_of_a_pull_request_link_keeps_every_session_it_is_part_of`
+`verified-by: bravebot_tui::sessions_screen::a_pull_request_narrows_the_list_by_number_or_address_and_not_by_a_prefix`
+`verified-by: bravebot_tui::sessions_screen::typing_narrows_a_pull_requests_list_and_an_unlinked_one_lists_nothing`
+`verified-by: bravebot_tui::render::sessions_screen::an_empty_list_says_whether_nothing_exists_or_nothing_matches`
 `verified-by: bravebot_cli::running::from_pr_without_a_pull_request_is_refused_rather_than_listing_every_session`
 `verified-by: bravebot_tui::sessions::a_record_from_before_checkouts_were_kept_reads_as_having_none`
+`verified-by: bravebot_session::sessions::the_names_the_file_tools_reached_are_written_and_read_back`
+`verified-by: bravebot_session::sessions::a_record_from_before_touched_names_were_kept_reads_as_having_none`
 
 <a id="SESSION-4"></a>
 ### SESSION-4: a title comes from the prompt, and is cut rather than mangled
@@ -279,7 +289,7 @@ ended where it started, the directory goes unsaid: naming the one somebody is st
 though something had happened to it.
 
 **Why.** A session is worth resuming far more often than anybody thinks to write its name down
-beforehand, and the picker is no use to someone who has already closed the window. Naming a
+beforehand, and the Sessions screen is no use to someone who has already closed the window. Naming a
 session with no record behind it would be worse than saying nothing: the command would answer "no
 session by that name". Naming one in the wrong directory is worse again, because it does not fail:
 the same id in the directory left behind is the same session as it was before the move, so the line
@@ -311,7 +321,7 @@ nothing about a theme depends on which files are open.
 
 The goal, the proposed plan, the frozen steps, and what each one did are written into the record,
 finished or not. The conversation is empty: a session is turns over one conversation, and a
-manifest run has none. The picker marks the row and refuses Enter rather than loading an empty
+manifest run has none. The Sessions screen marks the row and refuses Enter rather than loading an empty
 session and asking the model to carry on from nothing. Naming one on the command line prints
 what it produced, and still does not continue it.
 
@@ -323,8 +333,8 @@ still refused, since a fork continues a conversation and there is none to contin
 
 `verified-by: bravebot_tui::sessions::a_manifest_run_is_recorded_and_cannot_be_resumed`
 `verified-by: bravebot_cli::running::naming_a_manifest_run_prints_its_report_and_succeeds`
-`verified-by: bravebot_tui::resume::a_manifest_session_cannot_be_resumed`
-`verified-by: bravebot_tui::resume::a_manifest_run_is_marked_in_the_list`
+`verified-by: bravebot_tui::sessions_screen_tests::a_manifest_run_is_not_opened_and_says_why`
+`verified-by: bravebot_tui::render::sessions_screen::a_manifest_run_is_marked_on_its_row`
 
 <a id="SESSION-11"></a>
 ### SESSION-11: the record says what answered, and what each turn cost
@@ -355,6 +365,10 @@ the total, and clearing the conversation resets it. A record written before the 
 neither figure, and a session continued from one holds the split of its later turns only, so the two
 can total less than the tokens. `bravebot stats` reports the difference ([CLI-37](cli.md#CLI-37)).
 
+A `/btw` question asked while a turn runs ([CMD-8](commands.md#CMD-8)) is charged to that turn, in
+the total, the breakdown and the split. The status line and the turn's clock are the turn's own and
+the question adds nothing to them.
+
 **Why.** A transcript is read after the fact to find out why a session went the way it did, and
 both questions are unanswerable from a total alone. Twenty even turns and one turn that ran away
 come to the same figure and want different fixes. Two sessions cannot be compared at all without
@@ -381,6 +395,7 @@ than the one in force at the time.
 `verified-by: bravebot_session::sessions::a_failed_manifest_record_keeps_the_split_of_what_it_spent`
 `verified-by: bravebot_tui::state::a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total`
 `verified-by: bravebot_tui::state::an_aside_that_reports_its_usage_is_charged_with_its_split`
+`verified-by: bravebot_tui::state::a_question_answered_beside_a_turn_is_charged_to_that_turn_with_its_split`
 `verified-by: bravebot_tui::state::clearing_forgets_the_split`
 `verified-by: bravebot_tui::state::restoring_the_spend_leaves_no_split_from_before_it`
 `verified-by: bravebot_tui::state::a_resumed_session_carries_on_counting_the_split_it_was_written_with`
@@ -468,7 +483,7 @@ resumable in its new home at all: until it is saved there, there is nothing ther
 ### SESSION-14: the session someone was just in can be picked up without naming it
 
 `--continue` takes the most recently written session under the working directory, the one the
-picker offers first, and picks it up exactly as naming its id would. A manifest run is passed over
+Sessions screen offers first, and picks it up exactly as naming its id would. A manifest run is passed over
 rather than refused, since there is no conversation inside one to carry on from. Where the
 directory holds no session that can be continued, it says so and fails rather than starting a fresh
 one. Given with a task it carries that session on as a one-shot run ([CLI-25](cli.md#CLI-25)),
@@ -478,7 +493,7 @@ and finds none by the same rule.
 the time is "carry on with what I was just doing". Answering it with an id means finding the line
 that printed one, in a terminal that is often the thing that went away. Starting fresh instead
 would be answering a different question by discarding the one asked: an empty transcript is
-indistinguishable from a session that was lost, and the way to reach an older one is the picker.
+indistinguishable from a session that was lost, and the way to reach an older one is the Sessions screen.
 
 `verified-by: bravebot_session::sessions::continuing_takes_the_most_recent_session`
 `verified-by: bravebot_session::sessions::continuing_passes_over_a_manifest_run`
@@ -585,7 +600,10 @@ the continuation rule in SESSION-10.
 Both full-record and mid-history forks keep the source's current file decisions and inherit no
 rewind points. Forking does not rewind disk. The source record stays unchanged.
 [CHECKOUT-16](checkouts.md#CHECKOUT-16) keeps a fork from carrying the source's checkouts or the
-rules copied for them.
+rules copied for them. A fork keeps the names of the files touched and the rules told
+([INSTR-14](instructions.md#INSTR-14), [INSTR-16](instructions.md#INSTR-16)), since it keeps the
+conversation those rules were told in. A fork made from an earlier point keeps them as well, because
+the record holds one set for the session and not one per turn.
 
 **Why.** Exploring an alternative technical path from a shared prefix preserves the expensive
 context already built up without polluting the original session. Refusing manifest runs maintains
@@ -593,6 +611,8 @@ the invariant that finished autonomous runs have a definite end.
 
 `verified-by: bravebot_session::sessions::forking_a_manifest_session_is_refused`
 `verified-by: bravebot_session::sessions::a_fork_is_a_new_record_with_the_conversation_the_spend_and_the_trail`
+`verified-by: bravebot_session::sessions::a_fork_carries_the_names_the_file_tools_reached`
+`verified-by: bravebot_ui_bridge::bridge::a_desktop_fork_keeps_the_names_the_parents_file_tools_reached`
 `verified-by: bravebot_tui::undo_tests::terminal_bridge_terminal_handoff_and_both_forks_keep_current_file_decisions`
 
 <a id="SESSION-19"></a>
@@ -1374,7 +1394,7 @@ second copy a no-op without a field in the record that every earlier build would
 <a id="SESSION-33"></a>
 ### SESSION-33: past sessions are searched by what was said in them
 
-The resume picker narrows its list by what a session's record says as well as by its title, branch
+The Sessions screen narrows its list by what a session's record says as well as by its title, branch
 and links ([SESSION-3](#SESSION-3)). The words searched are the ones a resumed transcript draws: the
 prompts a person typed, the planner's replies, and the line announcing each call the planner made,
 which names the path, command, address or pattern it was about. A note a person typed on the
@@ -1393,7 +1413,7 @@ A match ignores case and runs of white space. The row of a session found by what
 under its title and age, the first line that holds the text, cut around the match to the width of a
 row. Control characters and the characters that reorder or hide text are removed from that line, as
 they are from every line before it is compared. Enter resumes the session as it does for any row.
-The records are read the first time a character is typed, not when the picker opens.
+The records are read the first time a character is typed, not when the screen opens.
 
 What a record says is kept in an index entry beside it, `<id>.search`, built from the lines above the
 first time the session is searched, so a session saved before the entry existed is found too. An
@@ -1412,7 +1432,7 @@ the rest of what was typed is the text to find. Until the word is complete it is
 `bravebot sessions search [workspace:<dir>] [since:<n>h|d|w] <text>` runs the same search for a
 script. It prints one line per session, newest first: the full id, two spaces, and the title with
 control characters removed, and nothing else. `workspace:` names the directory whose sessions are
-searched and defaults to the current one; the picker lists one workspace and has no such word. A
+searched and defaults to the current one; the Sessions screen lists every workspace and has no such word. A
 session matches when its title or its words hold the text; with only a `since:` word, every session
 inside it matches. No match prints nothing on stdout and exits 1; arguments it cannot read exit 2.
 
@@ -1445,12 +1465,11 @@ same reason: the driver may carry text it did not write but does not decide from
 `verified-by: bravebot_session::search::an_entry_built_by_another_rule_is_not_trusted`
 `verified-by: bravebot_session::search::a_session_nobody_asked_for_is_neither_read_nor_indexed`
 `verified-by: bravebot_session::search::the_index_holds_only_what_a_search_covers_and_goes_with_its_record`
-`verified-by: bravebot_tui::resume::typing_words_said_in_a_session_finds_it_and_enter_resumes_it`
-`verified-by: bravebot_tui::resume::a_session_whose_words_do_not_hold_the_phrase_is_left_out`
-`verified-by: bravebot_tui::resume::a_since_word_keeps_only_the_sessions_written_within_it`
-`verified-by: bravebot_tui::resume::a_since_word_not_yet_finished_is_typed_text`
-`verified-by: bravebot_tui::resume::what_the_sessions_say_is_not_read_until_a_phrase_is_typed`
-`verified-by: bravebot_tui::resume::a_found_session_shows_the_line_that_matched_and_a_title_match_shows_none`
+`verified-by: bravebot_tui::sessions_screen::typing_words_said_in_a_session_finds_it_and_shows_the_line_that_did`
+`verified-by: bravebot_tui::sessions_screen::a_session_whose_words_do_not_hold_the_phrase_is_left_out_until_it_is_cleared`
+`verified-by: bravebot_tui::sessions_screen::a_since_word_keeps_the_sessions_written_within_it_and_is_text_until_finished`
+`verified-by: bravebot_tui::sessions_screen::what_the_sessions_say_is_read_on_the_worker_after_the_first_character_and_the_keys_do_not_wait`
+`verified-by: bravebot_tui::render::sessions_screen::a_found_session_shows_the_line_that_matched_under_its_row`
 `verified-by: bravebot_cli::session_search::the_words_say_where_to_look_how_far_back_and_for_what`
 `verified-by: bravebot_cli::session_search::a_muddled_request_is_refused_rather_than_guessed_at`
 `verified-by: bravebot_cli::session_search::a_title_or_a_line_said_matches_and_a_session_with_neither_does_not`
@@ -1469,8 +1488,8 @@ edits it. Enter then starts a new session, as `/clear` does, whose first prompt 
 then; Escape, or emptying the box, drops it, and a prompt typed afterwards is an ordinary prompt.
 The prompt is sent as a line the person typed, because they read and approved it.
 
-The new record holds the id of the session it came from, which the resume picker shows on the
-row; the source's record is not touched and is still resumable. Only the brief crosses. File
+The new record holds the id of the session it came from, which the Sessions screen shows in the
+details; the source's record is not touched and is still resumable. Only the brief crosses. File
 decisions, standing permissions, the trust map, the directories opened and the quarantine are not
 carried, so the new session asks again as after `/clear`. The command is refused, with a line
 saying why and nothing requested, with no goal, and before a turn has ended, because there is no
@@ -1493,10 +1512,16 @@ stay behind because they were given for work that the brief describes only in wo
 `verified-by: bravebot_tui::app::a_brief_the_planner_could_have_held_is_offered_and_a_failed_request_offers_nothing`
 `verified-by: bravebot_session::sessions::the_list_carries_the_session_a_handoff_came_from_and_only_where_it_is_an_id`
 `verified-by: bravebot_session::sessions::a_handed_off_session_keeps_its_source_across_a_resume`
-`verified-by: bravebot_tui::resume::a_handed_off_session_names_its_source_on_its_row`
+`verified-by: bravebot_tui::render::sessions_screen::the_details_give_the_id_size_agent_links_and_where_it_was_handed_off_from`
 
 ## Known costs
 
+- **Listing the turns addressed to a definition reads every record.** `session.addressed` with no
+  directory, and a terminal session opened under a definition, read each record whole
+  ([SESSION-39](#SESSION-39)), so a directory with many long sessions is slow to list.
+- **A fork made in the second a turn was asked lists that turn as its own.** Times are kept in
+  seconds, so a line said in the second the fork's record started is not told apart from one the
+  fork said ([SESSION-39](#SESSION-39)).
 - **A record is held until its session ends.** A terminal that is suspended or left open holds its
   record, so resuming it from another terminal is refused until the first ends, with `--fork` as the
   way to carry on from a copy ([SESSION-38](#SESSION-38)).
@@ -1505,7 +1530,7 @@ stay behind because they were given for work that the brief describes only in wo
   saving, as it does for a record it cannot write ([SESSION-5](#SESSION-5)). The record keeps what
   the other process wrote. A resume is told when its record changed while it was opened.
 - **The first character typed reads every record.** Each record in the directory is parsed in full
-  and its lines are held in memory for as long as the picker is open, so the first keystroke pauses
+  and its lines are held in memory for as long as the screen is open, so the first keystroke pauses
   for a long list of long sessions. Indexing would avoid it, at the cost of a second file that has
   to agree with the record.
 - **Search is a substring match over the lines the transcript draws.** A word in a tool's result, a
@@ -1513,13 +1538,13 @@ stay behind because they were given for work that the brief describes only in wo
   an imported session. A phrase is not matched across two lines.
 - **Two working directories can share a session store.** The directory name is derived by mapping
   every character outside a small set to `-`, which is lossy, so `/a/b`, `/a-b` and `/a b` all
-  reduce to the same name. The resume picker does not re-check afterwards: it reads every record in
+  reduce to the same name. The Sessions screen does not re-check afterwards: it reads every record in
   that directory without comparing the path recorded inside it. Since a resume restores standing
   permissions, permissions granted in one of those directories would be offered in another.
 
   The record does hold the true path, and `bravebot sessions list`
   ([CLI-32](cli.md#CLI-32)) filters on it, so that listing shows only the sessions of the directory
-  it was run in. The picker still does not. `two_directories_do_not_share_a_key`
+  it was run in. The Sessions screen still does not. `two_directories_do_not_share_a_key`
   does not cover this: it compares `/a/one` with `/a/two`, which differ before the mapping is
   applied.
 
@@ -1716,10 +1741,42 @@ from fetched bytes ([TRUST-4](trust-map.md#TRUST-4)), after which the file reads
 `verified-by: bravebot_session::sessions::a_session_that_moves_holds_its_record_in_the_new_directory`
 `verified-by: bravebot_session::sessions::deleting_a_session_removes_its_lock_unless_a_process_holds_it`
 `verified-by: bravebot_session::retention::a_lock_with_no_record_goes_by_its_own_age_and_a_held_one_stays`
-`verified-by: bravebot_tui::resume::a_session_another_process_holds_cannot_be_picked`
-`verified-by: bravebot_tui::resume::a_session_another_process_holds_cannot_be_picked_from_a_pull_requests_list`
+`verified-by: bravebot_tui::sessions_screen_tests::a_task_another_terminal_has_open_is_refused_and_the_sessions_screen_stays`
 `verified-by: bravebot_tui::app::a_resume_of_a_record_another_process_holds_restores_nothing`
 `verified-by: bravebot_ui_bridge::attaching::a_record_another_window_holds_is_not_opened`
 `verified-by: bravebot_ui_bridge::attaching::a_session_opened_again_waits_for_what_is_still_writing_its_record`
 `verified-by: bravebot_tui::sessions::resume_refuses_a_record_another_process_holds`
 `verified-by: bravebot_cli::running::a_record_a_terminal_holds_is_not_resumed_or_started_again`
+
+<a id="SESSION-39"></a>
+### SESSION-39: the turns addressed to a definition for that turn alone are listed from the records
+
+The line that opens a turn addressed to a definition is recorded with the time it was sent, in
+seconds, the definition, and whether the session stands under it
+([ADDRESS-12](addressing-a-definition.md#ADDRESS-12)). `addressed_for_one_turn` reads every record
+of a directory and lists, newest first, the turns addressed to one definition that the session did
+not stand under: the record's id, title and directory, the prompt's ordinal as `session.open` and
+`session.fork` count it, the time, and the last thing the assistant said before the next prompt. A
+manifest run is not read.
+
+A fork copies its source's lines with the times they were sent, so a line sent before its record
+started is the source's and is not listed for the fork. A line recorded before the time was kept is
+not listed.
+
+The bridge answers `session.addressed` with `definition`, a slug, and `directory`, or every
+directory with a store where it names none. Each exchange carries the rows `session.open` would
+send for it, from its user row up to the next one, so a window draws a reply from the text that
+path already gives it. A name that is not a slug is refused. The host does not offer the method.
+
+A terminal session that works under a definition ([CLI-17](cli.md#CLI-17)) notes, when it opens or
+resumes, the three newest such turns in the directory's other sessions, each with the session's
+title, how long ago it was asked and the start of the reply, and counts the rest.
+
+**Why.** A definition answering in a conversation not its own leaves nothing in its own. The record
+already holds which turn was addressed to whom, so a front end reads it there and keeps no list of
+its own that a rewind, a delete or a fork would leave out of date.
+
+`verified-by: bravebot_session::sessions::the_turns_addressed_to_a_definition_for_one_turn_are_listed_and_a_forks_copies_are_not`
+`verified-by: bravebot_ui_bridge::addressing::the_turns_addressed_to_a_definition_for_one_turn_are_listed_with_their_reply`
+`verified-by: bravebot_tui::app::a_session_opened_under_a_definition_notes_the_turns_addressed_to_it_elsewhere`
+`verified-by: bravebot_agent::turn::the_record_keeps_which_definition_each_prompt_was_addressed_to`

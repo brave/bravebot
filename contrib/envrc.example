@@ -2,7 +2,7 @@
 #
 #   cp contrib/envrc.example .envrc && direnv allow
 #
-# .envrc itself is gitignored — never commit real key material.
+# .envrc itself is gitignored; never commit real key material.
 
 # ---------------------------------------------------------------------------
 # Which GitHub account gh acts as. Only needed if you have more than one, and
@@ -34,9 +34,7 @@
 #   - the services key, issued for exactly one environment. Used against
 #     another it returns 401 error 40101, "Invalid services key": the
 #     signature is well formed, the credential simply is not accepted there.
-#   - the aichat hosts, free and premium.
-#   - the Leo subscription, since a credential only verifies against the
-#     service that issued it. A mismatch returns 401 error 40104.
+#   - the aichat host.
 #
 # Override for one command without editing this file:
 #
@@ -46,18 +44,14 @@ export BRAVEBOT_ENV="${BRAVEBOT_ENV:-dev}"
 
 # --- dev -------------------------------------------------------------------
 # Hosts resolve on the VPN only; off-VPN the names do not resolve at all.
-# Import the matching subscription with:  bravebot import-leo-creds development
 DEV_SERVICES_KEY="replace-me"
 DEV_KEY_ID="replace-me"
 DEV_ENDPOINT="https://ai-chat.bsg.brave.software"
-DEV_PREMIUM_ENDPOINT="https://ai-chat-premium.bsg.brave.software"
 
 # --- prod ------------------------------------------------------------------
-# Import the matching subscription with:  bravebot import-leo-creds stable
 PROD_SERVICES_KEY="replace-me"
 PROD_KEY_ID="replace-me"
 PROD_ENDPOINT="https://ai-chat.bsg.brave.com"
-PROD_PREMIUM_ENDPOINT="https://ai-chat-premium.bsg.brave.com"
 
 # ---------------------------------------------------------------------------
 # Selection. An unrecognised BRAVEBOT_ENV fails here rather than silently leaving
@@ -68,13 +62,11 @@ case "$BRAVEBOT_ENV" in
     export SERVICES_KEY_AICHAT="$DEV_SERVICES_KEY"
     export BRAVE_SERVICES_KEY_ID="$DEV_KEY_ID"
     export BRAVE_AI_CHAT_ENDPOINT="$DEV_ENDPOINT"
-    export BRAVE_AI_CHAT_PREMIUM_ENDPOINT="$DEV_PREMIUM_ENDPOINT"
     ;;
   prod)
     export SERVICES_KEY_AICHAT="$PROD_SERVICES_KEY"
     export BRAVE_SERVICES_KEY_ID="$PROD_KEY_ID"
     export BRAVE_AI_CHAT_ENDPOINT="$PROD_ENDPOINT"
-    export BRAVE_AI_CHAT_PREMIUM_ENDPOINT="$PROD_PREMIUM_ENDPOINT"
     ;;
   *)
     echo "BRAVEBOT_ENV must be 'dev' or 'prod', got '$BRAVEBOT_ENV'" >&2
@@ -85,10 +77,18 @@ esac
 # Point the free endpoint at a locally running backend instead, e.g.
 # export BRAVE_AI_CHAT_ENDPOINT="http://127.0.0.1:8000"
 #
-# The premium endpoint is optional. Without it premium is unavailable and every
-# request goes to the free endpoint; a subscription credential is never sent
-# there, since it does not belong to that host.
+# Brave's premium service needs no entry here. Its host is compiled in (the dev
+# one for both environments for now, as DEV_PREMIUM_ENDPOINT and
+# PROD_PREMIUM_ENDPOINT in crates/config/src/lib.rs), and its key is not
+# configuration: each person stores their own with `bravebot auth login brave`.
+# Without a key every request goes to the free endpoint, signed with the services
+# key. BRAVE_AI_CHAT_PREMIUM_ENDPOINT, exported here, replaces the compiled-in
+# host with another Brave one; a host that is not Brave's is never sent the key.
 
+# Optional. This is the model requested when nothing else says, and the value
+# below is the one already built in, so there is nothing to set unless a
+# different default is wanted.
+#
 # Model to request from POST /v1/chat/completions when the user has not chosen
 # one. `/model` in the interface picks from what GET /v1/models lists and that
 # choice wins, so this is the fallback rather than the setting. It is the default
@@ -110,7 +110,7 @@ esac
 # selections; once spent, requesting a premium model returns 403 error 40301. Free
 # models such as llama-3-8b-instruct always work. GET /v1/models reports which is
 # which in an "access" field when called with Brave-Product: bravebot.
-export BRAVEBOT_DEFAULT_MODEL="automatic-bravebot"
+#export BRAVEBOT_DEFAULT_MODEL="automatic-bravebot"
 
 # ---------------------------------------------------------------------------
 # Crash reports. The submission URL of the Backtrace project a release build

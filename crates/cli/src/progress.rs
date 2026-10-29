@@ -452,6 +452,29 @@ mod tests {
         assert!(!written.contains("a second line"), "got: {written}");
     }
 
+    /// A quarantined listing entry's real file name reaches the call line in place of its
+    /// reference (LAYER-3), the way it did for [`the_lines_of_a_call_draw_a_checkouts_names_as_pictures`]
+    /// below, but through the `ref:N(flags):name` form `target_of` builds rather than a bare
+    /// name, which is the shape #3064 reported (`say` already pictures it through
+    /// [`printable_lines`]).
+    #[test]
+    fn a_call_line_draws_a_targets_control_characters_as_pictures() {
+        let written = log(|p| {
+            p.tool_started(Activity::running(
+                "Read",
+                "ref:1(U,priv):x\u{1b}]0;PWNED-TITLE\u{7}\u{1b}[31mred.txt",
+            ));
+        });
+        assert!(
+            !written.contains('\u{1b}') && !written.contains('\u{7}'),
+            "got: {written:?}"
+        );
+        assert!(
+            written.contains("x\u{241b}]0;PWNED-TITLE\u{2407}"),
+            "the escape should be drawn as its picture: {written:?}"
+        );
+    }
+
     #[test]
     fn a_finished_call_prints_what_came_of_it() {
         let written = log(|p| {

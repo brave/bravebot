@@ -10,6 +10,7 @@ use crate::select::{self, Click};
 use crate::theme;
 use bravebot_i18n::t;
 use bravebot_session::jobs::State;
+use bravebot_session::listing::Status;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -39,12 +40,13 @@ const NAME_WIDEST: usize = 28;
 /// The fewest columns a name is cut to on a screen too narrow for the rest of the row.
 const NAME_NARROWEST: usize = 8;
 
-/// The order the headings are drawn in.
+/// The order the headings are drawn in: the order of [`Status::ORDER`] for the statuses a roster
+/// entry can have (SCREEN-16).
 const ORDER: [State; 5] = [
     State::NeedsInput,
+    State::Interrupted,
     State::Working,
     State::Idle,
-    State::Interrupted,
     State::Stopped,
 ];
 
@@ -346,14 +348,10 @@ impl<W: Write> Drop for Screen<W> {
     }
 }
 
+/// The word a heading carries: the Sessions screen's word for the status the state is
+/// (SCREEN-16).
 fn heading(state: State) -> &'static str {
-    match state {
-        State::NeedsInput => t!(sessions_state_needs_input_unnamed),
-        State::Working => t!(sessions_state_working),
-        State::Idle => t!(sessions_state_idle),
-        State::Interrupted => t!(sessions_state_interrupted),
-        State::Stopped => t!(sessions_state_stopped),
-    }
+    crate::sessions_screen::status_word(Status::of_state(state))
 }
 
 /// Draw the whole screen.
@@ -615,8 +613,8 @@ mod tests {
         ]
     }
 
-    /// BG-16: a session is drawn under the heading for its state, the headings come in a fixed
-    /// order whatever order the roster was in, and a group keeps the roster's order.
+    /// BG-16: a session is drawn under the heading for its state, the headings come in the order of
+    /// the Sessions screen's statuses whatever order the roster was in, and a group keeps the roster's order.
     #[test]
     fn sessions_are_drawn_under_a_heading_for_their_state_in_a_fixed_order() {
         let drawn = screen(&List::new(roster()), 80, 24);
@@ -641,7 +639,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{needle} is not on the screen: {drawn:#?}"))
         };
         let order = [
-            "need0001", "work0001", "idle0001", "idle0002", "intr0001", "stop0001",
+            "need0001", "intr0001", "work0001", "idle0001", "idle0002", "stop0001",
         ];
         let positions: Vec<usize> = order.iter().map(|id| at(&format!("name-{id}"))).collect();
         assert!(positions.is_sorted(), "{positions:?} in {drawn:#?}");
@@ -1187,14 +1185,14 @@ mod tests {
             assert_eq!(outcome, None, "{kind:?}");
             chosen_id(list).map(str::to_string)
         };
-        // Grouped by state: needs-input, working, idle twice, interrupted, stopped.
+        // Grouped by state: needs-input, interrupted, working, idle twice, stopped.
         assert_eq!(
             turn(&mut list, MouseEventKind::ScrollDown, 2).as_deref(),
-            Some("idle0001")
+            Some("work0001")
         );
         assert_eq!(
             turn(&mut list, MouseEventKind::ScrollUp, 1).as_deref(),
-            Some("work0001")
+            Some("intr0001")
         );
         assert_eq!(
             turn(&mut list, MouseEventKind::ScrollDown, 50).as_deref(),
@@ -1239,5 +1237,24 @@ mod tests {
             !written.contains("\x1b[?1000"),
             "the mouse was asked for or given back with it off: {written:?}"
         );
+    }
+
+    /// SCREEN-16. The headings come in the order of the Sessions screen's statuses, and say its words.
+    #[test]
+    fn the_headings_are_in_the_order_and_the_words_of_the_sessions_screens_statuses() {
+        let drawn: Vec<Status> = ORDER.iter().map(|state| Status::of_state(*state)).collect();
+        let listed: Vec<Status> = Status::ORDER
+            .iter()
+            .copied()
+            .filter(|status| status.process_state().is_some())
+            .collect();
+        assert_eq!(drawn, listed);
+        for state in ORDER {
+            assert_eq!(
+                heading(state),
+                crate::sessions_screen::status_word(Status::of_state(state))
+            );
+        }
+        assert_eq!(heading(State::Idle), "Ready", "idle is the word ready");
     }
 }

@@ -6,7 +6,9 @@ description: Reach models through your own AWS account, name more than three, an
 
 # Reaching a model through AWS Bedrock
 
-Set these variables to reach models through your own AWS account:
+Set these variables to reach models through your own AWS account. They are read from your own
+settings file, a `--settings` file outside the project and the environment, and from no project or
+local file: `bravebot doctor` reports a checkout's file that names one, and the name decides nothing.
 
 | Variable | What it sets |
 |---|---|
@@ -52,8 +54,8 @@ never heard of an inference-profile ARN.
 Your tiers sit under a heading reading `Bedrock, your my-profile AWS profile`, or
 `Bedrock, your AWS account` with no profile set. The profile is named because it is what decides which
 credentials sign the request, and because Brave serves part of its own roster through Bedrock too.
-Every configured tier is marked free: premium means a Leo subscription, and reaching a model through
-your own account does not involve one.
+Every configured tier is marked free: premium means Brave's premium service, and reaching a model through
+your own account does not involve it.
 
 There is no automatic entry among them. On the Brave roster it means "let the server choose", which
 Bedrock does not offer. A request names one model and gets it or an error.

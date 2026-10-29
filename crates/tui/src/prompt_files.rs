@@ -31,6 +31,9 @@ pub enum Expansion {
     NotOne,
     /// The text that replaces the line in the box.
     Expanded(String),
+    /// The text that replaces the line in the box, and the model the file names, which the model
+    /// picker opens on. Nothing is chosen until the person presses Enter in the picker.
+    ExpandedForModel { text: String, model: String },
     /// A file is named and cannot be used. The line stays as typed and nothing is sent.
     Refused { name: String, why: Why },
 }
@@ -46,6 +49,10 @@ pub enum Why {
     Empty,
     /// The `agent` key is not one word.
     AgentNotAName,
+    /// The `model` key is not one word.
+    ModelNotAName,
+    /// Both `agent` and `model` are named. The box holds one form, so neither is used.
+    AgentAndModel,
     /// The text would begin with a word a command claims, so the next Enter would carry out a
     /// command that came out of a file (CMD-1).
     BeginsWithACommand,
@@ -86,18 +93,30 @@ pub fn expand(directory: &Path, line: &str) -> Expansion {
     if body.is_empty() {
         return refused(name, Why::Empty);
     }
-    let agent = declarations(&text)
-        .and_then(|declared| declared.get("agent").cloned())
-        .map(|agent| agent.trim().to_string())
-        .filter(|agent| !agent.is_empty());
-    match agent {
-        None if begins_with_a_command(body) => refused(name, Why::BeginsWithACommand),
-        None => Expansion::Expanded(body.to_string()),
-        Some(agent) if is_one_word(&agent) => Expansion::Expanded(format!(
+    let declared = declarations(&text);
+    let key = |key: &str| {
+        declared
+            .as_ref()
+            .and_then(|declared| declared.get(key).cloned())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    match (key("agent"), key("model")) {
+        (Some(_), Some(_)) => refused(name, Why::AgentAndModel),
+        (None, None) if begins_with_a_command(body) => refused(name, Why::BeginsWithACommand),
+        (None, None) => Expansion::Expanded(body.to_string()),
+        (Some(agent), None) if is_one_word(&agent) => Expansion::Expanded(format!(
             "{} {agent} {body}",
             crate::command_table::AGENT_COMMAND
         )),
-        Some(_) => refused(name, Why::AgentNotAName),
+        (Some(_), None) => refused(name, Why::AgentNotAName),
+        // The body stays the text of the box, so it is held to the same rule as one with no key.
+        (None, Some(_)) if begins_with_a_command(body) => refused(name, Why::BeginsWithACommand),
+        (None, Some(model)) if is_one_word(&model) => Expansion::ExpandedForModel {
+            text: body.to_string(),
+            model,
+        },
+        (None, Some(_)) => refused(name, Why::ModelNotAName),
     }
 }
 
@@ -230,7 +249,7 @@ mod tests {
         let directory = scratch("prompt-files-front-matter");
         std::fs::write(
             directory.join("plain.md"),
-            "---\ndescription: Look at a diff\nmodel: some-model\n---\nLook at $ARGUMENTS\n",
+            "---\ndescription: Look at a diff\nargument-hint: x\n---\nLook at $ARGUMENTS\n",
         )
         .unwrap();
 
@@ -253,6 +272,91 @@ mod tests {
             expanded(&directory, "/audit the parser"),
             "/agent auditor Audit the parser"
         );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// `model` leaves the body as the text of the box and names the model the picker opens on, so
+    /// the model is not part of any line that could be sent. A driver that wrote `/model name` or
+    /// the name into the text would send it.
+    #[test]
+    fn a_model_in_the_front_matter_is_named_beside_the_body() {
+        let directory = scratch("prompt-files-model");
+        std::fs::write(
+            directory.join("audit.md"),
+            "---\nmodel: some-model\n---\nAudit $ARGUMENTS\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            expand(&directory, "/audit the parser"),
+            Expansion::ExpandedForModel {
+                text: "Audit the parser".to_string(),
+                model: "some-model".to_string()
+            }
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A file's `!` command text and `@` file names are text of the box like any other and nothing
+    /// is run or read for them, whether or not the file names a model. The file `@secret.md` names
+    /// is beside the prompt and holds a marker that must not appear.
+    ///
+    /// Rejects: an expansion that includes the file an `@` names, or runs the command after a `!`.
+    #[test]
+    fn bang_and_at_text_in_a_file_is_left_as_written() {
+        let directory = scratch("prompt-files-bang-at");
+        std::fs::write(directory.join("secret.md"), "INCLUDED-MARKER").unwrap();
+        let body = "Run !echo RAN-MARKER and read @secret.md and @./secret.md";
+        std::fs::write(
+            directory.join("plain.md"),
+            format!("---\ndescription: x\n---\n{body}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("picked.md"),
+            format!("---\nmodel: some-model\n---\n{body}\n"),
+        )
+        .unwrap();
+
+        assert_eq!(expanded(&directory, "/plain"), body);
+        assert_eq!(
+            expand(&directory, "/picked"),
+            Expansion::ExpandedForModel {
+                text: body.to_string(),
+                model: "some-model".to_string()
+            }
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A `model` of several words is not one name, and a file naming both `agent` and `model` has
+    /// two forms for one box. Both are refused rather than one being dropped without a word.
+    #[test]
+    fn a_model_that_is_not_one_word_or_comes_with_an_agent_is_refused() {
+        let directory = scratch("prompt-files-model-refused");
+        std::fs::write(
+            directory.join("words.md"),
+            "---\nmodel: two words\n---\nAudit\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("both.md"),
+            "---\nagent: auditor\nmodel: some-model\n---\nAudit\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("wipe.md"),
+            "---\nmodel: some-model\n---\n/clear\n",
+        )
+        .unwrap();
+
+        let why = |line: &str| match expand(&directory, line) {
+            Expansion::Refused { why, .. } => Some(why),
+            _ => None,
+        };
+        assert_eq!(why("/words"), Some(Why::ModelNotAName));
+        assert_eq!(why("/both"), Some(Why::AgentAndModel));
+        assert_eq!(why("/wipe"), Some(Why::BeginsWithACommand));
         let _ = std::fs::remove_dir_all(&directory);
     }
 

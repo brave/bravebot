@@ -1,4 +1,4 @@
-//! Lending one confirmer, one reporter, one audit trail and one wallet to several runs at once.
+//! Lending one confirmer, one reporter, one audit trail and one premium key to several runs at once.
 //!
 //! A turn and the delegates it spawned run at the same time and each of the four is single: one
 //! person answers the questions, one screen shows the lines, one trail records the decisions, one
@@ -135,7 +135,7 @@ impl<'a, T: ?Sized> Lent<'a, T> {
     /// Take the lock.
     ///
     /// A delegate that panicked leaves it poisoned, and the turn is still running and still owns
-    /// the screen. What is behind the lock is a confirmer, a reporter, a trail or a wallet, and a
+    /// the screen. What is behind the lock is a confirmer, a reporter, a trail or a source, and a
     /// panic leaves none of the four half written: each method here is one call that either
     /// happened or did not, and a spend is recorded before the credential it produced is handed
     /// back. So the turn carries on with what it was lent rather than dying of somebody else's
@@ -156,16 +156,15 @@ impl<'a, T: ?Sized> Lent<'a, T> {
     }
 }
 
-/// The one credential store a run spends from.
+/// The one source of the premium key a run presents.
 ///
 /// A trait rather than [`Lent`] itself, because `Lent` is invariant in the lifetime of the borrow
-/// it holds: a run that has to carry either the wallet it opened or the one it was handed cannot
+/// it holds: a run that has to carry either the source it opened or the one it was handed cannot
 /// name both in a single type, and every signature between the turn and its delegates would
 /// otherwise state the turn's own borrow.
 ///
-/// Spending, and nothing else. A run is told what the next credential is and never which batch it
-/// came from, how many are left, or whether the wallet has been written back: those belong to the
-/// run that opened it, which is the only one that closes it.
+/// Presenting, and nothing else. A run is told what the key is and never where it came from: that
+/// belongs to the run that took it from the configuration.
 pub trait Spends: Sync {
     /// Take the lock and spend the next credential.
     fn spend_one(&self) -> Result<SubscriptionCredential, String>;
@@ -177,40 +176,38 @@ impl<T: Subscription + Send + ?Sized> Spends for Lent<'_, T> {
     }
 }
 
-/// A wallet that counts each credential it hands out against a session's spend limit (TURN-8).
+/// A source that counts each request it is asked for against a session's spend limit (TURN-8).
 ///
-/// Wrapped round the wallet a turn opens, which is the one its delegates are lent, so a delegate's
-/// spends reach the same count as the turn's own.
+/// Wrapped round the source a turn takes, which is the one its delegates are lent, so a delegate's
+/// requests reach the same count as the turn's own.
 pub struct Counted<'a> {
-    wallet: &'a dyn Spends,
+    source: &'a dyn Spends,
     limit: crate::spend_limit::SpendLimit,
 }
 
 impl<'a> Counted<'a> {
-    pub fn new(wallet: &'a dyn Spends, limit: crate::spend_limit::SpendLimit) -> Self {
-        Self { wallet, limit }
+    pub fn new(source: &'a dyn Spends, limit: crate::spend_limit::SpendLimit) -> Self {
+        Self { source, limit }
     }
 }
 
 impl Spends for Counted<'_> {
     fn spend_one(&self) -> Result<SubscriptionCredential, String> {
-        let credential = self.wallet.spend_one()?;
+        let credential = self.source.spend_one()?;
         self.limit.add_credit();
         Ok(credential)
     }
 }
 
-/// One run's handle on the wallet.
+/// One run's handle on the source.
 ///
-/// A handle rather than a copy, for the reason a credential exists at all: it is single-use, so
-/// a second wallet over the same batch hands the next run a credential the first has already
-/// presented. Every handle reaches the one wallet, and a spend made through any of them is a
-/// spend every other one can see (PREM-5).
+/// A handle rather than a copy, so that every handle reaches the one source and a request made
+/// through any of them is counted with the rest (TURN-8).
 pub struct Spending<'a>(&'a dyn Spends);
 
 impl<'a> Spending<'a> {
-    pub fn new(wallet: &'a dyn Spends) -> Self {
-        Self(wallet)
+    pub fn new(source: &'a dyn Spends) -> Self {
+        Self(source)
     }
 }
 
@@ -293,6 +290,17 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
     fn request_built(&mut self, view: crate::request_view::RequestView) {
         if self.from.is_none() {
             self.lent.hold().request_built(view);
+        }
+    }
+
+    fn wants_fork(&self) -> bool {
+        self.from.is_none() && self.lent.hold().wants_fork()
+    }
+
+    /// Only the turn's own exchange: a delegate's is a different conversation.
+    fn exchange_forked(&mut self, fork: crate::aside::Fork) {
+        if self.from.is_none() {
+            self.lent.hold().exchange_forked(fork);
         }
     }
 
@@ -935,48 +943,41 @@ mod tests {
         );
     }
 
-    /// PREM-5, over the wallet a run actually spends rather than a stand-in for one: two runs
-    /// holding handles on one wallet are never offered the same credential.
+    /// TURN-8: two runs holding handles on one source reach that source, so a premium request made
+    /// by either is the one thing counted against a session's limit in credits.
     ///
-    /// The turn and its delegates are the two runs, and a credential is single-use. What makes
-    /// that hold is the lock and the single wallet behind it: a spend is recorded in memory until
-    /// the wallet is written back (PREM-6), so two wallets over one batch (a copy each, or a
-    /// second read of the same file) would each hand out the first unspent credential they can
-    /// see, which is the same one.
+    /// The turn and its delegates are the two runs. A handle that asked the configuration for the
+    /// key instead of the source it was lent would present the same key and count nothing.
     #[test]
-    fn two_runs_holding_one_wallet_are_never_offered_the_same_credential() {
-        use bravebot_aichat::Subscription;
+    fn two_runs_holding_one_source_both_ask_it() {
+        use bravebot_aichat::{Subscription, SubscriptionCredential};
 
-        let batch = bravebot_skus::StoredCredentials {
-            order_id: "order".to_string(),
-            environment: bravebot_skus::Environment::Production,
-            item_id: "item".to_string(),
-            issuer: "brave.com?sku=brave-leo-premium".to_string(),
-            // Two, so running out is not what makes the second answer differ from the first, and
-            // real ones, since a credential that cannot be presented never reaches a cookie.
-            credentials: std::iter::repeat_with(|| bravebot_skus::store::Credential {
-                unblinded: bravebot_skus::device::test_credential(),
-                valid_from: "2000-01-01T00:00:00".to_string(),
-                valid_to: "2999-01-01T00:00:00".to_string(),
-                spent: false,
-                rfc: true,
-            })
-            .take(2)
-            .collect(),
-        };
+        struct Counting {
+            asked: usize,
+        }
+        impl Subscription for Counting {
+            fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
+                self.asked += 1;
+                Ok(SubscriptionCredential {
+                    key: bravebot_config::Secret::new("a-key"),
+                })
+            }
+        }
 
-        let mut wallet = crate::ImportedSubscription::detached(batch);
-        let lent = Lent::new(&mut wallet);
-        let turns = Spending::new(&lent)
-            .next_credential()
-            .expect("the turn spends one");
-        let delegates = Spending::new(&lent)
-            .next_credential()
-            .expect("the delegate spends the next");
+        let mut source = Counting { asked: 0 };
+        {
+            let lent = Lent::new(&mut source);
+            Spending::new(&lent)
+                .next_credential()
+                .expect("the turn presents the key");
+            Spending::new(&lent)
+                .next_credential()
+                .expect("the delegate presents the key");
+        }
 
-        assert_ne!(
-            turns.cookie_value, delegates.cookie_value,
-            "a credential the turn had already presented was offered to a delegate"
+        assert_eq!(
+            source.asked, 2,
+            "a request was made that the source the run was lent did not hear of"
         );
     }
 

@@ -1,503 +1,200 @@
-//! Spending imported Leo Premium credentials on a turn's requests.
+//! Presenting the premium key on a turn's requests.
 //!
-//! The adapter between the credential store and the chat client. It lives here rather than in either
-//! because a credential is single-use: the client has to ask for one per request, and the store
-//! has to record each as spent, so something has to sit between them and hold the channel.
+//! The adapter between the configuration and the chat client. The key lives in the configuration
+//! ([`bravebot_config::Config::premium_key`]) and the client asks for it once per request, so that
+//! the caller that holds it can count each request against a session's `limit` in credits
+//! ([TURN-8](../../../docs/specs/turns.md#TURN-8)).
 //!
-//! A failure here fails the turn rather than sending the request with no credential. That is
-//! deliberate: a subscription that silently stops being used looks like the model got worse for no
-//! reason, and the error names the fix (re-import, or unset the premium endpoint).
+//! A key is only ever handed to the client for a premium host that is one of Brave's. A premium
+//! endpoint that is not, a local model server or a private deployment, is somebody's own choice of
+//! where requests go, and no key belongs near it.
 
-use crate::calendar::civil_from_days;
 use bravebot_aichat::{Subscription, SubscriptionCredential};
-use bravebot_skus::{DeviceError, Registration, StoreError};
+use bravebot_config::{Config, Secret};
 
-/// What looking for an imported subscription found.
+/// The premium key, ready to be presented on each premium request.
 ///
-/// Three answers rather than an `Option`, because the two ways of coming back empty want different
-/// treatment. Nothing imported is not a fault and deserves no words: it is where a machine that
-/// never subscribed sits. A batch that exists and could not be read is a paid subscription not
-/// being spent, and the only symptom is a worse model, which nobody would think to attribute to the
-/// credential store.
-///
-/// No `Debug`, deliberately. One variant holds a wallet of live credentials, and the obvious
-/// debugging reflex of printing this would put them in a log. The same reasoning as
-/// [`bravebot_aichat::SubscriptionCredential`], which redacts for it.
-pub enum Discovery {
-    /// A batch is in hand and will be spent on this turn's requests.
-    Found(ImportedSubscription),
-    /// Nothing has been imported for this endpoint's environment, which is the ordinary case on a
-    /// machine that has never subscribed.
-    NothingImported,
-    /// Something is stored and could not be used, with a sentence saying why and what to do.
-    ///
-    /// Carries words rather than the error so a caller can report it without depending on
-    /// `bravebot_skus`, and because what a person needs here is the sentence, not the variant.
-    Refused(String),
+/// No `Debug`, deliberately. It holds a live key, and the obvious debugging reflex of printing this
+/// would put it in a log. The same reasoning as [`bravebot_aichat::SubscriptionCredential`], which
+/// redacts for it.
+pub struct PremiumKey {
+    key: Secret,
 }
 
-impl Discovery {
-    /// The subscription, where one was found.
-    pub fn found(self) -> Option<ImportedSubscription> {
-        match self {
-            Self::Found(subscription) => Some(subscription),
-            _ => None,
-        }
-    }
-
-    /// Whether a batch is in hand, without taking it.
+impl PremiumKey {
+    /// The key this configuration holds, where the premium host it goes with is one of Brave's.
     ///
-    /// For a caller deciding whether any configured service could answer, which is asked before
-    /// there is a turn to spend a credential on. [`Discovery::found`] consumes, and a caller that
-    /// used it to ask the question would be holding a wallet it has no use for yet.
-    pub fn holds_a_batch(&self) -> bool {
-        matches!(self, Self::Found(_))
-    }
-
-    /// What to tell the person watching, where there is anything worth saying.
-    ///
-    /// `None` for both of the cases that are working as intended: a subscription being spent needs
-    /// no explanation, and neither does a session that never had one.
-    pub fn complaint(&self) -> Option<&str> {
-        match self {
-            Self::Refused(detail) => Some(detail),
-            Self::Found(_) | Self::NothingImported => None,
-        }
+    /// `None` where there is no key, which is the ordinary case for a build that was not given one,
+    /// and where the premium host is not Brave's. The second is a destination somebody chose, so it
+    /// is no fault and not worth a line on every run.
+    pub fn held(config: &Config) -> Option<Self> {
+        let key = config.premium_key.as_ref()?;
+        is_a_brave_endpoint(config.premium_endpoint.as_deref()?).then(|| Self { key: key.clone() })
     }
 }
 
-/// How a new batch is obtained, as a function so a test can supply one without a network.
-type Register = fn(bravebot_skus::Environment, &str, &str) -> Result<Registration, DeviceError>;
-
-/// Spends imported credentials, one per request.
-///
-/// The batch is read once and spent from memory, so a session touches the store at most once
-/// rather than on every model round. See [`bravebot_skus::store::Wallet`].
-pub struct ImportedSubscription {
-    wallet: bravebot_skus::store::Wallet,
-    /// The clock, as an injectable function so a test need not wait for a real date.
-    now: fn() -> String,
-    /// How many credentials were left after the last spend, for a caller that wants to warn.
-    remaining: Option<usize>,
-    /// How a replacement batch is obtained when the current one runs out.
-    register: Register,
-    /// Supplies the request id a refill registers under.
-    new_request_id: fn() -> String,
-    /// Whether a refill has already been attempted this session.
-    refilled: bool,
-}
-
-impl ImportedSubscription {
-    /// Spend from a batch that is already in hand, with no file behind it.
-    ///
-    /// Exists so the spending behaviour can be tested without touching the real store, which would
-    /// overwrite the credentials of whoever ran the suite.
-    #[cfg(test)]
-    pub(crate) fn detached(batch: bravebot_skus::StoredCredentials) -> Self {
-        Self {
-            wallet: bravebot_skus::store::Wallet::detached(batch),
-            now: current_timestamp,
-            remaining: None,
-            // Refusing rather than reaching the network, so a test that unexpectedly triggers a
-            // refill fails loudly instead of making a live request.
-            register: |_, _, _| {
-                Err(DeviceError::Transport {
-                    detail: "no network in tests".to_string(),
-                })
-            },
-            new_request_id: || "test-request-id".to_string(),
-            refilled: false,
-        }
-    }
-
-    /// The imported batch, if it can be spent against `endpoint`.
-    ///
-    /// A credential only verifies against the issuer that signed it, so a batch imported for another
-    /// deployment is refused here rather than sent and rejected as invalid by the server.
-    ///
-    /// The pairing is production or not, rather than an exact environment match. The aichat hosts and
-    /// the SKU service do not divide the world the same way: a staging subscription is verified by
-    /// the `brave.software` aichat host, confirmed against the live service, so requiring the names
-    /// to agree would reject a credential that works.
-    ///
-    /// Three answers rather than two, because "nothing is imported" and "something is imported and
-    /// could not be read" are different facts and only one of them is ordinary. Collapsed into
-    /// `None` they were indistinguishable, and the tier silently became the free one: an unreadable
-    /// file, or a batch written by another version, cost the user the model they had chosen
-    /// and said nothing at all. What that looks like from the outside is the model getting worse for
-    /// no reason, which is the thing this module's own documentation promises never to do.
-    pub fn discover(endpoint: &str) -> Discovery {
-        // A host in neither camp, such as a local endpoint. No credential belongs anywhere near it,
-        // and that is a deliberate choice rather than a failure, so it reports as nothing imported.
-        let Some(production) = is_production_endpoint(endpoint) else {
-            return Discovery::NothingImported;
-        };
-
-        // A machine with nowhere to keep credentials has none imported rather than one that could
-        // not be read. STATE-2 makes an absent profile directory a state this program supports, so
-        // a container that has none of it wanted none of it, and the store answers that with the
-        // same error it uses for a file it could not read. Asked separately because those two are
-        // indistinguishable once the store has answered, and reporting the second would send
-        // somebody to re-import a subscription they never had.
-        if bravebot_skus::store::path().is_err() {
-            return Discovery::NothingImported;
-        }
-
-        let wallet = match bravebot_skus::store::Wallet::open() {
-            Ok(wallet) => wallet,
-            // The ordinary case: nothing has been imported.
-            Err(StoreError::NotFound) => return Discovery::NothingImported,
-            Err(e) => return Discovery::Refused(e.to_string()),
-        };
-
-        // A credential only verifies against the deployment that signed it, so one imported from a
-        // channel this build does not talk to cannot be spent. Reported rather than passed over: it
-        // is a paid subscription going unused, and the remedy is importing from the matching
-        // channel, which nobody would guess from a turn that quietly got worse.
-        if let Some(refusal) = environment_refusal(production, wallet.environment()) {
-            return Discovery::Refused(refusal);
-        }
-
-        Discovery::Found(Self {
-            wallet,
-            now: current_timestamp,
-            remaining: None,
-            register: default_register,
-            new_request_id: bravebot_skus::new_request_id,
-            refilled: false,
-        })
-    }
-
-    /// How many credentials remained after the last one was spent.
-    pub fn remaining(&self) -> Option<usize> {
-        self.remaining
-    }
-}
-
-impl Subscription for ImportedSubscription {
+impl Subscription for PremiumKey {
     fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
-        let now = (self.now)();
-
-        let spent = match self.wallet.spend(&now) {
-            Ok(spent) => spent,
-            // A batch covers a few daily windows and then stops working, usually with most of it
-            // unspent, so running out is the expected end of its life rather than a fault. The
-            // subscription is still paid for and everything needed to mint more is already here, so
-            // refill instead of making the user re-run the import.
-            Err(StoreError::Exhausted | StoreError::Expired { .. }) => {
-                self.refill()?;
-                self.wallet.spend(&now).map_err(|e| e.to_string())?
-            }
-            Err(e) => return Err(e.to_string()),
-        };
-
-        let value = bravebot_skus::device::present(&spent.credential, &spent.issuer)
-            .map_err(|e| e.to_string())?;
-
-        self.remaining = Some(spent.remaining);
-
         Ok(SubscriptionCredential {
-            cookie_name: bravebot_skus::CREDENTIAL_COOKIE_NAME.to_string(),
-            cookie_value: value,
+            key: self.key.clone(),
         })
     }
-}
-
-impl ImportedSubscription {
-    /// Mint a new batch for the same order and put it in the wallet.
-    ///
-    /// Registers again under a **fresh** request id. Reusing the stored one would claim the existing
-    /// batch rather than ask for a new one, which is the case the service answers with a conflict.
-    fn refill(&mut self) -> Result<(), String> {
-        // Attempted once per session. A second failure in the same run would not be a different
-        // answer, and retrying inside a tool loop would mint batches in a circle.
-        if self.refilled {
-            return Err("the subscription credentials could not be renewed".to_string());
-        }
-        self.refilled = true;
-
-        let order_id = self.wallet.order_id().to_string();
-        let registration = (self.register)(
-            self.wallet.environment(),
-            &order_id,
-            &(self.new_request_id)(),
-        )
-        .map_err(|e| e.to_string())?;
-
-        self.wallet.refill(registration.into());
-
-        // Written now rather than at session end: a batch that cost a round trip to obtain should
-        // survive the process not exiting cleanly.
-        self.wallet.flush().map_err(|e| e.to_string())?;
-        Ok(())
-    }
-}
-
-/// Whether an aichat endpoint is the production deployment.
-///
-/// Only that distinction is drawn, because it is the only one that matters for picking a credential:
-/// the non-production aichat hosts and the non-production SKU issuers do not correspond one to one,
-/// and a staging subscription is verified by the `brave.software` host in practice.
-///
-/// `None` for a host in neither camp, such as a local endpoint, so no credential is sent somewhere
-/// its issuer is unknown.
-fn is_production_endpoint(endpoint: &str) -> Option<bool> {
-    // The host the transport connects to, which is where the credential goes. It ends at the first
-    // `/`, `?` or `#`, and a port or userinfo is not part of it: a suffix test against anything
-    // longer reads `ai-chat.bsg.brave.com:443` as somebody else's host, and reads
-    // `attacker.example#.brave.com` as Brave's while the request goes to `attacker.example`.
-    let host = bravebot_core::url::host_of(endpoint)?;
-
-    // Checked before brave.com, since a careless suffix test would read brave.software as
-    // production and send a live credential to a development host.
-    if host.ends_with(".brave.software") || host.ends_with(".bravesoftware.com") {
-        Some(false)
-    } else if host.ends_with(".brave.com") {
-        Some(true)
-    } else {
-        None
-    }
-}
-
-/// Why a batch imported for `environment` cannot be spent against `endpoint`, or `None` where it can
-/// or where the endpoint belongs to no environment.
-///
-/// The sentence [`ImportedSubscription::discover`] refuses with, shared so that
-/// `bravebot auth status` prints the one a turn would show, and the two cannot say different things
-/// about one batch.
-pub fn environment_mismatch(
-    endpoint: &str,
-    environment: bravebot_skus::Environment,
-) -> Option<String> {
-    environment_refusal(is_production_endpoint(endpoint)?, environment)
-}
-
-fn environment_refusal(
-    production: bool,
-    environment: bravebot_skus::Environment,
-) -> Option<String> {
-    ((environment == bravebot_skus::Environment::Production) != production).then(|| {
-        format!(
-            "the imported subscription is for {}, which this endpoint does not accept; \
-             run `bravebot auth login leo` with the matching Brave channel",
-            environment.as_str()
-        )
-    })
 }
 
 /// Whether an aichat endpoint is one of Brave's own deployments.
 ///
-/// Here rather than beside the rule that asks it, because the host suffixes that answer it are
-/// already in this file: a second list of them is the two lists going out of step, and the one
-/// that decides where a credential may be sent is the one worth having only once.
+/// This decides where the premium key may be sent, so the host it reads is the one the transport
+/// connects to, which ends at the first `/`, `?` or `#`, with any userinfo and port left out. A
+/// suffix test against anything longer reads `ai-chat.bsg.brave.com:443` as somebody else's host,
+/// and reads `attacker.example#.brave.com` as Brave's while the request goes to `attacker.example`.
 ///
-/// False for a host in neither camp, which is somebody's own deployment: a local service, a
-/// private one, a proxy in front of either. Nobody is handed a configuration pointing at one, so
-/// it is a destination that was chosen.
+/// False for a host in none of the three suffixes, which is somebody's own deployment: a local
+/// service, a private one, a proxy in front of either. Nobody is handed a configuration pointing at
+/// one, so it is a destination that was chosen.
 pub fn is_a_brave_endpoint(endpoint: &str) -> bool {
-    is_production_endpoint(endpoint).is_some()
-}
-
-/// Register against the real service, over what this process trusts and goes through.
-fn default_register(
-    environment: bravebot_skus::Environment,
-    order_id: &str,
-    request_id: &str,
-) -> Result<Registration, DeviceError> {
-    bravebot_skus::device::register(
-        environment,
-        order_id,
-        request_id,
-        bravebot_net::Transport::shared().agent_config_builder(),
-    )
-}
-
-/// The current time, in the fixed-width UTC form the stored windows use.
-///
-/// Formatted by hand from the Unix epoch: the comparison is against strings the server wrote, and
-/// a date library would be a dependency for one conversion. Civil-time arithmetic from a day count
-/// is exact, so this needs no timezone handling.
-fn current_timestamp() -> String {
-    let seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    let (year, month, day) = civil_from_days((seconds / 86_400) as i64);
-    let seconds_today = seconds % 86_400;
-
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}",
-        seconds_today / 3600,
-        (seconds_today % 3600) / 60,
-        seconds_today % 60
-    )
+    let Some(host) = bravebot_core::url::host_of(endpoint) else {
+        return false;
+    };
+    [".brave.com", ".brave.software", ".bravesoftware.com"]
+        .iter()
+        .any(|suffix| host.ends_with(suffix))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The distinction the type exists for. Nothing imported is not a fault; a batch that cannot be
-    /// read is a paid subscription going unspent, and collapsing the two into one empty answer is
-    /// what made the downgrade silent.
-    ///
-    /// Stated over the two empty variants rather than by calling `discover`, which would read the
-    /// real store of whoever ran the suite. See [`ImportedSubscription::detached`].
+    /// A configuration whose premium host is `premium` where one is named and the compiled-in one
+    /// where not, with `key` stored as `bravebot auth login brave` leaves it.
+    fn configured(premium: Option<&str>, key: Option<&str>) -> Config {
+        let mut config = Config::from_lookup(|name| match name {
+            "SERVICES_KEY_AICHAT" => Some("test-signing-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-key-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.software".into()),
+            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT" => premium.map(str::to_string),
+            _ => None,
+        })
+        .expect("a configuration");
+        config.premium_key = key.map(bravebot_config::Secret::new);
+        config
+    }
+
+    /// PREM-12: the key a configuration holds is the one presented, every time it is asked for. A
+    /// source that spent it, as the single-use credential it replaces was, would fail the second
+    /// request of a turn.
     #[test]
-    fn an_unreadable_batch_is_reported_and_an_absent_one_is_not() {
-        let absent = Discovery::NothingImported;
-        assert!(
-            absent.complaint().is_none(),
-            "having imported nothing is not a fault"
+    fn the_key_is_presented_on_every_request() {
+        let config = configured(
+            Some("https://ai-chat-premium.bsg.brave.software"),
+            Some("the-premium-key"),
         );
-        assert!(absent.found().is_none());
-
-        let refused =
-            Discovery::Refused("nightly: the stored credentials could not be read".to_string());
-        let complaint = refused.complaint().expect("an unreadable batch says so");
-        // Which channel and why, since "premium is off" would leave nothing to act on.
-        assert!(complaint.contains("nightly"), "{complaint}");
-        assert!(complaint.contains("could not be read"), "{complaint}");
-        assert!(refused.found().is_none(), "nothing to spend");
-    }
-
-    /// A local endpoint is in neither environment, so no credential is sent near it. That is a
-    /// deliberate choice rather than a failure, so it must not be reported as one: a warning on
-    /// every run against a local backend is a warning people learn to ignore.
-    #[test]
-    fn an_endpoint_in_no_environment_is_not_a_complaint() {
-        let discovery = ImportedSubscription::discover("http://127.0.0.1:8080");
-        assert!(discovery.complaint().is_none());
-        assert!(discovery.found().is_none());
-    }
-
-    /// The timestamp is compared against windows the server wrote, so it has to be the same
-    /// fixed-width shape rather than merely a correct instant.
-    #[test]
-    fn the_timestamp_is_fixed_width_and_orders_lexicographically() {
-        let now = current_timestamp();
-        assert_eq!(now.len(), 19, "{now}");
-        assert_eq!(now.as_bytes()[4], b'-');
-        assert_eq!(now.as_bytes()[7], b'-');
-        assert_eq!(now.as_bytes()[10], b'T');
-        assert_eq!(now.as_bytes()[13], b':');
-        assert_eq!(now.as_bytes()[16], b':');
-    }
-
-    fn batch() -> bravebot_skus::StoredCredentials {
-        bravebot_skus::StoredCredentials {
-            order_id: "order".to_string(),
-            environment: bravebot_skus::Environment::Production,
-            item_id: "item".to_string(),
-            issuer: "brave.com?sku=brave-leo-premium".to_string(),
-            credentials: vec![bravebot_skus::store::Credential {
-                // Not a real token, so presenting it fails. That is what the error paths below
-                // exercise, without needing a signed batch from the service.
-                unblinded: bravebot_skus::Secret::new("not-a-token"),
-                valid_from: "2026-08-22T00:00:00".to_string(),
-                valid_to: "2026-08-23T00:00:00".to_string(),
-                spent: false,
-                rfc: true,
-            }],
+        let mut held = PremiumKey::held(&config).expect("a key to present");
+        for _ in 0..3 {
+            let credential = held.next_credential().expect("a key");
+            assert_eq!(credential.key.expose(), "the-premium-key");
         }
     }
 
-    /// The endpoint decides which imported batch is usable. Getting it wrong sends a production
-    /// credential to a non-production host, which reads as an invalid credential and looks like the
-    /// import failed.
+    /// PREM-2: a key is presented only to a premium host that is Brave's. With none stored there is
+    /// nothing to present, the host compiled in is Brave's, and a host somebody named in its place
+    /// that is not Brave's is sent nothing.
     #[test]
-    fn the_endpoint_decides_whether_a_production_credential_is_wanted() {
-        assert_eq!(
-            is_production_endpoint("https://ai-chat-premium.bsg.brave.com/v1/chat/completions"),
-            Some(true)
+    fn a_key_is_presented_only_to_a_premium_host_that_is_braves() {
+        assert!(
+            PremiumKey::held(&configured(None, None)).is_none(),
+            "no key"
         );
-        assert_eq!(
-            is_production_endpoint("https://ai-chat-premium.bsg.bravesoftware.com"),
-            Some(false)
+        assert!(
+            PremiumKey::held(&configured(
+                Some("https://ai-chat-premium.bsg.brave.software"),
+                None
+            ))
+            .is_none(),
+            "a host with no key"
         );
+        assert!(
+            PremiumKey::held(&configured(None, Some("the-premium-key"))).is_some(),
+            "the host compiled in is not Brave's"
+        );
+        for theirs in ["http://127.0.0.1:8080", "https://premium.example"] {
+            assert!(
+                PremiumKey::held(&configured(Some(theirs), Some("the-premium-key"))).is_none(),
+                "{theirs} was sent the key"
+            );
+        }
+
+        // A value that a transport would split two ways is not used by the configuration, so the host
+        // compiled in stands and it is that host the key goes to (PREM-11).
+        let split = configured(
+            Some("https://attacker.example#.brave.com"),
+            Some("the-premium-key"),
+        );
+        assert!(PremiumKey::held(&split).is_some());
         assert_eq!(
-            is_production_endpoint("https://ai-chat-premium.bsg.brave.software"),
-            Some(false)
+            split.premium_endpoint.as_deref(),
+            Some(bravebot_config::DEV_PREMIUM_ENDPOINT)
         );
     }
 
-    /// `brave.software` does not end with `brave.com`, but a suffix test written in the wrong order
-    /// would treat it as production and send a live credential to a development host.
+    /// A turn whose model is served by another backend is not handed the key.
+    ///
+    /// The model decides which service answers, and only Brave's endpoint has a notion of a premium
+    /// key at all. Bedrock and a gateway were set up with credentials of their own, and the key is
+    /// not one they would accept, so presenting it there is sending it somewhere it does not belong.
+    /// The Brave half is asserted too, since a gate that handed out nothing would pass the other.
     #[test]
-    fn the_development_domain_is_not_read_as_production() {
-        assert_eq!(
-            is_production_endpoint("https://ai-chat.bsg.brave.software"),
-            Some(false)
-        );
-        assert_eq!(
-            is_production_endpoint("https://ai-chat.bsg.bravesoftware.com"),
-            Some(false)
-        );
-    }
+    fn a_turn_on_another_backend_is_not_handed_the_premium_key() {
+        let mut config = Config::from_lookup(|name| {
+            match name {
+                "SERVICES_KEY_AICHAT" => Some("test-signing-key"),
+                "BRAVE_SERVICES_KEY_ID" => Some("test-key-id"),
+                "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.software"),
+                "BRAVEBOT_USE_BEDROCK" => Some("1"),
+                "AWS_REGION" => Some("us-west-2"),
+                "ANTHROPIC_DEFAULT_OPUS_MODEL" => Some("opus-arn"),
+                _ => None,
+            }
+            .map(str::to_string)
+        })
+        .expect("a configuration");
+        config.premium_key = Some(bravebot_config::Secret::new("the-premium-key"));
+        let egress = bravebot_net::Egress::new();
 
-    /// PREM-8: the mismatch sentence names the batch's environment and the remedy, only for a pairing
-    /// the endpoint does not accept, and never for an endpoint in no environment. `auth status` prints
-    /// this sentence, so what it says is what a turn says.
-    #[test]
-    fn a_batch_for_the_wrong_environment_is_refused_with_its_remedy() {
-        use bravebot_skus::Environment;
-        let production = "https://ai-chat-premium.bsg.brave.com";
-        let development = "https://ai-chat-premium.bsg.brave.software";
-
-        let refusal =
-            environment_mismatch(production, Environment::Staging).expect("a staging batch");
-        assert!(refusal.contains("is for staging"), "{refusal}");
-        assert!(refusal.contains("bravebot auth login leo"), "{refusal}");
-        assert!(environment_mismatch(development, Environment::Production).is_some());
-        assert_eq!(
-            environment_mismatch(production, Environment::Production),
-            None
+        assert!(
+            crate::turn::discover_subscription(
+                &config,
+                &egress,
+                Some(bravebot_config::DEFAULT_MODEL)
+            )
+            .is_some(),
+            "a Brave turn was not handed the key"
         );
-        // Staging and development are both "not production" to the hosts that verify them.
-        assert_eq!(
-            environment_mismatch(development, Environment::Staging),
-            None
+        assert!(
+            crate::turn::discover_subscription(&config, &egress, Some("opus-arn")).is_none(),
+            "a Bedrock turn was handed the premium key"
         );
-        assert_eq!(
-            environment_mismatch("http://127.0.0.1:8000", Environment::Staging),
-            None
-        );
-    }
-
-    /// A local endpoint is in neither camp, so no credential is sent to it rather than one being
-    /// released to a host whose issuer is unknown.
-    #[test]
-    fn a_local_endpoint_matches_no_environment() {
-        assert_eq!(is_production_endpoint("http://127.0.0.1:8000"), None);
-        assert_eq!(is_production_endpoint("https://example.invalid"), None);
     }
 
     /// A port is not part of a host's name, so a deployment written with one is the same
     /// deployment. Read against the whole authority, every Brave host with a port in it came back
-    /// as somebody else's, which is a credential withheld from the host that issued it and a
+    /// as somebody else's, which is a key withheld from the host it was issued for and a
     /// configuration that names Brave's own endpoint read as a service the person chose.
     #[test]
     fn a_port_is_not_part_of_the_host() {
-        assert_eq!(
-            is_production_endpoint("https://ai-chat.bsg.brave.com:443"),
-            Some(true)
-        );
-        assert_eq!(
-            is_production_endpoint("https://ai-chat.bsg.brave.software:8443/v1"),
-            Some(false)
-        );
         assert!(is_a_brave_endpoint("https://ai-chat.bsg.brave.com:443"));
+        assert!(is_a_brave_endpoint(
+            "https://ai-chat.bsg.brave.software:8443/v1"
+        ));
 
         // And nothing is cut off an authority whose last colon starts no port.
-        assert_eq!(is_production_endpoint("https://example.invalid:"), None);
+        assert!(!is_a_brave_endpoint("https://example.invalid:"));
         assert!(!is_a_brave_endpoint("http://[::1]:8080"));
     }
 
-    /// PREM-2: the host a credential is sent to is the one the transport connects to, which ends at
-    /// the first `/`, `?` or `#`. Read to the first `/` alone, `attacker.example#.brave.com` ends
-    /// with a Brave suffix while the request goes to `attacker.example`, so the suffix test would
-    /// pass for a host that is not Brave's.
+    /// PREM-2: the host a key is sent to is the one the transport connects to, which ends at the
+    /// first `/`, `?` or `#`. Read to the first `/` alone, `attacker.example#.brave.com` ends with a
+    /// Brave suffix while the request goes to `attacker.example`, so the suffix test would pass for
+    /// a host that is not Brave's.
     #[test]
     fn a_suffix_after_a_hash_or_a_question_mark_does_not_make_a_host_braves() {
         for theirs in [
@@ -510,7 +207,6 @@ mod tests {
             "https://attacker.example#.brave.software",
             "https://attacker.example?.bravesoftware.com",
         ] {
-            assert_eq!(is_production_endpoint(theirs), None, "{theirs}");
             assert!(!is_a_brave_endpoint(theirs), "{theirs}");
         }
     }
@@ -519,19 +215,16 @@ mod tests {
     /// front of it does not make the endpoint Brave's, and one after it does.
     #[test]
     fn a_brave_name_in_the_userinfo_does_not_make_a_host_braves() {
-        assert_eq!(
-            is_production_endpoint("https://ai-chat.bsg.brave.com@attacker.example"),
-            None
-        );
-        assert_eq!(
-            is_production_endpoint("https://attacker.example@ai-chat.bsg.brave.com"),
-            Some(true)
-        );
+        assert!(!is_a_brave_endpoint(
+            "https://ai-chat.bsg.brave.com@attacker.example"
+        ));
+        assert!(is_a_brave_endpoint(
+            "https://attacker.example@ai-chat.bsg.brave.com"
+        ));
     }
 
     /// Brave's own deployments are Brave's, whichever channel they are, and everything else is a
-    /// host somebody chose. The question the refusal turns on, so it is pinned apart from the
-    /// production split above: a local service read as Brave's would be refused as having no service
+    /// host somebody chose. A local service read as Brave's would be refused as having no service
     /// configured, which is every development build.
     #[test]
     fn braves_own_deployments_are_told_from_a_host_somebody_chose() {
@@ -551,138 +244,5 @@ mod tests {
         ] {
             assert!(!is_a_brave_endpoint(theirs), "{theirs}");
         }
-    }
-
-    /// A batch that stops working must be replaced automatically. The subscription is still paid
-    /// for and everything needed to mint more is already stored, so making the user re-run the
-    /// import by hand would be a gap rather than a safeguard.
-    #[test]
-    fn an_expired_batch_is_refilled_rather_than_failing() {
-        let mut expired = batch();
-        expired.credentials[0].valid_from = "2020-01-01T00:00:00".to_string();
-        expired.credentials[0].valid_to = "2020-01-02T00:00:00".to_string();
-
-        let mut subscription = ImportedSubscription::detached(expired);
-        subscription.register = |_, _, _| Ok(fresh_registration());
-
-        let credential = subscription
-            .next_credential()
-            .expect("an expired batch is replaced");
-        assert_eq!(
-            credential.cookie_name,
-            bravebot_skus::CREDENTIAL_COOKIE_NAME
-        );
-        assert!(subscription.refilled);
-    }
-
-    /// Same for a batch whose credentials are all spent rather than expired.
-    #[test]
-    fn a_spent_batch_is_refilled() {
-        let mut spent = batch();
-        spent.credentials[0].spent = true;
-
-        let mut subscription = ImportedSubscription::detached(spent);
-        subscription.register = |_, _, _| Ok(fresh_registration());
-
-        assert!(subscription.next_credential().is_ok());
-    }
-
-    /// A refill registers against the order already stored, so nothing has to be re-read from the
-    /// browser profile, which may not even be installed any more.
-    #[test]
-    fn a_refill_uses_the_stored_order() {
-        let mut expired = batch();
-        expired.credentials.clear();
-
-        let mut subscription = ImportedSubscription::detached(expired);
-        subscription.register = |_, order_id, request_id| {
-            assert_eq!(order_id, "order", "refilled against the wrong order");
-            assert!(!request_id.is_empty(), "a refill needs a request id");
-            Ok(fresh_registration())
-        };
-
-        assert!(subscription.next_credential().is_ok());
-    }
-
-    /// One attempt per session. Retrying inside a tool loop would mint batches in a circle, each
-    /// costing a round trip, and the second answer would not differ from the first.
-    #[test]
-    fn a_failing_refill_is_attempted_only_once() {
-        let mut empty = batch();
-        empty.credentials.clear();
-
-        let mut subscription = ImportedSubscription::detached(empty);
-        subscription.register = |_, _, _| {
-            Err(DeviceError::Transport {
-                detail: "the service is unreachable".to_string(),
-            })
-        };
-
-        assert!(subscription.next_credential().is_err());
-        assert!(subscription.refilled);
-        // The second call must not try again, so it reports the refusal rather than the transport
-        // error a fresh attempt would produce.
-        let second = subscription.next_credential().unwrap_err();
-        assert!(second.contains("could not be renewed"), "retried: {second}");
-    }
-
-    /// A batch obtained at the cost of a round trip is written immediately rather than at session
-    /// end, so an unclean exit does not throw it away.
-    #[test]
-    fn a_refill_is_flushed_immediately() {
-        let mut empty = batch();
-        empty.credentials.clear();
-
-        let mut subscription = ImportedSubscription::detached(empty);
-        subscription.register = |_, _, _| Ok(fresh_registration());
-        subscription.next_credential().expect("refilled");
-
-        // Detached, so the flush cannot have written to a file; what matters is that the new
-        // batch is in hand and spendable.
-        assert!(subscription.remaining().is_some());
-    }
-
-    /// A registration with one usable credential, as the service would return.
-    fn fresh_registration() -> bravebot_skus::Registration {
-        bravebot_skus::Registration {
-            order_id: "order".to_string(),
-            environment: bravebot_skus::Environment::Production,
-            item_id: "item".to_string(),
-            issuer: "brave.com?sku=brave-leo-premium".to_string(),
-            credentials: vec![bravebot_skus::device::SignedCredential {
-                unblinded: bravebot_skus::device::test_credential(),
-                // Open-ended, so the credential is valid whenever the test happens to run.
-                valid_from: "2000-01-01T00:00:00".to_string(),
-                valid_to: "2999-01-01T00:00:00".to_string(),
-                rfc: true,
-            }],
-        }
-    }
-
-    /// When the batch is unusable *and* it cannot be replaced, the request fails and says so. This
-    /// is the fallback behind the automatic refill, not the first response to running out.
-    #[test]
-    fn an_unusable_batch_that_cannot_be_refilled_is_an_error() {
-        let mut empty = batch();
-        empty.credentials.clear();
-        let mut subscription = ImportedSubscription::detached(empty);
-        subscription.register = |_, _, _| {
-            Err(DeviceError::Transport {
-                detail: "the service is unreachable".to_string(),
-            })
-        };
-
-        let err = subscription
-            .next_credential()
-            .expect_err("an empty batch that cannot be refilled cannot be spent");
-        assert!(err.contains("subscription service"), "unclear error: {err}");
-    }
-
-    /// A credential that cannot be turned into a presentation is also an error, since the request
-    /// would otherwise be downgraded with nothing said about it.
-    #[test]
-    fn a_credential_that_cannot_be_presented_is_an_error() {
-        let mut subscription = ImportedSubscription::detached(batch());
-        assert!(subscription.next_credential().is_err());
     }
 }

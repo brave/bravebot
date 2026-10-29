@@ -46,6 +46,7 @@ governs:
   - crates/aichat/src/generate_content/protocol.rs
   - crates/aichat/src/conversation.rs
   - crates/aichat/src/models.rs
+  - crates/aichat/src/roster.rs
   - crates/config/src/provider.rs
   - crates/config/src/settings.rs
   - crates/ui-bridge/src/models.rs
@@ -1277,6 +1278,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | What | How layers combine |
 |---|---|
 | `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
+| the fifteen `env` names of the network, Google and Bedrock sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside the checkout; a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
@@ -1964,7 +1966,7 @@ something reads:
 | `SERVICES_KEY_AICHAT` | the key a request to Brave's endpoint is signed with |
 | `BRAVE_SERVICES_KEY_ID` | which key that signature is checked against |
 | `BRAVE_AI_CHAT_ENDPOINT` | the host Brave's endpoint is reached at |
-| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host an imported subscription is spent against |
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host the premium key is presented to, in place of the one compiled in |
 | `BRAVEBOT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
 | `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
 | `BRAVEBOT_OUTPUT_BUDGET` | how many tokens one reply may run to before the service cuts it off |
@@ -1984,11 +1986,15 @@ something reads:
 | `HTTP_PROXY` | the proxy, where neither is set |
 | `NO_PROXY` | the hosts the proxy is not used for |
 
-The last six are the network names, and they are read from the person's own layers alone: the
+The last six rows are the network names. Three more rows are the Google names, and six are the
+Bedrock names: `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three
+`ANTHROPIC_DEFAULT_*_MODEL` tiers. All three sets come from the person's own layers alone, the
 user's settings file and a file the command line named that is not inside the checkout. The project
 and local files arrive with a clone, and a proxy or an authority they chose would decide where
-conversation content is sent and who may read it, so a network name in either is reported by
-`doctor` with the file that wrote it and decides nothing, and it does not displace what a layer
+conversation content is sent and who may read it, and a Google key or project, or an AWS account,
+region, profile or tier model, they chose would decide which account receives it. So one of these
+fifteen names in either file is reported by `doctor` with the file that wrote it and decides nothing,
+and it does not displace what a layer
 entitled to state it said. An exported variable still wins, as for every name here, and each of the
 two answers comes whole from one place: [NET-7](network-egress.md#NET-7) and
 [NET-8](network-egress.md#NET-8) say how. The names are spelled as the environment spells them in
@@ -1998,7 +2004,7 @@ upper case, and a lower-case spelling is not read from a file.
 region only as lowercase letters, digits and `-` starting with a letter or a digit, the characters
 a Google location is held to ([BACKEND-49](#BACKEND-49)). A value with any other character, `/`,
 `@`, `?`, `#`, `:` and `.` among them, configures no account, as an absent one does. That holds for
-every layer that may set the name, a checkout's included, and for an exported variable, and the
+every layer that may set the name and for an exported variable, and the
 `options.region` of a `provider` entry is held to it too ([BACKEND-29](#BACKEND-29)).
 
 A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
@@ -2019,7 +2025,7 @@ and the two budgets carry this program's own prefix, for the reason BACKEND-24 g
 copied from elsewhere should work unedited, while a name that decides what *this* program does
 belongs to this program and must not collide with whatever else a shared shell profile wanted.
 
-The region is checked because the host is built from it and a checkout's layer can write it. A
+The region is checked because the host is built from it. A
 file names only the region, and the rest of the host is compiled in, so a value that passes the
 check gives a host under `amazonaws.com`.
 
@@ -2028,13 +2034,14 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_config::settings::a_proxy_and_an_authority_in_the_persons_own_file_are_handed_over`
 `verified-by: bravebot_config::settings::a_checkouts_proxy_and_authority_are_reported_and_never_handed_over`
 `verified-by: bravebot_config::settings::a_checkouts_proxy_alone_leaves_nothing_handed_over_and_its_other_names_alone`
+`verified-by: bravebot_config::settings::a_checkouts_google_names_configure_no_service_and_the_persons_own_still_do`
 `verified-by: bravebot_config::settings::a_named_file_states_the_network_unless_it_sits_in_the_checkout`
 `verified-by: bravebot_config::settings::a_blank_or_non_string_network_value_states_nothing`
 `verified-by: bravebot_agent::transport::the_settings_and_the_transport_name_the_same_variables`
 `verified-by: bravebot_agent::transport::a_proxy_in_the_persons_file_is_the_one_a_client_carries_and_a_checkouts_is_not`
 `verified-by: bravebot_config::bedrock::a_region_that_would_move_the_request_configures_nothing`
 `verified-by: bravebot_config::bedrock::a_region_holding_only_the_characters_aws_uses_is_accepted`
-`verified-by: bravebot_config::settings::a_checkouts_region_that_would_move_the_request_configures_no_account`
+`verified-by: bravebot_config::settings::a_checkouts_bedrock_names_configure_no_account_and_the_persons_own_still_do`
 `verified-by: bravebot_config::settings::every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it`
 `verified-by: bravebot_config::settings::the_persons_own_files_decide_every_pinnable_name`
 
@@ -2348,15 +2355,18 @@ that path rather than with the person in front of the screen.
 <a id="BACKEND-39"></a>
 ### BACKEND-39: a configuration naming no model service says what to configure
 
-Where the model in force would be sent to Brave's own aichat endpoint and no Leo Premium
-subscription is in hand to spend on it, nothing is configured to serve the turn and no work starts.
+Where the model in force would be sent to Brave's own aichat endpoint and no premium key is stored to
+present to it ([PREM-13](premium-credentials.md#PREM-13)), nothing is configured to serve the turn and
+no work starts.
 A session does not open and a one-shot run asks nothing. What is said instead is the five ways to
 configure a service that can answer, each naming the thing to type or to write: an AWS account
 through Bedrock, an OpenAI-compatible gateway, signing in with a ChatGPT account
 (`bravebot auth login chatgpt`, [CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)), signing in with an xAI
-account (`bravebot auth login xai`, [XAI-7](xai-sign-in.md#XAI-7)), and importing a Leo Premium
-subscription. The line for each sign-in says that the account's models are then offered in `/model`
-as `chatgpt/<model>` and `xai/<model>`. `doctor` says the same and fails, which is [CLI-7](cli.md#CLI-7).
+account (`bravebot auth login xai`, [XAI-7](xai-sign-in.md#XAI-7)), and Brave's premium service for
+somebody who has a key for it, stored by running `bravebot auth login brave` in a terminal and typing
+the key. The line for each sign-in says that the account's models are then
+offered in `/model` as `chatgpt/<model>` and `xai/<model>`. `doctor` says the same and fails, which is
+[CLI-7](cli.md#CLI-7).
 `bravebot --bg <prompt>` is refused the same way, in the terminal that typed it, before the
 background process is started.
 
@@ -2381,7 +2391,7 @@ one the build baked in. What is said there is the key that names one of the conf
 models, and the routes are left out.
 
 **A stored ChatGPT or xAI sign-in is such a service.** Each is a way to configure one, beside a Bedrock
-block, a gateway block and a stored Leo batch, and is read only where none of those has answered. A
+block, a gateway block and a premium key, and is read only where none of those has answered. A
 Bedrock or gateway block that is configured keeps the line above whatever else is stored: neither file is
 read, so a person who set up an AWS account or a gateway and also signed in to ChatGPT or xAI is asked
 which of that service's models to use where a person can be asked (below), and is told to name a model with
@@ -2443,12 +2453,10 @@ goes on to the refusal that names the `model` key. A one-shot run, a start that 
 `doctor` ask nothing.
 
 The refusal is the configuration ending of [CLI-6](cli.md#CLI-6) rather than a status of its own.
-Where a subscription is stored and could not be read, what the store said about it is said first.
-A machine with nowhere to keep credentials has none stored rather than a batch it could not read.
 
 **Why.** Nothing has been set up yet. A released binary arrives pointed at Brave's own aichat
 endpoint, and being pointed at it is not the same as having a service configured to do this work: no
-account was named, no gateway was written down, and no subscription was imported. A run that went
+account was named, no gateway was written down, and no premium key was stored. A run that went
 ahead would send the turn there anyway and hand back whatever that request became, and whatever it
 became is not the agent doing the work. What a person is left with is a session that failed, or one
 that answered poorly, and nothing on the screen saying the missing piece was a configuration. The
@@ -2459,15 +2467,15 @@ service". Afterwards the question a person has is why the answers are bad, which
 configuration cannot be reached from.
 
 Refusing rather than letting the request go, for the reason
-[PREM-8](premium-credentials.md#PREM-8) reports a subscription it could not read rather than passing
-over it: what comes back from a request that was never going to be served carries no sign of why,
-and nothing about a bad session points at where a request went.
+[PREM-10](premium-credentials.md#PREM-10) fails a request that cannot present its key rather than
+sending it without one: what comes back from a request that was never going to be served carries no
+sign of why, and nothing about a bad session points at where a request went.
 
 Five routes rather than one, and each named by what to type, because a refusal that states the
 problem and no way out of it has moved the work to the person and told them nothing they could not
-already see. Leo Premium is last and says why it is last: those models are reached through Brave's
-AI gateway, which has problems of its own being worked on. It is still the shortest route for
-somebody who already subscribes, which is why it is offered rather than left out. The ChatGPT
+already see. The premium key is last and says why it is last: those models are reached through
+Brave's AI gateway, which is still in development. It is offered rather than left out, for somebody
+who has a key for it. The ChatGPT
 and xAI sign-ins come before it, since each reaches its own service and not Brave's gateway, and each says
 the command to type because a session never starts a sign-in itself
 ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1), [XAI-7](xai-sign-in.md#XAI-7)).
@@ -2498,6 +2506,7 @@ refusal exists because one does not.
 `verified-by: bravebot_agent::backend::a_model_a_configured_service_serves_has_one`
 `verified-by: bravebot_agent::backend::a_service_configured_while_the_model_is_braves_own_has_none_for_that_model`
 `verified-by: bravebot_agent::backend::an_endpoint_that_is_not_braves_is_a_service_that_was_chosen`
+`verified-by: bravebot_agent::backend::a_premium_key_with_a_braves_premium_host_is_a_service_configured`
 `verified-by: bravebot_agent::subscription::braves_own_deployments_are_told_from_a_host_somebody_chose`
 `verified-by: bravebot_agent::subscription::a_port_is_not_part_of_the_host`
 `verified-by: bravebot_cli::running::a_first_run_with_no_service_configured_says_how_to_configure_one`
@@ -2507,7 +2516,7 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::running::a_session_in_lines_with_no_service_configured_says_how_to_configure_one`
 `verified-by: bravebot_cli::running::a_session_in_lines_with_a_configured_gateway_opens`
 `verified-by: bravebot_cli::running::a_background_session_with_no_service_configured_says_how_to_configure_one`
-`verified-by: bravebot_cli::model::the_routes_of_an_unconfigured_start_each_name_what_to_type_or_write_and_leave_leo_last`
+`verified-by: bravebot_cli::model::the_routes_of_an_unconfigured_start_each_name_what_to_type_or_write_and_leave_the_premium_key_last`
 `verified-by: bravebot_cli::model::a_configured_service_is_told_to_name_a_model_and_is_not_offered_the_routes`
 `verified-by: bravebot_cli::running::a_first_run_names_the_chatgpt_sign_in_in_the_language_it_is_read_in`
 `verified-by: bravebot_agent::backend::a_stored_chatgpt_sign_in_is_a_service_configured_and_an_unreadable_one_is_not`
@@ -2924,8 +2933,7 @@ would refuse it, while the configured model beneath it would be served, the pick
 that start. The interface, a session in lines and a one-shot run given no `--model` open on the
 configured model and say which pick they set aside. `doctor` reports the configured model with the
 pick beside it. The record is left as it is. Where the configured model would be refused as well,
-or the pick is refused because a stored Leo Premium batch could not be used, nothing is set aside
-and the refusal is BACKEND-39's.
+nothing is set aside and the refusal is BACKEND-39's.
 
 **Why.** An inference-profile ARN changes when the profile is recreated, and the tier variable is
 what a person edits when that happens, which leaves a recorded ARN naming the old profile. That
@@ -2934,13 +2942,11 @@ with advice to set the key it already outranks. Recording the tier word removes 
 made from now on. A record written before this, or one naming a model of a gateway block that was
 removed, still names nothing a configured service offers, and refusing it leaves somebody stuck on a
 file no message names. The record is kept because the configuration that served it can return, such
-as an `.envrc` that exports the tier variables in one checkout only. A refused batch is left to
-BACKEND-39 because importing it again is what serves the pick, and the refusal says how.
+as an `.envrc` that exports the tier variables in one checkout only.
 
 `verified-by: bravebot_config::lib::a_tier_model_is_recorded_as_its_word_and_read_back_through_the_variable`
 `verified-by: bravebot_agent::backend::a_recorded_tier_word_names_the_model_its_variable_names`
 `verified-by: bravebot_agent::backend::a_pick_is_set_aside_only_for_a_default_that_is_served`
-`verified-by: bravebot_agent::backend::a_pick_refused_for_a_stored_batch_is_not_set_aside`
 `verified-by: bravebot_tui::persist::a_picked_tier_is_recorded_as_its_word_and_follows_the_variable`
 `verified-by: bravebot_tui::persist::a_pick_nothing_serves_is_set_aside_and_named`
 `verified-by: bravebot_cli::running::a_recorded_pick_nothing_serves_is_set_aside_for_the_configured_model`
@@ -3090,7 +3096,7 @@ exactly what is offered, as for any other gateway.
 ### BACKEND-50: the environment names a Google Vertex service when no block does
 
 `GOOGLE_API_KEY` configures the `google-vertex` service, whether it is exported or set in the `env`
-block of a settings file, and has to hold a value: a missing or blank key configures nothing. With
+block of the person's own settings file ([BACKEND-33](#BACKEND-33) withholds the three names from a checkout's), and has to hold a value: a missing or blank key configures nothing. With
 `GOOGLE_CLOUD_PROJECT` beside it, and `VERTEX_LOCATION` where the location is not `global`, the
 service is the one of [BACKEND-49](#BACKEND-49), and a project or location that BACKEND-49 refuses
 configures nothing. With no project, or a blank one, it is the express service of
@@ -3099,7 +3105,7 @@ models, so it is offered the list BACKEND-49 compiles in.
 
 The key is read from `GOOGLE_API_KEY` when a request needs it, as [BACKEND-16](#BACKEND-16) says of
 any variable a gateway names, so a key exported after the session opened is the one sent. A key set
-only in the `env` block is held by the configuration, and an exported one outranks it, as
+only in the person's `env` block is held by the configuration, and an exported one outranks it, as
 [BACKEND-35](#BACKEND-35) ranks every name.
 
 A `provider.google-vertex` entry that configures a service replaces this route, and so does a managed gateway list
@@ -3962,8 +3968,9 @@ credentials. Entries that state a readable port, or none, are unaffected by anot
 A `BRAVE_AI_CHAT_ENDPOINT` that writes such a port fails the configuration with an error that names
 the text written there, as a missing scheme fails it.
 
-The other readers of a url are unchanged. `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is dropped when it is
-malformed, which this clause leaves as it is, and the constants for the ChatGPT account and xAI state
+The other readers of a url are unchanged. `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is not used when it is
+malformed, the host compiled in standing in its place ([PREM-11](premium-credentials.md#PREM-11)), which this
+clause leaves as it is, and the constants for the ChatGPT account and xAI state
 their own ports. A block imported from `opencode.json` is written into the settings file as it
 stands, so the rule applies when that file is read.
 
@@ -4040,6 +4047,85 @@ writes.
 `verified-by: bravebot_agent::bedrock_refusals::a_streamed_request_puts_back_what_was_kept_and_keeps_what_was_found`
 `verified-by: bravebot_agent::incognito::no_bedrock_refusal_is_written_down`
 `verified-by: bravebot_agent::incognito::a_bedrock_refusal_an_earlier_session_kept_is_still_honoured`
+
+<a id="BACKEND-64"></a>
+### BACKEND-64: a start waits on no service, a lookup for one model on the service that answers it, and a picker on the slowest service
+
+Nothing here changes which models are offered or which service answers one. It bounds how long a
+person waits on the services that say what is offered.
+
+**A lookup for one model's row asks the service that answers that model.** The window a session
+opens on, the window a one-shot run takes, the window of the model a `/agent` line names and the
+check that a model reads structured output each need one row. They ask the service
+[BACKEND-3](#BACKEND-3) says answers the model and no other: the gateway whose id a qualified name
+begins with, or whose block lists a bare name; the ChatGPT or xAI account; or Brave's endpoint for a
+name no other service claims. A model an AWS account serves asks no one, since its rows come from the
+configuration. `Config::serves` is the one function that says which, and the router takes its answer
+from it, so a lookup cannot leave out the service a turn on that model goes to. A picker is not a
+lookup for one model and asks every service.
+
+**A roster asks its services at once.** The gateways whose blocks name no models, Brave's endpoint and
+the two accounts are asked together, and a person waits for the slowest of them and not for all of
+them in turn. The rows are offered in the order [BACKEND-4](#BACKEND-4) gives, and the sentences about
+a listing that could not be read are said in the order [BACKEND-19](#BACKEND-19) gives, whichever
+service answered first.
+
+**A request for a roster is given up on in seconds.** Resolving takes at most 3 seconds, connecting 5,
+sending 5, the reply to begin and then to finish 10 each, and a gap in the reply 5, where a model's
+reply is allowed minutes. A service that does not answer in that time is a listing that could not be
+read, and is said as [BACKEND-19](#BACKEND-19) says.
+
+**The window of the model a session opened on does not hold the first frame.** It is asked for on a
+thread of its own when the session is begun, and adopted, with the note that says the budget moved,
+on the pass of the loop it arrives. A turn or a manifest run sent before it has arrived waits for it,
+for as long as a request for a roster may take, so that no turn is sized against the default budget
+for want of a lookup that was on its way. A turn waits for a lookup once: one it has waited out stays
+for the loop to take when it arrives, and the next turn does not wait for it again. A lookup about a
+model that is no longer the one in force is dropped before anything waits for it, because the pick
+that replaced that model brought a window of its own ([BACKEND-7](#BACKEND-7)). A one-shot run has no
+frame and takes its one lookup before it begins.
+
+**Built:** `bravebot_config::Config::{serves, roster_scope_for_a_turn}` and `RosterScope`;
+`bravebot_aichat::roster::ask`, which decides which gateways and whether Brave are asked, makes each
+request through `bravebot_aichat::models::{concurrently, listing_egress}` and gives the entries back in
+the configuration's order, and which the roster of the terminal (`bravebot_tui::app::models::roster`) and
+of the window (`bravebot_ui_bridge::models::roster`) both take their answers from; the listings of the
+two accounts (`bravebot_agent::chatgpt::account_models` and `bravebot_agent::xai::account_models`), which
+ask through the same egress; `ask_for_the_budget_of_the_model_in_force` and `adopt_the_awaited_budget`
+in the terminal.
+
+**Not built:** rows of a picker appearing as each service answers, and a roster kept from one opening of
+the picker to the next, so the picker still waits for its slowest service each time it opens. The
+window of the model a session opened on is still looked up on every start.
+
+**Why.** Each service that says what is offered is a network request, and a person waits on all of
+them. Measured on 2026-10-28 against stand-in gateways on this machine, with six gateways that name no
+models and four of them taking 0.5 s to answer, asking them one after the next takes 2.3 s for a start
+to draw and 2.3 s for `/model`, the sum of their latencies. Asking them at once takes 0.54 s for
+`/model`, the slowest gateway's 0.5 s, and a start on a model served by one gateway draws in 0.01 s
+because it asks only that one. A gateway that takes the connection and never answers holds a request
+for as long as a reply is allowed, 600 seconds unless the request states a bound. The model names the
+service ([BACKEND-3](#BACKEND-3)), so a lookup about one model has no use for the rosters of the
+others.
+
+`verified-by: bravebot_config::lib::a_roster_for_a_model_asks_the_service_that_answers_it_and_no_other`
+`verified-by: bravebot_tui::app::a_lookup_for_one_models_row_asks_only_the_gateway_that_serves_it`
+`verified-by: bravebot_tui::app::a_lookup_asks_brave_only_for_a_model_brave_answers`
+`verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_only_the_gateway_that_serves_its_model`
+`verified-by: bravebot_aichat::models::the_asks_of_a_roster_are_in_flight_together_and_answered_in_the_order_given`
+`verified-by: bravebot_aichat::models::a_panic_in_an_ask_is_raised_to_the_caller`
+`verified-by: bravebot_tui::app::the_picker_asks_every_gateway_at_once_and_lists_them_in_the_configurations_order`
+`verified-by: bravebot_ui_bridge::models::the_window_asks_every_gateway_at_once_and_lists_them_in_the_configurations_order`
+`verified-by: bravebot_aichat::models::a_request_for_a_roster_is_given_up_on_in_seconds_and_not_minutes`
+`verified-by: bravebot_aichat::roster::a_roster_gives_up_on_a_gateway_that_takes_the_connection_and_never_answers`
+`verified-by: bravebot_aichat::roster::the_entries_are_in_the_configurations_order_and_each_kind_of_gateway_is_told_apart`
+`verified-by: bravebot_cli::window_lookup::a_session_draws_while_its_window_is_asked_for_and_takes_it_when_it_comes`
+`verified-by: bravebot_cli::window_lookup::a_turn_sent_before_the_window_arrives_waits_for_it`
+`verified-by: bravebot_tui::app::asking_for_the_window_at_start_adopts_it_only_when_the_answer_is_taken`
+`verified-by: bravebot_tui::app::a_pass_of_the_loop_takes_an_arrived_window_once_and_does_not_wait_for_one_that_has_not`
+`verified-by: bravebot_tui::app::a_lookup_about_a_model_that_is_no_longer_in_force_is_dropped_and_not_waited_for`
+`verified-by: bravebot_tui::app::a_turn_waits_for_a_lookup_once_and_the_loop_still_takes_its_late_answer`
+`verified-by: bravebot_tui::app::a_turn_waits_for_the_window_it_is_sized_against_for_a_bounded_time`
 
 ## Known costs
 
@@ -4183,7 +4269,9 @@ writes.
   one arrives unasked. The fields that name a destination and the credential that signs it
   (`provider` and `model`, [BACKEND-24](#BACKEND-24)) are refused from the project layers outright,
   because the credential value comes from the person's own environment under names the layer would
-  choose, and a file nobody read must not pick either. For the remaining fields, what limits the
+  choose, and a file nobody read must not pick either. The `env` names that choose the account a
+  request goes to are refused from them too: the six network names, the three Google names and the
+  six Bedrock names ([BACKEND-33](#BACKEND-33)). For the remaining fields, what limits the
   damage is the same rule that limits it anywhere: a file names a destination and grants no
   capability, so the worst it does is send a request somewhere useless or somewhere watching.
 
@@ -4204,8 +4292,8 @@ writes.
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits
   the field, so it is not validated, and on `near-glm-5`, which reports a non-zero reasoning-token
   count for an ordinary prompt, that count does not move with the level. The premium rows of the
-  roster were not measured, an unsubscribed request being substituted to a weaker model before the
-  request lands, so nothing here is established about them. A level chosen against a Brave-served
+  roster were not measured, a request without the premium key being substituted to a weaker model
+  before the request lands, so nothing here is established about them. A level chosen against a Brave-served
   model is therefore carried, sent, and dropped, while the interface goes on reporting it as in
   force. Bedrock is unaffected, the level reaching the model in the field that model defines.
 
@@ -4292,12 +4380,13 @@ writes.
   The alternative is asking again after every such status, which is the round trip the memory
   exists to spend once.
 
-- **The request BACKEND-32 sends again is outside the retry budget, and spends a credential.** It is
+- **The request BACKEND-32 sends again is outside the retry budget, and counts as a premium request.** It is
   not a retry: nothing failed in transit, and the same body with a field removed is a different
   request. So it does not count against the attempts a failure gets, which means the worst case
-  is one request more than the count allows, four rather than three where none is stated. On a
-  premium subscription it also costs one more single-use credential, each request presenting its
-  own. That is once per service and model per process, and
+  is one request more than the count allows, four rather than three where none is stated. On the
+  premium host it also asks the key source once more, so a limit in credits counts it as one more
+  premium request ([PREM-12](premium-credentials.md#PREM-12)). That is once per service and model per
+  process, and
   the alternative is paying for the whole prompt on every request instead.
 
 - **A gateway credential may be a plaintext string in the settings file.** The shape this block

@@ -8,10 +8,8 @@
 //! person wants the session and nothing else.
 //!
 //! Engaging this says so once, at startup, and every place that would write to the user's own
-//! directory declines instead, apart from the file an imported subscription lives in: a credential
-//! the session spends is recorded as spent there, and a batch that runs out is renewed there, since
-//! a credential is single use and one left looking unspent would be offered again in the next
-//! session and lost.
+//! directory declines instead, apart from the files the sign-ins this program keeps there are
+//! rewritten in, which a session replaces an access token in.
 //!
 //! # Reading is not writing
 //!

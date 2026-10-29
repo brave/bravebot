@@ -29,6 +29,8 @@
 #![forbid(unsafe_code)]
 
 mod address;
+#[cfg(test)]
+mod fixtures;
 pub mod transport;
 
 pub use transport::{Transport, TrustError, TrustRoots};
@@ -482,6 +484,10 @@ const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
 /// A request to send.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate answer the caller gives about one request"
+)]
 pub struct Request {
     pub method: Method,
     pub url: String,
@@ -503,6 +509,9 @@ pub struct Request {
     /// Whether a non-success status carries the whole body with it, where it is short enough. See
     /// [`Request::reading_a_refusal`].
     pub refusal_read: bool,
+    /// Whether the client certificate is presented to the host of [`Request::url`]. See
+    /// [`Request::with_client_certificate`].
+    pub client_certificate: bool,
 }
 
 /// How long a reply may take, stated by the request that asks for it.
@@ -536,6 +545,7 @@ impl Request {
             patient_on_this_machine: false,
             redirects_refused: false,
             refusal_read: false,
+            client_certificate: false,
         }
     }
 
@@ -551,6 +561,7 @@ impl Request {
             patient_on_this_machine: false,
             redirects_refused: false,
             refusal_read: false,
+            client_certificate: false,
         }
     }
 
@@ -565,6 +576,17 @@ impl Request {
     /// or server-scoped headers never leak to an unintended destination.
     pub fn socket_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.socket_headers.push((name.into(), value.into()));
+        self
+    }
+
+    /// Present the client certificate the environment named (NET-11) to the host this request
+    /// names, if that host asks for one.
+    ///
+    /// For a request to a model provider or its gateway, whose URL the person configured. Every
+    /// other request, and every redirect hop to a socket other than [`Request::url`]'s, is sent on
+    /// an agent that holds no certificate.
+    pub fn with_client_certificate(mut self) -> Self {
+        self.client_certificate = true;
         self
     }
 
@@ -652,6 +674,76 @@ pub struct Egress {
     /// What the agent was configured with, so a request stating its own reply bound can have the
     /// phases that carry it worked out again the same way.
     timeouts: Timeouts,
+    /// The agents that present the client certificate (NET-11), where the environment named one.
+    /// Used only for a request that asks for it, to the socket it names.
+    presenting: Option<std::sync::Mutex<Presenting>>,
+    /// What the environment resolved to, kept to read the certificate and key again.
+    transport: Transport,
+    /// Builds the two agents for a pair, the same way [`Egress::resolving_through`] built the first.
+    rebuild: Rebuild,
+}
+
+/// Builds the ordinary agent and the guarded one for a client pair.
+type Rebuild = Box<dyn Fn(&transport::ClientPair) -> (ureq::Agent, ureq::Agent) + Send + Sync>;
+
+/// The pair in use and the two agents built to present it.
+struct Presenting {
+    pair: transport::ClientPair,
+    agent: ureq::Agent,
+    guarded: ureq::Agent,
+}
+
+/// The two agents of one configuration: the one a backend's request goes out on, and the one that
+/// resolves through [`address::GuardedResolver`] for a fetch in flight.
+fn build_agents<R: ureq::unversioned::resolver::Resolver>(
+    timeouts: Timeouts,
+    builder: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
+    system: &impl Fn() -> R,
+) -> (ureq::Agent, ureq::Agent) {
+    // ureq gives a phase the earliest of its own deadline and the deadlines of the phases
+    // before it (`Timeout::preceeding`, ureq 3.4 src/timings.rs), which its configuration
+    // does not say. A number handed over here therefore bounds the phase it names *and* the
+    // phases after it, so each one below covers every phase whose deadline it sets. Passing
+    // `send` straight to the send phases instead would bound the wait for the reply by
+    // `send`, and an endpoint that took longer than that to start answering would be
+    // reported as a failed send and the request sent again.
+    let config = builder
+        // Redirects are handled here so each hop can be revalidated; letting the
+        // client follow them silently would defeat the gate.
+        .max_redirects(0)
+        // A status is a reply, not a failure to get one. Left as ureq has it, every non-2xx
+        // comes back as a transport error carrying the status in its text, so the status
+        // check below never runs and nothing downstream can tell 403 from a dead socket:
+        // a refused credential loses the sign-in that fixes it, and a 429 stops counting as
+        // worth another attempt.
+        .http_status_as_error(false)
+        // Bounds connecting too, from the moment the name resolved.
+        .timeout_resolve(Some(timeouts.resolve.max(timeouts.connect)))
+        // Bounds the request going out too, from the moment the connection opened.
+        .timeout_connect(Some(timeouts.connect.max(timeouts.send)))
+        // Bounds the request body and then the wait for the reply too, both from the
+        // moment the request headers went out.
+        .timeout_send_request(Some(timeouts.send + timeouts.reply))
+        // Bounds the wait for the reply too, from the moment the body went out, which is
+        // the moment that wait begins.
+        .timeout_send_body(Some(timeouts.reply))
+        // ureq keeps checking this one while the body arrives, so it bounds the whole
+        // reply rather than only its headers.
+        .timeout_recv_response(Some(timeouts.reply))
+        // Recomputed on every read, which is what makes it a gap rather than a total.
+        .timeout_recv_body(Some(timeouts.idle))
+        .build();
+    let guarded = ureq::Agent::with_parts(
+        config.clone(),
+        ureq::unversioned::transport::DefaultConnector::default(),
+        address::GuardedResolver::over(address::Lookup::new(system()), address::is_public),
+    );
+    let agent = ureq::Agent::with_parts(
+        config,
+        ureq::unversioned::transport::DefaultConnector::default(),
+        address::Lookup::new(system()),
+    );
+    (agent, guarded)
 }
 
 impl Default for Egress {
@@ -696,56 +788,119 @@ impl Egress {
     fn resolving_through<R: ureq::unversioned::resolver::Resolver>(
         timeouts: Timeouts,
         transport: &Transport,
-        system: impl Fn() -> R,
+        system: impl Fn() -> R + Send + Sync + 'static,
     ) -> Self {
-        // ureq gives a phase the earliest of its own deadline and the deadlines of the phases
-        // before it (`Timeout::preceeding`, ureq 3.4 src/timings.rs), which its configuration
-        // does not say. A number handed over here therefore bounds the phase it names *and* the
-        // phases after it, so each one below covers every phase whose deadline it sets. Passing
-        // `send` straight to the send phases instead would bound the wait for the reply by
-        // `send`, and an endpoint that took longer than that to start answering would be
-        // reported as a failed send and the request sent again.
-        let config = transport
-            .agent_config_builder()
-            // Redirects are handled here so each hop can be revalidated; letting the
-            // client follow them silently would defeat the gate.
-            .max_redirects(0)
-            // A status is a reply, not a failure to get one. Left as ureq has it, every non-2xx
-            // comes back as a transport error carrying the status in its text, so the status
-            // check below never runs and nothing downstream can tell 403 from a dead socket:
-            // a refused credential loses the sign-in that fixes it, and a 429 stops counting as
-            // worth another attempt.
-            .http_status_as_error(false)
-            // Bounds connecting too, from the moment the name resolved.
-            .timeout_resolve(Some(timeouts.resolve.max(timeouts.connect)))
-            // Bounds the request going out too, from the moment the connection opened.
-            .timeout_connect(Some(timeouts.connect.max(timeouts.send)))
-            // Bounds the request body and then the wait for the reply too, both from the
-            // moment the request headers went out.
-            .timeout_send_request(Some(timeouts.send + timeouts.reply))
-            // Bounds the wait for the reply too, from the moment the body went out, which is
-            // the moment that wait begins.
-            .timeout_send_body(Some(timeouts.reply))
-            // ureq keeps checking this one while the body arrives, so it bounds the whole
-            // reply rather than only its headers.
-            .timeout_recv_response(Some(timeouts.reply))
-            // Recomputed on every read, which is what makes it a gap rather than a total.
-            .timeout_recv_body(Some(timeouts.idle))
-            .build();
-        let guarded = ureq::Agent::with_parts(
-            config.clone(),
-            ureq::unversioned::transport::DefaultConnector::default(),
-            address::GuardedResolver::over(address::Lookup::new(system()), address::is_public),
-        );
-        let agent = ureq::Agent::with_parts(
-            config,
-            ureq::unversioned::transport::DefaultConnector::default(),
-            address::Lookup::new(system()),
-        );
+        let (agent, guarded) = build_agents(timeouts, transport.agent_config_builder(), &system);
+        let held = transport.clone();
+        let rebuild: Rebuild = Box::new(move |pair| {
+            build_agents(
+                timeouts,
+                held.agent_config_builder_presenting(pair),
+                &system,
+            )
+        });
+        let presenting = transport.names_client_certificate().then(|| {
+            let pair = transport.client_pair();
+            let (agent, guarded) = rebuild(&pair);
+            std::sync::Mutex::new(Presenting {
+                pair,
+                agent,
+                guarded,
+            })
+        });
         Self {
             agent,
             guarded,
             timeouts,
+            presenting,
+            transport: transport.clone(),
+            rebuild,
+        }
+    }
+
+    /// The agent for one hop of `request`: the one that presents the client certificate where the
+    /// request asks for it and `url` is on the socket it names, and otherwise the one that holds
+    /// none (NET-11). A redirect to another socket therefore never carries the certificate.
+    fn agent_for_hop(&self, request: &Request, fetching: bool, url: &str) -> ureq::Agent {
+        let declared = bravebot_core::url::socket_of(&request.url);
+        let presents = request.client_certificate
+            && declared.is_some()
+            && declared == bravebot_core::url::socket_of(url);
+        if let (true, Some(presenting)) = (presents, &self.presenting) {
+            let held = presenting
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            return if fetching && !self.proxied(url) {
+                held.guarded.clone()
+            } else {
+                held.agent.clone()
+            };
+        }
+        self.agent_for(fetching, url).clone()
+    }
+
+    /// Read the certificate and key again after a handshake that did not succeed, and say whether
+    /// the pair changed, so that sending once more can differ from the first attempt (NET-11).
+    ///
+    /// A reading that cannot be used keeps the pair in use. The log names which of the two files
+    /// could not be used, by its role and never its path or contents.
+    fn refresh_client_pair(&self) -> bool {
+        let Some(presenting) = &self.presenting else {
+            return false;
+        };
+        let mut held = presenting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let reread = self.transport.reread_client_pair(&held.pair);
+        for file in &reread.failed {
+            bravebot_diag::info(
+                "client_pair_reread_failed",
+                &[
+                    ("file", bravebot_diag::Field::word(file)),
+                    ("reason", bravebot_diag::Field::word("unusable")),
+                ],
+            );
+        }
+        let changed = !reread.pair.same_as(&held.pair);
+        bravebot_diag::info(
+            "client_pair_reread",
+            &[(
+                "changed",
+                bravebot_diag::Field::word(if changed { "yes" } else { "no" }),
+            )],
+        );
+        if changed {
+            let (agent, guarded) = (self.rebuild)(&reread.pair);
+            *held = Presenting {
+                pair: reread.pair,
+                agent,
+                guarded,
+            };
+        }
+        changed
+    }
+
+    /// One hop, on the thread that calls this or on one it can walk away from.
+    fn send_hop(
+        &self,
+        request: &Request,
+        url: &str,
+        patient: bool,
+        fetching: bool,
+        started: std::time::Instant,
+        cancel: Option<&Cancel>,
+    ) -> Result<Sent, EgressError> {
+        match cancel {
+            Some(cancel) => self.send_watching(request, url, patient, fetching, started, cancel),
+            None => send(
+                &self.agent_for_hop(request, fetching, url),
+                self.timeouts,
+                request,
+                url,
+                patient,
+                started,
+                None,
+            ),
         }
     }
 
@@ -947,19 +1102,17 @@ impl Egress {
                 && stoppable
                 && hops == 0
                 && self.reaches_here(&url);
-            let response = match cancel {
-                Some(cancel) => {
-                    self.send_watching(request, &url, patient, fetching, started, cancel)?
+            let response = self.send_hop(request, &url, patient, fetching, started, cancel);
+            // A connection that did not get through, to a host this request presents the client
+            // certificate to, may be the certificate rotating under it. Read the files again and
+            // send once more only when they now hold a different pair.
+            let response = match response {
+                Err(EgressError::Transport { .. })
+                    if request.client_certificate && hops == 0 && self.refresh_client_pair() =>
+                {
+                    self.send_hop(request, &url, patient, fetching, started, cancel)?
                 }
-                None => send(
-                    self.agent_for(fetching, &url),
-                    self.timeouts,
-                    request,
-                    &url,
-                    patient,
-                    started,
-                    None,
-                )?,
+                other => other?,
             };
             let status = response.status;
 
@@ -1016,7 +1169,7 @@ impl Egress {
     ) -> Result<Sent, EgressError> {
         let (answered, waiting) = std::sync::mpsc::channel();
         let (agent, hop, target) = (
-            self.agent_for(fetching, url).clone(),
+            self.agent_for_hop(request, fetching, url),
             request.clone(),
             url.to_string(),
         );
@@ -2029,7 +2182,7 @@ mod tests {
         let egress = Egress::resolving_through(
             Timeouts::default(),
             &Transport::stated(TrustRoots::Bundled, None, None),
-            || FailedLookup(failure),
+            move || FailedLookup(failure),
         );
         [
             (
@@ -2988,5 +3141,407 @@ mod tests {
         assert!(fields.iter().any(
             |(name, value)| *name == "kind" && format!("{value:?}").contains("address_refused")
         ));
+    }
+
+    /// The certificate and key files and the authority file of one test, in a scratch directory.
+    struct ClientFiles {
+        _directory: tempfile::TempDir,
+        authority: std::path::PathBuf,
+        certificate: std::path::PathBuf,
+        key: std::path::PathBuf,
+    }
+
+    fn client_files(pair: fixtures::Pair) -> ClientFiles {
+        let directory = tempfile::tempdir().expect("a scratch directory");
+        let files = ClientFiles {
+            authority: directory.path().join("authority.pem"),
+            certificate: directory.path().join("client.crt"),
+            key: directory.path().join("client.key"),
+            _directory: directory,
+        };
+        fixtures::write_authority(&files.authority);
+        pair.write_certificate(&files.certificate);
+        pair.write_key(&files.key);
+        files
+    }
+
+    /// An egress whose transport trusts the test authority and names `files` as its client pair.
+    fn egress_presenting(files: &ClientFiles) -> Egress {
+        Egress::with_transport(
+            Timeouts::default(),
+            &Transport::stated_with_roots_and_client_pair(
+                TrustRoots::Named {
+                    file: Some(files.authority.clone()),
+                    directory: None,
+                },
+                Some(&files.certificate),
+                Some(&files.key),
+            ),
+        )
+    }
+
+    /// A hook that replaces the pair in `files` with `next` when the server accepts its first
+    /// connection, which is before that connection's handshake is read.
+    fn replacing_with(files: &ClientFiles, next: fixtures::Pair) -> Option<fixtures::Hook> {
+        let (certificate, key) = (files.certificate.clone(), files.key.clone());
+        Some(std::sync::Arc::new(move |connection| {
+            if connection == 0 {
+                next.write_certificate(&certificate);
+                next.write_key(&key);
+            }
+        }))
+    }
+
+    /// A hook that writes `next`'s certificate beside the key already in `files`, as a rotation
+    /// does that has replaced one of the two files and not yet the other.
+    fn replacing_only_the_certificate(
+        files: &ClientFiles,
+        next: fixtures::Pair,
+    ) -> Option<fixtures::Hook> {
+        let certificate = files.certificate.clone();
+        Some(std::sync::Arc::new(move |connection| {
+            if connection == 0 {
+                next.write_certificate(&certificate);
+            }
+        }))
+    }
+
+    /// Sends `request` as a model request is sent: no fetch is in flight and nothing was approved.
+    fn sent_to_a_provider(egress: &Egress, request: Request) -> Result<Response, EgressError> {
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "ask the model");
+        let mut sink = bravebot_core::event::NullSink;
+        // A test helper: a policy that does not begin is a broken fixture.
+        // nosemgrep: trailofbits.rs.panic-in-function-returning-result.panic-in-function-returning-result
+        let mut policy = bravebot_core::policy::Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy begins");
+        egress.fetch(&mut policy, request, Label::untrusted_public())
+    }
+
+    /// Holds the process-wide diagnostic log pointed at a scratch directory, and points it nowhere
+    /// when dropped, whether or not the test passed.
+    struct Logged {
+        directory: tempfile::TempDir,
+        _held: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Logged {
+        fn start() -> Self {
+            let held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+            let directory = tempfile::tempdir().expect("a scratch directory");
+            bravebot_diag::configure(
+                bravebot_diag::Level::Info,
+                Some(directory.path().to_path_buf()),
+            );
+            Self {
+                directory,
+                _held: held,
+            }
+        }
+
+        /// The lines written about the client pair.
+        fn about_the_pair(&self) -> String {
+            std::fs::read_dir(self.directory.path().join(bravebot_diag::DIRECTORY))
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .flat_map(|entry| {
+                            std::fs::read_to_string(entry.path())
+                                .unwrap_or_default()
+                                .lines()
+                                .filter(|line| line.contains("client_pair_reread"))
+                                .map(str::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default()
+        }
+    }
+
+    impl Drop for Logged {
+        fn drop(&mut self) {
+            bravebot_diag::configure(bravebot_diag::Level::Error, None);
+        }
+    }
+
+    /// NET-11: a server that requires a client certificate is given the pair the environment named
+    /// by a request marked as a provider's, and answers it. Rejects an implementation that loads the
+    /// pair and never offers it, or offers a different one.
+    #[test]
+    fn a_client_certificate_is_presented_to_a_server_that_requires_one() {
+        let files = client_files(fixtures::GOOD);
+        let server = fixtures::Server::start(true, vec![fixtures::ok("answered")], None);
+        let egress = egress_presenting(&files);
+
+        let response = sent_to_a_provider(
+            &egress,
+            Request::get(server.url("/v1/models")).with_client_certificate(),
+        )
+        .expect("the server accepts the pair it requires");
+
+        assert_eq!(response.status, 200);
+        let attempts = server.attempts();
+        assert_eq!(attempts.len(), 1, "{attempts:?}");
+        assert_eq!(
+            attempts[0].presented.as_deref(),
+            Some(fixtures::GOOD.certificate_der().as_slice())
+        );
+        assert!(attempts[0].read_request);
+    }
+
+    /// NET-11: a request that is not marked is sent on an agent that holds no certificate, although
+    /// the environment named one and the server asked. Rejects an implementation that presents the
+    /// pair to every host, which is what the sign-in clients and a fetch would then do.
+    #[test]
+    fn a_client_certificate_is_not_sent_on_a_request_that_does_not_ask_for_it() {
+        let files = client_files(fixtures::GOOD);
+        let server =
+            fixtures::Server::start(false, vec![fixtures::ok("a"), fixtures::ok("b")], None);
+        let egress = egress_presenting(&files);
+
+        let marked = sent_to_a_provider(
+            &egress,
+            Request::get(server.url("/marked")).with_client_certificate(),
+        )
+        .expect("answered");
+        let plain = sent_to_a_provider(&egress, Request::get(server.url("/plain")))
+            .expect("a server that does not require one answers");
+
+        assert_eq!((marked.status, plain.status), (200, 200));
+        let attempts = server.attempts();
+        assert_eq!(attempts.len(), 2, "{attempts:?}");
+        assert_eq!(
+            attempts[0].presented.as_deref(),
+            Some(fixtures::GOOD.certificate_der().as_slice()),
+            "the marked request is the control: the server does ask"
+        );
+        assert_eq!(
+            attempts[1].presented, None,
+            "the plain request presented one"
+        );
+        assert!(attempts[1].read_request);
+    }
+
+    /// NET-11, NET-2: a redirect to another socket is sent without the certificate, and a redirect
+    /// within the socket keeps presenting it. Rejects an implementation that keeps the presenting
+    /// agent for every hop, and one that drops the pair on every hop.
+    #[test]
+    fn a_client_certificate_is_not_sent_to_another_socket_on_a_redirect() {
+        let elsewhere = fixtures::Server::start(false, vec![fixtures::ok("elsewhere")], None);
+        let home = fixtures::Server::start(
+            false,
+            vec![
+                fixtures::redirect("/second"),
+                fixtures::redirect(&elsewhere.url("/landed")),
+            ],
+            None,
+        );
+        let files = client_files(fixtures::GOOD);
+        let egress = egress_presenting(&files);
+
+        let response = sent_to_a_provider(
+            &egress,
+            Request::get(home.url("/first")).with_client_certificate(),
+        );
+        // The second reply is read by the same server for the second hop.
+        let home_attempts = home.attempts();
+        let elsewhere_attempts = elsewhere.attempts();
+
+        assert!(response.is_ok(), "{response:?}");
+        assert_eq!(home_attempts.len(), 2, "{home_attempts:?}");
+        for attempt in &home_attempts {
+            assert_eq!(
+                attempt.presented.as_deref(),
+                Some(fixtures::GOOD.certificate_der().as_slice()),
+                "a hop on the request's own socket presents the pair"
+            );
+        }
+        assert_eq!(elsewhere_attempts.len(), 1, "{elsewhere_attempts:?}");
+        assert_eq!(
+            elsewhere_attempts[0].presented, None,
+            "the hop to another socket presented the pair"
+        );
+        assert!(elsewhere_attempts[0].read_request);
+    }
+
+    /// NET-6, NET-11: a first hop that fails, on a pair the files no longer hold, is sent once more
+    /// with the pair they now hold. The pair in use at the start is one the server does not trust and
+    /// the server replaces the files as it accepts the first connection, so only a re-read can make
+    /// the second connection succeed. Rejects an implementation that never reads the files again,
+    /// and one that reads them and keeps using the first pair.
+    #[test]
+    fn a_changed_pair_is_sent_once_more_after_a_refused_handshake() {
+        let logged = Logged::start();
+        let files = client_files(fixtures::STRANGER);
+        let server = fixtures::Server::start(
+            true,
+            vec![fixtures::ok("answered")],
+            replacing_with(&files, fixtures::CHANGED),
+        );
+        let egress = egress_presenting(&files);
+
+        let response = sent_to_a_provider(
+            &egress,
+            Request::get(server.url("/v1/models")).with_client_certificate(),
+        )
+        .expect("the second send presents the pair the files now hold");
+
+        assert_eq!(response.status, 200);
+        let attempts = server.attempts();
+        assert_eq!(attempts.len(), 2, "{attempts:?}");
+        assert!(!attempts[0].read_request, "the first pair was refused");
+        assert_eq!(
+            attempts[1].presented.as_deref(),
+            Some(fixtures::CHANGED.certificate_der().as_slice())
+        );
+        assert!(attempts[1].read_request);
+        let log = logged.about_the_pair();
+        assert!(log.contains("client_pair_reread "), "{log}");
+        assert!(log.contains("changed=yes"), "{log}");
+    }
+
+    /// NET-6, NET-11: the same failure with files that still hold the same pair is not sent again,
+    /// since the second send would fail as the first did. Rejects an implementation that retries
+    /// after every connection failure whether or not the pair changed.
+    #[test]
+    fn an_unchanged_pair_is_not_sent_again() {
+        let logged = Logged::start();
+        let files = client_files(fixtures::STRANGER);
+        let server = fixtures::Server::start(true, vec![fixtures::ok("never read")], None);
+        let egress = egress_presenting(&files);
+
+        let outcome = sent_to_a_provider(
+            &egress,
+            Request::get(server.url("/v1/models")).with_client_certificate(),
+        );
+
+        assert!(
+            matches!(outcome, Err(EgressError::Transport { .. })),
+            "{outcome:?}"
+        );
+        let attempts = server.attempts();
+        assert_eq!(attempts.len(), 1, "sent again: {attempts:?}");
+        let log = logged.about_the_pair();
+        assert!(log.contains("changed=no"), "{log}");
+    }
+
+    /// NET-11: a rotation that has replaced the certificate and not yet the key is read as a pair
+    /// that disagree, so the pair in use stays and nothing is sent again. The log says which file
+    /// could not be used by its role and never by its path. Rejects an implementation that adopts
+    /// whatever it reads, which would stop presenting anything until the key was replaced.
+    #[test]
+    fn a_half_written_rotation_keeps_the_pair_in_use_and_is_not_sent_again() {
+        let logged = Logged::start();
+        let files = client_files(fixtures::STRANGER);
+        let server = fixtures::Server::start(
+            true,
+            vec![fixtures::ok("never read")],
+            replacing_only_the_certificate(&files, fixtures::CHANGED),
+        );
+        let egress = egress_presenting(&files);
+
+        let outcome = sent_to_a_provider(
+            &egress,
+            Request::get(server.url("/v1/models")).with_client_certificate(),
+        );
+
+        assert!(
+            matches!(outcome, Err(EgressError::Transport { .. })),
+            "{outcome:?}"
+        );
+        assert_eq!(server.attempts().len(), 1);
+        let log = logged.about_the_pair();
+        assert!(log.contains("client_pair_reread_failed"), "{log}");
+        assert!(log.contains("file=key"), "{log}");
+        assert!(log.contains("changed=no"), "{log}");
+        let directory = files
+            .key
+            .parent()
+            .expect("a directory")
+            .display()
+            .to_string();
+        assert!(!log.contains(&directory), "a path reached the log: {log}");
+    }
+
+    /// NET-6: a refusal by status is not a connection that failed, so the files are not read again
+    /// and nothing is sent twice, although the files now hold a different pair. Rejects an
+    /// implementation that retries on any error rather than on a failed connection.
+    #[test]
+    fn a_refusal_by_status_does_not_read_the_pair_again() {
+        let logged = Logged::start();
+        let files = client_files(fixtures::GOOD);
+        let refused = "HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let server = fixtures::Server::start(
+            true,
+            vec![refused.to_string(), fixtures::ok("never read")],
+            replacing_with(&files, fixtures::CHANGED),
+        );
+        let egress = egress_presenting(&files);
+
+        let outcome = sent_to_a_provider(
+            &egress,
+            Request::get(server.url("/v1/models")).with_client_certificate(),
+        );
+
+        assert!(
+            matches!(outcome, Err(EgressError::Status { status: 503, .. })),
+            "{outcome:?}"
+        );
+        assert_eq!(server.attempts().len(), 1);
+        assert_eq!(logged.about_the_pair(), "");
+    }
+
+    /// NET-11: a key that is not the certificate's is refused by its path when the pair is read,
+    /// without panicking, and no request carries a certificate. Rejects an implementation that
+    /// skips the agreement check, which the TLS library then fails on at the first request.
+    #[test]
+    fn a_mismatched_pair_is_refused_with_the_key_path_and_presents_nothing() {
+        let logged = Logged::start();
+        let files = client_files(fixtures::GOOD);
+        fixtures::CHANGED.write_key(&files.key);
+        let transport = Transport::stated_with_roots_and_client_pair(
+            TrustRoots::Named {
+                file: Some(files.authority.clone()),
+                directory: None,
+            },
+            Some(&files.certificate),
+            Some(&files.key),
+        );
+        let [problem] = transport.client_problems() else {
+            panic!("one problem expected: {:?}", transport.client_problems());
+        };
+        assert_eq!(problem.path, files.key);
+        assert!(
+            problem
+                .to_string()
+                .contains(&files.key.display().to_string())
+        );
+        assert!(!transport.presents_client_certificate());
+
+        let server = fixtures::Server::start(false, vec![fixtures::ok("never read")], None);
+        let egress = Egress::with_transport(Timeouts::default(), &transport);
+        let outcome = sent_to_a_provider(
+            &egress,
+            Request::get(server.url("/v1/models")).with_client_certificate(),
+        );
+
+        assert!(
+            matches!(outcome, Err(EgressError::Transport { .. })),
+            "{outcome:?}"
+        );
+        for attempt in server.attempts() {
+            assert_eq!(attempt.presented, None);
+            assert!(!attempt.read_request, "the request reached the server");
+        }
+        drop(logged);
     }
 }

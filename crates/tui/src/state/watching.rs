@@ -2,6 +2,24 @@
 
 use super::*;
 
+/// A question asked beside a running turn, while its worker is out (CMD-8).
+///
+/// Held by the session so the turn's own loop can drain it each frame: the loop that waits for a
+/// question asked between turns takes the terminal, and this one must not.
+#[derive(Debug)]
+pub struct AsideFlight {
+    /// What the row will say was asked.
+    pub asked: String,
+    /// The stop for this question alone; the turn's own token is not shared with it.
+    pub cancel: bravebot_core::cancel::Cancel,
+    /// What the worker sends while it works.
+    pub from_worker: std::sync::mpsc::Receiver<crate::remote_confirm::ToMain>,
+    /// The worker, joined once its sender is dropped.
+    pub worker: std::thread::JoinHandle<AsideDone>,
+}
+
+pub type AsideDone = Result<bravebot_agent::aside::Answered, String>;
+
 /// The delegate view, while it is open.
 ///
 /// Two levels rather than one, because a turn has one delegate or nine. The list is the way in
@@ -337,6 +355,65 @@ impl Session {
             listing: false,
             on_session: false,
         });
+    }
+
+    pub fn set_fork(&mut self, fork: bravebot_agent::aside::Fork) {
+        self.fork = Some(fork);
+    }
+
+    pub fn fork(&self) -> Option<&bravebot_agent::aside::Fork> {
+        self.fork.as_ref()
+    }
+
+    pub fn set_turn_files(&mut self, files: Option<bravebot_core::file_authority::FileAuthority>) {
+        self.turn_files = files;
+    }
+
+    pub fn turn_files(&self) -> Option<&bravebot_core::file_authority::FileAuthority> {
+        self.turn_files.as_ref()
+    }
+
+    pub fn aside_in_flight(&self) -> bool {
+        self.aside_flight.is_some()
+    }
+
+    pub fn begin_aside_beside_a_turn(&mut self, flight: AsideFlight) {
+        self.aside_flight = Some(flight);
+    }
+
+    pub fn take_aside_flight(&mut self) -> Option<AsideFlight> {
+        self.aside_flight.take()
+    }
+
+    pub fn stop_aside_beside_a_turn(&mut self) {
+        if let Some(flight) = &self.aside_flight {
+            flight.cancel.cancel();
+        }
+    }
+
+    /// Keep a question answered beside a turn as a row of the agents list, without opening the view.
+    ///
+    /// [`Session::asked_aside`] opens the view on the answer, which between turns is the only thing
+    /// on the screen. Beside a turn it would take the screen from a person reading the turn, so the
+    /// row is added and the hint line names the key that opens it (WATCH-19). The agents list is
+    /// the asides and then the delegates, so a view open on a delegate moves down with it.
+    pub fn kept_aside_beside_a_turn(&mut self, aside: Aside) {
+        let ahead = self.asides.len();
+        self.asides.push(aside);
+        if let Some(watching) = &mut self.watching
+            && watching.scope == WatchScope::Agents
+            && watching.at >= ahead
+        {
+            watching.at += 1;
+        }
+    }
+
+    /// Charge what a question answered beside the turn cost to the turn it interrupted, with how it
+    /// divides into what was read and what was written (SESSION-11). The status line and the clock
+    /// are the turn's and are left alone.
+    pub fn charge_aside_beside_a_turn(&mut self, usage: bravebot_aichat::protocol::Usage) {
+        self.charge(usage.total());
+        self.charged_split(usage.total(), usage.completion_tokens);
     }
 
     /// A row put ahead of every delegate in the list, with the place of the row the view is on moved

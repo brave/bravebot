@@ -27,6 +27,7 @@ pub mod env_var {
     include!("env_var.rs");
 }
 
+pub mod brave_key;
 pub mod connectors;
 pub mod git_identities;
 pub mod hooks;
@@ -77,6 +78,31 @@ include!(concat!(env!("OUT_DIR"), "/baked.rs"));
 /// this product identify themselves with `Brave-Product: bravebot` so the listing and completions
 /// endpoints offer this name instead.
 pub const DEFAULT_MODEL: &str = "automatic-bravebot";
+
+/// Where Brave's premium service is, for a build whose free endpoint is a development one.
+///
+/// Compiled in rather than configured: the key a person types with `bravebot auth login brave` goes
+/// to this host, so no variable or settings file is what decides where it goes. The two constants
+/// below are one value while the premium service is live only in development, and are two so that
+/// production can move without touching how the choice is made.
+pub const DEV_PREMIUM_ENDPOINT: &str = "https://ai-gateway-api.bsg.brave.software";
+
+/// Where Brave's premium service is, for every other build.
+pub const PROD_PREMIUM_ENDPOINT: &str = "https://ai-gateway-api.bsg.brave.software";
+
+/// The premium host compiled in for a build whose free endpoint is `free`.
+///
+/// A development endpoint is one under `brave.software` or `bravesoftware.com`; every other host,
+/// including one that names nothing, is production's.
+fn compiled_in_premium_endpoint(free: &str) -> &'static str {
+    let development = provider::reached_at(free).is_some_and(|(host, _)| {
+        host.ends_with(".brave.software") || host.ends_with(".bravesoftware.com")
+    });
+    match development {
+        true => DEV_PREMIUM_ENDPOINT,
+        false => PROD_PREMIUM_ENDPOINT,
+    }
+}
 
 /// The automatic routing name Leo uses. Remembered choices and configuration may still say it from
 /// before bravebot had its own entry; [`normalize_model`] rewrites those to [`DEFAULT_MODEL`].
@@ -597,11 +623,8 @@ pub enum Binding {
 /// different question: the host it names is the surface the token is presented to and the only one
 /// that revokes it, which is the address the clause asks be written down.
 ///
-/// An imported subscription's credential batch is in it for the same reason and on a different
-/// tier. `skus/store.rs` is among the paths CRED governs, the batch sits in a file under the
-/// machine for the length of its validity window, and a request spends one credential from it, so
-/// it is a credential in use and owes a tier. That the tier is [`Tier::Granted`] rather than Held
-/// is what the walk answers, not what being in this list decides.
+/// The premium key is in it on the same footing: this build or this shell holds a bearer key for
+/// the length of a run, and presents it with every premium request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Held<'a> {
     /// The HMAC signing key baked into this build, which signs every request to the Brave backend.
@@ -635,20 +658,17 @@ pub enum Held<'a> {
         /// The host the block's endpoint names, from [`provider::Provider::host`].
         host: &'a str,
     },
-    /// The single-use credential batch an imported Leo Premium subscription was minted as, kept in
-    /// `~/.bravebot/leo-premium.json` and spent one credential per premium request.
+    /// The key the premium host authorises a request with, kept in `~/.bravebot/brave-key.json`
+    /// and sent as a bearer token with every premium request.
     ///
-    /// Granted. Gate 1 fails, because the batch is presented by this program and nothing else
-    /// decides a use of it. Gate 2 passes: the batch is what Brave's subscription service minted
-    /// from the order, each credential is good for one presentation inside one window, and the
-    /// backend verifying it is what enforces both, so the bound was fixed before issue and sits
-    /// beyond this program's reach. The walk stops there, which is why nothing here sizes it
-    /// against detection: a window is not what bounds it.
+    /// Held. It carries no expiry, and this program presents it itself with nothing deciding a
+    /// use: the premium host is both the issuer and the only surface that revokes it, and it
+    /// offers no narrower or shorter form. `bravebot auth logout brave` ends this machine's
+    /// custody and leaves the key live there.
     ///
-    /// No parameter, unlike a gateway. There is one batch whatever channel it was imported from,
-    /// the issuer is Brave's own service, and the surface is the order rather than an address this
-    /// configuration could name differently on two machines.
-    SubscriptionBatch,
+    /// No parameter. The host is Brave's premium deployment, which [`Config::premium_endpoint`]
+    /// names, and the key is one value whatever the person.
+    PremiumKey,
     /// The sign-in a person made to OpenAI with a ChatGPT account, kept in
     /// `~/.bravebot/chatgpt-account.json` as an access token and the refresh token that replaces it.
     ///
@@ -696,7 +716,7 @@ impl<'a> Held<'a> {
             Self::AwsAccessKey,
             Self::AwsSession,
             Self::GatewayToken { host: gateway_host },
-            Self::SubscriptionBatch,
+            Self::PremiumKey,
             Self::ChatgptAccount,
             Self::XaiAccount,
         ]
@@ -786,8 +806,10 @@ impl<'a> Held<'a> {
             // A block names a host and a variable and never an issuer, so there is nothing here
             // to ask for a performer, a narrower token or a shorter one. Not attempted rather
             // than refused: what the gateway at the other end offers is not something this
-            // program has been told.
-            Self::GatewayToken { .. } => &[
+            // program has been told. The premium key is the same arrangement: one bearer value the
+            // premium host issued, presented by this program, with nothing asked of that host for
+            // something narrower or shorter.
+            Self::GatewayToken { .. } | Self::PremiumKey => &[
                 GateDrop {
                     condition: Condition::NothingDecidesEachUse,
                     attempt: Attempt::NotAttempted,
@@ -801,15 +823,6 @@ impl<'a> Held<'a> {
                     attempt: Attempt::NotAttempted,
                 },
             ],
-            // One drop, because gate 2 passes: Brave's subscription service minted the batch from
-            // the order, each credential is good for one presentation inside one window, and the
-            // backend verifying it enforces both beyond this program's reach. Gate 1 fails because
-            // this program presents the credential itself and nothing decides a use of it, and
-            // nobody has asked that service for something that would.
-            Self::SubscriptionBatch => &[GateDrop {
-                condition: Condition::NothingDecidesEachUse,
-                attempt: Attempt::NotAttempted,
-            }],
             // Three drops, on the same conditions as an AWS session and for the same reasons: the
             // token is presented by this program, nothing here asks OpenAI to narrow it to a run,
             // and the refresh token replaces it without anybody being asked. Not attempted rather
@@ -843,11 +856,11 @@ impl<'a> Held<'a> {
     /// not repeated here: a second copy of it is a second thing to keep true.
     pub fn tier(self) -> Tier {
         match self {
-            Self::SubscriptionBatch => Tier::Granted,
             Self::SigningKey
             | Self::AwsAccessKey
             | Self::AwsSession
             | Self::GatewayToken { .. }
+            | Self::PremiumKey
             | Self::ChatgptAccount
             | Self::XaiAccount => Tier::Held,
         }
@@ -883,7 +896,7 @@ impl<'a> Held<'a> {
             Self::SigningKey
             | Self::AwsAccessKey
             | Self::GatewayToken { .. }
-            | Self::SubscriptionBatch
+            | Self::PremiumKey
             | Self::ChatgptAccount
             | Self::XaiAccount => None,
         }
@@ -900,10 +913,8 @@ impl<'a> Held<'a> {
     /// and nothing here mints anything from it. A copy of the same token in a file or a shell
     /// profile is that credential rather than something derived from it, so revoking reaches it.
     ///
-    /// False for a subscription batch on the other side of the same question: the batch is what
-    /// was minted, and nothing is minted from a credential in it. A re-import mints a further
-    /// batch from the order rather than from this one, so it is the order that has something under
-    /// it, and the order is not a credential this program holds.
+    /// False for the premium key on the same footing: the premium host that revokes it is the only
+    /// place it is presented, and nothing here mints anything from it.
     ///
     /// True for the ChatGPT sign-in, because the surfaces the record names for ending it are
     /// signing out of the account and removing this program's access in the account's settings,
@@ -931,26 +942,25 @@ impl<'a> Held<'a> {
     /// asks the record to say.
     ///
     /// `None` for a credential that is not derived from another: the signing key, a long-lived
-    /// access key and a gateway's token are each issued once and held as they were issued, so
-    /// there is no derivative for a bound form to be asked of. The three derived credentials
-    /// are all bearer secrets today.
+    /// access key, a gateway's token and the premium key are each issued once and held as they
+    /// were issued, so there is no derivative for a bound form to be asked of. The three derived
+    /// credentials are all bearer secrets today.
     ///
     /// An AWS session is [`Attempt::Refused`]: STS issues session credentials that any holder of
-    /// the three values can sign with, and offers no form checked against the presenter. A
-    /// subscription batch is [`Attempt::NotAttempted`]: a presentation is signed over a resource
-    /// string and is single-use and bound to its issuer, which does not identify the presenter,
-    /// and nothing here has asked Brave's subscription service for a form that would. The ChatGPT
-    /// sign-in's access token is the same answer: nothing asks OpenAI's authorization server for a
-    /// sender-constrained form, so it is a bearer secret nobody has asked for more of.
+    /// the three values can sign with, and offers no form checked against the presenter. The
+    /// ChatGPT sign-in's access token is [`Attempt::NotAttempted`]: nothing asks OpenAI's
+    /// authorization server for a sender-constrained form, so it is a bearer secret nobody has
+    /// asked for more of.
     ///
     /// A claim about the arrangement, so it moves only when the arrangement does.
     pub fn binding(self) -> Option<Binding> {
         match self {
             Self::AwsSession => Some(Binding::Bearer(Attempt::Refused)),
-            Self::SubscriptionBatch | Self::ChatgptAccount | Self::XaiAccount => {
-                Some(Binding::Bearer(Attempt::NotAttempted))
-            }
-            Self::SigningKey | Self::AwsAccessKey | Self::GatewayToken { .. } => None,
+            Self::ChatgptAccount | Self::XaiAccount => Some(Binding::Bearer(Attempt::NotAttempted)),
+            Self::SigningKey
+            | Self::AwsAccessKey
+            | Self::GatewayToken { .. }
+            | Self::PremiumKey => None,
         }
     }
 }
@@ -1117,6 +1127,71 @@ impl RosterAccounts {
     }
 }
 
+/// Which gateways a roster asks over the network. A gateway whose block names its models is never
+/// asked, so this only decides among the ones that name none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gateways<'config> {
+    /// Every one of them.
+    All,
+    /// The one with this id, and no other.
+    Only(&'config str),
+    /// None of them.
+    Nothing,
+}
+
+/// Every service a roster asks over the network for its rows
+/// ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)).
+///
+/// One rule for the terminal's roster and the window's, as [`RosterAccounts`] is for the accounts
+/// it holds, so neither keeps its own copy of which services a lookup waits on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RosterScope<'config> {
+    pub accounts: RosterAccounts,
+    pub gateways: Gateways<'config>,
+    /// Brave's own endpoint, which is also where an `automatic` row and every bare Brave name
+    /// come from.
+    pub brave: bool,
+}
+
+impl RosterScope<'_> {
+    /// What a picker asks: every service, whatever model is in force, since it lists every model a
+    /// person could choose.
+    pub fn for_a_picker() -> Self {
+        Self {
+            accounts: RosterAccounts::for_a_picker(),
+            gateways: Gateways::All,
+            brave: true,
+        }
+    }
+
+    /// Whether `provider`, a gateway whose block names no models, is asked.
+    pub fn asks_gateway(&self, provider: &provider::Provider) -> bool {
+        match self.gateways {
+            Gateways::All => true,
+            Gateways::Only(id) => provider.id == id,
+            Gateways::Nothing => false,
+        }
+    }
+}
+
+/// The service that answers a request naming a model ([BACKEND-3](../../../docs/specs/backends.md#BACKEND-3)).
+///
+/// `'config` is the configuration the service is found in, and `'name` the model's own spelling,
+/// from which the name a service knows it by is taken.
+#[derive(Debug, Clone, Copy)]
+pub enum Serves<'config, 'name> {
+    /// An AWS account, from the tier variables or from a `provider` block that names AWS.
+    Bedrock(&'config bedrock::Bedrock),
+    /// A gateway, and the name it knows the model by.
+    Gateway(&'config provider::Provider, &'name str),
+    /// The ChatGPT account, and the name it knows the model by.
+    Chatgpt(&'name str),
+    /// The xAI account, and the name it knows the model by.
+    Xai(&'name str),
+    /// Brave's endpoint, which answers any name nothing above claims.
+    Aichat,
+}
+
 /// Everything needed to talk to the backends this build can reach.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -1153,12 +1228,20 @@ pub struct Config {
     pub key_id: String,
     /// Base URL. The API path is appended by the client.
     pub endpoint: String,
-    /// Base URL for the premium tier, when this build has one.
+    /// Base URL for the premium tier: the one compiled in for this build's environment, or the one
+    /// [`env_var::PREMIUM_ENDPOINT`] names in its place.
     ///
-    /// `None` leaves premium unavailable, which is the right outcome for a build that was never
-    /// given the host: falling back to the free endpoint with a subscription credential attached
-    /// would send the credential somewhere it does not belong.
+    /// `None` only for a build that cannot reach the Brave backend at all, which has no premium tier
+    /// to reach either. A value that is present but malformed is not used and the compiled-in host
+    /// stands, so the key never goes to an address a settings file spelled badly.
     pub premium_endpoint: Option<String>,
+    /// The key `bravebot auth login brave` stored, sent as a bearer token to the premium host.
+    ///
+    /// `None` where none is stored, and where there is no premium host to send it to: the two go
+    /// together, so a key with nowhere to go is dropped rather than held. Whether the host is one
+    /// of Brave's is decided where the key is presented, not here
+    /// ([PREM-2](../../../docs/specs/premium-credentials.md#PREM-2)).
+    pub premium_key: Option<Secret>,
     /// Model to request when the user has not picked one. The server may substitute a different
     /// one regardless.
     pub default_model: String,
@@ -1412,13 +1495,22 @@ impl Config {
         settings: &Settings,
         managed: &Managed,
     ) -> Result<Self, ConfigError> {
-        let stored = settings::home()
-            .and_then(|home| keys::Keys::read(&home).ok())
+        let home = settings::home();
+        let stored = home
+            .as_deref()
+            .and_then(|home| keys::Keys::read(home).ok())
             .unwrap_or_default();
+        // Read on the footing the gateway keys are: a file that cannot be read is no key, and
+        // `doctor` says it is unreadable.
+        let premium_key = home
+            .as_deref()
+            .and_then(|home| brave_key::read(home).ok())
+            .flatten();
         Self::from_sources(
             settings,
             managed,
             &stored,
+            premium_key,
             |key| env::var(key).ok(),
             built_in,
         )
@@ -1430,6 +1522,7 @@ impl Config {
         settings: &Settings,
         managed: &Managed,
         stored: &keys::Keys,
+        premium_key: Option<Secret>,
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
@@ -1448,6 +1541,9 @@ impl Config {
             })
             .collect();
         let mut config = Self::from_lookup_with_providers(lookup, providers)?;
+        // Held only with a host to send it to, so a key stored on a machine whose build reaches no
+        // Brave backend is carried by nothing.
+        config.premium_key = premium_key.filter(|_| config.premium_endpoint.is_some());
         // Carried rather than consulted here: the name to check against the lists arrives later, from
         // any of the places that may name a model, and each is checked against the same pair
         // (BACKEND-48).
@@ -1560,17 +1656,24 @@ impl Config {
             reaches_brave,
         );
 
-        // A premium host that is present but malformed is dropped rather than rejected: it only
-        // matters to someone who has imported a subscription, and failing every run over it would
-        // punish everyone else. A query or a fragment makes it malformed: a transport ends the host
-        // at the first `/`, `?` or `#`, so the text after either is not part of the host although a
-        // suffix test on the whole value reads it as one, and the request path is appended to a base
-        // that has either, which puts it inside the query or the fragment.
+        // A premium host that is present but malformed is not used rather than rejected, and the one
+        // compiled in stands: failing every run over it would punish everyone else, and sending the
+        // key to an address that was spelled badly would send it somewhere nobody chose. A query or
+        // a fragment makes it malformed: a transport ends the host at the first `/`, `?` or `#`, so
+        // the text after either is not part of the host although a suffix test on the whole value
+        // reads it as one, and the request path is appended to a base that has either, which puts it
+        // inside the query or the fragment.
+        //
+        // None for a build that reaches no Brave backend, which has no free endpoint to say which
+        // environment's premium host it would be.
         let premium_endpoint = lookup(env_var::PREMIUM_ENDPOINT)
             .map(|value| value.trim().to_string())
             .filter(|value| value.starts_with("https://") || value.starts_with("http://"))
             .filter(|value| !value.contains(['?', '#']))
-            .map(|value| value.trim_end_matches('/').to_string());
+            .map(|value| value.trim_end_matches('/').to_string())
+            .or_else(|| {
+                (!endpoint.is_empty()).then(|| compiled_in_premium_endpoint(&endpoint).to_string())
+            });
 
         // Nonsense falls back to the default rather than disabling compaction, which is what a
         // zero or an unparseable value would otherwise quietly do. A mistyped budget should cost
@@ -1600,6 +1703,7 @@ impl Config {
             key_id,
             endpoint: endpoint.trim_end_matches('/').to_string(),
             premium_endpoint,
+            premium_key: None,
             default_model,
             advisor_model: None,
             defer_mcp_tools_above: None,
@@ -1798,6 +1902,63 @@ impl Config {
         }
     }
 
+    /// The service that answers a request naming `model`.
+    ///
+    /// The four questions [`Config::bedrock_for`], [`Config::provider_for`],
+    /// [`Config::chatgpt_model`] and [`Config::xai_model`] answer one at a time, asked in the order
+    /// a request is routed in ([BACKEND-3](../../../docs/specs/backends.md#BACKEND-3)). The router
+    /// and a roster that asks for the sake of one model both take it from here, so a lookup cannot
+    /// leave out the service a turn on that model goes to.
+    pub fn serves<'config, 'name>(&'config self, model: &'name str) -> Serves<'config, 'name> {
+        if let Some(bedrock) = self.bedrock_for(model) {
+            return Serves::Bedrock(bedrock);
+        }
+        if let Some((provider, wire)) = self.provider_for(model) {
+            return Serves::Gateway(provider, wire);
+        }
+        if let Some(wire) = self.chatgpt_model(model) {
+            return Serves::Chatgpt(wire);
+        }
+        if let Some(wire) = self.xai_model(model) {
+            return Serves::Xai(wire);
+        }
+        Serves::Aichat
+    }
+
+    /// The services a roster asks for the sake of a turn on `model`, or on the configured default
+    /// where `model` is `None`: the one that answers it, and no other
+    /// ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)).
+    ///
+    /// A turn needs the row of its own model, for its window and for what it takes. Asking the
+    /// others as well made a start wait on every gateway a person had configured, one after the
+    /// next, before it drew anything. An AWS account is asked nothing, since its rows come from the
+    /// configuration, so a turn on a model it serves waits on no one.
+    pub fn roster_scope_for_a_turn(&self, model: Option<&str>) -> RosterScope<'_> {
+        let nothing = RosterScope {
+            accounts: RosterAccounts {
+                chatgpt: false,
+                xai: false,
+            },
+            gateways: Gateways::Nothing,
+            brave: false,
+        };
+        match self.serves(model.unwrap_or(&self.default_model)) {
+            Serves::Bedrock(_) => nothing,
+            Serves::Gateway(provider, _) => RosterScope {
+                gateways: Gateways::Only(provider.id.as_str()),
+                ..nothing
+            },
+            Serves::Chatgpt(_) | Serves::Xai(_) => RosterScope {
+                accounts: self.roster_accounts_for_a_turn(model),
+                ..nothing
+            },
+            Serves::Aichat => RosterScope {
+                brave: true,
+                ..nothing
+            },
+        }
+    }
+
     /// Whether the ChatGPT account may be reached at all, which it may not where a `provider`
     /// entry has its id ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
     ///
@@ -1897,18 +2058,15 @@ impl Config {
     /// needed and is left out, as is one reaching Bedrock, whose credentials are the AWS pair and
     /// would otherwise be counted twice.
     ///
-    /// `subscription_imported` is asked of the caller because the batch lives in a file
-    /// `bravebot-skus` owns and nothing here depends on that crate. It is a fact about the machine
-    /// rather than about this configuration, which is why it arrives as an argument rather than
-    /// being read: the same configuration on a machine with no import holds one credential fewer.
-    /// A build that cannot reach the Brave backend is left out of it whatever the file holds,
-    /// because the batch buys the premium half of that backend's roster and nothing else reads it,
-    /// and CRED-2 gives a credential nothing reads no tier.
+    /// The premium key is listed where one is held, and a build that cannot reach the Brave
+    /// backend is left out of it whatever it holds, because the key buys the premium half of that
+    /// backend's roster and nothing else reads it, and CRED-2 gives a credential nothing reads no
+    /// tier.
     ///
     /// [`Held::ChatgptAccount`] and [`Held::XaiAccount`] are not in it, for the opposite reason: a
     /// sign-in is held on every machine that made one, whatever backend this configuration reaches,
     /// so a caller that reads the file adds it.
-    pub fn held(&self, subscription_imported: bool) -> Vec<Held<'_>> {
+    pub fn held(&self) -> Vec<Held<'_>> {
         let mut held = Vec::new();
         if self.serves_aichat() {
             held.push(Held::SigningKey);
@@ -1925,8 +2083,8 @@ impl Config {
                     host: provider.host(),
                 }),
         );
-        if subscription_imported && self.serves_aichat() {
-            held.push(Held::SubscriptionBatch);
+        if self.premium_key.is_some() && self.serves_aichat() {
+            held.push(Held::PremiumKey);
         }
         held
     }
@@ -2333,14 +2491,14 @@ mod tests {
         .expect("bedrock alone is a working configuration");
         assert!(!bedrock_only.serves_aichat());
         assert_eq!(
-            bedrock_only.held(false),
+            bedrock_only.held(),
             [Held::AwsAccessKey, Held::AwsSession],
             "a build with a blank signing key holds no signing key"
         );
 
         let brave_only = Config::from_lookup(complete_env).expect("configured");
         assert_eq!(
-            brave_only.held(false),
+            brave_only.held(),
             [Held::SigningKey],
             "a build with no AWS account has no AWS credential to account for"
         );
@@ -2394,7 +2552,7 @@ mod tests {
         })
         .expect("configured");
         assert_eq!(
-            config.held(false),
+            config.held(),
             [Held::SigningKey, Held::AwsAccessKey, Held::AwsSession]
         );
 
@@ -2436,7 +2594,7 @@ mod tests {
 
         // The gateways in the order the blocks are read, which is by id.
         assert_eq!(
-            config.held(false),
+            config.held(),
             [
                 Held::SigningKey,
                 Held::AwsAccessKey,
@@ -2556,10 +2714,9 @@ mod tests {
     /// being worth looking at again.
     ///
     /// True of all six: AWS mints a bounded session and ends it, this project's own backend
-    /// issues the signing key, a gateway block names no issuer for anything to have asked,
-    /// Brave's subscription service mints a batch nobody has asked to gate use of, and OpenAI has
-    /// been asked for no narrower or bound form of the ChatGPT sign-in. None of those is a
-    /// counterparty saying no.
+    /// issues the signing key, a gateway block names no issuer for anything to have asked, the
+    /// premium host has been asked for no narrower or shorter key, and OpenAI has been asked for no
+    /// narrower or bound form of the ChatGPT sign-in. None of those is a counterparty saying no.
     #[test]
     fn every_drop_this_configuration_records_is_one_nobody_attempted() {
         for held in Held::all("gateway.invalid") {
@@ -2604,7 +2761,7 @@ mod tests {
         tiers.dedup();
         assert_eq!(
             tiers,
-            ["Granted", "Held"],
+            ["Held"],
             "the record does not answer its credentials with the tiers their walks stopped at"
         );
 
@@ -2612,7 +2769,7 @@ mod tests {
         assert_eq!(Held::SigningKey.tier(), Tier::Held);
         assert_eq!(Held::AwsAccessKey.tier(), Tier::Held);
         assert_eq!(Held::AwsSession.tier(), Tier::Held);
-        assert_eq!(Held::SubscriptionBatch.tier(), Tier::Granted);
+        assert_eq!(Held::PremiumKey.tier(), Tier::Held);
 
         // CRED-4: the tier is a claim about the arrangement, and a gateway's address is not part of
         // one. Two hosts answered differently would be a tier that moved without the arrangement
@@ -2696,50 +2853,64 @@ mod tests {
         let after: for<'a> fn(Disposition, Held<'a>, Performer) -> Result<Tier, NotMoved> =
             Disposition::apply;
 
-        assert_eq!(tier_of(Held::SubscriptionBatch), Tier::Granted);
-        assert_eq!(walk_of(Held::SubscriptionBatch).len(), 1);
+        assert_eq!(tier_of(Held::PremiumKey), Tier::Held);
+        assert_eq!(walk_of(Held::PremiumKey).len(), 3);
         assert_eq!(
             after(Disposition::Accept, Held::SigningKey, Performer::Absent),
             Ok(Tier::Held)
         );
     }
 
-    /// CRED-2: an imported subscription's credential batch is a credential this machine holds and
-    /// spends, so it is in the record with a tier of its own. Left out, a batch sitting in a file
-    /// under the machine and spent by every premium request has no recorded tier at all, which is
-    /// the outcome the clause forbids.
+    /// A configuration over `lookup` with a premium key stored, as `bravebot auth login brave`
+    /// leaves one.
+    fn with_a_stored_premium_key(lookup: impl Fn(&str) -> Option<String>) -> Config {
+        Config::from_sources(
+            &Settings::default(),
+            &Managed::default(),
+            &keys::Keys::default(),
+            Some(Secret::new("a-premium-key")),
+            |_| None,
+            lookup,
+        )
+        .expect("configured")
+    }
+
+    /// CRED-2: the premium key is a credential this machine holds and presents with every premium
+    /// request, so it is in the record with a tier of its own. Left out, a bearer key stored under
+    /// the state directory has no recorded tier at all, which is the outcome the clause forbids.
     ///
     /// Both directions, because the record is what a report walks: a rule that pushed the entry
-    /// unconditionally would account for a subscription on every machine that has never imported
-    /// one, and send somebody to a batch that does not exist. A Bedrock-only build is held to the
-    /// absent case with a batch present, since nothing there reads it and CRED-2 gives a credential
-    /// nothing reads no tier.
+    /// unconditionally would account for a key on every build that was given none, and send
+    /// somebody to revoke a key that does not exist. A Bedrock-only build is held to the absent case
+    /// with a key stored, since nothing there reads it and CRED-2 gives a credential nothing reads
+    /// no tier.
     #[test]
-    fn an_imported_subscription_is_a_credential_this_configuration_holds() {
-        let brave = Config::from_lookup(complete_env).expect("configured");
+    fn a_premium_key_is_a_credential_this_configuration_holds() {
+        let brave = with_a_stored_premium_key(complete_env);
         assert!(brave.serves_aichat());
         assert_eq!(
-            brave.held(true),
-            [Held::SigningKey, Held::SubscriptionBatch],
-            "an imported batch is not in the record"
-        );
-        assert_eq!(
-            brave.held(false),
-            [Held::SigningKey],
-            "a machine that has imported nothing is accounted for a batch it does not hold"
+            brave.held(),
+            [Held::SigningKey, Held::PremiumKey],
+            "a premium key is not in the record"
         );
 
-        let bedrock_only = Config::from_lookup(|k| match k {
+        let without = Config::from_lookup(complete_env).expect("configured");
+        assert_eq!(
+            without.held(),
+            [Held::SigningKey],
+            "a build with no premium key is accounted for one it does not hold"
+        );
+
+        let bedrock_only = with_a_stored_premium_key(|k| match k {
             env_var::USE_BEDROCK => Some("1".into()),
             env_var::AWS_REGION => Some("us-west-2".into()),
             _ => None,
-        })
-        .expect("bedrock alone is a working configuration");
+        });
         assert!(!bedrock_only.serves_aichat());
         assert_eq!(
-            bedrock_only.held(true),
+            bedrock_only.held(),
             [Held::AwsAccessKey, Held::AwsSession],
-            "a build that cannot reach the Brave backend is accounted for a batch nothing there spends"
+            "a build that cannot reach the Brave backend is accounted for a key nothing there presents"
         );
     }
 
@@ -2781,10 +2952,9 @@ mod tests {
     }
 
     /// CRED-26: a derived credential records whether it is bound to its presenter or a bearer
-    /// secret, and the record keeps a refusal apart from a request nobody made. The AWS session, the
-    /// subscription batch and the ChatGPT sign-in are the derived credentials and all are bearer
-    /// secrets, for different reasons: STS offers no bound form, and nobody has asked the
-    /// subscription service or OpenAI.
+    /// secret, and the record keeps a refusal apart from a request nobody made. The AWS session and
+    /// the ChatGPT sign-in are the derived credentials and both are bearer secrets, for different
+    /// reasons: STS offers no bound form, and nobody has asked OpenAI.
     /// A record that answered both alike, or answered neither, would leave a bound and an unbound
     /// credential at one tier indistinguishable, which is what the clause is for.
     ///
@@ -2796,13 +2966,9 @@ mod tests {
             Held::AwsSession.binding(),
             Some(Binding::Bearer(Attempt::Refused))
         );
-        assert_eq!(
-            Held::SubscriptionBatch.binding(),
-            Some(Binding::Bearer(Attempt::NotAttempted))
-        );
         assert_ne!(
             Held::AwsSession.binding(),
-            Held::SubscriptionBatch.binding(),
+            Held::ChatgptAccount.binding(),
             "an issuer that offers no bound form and one nobody asked are recorded alike"
         );
         assert_eq!(
@@ -2814,6 +2980,7 @@ mod tests {
         for held in [
             Held::SigningKey,
             Held::AwsAccessKey,
+            Held::PremiumKey,
             Held::GatewayToken {
                 host: "gateway.invalid",
             },
@@ -2826,14 +2993,14 @@ mod tests {
         }
     }
 
-    /// CRED-26: recording the binding moves no tier. The subscription batch stays at Granted
-    /// whether or not it is bound, and the session stays at Held, so the walk and the binding are
-    /// two facts about a credential rather than one derived from the other.
+    /// CRED-26: recording the binding moves no tier. The ChatGPT sign-in stays at Held whether or
+    /// not it is bound, and so does the session, so the walk and the binding are two facts about a
+    /// credential rather than one derived from the other.
     #[test]
     fn a_credentials_binding_does_not_move_its_tier() {
-        assert_eq!(Held::SubscriptionBatch.tier(), Tier::Granted);
+        assert_eq!(Held::ChatgptAccount.tier(), Tier::Held);
         assert_eq!(Held::AwsSession.tier(), Tier::Held);
-        assert_eq!(Held::SubscriptionBatch.walk().len(), 1);
+        assert_eq!(Held::ChatgptAccount.walk().len(), 3);
         assert_eq!(Held::AwsSession.walk().len(), 3);
     }
 
@@ -2870,7 +3037,7 @@ mod tests {
 
         let brave = Config::from_lookup(complete_env).expect("configured");
         assert!(
-            !brave.held(true).contains(&Held::ChatgptAccount),
+            !brave.held().contains(&Held::ChatgptAccount),
             "a configuration is accounted for a sign-in only the machine can say it holds"
         );
     }
@@ -2909,7 +3076,7 @@ mod tests {
 
         let brave = Config::from_lookup(complete_env).expect("configured");
         assert!(
-            !brave.held(true).contains(&Held::XaiAccount),
+            !brave.held().contains(&Held::XaiAccount),
             "a configuration is accounted for a sign-in only the machine can say it holds"
         );
         assert!(Held::all("gateway.invalid").contains(&Held::XaiAccount));
@@ -3516,6 +3683,115 @@ mod tests {
         );
     }
 
+    /// BACKEND-64: a roster asked for the sake of one model asks the service that answers it and no
+    /// other, and a picker asks them all. Each of the five services a request can go to is given a
+    /// model only it answers, with a second gateway and an AWS account configured beside it, so a
+    /// scope that leaves a service in or out shows.
+    ///
+    /// The regressions it rejects are a lookup that still waits on every gateway, which is what held a
+    /// start for the sum of their latencies; one that asks Brave for a model an AWS account serves;
+    /// and a scope that names the wrong gateway for a qualified name or for one a block lists.
+    #[test]
+    fn a_roster_for_a_model_asks_the_service_that_answers_it_and_no_other() {
+        let mut config = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            other => complete_env(other),
+        })
+        .expect("configured");
+        config.providers = Settings::parse(
+            r#"{"provider": {
+                "one": {"options": {"baseURL": "https://one.example.invalid/v1"}},
+                "two": {"options": {"baseURL": "https://two.example.invalid/v1"}},
+                "three": {"options": {"baseURL": "https://three.example.invalid/v1"},
+                          "models": {"tiny": {}}}
+            }}"#,
+        )
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 3, "a block configured no gateway");
+        let scope = |gateways, chatgpt, xai, brave| RosterScope {
+            accounts: RosterAccounts { chatgpt, xai },
+            gateways,
+            brave,
+        };
+
+        let table = [
+            (
+                Some("one/llama3"),
+                scope(Gateways::Only("one"), false, false, false),
+            ),
+            (
+                Some("two/llama3"),
+                scope(Gateways::Only("two"), false, false, false),
+            ),
+            // A bare name a block lists finds that block's gateway.
+            (
+                Some("tiny"),
+                scope(Gateways::Only("three"), false, false, false),
+            ),
+            (
+                Some("opus-arn"),
+                scope(Gateways::Nothing, false, false, false),
+            ),
+            (
+                Some("chatgpt/gpt-5"),
+                scope(Gateways::Nothing, true, false, false),
+            ),
+            (
+                Some("xai/grok-4.5"),
+                scope(Gateways::Nothing, false, true, false),
+            ),
+            // What nothing above claims is Brave's, and so is the configured default.
+            (
+                Some("claude-sonnet"),
+                scope(Gateways::Nothing, false, false, true),
+            ),
+            (None, scope(Gateways::Nothing, false, false, true)),
+        ];
+        for (model, expected) in table {
+            assert_eq!(config.roster_scope_for_a_turn(model), expected, "{model:?}");
+        }
+        assert_eq!(
+            RosterScope::for_a_picker(),
+            scope(Gateways::All, true, true, true)
+        );
+
+        // The router and the scope take their answer from one function, and these are its answers.
+        assert!(matches!(config.serves("opus-arn"), Serves::Bedrock(_)));
+        assert!(matches!(
+            config.serves("one/llama3"),
+            Serves::Gateway(provider, "llama3") if provider.id == "one"
+        ));
+        assert!(matches!(
+            config.serves("chatgpt/gpt-5"),
+            Serves::Chatgpt("gpt-5")
+        ));
+        assert!(matches!(
+            config.serves("xai/grok-4.5"),
+            Serves::Xai("grok-4.5")
+        ));
+        assert!(matches!(config.serves("claude-sonnet"), Serves::Aichat));
+
+        // Which gateways a scope asks, among those that name no models.
+        let named = |id: &str| {
+            config
+                .providers
+                .iter()
+                .find(|provider| provider.id == id)
+                .expect(id)
+        };
+        let (one, two) = (named("one"), named("two"));
+        let asks = |gateways| {
+            let scope = scope(gateways, false, false, false);
+            (scope.asks_gateway(one), scope.asks_gateway(two))
+        };
+        assert_eq!(asks(Gateways::All), (true, true));
+        assert_eq!(asks(Gateways::Only("two")), (false, true));
+        assert_eq!(asks(Gateways::Nothing), (false, false));
+    }
+
     /// XAI-13: an entry that already has the id keeps it. Taking the id over would send a working
     /// gateway's requests, and the key that gateway holds, to another service.
     #[test]
@@ -3793,7 +4069,14 @@ mod tests {
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Config, ConfigError> {
-        Config::from_sources(settings, managed, &keys::Keys::default(), exported, baked)
+        Config::from_sources(
+            settings,
+            managed,
+            &keys::Keys::default(),
+            None,
+            exported,
+            baked,
+        )
     }
 
     /// The names a settings file may set are the names something reads, and this is all of them. A
@@ -4150,7 +4433,7 @@ mod tests {
         settings: &Settings,
         stored: &keys::Keys,
     ) -> Vec<(String, Option<String>)> {
-        Config::from_sources(settings, managed, stored, |_| None, complete_env)
+        Config::from_sources(settings, managed, stored, None, |_| None, complete_env)
             .expect("configured")
             .providers
             .iter()
@@ -4218,6 +4501,7 @@ mod tests {
             &recorded,
             &Managed::default(),
             &stored,
+            None,
             exported,
             complete_env,
         )
@@ -4244,6 +4528,7 @@ mod tests {
             &unnamed,
             &Managed::default(),
             &stored,
+            None,
             exported,
             complete_env,
         )
@@ -4283,6 +4568,7 @@ mod tests {
             &settings,
             &Managed::default(),
             &stored,
+            None,
             |_| None,
             complete_env,
         )
@@ -4335,6 +4621,7 @@ mod tests {
             &settings,
             &Managed::default(),
             &stored,
+            None,
             |_| None,
             complete_env,
         )
@@ -4879,14 +5166,14 @@ mod tests {
     #[test]
     fn a_google_vertex_service_holds_a_credential_the_record_names_by_host() {
         let config = resolved(&Settings::default(), google_env, complete_env).expect("configured");
-        assert!(config.held(false).iter().any(|held| matches!(
+        assert!(config.held().iter().any(|held| matches!(
             held,
             Held::GatewayToken { host } if *host == "aiplatform.googleapis.com"
         )));
         let config = resolved(&Settings::default(), |_| None, complete_env).expect("configured");
         assert!(
             !config
-                .held(false)
+                .held()
                 .iter()
                 .any(|held| matches!(held, Held::GatewayToken { .. }))
         );
@@ -5552,35 +5839,93 @@ mod tests {
         assert_eq!(config.models_url(), "https://example.invalid/v1/models");
     }
 
-    /// A build without the premium host must report premium as unavailable rather than quietly
-    /// using the free endpoint, which would send a subscription credential to the wrong host.
+    /// The premium host is compiled in, so a build that names none still has one, and it is the
+    /// host of the environment the free endpoint is in. A key typed with `bravebot auth login brave`
+    /// goes to it with no variable or settings file having a say.
     #[test]
-    fn a_build_without_a_premium_endpoint_has_no_premium_url() {
+    fn a_build_that_names_no_premium_host_has_the_one_compiled_in() {
         let config = Config::from_lookup(complete_env).unwrap();
+        assert_eq!(
+            config.premium_endpoint.as_deref(),
+            Some(PROD_PREMIUM_ENDPOINT)
+        );
+        assert_eq!(
+            config.premium_chat_completions_url().as_deref(),
+            Some(format!("{PROD_PREMIUM_ENDPOINT}/v1/chat/completions").as_str())
+        );
+
+        let development = Config::from_lookup(|k| match k {
+            env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.software".into()),
+            other => complete_env(other),
+        })
+        .unwrap();
+        assert_eq!(
+            development.premium_endpoint.as_deref(),
+            Some(DEV_PREMIUM_ENDPOINT)
+        );
+    }
+
+    /// PREM-11: the compiled-in host is the one that accepts a premium key. `ai-chat-premium` answers
+    /// a request carrying one with a 401, so a constant moved back to it would leave every key
+    /// refused while the assertions above, which compare against the constants, still held.
+    #[test]
+    fn the_compiled_in_premium_host_is_the_one_that_accepts_a_key() {
+        let gateway = "https://ai-gateway-api.bsg.brave.software/v1/chat/completions";
+        let production = Config::from_lookup(complete_env).unwrap();
+        assert_eq!(
+            production.premium_chat_completions_url().as_deref(),
+            Some(gateway)
+        );
+
+        let development = Config::from_lookup(|k| match k {
+            env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.software".into()),
+            other => complete_env(other),
+        })
+        .unwrap();
+        assert_eq!(
+            development.premium_chat_completions_url().as_deref(),
+            Some(gateway)
+        );
+    }
+
+    /// A build that reaches no Brave backend has no premium host either, since there is no free
+    /// endpoint to say whose environment it would be.
+    #[test]
+    fn a_build_that_reaches_no_brave_backend_has_no_premium_host() {
+        let config = Config::from_lookup(|k| match k {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            _ => None,
+        })
+        .unwrap();
         assert_eq!(config.premium_endpoint, None);
         assert_eq!(config.premium_chat_completions_url(), None);
     }
 
-    /// A blank or schemeless premium host is discarded, not turned into a request to a host with
-    /// no scheme.
+    /// A blank or schemeless premium host is not used, and the one compiled in stands, rather than
+    /// the key being sent to a host with no scheme.
     #[test]
-    fn a_malformed_premium_endpoint_is_discarded() {
+    fn a_malformed_premium_endpoint_is_not_used() {
         for value in ["", "   ", "premium.invalid"] {
             let config = Config::from_lookup(|k| match k {
                 env_var::PREMIUM_ENDPOINT => Some(value.into()),
                 other => complete_env(other),
             })
             .unwrap();
-            assert_eq!(config.premium_endpoint, None, "accepted '{value}'");
+            assert_eq!(
+                config.premium_endpoint.as_deref(),
+                Some(PROD_PREMIUM_ENDPOINT),
+                "accepted '{value}'"
+            );
         }
     }
 
-    /// PREM-2: a premium endpoint is a base the request path is appended to, so a query or a
+    /// PREM-11: a premium endpoint is a base the request path is appended to, so a query or a
     /// fragment is never part of a base. A transport ends the host at the first `/`, `?` or `#`, so
     /// `https://attacker.example#.brave.com` names `attacker.example` while its text ends with a
-    /// Brave suffix. The value is dropped here, as a schemeless one is, so the URL requests are sent
-    /// to and the host the credential is judged by are read from a string that cannot be split two
-    /// ways.
+    /// Brave suffix. The value is not used here, as a schemeless one is not, so the URL requests are
+    /// sent to and the host the credential is judged by are read from a string that cannot be split
+    /// two ways.
     #[test]
     fn a_premium_endpoint_with_a_query_or_a_fragment_is_discarded() {
         for value in [
@@ -5595,8 +5940,11 @@ mod tests {
                 other => complete_env(other),
             })
             .unwrap();
-            assert_eq!(config.premium_endpoint, None, "accepted '{value}'");
-            assert_eq!(config.premium_chat_completions_url(), None, "{value}");
+            assert_eq!(
+                config.premium_endpoint.as_deref(),
+                Some(PROD_PREMIUM_ENDPOINT),
+                "accepted '{value}'"
+            );
         }
     }
 
@@ -5613,6 +5961,37 @@ mod tests {
             config.premium_chat_completions_url().as_deref(),
             Some("https://premium.invalid:8443/gateway/v1/chat/completions")
         );
+    }
+
+    /// PREM-11: the key a person stored is held, and goes with the compiled-in host. A build with
+    /// no key stored holds none, so every request it makes is the free endpoint's.
+    #[test]
+    fn a_stored_premium_key_is_held_with_the_host_compiled_in() {
+        let config = with_a_stored_premium_key(complete_env);
+        assert_eq!(
+            config.premium_key.as_ref().map(Secret::expose),
+            Some("a-premium-key")
+        );
+        assert_eq!(
+            config.premium_endpoint.as_deref(),
+            Some(PROD_PREMIUM_ENDPOINT)
+        );
+
+        let none = Config::from_lookup(complete_env).unwrap();
+        assert!(none.premium_key.is_none());
+    }
+
+    /// PREM-11: the key and the premium host travel together. A key stored on a machine whose build
+    /// reaches no Brave backend has no host to go to, so it is dropped and nothing downstream holds
+    /// a credential with nowhere to go.
+    #[test]
+    fn a_stored_premium_key_is_dropped_where_there_is_no_brave_backend() {
+        let config = with_a_stored_premium_key(|k| match k {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            _ => None,
+        });
+        assert!(config.premium_key.is_none());
     }
 
     #[test]

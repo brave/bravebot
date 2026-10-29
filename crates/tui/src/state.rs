@@ -23,6 +23,7 @@ mod menu;
 mod open_loops;
 mod queue;
 mod scroller;
+mod sessions_screen;
 mod settings;
 mod standing;
 mod targets;
@@ -59,7 +60,7 @@ pub use scroller::{Bar, Footer, HintRow, Laid, Panel, Popup, Scroller, TopOfView
 pub use settings::wheel_rows_named;
 pub use targets::{Hit, Scrolled, Space, Target};
 pub use vi::Spelled;
-pub use watching::{WatchScope, Watching};
+pub use watching::{AsideDone, AsideFlight, WatchScope, Watching};
 
 /// How many bytes of the model's thinking are kept for the screen, counted from the end.
 ///
@@ -153,7 +154,7 @@ fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Option<Entry> {
             bravebot_agent::messages::heading(false, to, name, label),
             Some(text),
         ),
-        Said::User(text) | Said::Composed { text, .. } => Entry::user(text),
+        Said::User(text, _) | Said::Composed { text, .. } => Entry::user(text),
         Said::Assistant(text) => {
             let text = crate::reasoning::spoken(text);
             if text.trim().is_empty() {
@@ -163,6 +164,48 @@ fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Option<Entry> {
         }
         Said::Tool { line, why } => Entry::recalled_tool(line, why),
     })
+}
+
+/// Draw the definition a turn was addressed to over the last reply `entries` holds from `from` on,
+/// as a live turn does (ADDRESS-12).
+///
+/// The name is the one the driver recorded beside the prompt, and no reply chooses it. A turn that
+/// said nothing has no reply to carry it.
+fn label_the_reply(
+    entries: &mut [Entry],
+    from: usize,
+    address: Option<&bravebot_agent::conversation::Address>,
+) {
+    let Some(address) = address else { return };
+    if let Some(reply) = entries
+        .iter_mut()
+        .skip(from)
+        .rev()
+        .find(|entry| entry.speaker == Speaker::Assistant)
+    {
+        reply.answered_as = Some(address.definition.clone());
+    }
+}
+
+/// The entries a conversation read back from a record draws, with the reply of each addressed turn
+/// labelled by the definition the record says it was addressed to.
+fn recalled_entries(said: &[bravebot_agent::conversation::Said]) -> Vec<Entry> {
+    use bravebot_agent::conversation::Said;
+    let mut entries: Vec<Entry> = Vec::new();
+    let mut turn: Option<(usize, &bravebot_agent::conversation::Address)> = None;
+    for line in said {
+        if let Said::User(_, address) = line {
+            if let Some((from, address)) = turn.take() {
+                label_the_reply(&mut entries, from, Some(address));
+            }
+            turn = address.as_ref().map(|address| (entries.len(), address));
+        }
+        entries.extend(recalled_entry(line));
+    }
+    if let Some((from, address)) = turn {
+        label_the_reply(&mut entries, from, Some(address));
+    }
+    entries
 }
 
 /// What the session is doing.
@@ -367,6 +410,9 @@ pub struct Session {
     vetting: bool,
     /// Configurable keybindings for navigation and shortcuts.
     bindings: crate::keybindings::Keybindings,
+    /// The keys the Sessions screen answers (SCREEN-14), and what was refused when they were read.
+    sessions_keys: crate::sessions_keys::SessionsKeys,
+    sessions_keys_refused: Vec<crate::sessions_keys::Refused>,
     /// How many rows one mouse wheel event moves the view by.
     ///
     /// A preference about the person's terminal rather than about the session, read once at startup
@@ -530,6 +576,8 @@ pub struct Session {
     pub(crate) away: crate::away::Away,
     /// The person's own prompt-file directory (CMD-17), or `None` where nothing reads one.
     prompt_files: Option<std::path::PathBuf>,
+    /// The model a prompt file named, until the loop opens the model picker on it (CMD-17).
+    model_to_offer: Option<String>,
     /// What the info panel says this session is.
     identity: Identity,
     /// The GitHub repository a `#<number>` in a reply links into: the one the checkout's `origin`
@@ -552,6 +600,16 @@ pub struct Session {
     /// `None` at rest, on the same footing as the scroller: what decides whether a letter is a
     /// letter or a movement is the mode, never what happens to be on the screen.
     watching: Option<Watching>,
+    /// The Sessions screen, while it is open (SCREEN-1).
+    ///
+    /// `None` at rest, on the same footing as the delegate view: it takes every key while it is
+    /// open, and the box is not drawn.
+    sessions_screen: Option<crate::sessions_screen::SessionsScreen>,
+    /// The tasks the person hid in the Sessions screen, which stay hidden while this session lasts.
+    sessions_screen_hidden: std::collections::HashSet<String>,
+    /// What the Sessions screen was asked for over a running turn, and the person answered `y` to
+    /// stopping the turn for, until the turn has ended (SCREEN-15).
+    after_the_turn: Option<crate::sessions_screen::Effect>,
     /// What each command this session ran printed, oldest first.
     ///
     /// Held here rather than on the entry that ran it, because the view lists them across the
@@ -570,6 +628,14 @@ pub struct Session {
     /// aside drawn among the turn's own lines would read as an exchange the planner had, and the
     /// planner has read neither half of it.
     asides: Vec<Aside>,
+    /// The conversation as the running turn last sent it, for a `/btw` typed beside the turn to be
+    /// asked over (CMD-8). Replaced at each request the turn makes and dropped when a turn begins.
+    fork: Option<bravebot_agent::aside::Fork>,
+    /// The file decisions the running turn answers into, shared with it, so a question asked
+    /// beside the turn reads the map the turn is using and writes none of its own back (CMD-8).
+    turn_files: Option<bravebot_core::file_authority::FileAuthority>,
+    /// The question being answered beside the running turn, if there is one (CMD-8).
+    aside_flight: Option<watching::AsideFlight>,
     /// Where the turn's own view was when somebody went to look at a delegate.
     ///
     /// Held rather than recomputed, so coming back puts them where they were reading instead of
@@ -605,7 +671,7 @@ pub struct Session {
     /// together where they are drawn, so `/sandbox` changes what the screen says.
     pub confinement: String,
     /// Whether this kernel leaves every unix socket that has a path reachable from a confined
-    /// stage, which the opening screen and `/status` say under `read-only` and `workspace-write` (SANDBOX-3). Read at
+    /// stage, which the opening screen and `/status` say under `workspace-write` (SANDBOX-3). Read at
     /// start-up with the confinement above, since the kernel does not change while the session runs.
     pub sockets_with_a_path_reachable: bool,
     /// The sandbox mode programs `run` starts are held to, and who chose it (SANDBOX-22).
@@ -645,9 +711,9 @@ pub struct Session {
     /// What the configuration says about the tier, drawn beside the confinement on the opening
     /// screen.
     ///
-    /// The configuration rather than the credentials, because a stored batch may be expired or for
-    /// the wrong environment, so its presence would not settle the tier. See
-    /// [`crate::status::configured_tier`]. What was actually spent is settled by the first turn.
+    /// The configuration rather than a request, because a key that is held may still be refused,
+    /// so holding one would not settle the tier. See [`crate::status::configured_tier`]. What was
+    /// actually sent is settled by the first turn.
     pub tier: String,
     /// How many turns have been submitted, which picks the indicator's word.
     pub turns: usize,
@@ -692,7 +758,7 @@ pub struct Session {
     /// `None` until a turn has run, which is the honest reading: whether premium is in use is not a
     /// fact about the configuration, it is a fact about a request, and before the first one there is
     /// nothing to report. Reporting the build's premium host instead said "premium configured" for a
-    /// whole session that never spent a credential.
+    /// whole session that never presented a key.
     ///
     /// Both halves, because the interesting case is when they differ: the endpoint answers a model
     /// name it will not serve by substituting a weaker one rather than by failing, so a session can
@@ -711,7 +777,7 @@ pub struct Session {
     /// the reply then names something different every time and nothing is wrong. Recorded by the
     /// caller, which knows which backend answered, rather than inferred from how a name is spelled.
     served_names_are_comparable: bool,
-    /// Whether the last turn actually spent a subscription credential.
+    /// Whether the last turn actually presented the premium key.
     ///
     /// `None` until a turn has run. Observed rather than derived from the configuration, which is
     /// the same reasoning as [`Session::served`]: whether premium is in use is a fact about a
@@ -1112,6 +1178,9 @@ pub struct Session {
     /// True until a listing says otherwise, so a session that has never reached one sends what the
     /// person asked for rather than withholding it on a fact nobody established.
     model_reads_effort: bool,
+    /// The lookup that settles the budget of the model the session opened on, while its answer is
+    /// still on the way (BACKEND-64).
+    awaited_listing: Option<accounts::AwaitedListing>,
     /// Whether the model in force is one of the ChatGPT account's, as the configuration names it.
     ///
     /// What decides whether the level a turn sends is the one chosen or the one the session began
@@ -1180,6 +1249,13 @@ pub struct Session {
     /// Held and let go as [`Session::skills`] are, so that offering the list reads no directory
     /// per frame and constructing a session reads none at all.
     past_sessions: Option<Vec<bravebot_mentions::Entry>>,
+    /// The definitions an `@` could address the message to, held while a reference is typed, as
+    /// [`Session::past_sessions`] are.
+    definitions_offered: Option<Vec<bravebot_mentions::Entry>>,
+    /// The definition picked from that list for the line in the box, until the line is sent or the
+    /// marker the pick wrote is taken out of it. Staged as a dropped file is (DROP-6): it lives
+    /// beside the line and the line says it stands.
+    pick: Option<completion::Pick>,
     /// What [`Session::offered`] last answered, so a frame and the callers behind a key press ask
     /// the disk once between them.
     offered_memo: Kept<completion::OfferedFor>,
@@ -1242,6 +1318,8 @@ impl Session {
             // constructed by a test reads nothing from disk and asks.
             vetting: false,
             bindings: crate::keybindings::Keybindings::default(),
+            sessions_keys: crate::sessions_keys::SessionsKeys::default(),
+            sessions_keys_refused: Vec::new(),
             wheel_rows: WHEEL_ROWS,
             mouse: true,
             context_menu: true,
@@ -1284,15 +1362,22 @@ impl Session {
             caffeinate: Default::default(),
             away: Default::default(),
             prompt_files: None,
+            model_to_offer: None,
             identity: Identity::default(),
             repository: None,
             scroll: 0,
             scroller: None,
             last_request: None,
             watching: None,
+            sessions_screen: None,
+            sessions_screen_hidden: std::collections::HashSet::new(),
+            after_the_turn: None,
             outputs: Vec::new(),
             jobs_from: 0,
             asides: Vec::new(),
+            fork: None,
+            turn_files: None,
+            aside_flight: None,
             held_view: None,
             history_search: None,
             picking: None,
@@ -1402,6 +1487,7 @@ impl Session {
             model_labels: Vec::new(),
             effort: None,
             model_reads_effort: true,
+            awaited_listing: None,
             model_is_account: false,
             account: bravebot_agent::chatgpt::AccountSession::begin(),
             advisor: None,
@@ -1415,6 +1501,8 @@ impl Session {
             project_styles: Vec::new(),
             project_styles_read: false,
             past_sessions: None,
+            definitions_offered: None,
+            pick: None,
             offered_memo: Kept::default(),
             offered_epoch: 0,
             attached: Vec::new(),
@@ -1796,6 +1884,8 @@ impl Session {
         self.asides.clear();
         self.watching = None;
         self.held_view = None;
+        self.sessions_screen = None;
+        self.after_the_turn = None;
     }
 
     /// The task list each turn finished with, by turn number, for writing the session down.
@@ -2193,34 +2283,10 @@ impl Session {
             return false;
         }
         let line = self.unfolded(self.input.trim());
-        match expand(&directory, &line) {
-            Expansion::NotOne => false,
-            Expansion::Expanded(text) => {
-                // A file's text that would run a prompt of a server once sent is refused as one
-                // that opens with a command is: nothing carries out a line from a file (CMD-26).
-                let runs_a_prompt = self
-                    .servers
-                    .session
-                    .as_ref()
-                    .is_some_and(|servers| servers.prompt_request(&text).is_some());
-                if runs_a_prompt {
-                    let name = line
-                        .trim_start_matches('/')
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or_default()
-                        .to_string();
-                    let path = directory.join(format!("{name}.md")).display().to_string();
-                    self.note(t!(
-                        prompt_file_begins_with_a_command,
-                        name = name,
-                        path = path
-                    ));
-                    return true;
-                }
-                self.put_in_the_box(text);
-                true
-            }
+        let (text, model) = match expand(&directory, &line) {
+            Expansion::NotOne => return false,
+            Expansion::Expanded(text) => (text, None),
+            Expansion::ExpandedForModel { text, model } => (text, Some(model)),
             Expansion::Refused { name, why } => {
                 let path = directory.join(format!("{name}.md")).display().to_string();
                 self.note(match why {
@@ -2230,13 +2296,55 @@ impl Session {
                     Why::AgentNotAName => {
                         t!(prompt_file_agent_not_a_name, name = name, path = path)
                     }
+                    Why::ModelNotAName => {
+                        t!(prompt_file_model_not_a_name, name = name, path = path)
+                    }
+                    Why::AgentAndModel => {
+                        t!(prompt_file_agent_and_model, name = name, path = path)
+                    }
                     Why::BeginsWithACommand => {
                         t!(prompt_file_begins_with_a_command, name = name, path = path)
                     }
                 });
-                true
+                return true;
             }
+        };
+        // A file's text that would run a prompt of a server once sent is refused as one
+        // that opens with a command is: nothing carries out a line from a file (CMD-26).
+        let runs_a_prompt = self
+            .servers
+            .session
+            .as_ref()
+            .is_some_and(|servers| servers.prompt_request(&text).is_some());
+        if runs_a_prompt {
+            let name = line
+                .trim_start_matches('/')
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let path = directory.join(format!("{name}.md")).display().to_string();
+            self.note(t!(
+                prompt_file_begins_with_a_command,
+                name = name,
+                path = path
+            ));
+            return true;
         }
+        self.put_in_the_box(text);
+        // Held for the loop to open the picker on it. Nothing is chosen here (CMD-17).
+        self.model_to_offer = model;
+        true
+    }
+
+    /// The model a prompt file named, for the picker to open on, taken so it is offered once.
+    pub fn take_model_to_offer(&mut self) -> Option<String> {
+        self.model_to_offer.take()
+    }
+
+    /// Whether the last prompt file expanded named a model the picker has yet to open on.
+    pub fn has_model_to_offer(&self) -> bool {
+        self.model_to_offer.is_some()
     }
 
     /// Refuse a line that runs a prompt of an MCP server when the words after its name are not
@@ -2389,6 +2497,7 @@ impl Session {
                             .adopt(&self.recallable(prompt), recalled.started);
                     }
                     self.transcript.push(Entry::user(prompt));
+                    let replies_from = self.transcript.len();
                     for (offset, line) in said.iter().enumerate().take(end).skip(start) {
                         // Only the submitted prompt is replaced by its display copy. Context,
                         // corrections and delegate reports can also have the user role.
@@ -2397,6 +2506,17 @@ impl Session {
                         }
                         self.transcript.extend(recalled_entry(line));
                     }
+                    // Under the definition the turn was addressed to, from the record (ADDRESS-12).
+                    let address = match turn
+                        .prompt_offset
+                        .and_then(|offset| said.get(start + offset))
+                    {
+                        Some(bravebot_agent::conversation::Said::User(_, address)) => {
+                            address.as_ref()
+                        }
+                        _ => None,
+                    };
+                    label_the_reply(&mut self.transcript, replies_from, address);
                     match &turn.outcome {
                         Some(StoredOutcome::Failed { reason }) => {
                             self.transcript.push(Entry::failure(reason))
@@ -2436,7 +2556,7 @@ impl Session {
         // prompts. None of those roles establish turn ownership. Keep the messages unassigned
         // and preserve the recorded count rather than saving guessed boundaries as history.
         self.transcript
-            .extend(conversation.recounted().iter().filter_map(recalled_entry));
+            .extend(recalled_entries(&conversation.recounted()));
         self.turns = recalled.turns.unwrap_or(0);
 
         // Into the view and not into the transcript, which is the whole of what an aside is: the
@@ -3832,6 +3952,9 @@ impl Session {
         self.hunks_listed = None;
         self.links_listed = None;
         self.prompt_at = None;
+        // The last turn's exchange is not this one's: a question asked before this turn has sent
+        // its first request would be answered over the wrong conversation.
+        self.fork = None;
         self.said_while_working.clear();
         // Set again by the call that took a line from the box, after this returns. A tick, a watch,
         // a goal sending the work back and a command's own prompt are not a lone word the person
@@ -8907,10 +9030,13 @@ mod tests {
     #[test]
     fn an_after_line_is_sent_once_when_its_delay_is_up_and_leaves_no_schedule() {
         let mut s = session();
-        s.start_after(match crate::loops::parse_after("5m /exit") {
-            crate::loops::Delayed::Start(request) => request,
-            _ => panic!("unread"),
-        });
+        s.start_after(
+            match crate::loops::parse_after("5m /exit") {
+                crate::loops::Delayed::Start(request) => request,
+                _ => panic!("unread"),
+            },
+            Instant::now(),
+        );
         assert_eq!(s.status, Status::Idle, "a turn started at once");
         assert!(s.looping().is_some());
 
@@ -8932,10 +9058,13 @@ mod tests {
     #[test]
     fn a_prompt_typed_while_an_after_line_waits_does_not_use_it_up() {
         let mut s = session();
-        s.start_after(match crate::loops::parse_after("5m later") {
-            crate::loops::Delayed::Start(request) => request,
-            _ => panic!("unread"),
-        });
+        s.start_after(
+            match crate::loops::parse_after("5m later") {
+                crate::loops::Delayed::Start(request) => request,
+                _ => panic!("unread"),
+            },
+            Instant::now(),
+        );
         s.begin_turn("now".to_string(), (Vec::new(), Vec::new()), Vec::new());
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(None);
@@ -10390,7 +10519,7 @@ mod tests {
         let mut s = two_loops();
         s.transcript.clear();
         let after = |s: &mut Session, line: &str| match crate::loops::parse_after(line) {
-            crate::loops::Delayed::Start(request) => s.start_after(request),
+            crate::loops::Delayed::Start(request) => s.start_after(request, Instant::now()),
             _ => panic!("unread"),
         };
 
@@ -10423,6 +10552,35 @@ mod tests {
         assert_eq!(
             said(&s),
             [t!(loop_full, count = crate::loops::MAX_LIVE).to_string()]
+        );
+    }
+
+    /// LOOP-18: the note that announces an `/after` line says the time left of its delay, counted
+    /// from when the line was typed. A line typed two minutes ago with `5m` is due in three, and one
+    /// typed six minutes ago is due at once. The regression it rejects is the note saying the whole
+    /// delay for a line that has already spent part of it.
+    #[test]
+    fn the_note_for_an_after_line_typed_earlier_says_the_time_left() {
+        let typed = |ago: Duration| Instant::now().checked_sub(ago).expect("an earlier instant");
+        let start = |s: &mut Session, ago: Duration| match crate::loops::parse_after("5m tail") {
+            crate::loops::Delayed::Start(request) => s.start_after(request, typed(ago)),
+            _ => panic!("unread"),
+        };
+
+        let mut s = session();
+        start(&mut s, Duration::from_secs(2 * 60));
+        let heard = said(&s);
+        assert_eq!(
+            heard,
+            [t!(after_started, number = 1, delay = "3m").to_string()],
+            "the whole delay was said for a line typed earlier"
+        );
+
+        let mut s = session();
+        start(&mut s, Duration::from_secs(6 * 60));
+        assert_eq!(
+            said(&s),
+            [t!(after_started, number = 1, delay = "0s").to_string()]
         );
     }
 
@@ -14332,6 +14490,83 @@ mod tests {
             assert_eq!(fired.text, sentence);
         }
 
+        /// ADDRESS-12: a resumed session draws the label over the reply of each turn the record says
+        /// was addressed, from the record's field and not from anything the reply says, and over no
+        /// other reply. The two ways a record is drawn, with and without its turn boundaries, both
+        /// do.
+        #[test]
+        fn a_resumed_reply_is_drawn_under_the_definition_its_prompt_was_addressed_to() {
+            use bravebot_agent::conversation::Address;
+            use bravebot_agent::request_view::Provenance;
+
+            let mut conversation = Conversation::new();
+            let mut turns = Vec::new();
+            let exchanges = [
+                ("plain question", None),
+                ("reviewed question", Some(("reviewer", false))),
+                ("standing question", Some(("keeper", true))),
+            ];
+            for (number, (prompt, address)) in exchanges.into_iter().enumerate() {
+                let begins = conversation.recounted().len();
+                conversation.push_from(Message::user(prompt), Provenance::Typed);
+                if let Some((definition, standing)) = address {
+                    conversation.address_last(Address {
+                        definition: definition.to_string(),
+                        standing,
+                        at: None,
+                    });
+                }
+                // A reply that says it is another definition's, which must decide nothing.
+                conversation.push(Message::assistant("I am the lantern bot."));
+                turns.push(bravebot_session::sessions::StoredTurn::completed(
+                    number + 1,
+                    prompt,
+                    begins,
+                    conversation.recounted().len(),
+                    Some(begins),
+                ));
+            }
+            let labels = |entries: Vec<Entry>| -> Vec<Option<String>> {
+                entries
+                    .into_iter()
+                    .filter(|entry| entry.speaker == Speaker::Assistant)
+                    .map(|entry| entry.answered_as)
+                    .collect()
+            };
+            let expected = vec![
+                None,
+                Some("reviewer".to_string()),
+                Some("keeper".to_string()),
+            ];
+
+            let mut recorded = session();
+            recorded.replay(
+                &conversation,
+                "t",
+                &bravebot_session::sessions::Recalled {
+                    history: Some(turns),
+                    turns: Some(3),
+                    trails: BTreeMap::new(),
+                    todos: BTreeMap::new(),
+                    asides: Vec::new(),
+                    started: None,
+                },
+            );
+            assert_eq!(
+                labels(recorded.transcript.iter().cloned().collect()),
+                expected,
+                "a record with its turn boundaries"
+            );
+
+            let mut legacy = session();
+            legacy.replay(&conversation, "t", &Default::default());
+            assert_eq!(
+                labels(legacy.transcript.iter().cloned().collect()),
+                expected,
+                "a record without its turn boundaries"
+            );
+        }
+
         /// MSG-11: a message from another session is drawn from the tag's fields as a block marked
         /// as a message, apart from the person's prompts, and one the planner was given only a
         /// reference to is drawn with its words absent and says so. A message this session sent is
@@ -14847,6 +15082,46 @@ mod tests {
                     read: 200,
                     written: 50
                 }
+            );
+        }
+
+        /// SESSION-11. A question answered beside a running turn is charged to that turn with its
+        /// split, and neither ends the turn's work nor touches its clock.
+        #[test]
+        fn a_question_answered_beside_a_turn_is_charged_to_that_turn_with_its_split() {
+            let mut s = session();
+            s.type_char('a');
+            s.submit();
+            let timing = s.timing_by_turn().clone();
+
+            s.charge_aside_beside_a_turn(bravebot_aichat::protocol::Usage {
+                prompt_tokens: 200,
+                completion_tokens: 50,
+                ..Default::default()
+            });
+
+            assert_eq!(s.tokens, 250);
+            assert_eq!(
+                s.spend_by_turn(),
+                &std::collections::BTreeMap::from([(1, 250)]),
+                "the question was charged to no turn, or to another"
+            );
+            assert_eq!(
+                s.split(),
+                bravebot_session::sessions::Split {
+                    read: 200,
+                    written: 50
+                }
+            );
+            assert_eq!(
+                s.status,
+                Status::Working,
+                "the question ended the turn's work"
+            );
+            assert_eq!(
+                s.timing_by_turn(),
+                &timing,
+                "the question was added to the turn's clock"
             );
         }
 

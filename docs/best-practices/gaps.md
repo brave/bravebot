@@ -2,37 +2,39 @@
 
 <!-- applicability: always -->
 
-What a reviewer checks in a pull request description, which no tool reads for meaning. A case it
-says is left undone has an issue or a Known costs entry that records it, and the record is about
-that case. Every statement in it is true of the head commit, including after later pushes. Finding
+What a reviewer checks in a pull request description, which no tool reads for meaning. A defect it
+says is left unfixed has an issue or a Known costs entry that records it, and the record is about
+that defect. Every statement in it is true of the head commit, including after later pushes. Finding
 the statements takes reading the whole description, in whatever words it uses.
 
 ---
 
 <a id="GAP-001"></a>
 
-## A pull request that says a case is left undone cites an issue or a Known costs entry
+## A pull request that leaves a defect unfixed cites the issue that tracks it
 
-**A pull request that says a case is not handled, may be affected, or is left for later cites the
-issue that tracks the case, or the Known costs entry that records it as accepted.** The case is
-another call site, platform or program with the same weakness as the one the change fixes, or
-another defect the author found. The issue is filed when the description is written or edited, so
-its number is in the text the reviewer reads.
+**A pull request that says another call site, platform or program has the weakness it fixes, or that
+it found another defect and did not fix it, cites the issue that tracks the defect, or the Known
+costs entry that records it as accepted.** The issue is filed when the description is written or
+edited, so its number is in the text the reviewer reads. Once the issue exists, the defect is
+tracked wherever the description mentions it.
 
 A reviewer reads the description for statements of this kind in any wording, such as "may apply
 to", "none has an issue", "is not fixed here" and "left for a follow-up", and for each one checks
 that:
 
 - the number or the entry is given where the statement is made;
-- the issue describes that case, since an issue about a nearby case does not track it;
-- an accepted case points to a bullet under Known costs in the spec that governs it, which the same
-  pull request adds where it does not exist yet.
+- the issue describes that defect, since an issue about a nearby one does not track it;
+- an accepted defect points to a bullet under Known costs in the spec that governs it, which the
+  same pull request adds where it does not exist yet.
 
-A pull request opened by netzenbot lists such cases under its `Not covered:` line, and
-`make check-pr-body` checks that the line exists and that each case under it names an issue
-([commits.md](../development/commits.md#opening-the-pull-request)). It does not hold other authors to
-the line, and it cannot read whether the list is complete, whether a number is an issue, whether the issue is about that case, or a statement of this kind made elsewhere in the
-description, which the reviewer checks.
+A description with no such statement says nothing about it, and a change that finds no defect has
+nothing to list. A feature, an improvement or a test the change does not add, and a decision left to
+a person, are not defects. The description says so in a sentence where it matters, a spec records
+what is not built, and no issue is filed for them.
+
+No tool checks this. The statements come in any wording, and the cited issue has to describe the
+same defect, so the reviewer reads the whole description.
 
 [PATH-004](paths.md#PATH-004) is this rule for the other spellings of a path, with an issue as the
 only record.
@@ -44,10 +46,13 @@ Right: `aws` has the same weakness (#NNNN).
 
 Right: Hooks named by a relative path are left as they are, which Known costs in
        docs/specs/hooks.md records.
+
+Right: The editor's terminal is not used by this change.
+       (A feature that is not built is not a defect.)
 ```
 
-**Why:** a case recorded only in a description is not in the issue tracker, so nobody is assigned
-to it. It stays undone until someone else finds it, which can be an outside reporter filing it as a
+**Why:** a defect recorded only in a description is not in the issue tracker, so nobody is assigned
+to it. It stays unfixed until someone else finds it, which can be an outside reporter filing it as a
 new defect.
 
 ---
@@ -70,8 +75,8 @@ base to its head, and for each one checks that:
 - a behaviour described as added, removed or changed is so in the final diff;
 - the test plan names tests and commands that exist at the head.
 
-`make check-pr-body` and `make check-narration` read the shape and the wording of the body. They
-cannot read whether a sentence is still true of the code, so the reviewer checks it.
+`make check-narration` reads the wording of the body. It cannot read whether a sentence is still
+true of the code, so the reviewer checks it.
 
 ```text
 Wrong: Decision 2: the setting is stored in `config.json`.

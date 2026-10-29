@@ -51,10 +51,15 @@ impl Scratch {
 
     /// The definition a bot's conversation is addressed to: a reader, so it holds no write.
     fn define(&self, name: &str) {
+        self.define_for(name, PURPOSE);
+    }
+
+    /// A reader whose body is `purpose`, so a request says which of two definitions it ran under.
+    fn define_for(&self, name: &str, purpose: &str) {
         std::fs::write(
             self.home().join(format!(".bravebot/agents/{name}.md")),
             format!(
-                "---\nname: {name}\ndescription: Keeps the lights.\nkind: reader\n---\n\n{PURPOSE}\n"
+                "---\nname: {name}\ndescription: Keeps the lights.\nkind: reader\n---\n\n{purpose}\n"
             ),
         )
         .expect("a definition");
@@ -403,6 +408,271 @@ fn a_definition_that_is_no_slug_is_refused_before_a_turn_starts() {
     );
 }
 
+/// What a second definition's body says, so a request can be told apart from one under the first.
+const OTHER_PURPOSE: &str = "SWEEP-THE-LANTERN-ROOM";
+
+/// The request whose prompt is `prompt`.
+fn asked_with<'a>(asked: &'a [String], prompt: &str) -> &'a str {
+    asked
+        .iter()
+        .find(|body| body.contains(prompt))
+        .unwrap_or_else(|| panic!("{prompt} never reached the service"))
+}
+
+/// MEMORY-14: a bot summoned in a project's chat answers that turn under its definition, and the
+/// turn after it, which names nothing, runs as the session's own planner again. A bridge that kept
+/// the summoned name on the session would address the second turn too.
+#[test]
+fn a_summoned_turn_runs_under_the_summoned_definition_and_the_next_does_not() {
+    let scratch = Scratch::new("bridge-addressing-summoned");
+    scratch.define("harbour");
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    let summoned = window.turn(json!({"prompt": "SUMMONED-TURN", "address": "harbour"}));
+    assert_eq!(summoned["event"], "turn.done", "{summoned}");
+    let after = window.turn(json!({"prompt": "AFTER-TURN"}));
+    assert_eq!(after["event"], "turn.done", "{after}");
+
+    let asked = requests(&received);
+    let summoned = asked_with(&asked, "SUMMONED-TURN");
+    assert!(
+        summoned.contains(PURPOSE) && summoned.contains("addressed this turn to harbour"),
+        "the summoned turn did not run under its definition: {summoned}"
+    );
+    assert!(
+        !offers(summoned, "write_file"),
+        "the summoned turn held more than a reader does: {summoned}"
+    );
+    let after = asked_with(&asked, "AFTER-TURN");
+    assert!(
+        !after.contains(PURPOSE) && offers(after, "write_file"),
+        "the turn after a summon was still addressed: {after}"
+    );
+}
+
+/// MEMORY-14: summoning another bot in a bot's conversation addresses that turn to the summoned
+/// bot, and leaves the conversation's own definition standing for the turn after. Distinct bodies
+/// tell the two definitions apart in each request.
+#[test]
+fn a_summon_in_a_bots_conversation_leaves_the_bots_own_definition_standing() {
+    let scratch = Scratch::new("bridge-addressing-summon-in-bot");
+    scratch.define("harbour");
+    scratch.define_for("lantern", OTHER_PURPOSE);
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    window.turn(json!({"prompt": "OWN-TURN", "definition": "harbour"}));
+    window.turn(json!({"prompt": "GUEST-TURN", "definition": "harbour", "address": "lantern"}));
+    let back = window.turn(json!({"prompt": "BACK-TURN"}));
+    assert_eq!(back["event"], "turn.done", "{back}");
+
+    let asked = requests(&received);
+    let guest = asked_with(&asked, "GUEST-TURN");
+    assert!(
+        guest.contains(OTHER_PURPOSE)
+            && guest.contains("addressed this turn to lantern")
+            && !guest.contains(PURPOSE),
+        "the summoned bot did not answer the turn: {guest}"
+    );
+    let back = asked_with(&asked, "BACK-TURN");
+    assert!(
+        back.contains("addressed this turn to harbour") && !back.contains(OTHER_PURPOSE),
+        "the conversation's own definition did not come back after the summon: {back}"
+    );
+}
+
+/// MEMORY-14: a summon that is the first turn of a bot's conversation still stands the bot's own
+/// definition up, so a turn that names nothing, as a watch's does, is the bot's and not the
+/// session's whole reach.
+#[test]
+fn a_summon_as_the_first_turn_of_a_bots_conversation_still_leaves_its_definition_standing() {
+    let scratch = Scratch::new("bridge-addressing-summon-first");
+    scratch.define("harbour");
+    scratch.define_for("lantern", OTHER_PURPOSE);
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    window
+        .turn(json!({"prompt": "FIRST-GUEST-TURN", "definition": "harbour", "address": "lantern"}));
+    let back = window.turn(json!({"prompt": "FIRST-BACK-TURN"}));
+    assert_eq!(back["event"], "turn.done", "{back}");
+
+    let asked = requests(&received);
+    let back = asked_with(&asked, "FIRST-BACK-TURN");
+    assert!(
+        back.contains("addressed this turn to harbour") && !offers(back, "write_file"),
+        "the turn after a first-turn summon was not the bot's own: {back}"
+    );
+}
+
+/// MEMORY-14: a summoned name is held to the terms the conversation's own name is. A path, or
+/// anything that is not a slug, is refused before a turn starts rather than sent unaddressed.
+#[test]
+fn an_address_that_is_no_slug_is_refused_before_a_turn_starts() {
+    let scratch = Scratch::new("bridge-addressing-summon-no-slug");
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    for named in [json!("../harbour"), json!("Harbour"), json!(""), json!(7)] {
+        let session = window.session.clone();
+        let refused = window.call(
+            "turn.send",
+            json!({"session": session, "prompt": "ADDRESS-SLUG-TURN", "address": named}),
+        );
+        assert!(
+            refused.get("error").is_some(),
+            "{named} was accepted: {refused}"
+        );
+    }
+    assert!(
+        requests(&received)
+            .iter()
+            .all(|body| !body.contains("ADDRESS-SLUG-TURN")),
+        "a refused name still started a turn"
+    );
+}
+
+/// ADDRESS-12 and MEMORY-14: `turn.done` names the definition the driver matched for the turn and
+/// says whether it was the conversation's own or one named for that turn alone, and the same two
+/// facts come back on the prompt rows of a reopened session. A turn nobody addressed carries
+/// neither, so the label of one reply is not drawn on its neighbours.
+#[test]
+fn a_turn_and_a_reopened_session_say_which_definition_was_addressed_and_whether_it_stands() {
+    let scratch = Scratch::new("bridge-addressing-says-which");
+    scratch.define("harbour");
+    scratch.define_for("lantern", OTHER_PURPOSE);
+    let (endpoint, _received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    let plain = window.turn(json!({"prompt": "PLAIN-TURN"}));
+    let summoned_alone = window.turn(json!({"prompt": "SUMMONED-ALONE", "address": "lantern"}));
+    let own = window.turn(json!({"prompt": "OWN-TURN", "definition": "harbour"}));
+    let guest =
+        window.turn(json!({"prompt": "GUEST-TURN", "definition": "harbour", "address": "lantern"}));
+    for done in [&plain, &summoned_alone, &own, &guest] {
+        assert_eq!(done["event"], "turn.done", "{done}");
+    }
+
+    assert_eq!(plain["data"]["address"], Value::Null, "{plain}");
+    assert_eq!(
+        summoned_alone["data"]["address"],
+        json!({"definition": "lantern", "standing": false}),
+        "a bot summoned in a project's chat was recorded as the conversation's own: {summoned_alone}"
+    );
+    assert_eq!(
+        own["data"]["address"],
+        json!({"definition": "harbour", "standing": true}),
+        "{own}"
+    );
+    assert_eq!(
+        guest["data"]["address"],
+        json!({"definition": "lantern", "standing": false}),
+        "a definition named for the turn was recorded as the conversation's own: {guest}"
+    );
+
+    let id = guest["data"]["id"].as_str().unwrap().to_string();
+    let session = window.session.clone();
+    window.call("session.close", json!({"session": session}));
+    let reopened = window.call(
+        "session.open",
+        json!({"directory": scratch.project().display().to_string(), "id": id}),
+    );
+    let said = reopened["ok"]["said"].as_array().unwrap_or_else(|| {
+        panic!("a reopened session returned no transcript: {reopened}");
+    });
+    let prompts: Vec<(&str, Value, bool)> = said
+        .iter()
+        .filter(|row| row["kind"] == "user")
+        .map(|row| {
+            let mut address = row["address"].clone();
+            let said_at = address
+                .as_object_mut()
+                .and_then(|fields| fields.remove("at"))
+                .is_some_and(|at| at.as_u64().is_some_and(|at| at > 0));
+            (row["text"].as_str().unwrap(), address, said_at)
+        })
+        .collect();
+    assert_eq!(
+        prompts,
+        vec![
+            ("PLAIN-TURN", Value::Null, false),
+            (
+                "SUMMONED-ALONE",
+                json!({"definition": "lantern", "standing": false}),
+                true
+            ),
+            (
+                "OWN-TURN",
+                json!({"definition": "harbour", "standing": true}),
+                true
+            ),
+            (
+                "GUEST-TURN",
+                json!({"definition": "lantern", "standing": false}),
+                true
+            ),
+        ],
+        "a reopened prompt row names its definition and, for an addressed turn, when it was said: {said:?}"
+    );
+}
+
+/// SESSION-39: `session.addressed` lists the turns addressed to a definition for that turn alone,
+/// with the rows of each exchange as `session.open` sends them. A plain turn, and every turn of a
+/// conversation that belongs to the definition, are not listed, and a name that is no slug is
+/// refused.
+#[test]
+fn the_turns_addressed_to_a_definition_for_one_turn_are_listed_with_their_reply() {
+    let scratch = Scratch::new("bridge-addressing-listed");
+    scratch.define("harbour");
+    let (endpoint, _received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+    window.turn(json!({"prompt": "PLAIN-TURN"}));
+    let done = window.turn(json!({"prompt": "SUMMONED-TURN", "address": "harbour"}));
+    let id = done["data"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no record id: {done}"))
+        .to_string();
+    window.turn(json!({"prompt": "AFTER-TURN"}));
+    drop(window);
+    let mut owned = Window::open(&scratch, &endpoint);
+    owned.turn(json!({"prompt": "OWN-TURN", "definition": "harbour"}));
+    owned.turn(json!({"prompt": "OWN-AGAIN", "definition": "harbour", "address": "harbour"}));
+
+    let directory = scratch.project().display().to_string();
+    for params in [
+        json!({"definition": "harbour", "directory": directory}),
+        json!({"definition": "harbour"}),
+    ] {
+        let listed = owned.call("session.addressed", params);
+        let exchanges = listed["ok"]["exchanges"]
+            .as_array()
+            .unwrap_or_else(|| panic!("nothing listed: {listed}"));
+        assert_eq!(exchanges.len(), 1, "{listed}");
+        let exchange = &exchanges[0];
+        assert_eq!(exchange["id"], json!(id), "{listed}");
+        assert_eq!(exchange["prompt"], json!(1), "{listed}");
+        assert!(exchange["at"].as_u64().is_some(), "{listed}");
+        let said: Vec<(Value, Value)> = exchange["said"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no rows: {listed}"))
+            .iter()
+            .map(|row| (row["kind"].clone(), row["text"].clone()))
+            .collect();
+        assert_eq!(
+            said,
+            vec![
+                (json!("user"), json!("SUMMONED-TURN")),
+                (json!("assistant"), json!("done")),
+            ],
+            "{listed}"
+        );
+    }
+
+    let refused = owned.call("session.addressed", json!({"definition": "../harbour"}));
+    assert!(refused.get("error").is_some(), "{refused}");
+}
+
 /// MEMORY-10: the turn a watch fires in a bot's conversation is addressed, though no request
 /// carries the name. A person armed the watch and the run did not choose the turn, so it is the
 /// bot's turn, and unaddressed it would hold the session's whole reach.
@@ -454,5 +724,44 @@ fn the_turn_a_watch_fires_in_a_bots_conversation_is_addressed() {
     assert!(
         fire.contains("addressed this turn to harbour") && !offers(fire, "write_file"),
         "the fired turn held the session's whole reach: {fire}"
+    );
+}
+
+/// ADDRESS-2: the `@` list offers the definitions a person has, with what each is for, ahead of the
+/// files; a word that holds no name offers none; and a client that does not ask is offered none.
+#[test]
+fn the_at_list_offers_the_definitions_ahead_of_the_files() {
+    let scratch = Scratch::new("bridge-addressing-offer");
+    scratch.define("lantern");
+    scratch.define("harbour");
+    std::fs::write(scratch.project().join("lantern-notes.md"), "notes").expect("a file");
+    let (endpoint, _received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+    let session = window.session.clone();
+
+    let offered = window.call(
+        "mentions.offer",
+        json!({"session": session, "line": "ask @lan", "definitions": true}),
+    );
+    let rows = offered["ok"]["entries"].as_array().expect("rows");
+    let seen: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|row| (row["kind"].as_str().unwrap(), row["path"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        seen,
+        [("definition", "lantern"), ("file", "lantern-notes.md")],
+        "{offered}"
+    );
+    assert_eq!(rows[0]["description"], "Keeps the lights.");
+    assert_eq!(offered["ok"]["completes"], true);
+
+    let none = window.call(
+        "mentions.offer",
+        json!({"session": session, "line": "ask @zzz", "definitions": true}),
+    );
+    assert!(
+        none["ok"]["entries"].as_array().unwrap().is_empty(),
+        "{none}"
     );
 }

@@ -9,7 +9,7 @@ import type { Plugin } from 'vite'
  * Vite's localhost in dev and `file://` in a packaged app. Icons stay in
  * `node_modules/@brave/leo/icons`; nothing is committed under `src/`.
  */
-function leoIcons(): Plugin {
+export function leoIcons(): Plugin {
   const source = resolve(__dirname, 'node_modules/@brave/leo/icons')
 
   return {

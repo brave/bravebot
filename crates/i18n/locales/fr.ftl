@@ -48,10 +48,10 @@ cli-usage-doctor = Vérifier la configuration et le confinement
 cli-usage-doctor-sandbox = Exécuter les flux de travail courants dans le bac à sable et indiquer lesquels fonctionnent
 cli-usage-update = Afficher la commande qui met à jour cette copie
 cli-usage-bug-report = Écrire la version, le rapport de doctor et le nom du journal le plus récent dans un fichier à joindre à un rapport de bogue
-cli-usage-import = Importer un abonnement Leo Premium
+cli-import-leo-creds-retired = bravebot n'importe plus d'abonnement Leo depuis Brave. Les requêtes premium utilisent une clé enregistrée avec `bravebot auth login brave`
 cli-usage-import-providers = Importer un service de modèle configuré par Claude Code ou opencode
 cli-usage-auth-login = Se connecter à un service de modèle, en listant chaque façon si aucune n'est nommée
-cli-usage-auth-logout = Oublier un abonnement Leo Premium importé, une clé de passerelle enregistrée, ou une connexion ChatGPT ou xAI
+cli-usage-auth-logout = Oublier la clé premium de Brave enregistrée, une clé de passerelle, ou une connexion ChatGPT ou xAI
 cli-usage-auth-status = Dire si une connexion est utilisable, avec le code de sortie 0 seulement si elle l'est
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 cli-usage-completion = Afficher un script de complétion pour le shell
@@ -380,7 +380,6 @@ cli-piped-input-too-large =
 ## Ce qu'une exécution dit quand aucun service de modèle n'est configuré
 
 onboarding-no-model = aucun service de modèle n'est encore configuré
-onboarding-subscription-unusable = l'abonnement enregistré n'a pas pu être utilisé : { $problem }
 onboarding-import-one =
     { $source } configure un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour l'importer.
 onboarding-import-running =
@@ -407,8 +406,8 @@ onboarding-chatgpt =
     Un compte ChatGPT Plus ou Pro, si vous en avez un : lancez `bravebot auth login chatgpt` dans un terminal et connectez-vous dans le navigateur qu'il ouvre. Ses modèles sont ensuite proposés dans /model sous la forme chatgpt/<modèle>.
 onboarding-xai =
     Un abonnement xAI SuperGrok, si vous en avez un : lancez `bravebot auth login xai` dans un terminal et ouvrez l'adresse qu'il affiche sur n'importe quel appareil. Ses modèles sont ensuite proposés dans /model sous la forme xai/<modèle>.
-onboarding-leo =
-    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot auth login leo` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des quatre options ci-dessus.
+onboarding-premium =
+    Le service premium de Brave, si vous avez une clé : lancez `bravebot auth login brave` dans un terminal et saisissez la clé. Sa passerelle d'IA est encore en développement, donc préférez l'une des quatre ci-dessus pour l'instant.
 onboarding-where-to-read =
     Des exemples concrets se trouvent dans https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
@@ -434,6 +433,8 @@ doctor-configuration-ok = configuration OK
 doctor-endpoint = adresse
 doctor-premium = premium
 doctor-premium-absent = non configuré
+doctor-premium-keyed = { $url }, avec une clé premium
+doctor-premium-unkeyed = { $url }, sans clé premium, donc les requêtes vont au point d'accès ci-dessus
 doctor-key-id = id de clé
 doctor-model = modèle
 doctor-model-chosen = { $model } (choisi avec /model)
@@ -449,10 +450,10 @@ doctor-ends-aws-access-key =
     une clé d'accès permanente : émise par AWS IAM à l'utilisateur nommé par le profil ; supprimée avec `aws iam delete-access-key`
 doctor-ends-aws-session =
     une identification de session : émise par AWS STS pour le profil, et ce programme en demande une autre à l'AWS CLI à chaque requête qu'il construit, de sorte que l'expiration met fin à cette copie et non à l'accès de ce programme ; on y met fin auprès de son émetteur, car `aws sso logout` efface la copie de cette machine et non la session elle-même, et la suivante est émise à partir de ce à quoi le profil se rattache, tant que cela dure
+doctor-ends-premium-key =
+    la clé premium : émise par le service premium de Brave, qui est aussi la seule surface qui la révoque ; `bravebot auth logout brave` met fin à la garde de cette machine et laisse la clé active là-bas
 doctor-ends-gateway-token =
     un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages, effacer la variable ou lancer `bravebot auth logout gateway` met fin à la garde de cette machine et laisse le jeton actif là-bas
-doctor-ends-subscription-batch =
-    le lot d'identifiants d'un abonnement importé : émis par le service d'abonnement de Brave pour la commande sur laquelle cette installation s'est enregistrée comme appareil ; chaque identifiant est dépensé par une requête premium et le lot cesse de fonctionner à la fermeture de sa dernière fenêtre, et rien ne révoque un identifiant non dépensé, donc `bravebot auth logout leo` met fin à la garde de cette machine et laisse le lot dépensable par tout ce qui a copié le fichier
 doctor-ends-chatgpt-account =
     une connexion ChatGPT : émise par OpenAI pour le compte qui s'est connecté, et le jeton d'actualisation remplace le jeton d'accès sans rien demander à personne, de sorte que l'expiration du jeton d'accès met fin à cette copie et non à l'accès de ce programme ; on y met fin chez OpenAI en se déconnectant du compte ou en retirant l'accès de ce programme dans ses réglages, car `bravebot auth logout chatgpt` met fin à la garde de cette machine et laisse les jetons actifs là-bas
 doctor-ends-xai-account =
@@ -508,10 +509,14 @@ doctor-dropped-gateway-token-nothing-decides-each-use =
     porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car le jeton part dans un en-tête envoyé par ce processus et aucun mandataire n'existe pour la requête
 doctor-dropped-gateway-token-no-bound-fixed-before-issue =
     porte { $gate }, { $answer } : aucune limite sur ce que le jeton peut faire n'est fixée avant son émission, car le bloc nomme un hôte et une variable et jamais un émetteur, donc rien ici ne peut en demander un plus étroit
+doctor-dropped-premium-key-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus présente lui-même la clé et rien n'est sollicité pour autoriser la requête
+doctor-dropped-premium-key-no-bound-fixed-before-issue =
+    porte { $gate }, { $answer } : aucune limite sur ce que la clé peut faire n'est fixée avant son émission, car le service premium n'émet qu'une clé et rien ici ne lui en demande une plus étroite
+doctor-dropped-premium-key-not-minted-for-one-step =
+    porte { $gate }, { $answer } : elle n'est pas émise pour une seule étape, car la clé est ce que `bravebot auth login brave` a enregistré, et elle est gardée pendant toute l'exécution
 doctor-dropped-gateway-token-not-minted-for-one-step =
     porte { $gate }, { $answer } : il n'est pas émis pour une seule étape, car le jeton est ce que porte le fichier de réglages, la variable ou ce que `bravebot auth login gateway` a enregistré, et il est gardé pendant toute l'exécution
-doctor-dropped-subscription-batch-nothing-decides-each-use =
-    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus présente lui-même un identifiant du lot et rien n'est sollicité pour autoriser la requête
 doctor-dropped-chatgpt-account-nothing-decides-each-use =
     porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus présente lui-même le jeton d'accès et rien n'est sollicité pour autoriser la requête
 doctor-dropped-chatgpt-account-no-bound-fixed-before-issue =
@@ -715,9 +720,6 @@ doctor-mcp-servers =
     serveurs MCP déclarés dans { $path }, pour une session démarrée dans { $project }
 doctor-mcp-none =
     aucun serveur MCP n'est déclaré dans { $path }, pour une session démarrée dans { $project }
-doctor-leo = leo
-doctor-subscription =
-    abonnement { $environment } importé, { $unspent } identifiants sur { $total } non dépensés
 doctor-state-directory = répertoire d'état { $path }, depuis { $variable }
 doctor-state-directory-logs = journaux de diagnostic { $path }
 doctor-state-directory-unprotected = non restreint
@@ -754,7 +756,7 @@ doctor-kernel-enforced = imposé par le noyau
 doctor-not-enforced = NON imposé
 doctor-confinement-unavailable = confinement indisponible
 doctor-no-network-namespace = espaces de noms réseau : indisponibles ({ $reason }). Une étape sans réseau, ou limitée par sandbox.network.allowedHosts, est refusée ici. Autorisez les espaces de noms utilisateur non privilégiés pour utiliser l'un ou l'autre.
-doctor-sockets-with-a-path-reachable = sockets unix avec un chemin : accessibles. Landlock sur ce noyau est antérieur à l'ABI 9 (Linux 7.1), donc une étape en mode bac à sable read-only ou workspace-write, et un serveur MCP local quel que soit le mode, atteint chacun de ces sockets, dont le D-Bus de l'utilisateur, SSH_AUTH_SOCK et docker.sock. Une étape en mode strict est refusée ici.
+doctor-sockets-with-a-path-reachable = sockets unix avec un chemin : accessibles. Landlock sur ce noyau est antérieur à l'ABI 9 (Linux 7.1), donc une étape en mode bac à sable workspace-write, et un serveur MCP local quel que soit le mode, atteint chacun de ces sockets, dont le D-Bus de l'utilisateur, SSH_AUTH_SOCK et docker.sock. Une étape en mode strict ou read-only est refusée ici.
 doctor-network = réseau
 doctor-trust-roots = racines de confiance
 doctor-trust-roots-bundled = intégrées ({ $variables } en désigne d'autres)
@@ -773,6 +775,9 @@ doctor-client-certificate = certificat client
 doctor-client-certificate-loaded = { $certificate }, clé { $key } (chargé ; la clé n'est jamais affichée)
 doctor-client-certificate-refused = désigné et inutilisable, donc toute connexion TLS sera refusée
 doctor-client-certificate-unusable = inutilisable
+doctor-client-passphrase = phrase secrète de la clé
+doctor-client-passphrase-given = fournie dans { $variable } (la valeur n'est jamais affichée)
+doctor-client-passphrase-absent = aucune dans { $variable }, donc une clé chiffrée ne peut pas être ouverte
 doctor-network-file = indiqué dans
 doctor-network-file-detail = { $names } depuis { $path }
 doctor-network-file-ignored = ignoré
@@ -792,7 +797,8 @@ permission-rule-empty = est vide
 permission-rule-unclosed-bracket = n'a pas sa parenthèse fermante
 permission-rule-unknown-family = ne nomme aucune famille d'outils de cet agent ; utilisez Read, Edit, Bash, WebFetch ou Mcp
 permission-rule-empty-brackets = a des parenthèses vides ; enlevez-les pour viser toute utilisation
-permission-rule-whitespace-at-an-end = a un caractère blanc au début ou à la fin de son chemin, qui ferait partie du nom d'un fichier ; enlevez-le, ou mettez un * à sa place, ce qui vise aussi d'autres noms
+permission-rule-empty-quoted-name = a des guillemets doubles autour de rien, et aucun fichier n'a un nom vide ; enlevez les parenthèses pour viser toute utilisation, ou mettez le nom du fichier entre les guillemets
+permission-rule-whitespace-at-an-end = a un caractère blanc au début ou à la fin de son chemin, qui ferait partie du nom d'un fichier ; enlevez-le, ou mettez tout le chemin entre guillemets doubles pour viser le nom tel qu'il est écrit
 permission-rule-unanchored = a besoin d'un répertoire personnel ou d'un répertoire de réglages pour indiquer vers quoi elle pointe
 permission-rule-not-a-domain-rule = a besoin d'un domaine ; écrivez WebFetch(domain:example.com)
 permission-rule-no-domain-named = ne nomme aucun domaine après 'domain:'
@@ -801,30 +807,6 @@ permission-rule-not-a-tool-rule = a besoin d'un serveur, ou d'un serveur et de l
 # qu'un autre fichier de réglages a écrites restent en vigueur, d'où « n'en retire aucune ».
 permission-rule-not-a-list = n'ajoute aucune règle et n'en retire aucune ; les règles s'écrivent en liste, par exemple "deny": ["Read(./.env)"]
 
-
-## Importer un abonnement Leo Premium
-
-leo-no-premium-endpoint =
-    avertissement : cette version n'a pas d'adresse premium, les identifiants importés ne
-    seront donc pas utilisés
-leo-set-and-rebuild = définissez { $variable } et recompilez
-leo-unknown-channel = canal inconnu : { $channel }
-leo-expected-channel = attendu parmi : stable, beta, nightly, development
-leo-forgotten = abonnement importé oublié
-leo-forget-takes-no-channel = --forget n'accepte pas de canal : un seul abonnement est enregistré pour tous les canaux
-leo-not-while-incognito = un import enregistre des identifiants sur le disque, ce qu'une session incognito ne fera pas
-leo-looking = recherche d'un abonnement Leo dans Brave { $channel }
-leo-found = abonnement { $environment } trouvé : { $order }
-leo-registering = enregistrement de cette installation comme nouvel appareil
-leo-stored =
-    { $count } identifiants enregistrés dans { $path }, valables jusqu'au { $expiry }
-leo-browser-untouched =
-    les requêtes premium les utiliseront désormais ; les identifiants du navigateur n'ont
-    pas été touchés
-
-subscription-unusable =
-    l'abonnement importé n'a pas pu être utilisé ({ $problem }) ; ce tour n'en utilise
-    donc aucun
 
 background-job-finished = `{ $command }` s'est terminé en arrière-plan : { $outcome }
 
@@ -954,7 +936,7 @@ auth-needs-a-terminal =
     bravebot auth login demande par quelle façon se connecter, il lui faut donc un terminal où demander, ou le nom d'une façon
 auth-logout-needs-a-way = bravebot auth logout a besoin du nom de la façon dont se déconnecter
 auth-ways-heading = Façons de se connecter à un service de modèle :
-auth-way-leo = Brave Leo Premium, depuis une installation de Brave abonnée
+auth-way-brave = Le service premium de Brave, avec une clé saisie ici et gardée par bravebot
 auth-way-bedrock = Un compte AWS, pour Amazon Bedrock
 auth-way-import = Un service de modèle de Claude Code, opencode, Ollama, LM Studio ou llama-server, importé dans les réglages
 auth-way-gateway = Une clé pour { $services } ou pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
@@ -966,11 +948,6 @@ auth-way-held = { $description } ({ $status })
 auth-signed-in = connecté
 auth-which-way = Laquelle ? Tapez son numéro ou son nom, ou rien pour arrêter :
 auth-not-a-listed-way = { $answer } n'est pas l'une des façons listées
-auth-which-channel =
-    Quel canal de Brave est abonné ? stable, beta, nightly ou development, ou rien pour stable :
-auth-leo-held =
-    Brave Leo Premium est connecté : { $status }. bravebot auth logout leo le déconnecte.
-auth-sign-in-again = Se connecter à nouveau, comme un nouvel appareil ?
 auth-no-aws-account =
     aucun compte AWS n'est configuré pour Bedrock : définissez { $region } et un modèle dans l'une des variables { $tiers }, ou lancez bravebot auth login import si Claude Code ou opencode en utilise un
 auth-bedrock-off =
@@ -1057,9 +1034,10 @@ auth-status-not-signed-in = non connecté : { $detail }
 auth-status-unusable = inutilisable : { $detail }
 auth-status-none-usable = aucune connexion n'est utilisable
 auth-status-not-all-usable = une connexion demandée n'est pas utilisable
-auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez leo, bedrock, gateway, chatgpt ou xai
-auth-status-leo-none = aucun abonnement Leo n'est importé ; lancez bravebot auth login leo
-auth-status-leo-nowhere = cette machine n'a nulle part où garder des identifiants, donc aucun n'est importé
+auth-status-brave-held = une clé premium est enregistrée et n'est envoyée qu'au service premium de Brave
+auth-status-brave-none = aucune clé premium n'est enregistrée ; lancez bravebot auth login brave
+auth-status-brave-nowhere = cette machine n'a nulle part où garder une clé, donc aucune n'est enregistrée
+auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez brave, bedrock, gateway, chatgpt ou xai
 auth-status-gateway-none = aucune clé de passerelle n'est enregistrée ; lancez bravebot auth login gateway
 auth-status-gateway-none-stored = aucune clé n'est enregistrée pour { $id } ; lancez bravebot auth login gateway { $id }
 auth-status-gateway-unrecorded =
@@ -1160,6 +1138,24 @@ chatgpt-defect-no-expiry = il n'a pas d'expiration
 # requête sur le port. Elles sont affichées dans le navigateur, pas dans le terminal.
 chatgpt-page-done = Vous pouvez fermer cet onglet et revenir à bravebot, qui dit si la connexion a réussi.
 chatgpt-page-not-found = Introuvable.
+
+## Se connecter au service premium de Brave
+
+brave-not-while-incognito = une clé premium est gardée sur le disque, ce qu'une session incognito ne fera pas
+brave-needs-a-terminal = bravebot auth login brave demande la clé sans l'afficher, donc il lui faut un terminal pour la demander
+brave-no-home = il n'y a nulle part où garder une clé : ni BRAVEBOT_HOME ni le répertoire du profil n'en nomme un
+brave-key-unreadable = le fichier de la clé premium { $path } ne peut pas être lu, donc il est laissé tel quel ; supprimez-le pour enregistrer une clé de nouveau
+brave-key-held = une clé premium est déjà enregistrée
+brave-replace = La remplacer ?
+brave-key-question = Clé premium de Brave (rien ne s'affiche pendant la saisie) :
+brave-nothing-stored = aucune clé n'a été saisie, donc rien n'a été enregistré
+brave-not-read = la clé n'a pas pu être lue : { $error }
+brave-not-stored = la clé n'a pas pu être enregistrée dans { $path } : { $error }
+brave-stored = clé premium enregistrée dans { $path } ; les requêtes premium l'utiliseront désormais
+brave-forgotten = clé premium enregistrée oubliée ; elle fonctionne encore auprès du service premium de Brave tant qu'elle n'y est pas révoquée
+brave-nothing-to-forget = aucune clé premium n'est enregistrée
+brave-not-forgotten = la clé premium enregistrée dans { $path } n'a pas pu être supprimée : { $error }
+doctor-brave-key = clé premium
 
 ## Se connecter à xAI avec un abonnement SuperGrok
 
@@ -1747,6 +1743,7 @@ model-picker-search-placeholder = Rechercher
 model-picker-nothing-matches = aucune correspondance
 model-picker-loading = chargement des modèles…
 model-picker-listing-lost = la liste des modèles n'a pas été reçue
+model-picker-unknown-name = le fichier d'invite nomme { $model }, que la liste des modèles ne contient pas
 picker-current = actuel
 
 config-picker-title = mode d'édition
@@ -1795,20 +1792,6 @@ input-history-narrow = { $chord } cette session
 input-history-project = { $chord } prompts du projet
 input-history-search = { $chord } pour rechercher
 input-history-scope = { $chord } ce projet
-resume-heading = Reprendre une session
-resume-search-placeholder = Rechercher dans les titres et les échanges… (since:7d pour les récentes)
-resume-keys =
-    ↑↓ pour choisir  ·  Entrée pour reprendre  ·  Suppr pour supprimer  ·  tapez pour rechercher  ·
-    Échap pour une nouvelle session
-resume-from-pr = pull request { $pull_request }
-resume-keys-within =
-    ↑↓ pour choisir  ·  Entrée pour reprendre  ·  Suppr pour supprimer  ·  tapez pour rechercher  ·
-    Échap pour rester ici
-resume-nothing-matches = aucune correspondance
-resume-delete-question = Supprimer « { $title } » ? y la supprime, toute autre touche la garde
-resume-delete-held = cette session s'exécute en arrière-plan ; arrêtez-la avant de la supprimer
-resume-delete-done = supprimée
-resume-delete-failed = impossible de supprimer cette session
 resume-manifest-run =
     c'était une exécution manifest, qui ne peut pas être reprise ; démarrez une nouvelle
     session
@@ -1847,6 +1830,13 @@ write-tally = +{ $added } -{ $removed }
 write-too-large-to-show =
     le changement est trop grand pour être montré : { $added } lignes en remplacent
     { $removed }
+# Dit au-dessus des lignes du changement d'une écriture quand certaines des lignes ajoutées ou
+# retirées contiennent un caractère qui ne s'affiche pas. Le texte ne va pas au modèle : il va tout
+# entier dans un fichier.
+write-hidden-characters = { $count ->
+    [one] 1 caractère des lignes que ceci change ne s'affiche pas. Il est écrit ci-dessous sous la forme ‹U+XXXX›, et un caractère d'étiquette aussi avec la lettre qu'il représente. Le fichier est écrit avec, tel quel.
+   *[other] { $count } caractères des lignes que ceci change ne s'affichent pas. Chacun est écrit ci-dessous sous la forme ‹U+XXXX›, et un caractère d'étiquette aussi avec la lettre qu'il représente. Le fichier est écrit avec, tels quels.
+    }
 write-untrusted = non fiable : personne n'a lu ceci, et le modèle ne l'a jamais vu
 write-remark =
     ce que le processeur isolé a dit de ce changement, que rien n'a vérifié par rapport à lui
@@ -2311,9 +2301,9 @@ status-served = Répondu par
 status-served-instead = servi à la place de { $asked }, demandé par ce tour
 status-endpoint = Adresse
 status-premium-available = premium disponible, rien encore envoyé
-status-premium-in-use = premium, un jeton a été dépensé
-status-premium-not-spent = aucun abonnement utilisé
-status-no-subscription = aucun abonnement configuré
+status-premium-in-use = premium, la clé premium a été envoyée
+status-premium-not-spent = la clé premium n'a pas été envoyée
+status-no-subscription = aucune clé premium configurée
 status-confinement = Confinement
 status-confinement-nothing-confined = cette session ne confine rien
 status-confinement-servers = cette session confine les serveurs MCP qu'elle a démarrés, et rien d'autre de ce qu'elle exécute
@@ -2385,7 +2375,7 @@ status-network-pinned = imposé fermé par { $path }, ni un drapeau ni un fichie
 status-network-pinned-by-policy = imposé fermé par les réglages gérés, ni un drapeau ni un fichier de réglages ne peut le changer
 status-path-sockets = Sockets unix des programmes
 status-path-sockets-reachable = chacun avec un chemin est accessible : D-Bus, SSH_AUTH_SOCK, docker.sock
-status-path-sockets-why = Landlock ici est antérieur à l'ABI 9 (Linux 7.1), et strict refuse les programmes
+status-path-sockets-why = Landlock ici est antérieur à l'ABI 9 (Linux 7.1), et strict et read-only refusent les programmes
 status-sandbox-filesystem = Règles de fichiers
 status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
 status-sandbox-filesystem-files = de { $files }
@@ -2463,7 +2453,7 @@ session-limit-in-force = la limite de la session est de { $limit } { $unit }, do
 session-limit-set = la limite de la session est de { $limit } { $unit }, dont { $spent } sont dépensés
 session-limit-set-below-spent = la limite de la session est de { $limit } { $unit }, et { $spent } sont déjà dépensés ; la prochaine requête demandera s'il faut continuer
 session-limit-cleared = la session n'a plus de limite de dépense
-session-limit-unknown = { $figure } n'est pas une limite. Utilisez un nombre entier, suivi de k ou de m pour des milliers ou des millions, puis de credits pour compter les crédits Leo Premium au lieu des jetons, ou off pour retirer la limite
+session-limit-unknown = { $figure } n'est pas une limite. Utilisez un nombre entier, suivi de k ou de m pour des milliers ou des millions, puis de credits pour compter les requêtes premium au lieu des jetons, ou off pour retirer la limite
 request-none-yet = Aucune requête n'a encore été envoyée au modèle dans cette session.
 # Ce que /context rapporte. Les noms de section sont des mots fixes, jamais lus dans un fichier ou un résultat.
 context-not-measured = Le contexte n'a pas encore été mesuré, il n'y a donc pas de répartition.
@@ -2537,7 +2527,6 @@ session-checkout-not-restored =
         [one] le checkout { $ids } était gardé par cette session mais n'est plus où il a été créé, il n'est donc pas listé
        *[other] les checkouts { $ids } étaient gardés par cette session mais ne sont plus où ils ont été créés, ils ne sont donc pas listés
     }
-session-resume-nothing-else = aucune autre session à reprendre dans ce répertoire
 session-resume-already-here = c'est la session déjà ouverte
 session-resume-no-such = aucune session avec cet identifiant dans ce répertoire
 session-resume-held-by-background = cette session est tenue par une session d'arrière-plan en cours, elle ne peut donc pas être reprise ici
@@ -3506,6 +3495,10 @@ prompt-file-empty =
     /{ $name } est un fichier d'invite vide, donc la ligne n'a pas été envoyée : { $path }
 prompt-file-agent-not-a-name =
     /{ $name } est un fichier d'invite dont l'agent n'est pas un seul mot, donc la ligne n'a pas été envoyée : { $path }
+prompt-file-model-not-a-name =
+    /{ $name } est un fichier d'invite dont le modèle n'est pas un seul mot, donc la ligne n'a pas été envoyée : { $path }
+prompt-file-agent-and-model =
+    /{ $name } est un fichier d'invite qui nomme un agent et un modèle, alors que la zone de saisie ne tient qu'une forme, donc la ligne n'a pas été envoyée : { $path }
 prompt-file-begins-with-a-command =
     /{ $name } est un fichier d'invite qui commence par une commande, ce qu'un fichier ne peut pas lancer, donc la ligne n'a pas été envoyée : { $path }
 paste-folded = { $lines ->
@@ -3588,6 +3581,13 @@ session-working-under =
 # raison suit à la ligne suivante. Le nom est celui que le pilote a enregistré depuis --agent.
 session-working-under-by-setting =
     le réglage agent a choisi cette définition ; --agent <nom> en choisit une autre pour la session
+session-addressed-elsewhere = { $definition } a répondu dans « { $title } » { $when } : { $reply }
+session-addressed-elsewhere-unanswered = { $definition } a été sollicitée dans « { $title } » { $when } et n'a pas répondu
+session-addressed-elsewhere-more =
+    { $count ->
+        [one] et 1 autre tour ; /resume liste les sessions
+       *[other] et { $count } autres tours ; /resume liste les sessions
+    }
 session-agent-setting-gone =
     le réglage agent désigne { $definition }, que cette session n'a pas résolue : chaque tour est
     celui de la session elle-même, avec les outils et le modèle qu'elle aurait sans --agent
@@ -4181,7 +4181,6 @@ commit-message-partial = les changements dépassaient ce qu'une lecture prend, d
 commit-message-failed = le message de commit n'a pas pu être rédigé : { $problem }
 commit-message-stopped = la rédaction du message de commit a été arrêtée
 handoff-started = transmis : ceci est une nouvelle session, et la précédente est restée telle quelle. Pour y revenir, lancez `bravebot --resume { $id }`
-resume-handed-off = depuis { $id }
 
 enhance-ready = la ligne améliorée est dans la zone de saisie. Modifiez-la, puis Entrée l'envoie, ou Échap remet ce que vous aviez écrit
 enhance-ready-vi = la ligne améliorée est dans la zone de saisie. Modifiez-la, puis Entrée l'envoie, ou Ctrl-C remet ce que vous aviez écrit

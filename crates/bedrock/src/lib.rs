@@ -950,6 +950,7 @@ impl<'a> BedrockClient<'a> {
         );
 
         let mut http = Request::post(url, body)
+            .with_client_certificate()
             .header("content-type", "application/json")
             .header("host", host)
             .header("x-amz-date", &signed.date)

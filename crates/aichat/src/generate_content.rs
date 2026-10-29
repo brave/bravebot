@@ -267,7 +267,9 @@ impl<'a> GenerateContentClient<'a> {
         let body =
             serde_json::to_vec(&body).map_err(|error| ChatError::Encode(error.to_string()))?;
 
-        let mut http = Request::post(url, body).header("content-type", "application/json");
+        let mut http = Request::post(url, body)
+            .with_client_certificate()
+            .header("content-type", "application/json");
         for (name, value) in self.provider.fixed_headers() {
             http = http.header(*name, *value);
         }

@@ -11,7 +11,7 @@ governs:
   - crates/agent/src/trusted.rs
   - crates/config/src/settings.rs
   - crates/session/src/store.rs
-  - crates/tui/src/update.rs
+  - crates/update/src/lib.rs
   - crates/session/src/sessions.rs
   - crates/session/src/retention.rs
   - crates/agent/src/findings.rs
@@ -34,7 +34,7 @@ documented-by: docs/website/docs/customize/configuration.md
 is written into it. Where [STATE-2](#STATE-2) puts it elsewhere, every statement here is about that
 directory. The prompt history, the model, theme, effort, language and editing choices, the answer to
 the update question, the answer to `/caffeinate`'s explanation, session records, a language server's index of a workspace, skills, standing
-instructions, an imported subscription, the command lines somebody asked to be remembered past a
+instructions, the premium key, the ChatGPT and xAI sign-ins, the gateway keys, the command lines somebody asked to be remembered past a
 session, the reach somebody remembered for a command, the command lines a shell hook recorded for the terminal still open ([shell-integration.md](shell-integration.md)), the permission rules somebody granted a checkout and the answers to the startup question
 somebody asked to be kept all live here, and so does the record of the definitions' memories a
 session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5)). The rules and facts a person's sessions remember live here too, as `projects/<id>/` and `facts/` ([recall.md](recall.md)), written readable by their owner alone and refused to programs like the rest of the directory.
@@ -46,6 +46,8 @@ yet builds either: the checkouts delegates are given, `checkouts/`, which hold a
 written readable by their owner alone and are read through the trust map.
 [background-sessions.md](background-sessions.md) proposes a third, which nothing yet builds: the
 roster of sessions running in the background, `jobs/` ([BG-4](background-sessions.md#BG-4)).
+The Sessions screen keeps three small files there, the grouping of its list, the sessions pinned
+in it and the sessions archived from it, each holding only ids and words ([SCREEN-11](sessions-screen.md#SCREEN-11)).
 
 What each of those files means belongs to the spec for that subject:
 [sessions.md](sessions.md) for a session record, [tools/run.md](tools/run.md) for the remembered
@@ -54,7 +56,8 @@ command lines, [sandboxing.md](sandboxing.md#SANDBOX-23) for the remembered reac
 [trust-map.md](trust-map.md) for the kept answers to the startup question,
 [skills.md](skills.md) and [instructions.md](instructions.md) for what is read out of
 the directory,
-[premium-credentials.md](premium-credentials.md) for the subscription,
+[premium-credentials.md](premium-credentials.md) for the premium key,
+[chatgpt-sign-in.md](chatgpt-sign-in.md) and [xai-sign-in.md](xai-sign-in.md) for the sign-ins,
 [tools/lsp.md](tools/lsp.md) for the index and why sitting here confers nothing on it, and
 [incognito.md](incognito.md) for the mode that writes none of it. This file covers the directory
 itself.
@@ -98,8 +101,8 @@ than followed, for the same reason: the bound is a comparison of paths, so it sa
 sits and nothing about where it leads, and somebody who keeps their sessions on a synced volume and
 links the directory into place has put the target outside what this was given.
 
-One helper does this for the crates that can share one. The crate that imports a subscription, the
-language server client and the diagnostic log all sit below the crate holding that helper, as
+One helper does this for the crates that can share one. The crate that holds the ChatGPT and xAI
+sign-ins and the file helpers the premium key is stored with, the language server client and the diagnostic log all sit below the crate holding that helper, as
 [layering.md](layering.md) records, so each keeps its own copy of the modes rather than inverting a
 dependency for four lines. Any of them can be the first to write, which is the case that made the
 mode of a directory holding prompt history a matter of which subsystem ran first. The language
@@ -296,8 +299,8 @@ a whole number above zero. `doctor` names the file. The built-in period is not p
 
 Left where they are at any age: the rules a person granted, the answers to the startup question kept
 past a session, the memories left untrusted, the acceptances of findings, the prompt history, the
-settings, standing instructions, skills and an imported subscription, which a person asked to keep or
-wrote themselves. The record of Bedrock models that refused the ask to show thinking is left too: it
+settings, standing instructions, skills, the premium key and the ChatGPT and xAI sign-ins, which a
+person asked to keep or wrote themselves. The record of Bedrock models that refused the ask to show thinking is left too: it
 bounds its own entries by their age ([BACKEND-63](backends.md#BACKEND-63)). The diagnostic logs are bounded by their own rule
 ([diagnostic-log.md](diagnostic-log.md)).
 
@@ -406,7 +409,7 @@ age does not end them.
   as the sweep removes it reads it without its trail.
 - **A directory `BRAVEBOT_HOME` puts anywhere other than `~/.bravebot` is not refused to the programs
   a `run` starts.** [SANDBOX-12](sandboxing.md#SANDBOX-12) refuses the state directory by its default
-  name under the profile directory, so the gateway keys and the premium token in a moved directory
+  name under the profile directory, so the gateway keys, the premium key and the ChatGPT and xAI sign-ins in a moved directory
   can be read by a program a stage starts, as any file outside that table can. Refusing the directory
   the variable names is [#2917](https://github.com/brave/bravebot/issues/2917), which needs a
   security review: the refusal is built from the profile directory in each platform's engine, in the
@@ -425,11 +428,12 @@ age does not end them.
   the permissions inherited from the profile directory. A profile on a shared or a synced volume is
   where that is felt, and the prompt history is the file that matters, since it holds every path,
   branch name and pasted fragment somebody has typed. `doctor` reports which of the two a machine has, so
-  this is a weakness a user can read rather than one only recorded here. An imported subscription is
-  the exception: it is a bearer token, so it is restricted to one account by whatever the platform
-  does have (a mode on Unix, an access-control list on Windows) and refused rather than written where
-  it has neither, which [premium-credentials.md](premium-credentials.md) records. That buys the one
-  file and not the directory holding it, which is why the sentence above still stands.
+  this is a weakness a user can read rather than one only recorded here. The premium key and the ChatGPT
+  and xAI sign-ins are the exception: each holds a bearer key or tokens, so each is restricted to one
+  account by whatever the platform does have (a mode on Unix, an access-control list on Windows) and
+  refused rather than written where it has neither, which [PREM-14](premium-credentials.md#PREM-14),
+  [CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6) and [XAI-5](xai-sign-in.md#XAI-5) record. That buys the one file and not the directory holding it,
+  which is why the sentence above still stands.
 - **A file this program only reads keeps whatever mode it arrived with.** STATE-1 reaches a file as
   something here writes it, and `settings.json`, the standing instructions and the skills are put in
   the directory by the user rather than written by this program, so one placed there at the umask

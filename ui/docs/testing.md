@@ -120,11 +120,21 @@ matter:
 - After building, `node scripts/drive-at-mentions.mjs` (`npm run drive:at-mentions`): the `@`
   list, its keys and Enter's two meanings in the real app against the real bridge and a model
   service the script serves, the file the model was sent, the **Read** row, `@../outside.txt`
-  refused at send, and a bot's conversation with no project reading and listing the bot's home
-  folder and refusing a name from the project. Disposable `HOME` and profile; screenshots of the
+  refused at send, and a bot's own conversation reading and listing the bot's home folder and
+  refusing a name from the project. Disposable `HOME` and profile; screenshots of the
   list in light and dark. The rules themselves are the terminal's, pinned in `crates/mentions`, and
   the bridge's `mentions.offer`, `mentions.named` and `turn.send` refusals in
   `crates/ui-bridge/tests/mentions.rs`.
+- After building, `node scripts/drive-bot-summon.mjs` (`npm run drive:bot-summon`): a bot picked
+  from the `@` list answering one message in a project's chat and one in another bot's
+  conversation under its label, the next turn running as before, the summoned bot's
+  **Replied to** cards opening the reply, and the channel refusing what a window sends it
+  directly (an unknown or archived bot, a malformed request, the conversation's own bot) and
+  recording nothing for a summoned turn that fails
+  ([MEMORY-14](../../docs/specs/definition-memory.md#MEMORY-14)). The real app and bridge against
+  a model service the script serves; which definition a turn ran under is read off the sentence
+  the agent adds for it. Disposable `HOME` and profile; screenshots of the list, the draft, the
+  sent message, the label and the cards in light and dark.
 - For a change to the agent crates the bridge links, `cargo test --all --locked` from the
   repository root covers both sides in one run.
   On Apple Silicon with an Intel Rust toolchain, add `--target aarch64-apple-darwin`
@@ -173,8 +183,9 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:theme` | Appearance: System / Light / Dark painting and persistence, legacy palette fallback, and the export renderer's light-only guarantee |
 | `pnpm run drive:bots` | Bots: that the column has two lists and remembers which, that a bot survives a relaunch with what was typed into it, and that two bots have different faces while one bot keeps its own across a rename, asserted on the *form* the seed built, since the face is turning while it is looked at. Also the archive: that a bot put away survives field-for-field and comes back as itself, and that deleting one asks before it does anything |
 | `pnpm run drive:packaged` | A built `.app`: that a release hides the developer items and finds its agent |
-| `pnpm run drive:bot-turn` | A live turn as a bot: that a purpose nobody typed reaches the model, that the memory file is real and in the checkout, and that reopening the bot resumes the same session |
+| `pnpm run drive:bot-turn` | A live turn as a bot: that a purpose nobody typed reaches the model, that the memory file is real and in the bot's home folder, and that reopening the bot resumes the same session |
 | `pnpm run drive:bot-memory` | That a bot is asked to keep its memory current without anybody asking it to: that one which has gone quiet is handed its briefing again with a line saying so, that the count resets on the nudge rather than on every turn, and that a prompt somebody typed to read like the app's own house-keeping is drawn as a prompt in a reopened transcript, with its words and the cut that is taken on its ordinal |
+| `pnpm run drive:bot-summon` | Summoning a bot with `@` for one message, in a project's chat and in another bot's conversation: the label on its reply, the next turn answered as before, and the **Replied to** cards in its own conversation. Stub model service, disposable profile |
 | `pnpm run drive:visual` | The gallery: every surface as screenshots, in light and dark, with a hit-target audit and forced-colours captures; see [below](#the-visual-gallery) |
 | `pnpm run drive:perf` | The performance budgets on a 1,000-session list and a 500-entry transcript; see [below](#performance-budgets) |
 | `node scripts/drive-turn.mjs` | A live inference request through the window, to prove the binary carries its credentials rather than inheriting them |
@@ -239,7 +250,7 @@ at a time, and a driver replaces only its own rows inside a shared key such as `
 
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
-`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-connectors`,
+`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-bot-summon`, `drive-connectors`,
 `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
 `drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-permission-mode`,
 `drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,

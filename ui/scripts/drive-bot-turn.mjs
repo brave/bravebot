@@ -10,7 +10,7 @@
 // and it puts its own keys back.
 
 import { checker, launch, COMPOSER_INPUT, SIDEBAR_TAB, ASSISTANT_BUBBLE, BOT_OPEN_BUTTON } from './drive-support.mjs'
-import { appState, forgetCheckoutSessions, locateProfile, openBot, scratchCheckout, settle } from './drive-profile.mjs'
+import { appState, forgetCheckoutSessions, locateProfile, openBot, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -21,7 +21,6 @@ const { check, problems } = checker()
 const { userData, stateFile } = await locateProfile()
 const { readState, putKey } = appState(stateFile)
 const hadView = readState().view
-const checkout = scratchCheckout('bravebot-ui-drive-bot-turn')
 
 // This driver's own row and no more. `bots` holds somebody's actual bots — names and purposes they
 // wrote, sessions with history in them, and the only copy of what each one's face looks like — so
@@ -41,32 +40,20 @@ await page.waitForTimeout(2500)
 
 // The purpose carries a word nothing else would produce, so the reply is evidence the briefing
 // arrived rather than evidence the model is agreeable.
-await openBot(app, page, {
+// Opening the bot opens its one conversation, in its home folder, and answers the trust question
+// that folder asks.
+const home = await openBot(page, {
   name: 'Custodian',
   row: /^Custodian$/,
   purpose:
-    'You are the custodian of this checkout. Whenever you are greeted, and only then, ' +
+    'You are the custodian of this folder. Whenever you are greeted, and only then, ' +
     'reply with exactly the word: harbour. Do not explain it.',
-  checkout,
   check,
 })
-
-// The bot's page starts a conversation from its composer, in the project picked in its footer.
-await page.locator('[data-test="project-trigger"]').click()
-await page.locator('[data-test="project-pick"]').click()
-await page.waitForTimeout(400)
+check(typeof home === 'string', `the bot has a home folder (${home})`)
 await page.locator(COMPOSER_INPUT).fill('Hello.')
 await page.locator('.send').click()
 await page.waitForTimeout(1500)
-
-// A new conversation in a folder nobody has trusted asks the trust question, exactly as any new
-// chat does; the message waits for the answer.
-const trust = page.locator('.trust button').first()
-if (await trust.isVisible().catch(() => false)) {
-  await trust.click()
-  await page.waitForTimeout(600)
-  check(true, 'a new bot conversation asks about the checkout, like any new chat')
-}
 console.log('  ..   sent; waiting for the turn…')
 const first = await settle(page)
 check(first === 'done', `the turn finished (${first})`)
@@ -89,11 +76,11 @@ check(
   'a live turn draws nothing for the briefing, having been told nothing about it',
 )
 
-// The memory file is real, and in the checkout where the bot can edit it.
-const memory = join(checkout, '.bravebot-ui', 'bots', 'custodian.md')
-check(existsSync(memory), 'the bot has a memory file inside its checkout')
+// The memory file is real, and in the home folder where the bot can edit it.
+const memory = join(home, '.bravebot-ui', 'bots', 'custodian.md')
+check(existsSync(memory), 'the bot has a memory file inside its home folder')
 check(
-  existsSync(join(checkout, '.bravebot-ui', '.gitignore')),
+  existsSync(join(home, '.bravebot-ui', '.gitignore')),
   'and the folder holding it ignores itself, so it is not somebody’s diff',
 )
 
@@ -101,8 +88,8 @@ check(
 const stored = (readState().bots ?? []).find((bot) => bot.slug === MINE)
 check(typeof stored?.session === 'string', `the bot remembers its session (${stored?.session})`)
 check(
-  stored?.conversations?.some((each) => each.id === stored.session && each.directory === checkout),
-  'and the folder that conversation ran in',
+  stored?.conversations?.some((each) => each.id === stored.session && each.directory === home),
+  'and that the conversation ran in its home folder',
 )
 
 await app.close()
@@ -118,7 +105,6 @@ await page2
   .filter({ has: page2.locator('.bot-name', { hasText: /^Custodian$/ }) })
   .locator(BOT_OPEN_BUTTON)
   .click()
-await page2.locator('[data-test="bot-conversations"] .bot-history-row').first().click()
 await page2.waitForTimeout(2000)
 
 check(
@@ -130,21 +116,19 @@ check(
   'the briefing is drawn as a file that was read rather than as something somebody typed',
 )
 // A bot's conversation is a chat like any other, so it is in the Chats list too, marked with the
-// bot's face and named for the project it ran in.
+// bot's face.
 await page2.locator(SIDEBAR_TAB).nth(0).click()
 await page2.waitForTimeout(400)
 const listed = page2.locator('.session').filter({ has: page2.locator('.bot-face') })
-  .filter({ has: page2.locator('.session-project', { hasText: checkout.split('/').at(-1) }) })
-check((await listed.count()) >= 1, 'the bot’s conversation is in the Chats list with its face and project')
+check((await listed.count()) >= 1, 'the bot’s conversation is in the Chats list with its face')
 await page2.screenshot({ path: '/tmp/bravebot-ui/25-bot-resumed.png' })
 
 await back.close()
 
 putKey('bots', withoutMine())
 putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
-rmSync(checkout, { recursive: true, force: true })
 rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
-forgetCheckoutSessions(checkout)
+forgetCheckoutSessions(home)
 
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
 process.exit(problems.length ? 1 : 0)

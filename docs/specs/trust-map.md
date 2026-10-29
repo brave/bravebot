@@ -215,13 +215,10 @@ each row's line names.
 
 A rule written about one of the names is asked in the deny, ask and allow lists and for `Read` and
 `Edit`, since a rule is matched under a key built apart from the map's. A deny or ask rule reaches
-the other name of the NFC and NFD group on purpose and an allow rule does not. A path specifier with
-whitespace at an end is reported and not read, since the whitespace is as likely padding as part of the
-name ([PERM-3](permissions.md#PERM-3)), so a name with whitespace at its end and a name of whitespace
-alone cannot be written as a rule about that file, and a rule typed for one is reported. A `*` in a
-rule is always a wildcard, so a name holding `*` cannot be written as a rule about that file alone
-either, and nothing reports it, since the rule is a pattern. A name with whitespace at its start is
-written from `./`. The test lists the three kinds against #2864 and fails once one can be written.
+the other name of the NFC and NFD group on purpose and an allow rule does not. A name with
+whitespace at its end, a name of whitespace alone and a name holding `*` are written as a path in
+double quotes, which is one name taken as written ([PERM-3](permissions.md#PERM-3)), so the test
+asks them as `Read("./name")`. A name with whitespace at its start is written from `./`.
 
 A listing is asked the same pairs. It reports two entries for two files, and a refusal of one reaches
 a listing of the other only within a group.
@@ -431,6 +428,13 @@ A no is never kept, so a directory answered with a no asks again. `/clear` begin
 therefore asks, on the same terms. `--resume` does not ask, and restores the map from the record of
 the session chosen; a record from before maps were kept has none, and is asked about.
 
+A record written by a sitting that had bypass on at any point says so, and `--resume` restores neither
+its map nor its opened directories: the mode answered the startup question and each vouch in the
+person's place ([MODE-4](permission-modes.md#MODE-4)), so what the map holds is not an answer the
+person resuming gave, and it asks. A rule the person made in that sitting by hand is not kept either,
+which is the cost of a record that cannot tell the two apart. Resuming with the flag again is
+answered by the mode as it was.
+
 A continuing caller keeps the current map after success, returned error or cancellation, after
 joining the turn's children. This includes grants made while loading context before a later load
 fails and downgrades recorded by effects. The caller adopts that map before saving or starting
@@ -438,10 +442,15 @@ another turn; a pre-turn copy cannot replace it. A record is written by one proc
 ([SESSION-38](sessions.md#SESSION-38)), so the map one process recorded is not replaced by a copy
 another process made before it.
 
+`verified-by: bravebot_tui::app::a_resume_without_the_flag_asks_where_bypass_answered_for_the_record`
+`verified-by: bravebot_tui::sessions::a_record_written_under_bypass_restores_no_trust_and_no_directory`
 `verified-by: bravebot_cli::plain_retention_tests::failed_plain_turn_excludes_replacement_from_the_next_request`
 `verified-by: bravebot_agent::turn::retention::early_loading_errors_return_current_decisions`
 `verified-by: bravebot_agent::turn::ordinary_parent_endings_retain_delegate_file_and_program_decisions`
 `verified-by: bravebot_ui_bridge::retention::worker::bridge_ordinary_endings_keep_decisions_live_and_resumed`
+`verified-by: bravebot_ui_bridge::retention::worker::a_desktop_turn_records_whether_bypass_answered_for_the_person`
+`verified-by: bravebot_ui_bridge::bridge::a_desktop_fork_carries_the_mark_that_bypass_answered_in_its_parents_map`
+`verified-by: bravebot_cli::running::a_one_shot_run_records_whether_bypass_answered_for_the_person`
 `verified-by: bravebot_session::sessions::a_second_resume_cannot_erase_the_distrust_the_first_recorded`
 
 A kept yes is the yes and nothing else the session held. The session it settles starts from the rule

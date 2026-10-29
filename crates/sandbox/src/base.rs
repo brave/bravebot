@@ -863,6 +863,7 @@ mod tests {
         ];
         let refused = [
             "gateway-keys.json",
+            "brave-key.json",
             "leo-premium.json",
             "leo-premium.lock",
             "chatgpt-account.json",

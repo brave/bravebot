@@ -24,7 +24,8 @@ which a person chooses to attach to an issue. It is sent without being asked for
 clauses below are about what it cannot say.
 
 Only a Rust panic is reported. The executables covered are `bravebot`, `bravebot-host`,
-`bravebot-rpc` and `bravebot-acp`.
+`bravebot-rpc` and `bravebot-acp`. `bravebot acp` is the `bravebot` executable and reports as it
+does.
 
 ## Clauses
 

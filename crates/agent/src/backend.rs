@@ -24,6 +24,7 @@ pub use bravebot_bedrock::credentials::CredentialError;
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
 use bravebot_config::ModelRefusal;
+use bravebot_config::Serves;
 use bravebot_config::provider::{self, Credential, Protocol};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
@@ -36,7 +37,7 @@ use std::path::{Path, PathBuf};
 /// A failure from whichever backend was asked.
 ///
 /// One type so a caller handles one error. The variants stay distinct because the remedies differ:
-/// an expired AWS session is fixed by signing in, and a spent Leo credential by importing again.
+/// an expired AWS session is fixed by signing in, and an unusable premium key by unsetting it.
 #[derive(Debug)]
 pub enum BackendError {
     Aichat(ChatError),
@@ -683,11 +684,6 @@ pub enum Serving {
     Configured,
     /// No service is configured to answer, so nothing will be asked.
     NothingConfigured {
-        /// What was wrong with a stored Leo Premium batch, where something was.
-        ///
-        /// Somebody in that case is one import away rather than a whole configuration away, and
-        /// the sentence saying what the store refused is the difference between the two.
-        subscription: Option<String>,
         /// Whether another service is configured and only the model in force is Brave's own.
         ///
         /// The case a settings block copied from another tool lands in: those blocks name their
@@ -722,7 +718,7 @@ pub enum Serving {
     },
 }
 
-/// What the model in force would be served by, reading the credential store to find out.
+/// What the model in force would be served by, reading the sign-in files to find out.
 ///
 /// The model decides which service answers, so the model is what this is asked about rather than
 /// the configuration: a turn bound for Bedrock or for a gateway is served by the service that was
@@ -730,7 +726,7 @@ pub enum Serving {
 /// [`Backend::spends_a_subscription`]'s question, asked here for the same reason
 /// [`crate::turn::discover_subscription`] asks it.
 ///
-/// The store and the ChatGPT sign-in file are read only where nothing before them has answered, since
+/// The ChatGPT and xAI sign-in files are read only where nothing before them has answered, since
 /// each is a file in somebody's home directory and a read that cannot change the answer is a read
 /// for nothing.
 pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
@@ -774,14 +770,9 @@ fn serving_with(
         return Serving::Configured;
     }
 
-    // A build with no premium host cannot spend a credential at all, so there is nothing to look
-    // for: sending one to an endpoint that did not issue it would send it where it does not belong.
-    let stored = config
-        .premium_endpoint
-        .as_deref()
-        .map(crate::ImportedSubscription::discover);
-
-    if stored.as_ref().is_some_and(crate::Discovery::holds_a_batch) {
+    // A build with no premium host holds no key to present: sending one to an endpoint that did not
+    // issue it would send it where it does not belong.
+    if crate::PremiumKey::held(config).is_some() {
         return Serving::Configured;
     }
 
@@ -799,10 +790,6 @@ fn serving_with(
         (chatgpt(), xai())
     };
     Serving::NothingConfigured {
-        subscription: stored
-            .as_ref()
-            .and_then(|found| found.complaint())
-            .map(str::to_string),
         a_service_is_configured: configured_elsewhere
             || chatgpt == crate::chatgpt::AccountFile::Stored
             || xai == crate::chatgpt::AccountFile::Stored,
@@ -955,9 +942,6 @@ pub fn pick(config: &Config, recorded: Option<String>) -> Pick {
 
 /// Whether a pick [`serving`] answered `pick` for gives way to a default it answers `default` for.
 ///
-/// Not where a stored Leo Premium batch was refused: that pick is served once the batch is imported
-/// again, and the refusal is what says so.
-///
 /// A pick the machine-level layer refuses gives way on the same terms as one nothing serves
 /// (BACKEND-48). Both are a recorded name that cannot be asked for today while a configured model
 /// beneath it can, and the record is left as it is either way: an administrator's list changes, and a
@@ -965,10 +949,7 @@ pub fn pick(config: &Config, recorded: Option<String>) -> Pick {
 fn sets_aside(pick: Serving, default: impl FnOnce() -> Serving) -> bool {
     let gives_way = matches!(
         pick,
-        Serving::NothingConfigured {
-            subscription: None,
-            ..
-        } | Serving::Refused { .. }
+        Serving::NothingConfigured { .. } | Serving::Refused { .. }
     );
     gives_way && default() == Serving::Configured
 }
@@ -998,43 +979,37 @@ impl<'a> Backend<'a> {
     /// configured default, or from a delegate definition loaded from a vouched-for source
     /// (DELEGATE-20), and that is the endorsement for the request field it lands in.
     pub fn select(config: &'a Config, egress: &'a Egress, model: &str) -> Self {
-        if let Some(bedrock) = config.bedrock_for(model) {
-            return Self::Bedrock {
+        match config.serves(model) {
+            Serves::Bedrock(bedrock) => Self::Bedrock {
                 config: bedrock,
                 egress,
                 cancel: None,
-            };
-        }
-        if let Some((provider, wire_model)) = config.provider_for(model) {
-            return Self::Gateway {
+            },
+            Serves::Gateway(provider, wire_model) => Self::Gateway {
                 config,
                 provider,
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
-            };
-        }
-        if let Some(wire_model) = config.chatgpt_model(model) {
-            return Self::Account {
+            },
+            Serves::Chatgpt(wire_model) => Self::Account {
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
                 session: None,
-            };
-        }
-        if let Some(wire_model) = config.xai_model(model) {
-            return Self::XaiAccount {
+            },
+            Serves::Xai(wire_model) => Self::XaiAccount {
                 config,
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
-            };
-        }
-        Self::Aichat {
-            config,
-            egress,
-            subscription: None,
-            cancel: None,
+            },
+            Serves::Aichat => Self::Aichat {
+                config,
+                egress,
+                subscription: None,
+                cancel: None,
+            },
         }
     }
 
@@ -1190,10 +1165,10 @@ impl<'a> Backend<'a> {
             .is_some_and(|bedrock| !Self::signed_in_to(bedrock))
     }
 
-    /// Whether an imported subscription would be spent on this backend's requests.
+    /// Whether the premium key would be presented on this backend's requests.
     ///
     /// Only the aichat endpoint has the notion. Bedrock reaches whatever the AWS account is entitled
-    /// to and a gateway authenticates with a token of its own, so a Leo credential means nothing to
+    /// to and a gateway authenticates with a token of its own, so the premium key means nothing to
     /// either and [`Backend::with_subscription`] drops one handed to it.
     ///
     /// For a caller deciding whether to look for a subscription at all. The same reasoning as
@@ -1206,7 +1181,7 @@ impl<'a> Backend<'a> {
     /// Send requests on the premium tier, where the backend has one.
     ///
     /// Ignored by Bedrock, which has no such notion: an AWS account reaches the models it reaches,
-    /// and a Leo credential means nothing to it.
+    /// and the premium key means nothing to it.
     pub fn with_subscription(mut self, source: &'a mut dyn Subscription) -> Self {
         if let Self::Aichat { subscription, .. } = &mut self {
             *subscription = Some(source);
@@ -1808,11 +1783,62 @@ mod tests {
                 || AccountFile::NotStored
             ),
             Serving::NothingConfigured {
-                subscription: None,
                 a_service_is_configured: false,
                 chatgpt: AccountFile::NotStored,
                 xai: AccountFile::NotStored,
             }
+        );
+    }
+
+    /// BACKEND-39: a premium key stored with a premium host that is Brave's configures the Brave
+    /// backend, so a build that holds one starts work. Each half of the pair is held to the other:
+    /// a host with no key leaves the state a first run is told about, and a key for a host that is
+    /// not Brave's is a destination somebody chose, whose key is not presented.
+    #[test]
+    fn a_premium_key_with_a_braves_premium_host_is_a_service_configured() {
+        let egress = Egress::new();
+        let with = |premium: Option<&str>, key: Option<&str>| {
+            let mut config = Config::from_lookup(|name| {
+                match name {
+                    env_var::SIGNING_KEY => Some("test-signing-key"),
+                    env_var::KEY_ID => Some("test-key-id"),
+                    env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.com"),
+                    env_var::PREMIUM_ENDPOINT => premium,
+                    _ => None,
+                }
+                .map(str::to_string)
+            })
+            .expect("configured");
+            config.premium_key = key.map(bravebot_config::Secret::new);
+            config
+        };
+        let served = |config: &Config| {
+            serving_with(
+                config,
+                &egress,
+                DEFAULT_MODEL,
+                || AccountFile::NotStored,
+                || AccountFile::NotStored,
+            )
+        };
+        let nothing = Serving::NothingConfigured {
+            a_service_is_configured: false,
+            chatgpt: AccountFile::NotStored,
+            xai: AccountFile::NotStored,
+        };
+        let premium = Some("https://ai-chat-premium.bsg.brave.software");
+
+        assert_eq!(served(&with(premium, Some("a-key"))), Serving::Configured);
+        assert_eq!(
+            served(&with(None, Some("a-key"))),
+            Serving::Configured,
+            "the host compiled in"
+        );
+        assert_eq!(served(&with(premium, None)), nothing, "a host and no key");
+        assert_eq!(
+            served(&with(Some("https://premium.example"), Some("a-key"))),
+            nothing,
+            "a key for a host that is not Brave's"
         );
     }
 
@@ -1838,7 +1864,6 @@ mod tests {
                     || AccountFile::NotStored
                 ),
                 Serving::NothingConfigured {
-                    subscription: None,
                     a_service_is_configured: configured,
                     chatgpt: found,
                     xai: AccountFile::NotStored,
@@ -1879,7 +1904,6 @@ mod tests {
             assert_eq!(
                 serving_with(&config, &egress, DEFAULT_MODEL, || chatgpt, || xai),
                 Serving::NothingConfigured {
-                    subscription: None,
                     a_service_is_configured: configured,
                     chatgpt,
                     xai,
@@ -1937,7 +1961,6 @@ mod tests {
                     || panic!("the xAI sign-in file was read beside {configured}")
                 ),
                 Serving::NothingConfigured {
-                    subscription: None,
                     a_service_is_configured: true,
                     chatgpt: AccountFile::NotStored,
                     xai: AccountFile::NotStored,
@@ -1981,7 +2004,6 @@ mod tests {
                 || AccountFile::NotStored
             ),
             Serving::NothingConfigured {
-                subscription: None,
                 a_service_is_configured: true,
                 chatgpt: AccountFile::NotStored,
                 xai: AccountFile::NotStored,
@@ -2112,23 +2134,6 @@ mod tests {
         std::fs::write(&path, text).expect("a managed file");
         let managed = bravebot_config::Managed::at(&path);
         (managed.models().clone(), path)
-    }
-
-    /// BACKEND-47: a pick refused because a stored Leo Premium batch could not be used stays in
-    /// force, so the start is refused with what was wrong with the batch.
-    #[test]
-    fn a_pick_refused_for_a_stored_batch_is_not_set_aside() {
-        let refused = |subscription: Option<&str>| Serving::NothingConfigured {
-            subscription: subscription.map(str::to_string),
-            a_service_is_configured: true,
-            chatgpt: AccountFile::NotStored,
-            xai: AccountFile::NotStored,
-        };
-        assert!(sets_aside(refused(None), || Serving::Configured));
-        assert!(!sets_aside(
-            refused(Some("the store was written by another channel")),
-            || Serving::Configured
-        ));
     }
 
     /// BACKEND-47: a recorded tier word names the model that tier's variable names.
@@ -3179,7 +3184,7 @@ mod tests {
 
     /// CHATGPT-9: the account answers for its own models alone. One conversation moves between two
     /// of them and no further, the name a reply reports is not compared with the qualified name, and
-    /// the account spends no Leo credential and asks for no AWS sign-in.
+    /// the account presents no premium key and asks for no AWS sign-in.
     #[test]
     fn the_account_answers_for_its_own_models_and_for_nothing_a_credential_of_another_service_is_for()
      {
@@ -3593,9 +3598,8 @@ mod tests {
         assert!(said.is_empty(), "a gateway asked for a sign-in: {said:?}");
     }
 
-    /// A Leo credential is only spendable against Brave's endpoint. Deciding otherwise would have a
-    /// turn read the credential store, and report on what it found there, for a request going to a
-    /// service that has never heard of a subscription.
+    /// The premium key is only presented to Brave's endpoint. Deciding otherwise would hand a turn a
+    /// key for a request going to a service that has never heard of one.
     #[test]
     fn only_the_aichat_backend_spends_an_imported_subscription() {
         let config = with_a_gateway();
@@ -3608,7 +3612,7 @@ mod tests {
         for model in ["opus-arn", "z-ai/glm-4.6"] {
             assert!(
                 !Backend::select(&config, &egress, model).spends_a_subscription(),
-                "{model} was taken to spend a Leo credential"
+                "{model} was taken to present the premium key"
             );
         }
     }
@@ -5043,7 +5047,7 @@ mod tests {
     }
 
     /// The remedies differ, so the messages have to. An expired AWS session is fixed by signing in
-    /// and a spent Leo credential by importing again, and a person shown the wrong one is sent to
+    /// and an unusable premium key by unsetting it, and a person shown the wrong one is sent to
     /// fix something that is not broken.
     #[test]
     fn each_backend_keeps_its_own_explanation() {
@@ -5055,8 +5059,9 @@ mod tests {
         .to_string();
         assert!(bedrock.contains("aws sso login"), "{bedrock}");
 
-        let leo = BackendError::from(ChatError::Subscription("spent".into())).to_string();
-        assert!(leo.contains("bravebot auth login leo"), "{leo}");
+        let premium = BackendError::from(ChatError::Subscription("not held".into())).to_string();
+        assert!(premium.contains("bravebot auth login brave"), "{premium}");
+        assert!(!premium.contains("aws sso login"), "{premium}");
     }
 
     /// A gateway nothing holds a token for is a setting somebody has not finished, not a service

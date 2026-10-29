@@ -63,6 +63,7 @@ from workflow_checks import (  # noqa: E402
     check_pinned_images,
     check_privileged_job_runs_only_its_own_code,
     check_required_checks_are_the_gates,
+    check_run_files_have_owners,
 )
 
 _spec = importlib.util.spec_from_file_location(
@@ -3489,6 +3490,7 @@ def mechanical_findings(specs, sources):
     findings += list(check_checkout_ref_is_qualified())
     findings += list(check_grant_is_behind_an_environment())
     findings += list(check_required_checks_are_the_gates())
+    findings += list(check_run_files_have_owners())
     findings += list(check_guarantee_specs_exist())
     findings += list(check_unpinned_guarantee_clauses(specs))
     findings += list(check_answers_registered(specs, sources))

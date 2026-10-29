@@ -156,8 +156,8 @@ socket rule holds on a kernel carrying Landlock ABI version 9, which is Linux 7.
 is most Linux machines in use, every socket that has a path is reachable whatever the policy names,
 which includes the user's D-Bus (where `systemd-run --user` starts a program outside the sandbox),
 the agent `SSH_AUTH_SOCK` names (every key it holds) and `docker.sock`. The Linux backend reports
-whether the kernel governs these sockets. Where it does not, a stage under sandbox mode `strict`
-([SANDBOX-22](#SANDBOX-22)) is refused with the kernel it needs named, and a stage under `read-only` or `workspace-write`
+whether the kernel governs these sockets. Where it does not, a stage under sandbox mode `strict` or `read-only`
+([SANDBOX-22](#SANDBOX-22)) is refused with the kernel it needs named, and a stage under `workspace-write`
 runs while `doctor`, `/status` and the opening screen say the sockets are reachable. Under `off`
 `/status` and the opening screen say nothing of them, since the confinement line already says
 nothing is confined. The mode does not apply to a local MCP server, which below version 9 reaches
@@ -229,10 +229,10 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_connect_to_an_abstract_socket_made_outside_it`
 `verified-by: bravebot_sandbox::linux::a_socket_with_a_path_is_reached_under_a_write_grant_and_not_under_a_read_grant_or_a_refusal`
 `verified-by: bravebot_sandbox::linux::sockets_with_a_path_are_reported_governed_from_landlock_abi_9`
-`verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
-`verified-by: bravebot_agent::confine::a_strict_stage_is_prepared_only_where_sockets_with_a_path_are_governed`
+`verified-by: bravebot_agent::confine::strict_and_read_only_are_refused_where_sockets_with_a_path_are_not_governed`
+`verified-by: bravebot_agent::confine::a_strict_or_read_only_stage_is_prepared_only_where_sockets_with_a_path_are_governed`
 `verified-by: bravebot_cli::doctor::doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs`
-`verified-by: bravebot_tui::status::reachable_sockets_with_a_path_are_reported_under_read_only_and_workspace_write`
+`verified-by: bravebot_tui::status::reachable_sockets_with_a_path_are_reported_under_workspace_write_alone`
 `verified-by: bravebot_tui::logo::reachable_sockets_with_a_path_are_named_on_the_opening_screen_under_workspace_write_alone`
 `verified-by: bravebot_sandbox::windows::a_policy_that_did_not_ask_for_the_network_asks_for_no_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
@@ -584,7 +584,7 @@ everything beneath it:
 
 | Where | Refused |
 | --- | --- |
-| every platform | the program's own state directory `~/.bravebot`, where the gateway keys, the premium token and the server list are (a directory `BRAVEBOT_HOME` moves it to is not covered, [Known costs](state-directory.md#known-costs)); the browser relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay told to use another directory is not covered); `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, sops' age keys `~/.config/sops/age` and `pass`'s `~/.password-store`; the histories `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions`, `~/.bash_sessions`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell` and `~/.mongodb/mongosh/mongosh_repl_history`; another agent's login and transcripts, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` and `~/.local/share/opencode` (a directory `CLAUDE_CONFIG_DIR` or the like moves is not covered); `~/.config/github-copilot`, `~/.config/openconnect`, `~/.gitlab-runner`, `~/.pgadmin` and `~/Postman` |
+| every platform | the program's own state directory `~/.bravebot`, where the gateway keys, the premium key, the ChatGPT and xAI sign-ins and the server list are, and where a `leo-premium.json` that an earlier version wrote and this one does not is refused with the rest, so a file left from an earlier version stays protected (a directory `BRAVEBOT_HOME` moves it to is not covered, [Known costs](state-directory.md#known-costs)); the browser relay's default directory `~/.bravebot-browser`, where the secret that drives the browser is (a relay told to use another directory is not covered); `~/.ssh`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`, sops' age keys `~/.config/sops/age` and `pass`'s `~/.password-store`; the histories `~/.bash_history`, `~/.zsh_history`, `~/.zsh_sessions`, `~/.bash_sessions`, `~/.local/share/fish/fish_history`, `~/.psql_history`, `~/.mysql_history`, `~/.node_repl_history`, `~/.python_history`, `~/.rediscli_history`, `~/.sqlite_history`, `~/.dbshell` and `~/.mongodb/mongosh/mongosh_repl_history`; another agent's login and transcripts, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.gemini` and `~/.local/share/opencode` (a directory `CLAUDE_CONFIG_DIR` or the like moves is not covered); `~/.config/github-copilot`, `~/.config/openconnect`, `~/.gitlab-runner`, `~/.pgadmin` and `~/Postman` |
 | Windows, also | `~/AppData/Roaming/gcloud` and `~/AppData/Roaming/gnupg`, where `gcloud` and `gpg` keep what the unix spellings hold; the browser profiles `~/AppData/Local/BraveSoftware`, `~/AppData/Local/Google/Chrome`, `~/AppData/Local/Chromium`, `~/AppData/Local/Microsoft/Edge` and `~/AppData/Roaming/Mozilla`; and the platform's own stores, Credential Manager's files `~/AppData/Local/Microsoft/Credentials` and `~/AppData/Roaming/Microsoft/Credentials`, the keys the data protection API encrypts with `~/AppData/Roaming/Microsoft/Protect`, the account's private keys `~/AppData/Roaming/Microsoft/Crypto`, and the vault `~/AppData/Local/Microsoft/Vault` and `~/AppData/Roaming/Microsoft/Vault` (an application data directory moved out of the home is not covered) |
 | macOS, also | `~/Library/Keychains` and `/Library/Keychains`; the browser profiles under `~/Library/Application Support` (`BraveSoftware`, `Google/Chrome`, `Google/Chrome Beta`, `Google/Chrome Canary`, `Google/Chrome Dev`, `Chromium`, `Firefox`, `Microsoft Edge`, `Microsoft Edge Beta`, `Microsoft Edge Dev`, `Microsoft Edge Canary`, `Arc`, `Vivaldi`), `~/Library/Cookies` and `~/Library/Safari`; `~/Library/Messages`, `~/Library/Mail` and `~/Library/Thunderbird`; 1Password's group container `~/Library/Group Containers/2BUA8C4S2C.com.1password`; under `~/Library/Application Support` also `Slack`, `discord`, `Signal`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `Claude`, `Insomnia`, `Bruno`, `Postman` and `sops/age`; and `~/Library/DBeaverData` |
 | Linux, also | `~/.local/share/keyrings`, `~/.local/share/kwalletd` and the X display's cookie `~/.Xauthority` (a cookie `XAUTHORITY` names elsewhere is not covered); the browser profiles `~/.config/BraveSoftware`, `~/.config/google-chrome`, `~/.config/google-chrome-beta`, `~/.config/google-chrome-unstable`, `~/.config/chromium`, `~/.config/microsoft-edge`, `~/.config/microsoft-edge-beta`, `~/.config/microsoft-edge-dev`, `~/.config/vivaldi`, `~/.mozilla`, `~/snap/firefox/common/.mozilla`, `~/snap/chromium` and `~/snap/brave`, and every Flatpak application's data, `~/.var/app`; `~/.thunderbird`; under `~/.config` also `Slack`, `discord`, `Signal`, `1Password`, `Code`, `Code - Insiders`, `VSCodium`, `Cursor`, `JetBrains`, `Insomnia`, `Bruno` and `Postman`; and `~/.local/share/DBeaverData` |
@@ -1412,7 +1412,9 @@ cache is where any build may write ([SANDBOX-15](#SANDBOX-15)); the credential s
 ([SANDBOX-16](#SANDBOX-16)); each directory the session was opened on, to read and write; the
 session's scratch directory, to read and write; and the plan's directory as the place it starts.
 No row names the directories its program is read from or the two files the step names, since the
-machine is read. Where the stage carries the remote scope, the socket `SSH_AUTH_SOCK` names in its
+machine is read. A local MCP server, which is not a stage, also reads the installation above its
+program's `bin` directory when that sits deeper in the home ([SERVERS-10](mcp-servers.md#SERVERS-10)).
+Where the stage carries the remote scope, the socket `SSH_AUTH_SOCK` names in its
 own environment is a write row ([SANDBOX-3](#SANDBOX-3)). Nothing else is in it: no write outside
 those, no credential location the stage's scope does not name, and no socket for a stage without
 the remote scope.
@@ -1519,7 +1521,8 @@ the hooks and the configuration too: `git init` and `git clone` write both from 
 `git remote add`, `git push -u` and a checkout that tracks a remote branch write the configuration,
 so a refusal there is a git that does not work. A program installed inside the
 home is read as the file a person read and not as its directory, so that granting a program does not
-open the home. The persistence locations are refused for writing on macOS because a program started
+open the home. A local MCP server also reads the installation above its program's `bin` directory when
+that sits deeper in the home ([SERVERS-10](mcp-servers.md#SERVERS-10)). The persistence locations are refused for writing on macOS because a program started
 later by a shell, by launchd, systemd or a desktop session, or by git (`core.fsmonitor`,
 `core.pager`, a `!` alias, a credential helper) runs as the account with no profile around it, so a
 write there reaches past the stage that made it. The scratch directory is held to the directory the session
@@ -1586,6 +1589,7 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_agent::confine::an_assignment_in_front_of_a_push_removes_its_scope`
 `verified-by: bravebot_agent::confine::a_program_at_the_top_of_the_home_is_granted_as_a_file_and_not_as_the_home`
 `verified-by: bravebot_agent::confine::the_path_outside_the_home_is_read_and_the_homes_own_bin_brings_no_parent`
+`verified-by: bravebot_agent::confine::a_program_deep_in_the_home_brings_no_installation_row_to_a_stage_but_does_to_a_server`
 `verified-by: bravebot_sandbox::rules::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
 `verified-by: bravebot_sandbox::windows::what_every_container_reads_is_the_machines_own_directories`
 `verified-by: bravebot_sandbox::windows::nothing_else_is_taken_to_be_readable_by_every_container`
@@ -1950,7 +1954,7 @@ There are four sandbox modes. `strict` starts every stage under the deny-by-defa
 [SANDBOX-18](#SANDBOX-18) composes where the machine cannot be read: the base, the list its program's
 binary brings, the credential scope its argv names and the session's directories, so a program reads
 nothing else on the machine. On a Linux kernel below Landlock ABI 9, where a stage reaches every
-unix socket that has a path, a `strict` stage is refused ([SANDBOX-3](#SANDBOX-3)). `read-only`
+unix socket that has a path, a `strict` or `read-only` stage is refused ([SANDBOX-3](#SANDBOX-3)). `read-only`
 starts a stage with the reads of `workspace-write` and without its writes to the session: the
 directories the session was opened on, the scratch directory and the toolchain caches can be read and
 cannot be written, and the temporary directory and the null device stay writable unless the person
@@ -2025,7 +2029,10 @@ The managed file's `sandbox.mode` is a floor and not a default. A flag or a sett
 a mode looser than it refuses the session before it starts, naming both files, saying which of
 reading and writing the mode does more of than the pin, and naming the pin as the mode to run with,
 since no mode is stricter than a pin of `strict` or of `read-only`; a mode no looser than the pin is
-kept; with nothing asked, the pin is the mode. A managed file that pins `run.network`
+kept; with nothing asked, the pin is the mode. On a Linux kernel below Landlock ABI 9, a pin of `strict` or
+`read-only` makes every `run` stage refuse with the sentence [SANDBOX-3](#SANDBOX-3) describes. The refusal
+is made when a stage is prepared and not when the session starts, so a session that starts no stage still
+works, and no looser mode replaces the pin. A managed file that pins `run.network`
 to `closed` ([SANDBOX-20](#SANDBOX-20)) is a floor of `workspace-write` as well, because `off` starts a
 program with no profile and nothing would hold its network shut; the refusal says so. `doctor`,
 `--help`, `--version` and the commands that start no program (`auth`, `sessions`, `attach`,
@@ -2062,7 +2069,8 @@ name the mode in force after the command.
 The desktop window has a control of its own in the composer, beside the permission mode. It shows
 the mode in force and offers `strict`, `read-only` and `workspace-write`. It offers no `off`, and the bridge refuses a
 request for `off`, or for any word that is not one of the three or `standard`, whatever the window
-sends. A choice is
+sends. A mode the kernel cannot hold ([SANDBOX-3](#SANDBOX-3)) is still offered and accepted, and a `run`
+stage under it is refused with the sentence that clause describes. A choice is
 the session's own and applies from the next turn or manifest run; the one running keeps the mode it
 started in. The managed floor holds: a mode looser than the pin is refused with a sentence naming the
 file and saying which of reading and writing the mode does more of, and a choice is met with the
@@ -2120,7 +2128,8 @@ not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and 
 adds the directory. `off` is the whole of the confinement removed: a window never offers it, and
 the command line prints it on its opening line. On Windows, where `read-only` reads no more than
 `strict` and writes less, a pin of `strict` keeps `read-only`, while a pin of `read-only` still
-refuses `strict`, which writes the session's directories. Under
+refuses `strict`, which writes the session's directories. On a Linux kernel below Landlock ABI 9 a pin of
+`strict` or `read-only` refuses every `run` stage ([SANDBOX-3](#SANDBOX-3)), and nothing is relaxed. Under
 bypass in a trusted workspace, a `workspace-write` stage of the lead
 session writes every path outside the refusals [SANDBOX-28](#SANDBOX-28) lists, which includes
 shell start-up files and other repositories on the machine. Under `read-only`, a program that writes
@@ -2174,7 +2183,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_config::settings::a_network_pin_that_is_neither_word_refuses_off_as_a_closed_one_does`
 `verified-by: bravebot_config::settings::a_key_beside_the_sandbox_mode_is_reported_as_unread`
 `verified-by: bravebot_tui::logo::a_closed_network_is_not_claimed_for_programs_nothing_confines`
-`verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
+`verified-by: bravebot_agent::confine::strict_and_read_only_are_refused_where_sockets_with_a_path_are_not_governed`
 `verified-by: bravebot_cli::main::a_refused_mode_stops_what_runs_programs_and_not_what_does_not`
 `verified-by: bravebot_config::settings::a_window_never_runs_unconfined_and_keeps_the_pin`
 `verified-by: bravebot_cli::main::the_sandbox_flag_takes_one_of_four_words_and_the_last_wins`
@@ -2942,6 +2951,17 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
   settings layer, project file or permission rule grants one in advance, because none names it.
 - **Shown and recorded.** `/status` lists each path held, with its access, and the
   trace carries one `path_reach` record for each yes, naming the path and the access.
+- **Judged once.** The path is stored as it was judged and is not resolved or judged again when a
+  line starts. A path later replaced by a link keeps its row for the stored path, and what the
+  sandbox backend does with a row that has become a link is that backend's. No test replaces a
+  held path with a link on either backend. For macOS, a comment in `crates/sandbox/src/macos.rs`
+  about refusal rows says the path a process ends up opening is the one matched, and no test checks
+  that. For Linux, the risk is that the row is opened by following the link, so it may widen to the
+  link's target. That has not been checked either.
+  [#2914](https://github.com/brave/bravebot/issues/2914) tracks the case and the two missing
+  tests. This differs from a directory given by `/reach`,
+  which is judged again when it is used ([SANDBOX-23](#SANDBOX-23)). The session holds the grant
+  only, so a `git switch` changes what is at the path and leaves the grant in place.
 - **Not delegated.** A delegate is offered no `request_path`, and one it names anyway is answered
   as an unknown name ([DELEGATE-12](delegation.md#DELEGATE-12)), since a path asked for from inside
   a sub-task is reach the person never set up.

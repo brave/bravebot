@@ -114,8 +114,7 @@ try {
   // A list that cannot be read offers no switch, since "Only these" would save a line selecting none.
   await app.evaluate(() => { globalThis.servers.unlisted = true })
   const reopen = async () => {
-    await page.getByRole('button', { name: 'Chats', exact: true }).click()
-    await picker.waitFor({ state: 'detached' })
+    await page.reload()
     await page.getByRole('button', { name: 'Bots', exact: true }).click()
     await page.getByText('Review Bot', { exact: true }).first().click()
     await page.locator('[data-test="bot-details"]').waitFor()

@@ -31,11 +31,13 @@
 
 mod account_words;
 pub mod acp;
+pub mod acp_loop;
 pub mod allowlist;
 mod answerers;
 pub mod arguments;
 pub mod attached;
 pub mod bridge;
+pub mod bug_report;
 pub mod connectors;
 // Public so the integration tests and the persistent host can reach it, and hidden from the
 // documentation until a caller outside the tests settles what it offers.
@@ -58,6 +60,7 @@ pub mod running;
 pub mod settings;
 pub mod store;
 pub mod turn;
+pub mod update_status;
 pub mod view;
 pub mod wire;
 pub mod workers;

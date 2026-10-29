@@ -43,29 +43,16 @@ git remote get-url origin
 A worker that was handed a branch to push does not open the pull request unless its brief says to.
 It reports the branch, and whoever owns the pull request opens it with the command above.
 
-**A pull request opened by `netzenbot` says which cases it leaves undone, with an issue for each.** The body has a line
-`Not covered: none`, or `Not covered:` followed by one bullet per case, each naming the issue that
-tracks it as `#N` or `brave/bravebot#N`:
-
-```text
-Not covered:
-- `aws` keeps bravebot's own PATH (#NNNN)
-- hooks named by a relative path (#NNNN)
-```
-
-A case is another call site, platform or program with the same weakness as the one the change
-fixes, or another defect found while making it. File the issue first, with the
+**A defect the change finds and does not fix has an issue, and the description cites it.** A defect
+is another call site, platform or program with the same weakness as the one the change fixes, or
+another defect found while making it. File the issue first, with the
 [issue-poster](../../agents/agents/issue-poster.md) definition, so that its number exists when the
-body is written. A case that a spec records as accepted under Known costs is cited in the body where
-it is described, as [GAP-001](../best-practices/gaps.md#GAP-001) says, and is not a bullet, since an
-accepted case has no issue.
-
-`make check-pr-body` fails a pull request opened by `netzenbot` whose body has no such line, or has
-a bullet that names no issue. CI runs it when the body is edited as well as when the branch is
-pushed. Pull requests by other authors are not held to the line, and
-[GAP-001](../best-practices/gaps.md#GAP-001) still applies to what their description says. The check
-cannot read whether the list is complete, whether a number is an issue, or whether an issue is about
-its case, so the reviewer reads the diff for the cases it leaves.
+body is written, and write the number where the body mentions the defect
+([GAP-001](../best-practices/gaps.md#GAP-001)). A defect that a spec records as accepted under
+Known costs is cited as that entry and has no issue. The body has no line or section for this. A
+change that finds no defect says nothing about it, and a feature, test or improvement the change
+leaves out is a sentence in the description with no issue. No check reads it, so the reviewer reads
+the description for statements of this kind.
 
 **No co-attribution markers for Claude Code or other tools**, in a commit message or a pull request
 body.

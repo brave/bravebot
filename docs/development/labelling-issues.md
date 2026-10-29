@@ -2,7 +2,7 @@
 
 The [issue-poster](../../agents/agents/issue-poster.md) definition is the only thing that files an
 issue from a session or a skill. It holds the procedure: search the backlog, apply the labels below,
-assign, cite or file an issue for each case the body says is left undone, post, and read the issue
+assign, cite or file an issue for each defect the body says is left unfixed, post, and read the issue
 back. A skill hands each draft to it, and no script under
 `agents/skills` runs `gh issue create`. This page holds what the labels mean, and the definition
 links here rather than copying it. `make check-spec` fails when the definition writes a label this

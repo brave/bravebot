@@ -460,9 +460,11 @@ fn draw_needle(frame: &mut Frame, area: Rect, search: &Search) {
 ///
 /// Blank for a prompt stored before times were kept, since a made-up age is worse than none.
 fn age_of(entry: &Entry) -> String {
-    let Some(at) = entry.at else {
-        return String::new();
-    };
+    entry.at.map(age_since).unwrap_or_default()
+}
+
+/// How long ago `at` was, in seconds since the epoch, in the same compact words.
+pub(crate) fn age_since(at: u64) -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_secs())

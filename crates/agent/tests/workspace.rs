@@ -555,33 +555,16 @@ fn a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule()
     );
 }
 
-/// Names a rule's text cannot spell, each with the issue that tracks it. A path specifier with
-/// whitespace at an end is reported and not read, since the whitespace is as likely padding as part
-/// of the name, so a name with whitespace at an end and a name of whitespace alone have no rule. A
-/// `*` is always a wildcard, so no rule is about the file called `*.md` and nothing else. The test
-/// below fails for a name listed here that a rule can spell, so the list is revised with the fix.
-const NOT_SPELLABLE_IN_A_RULE: &[(&str, &str)] = &[
-    ("a.md ", "#2864"),
-    ("a.md\t", "#2864"),
-    ("a.md\n", "#2864"),
-    ("a.md\u{a0}", "#2864"),
-    ("a.md\u{3000}", "#2864"),
-    ("*.md", "#2864"),
-    (" ", "#2864"),
-    ("\t", "#2864"),
-    ("\u{a0}", "#2864"),
-    ("\u{3000}", "#2864"),
-];
-
 /// A rule about one name is a rule about no other file the volume holds apart from it, whatever
 /// the polarity (TRUST-2, PERM-7). Deny and ask rules are about every canonically equivalent
 /// spelling of a name, which is one group of the awkward names, and an allow rule is about the
 /// spelling it was written in. The key a rule is matched under is built apart from the trust map's,
 /// so a step in it that trims, folds or decodes would join two files there without showing in the
-/// pair tests above.
+/// pair tests above. A name with whitespace at an end or holding a `*` is written in double quotes
+/// (PERM-3), which is the only spelling a rule can give it.
 #[test]
 fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
-    use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject, Unreadable};
+    use bravebot_core::permissions::{Anchors, Decision, Permissions, Ruling, Subject};
 
     let names = aliases::held_names();
     let mut asked = 0;
@@ -595,12 +578,13 @@ fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
             let folds_case = bravebot_agent::workspace::trust_store(&scratch.path).folds_case();
 
             for (named, other) in [(first, second), (second, first)] {
-                let spellable = !NOT_SPELLABLE_IN_A_RULE
-                    .iter()
-                    .any(|(listed, _)| listed == named);
                 for ruling in [Ruling::Deny, Ruling::Ask, Ruling::Allow] {
                     for (subject, verb) in [(Subject::Read, "Read"), (Subject::Edit, "Edit")] {
-                        let text = vec![format!("{verb}(./{named})")];
+                        let text = vec![if named.trim_end() != *named || named.contains('*') {
+                            format!("{verb}(\"./{named}\")")
+                        } else {
+                            format!("{verb}(./{named})")
+                        }];
                         let none: Vec<String> = Vec::new();
                         let (deny, ask, allow) = match ruling {
                             Ruling::Deny => (&text, &none, &none),
@@ -619,34 +603,6 @@ fn a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it() {
                         let decides = |path: &str| {
                             permissions.for_path(subject, path) == Decision::Ruled(ruling)
                         };
-                        if !spellable {
-                            let decides_a_file = aliases::AWKWARD_NAMES
-                                .iter()
-                                .any(|(another, _)| decides(another));
-                            if named.trim() != *named {
-                                // Told, and in force for no file, so it is never read as the rule
-                                // about another one.
-                                assert!(
-                                    rejected.len() == 1
-                                        && rejected[0].reason == Unreadable::WhitespaceAtAnEnd
-                                        && !decides_a_file,
-                                    "a rule for {named:?} must be reported for its whitespace and \
-                                     decide no file, and a name a rule can spell is removed from \
-                                     NOT_SPELLABLE_IN_A_RULE"
-                                );
-                                continue;
-                            }
-                            let about_that_file_alone = decides(named)
-                                && names
-                                    .iter()
-                                    .all(|(another, _)| another == named || !decides(another));
-                            assert!(
-                                rejected.is_empty() && !about_that_file_alone,
-                                "a rule for {named:?} is now rejected or is about that file alone: \
-                                 remove it from NOT_SPELLABLE_IN_A_RULE"
-                            );
-                            continue;
-                        }
                         assert!(rejected.is_empty(), "{text:?} did not parse");
                         assert!(decides(named), "{text:?} did not decide {named:?}");
                         let joined = first_group == second_group && ruling != Ruling::Allow;
@@ -13331,6 +13287,49 @@ fn a_workspace_given_what_the_session_kept_has_the_files_it_touched() {
     assert!(!next_turn.take_telling(".bravebot/rules/rust.md"));
     let stranger = Workspace::new(&scratch.path).expect("workspace");
     assert!(stranger.touched_files().is_empty());
+}
+
+/// INSTR-14, INSTR-16: a workspace given a session's record has the names in it, and the record is a
+/// claim. A name that lands outside the root adds nothing, and the limits that bound a live session
+/// bound a record too, so a hand-edited one cannot make every turn compare thousands of names. A
+/// restore that took the names as they stand would let a record place `../elsewhere` in the set.
+#[test]
+fn a_workspace_restored_from_a_record_places_each_name_under_the_root_and_keeps_the_limits() {
+    use bravebot_agent::workspace::TouchedRecord;
+    let scratch = Scratch::new("restore-touched");
+    let first = Workspace::new(&scratch.path).expect("workspace");
+    first.record_touch("pkg/a.rs");
+    assert!(first.take_telling(".bravebot/rules/rust.md"));
+    let record = first.touched_record();
+    assert_eq!(record.files, ["pkg/a.rs"]);
+    assert_eq!(record.directories, ["pkg"]);
+    assert_eq!(record.told, [".bravebot/rules/rust.md"]);
+
+    let again = Workspace::new(&scratch.path).expect("workspace");
+    again.restore_touched(&TouchedRecord {
+        rules: vec![".bravebot/rules/rust.md".to_string()],
+        ..record.clone()
+    });
+    assert_eq!(again.touched_record().rules, [".bravebot/rules/rust.md"]);
+    assert_eq!(again.touched_record().files, record.files);
+    assert_eq!(again.touched_record().directories, record.directories);
+    assert_eq!(again.touched_record().told, record.told);
+    assert!(!again.take_telling(".bravebot/rules/rust.md"));
+
+    let claim = TouchedRecord {
+        directories: vec!["../outside".to_string(), "inside/deep".to_string()],
+        files: (0..1100)
+            .map(|n| format!("f{n:04}.rs"))
+            .chain(["../outside/x.rs".to_string()])
+            .collect(),
+        ..TouchedRecord::default()
+    };
+    let claimed = Workspace::new(&scratch.path).expect("workspace");
+    claimed.restore_touched(&claim);
+    assert_eq!(claimed.touched_directories(), ["inside", "inside/deep"]);
+    let files = claimed.touched_files();
+    assert_eq!(files.len(), 1024);
+    assert!(files.iter().all(|file| !file.contains("outside")));
 }
 
 /// INSTR-16: a name typed with `@` is a file named only where a file is there. A directory is not a

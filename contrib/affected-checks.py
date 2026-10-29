@@ -132,7 +132,7 @@ FUZZ_MANIFEST = "fuzz/Cargo.toml"
 # they need a nightly toolchain and cargo-fuzz, so `make check-fuzz` is run by name.
 ALWAYS = (
     "check-scripts", "check-spec", "check-security", "check-locales", "check-versions",
-    "check-narration", "check-pr-body", "check-reviewdog",
+    "check-narration", "check-reviewdog",
 )
 HOST = {
     "rust": ("check",),
@@ -465,6 +465,10 @@ CASES = (
     ("pnpm-lock.yaml", {"npm"}),
     ("pnpm-workspace.yaml", {"npm"}),
     ("agents/skills/rebase/SKILL.md", NOTHING),
+    ("agents/skills/security-audit/security-audit.py", NOTHING),
+    ("crates/agent/src/answers.rs", {"rust", "fuzz"}),
+    ("crates/agent/src/kept_answers.rs", {"rust", "fuzz"}),
+    ("docs/specs/prompting.md", {"rust"}),
     ("contrib/check-locales.py", NOTHING),
     ("README.md", NOTHING),
     (".github/SECURITY.md", NOTHING),
@@ -648,6 +652,34 @@ def selftest():
         wanted = ["docs/development/checks.md", "ui/new.ts"]
         checks.append(("a branch is its commits, its edits and its new files, not the base's",
                        got == wanted, got))
+
+    # `check-security` is selected by no area: it is in ALWAYS, which a local run prints whatever
+    # the paths need, including the paths the security audit's Stop hook watches and a change that
+    # needs nothing else (the audit script itself is under agents/).
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch)
+        env, run, write = fixture_git(root)
+        run("init", "-q", "-b", "main")
+        write("README.md", "base\n")
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        for path in (
+            "docs/specs/prompting.md",
+            "crates/agent/src/answers.rs",
+            "crates/agent/src/kept_answers.rs",
+            "agents/skills/security-audit/security-audit.py",
+            "agents/skills/rebase/SKILL.md",
+        ):
+            run("checkout", "-q", "-B", "branch", "main")
+            write(path, "changed\n")
+            run("add", ".")
+            run("commit", "-q", "-m", "change")
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(io.StringIO()):
+                status = local(root, "main", False)
+            gates = printed.getvalue().split()
+            checks.append((f"a local run for a change to {path} runs check-security",
+                           status == 0 and "check-security" in gates, gates))
 
     for area in set(AREAS) - {"build", "installers", "fuzz"}:
         runs = targets({area}, HOST) + targets({area}, CONTAINERS)

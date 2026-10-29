@@ -1931,7 +1931,8 @@ pub fn compile(
 ///
 /// A pattern in the line is replaced by the names it matched when the line is compiled, and those
 /// names come out of a directory nobody may have vouched for, so a sentence addressed to the planner
-/// cannot spell them ([CMDLINE-4]). The program is still named as the person was shown it (RUN-2).
+/// cannot spell them ([CMDLINE-4]). The program is named by the path the planner typed and not the
+/// file a link leads to, for the same reason (RUN-2).
 /// A plan whose steps this walk cannot pair with the line's commands is told as the line itself,
 /// which is the planner's own text.
 ///

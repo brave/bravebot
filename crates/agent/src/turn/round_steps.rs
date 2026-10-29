@@ -842,7 +842,7 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
     workspace: &'scope Workspace,
     task: &'scope Task,
     cancel: &'scope Cancel,
-    wallet: Option<&'scope dyn crate::shared::Spends>,
+    premium_key: Option<&'scope dyn crate::shared::Spends>,
     turn_model: &Option<String>,
     effort: Option<Effort>,
 ) where
@@ -903,7 +903,7 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
                 &mut confirmer,
                 &mut reporter,
                 &mut sink,
-                wallet,
+                premium_key,
                 shared,
             );
             (ended, reporter.last_spent(), reporter.take_inference())
@@ -1085,6 +1085,9 @@ pub(super) fn build_request<R: Reporter>(
     };
     if task.delegate.is_none() && reporter.wants_request_view() {
         reporter.request_built(RequestView::of(&request, system, &marks));
+    }
+    if task.delegate.is_none() && reporter.wants_fork() {
+        reporter.exchange_forked(crate::aside::Fork::of(conversation));
     }
     request
 }
@@ -1495,7 +1498,7 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
         workspace,
         task,
         cancel,
-        plan.wallet,
+        plan.premium_key,
         &state.turn_model,
         state.effort,
     );

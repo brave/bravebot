@@ -262,8 +262,8 @@ the reader gave for that draft in `claims-collect`, or `none`:
 Use the title as given. If you think it is inaccurate, post it as given and say so in your report.
 Apply no importance, urgency or size: the issue is a finding a reviewer wrote and nobody has read,
 and the triage-issues skill judges those.
-File exactly this one issue and no other. Where the body names a case it leaves undone, cite an
-existing issue for it where one exists. File none for a case that has no issue: list it in your
+File exactly this one issue and no other. Where the body names a defect it leaves unfixed, cite an
+existing issue for it where one exists. File none for a defect that has no issue: list it in your
 report, because the user decides.
 The reviewers read commit {commit}. These places the body cites have moved since, or are in code
 that changed: {moved}. Correct only those line numbers in the posted body, to the places named for
@@ -275,7 +275,7 @@ Search open and closed issues for the symbol or path the title names before fili
 already covers it, cite it and do not file.
 ```
 
-The poster's own procedure files an issue for each case a body leaves undone unless the task says
+The poster's own procedure files an issue for each defect a body leaves unfixed unless the task says
 to file none, and an issue it files was never a draft, so nobody has chosen it. The brief says to
 file none, and keeps the poster from retitling a draft or changing a line number it was not told
 about.

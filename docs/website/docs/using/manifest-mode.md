@@ -108,7 +108,7 @@ the exchange a later turn resumes. The run leaves the conversation exactly as de
 the workspace.
 
 The run is written down as **its own record** and the session records its name, so the session still
-resumes as a conversation while the run stays a run the picker refuses. A run you stopped is not
+resumes as a conversation while the run stays a run the Sessions screen refuses. A run you stopped is not
 written at all, since there is nothing in it to read. A run that fails or is stopped after it wrote a
 file keeps what it learned about that file: the file stays untrusted, and the saved session resumes with
 the same trust.

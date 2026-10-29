@@ -36,6 +36,7 @@ pub(crate) fn print_help() {
             t!(cli_usage_continue_task),
         ),
         ("bravebot --fork <id>", t!(cli_usage_fork)),
+        ("bravebot acp", t!(cli_usage_acp)),
         ("bravebot doctor", t!(cli_usage_doctor)),
         (
             "bravebot doctor --sandbox-check",
@@ -72,7 +73,6 @@ pub(crate) fn print_help() {
         ("bravebot auth login [way]", t!(cli_usage_auth_login)),
         ("bravebot auth logout <way>", t!(cli_usage_auth_logout)),
         ("bravebot auth status [way]", t!(cli_usage_auth_status)),
-        ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
         ("bravebot import-providers", t!(cli_usage_import_providers)),
         ("bravebot mcp <command>", t!(cli_usage_mcp)),
         (

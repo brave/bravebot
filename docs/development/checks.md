@@ -111,7 +111,7 @@ website, the published pages the agent crate carries in the binary, the pnpm loc
 dependency policy and the fuzz targets they could affect. On a pull request the
 Windows installers are built and installed only for a change to the scripts that make them; main
 and every tag build and install them whatever changed. The specs, security, locales, versions and narration
-jobs take seconds and run on every change, and the narration job also reads the body's `Not covered:` line. A change to a crate needs the desktop jobs when the desktop app
+jobs take seconds and run on every change. A change to a crate needs the desktop jobs when the desktop app
 builds that crate, which is any crate the two bridge crates name, however far down, and needs the fuzz job when
 the fuzz package builds it, which is any crate its manifest names, however far down. A job skipped
 by its condition reports success, and branch protection counts that as passing, so every doubt runs
@@ -121,6 +121,11 @@ Main and every tag are checked whole, and a push to a pull request cancels the r
 for its previous head. A file outside `crates/` that a Rust test reads belongs in
 the classifier's `READ_BY_RUST`; its selftest scans the crates for strings naming such a file and
 stops on one that is in neither that list nor `NAMED_NOT_READ`.
+
+The changes job runs the classifier from the pull request's base commit, not from the pull request,
+so a change to the classifier is judged by the copy it replaces. The classifier and the Makefile are
+in `.github/CODEOWNERS`, and `make check-security` fails when a file a workflow step runs by path
+(`python3 <path>`, or the Makefile behind `make`) matches no entry there.
 
 `make check-affected` makes that choice locally, against the merge base with `upstream/main`, or
 `origin/main` where there is no upstream remote, or `BASE=<ref>`, which `check-reviewdog` is
@@ -349,18 +354,6 @@ Locally it reads this branch's commits, uncommitted edits and untracked files ag
 base with `upstream/main`, or `origin/main` without one, or `BASE=<ref>`, and reads a title and body
 only where `PR_TITLE` and `PR_BODY` are set. It carries a `--selftest`, which `make check-narration`
 runs first.
-
-`make check-pr-body` fails a pull request opened by `netzenbot` whose body has no `Not covered:` line, or has a case under
-it that names no issue, which is the rule in [commits.md](commits.md) about cases a change leaves
-undone. The line is `none`, or a bullet per case each naming `#N` or `brave/bravebot#N`. CI runs it
-as the second step of the narration workflow, so it is read again when the body is edited, and it
-fails a body that is empty. The pull request's author arrives as `PR_AUTHOR`. Only `netzenbot`'s
-pull requests are held to the line, and a run that cannot name the author holds the body to it. Text inside a fenced code block or an
-HTML comment is not read, and a number is not looked up, so it does not show that the issue exists. Locally it reads a draft where `PR_BODY` is set, as in
-`PR_BODY="$(cat body.md)" make check-pr-body`, and otherwise runs its `--selftest` alone. The script
-is [../../contrib/check-pr-body.py](../../contrib/check-pr-body.py), which
-`agents/skills/pr-fix/pr-fix.py` loads as well, so the two readers of the body shape cannot disagree
-about the line.
 
 `make check-npm` lints the pnpm lockfiles, as CI does, and runs the tests under `npm/tests`. They
 hold the release origin the script that builds the platform packages downloads from to this

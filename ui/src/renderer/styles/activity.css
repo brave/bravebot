@@ -20,14 +20,14 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: var(--icon-meta);
-  height: var(--icon-meta);
-  --leo-icon-size: var(--icon-meta);
+  width: var(--icon-control);
+  height: var(--icon-control);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--ink-tertiary);
 }
 .tool.failed .tool-status { --leo-icon-color: var(--status-error); }
 .tool-ring {
-  --leo-progressring-size: 12px;
+  --leo-progressring-size: var(--icon-control);
   --leo-progressring-stroke-width: 2px;
   --leo-progressring-color: var(--accent);
 }
@@ -41,7 +41,7 @@
   align-items: baseline;
   column-gap: var(--leo-spacing-m);
   min-width: 0;
-  max-width: calc(100% - var(--icon-meta) - var(--leo-spacing-m));
+  max-width: calc(100% - var(--icon-control) - var(--leo-spacing-m));
 }
 .tool .call {
   display: flex;
@@ -103,7 +103,7 @@
   --leo-collapse-radius: var(--radius-control);
   --leo-collapse-summary-color: var(--ink-secondary);
   --leo-collapse-summary-color-hover: var(--ink-primary);
-  --leo-collapse-icon-size: var(--icon-meta);
+  --leo-collapse-icon-size: var(--icon-control);
   --leo-collapse-icon-color: var(--ink-tertiary);
   --leo-font-heading-h3: var(--type-meta);
   font: var(--type-meta);
@@ -111,13 +111,13 @@
 .tool-run-status {
   display: grid;
   place-items: center;
-  width: var(--icon-meta);
-  height: var(--icon-meta);
-  --leo-icon-size: var(--icon-meta);
+  width: var(--icon-control);
+  height: var(--icon-control);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--ink-tertiary);
 }
 .tool-run-lines {
-  margin-left: calc(var(--leo-spacing-s) + var(--icon-meta) / 2);
+  margin-left: calc(var(--leo-spacing-s) + var(--icon-control) / 2);
   padding-left: var(--leo-spacing-s);
   border-left: 1px solid var(--border-hairline);
 }
@@ -139,8 +139,8 @@
 .working-ring {
   display: grid;
   place-items: center;
-  width: var(--icon-meta);
-  --leo-progressring-size: 12px;
+  width: var(--icon-control);
+  --leo-progressring-size: var(--icon-control);
   --leo-progressring-stroke-width: 2px;
   --leo-progressring-color: var(--accent);
 }
@@ -173,12 +173,12 @@
   flex-direction: column;
   gap: var(--leo-spacing-s);
   min-width: 0;
-  margin-left: calc(var(--leo-spacing-s) + var(--icon-meta) / 2);
+  margin-left: calc(var(--leo-spacing-s) + var(--icon-control) / 2);
   padding-left: var(--leo-spacing-m);
   border-left: 1px solid var(--border-hairline);
   font: var(--type-caption);
   color: var(--ink-tertiary);
-  --leo-icon-size: var(--icon-caption);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--ink-tertiary);
 }
 .thinking-head {
@@ -223,7 +223,7 @@
   padding-inline: var(--leo-spacing-s);
   font: var(--type-caption);
   color: var(--ink-tertiary);
-  --leo-icon-size: var(--icon-caption);
+  --leo-icon-size: var(--icon-control);
   --leo-icon-color: var(--ink-tertiary);
 }
 .narration leo-icon,
