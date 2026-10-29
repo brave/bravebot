@@ -319,11 +319,10 @@ fn network_line(
 }
 
 /// Whether a stage the next turn starts reaches every unix socket that has a path: where the kernel
-/// does not govern them and the mode is `read-only` or `workspace-write`. `strict` refuses such a
+/// does not govern them and the mode is `workspace-write`. `strict` and `read-only` refuse such a
 /// stage, and under `off` the confinement line already says nothing is confined (SANDBOX-3).
 pub fn sockets_with_a_path_open(reachable: bool, mode: bravebot_sandbox::SandboxMode) -> bool {
-    use bravebot_sandbox::SandboxMode;
-    reachable && matches!(mode, SandboxMode::ReadOnly | SandboxMode::WorkspaceWrite)
+    reachable && mode == bravebot_sandbox::SandboxMode::WorkspaceWrite
 }
 
 /// The line for the unix sockets the programs `run` starts can reach, where every one that has a
@@ -1420,12 +1419,11 @@ mod tests {
     }
 
     /// SANDBOX-3: `/status` says a session's programs reach every unix socket that has a path where
-    /// the kernel leaves them open, under `read-only` and `workspace-write`, with why beside it. The
-    /// regressions it rejects: no line on such a kernel, a line under `read-only` that is missing
-    /// because only `workspace-write` was listed, a line where the kernel governs the sockets, and a
-    /// line under `strict`, which refuses the stage, or under `off`, which confines nothing.
+    /// the kernel leaves them open, under `workspace-write`, with why beside it. The regressions it
+    /// rejects: no line on such a kernel, a line where the kernel governs the sockets, and a line
+    /// under `strict` or `read-only`, which refuse the stage, or under `off`, which confines nothing.
     #[test]
-    fn reachable_sockets_with_a_path_are_reported_under_read_only_and_workspace_write() {
+    fn reachable_sockets_with_a_path_are_reported_under_workspace_write_alone() {
         use bravebot_sandbox::SandboxMode;
         let config = config_for("https://ai-chat.bsg.brave.com", None);
         let trust = TrustStore::new("/work");
@@ -1439,7 +1437,8 @@ mod tests {
                 .find(|line| line.label.trim() == t!(status_path_sockets))
         };
 
-        for mode in [SandboxMode::WorkspaceWrite, SandboxMode::ReadOnly] {
+        let mode = SandboxMode::WorkspaceWrite;
+        {
             let line = shown(mode, true)
                 .unwrap_or_else(|| panic!("{mode}: the sockets are on the report"));
             assert_eq!(line.value, t!(status_path_sockets_reachable), "{mode}");
@@ -1447,6 +1446,7 @@ mod tests {
         }
         for (mode, reachable) in [
             (SandboxMode::WorkspaceWrite, false),
+            (SandboxMode::ReadOnly, true),
             (SandboxMode::ReadOnly, false),
             (SandboxMode::Strict, true),
             (SandboxMode::Off, true),

@@ -156,8 +156,8 @@ socket rule holds on a kernel carrying Landlock ABI version 9, which is Linux 7.
 is most Linux machines in use, every socket that has a path is reachable whatever the policy names,
 which includes the user's D-Bus (where `systemd-run --user` starts a program outside the sandbox),
 the agent `SSH_AUTH_SOCK` names (every key it holds) and `docker.sock`. The Linux backend reports
-whether the kernel governs these sockets. Where it does not, a stage under sandbox mode `strict`
-([SANDBOX-22](#SANDBOX-22)) is refused with the kernel it needs named, and a stage under `read-only` or `workspace-write`
+whether the kernel governs these sockets. Where it does not, a stage under sandbox mode `strict` or `read-only`
+([SANDBOX-22](#SANDBOX-22)) is refused with the kernel it needs named, and a stage under `workspace-write`
 runs while `doctor`, `/status` and the opening screen say the sockets are reachable. Under `off`
 `/status` and the opening screen say nothing of them, since the confinement line already says
 nothing is confined. The mode does not apply to a local MCP server, which below version 9 reaches
@@ -229,10 +229,10 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::linux::a_confined_process_cannot_connect_to_an_abstract_socket_made_outside_it`
 `verified-by: bravebot_sandbox::linux::a_socket_with_a_path_is_reached_under_a_write_grant_and_not_under_a_read_grant_or_a_refusal`
 `verified-by: bravebot_sandbox::linux::sockets_with_a_path_are_reported_governed_from_landlock_abi_9`
-`verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
-`verified-by: bravebot_agent::confine::a_strict_stage_is_prepared_only_where_sockets_with_a_path_are_governed`
+`verified-by: bravebot_agent::confine::strict_and_read_only_are_refused_where_sockets_with_a_path_are_not_governed`
+`verified-by: bravebot_agent::confine::a_strict_or_read_only_stage_is_prepared_only_where_sockets_with_a_path_are_governed`
 `verified-by: bravebot_cli::doctor::doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs`
-`verified-by: bravebot_tui::status::reachable_sockets_with_a_path_are_reported_under_read_only_and_workspace_write`
+`verified-by: bravebot_tui::status::reachable_sockets_with_a_path_are_reported_under_workspace_write_alone`
 `verified-by: bravebot_tui::logo::reachable_sockets_with_a_path_are_named_on_the_opening_screen_under_workspace_write_alone`
 `verified-by: bravebot_sandbox::windows::a_policy_that_did_not_ask_for_the_network_asks_for_no_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
@@ -1954,7 +1954,7 @@ There are four sandbox modes. `strict` starts every stage under the deny-by-defa
 [SANDBOX-18](#SANDBOX-18) composes where the machine cannot be read: the base, the list its program's
 binary brings, the credential scope its argv names and the session's directories, so a program reads
 nothing else on the machine. On a Linux kernel below Landlock ABI 9, where a stage reaches every
-unix socket that has a path, a `strict` stage is refused ([SANDBOX-3](#SANDBOX-3)). `read-only`
+unix socket that has a path, a `strict` or `read-only` stage is refused ([SANDBOX-3](#SANDBOX-3)). `read-only`
 starts a stage with the reads of `workspace-write` and without its writes to the session: the
 directories the session was opened on, the scratch directory and the toolchain caches can be read and
 cannot be written, and the temporary directory and the null device stay writable unless the person
@@ -2029,7 +2029,10 @@ The managed file's `sandbox.mode` is a floor and not a default. A flag or a sett
 a mode looser than it refuses the session before it starts, naming both files, saying which of
 reading and writing the mode does more of than the pin, and naming the pin as the mode to run with,
 since no mode is stricter than a pin of `strict` or of `read-only`; a mode no looser than the pin is
-kept; with nothing asked, the pin is the mode. A managed file that pins `run.network`
+kept; with nothing asked, the pin is the mode. On a Linux kernel below Landlock ABI 9, a pin of `strict` or
+`read-only` makes every `run` stage refuse with the sentence [SANDBOX-3](#SANDBOX-3) describes. The refusal
+is made when a stage is prepared and not when the session starts, so a session that starts no stage still
+works, and no looser mode replaces the pin. A managed file that pins `run.network`
 to `closed` ([SANDBOX-20](#SANDBOX-20)) is a floor of `workspace-write` as well, because `off` starts a
 program with no profile and nothing would hold its network shut; the refusal says so. `doctor`,
 `--help`, `--version` and the commands that start no program (`auth`, `sessions`, `attach`,
@@ -2066,7 +2069,8 @@ name the mode in force after the command.
 The desktop window has a control of its own in the composer, beside the permission mode. It shows
 the mode in force and offers `strict`, `read-only` and `workspace-write`. It offers no `off`, and the bridge refuses a
 request for `off`, or for any word that is not one of the three or `standard`, whatever the window
-sends. A choice is
+sends. A mode the kernel cannot hold ([SANDBOX-3](#SANDBOX-3)) is still offered and accepted, and a `run`
+stage under it is refused with the sentence that clause describes. A choice is
 the session's own and applies from the next turn or manifest run; the one running keeps the mode it
 started in. The managed floor holds: a mode looser than the pin is refused with a sentence naming the
 file and saying which of reading and writing the mode does more of, and a choice is met with the
@@ -2124,7 +2128,8 @@ not name; the person reads the refusal sentence ([SANDBOX-19](#SANDBOX-19)) and 
 adds the directory. `off` is the whole of the confinement removed: a window never offers it, and
 the command line prints it on its opening line. On Windows, where `read-only` reads no more than
 `strict` and writes less, a pin of `strict` keeps `read-only`, while a pin of `read-only` still
-refuses `strict`, which writes the session's directories. Under
+refuses `strict`, which writes the session's directories. On a Linux kernel below Landlock ABI 9 a pin of
+`strict` or `read-only` refuses every `run` stage ([SANDBOX-3](#SANDBOX-3)), and nothing is relaxed. Under
 bypass in a trusted workspace, a `workspace-write` stage of the lead
 session writes every path outside the refusals [SANDBOX-28](#SANDBOX-28) lists, which includes
 shell start-up files and other repositories on the machine. Under `read-only`, a program that writes
@@ -2178,7 +2183,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_config::settings::a_network_pin_that_is_neither_word_refuses_off_as_a_closed_one_does`
 `verified-by: bravebot_config::settings::a_key_beside_the_sandbox_mode_is_reported_as_unread`
 `verified-by: bravebot_tui::logo::a_closed_network_is_not_claimed_for_programs_nothing_confines`
-`verified-by: bravebot_agent::confine::strict_is_refused_where_sockets_with_a_path_are_not_governed`
+`verified-by: bravebot_agent::confine::strict_and_read_only_are_refused_where_sockets_with_a_path_are_not_governed`
 `verified-by: bravebot_cli::main::a_refused_mode_stops_what_runs_programs_and_not_what_does_not`
 `verified-by: bravebot_config::settings::a_window_never_runs_unconfined_and_keeps_the_pin`
 `verified-by: bravebot_cli::main::the_sandbox_flag_takes_one_of_four_words_and_the_last_wins`

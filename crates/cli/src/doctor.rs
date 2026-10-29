@@ -2814,10 +2814,10 @@ mod tests {
         assert!(note.contains("sandbox.network.allowedHosts"), "{note}");
     }
 
-    /// SANDBOX-3: below Landlock ABI 9 a program under read-only or workspace-write reaches every unix socket that has
-    /// a path and a strict stage is refused, and `doctor` is where a person learns both. The
+    /// SANDBOX-3: below Landlock ABI 9 a program under workspace-write reaches every unix socket that has
+    /// a path and a strict or read-only stage is refused, and `doctor` is where a person learns both. The
     /// regressions it rejects: no line on such a kernel, a line where the sockets are governed,
-    /// and a line that names neither the sockets, the kernel it needs, nor what strict does.
+    /// and a line that names neither the sockets, the kernel it needs, nor what strict and read-only do.
     #[test]
     fn doctor_says_when_sockets_with_a_path_are_reachable_and_what_that_costs() {
         let report = |governs_sockets_with_a_path| {
@@ -2845,6 +2845,7 @@ mod tests {
             "ABI 9",
             "Linux 7.1",
             "strict",
+            "read-only",
         ] {
             assert!(expected.contains(word), "{word}: {expected}");
         }

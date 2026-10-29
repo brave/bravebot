@@ -103,7 +103,7 @@ Reports everything the session knows about itself:
 - the [effort level](#effort-level), and whether this model reads one;
 - which deployment the endpoint names, and **which tier the last turn ran on**, rather than which
   tier the build was compiled to reach;
-- the confinement available here, and under `workspace-write` or `read-only` on a Linux kernel older
+- the confinement available here, and under `workspace-write` on a Linux kernel older
   than Landlock ABI 9 a `Programs' unix sockets` row saying that every socket with a path is
   reachable (D-Bus, `SSH_AUTH_SOCK`, `docker.sock`);
 - turns and tokens spent, and **where the time went**: how much was spent waiting on the model,

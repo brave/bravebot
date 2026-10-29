@@ -890,7 +890,7 @@ doctor-confinement-unavailable = confinement unavailable
 doctor-no-network-namespace = network namespaces: unavailable ({ $reason }). A stage with no network, or held to sandbox.network.allowedHosts, is refused here. Allow unprivileged user namespaces to use either.
 # Said only where the kernel cannot hold a connect to a unix socket that has a path to a stage's
 # grants, which is Landlock below ABI 9.
-doctor-sockets-with-a-path-reachable = unix sockets with a path: reachable. Landlock on this kernel is below ABI 9 (Linux 7.1), so a stage under sandbox mode read-only or workspace-write, and a local MCP server under any mode, reaches every such socket, the user's D-Bus, SSH_AUTH_SOCK and docker.sock among them. A stage under strict is refused here.
+doctor-sockets-with-a-path-reachable = unix sockets with a path: reachable. Landlock on this kernel is below ABI 9 (Linux 7.1), so a stage under sandbox mode workspace-write, and a local MCP server under any mode, reaches every such socket, the user's D-Bus, SSH_AUTH_SOCK and docker.sock among them. A stage under strict or read-only is refused here.
 # The network a request actually crosses: which certificate authorities a handshake is validated
 # against, and which proxy it is routed through. Both are stated outside this program, and neither
 # is visible anywhere else when a connection fails.
@@ -2685,11 +2685,11 @@ status-network-by-settings = closed by run.network in { $path }
 status-network-by-a-setting = closed by run.network in a settings file
 status-network-pinned = pinned closed by { $path } and not changeable by a flag or a settings file
 status-network-pinned-by-policy = pinned closed by the managed settings and not changeable by a flag or a settings file
-# Said only under sandbox mode read-only or workspace-write, where the kernel leaves every unix socket that has a path
-# open to the programs a command starts. The note says why, and what strict does there.
+# Said only under sandbox mode workspace-write, where the kernel leaves every unix socket that has a path
+# open to the programs a command starts. The note says why, and what strict and read-only do there.
 status-path-sockets = Programs' unix sockets
 status-path-sockets-reachable = every one with a path is reachable: D-Bus, SSH_AUTH_SOCK, docker.sock
-status-path-sockets-why = Landlock here is below ABI 9 (Linux 7.1), and strict refuses programs
+status-path-sockets-why = Landlock here is below ABI 9 (Linux 7.1), and strict and read-only refuse programs
 # Said only where one of the four sandbox.filesystem lists has an entry. The note names the files.
 status-sandbox-filesystem = Filesystem rules
 status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
