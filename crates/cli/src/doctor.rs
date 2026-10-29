@@ -1429,6 +1429,9 @@ pub(crate) fn gateway_credential(
     lookup: impl Fn(&str) -> Option<String>,
 ) -> String {
     use bravebot_config::provider::{Credential, Source};
+    if provider.needs_google_cloud_token(&lookup) {
+        return t!(doctor_gateway_token_google_cloud).to_string();
+    }
     match provider.credential_and_source(lookup) {
         (Credential::Token(_), Some(Source::Stored)) => t!(doctor_gateway_token_stored).to_string(),
         (Credential::Token(_), _) => t!(doctor_gateway_token).to_string(),
@@ -3456,6 +3459,26 @@ mod tests {
         assert_eq!(
             gateway_credential(&names_one, |_| None),
             t!(doctor_gateway_token_absent, id = "gw")
+        );
+    }
+
+    /// BACKEND-65: a Vertex AI project with no key is reported as signed in by the Google Cloud CLI,
+    /// and not as a credential to go and set.
+    #[test]
+    fn a_vertex_project_with_no_key_is_reported_as_signed_in_by_the_google_cloud_cli() {
+        let project = configured_gateway(
+            r#"{"provider": {"google-vertex": {"options": {"project": "example-project-1"}}}}"#,
+        );
+        assert_eq!(
+            gateway_credential(&project, |_| None),
+            t!(doctor_gateway_token_google_cloud)
+        );
+        let express = configured_gateway(
+            r#"{"provider": {"google-vertex": {"env": ["GOOGLE_API_KEY"], "options": {}}}}"#,
+        );
+        assert_eq!(
+            gateway_credential(&express, |_| None),
+            t!(doctor_gateway_token_absent, id = "google-vertex")
         );
     }
 

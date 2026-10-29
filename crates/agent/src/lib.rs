@@ -31,6 +31,7 @@ pub mod diff;
 pub mod exec;
 pub mod file_preview;
 pub mod findings;
+pub mod gcloud;
 pub mod git;
 pub mod glob;
 pub mod goal;
