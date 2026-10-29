@@ -35,6 +35,13 @@ jobs:
         with:
           fetch-depth: 2
 
+      # The classifier decides which required checks a pull request skips as passing, so the
+      # pull request does not get to decide it: a change to the classifier is judged by the copy
+      # it replaces, which is the base as the change would land on it. CODEOWNERS owns the file.
+      - name: Take the classifier from the base
+        if: ${{ github.event_name == 'pull_request' }}
+        run: git show HEAD^1:contrib/affected-checks.py > contrib/affected-checks.py
+
       - name: Decide which checks this change needs
         id: affected
         run: python3 contrib/affected-checks.py --github-output
