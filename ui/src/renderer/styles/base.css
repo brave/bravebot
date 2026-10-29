@@ -21,7 +21,7 @@ button { cursor: default; }
 a[href] { cursor: pointer; }
 /* A row that opens or selects something shows the pointer, the way a link does. A new clickable
    row joins this list. Menu items keep the arrow, as native menus do. */
-button:is(.session, .tree-row, .bot-history-row, .connector-card, .connector-row, .replied-card):not(:disabled) { cursor: pointer; }
+button:is(.session, .tree-row, .bot-history-row, .connector-card, .connector-row, .replied-card, .turn-usage):not(:disabled) { cursor: pointer; }
 
 /* Everything somebody reads rather than operates. */
 .entries,
@@ -32,7 +32,6 @@ button:is(.session, .tree-row, .bot-history-row, .connector-card, .connector-row
 .modal pre,
 .notice-body,
 .audit-inspector,
-.turn-statistics-body,
 .bot-memory,
 pre,
 code,
@@ -106,6 +105,14 @@ leo-icon { flex: none; }
   align-items: center;
   gap: var(--leo-spacing-m);
   white-space: nowrap;
+}
+.tooltip-text.multiline {
+  display: block;
+  max-width: 36ch;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  text-align: start;
+  font-variant-numeric: tabular-nums;
 }
 .tooltip-shortcut {
   font: inherit;

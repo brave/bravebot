@@ -200,8 +200,9 @@ not read a sentence to find it. A warning that names no command is a plain line.
 groups start expanded; an identical group on the next turn starts collapsed. The
 agent's messages are shown verbatim, without guessing their severity from the text.
 
-The footer beneath a completed reply shows the model actually used and total tokens.
-Expand it for exact total and output tokens and the number of tool-calling rounds.
+The footer beneath a completed reply is one left-aligned row: copy, undo, the audit
+control, then the model actually used and a compact token total. Clicking the
+model line shows the exact total and output tokens and the number of tool-calling rounds.
 Total usage includes every request in the turn; it is not context-window occupancy.
 Cancelled turns have no final usage report. The live tokens-written counter remains
 available while work is running. **Answered by** names the service (Brave, AWS Bedrock,
