@@ -4794,14 +4794,20 @@ mod tests {
     fn a_refusal_by_the_cli_ends_the_request_naming_the_cli() {
         let config = vertex_config(A_PROJECT);
         let (provider, _) = config.provider_for(VERTEX_MODEL).expect("offered");
-        let failure = gateway_parts_or_google_token(
-            provider,
-            |_| None,
-            || Err(crate::gcloud::GcloudError::NotInstalled),
-        )
-        .expect_err("refused");
-        assert!(matches!(failure, BackendError::GoogleCloud(_)));
-        assert!(format!("{failure}").contains("gcloud"));
+        for refusal in [
+            crate::gcloud::GcloudError::NotInstalled,
+            crate::gcloud::GcloudError::Refused {
+                detail: "no credentials".into(),
+            },
+        ] {
+            let failure = gateway_parts_or_google_token(provider, |_| None, || Err(refusal))
+                .expect_err("refused");
+            assert!(matches!(failure, BackendError::GoogleCloud(_)));
+            assert!(
+                format!("{failure}").contains("gcloud auth application-default login"),
+                "{failure}"
+            );
+        }
     }
 
     /// BACKEND-65: express mode, a proxy named in `baseURL`, a block with an `authorization` header of
