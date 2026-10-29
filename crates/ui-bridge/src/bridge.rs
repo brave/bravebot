@@ -3871,6 +3871,60 @@ mod coverage_tests {
         assert!(parent_state.answers.servers.is_some());
     }
 
+    /// MODE-4, TRUST-6: a desktop fork copies its parent's map, so it also carries the mark that
+    /// bypass answered in it, and a parent that never bypassed gives the child no mark. The faults
+    /// this rejects: a fork that drops the mark, so the child's record restores a map bypass opened
+    /// without the startup question, and one that marks every child.
+    #[test]
+    fn a_desktop_fork_carries_the_mark_that_bypass_answered_in_its_parents_map() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        for marked in [false, true] {
+            let directory = test_profile::project(&format!("fork-mark-{marked}"));
+            std::fs::create_dir_all(&directory).unwrap();
+            let root = directory.as_path();
+            let mut conversation = bravebot_agent::Conversation::new();
+            conversation.push(bravebot_aichat::protocol::Message::user("work"));
+            let record: Record = serde_json::from_value(json!({
+                "id": "mark-parent", "directory": root, "title": "work",
+                "started": 1, "updated": 1,
+                "conversation": conversation.snapshot()
+            }))
+            .unwrap();
+            let mut parent_state =
+                State::resumed(root, &record, TrustStore::new(root)).expect("the record is free");
+            parent_state.answered_by_mode = marked;
+            let mut bridge = Bridge::new(Box::new(|_| {}));
+            let parent = bridge.mint(Open::opened(
+                root.to_path_buf(),
+                parent_state,
+                true,
+                None,
+                false,
+            ));
+
+            let request = Request::parse(
+                &json!({"id": 1, "method": "session.fork", "params": {
+                    "session": parent, "prompt": 0, "text": "work"
+                }})
+                .to_string(),
+            )
+            .unwrap();
+            let forked = bridge.dispatch(&request).unwrap();
+
+            let child = bridge
+                .open
+                .get(forked["session"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(
+                child.state.lock().unwrap().answered_by_mode,
+                marked,
+                "the fork of a parent with mark {marked} has the other"
+            );
+        }
+    }
+
     /// SESSION-18, INSTR-14, INSTR-16: a desktop fork keeps the names of the files the parent's
     /// file tools reached and the rules it was told, as the record a terminal fork copies does, so
     /// the nested instructions and path-scoped rules the copied conversation was written under are

@@ -448,6 +448,9 @@ another process made before it.
 `verified-by: bravebot_agent::turn::retention::early_loading_errors_return_current_decisions`
 `verified-by: bravebot_agent::turn::ordinary_parent_endings_retain_delegate_file_and_program_decisions`
 `verified-by: bravebot_ui_bridge::retention::worker::bridge_ordinary_endings_keep_decisions_live_and_resumed`
+`verified-by: bravebot_ui_bridge::retention::worker::a_desktop_turn_records_whether_bypass_answered_for_the_person`
+`verified-by: bravebot_ui_bridge::bridge::a_desktop_fork_carries_the_mark_that_bypass_answered_in_its_parents_map`
+`verified-by: bravebot_cli::running::a_one_shot_run_records_whether_bypass_answered_for_the_person`
 `verified-by: bravebot_session::sessions::a_second_resume_cannot_erase_the_distrust_the_first_recorded`
 
 A kept yes is the yes and nothing else the session held. The session it settles starts from the rule
