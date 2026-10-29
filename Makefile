@@ -113,10 +113,11 @@ help:
 	@echo
 	@echo "  make clean          Remove build output"
 
-# agents/ is the checked-in source of truth for skills and AGENTS.md, and no tool reads
-# it: each tool looks under its own discovery paths. This creates the symlinks that
-# bridge them. The links are gitignored, so a fresh clone needs it once, and it is
-# idempotent, so re-running costs nothing.
+# agents/ is the checked-in source of truth for skills, subagents and AGENTS.md, and no tool
+# reads it: each tool looks under its own discovery paths. This creates the symlinks that
+# bridge them, and writes the TOML files Codex reads its subagents from. They are
+# gitignored, so a fresh clone needs it once, and it is idempotent, so re-running costs
+# nothing. Run it again after a definition in agents/agents/ changes.
 .PHONY: init
 init: hooks
 	python3 agents/setup.py link
@@ -226,6 +227,7 @@ check-spec:
 	@python3 contrib/check-issue-posters.py --selftest
 	@python3 agents/issue_helper_selftest.py
 	@python3 agents/work_dir_selftest.py
+	@python3 agents/setup_selftest.py
 	@python3 contrib/check-issue-posters.py
 
 # The deterministic half of the security audit. It answers the questions check-spec cannot: whether
