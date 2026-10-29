@@ -1278,6 +1278,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | What | How layers combine |
 |---|---|
 | `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
+| the fifteen `env` names of the network, Google and Bedrock sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside the checkout; a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
@@ -1985,12 +1986,15 @@ something reads:
 | `HTTP_PROXY` | the proxy, where neither is set |
 | `NO_PROXY` | the hosts the proxy is not used for |
 
-The last six are the network names, and the three Google names are read with them: both sets come from the person's own layers alone, the
+The last six rows are the network names. Three more rows are the Google names, and six are the
+Bedrock names: `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`, `AWS_PROFILE` and the three
+`ANTHROPIC_DEFAULT_*_MODEL` tiers. All three sets come from the person's own layers alone, the
 user's settings file and a file the command line named that is not inside the checkout. The project
 and local files arrive with a clone, and a proxy or an authority they chose would decide where
-conversation content is sent and who may read it, and a Google key or project they chose would decide
-which account receives it. So one of these nine names in either file is reported by
-`doctor` with the file that wrote it and decides nothing, and it does not displace what a layer
+conversation content is sent and who may read it, and a Google key or project, or an AWS account,
+region, profile or tier model, they chose would decide which account receives it. So one of these
+fifteen names in either file is reported by `doctor` with the file that wrote it and decides nothing,
+and it does not displace what a layer
 entitled to state it said. An exported variable still wins, as for every name here, and each of the
 two answers comes whole from one place: [NET-7](network-egress.md#NET-7) and
 [NET-8](network-egress.md#NET-8) say how. The names are spelled as the environment spells them in
@@ -2000,7 +2004,7 @@ upper case, and a lower-case spelling is not read from a file.
 region only as lowercase letters, digits and `-` starting with a letter or a digit, the characters
 a Google location is held to ([BACKEND-49](#BACKEND-49)). A value with any other character, `/`,
 `@`, `?`, `#`, `:` and `.` among them, configures no account, as an absent one does. That holds for
-every layer that may set the name, a checkout's included, and for an exported variable, and the
+every layer that may set the name and for an exported variable, and the
 `options.region` of a `provider` entry is held to it too ([BACKEND-29](#BACKEND-29)).
 
 A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
@@ -2021,7 +2025,7 @@ and the two budgets carry this program's own prefix, for the reason BACKEND-24 g
 copied from elsewhere should work unedited, while a name that decides what *this* program does
 belongs to this program and must not collide with whatever else a shared shell profile wanted.
 
-The region is checked because the host is built from it and a checkout's layer can write it. A
+The region is checked because the host is built from it. A
 file names only the region, and the rest of the host is compiled in, so a value that passes the
 check gives a host under `amazonaws.com`.
 
@@ -2037,7 +2041,7 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_agent::transport::a_proxy_in_the_persons_file_is_the_one_a_client_carries_and_a_checkouts_is_not`
 `verified-by: bravebot_config::bedrock::a_region_that_would_move_the_request_configures_nothing`
 `verified-by: bravebot_config::bedrock::a_region_holding_only_the_characters_aws_uses_is_accepted`
-`verified-by: bravebot_config::settings::a_checkouts_region_that_would_move_the_request_configures_no_account`
+`verified-by: bravebot_config::settings::a_checkouts_bedrock_names_configure_no_account_and_the_persons_own_still_do`
 `verified-by: bravebot_config::settings::every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it`
 `verified-by: bravebot_config::settings::the_persons_own_files_decide_every_pinnable_name`
 
@@ -4265,7 +4269,9 @@ others.
   one arrives unasked. The fields that name a destination and the credential that signs it
   (`provider` and `model`, [BACKEND-24](#BACKEND-24)) are refused from the project layers outright,
   because the credential value comes from the person's own environment under names the layer would
-  choose, and a file nobody read must not pick either. For the remaining fields, what limits the
+  choose, and a file nobody read must not pick either. The `env` names that choose the account a
+  request goes to are refused from them too: the six network names, the three Google names and the
+  six Bedrock names ([BACKEND-33](#BACKEND-33)). For the remaining fields, what limits the
   damage is the same rule that limits it anywhere: a file names a destination and grants no
   capability, so the worst it does is send a request somewhere useless or somewhere watching.
 

@@ -1348,6 +1348,7 @@ impl Settings {
             for name in crate::env_var::NETWORK
                 .into_iter()
                 .chain(crate::env_var::GOOGLE)
+                .chain(crate::env_var::BEDROCK)
             {
                 let Some(value) = env_string(&root, name) else {
                     continue;
@@ -1363,6 +1364,11 @@ impl Settings {
                 }
             }
             for name in env_names(&root) {
+                // A layer that does not grant a name decides nothing for it, so it wins nothing the
+                // report could name.
+                if !granting && crate::env_var::is_person_only(&name) {
+                    continue;
+                }
                 // Whoever set it before lost it here, which is the only thing worth telling somebody:
                 // a name one file sets needs no explanation of where it came from.
                 if winner.insert(name.clone(), path.clone()).is_some() {
@@ -1448,6 +1454,7 @@ impl Settings {
         for name in crate::env_var::NETWORK
             .into_iter()
             .chain(crate::env_var::GOOGLE)
+            .chain(crate::env_var::BEDROCK)
         {
             if let Some(mut stale) = settings.env.remove(name) {
                 crate::scrub(&mut stale);
@@ -3863,14 +3870,22 @@ fn anchor_slash_rule(rule: &str, anchor: &str) -> String {
         return rule.to_string();
     };
     let name = name.trim_end();
-    let mut characters = specifier.chars();
+    // A quoted name (PERM-3) is anchored by what is inside the quotes and stays quoted.
+    let (quote, inner) = match specifier
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    {
+        Some(inner) => ("\"", inner),
+        None => ("", specifier),
+    };
+    let mut characters = inner.chars();
     let single_slash =
         characters.next().is_some_and(separates) && !characters.next().is_some_and(separates);
     if !(name == "Read" || name == "Edit") || !single_slash {
         return rule.to_string();
     }
-    let below = specifier.trim_start_matches(separates);
-    format!("{name}({anchor}/{below})")
+    let below = inner.trim_start_matches(separates);
+    format!("{name}({quote}{anchor}/{below}{quote})")
 }
 
 /// What the managed file wrote of `permissions.deny` and `permissions.ask` (PERM-19).
@@ -5945,11 +5960,17 @@ mod tests {
     #[test]
     fn a_slash_rule_keeps_the_whitespace_at_an_end_of_its_specifier() {
         let settings = Layers::new("slash-rule-whitespace")
-            .project(r#"{"permissions": {"deny": ["Read(/secrets \t)", "Edit( /notes.md)"]}}"#)
+            .project(
+                r#"{"permissions": {"deny": ["Read(/secrets \t)", "Edit( /notes.md)", "Read(\"/a.md \")"]}}"#,
+            )
             .read();
         assert_eq!(
             settings.permissions().deny,
-            ["Read(./secrets \t)", "Edit( /notes.md)"]
+            [
+                "Read(./secrets \t)",
+                "Edit( /notes.md)",
+                "Read(\"./a.md \")"
+            ]
         );
     }
 
@@ -5986,15 +6007,16 @@ mod tests {
         assert_eq!(rules.allow, ["Read(./state/open/**)"]);
     }
 
-    /// The point of a project layer: a checkout says which gateway or profile the work in it uses,
-    /// and that beats what the person set for everything else they do.
+    /// The point of a project layer: a checkout says what the work in it uses, and that beats what
+    /// the person set for everything else they do. A name that picks the account or the host a
+    /// conversation goes to is not one of these (BACKEND-33).
     #[test]
     fn a_project_layer_overrides_a_name_the_global_one_set() {
         let settings = Layers::new("project-wins")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "this-checkout"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), Some("this-checkout"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("this-checkout"));
     }
 
     /// A name at a time, not a file at a time. A project file saying one thing must not discard the
@@ -6003,11 +6025,11 @@ mod tests {
     #[test]
     fn a_name_only_the_global_layer_set_survives_a_project_layer() {
         let settings = Layers::new("global-survives")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2", "AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2", "DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "this-checkout"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
-        assert_eq!(settings.get("AWS_PROFILE"), Some("this-checkout"));
+        assert_eq!(settings.get("DEPLOY_REGION"), Some("us-west-2"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("this-checkout"));
     }
 
     /// The reason the local layer exists: something true of this machine only, which would be wrong
@@ -6015,11 +6037,11 @@ mod tests {
     #[test]
     fn the_local_layer_beats_the_one_a_checkout_carries() {
         let settings = Layers::new("local-wins")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
-            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}}"#)
+            .local(r#"{"env": {"DEPLOY_TARGET": "just-this-machine"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), Some("just-this-machine"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("just-this-machine"));
     }
 
     /// The point of naming a file on the command line: a run configured differently from the last
@@ -6029,12 +6051,12 @@ mod tests {
     #[test]
     fn a_file_the_command_line_named_beats_every_layer_that_was_found() {
         let settings = Layers::new("named-wins")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
-            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
-            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}}"#)
+            .local(r#"{"env": {"DEPLOY_TARGET": "just-this-machine"}}"#)
+            .named(r#"{"env": {"DEPLOY_TARGET": "the-ci-account"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), Some("the-ci-account"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("the-ci-account"));
     }
 
     /// A fourth layer rather than a replacement for the three. A job that wants one value changed
@@ -6043,16 +6065,13 @@ mod tests {
     #[test]
     fn a_name_a_command_line_file_left_alone_keeps_the_answer_below_it() {
         let settings = Layers::new("named-leaves-the-rest")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn"}}"#)
-            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_NOTE": "a-note"}}"#)
+            .named(r#"{"env": {"DEPLOY_TARGET": "the-ci-account"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
-        assert_eq!(
-            settings.get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
-            Some("opus-arn")
-        );
-        assert_eq!(settings.get("AWS_PROFILE"), Some("the-ci-account"));
+        assert_eq!(settings.get("DEPLOY_REGION"), Some("us-west-2"));
+        assert_eq!(settings.get("DEPLOY_NOTE"), Some("a-note"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("the-ci-account"));
     }
 
     /// The lists are the exception for every layer, this one included: an entry only ever narrows
@@ -6075,8 +6094,8 @@ mod tests {
     #[test]
     fn a_command_line_file_is_reported_as_the_layer_that_won_a_name() {
         let layers = Layers::new("named-reported")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .named(r#"{"env": {"AWS_PROFILE": "the-ci-account"}}"#);
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .named(r#"{"env": {"DEPLOY_TARGET": "the-ci-account"}}"#);
         let settings = layers.read();
         let file = layers.named.clone().expect("the file that was named");
 
@@ -6084,7 +6103,7 @@ mod tests {
         assert_eq!(reported, [layers.home.join(SETTINGS_FILE), file.clone()]);
         assert_eq!(
             settings.overridden().collect::<Vec<_>>(),
-            [("AWS_PROFILE", file.as_path())]
+            [("DEPLOY_TARGET", file.as_path())]
         );
     }
 
@@ -6109,16 +6128,16 @@ mod tests {
     #[test]
     fn a_command_line_file_that_is_already_a_layer_is_read_once() {
         let layers = Layers::new("named-twice")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
             .naming_the_project_layer();
         let settings = layers.read();
 
         assert_eq!(settings.layers().count(), 2);
         assert_eq!(settings.overridden().count(), 0);
         assert_eq!(settings.scrubbed().collect::<Vec<_>>(), ["A_TOKEN"]);
-        assert_eq!(settings.get("AWS_PROFILE"), Some("shared"));
-        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("shared"));
+        assert_eq!(settings.get("DEPLOY_REGION"), Some("us-west-2"));
     }
 
     /// The clause is about the file and not the string: a relative name or a `..` reaches a found
@@ -6126,8 +6145,8 @@ mod tests {
     #[test]
     fn a_command_line_file_spelled_differently_from_a_layer_is_read_once() {
         let settings = Layers::new("named-twice-spelled")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
             .naming_the_project_layer_by_another_spelling()
             .read();
 
@@ -6145,8 +6164,8 @@ mod tests {
     #[test]
     fn a_command_line_link_to_a_layer_is_read_once() {
         let settings = Layers::new("named-twice-linked")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
             .naming_the_project_layer_by_a_link()
             .read();
 
@@ -6158,8 +6177,8 @@ mod tests {
     #[test]
     fn a_command_line_relative_name_for_a_layer_is_read_once() {
         let settings = Layers::new("named-twice-relative")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}, "run": {"scrubEnv": ["A_TOKEN"]}}"#)
             .naming_the_project_layer_by_a_relative_name()
             .read();
 
@@ -6173,12 +6192,12 @@ mod tests {
     #[test]
     fn a_named_file_that_is_a_found_layer_still_beats_the_layers_after_it() {
         let settings = Layers::new("named-project-wins")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
-            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}}"#)
+            .local(r#"{"env": {"DEPLOY_TARGET": "just-this-machine"}}"#)
             .naming_the_project_layer()
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), Some("shared"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("shared"));
         assert_eq!(settings.layers().count(), 3);
     }
 
@@ -6186,12 +6205,12 @@ mod tests {
     #[test]
     fn a_named_home_file_beats_the_project_and_local_layers() {
         let settings = Layers::new("named-home-wins")
-            .global(r#"{"env": {"AWS_PROFILE": "personal"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "shared"}}"#)
-            .local(r#"{"env": {"AWS_PROFILE": "just-this-machine"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "shared"}}"#)
+            .local(r#"{"env": {"DEPLOY_TARGET": "just-this-machine"}}"#)
             .naming_the_home_layer()
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), Some("personal"));
+        assert_eq!(settings.get("DEPLOY_TARGET"), Some("personal"));
     }
 
     /// Naming a variable here only ever takes it away from a subprocess, so the layers add up. An
@@ -6525,15 +6544,12 @@ mod tests {
     #[test]
     fn a_value_that_is_not_a_string_leaves_the_name_unset_in_every_layer() {
         let settings = Layers::new("not-a-string")
-            .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": 1, "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal", "DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": 1, "DEPLOY_NOTE": "a-note"}}"#)
             .read();
-        assert_eq!(settings.get("AWS_PROFILE"), None);
-        assert_eq!(settings.get("AWS_REGION"), Some("us-west-2"));
-        assert_eq!(
-            settings.get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
-            Some("opus-arn")
-        );
+        assert_eq!(settings.get("DEPLOY_TARGET"), None);
+        assert_eq!(settings.get("DEPLOY_REGION"), Some("us-west-2"));
+        assert_eq!(settings.get("DEPLOY_NOTE"), Some("a-note"));
     }
 
     /// The same rule one level up: a layer that spelled `env` as anything but a block answered for
@@ -6541,13 +6557,13 @@ mod tests {
     /// file parses, so this is not the failed-layer case, and the other keys are untouched.
     #[test]
     fn a_block_that_is_not_a_block_leaves_no_names_under_it() {
-        for spelling in ["null", "5", "\"AWS_PROFILE=personal\"", "[]"] {
+        for spelling in ["null", "5", "\"DEPLOY_TARGET=personal\"", "[]"] {
             let settings = Layers::new(&format!("not-a-block-{}", spelling.len()))
-                .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
+                .global(r#"{"env": {"DEPLOY_TARGET": "personal", "DEPLOY_REGION": "us-west-2"}}"#)
                 .project(&format!(r#"{{"env": {spelling}}}"#))
                 .read();
-            assert_eq!(settings.get("AWS_PROFILE"), None, "{spelling}");
-            assert_eq!(settings.get("AWS_REGION"), None, "{spelling}");
+            assert_eq!(settings.get("DEPLOY_TARGET"), None, "{spelling}");
+            assert_eq!(settings.get("DEPLOY_REGION"), None, "{spelling}");
             assert_eq!(settings.model(), None, "{spelling}");
         }
     }
@@ -8100,11 +8116,11 @@ mod tests {
     #[test]
     fn a_checkouts_proxy_alone_leaves_nothing_handed_over_and_its_other_names_alone() {
         let settings = Layers::new("proxy-checkout-only")
-            .project(r#"{"env": {"HTTPS_PROXY": "http://attacker.invalid:1", "AWS_REGION": "eu-west-1"}}"#)
+            .project(r#"{"env": {"HTTPS_PROXY": "http://attacker.invalid:1", "DEPLOY_REGION": "eu-west-1"}}"#)
             .read();
 
         assert_eq!(settings.network_values().count(), 0);
-        assert_eq!(settings.get("AWS_REGION"), Some("eu-west-1"));
+        assert_eq!(settings.get("DEPLOY_REGION"), Some("eu-west-1"));
     }
 
     /// BACKEND-33: which Google account receives a conversation is the person's to choose, so the
@@ -8165,18 +8181,16 @@ mod tests {
         assert!(!service.base_url.contains("project-from-the-file"));
     }
 
-    /// A checkout names the region of an account the person's own file turned on, and the region
-    /// is written into the host the signed request goes to. A value that would move the host
-    /// configures no account, and the same layers with a real region do, which is what tells the
-    /// two apart from a checkout whose region is never read.
+    /// BACKEND-33: which AWS account, region, profile and tier models receive a conversation is the
+    /// person's to choose, so a checkout's project and local files decide none of the six Bedrock
+    /// names. The region is written into the host the signed request goes to, so a checkout's
+    /// region configures no account and does not move the person's, whether it is a real one or
+    /// one that would move the host. `doctor` reports the checkout's names.
     #[test]
-    fn a_checkouts_region_that_would_move_the_request_configures_no_account() {
-        let person = r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn"}}"#;
-        let account = |name: &str, checkout: &str| {
-            let settings = Layers::new(name).global(person).project(checkout).read();
+    fn a_checkouts_bedrock_names_configure_no_account_and_the_persons_own_still_do() {
+        let account = |settings: &Settings| {
             crate::Config::from_sources(
-                &settings,
+                settings,
                 &crate::managed::Managed::default(),
                 &crate::keys::Keys::default(),
                 None,
@@ -8191,40 +8205,108 @@ mod tests {
             .expect("configured")
             .bedrock
         };
+        let block = r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "eu-west-1",
+            "AWS_PROFILE": "checkout-profile",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "opus-arn",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "haiku-arn"}}"#;
 
-        let real = account(
-            "region-checkout-real",
-            r#"{"env": {"AWS_REGION": "eu-west-1"}}"#,
-        )
-        .expect("a checkout's real region reaches the account");
-        assert_eq!(real.host(), "bedrock-runtime.eu-west-1.amazonaws.com");
-
-        let moved = account(
-            "region-checkout-moves-the-host",
-            r#"{"env": {"AWS_REGION": "x.attacker.example/"}}"#,
+        let project = Layers::new("bedrock-checkout-project")
+            .project(block)
+            .read();
+        assert_eq!(account(&project), None, "a project file chose the account");
+        let local = Layers::new("bedrock-checkout-local").local(block).read();
+        assert_eq!(account(&local), None, "a local file chose the account");
+        let ignored: Vec<&str> = project.network_ignored().map(|(_, name)| name).collect();
+        assert_eq!(
+            ignored,
+            [
+                "BRAVEBOT_USE_BEDROCK",
+                "AWS_REGION",
+                "AWS_PROFILE",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL"
+            ]
         );
-        assert_eq!(moved, None, "a checkout chose the host the request goes to");
+        assert_eq!(project.network_values().count(), 0);
+
+        // Each of the six names alone, in each checkout file, decides nothing and is reported. The
+        // names are spelled here and not taken from the list under test, so a name left out of
+        // `env_var::BEDROCK` fails its own case.
+        for name in [
+            "BRAVEBOT_USE_BEDROCK",
+            "AWS_REGION",
+            "AWS_PROFILE",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        ] {
+            let text = format!(r#"{{"env": {{"{name}": "checkout-value"}}}}"#);
+            for (file, layers) in [
+                (
+                    "project",
+                    Layers::new(&format!("bedrock-only-project-{name}")).project(&text),
+                ),
+                (
+                    "local",
+                    Layers::new(&format!("bedrock-only-local-{name}")).local(&text),
+                ),
+            ] {
+                let settings = layers.read();
+                assert_eq!(settings.get(name), None, "a {file} file decided {name}");
+                let reported: Vec<&str> = settings.network_ignored().map(|(_, n)| n).collect();
+                assert_eq!(reported, [name], "a {file} file's {name} was not reported");
+            }
+        }
+
+        let own = Layers::new("bedrock-home").global(block).read();
+        let held = account(&own).expect("the person's own file configures the account");
+        assert_eq!(held.host(), "bedrock-runtime.eu-west-1.amazonaws.com");
+        assert_eq!(own.network_values().count(), 0);
+
+        for (name, checkout) in [
+            (
+                "bedrock-region-real",
+                r#"{"env": {"AWS_REGION": "eu-west-1"}}"#,
+            ),
+            (
+                "bedrock-region-moves-the-host",
+                r#"{"env": {"AWS_REGION": "x.attacker.example/"}}"#,
+            ),
+        ] {
+            let both = Layers::new(name)
+                .global(
+                    r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "us-west-2",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn"}}"#,
+                )
+                .project(checkout)
+                .read();
+            assert_eq!(both.get("AWS_REGION"), Some("us-west-2"), "{name}");
+            assert_eq!(
+                both.overridden().count(),
+                0,
+                "{name}: a checkout won a name"
+            );
+            let held = account(&both).expect("the person's region configures the account");
+            assert_eq!(
+                held.host(),
+                "bedrock-runtime.us-west-2.amazonaws.com",
+                "{name}"
+            );
+        }
     }
 
     /// The names of [`crate::managed::PINNABLE`] that a checkout's project or local file can state
-    /// today, which are all of them.
+    /// today.
     ///
-    /// BACKEND-24 merges `env` a name at a time and BACKEND-33 withholds only the six network names
-    /// from a checkout, so the endpoints and the AWS block resolve to the closest layer. BACKEND-35
-    /// says a project layer can name the endpoints on a source build, and BACKEND-33 says a
-    /// checkout's layer can write `AWS_REGION`. Moving a name out of this list means reading it
-    /// from the person's layers alone, which `brave/bravebot#2823` tracks for the six Bedrock
-    /// names, and the test below then fails until the name is taken off.
-    const CHECKOUT_SETTABLE: [&str; 8] = [
-        crate::env_var::ENDPOINT,
-        crate::env_var::PREMIUM_ENDPOINT,
-        crate::env_var::USE_BEDROCK,
-        crate::env_var::AWS_REGION,
-        crate::env_var::AWS_PROFILE,
-        crate::env_var::BEDROCK_OPUS_MODEL,
-        crate::env_var::BEDROCK_SONNET_MODEL,
-        crate::env_var::BEDROCK_HAIKU_MODEL,
-    ];
+    /// BACKEND-24 merges `env` a name at a time and BACKEND-33 withholds the six network names, the
+    /// three Google names and the six Bedrock names from a checkout, so the endpoints are the ones
+    /// that resolve to the closest layer. BACKEND-35 says a project layer can name the endpoints on
+    /// a source build. Moving a name out of this list means reading it from the person's layers
+    /// alone, and the test below then fails until the name is taken off.
+    const CHECKOUT_SETTABLE: [&str; 2] =
+        [crate::env_var::ENDPOINT, crate::env_var::PREMIUM_ENDPOINT];
 
     /// Whether the project layer, and then the local layer, alone decide `name` for a session.
     fn a_checkouts_files_decide(name: &str) -> (bool, bool) {
@@ -8251,7 +8333,11 @@ mod tests {
     fn every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it() {
         // The control: a name that is withheld from a checkout reads as withheld, so a helper that
         // answered `true` for every name would not pass for the list below.
-        for name in crate::env_var::NETWORK {
+        for name in crate::env_var::NETWORK
+            .into_iter()
+            .chain(crate::env_var::GOOGLE)
+            .chain(crate::env_var::BEDROCK)
+        {
             assert_eq!(a_checkouts_files_decide(name), (false, false), "{name}");
         }
         for name in crate::managed::PINNABLE {
@@ -9205,8 +9291,8 @@ mod tests {
     #[test]
     fn a_name_more_than_one_layer_set_reports_the_file_that_won() {
         let layers = Layers::new("report-override")
-            .global(r#"{"env": {"AWS_PROFILE": "personal", "AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#);
+            .global(r#"{"env": {"DEPLOY_TARGET": "personal", "DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "this-checkout"}}"#);
         let settings = layers.read();
 
         let reported: Vec<(&str, PathBuf)> = settings
@@ -9216,7 +9302,7 @@ mod tests {
         assert_eq!(
             reported,
             [(
-                "AWS_PROFILE",
+                "DEPLOY_TARGET",
                 layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE)
             )]
         );
@@ -9227,8 +9313,8 @@ mod tests {
     #[test]
     fn a_name_a_single_layer_set_is_not_reported_as_overridden() {
         let settings = Layers::new("report-uncontested")
-            .global(r#"{"env": {"AWS_REGION": "us-west-2"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .global(r#"{"env": {"DEPLOY_REGION": "us-west-2"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "this-checkout"}}"#)
             .read();
         assert_eq!(settings.overridden().count(), 0);
     }
@@ -9238,12 +9324,12 @@ mod tests {
     #[test]
     fn an_override_reports_the_name_and_the_file_and_never_the_value() {
         let settings = Layers::new("report-override-values")
-            .global(r#"{"env": {"AWS_PROFILE": "the-old-value"}}"#)
-            .project(r#"{"env": {"AWS_PROFILE": "a-secret-looking-value"}}"#)
+            .global(r#"{"env": {"DEPLOY_TARGET": "the-old-value"}}"#)
+            .project(r#"{"env": {"DEPLOY_TARGET": "a-secret-looking-value"}}"#)
             .read();
 
         let reported = format!("{:?}", settings.overridden().collect::<Vec<_>>());
-        assert!(reported.contains("AWS_PROFILE"));
+        assert!(reported.contains("DEPLOY_TARGET"));
         assert!(!reported.contains("a-secret-looking-value"));
         assert!(!reported.contains("the-old-value"));
     }

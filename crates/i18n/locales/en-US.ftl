@@ -890,7 +890,7 @@ doctor-confinement-unavailable = confinement unavailable
 doctor-no-network-namespace = network namespaces: unavailable ({ $reason }). A stage with no network, or held to sandbox.network.allowedHosts, is refused here. Allow unprivileged user namespaces to use either.
 # Said only where the kernel cannot hold a connect to a unix socket that has a path to a stage's
 # grants, which is Landlock below ABI 9.
-doctor-sockets-with-a-path-reachable = unix sockets with a path: reachable. Landlock on this kernel is below ABI 9 (Linux 7.1), so a stage under sandbox mode read-only or workspace-write, and a local MCP server under any mode, reaches every such socket, the user's D-Bus, SSH_AUTH_SOCK and docker.sock among them. A stage under strict is refused here.
+doctor-sockets-with-a-path-reachable = unix sockets with a path: reachable. Landlock on this kernel is below ABI 9 (Linux 7.1), so a stage under sandbox mode workspace-write, and a local MCP server under any mode, reaches every such socket, the user's D-Bus, SSH_AUTH_SOCK and docker.sock among them. A stage under strict or read-only is refused here.
 # The network a request actually crosses: which certificate authorities a handshake is validated
 # against, and which proxy it is routed through. Both are stated outside this program, and neither
 # is visible anywhere else when a connection fails.
@@ -934,7 +934,8 @@ permission-rule-empty = is empty
 permission-rule-unclosed-bracket = is missing its closing bracket
 permission-rule-unknown-family = names no family of tools this agent has; use Read, Edit, Bash, WebFetch or Mcp
 permission-rule-empty-brackets = has empty brackets; drop them to mean every use
-permission-rule-whitespace-at-an-end = has whitespace at the start or end of its path, which would be part of a file's name; remove it, or use a * in its place, which also covers other names
+permission-rule-empty-quoted-name = has double quotes around nothing, and no file has an empty name; drop the brackets to mean every use, or put the file's name between the quotes
+permission-rule-whitespace-at-an-end = has whitespace at the start or end of its path, which would be part of a file's name; remove it, or put the whole path in double quotes to mean the name as written
 permission-rule-unanchored = needs a home directory or a settings directory to say where it points
 permission-rule-not-a-domain-rule = needs a domain, written WebFetch(domain:example.com)
 permission-rule-no-domain-named = names no domain after 'domain:'
@@ -1989,6 +1990,7 @@ model-picker-search-placeholder = Search
 model-picker-nothing-matches = nothing matches that
 model-picker-loading = loading models…
 model-picker-listing-lost = the model list was not delivered
+model-picker-unknown-name = the prompt file names { $model }, which the model list does not hold
 picker-current = current
 
 # Choosing how hard to think. The level names are the words sent and stored, so they are not
@@ -2683,11 +2685,11 @@ status-network-by-settings = closed by run.network in { $path }
 status-network-by-a-setting = closed by run.network in a settings file
 status-network-pinned = pinned closed by { $path } and not changeable by a flag or a settings file
 status-network-pinned-by-policy = pinned closed by the managed settings and not changeable by a flag or a settings file
-# Said only under sandbox mode read-only or workspace-write, where the kernel leaves every unix socket that has a path
-# open to the programs a command starts. The note says why, and what strict does there.
+# Said only under sandbox mode workspace-write, where the kernel leaves every unix socket that has a path
+# open to the programs a command starts. The note says why, and what strict and read-only do there.
 status-path-sockets = Programs' unix sockets
 status-path-sockets-reachable = every one with a path is reachable: D-Bus, SSH_AUTH_SOCK, docker.sock
-status-path-sockets-why = Landlock here is below ABI 9 (Linux 7.1), and strict refuses programs
+status-path-sockets-why = Landlock here is below ABI 9 (Linux 7.1), and strict and read-only refuse programs
 # Said only where one of the four sandbox.filesystem lists has an entry. The note names the files.
 status-sandbox-filesystem = Filesystem rules
 status-sandbox-filesystem-counts = { $allow_read } allowRead, { $deny_read } denyRead, { $allow_write } allowWrite, { $deny_write } denyWrite
@@ -4213,6 +4215,10 @@ prompt-file-empty =
     /{ $name } is a prompt file with nothing in it, so the line was not sent: { $path }
 prompt-file-agent-not-a-name =
     /{ $name } is a prompt file whose agent is not a single word, so the line was not sent: { $path }
+prompt-file-model-not-a-name =
+    /{ $name } is a prompt file whose model is not a single word, so the line was not sent: { $path }
+prompt-file-agent-and-model =
+    /{ $name } is a prompt file that names both an agent and a model, and the box holds one form, so the line was not sent: { $path }
 prompt-file-begins-with-a-command =
     /{ $name } is a prompt file that begins with a command, which a file may not start, so the line was not sent: { $path }
 paste-folded = { $lines ->

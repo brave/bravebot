@@ -103,7 +103,7 @@ Reports everything the session knows about itself:
 - the [effort level](#effort-level), and whether this model reads one;
 - which deployment the endpoint names, and **which tier the last turn ran on**, rather than which
   tier the build was compiled to reach;
-- the confinement available here, and under `workspace-write` or `read-only` on a Linux kernel older
+- the confinement available here, and under `workspace-write` on a Linux kernel older
   than Landlock ABI 9 a `Programs' unix sockets` row saying that every socket with a path is
   reachable (D-Bus, `SSH_AUTH_SOCK`, `docker.sock`);
 - turns and tokens spent, and **where the time went**: how much was spent waiting on the model,
@@ -206,6 +206,10 @@ them. See [Choosing a model](../customize/model.md).
 
 In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
 every turn uses that model, so `/model` opens no picker and says so.
+
+`/model` takes no argument, so `/model foo` is a prompt. A [prompt file](#prompt-files) whose front
+matter has a `model` key opens this picker with the cursor on that model, and leaves the file's text
+in the box.
 
 ## `/theme [name]`
 
@@ -1642,6 +1646,11 @@ Review $1 for races, with attention to $ARGUMENTS.
   empty.
 - `agent` makes the box `/agent reviewer <text>`, which runs when you press Enter on it. `description`
   is not used yet.
+- `model` leaves the text in the box and opens the `/model` picker with the cursor on that model, by
+  its key or name. Nothing is chosen until you press Enter on a row, and Esc keeps the current
+  model. A name the list lacks is said. Under `--agent` with a definition that names a model the
+  picker does not open, as `/model` does not. A file with both `agent` and `model`, or a value of
+  more than one word, is refused. `/model <name>` stays a prompt.
 - Only your own `~/.bravebot/prompts` is read, never a project's. A file cannot take a command's name,
   and a file whose text begins with a command word or would run an MCP prompt is refused, so no file
   carries out a command.

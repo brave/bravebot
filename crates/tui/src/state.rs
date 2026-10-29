@@ -576,6 +576,8 @@ pub struct Session {
     pub(crate) away: crate::away::Away,
     /// The person's own prompt-file directory (CMD-17), or `None` where nothing reads one.
     prompt_files: Option<std::path::PathBuf>,
+    /// The model a prompt file named, until the loop opens the model picker on it (CMD-17).
+    model_to_offer: Option<String>,
     /// What the info panel says this session is.
     identity: Identity,
     /// The GitHub repository a `#<number>` in a reply links into: the one the checkout's `origin`
@@ -669,7 +671,7 @@ pub struct Session {
     /// together where they are drawn, so `/sandbox` changes what the screen says.
     pub confinement: String,
     /// Whether this kernel leaves every unix socket that has a path reachable from a confined
-    /// stage, which the opening screen and `/status` say under `read-only` and `workspace-write` (SANDBOX-3). Read at
+    /// stage, which the opening screen and `/status` say under `workspace-write` (SANDBOX-3). Read at
     /// start-up with the confinement above, since the kernel does not change while the session runs.
     pub sockets_with_a_path_reachable: bool,
     /// The sandbox mode programs `run` starts are held to, and who chose it (SANDBOX-22).
@@ -1360,6 +1362,7 @@ impl Session {
             caffeinate: Default::default(),
             away: Default::default(),
             prompt_files: None,
+            model_to_offer: None,
             identity: Identity::default(),
             repository: None,
             scroll: 0,
@@ -2280,34 +2283,10 @@ impl Session {
             return false;
         }
         let line = self.unfolded(self.input.trim());
-        match expand(&directory, &line) {
-            Expansion::NotOne => false,
-            Expansion::Expanded(text) => {
-                // A file's text that would run a prompt of a server once sent is refused as one
-                // that opens with a command is: nothing carries out a line from a file (CMD-26).
-                let runs_a_prompt = self
-                    .servers
-                    .session
-                    .as_ref()
-                    .is_some_and(|servers| servers.prompt_request(&text).is_some());
-                if runs_a_prompt {
-                    let name = line
-                        .trim_start_matches('/')
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or_default()
-                        .to_string();
-                    let path = directory.join(format!("{name}.md")).display().to_string();
-                    self.note(t!(
-                        prompt_file_begins_with_a_command,
-                        name = name,
-                        path = path
-                    ));
-                    return true;
-                }
-                self.put_in_the_box(text);
-                true
-            }
+        let (text, model) = match expand(&directory, &line) {
+            Expansion::NotOne => return false,
+            Expansion::Expanded(text) => (text, None),
+            Expansion::ExpandedForModel { text, model } => (text, Some(model)),
             Expansion::Refused { name, why } => {
                 let path = directory.join(format!("{name}.md")).display().to_string();
                 self.note(match why {
@@ -2317,13 +2296,55 @@ impl Session {
                     Why::AgentNotAName => {
                         t!(prompt_file_agent_not_a_name, name = name, path = path)
                     }
+                    Why::ModelNotAName => {
+                        t!(prompt_file_model_not_a_name, name = name, path = path)
+                    }
+                    Why::AgentAndModel => {
+                        t!(prompt_file_agent_and_model, name = name, path = path)
+                    }
                     Why::BeginsWithACommand => {
                         t!(prompt_file_begins_with_a_command, name = name, path = path)
                     }
                 });
-                true
+                return true;
             }
+        };
+        // A file's text that would run a prompt of a server once sent is refused as one
+        // that opens with a command is: nothing carries out a line from a file (CMD-26).
+        let runs_a_prompt = self
+            .servers
+            .session
+            .as_ref()
+            .is_some_and(|servers| servers.prompt_request(&text).is_some());
+        if runs_a_prompt {
+            let name = line
+                .trim_start_matches('/')
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let path = directory.join(format!("{name}.md")).display().to_string();
+            self.note(t!(
+                prompt_file_begins_with_a_command,
+                name = name,
+                path = path
+            ));
+            return true;
         }
+        self.put_in_the_box(text);
+        // Held for the loop to open the picker on it. Nothing is chosen here (CMD-17).
+        self.model_to_offer = model;
+        true
+    }
+
+    /// The model a prompt file named, for the picker to open on, taken so it is offered once.
+    pub fn take_model_to_offer(&mut self) -> Option<String> {
+        self.model_to_offer.take()
+    }
+
+    /// Whether the last prompt file expanded named a model the picker has yet to open on.
+    pub fn has_model_to_offer(&self) -> bool {
+        self.model_to_offer.is_some()
     }
 
     /// Refuse a line that runs a prompt of an MCP server when the words after its name are not

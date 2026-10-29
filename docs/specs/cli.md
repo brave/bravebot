@@ -1000,10 +1000,11 @@ command adds `"BRAVEBOT_USE_BEDROCK": "1"` to the `env` block of the person's ow
 keeping what the file says, and says it did. Nothing is written where the machine-level layer sets
 the name, where an export or a settings file sets it to something other than 1, where the person's
 own file names it already, or where only a provider block's account signed in. A checkout's file
-setting it to 1 does not stop the record. Where an export sets it to 1 over a settings file that sets
-something else, the file is left as it is, and the command says a session uses Bedrock only with the
-export. Where the person's own file names it with a value other than 1, the command says it left the
-file as it is. Where the switch cannot be recorded, the command exits with the failure status: there
+naming it is ignored ([BACKEND-33](backends.md#BACKEND-33)), so it neither stops the record nor is
+read as a setting. Where an export sets it to 1 over a settings file that sets something else, the
+file is left as it is, and the command says a session uses Bedrock only with the export. Where the
+person's own file names it with a value other than 1, the command says it left the file as it is.
+Where the switch cannot be recorded, the command exits with the failure status: there
 is no home directory, the file holds no settings document, or its `env` is not a block. Where the
 configuration names no account, it exits with the configuration status and names `AWS_REGION` and
 the tier variables. Where the name is set to something other than 1, it says that turns Bedrock off
@@ -1133,12 +1134,14 @@ still cannot be exported, and the export is what a turn signs with.
 Picking Bedrock is read as the opt-in because an account signed in to that no session then uses is a
 sign-in that did nothing. The switch names a destination, which a settings file may name
 ([BACKEND-1](backends.md#BACKEND-1)), and `import-providers` writes the same entry for an account it
-imports ([IMPORT-3](import.md#IMPORT-3)). It goes in the person's own file, the lowest layer, so a
-checkout's file or the machine-level layer that turns Bedrock off still does. A checkout's file
-turning it on is read only in that checkout, so it is no record. The switch is read as on only where
-a tier variable names a model: without one the tier variables' account is not one a session could
-use, and an `AWS_REGION` exported for a provider block would bring a sign-in to the default AWS
-profile nobody asked for. It is written only once the tier variables' account signs in. A provider
+imports ([IMPORT-3](import.md#IMPORT-3)). It goes in the person's own file, the lowest layer, so the
+machine-level layer that turns Bedrock off still does. A checkout's file naming the switch is
+ignored and reported by `doctor` whether it says 1 or something else ([BACKEND-33](backends.md#BACKEND-33)),
+so it is neither a record nor a veto: only the person's layers, the machine-level layer and an
+export decide. The switch is read as on only where a tier variable names a model: without one the
+tier variables' account is not one a session could use, and an `AWS_REGION` exported for a provider
+block would bring a sign-in to the default AWS profile nobody asked for. It is written only once the
+tier variables' account signs in. A provider
 block's account needs no switch, and a switch written for an account that failed would turn on a
 backend that cannot sign. A value a file already holds is never changed: a file turning Bedrock off
 is somebody's decision, and an export over it is for that shell.

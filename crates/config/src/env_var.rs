@@ -104,6 +104,28 @@ pub const NETWORK: [&str; 6] = [
 /// project and key a request to Vertex AI is made under.
 pub const GOOGLE: [&str; 3] = [GOOGLE_API_KEY, GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION];
 
+/// The six names that choose which AWS account, region, profile and tier models a conversation is
+/// sent through (BACKEND-33), read from the person's own layers alone as [`NETWORK`] is: a checkout
+/// that named them would choose the account the conversation goes to.
+pub const BEDROCK: [&str; 6] = [
+    USE_BEDROCK,
+    AWS_REGION,
+    AWS_PROFILE,
+    BEDROCK_OPUS_MODEL,
+    BEDROCK_SONNET_MODEL,
+    BEDROCK_HAIKU_MODEL,
+];
+
+/// Whether `name` is one of the network, Google or Bedrock names, which a checkout's files decide
+/// nothing for.
+pub fn is_person_only(name: &str) -> bool {
+    NETWORK
+        .iter()
+        .chain(&GOOGLE)
+        .chain(&BEDROCK)
+        .any(|listed| *listed == name)
+}
+
 /// Every name a build may bake in, in the order `doctor` reports them.
 ///
 /// CRASH_REPORT_URL is the one name no build needs: without it the build reports no crashes.

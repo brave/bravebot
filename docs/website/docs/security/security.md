@@ -64,10 +64,10 @@ Without an entry for the owner, the run prompt in the terminal interface numbers
 your own ssh files name and asks which one to offer, once per owner, and keeps the answer in
 `~/.bravebot/reach.jsonl`. An entry still decides over a kept answer.
 
-On Linux, on a kernel whose Landlock is older than its ninth version, a program also reaches every
+On Linux, on a kernel whose Landlock is older than its ninth version, a program under `workspace-write` also reaches every
 unix socket that has a path, whatever these settings say: the ssh agent's, with every key it holds,
 `docker.sock`, and the session bus, through which `systemd-run --user` starts a program outside the
-sandbox. On Linux, signals are not scoped. On macOS a stage signals only processes its own profile started. A connection to an abstract unix socket made outside the stage (the
+sandbox. `strict` and `read-only` are refused there. On Linux, signals are not scoped. On macOS a stage signals only processes its own profile started. A connection to an abstract unix socket made outside the stage (the
 X server, the session bus on some systems) is refused only on a kernel with Landlock's sixth version
 or later, and is reachable below it.
 
@@ -324,7 +324,7 @@ nothing looser, so a checkout cannot unconfine whoever opens it. Its `strict` is
 settings or the managed file chose `read-only`, since `strict` writes the session's directories. A managed file that pins a mode is a
 floor: a flag or a setting looser than it stops the session from starting, and `bravebot doctor`
 says which files disagree. A pin of `strict` also refuses `read-only` (on Windows, where `read-only` reads no more than `strict`, a pin of `strict` keeps it), and a pin of `read-only` also
-refuses `strict`, since `strict` writes the session's directories. A refusal of a mode looser than a pin says which of reading and writing the mode does more of, and names the pinned mode to use. `strict` is refused on a Linux kernel below Landlock ABI 9, which is Linux 7.1, because a program there reaches every unix socket that has a path, such as the session bus, the ssh agent and `docker.sock`. The refusal says so. Under `workspace-write` and `read-only` on such a kernel, the opening screen, `/status` and `bravebot doctor` each show a line saying that programs reach sockets with a path. A local MCP server reaches these sockets under every mode. `read-only` also closes the network
+refuses `strict`, since `strict` writes the session's directories. A refusal of a mode looser than a pin says which of reading and writing the mode does more of, and names the pinned mode to use. `strict` and `read-only` are refused on a Linux kernel below Landlock ABI 9, which is Linux 7.1, because a program there reaches every unix socket that has a path, such as the session bus, the ssh agent and `docker.sock`. The refusal says so. Under `workspace-write` on such a kernel, the opening screen, `/status` and `bravebot doctor` each show a line saying that programs reach sockets with a path. A local MCP server reaches these sockets under every mode. `read-only` also closes the network
 for every program whatever `run.network` says, and lends none the remote credentials, so `git push`
 and `gh pr create` fail. Under it the agent's file tools write nothing either,
 a manifest run that writes a file is refused, a delegate is not given a checkout of its own, a

@@ -68,7 +68,8 @@ line may hold and what the person is told, and [mcp.md](mcp.md) says what is lab
 
 **Prompt files are looked up, and are never commands.** A slash word that names a file in the
 person's own `~/.bravebot/prompts` is replaced in the box by the file's text, for the person to read
-and send. CMD-17 says what the lookup reads and what it never does.
+and send, and a `model` key opens the model picker on that model. CMD-17 says what the lookup reads
+and what it never does.
 
 ## Where a command may come from
 
@@ -1123,14 +1124,31 @@ text would begin with a command word is not used: the line stays as typed, a not
 nothing is sent. The last refusal keeps CMD-1: no command is carried out from text read out of a
 file.
 
-The one command a file can fill is `/agent`. An `agent: name` key of one word makes the box
-`/agent name <text>`, which is only a line in the box until the person presses Enter on it, and the
-name is then compared against the resolved set as for any other ([addressing-a-definition.md](addressing-a-definition.md)).
+The `agent` and `model` keys each name a form the file fills, and each form is only a line or a
+picker until the person acts on it. An `agent: name` key of one word makes the box
+`/agent name <text>`, which is sent when the person presses Enter on it, and the name is then
+compared against the resolved set as for any other ([addressing-a-definition.md](addressing-a-definition.md)).
+A `model: name` key of one word leaves the box holding the text and opens the `/model` picker with
+the cursor on the row whose key, and failing that whose name, is `name`, with the model in use still
+marked as current. Nothing is chosen until the person presses Enter on a row, and Esc leaves the
+model as it was. A name the list does not hold is said, and the cursor opens where `/model` opens
+it. It is asked for as `/model` is (CMD-8), so mid-turn it opens as `/model` does, and in a session
+started under a definition that fixes the model ([cli.md](cli.md)) it opens no picker and says so,
+and the text stays in the box. A `model` or `agent` of more than one word, and a file that has both
+keys, are refused as a file that cannot be used is, since the box holds one form. The text of a file
+that has a `model` key is held to the same rule as one that has none: it may not begin with a
+command word.
+
+`/model <name>` is not a command. It stays a prompt (CMD-2), because the picker is where a name is
+checked against the roster and where the person sees the row, and a command that took the name
+would apply it without that look. The box also keeps the file's text to send after the choice, which
+a `/model <name>` line has no room for.
 
 **Why.** A prompt used often should be a word, and the file is the person's own, so it is as trusted
 as their typing. Putting the text in the box before it is sent keeps what reaches the planner a line
 the person saw. Refusing a body that opens with a command, and not looking the name up in a
-directory listing, keep CMD-1 and CMD-7 whole.
+directory listing, keep CMD-1 and CMD-7 whole. The `model` name only moves a cursor, so no model is
+put in force by a file, and `!` commands and `@` includes are not read from a file.
 
 `verified-by: bravebot_tui::app::a_prompt_file_expands_into_the_box_and_is_sent_by_the_next_enter`
 `verified-by: bravebot_tui::app::a_slash_word_with_no_file_is_sent_as_typed`
@@ -1139,9 +1157,18 @@ directory listing, keep CMD-1 and CMD-7 whole.
 `verified-by: bravebot_tui::app::a_prompt_file_is_not_expanded_in_shell_mode`
 `verified-by: bravebot_tui::app::enter_on_a_highlighted_row_takes_the_row_not_a_file`
 `verified-by: bravebot_tui::app::a_prompt_file_expands_while_a_turn_is_running_before_it_is_queued`
+`verified-by: bravebot_tui::app::a_prompt_file_naming_a_model_fills_the_box_and_asks_for_the_picker`
+`verified-by: bravebot_tui::app::a_prompt_file_naming_a_model_opens_no_picker_under_a_definition_that_names_one`
+`verified-by: bravebot_tui::app::a_prompt_file_naming_a_model_asks_for_the_picker_while_a_turn_is_running`
+`verified-by: bravebot_tui::app::escape_on_the_picker_a_prompt_file_opened_leaves_the_model_and_the_text`
+`verified-by: bravebot_tui::model_prompt::a_picker_opened_for_a_named_model_puts_the_cursor_on_it_when_the_rows_arrive`
+`verified-by: bravebot_tui::model_prompt::a_named_model_the_list_lacks_is_said_and_the_cursor_stays_on_the_one_in_use`
+`verified-by: bravebot_tui::prompt_files::a_model_in_the_front_matter_is_named_beside_the_body`
+`verified-by: bravebot_tui::prompt_files::a_model_that_is_not_one_word_or_comes_with_an_agent_is_refused`
 `verified-by: bravebot_tui::prompt_files::arguments_and_positions_are_filled_from_what_followed_the_name`
 `verified-by: bravebot_tui::prompt_files::text_that_came_from_the_line_is_not_read_for_placeholders`
 `verified-by: bravebot_tui::prompt_files::front_matter_is_not_put_in_the_box`
+`verified-by: bravebot_tui::prompt_files::bang_and_at_text_in_a_file_is_left_as_written`
 `verified-by: bravebot_tui::prompt_files::an_agent_in_the_front_matter_fills_the_agent_form`
 `verified-by: bravebot_tui::prompt_files::an_agent_that_is_not_one_word_is_refused`
 `verified-by: bravebot_tui::prompt_files::only_a_plain_name_is_looked_up_and_only_inside_the_directory`

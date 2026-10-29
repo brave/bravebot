@@ -215,13 +215,10 @@ each row's line names.
 
 A rule written about one of the names is asked in the deny, ask and allow lists and for `Read` and
 `Edit`, since a rule is matched under a key built apart from the map's. A deny or ask rule reaches
-the other name of the NFC and NFD group on purpose and an allow rule does not. A path specifier with
-whitespace at an end is reported and not read, since the whitespace is as likely padding as part of the
-name ([PERM-3](permissions.md#PERM-3)), so a name with whitespace at its end and a name of whitespace
-alone cannot be written as a rule about that file, and a rule typed for one is reported. A `*` in a
-rule is always a wildcard, so a name holding `*` cannot be written as a rule about that file alone
-either, and nothing reports it, since the rule is a pattern. A name with whitespace at its start is
-written from `./`. The test lists the three kinds against #2864 and fails once one can be written.
+the other name of the NFC and NFD group on purpose and an allow rule does not. A name with
+whitespace at its end, a name of whitespace alone and a name holding `*` are written as a path in
+double quotes, which is one name taken as written ([PERM-3](permissions.md#PERM-3)), so the test
+asks them as `Read("./name")`. A name with whitespace at its start is written from `./`.
 
 A listing is asked the same pairs. It reports two entries for two files, and a refusal of one reaches
 a listing of the other only within a group.

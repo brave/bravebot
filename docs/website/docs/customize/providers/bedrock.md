@@ -6,7 +6,9 @@ description: Reach models through your own AWS account, name more than three, an
 
 # Reaching a model through AWS Bedrock
 
-Set these variables to reach models through your own AWS account:
+Set these variables to reach models through your own AWS account. They are read from your own
+settings file, a `--settings` file outside the project and the environment, and from no project or
+local file: `bravebot doctor` reports a checkout's file that names one, and the name decides nothing.
 
 | Variable | What it sets |
 |---|---|
