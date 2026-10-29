@@ -3035,14 +3035,34 @@ fn temporary_directory() -> PathBuf {
 /// sits beside where it was installed. A `bin` directory brings its parent, where an installation
 /// keeps what its programs load. None of these reaches the home directory: a `PATH` naming it, or a
 /// directory above it, is left out, and so is a parent inside it, since `~/.cargo` holds a registry
-/// token beside `~/.cargo/bin`. The program's own `bin` directory is the exception where it sits
-/// deeper in the home than that, as `nvm` installs one, since that parent is the installation the
-/// program came from. A row that is, holds or lies inside a credential location is left out
-/// whatever named it.
+/// token beside `~/.cargo/bin`. A program installed inside the home is read as the file a person
+/// read and not as its directory, which the caller adds. A row that is, holds or lies inside a
+/// credential location is left out whatever named it.
 pub(crate) fn program_reads(
     program: &Path,
     searched: &[PathBuf],
     home: Option<&Path>,
+) -> Vec<PathBuf> {
+    reads_of(program, searched, home, false)
+}
+
+/// [`program_reads`] for a local server, which has no toolchain list to bring the installation a
+/// version manager keeps in the home. The program's own `bin` directory brings its parent where it
+/// sits deeper in the home than a directory directly inside it, as `nvm` installs one, since that
+/// parent is the installation the program came from.
+pub(crate) fn server_program_reads(
+    program: &Path,
+    searched: &[PathBuf],
+    home: Option<&Path>,
+) -> Vec<PathBuf> {
+    reads_of(program, searched, home, true)
+}
+
+fn reads_of(
+    program: &Path,
+    searched: &[PathBuf],
+    home: Option<&Path>,
+    with_installation: bool,
 ) -> Vec<PathBuf> {
     let home = home.map(canonical);
     let outside_home = |path: &Path| home.as_ref().is_none_or(|home| !home.starts_with(path));
@@ -3063,7 +3083,7 @@ pub(crate) fn program_reads(
         .parent()
         .filter(|directory| directory.file_name() == Some(OsStr::new("bin")))
         .and_then(Path::parent)
-        .filter(|installation| below_the_top_of_home(installation))
+        .filter(|installation| with_installation && below_the_top_of_home(installation))
     {
         reads.push(installation.to_path_buf());
     }
@@ -6793,6 +6813,30 @@ mod tests {
         assert!(rows.contains(&PathBuf::from("/opt/tools/bin")));
         assert!(rows.contains(&PathBuf::from("/opt/tools")));
         assert!(!rows.contains(&PathBuf::from(format!("{HOME}/.cargo"))));
+    }
+
+    /// A program under a `bin` directory deep in the home (`nvm`'s layout) brings no row for the
+    /// installation above that directory from `run`, and a local server keeps the row for it. The
+    /// regression it rejects: `run` reading a parent inside the home, which SANDBOX-18 leaves out.
+    #[test]
+    fn a_program_deep_in_the_home_brings_no_installation_row_to_a_stage_but_does_to_a_server() {
+        let installation = format!("{HOME}/.tools/versions/v24");
+        let program = format!("{installation}/bin/tool");
+        let searched = vec![PathBuf::from(format!("{installation}/bin"))];
+
+        let stage = program_reads(Path::new(&program), &searched, Some(Path::new(HOME)));
+        let server = server_program_reads(Path::new(&program), &searched, Some(Path::new(HOME)));
+
+        assert!(!stage.contains(&PathBuf::from(&installation)), "{stage:?}");
+        assert!(stage.contains(&PathBuf::from(format!("{installation}/bin"))));
+        assert!(server.contains(&PathBuf::from(&installation)), "{server:?}");
+
+        let confined = confinement(&["/work/project"]).with_mode(SandboxMode::Strict);
+        let policy = confined.policy(&step(&program, &[]), Path::new("/work/project"), &[]);
+        assert!(!reads(&policy, &installation));
+        assert!(!reads(&policy, &format!("{HOME}/.tools")));
+        assert!(!reads(&policy, HOME));
+        assert!(reads(&policy, &program), "the program is read as a file");
     }
 
     /// A directory the search names is no read row where it holds a credential location or lies

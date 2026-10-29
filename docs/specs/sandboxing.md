@@ -1412,7 +1412,9 @@ cache is where any build may write ([SANDBOX-15](#SANDBOX-15)); the credential s
 ([SANDBOX-16](#SANDBOX-16)); each directory the session was opened on, to read and write; the
 session's scratch directory, to read and write; and the plan's directory as the place it starts.
 No row names the directories its program is read from or the two files the step names, since the
-machine is read. Where the stage carries the remote scope, the socket `SSH_AUTH_SOCK` names in its
+machine is read. A local MCP server, which is not a stage, also reads the installation above its
+program's `bin` directory when that sits deeper in the home ([SERVERS-10](mcp-servers.md#SERVERS-10)).
+Where the stage carries the remote scope, the socket `SSH_AUTH_SOCK` names in its
 own environment is a write row ([SANDBOX-3](#SANDBOX-3)). Nothing else is in it: no write outside
 those, no credential location the stage's scope does not name, and no socket for a stage without
 the remote scope.
@@ -1519,7 +1521,8 @@ the hooks and the configuration too: `git init` and `git clone` write both from 
 `git remote add`, `git push -u` and a checkout that tracks a remote branch write the configuration,
 so a refusal there is a git that does not work. A program installed inside the
 home is read as the file a person read and not as its directory, so that granting a program does not
-open the home. The persistence locations are refused for writing on macOS because a program started
+open the home. A local MCP server also reads the installation above its program's `bin` directory when
+that sits deeper in the home ([SERVERS-10](mcp-servers.md#SERVERS-10)). The persistence locations are refused for writing on macOS because a program started
 later by a shell, by launchd, systemd or a desktop session, or by git (`core.fsmonitor`,
 `core.pager`, a `!` alias, a credential helper) runs as the account with no profile around it, so a
 write there reaches past the stage that made it. The scratch directory is held to the directory the session
@@ -1586,6 +1589,7 @@ makes. A Windows container refuses a policy that carries a refusal at all.
 `verified-by: bravebot_agent::confine::an_assignment_in_front_of_a_push_removes_its_scope`
 `verified-by: bravebot_agent::confine::a_program_at_the_top_of_the_home_is_granted_as_a_file_and_not_as_the_home`
 `verified-by: bravebot_agent::confine::the_path_outside_the_home_is_read_and_the_homes_own_bin_brings_no_parent`
+`verified-by: bravebot_agent::confine::a_program_deep_in_the_home_brings_no_installation_row_to_a_stage_but_does_to_a_server`
 `verified-by: bravebot_sandbox::rules::a_verbatim_drive_path_loses_its_prefix_and_nothing_else_does`
 `verified-by: bravebot_sandbox::windows::what_every_container_reads_is_the_machines_own_directories`
 `verified-by: bravebot_sandbox::windows::nothing_else_is_taken_to_be_readable_by_every_container`
