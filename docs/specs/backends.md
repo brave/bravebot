@@ -4240,7 +4240,7 @@ how many rows a list hid is not reported. Import copies both lists ([IMPORT-3](i
 
 **Why.** A gateway's roster is too large to list and not all of it works: for OpenAI the listing
 includes embedding, speech and image models. Naming `models` turns the fetch off and loses the
-reported windows, so a person who wants to hide a few rows had no way to do it. A list is a
+reported windows, so hiding a few rows without a list costs every window the gateway reports. A list is a
 person's statement about what to offer, which is the same footing as `models`, so it is read where
 `provider` is and decides nothing from fetched content: the ids compared are the ones the person
 wrote against the ids the gateway listed, and the result is only which rows a picker draws.
