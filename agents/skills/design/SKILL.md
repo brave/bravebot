@@ -208,6 +208,10 @@ Compose from these before inventing a new pattern.
   presses the Thinking button the working row offers once thinking has arrived, and it is plain text.
 - **Tray**: what is said about sending docks onto the top edge of the composer at the composer's
   width (backend not set up, the queue). What needs attention floats above it as a pill.
+- **Window fault screen** (`WindowFault.tsx`): when the page itself fails, the error card centred
+  on the app ground with the title "This window hit an error", one sentence, a primary Reload, a
+  Copy details icon button and a collapsed Technical details holding the error, the components and
+  the stack as plain text. It stands in for the page and has no other chrome.
 - **Toast**: bottom-right of the conversation card. Confirmations clear themselves after four
   seconds; errors stay until dismissed and use `role="alert"`.
 - **Inspector**: one head, one row height and one empty state for every list in it.

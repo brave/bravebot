@@ -475,6 +475,10 @@ what that is worth and where it stops.
 `verified-by: bravebot_agent::turn::a_credential_the_line_itself_carries_stops_the_line`
 `verified-by: bravebot_agent::turn::a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there`
 `verified-by: bravebot_agent::turn::a_credential_the_destination_already_held_does_not_refuse_the_line_carrying_it`
+`verified-by: bravebot_agent::workspace::a_destination_that_is_not_there_has_no_text_to_scan`
+`verified-by: bravebot_agent::workspace::a_destination_exactly_the_size_of_the_budget_is_read_in_full`
+`verified-by: bravebot_agent::workspace::a_destination_one_byte_past_the_budget_is_not_read`
+`verified-by: bravebot_agent::workspace::a_destination_with_a_byte_that_is_not_text_is_decoded_with_the_rest_kept`
 
 <a id="CRED-12"></a>
 ### CRED-12: withdrawn, replaced by CRED-13
@@ -1321,6 +1325,7 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   bounded, and past the bound neither is done. A finding that could not be acted on would stop a
   line and leave the value where it landed, which is worse than saying nothing, so nothing is
   said. A turn that wanted to get past this would arrange for the destination to be large first.
+  The read-back's boundary and its other arms are pinned under [CRED-11](#CRED-11).
 
 - **A line gets the refusal and not the question.** A value that declared itself is refused at the
   run tool as it is at a write tool, but the inferred layer's finding has nowhere to be put to

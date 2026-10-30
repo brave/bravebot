@@ -63,6 +63,7 @@ pub enum Action {
     ChooseEffort,
     /// Take a level by name without opening the picker.
     SetEffort(String),
+    Variant(String),
     /// Say which model the planner may consult, take one by name, or drop the choice. Empty says.
     /// Needs the configuration to resolve the name against, which the loop owns.
     Advisor(String),
@@ -2438,7 +2439,7 @@ fn click_footer(session: &mut Session, target: crate::state::Footer) -> Action {
     match target {
         // The ladder short of bypassing: a click never grants what stops every later question
         // being asked (MOUSE-14).
-        Footer::Mode => session.cycle_permission_mode_short_of_bypass(),
+        Footer::Mode => session.cycle_permission_mode_by_click(),
         Footer::Trail => session.toggle_trail(),
         Footer::Shortcuts => session.toggle_shortcuts(),
         Footer::Info => session.toggle_panel(),

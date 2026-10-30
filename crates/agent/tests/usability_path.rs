@@ -126,6 +126,7 @@ fn with_environment<T>(directories: &[&Path], home: &Path, body: impl FnOnce() -
     unsafe {
         std::env::set_var("PATH", std::env::join_paths(directories).expect("a path"));
         std::env::set_var("HOME", home);
+        std::env::remove_var("BRAVEBOT_HOME");
     }
     let result = body();
     for (name, value) in previous {

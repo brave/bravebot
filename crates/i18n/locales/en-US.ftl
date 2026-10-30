@@ -138,6 +138,7 @@ mode-ask = ◇ asking before it acts
 mode-accept-edits = ⏵ accept edits on
 mode-plan = ⏸ plan mode on
 mode-bypass = ⏵⏵ bypass permissions on
+mode-auto = ⏵⏵ auto mode on
 
 cli-options-heading = Options:
 cli-option-file = Include a workspace file as context (repeatable)
@@ -195,6 +196,12 @@ cli-accept-edits-not-with-bypass =
     --accept-edits is refused with { $flag }: the second answers every question the first answers and more, so say which you mean
 cli-accept-edits-needs-a-run =
     --accept-edits is for a one-shot run, such as -p "task". A session has the mode key
+cli-auto-not-with-bypass =
+    --auto is refused with { $flag }: the second answers every question the first answers and more, so say which you mean
+cli-auto-not-with-accept-edits =
+    --auto is refused with --accept-edits: auto also answers a write the way accepting edits does, so give only --auto
+cli-auto-needs-a-run =
+    --auto is for a one-shot run, such as -p "task". A session has the mode key
 cli-option-vet =
     For this run, let a check answer: content it finds nothing in is promoted without asking you,
     and where nobody can be asked, anything else is kept back
@@ -211,6 +218,10 @@ cli-bypass-and-sandbox-disagree =
 cli-option-accept-edits =
     For a one-shot run, write files without asking. Commands, fetches and a write that would
     create a credential are still refused
+cli-option-auto =
+    For a one-shot run, let a classifier answer a command the sandbox confines and the first fetch of
+    a URL, and write files without asking. Anything the classifier does not allow is refused, and so
+    is a write that would create a credential
 cli-option-help = Show this message
 cli-option-version = Show the version
 
@@ -639,6 +650,9 @@ doctor-gateway-keys-unreadable =
 doctor-ended = the report above holds a problem that ends this run in failure
 doctor-gateway-models-absent = none configured (the gateway is asked what it serves)
 doctor-gateway-models-compiled = { $models } (built in, since this service has no listing; name any other the same way)
+doctor-gateway-lists-label = model lists
+doctor-gateway-whitelist = whitelist names { $count } of the models the gateway lists, and the rest are hidden
+doctor-gateway-blacklist = blacklist hides { $count } of the models the gateway lists
 doctor-region = region
 doctor-profile = profile
 doctor-profile-absent = default credentials
@@ -713,6 +727,8 @@ doctor-settings-plan-ignored =
     planModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-processor-ignored =
     processorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-commit-message-ignored =
+    commitMessage in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-agent-ignored =
     agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-shared-skill-directories-ignored =
@@ -3300,6 +3316,7 @@ command-request = Show the last request sent to the model, and where each part o
 command-model = Choose which model to think with
 command-theme = Choose which theme paints the interface
 command-effort = Choose how hard to think before answering
+command-variant = Pick a named set of options the model offers, list them, or drop the pick
 command-advisor = Name the model the planner may consult, say which it may, or drop the choice
 command-style = Choose how the planner answers: list the styles, pick one, or clear the pick
 command-mode = Keep a skill applied to every turn: list skills, pick one, or leave
@@ -3592,6 +3609,7 @@ session-cd-needs-a-path = /cd needs a directory, as in /cd ~/projects/other
 session-directory-changed = now working in { $directory }, and trusting it for this session
 # The mode the person was in, taken away by a settings layer of the directory they moved into.
 session-bypass-made-unreachable = permissions.bypassUnreachable is set here, so bypassing is off and the session is asking again
+session-bg-auto = /bg is refused in auto, because a session nobody is watching has no one to put a question to when the classifier does not allow it. Switch to another mode first, or use a one-shot run.
 session-bg-bypass = /bg is refused in bypass, because a session nobody is watching does not run in a mode that answers every question. Switch to another mode first, or use a one-shot run.
 session-bg-option-lost = /bg is refused because this session was started with { $flag }, which a background session does not receive. Start a session without that option to use /bg.
 session-bg-sandbox-moved = /bg is refused because /sandbox moved this session to { $mode }, and a background session starts in { $settled }. Run /sandbox { $settled } first to use /bg.
@@ -3674,6 +3692,12 @@ session-language-set = the interface will be in { $language } from the next star
 session-language-auto = the interface will follow the settings file and the environment from the next start
 session-language-not-saved = this session cannot keep a choice, so the language is unchanged
 session-no-such-language = no catalog for { $language }; the catalogs are { $available }
+session-variant-set = requests to this model carry the { $variant } variant from the next turn
+session-variant-dropped = no variant; requests carry the model's own options alone
+session-variant-in-force = the { $variant } variant is in force; this model offers { $names }
+session-variant-listed = no variant is in force; this model offers { $names }
+session-variant-none-offered = { $model } offers no variants
+session-no-such-variant = this model has no variant named { $variant }; it offers { $names }
 session-advisor-set = the planner may consult { $model } from the next turn, which spends that model's tokens
 session-advisor-in-force = the planner may consult { $model }
 session-advisor-none = no advisor; try /advisor followed by a model name
@@ -4947,6 +4971,9 @@ sessions-screen-interrupt-new-title = Stop this turn and begin a session where �
 sessions-screen-interrupt-body = The turn that is running is stopped, as Escape stops it, and this session is saved as it stands.
 sessions-screen-note-directory-gone = { $directory } is no longer there.
 sessions-screen-note-wait-for-turn = There is no session to ask about: begin one when the turn has ended.
+sessions-screen-note-busy-request = A request is running: opening, copying or beginning a session ends this one, so do it when the request has ended.
+sessions-screen-note-busy-plan = A plan is running: opening, copying or beginning a session ends this one, so do it when the plan has ended.
+sessions-screen-note-busy-command = A command is running: opening, copying or beginning a session ends this one, so do it when the command has ended.
 sessions-screen-open-not-started = Could not find the program to start the session with.
 sessions-screen-open-not-a-session = That is not the name of a session.
 sessions-screen-open-failed = Could not start the session: { $problem }
@@ -5201,3 +5228,9 @@ ui-settings-language-unsaved = Couldn't save the language.
 ui-settings-language-unread = Couldn't read the language setting.
 ui-settings-restart = Restart
 ui-settings-restart-running = A turn is still running. Restart once it has finished or been stopped.
+gcloud-not-installed = The Google Cloud CLI (`gcloud`) was not found. Install it and run `gcloud auth application-default login`, or set GOOGLE_API_KEY to use Google Vertex AI with a key.
+gcloud-refused = The Google Cloud CLI gave no access token ({ $detail }). Run `gcloud auth application-default login`.
+gcloud-no-token = the reply was not a token
+gcloud-no-reason = the Google Cloud CLI gave no reason
+gcloud-login-incomplete = the sign-in did not complete
+doctor-gateway-token-google-cloud = none needed (the Google Cloud CLI is asked for an access token)

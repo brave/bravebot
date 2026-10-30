@@ -53,6 +53,9 @@ pub enum BackendError {
     NoGatewayToken {
         provider: String,
     },
+    /// The Google Cloud CLI gave no access token for a Vertex AI project that takes no key
+    /// ([BACKEND-65](../../../docs/specs/backends.md#BACKEND-65)).
+    GoogleCloud(crate::gcloud::GcloudError),
     /// The failure and the number of requests handed to egress, including probes.
     /// Zero means preparation failed before egress; a policy refusal still counts as an attempt.
     Attempted {
@@ -78,6 +81,7 @@ impl fmt::Display for BackendError {
                 "no credential for the {provider} gateway: set one of the variables its `env` names, \
                  or `options.apiKey` in its settings block"
             ),
+            Self::GoogleCloud(e) => write!(f, "{e}"),
             // Counts belong to structured diagnostics; preserve the underlying error's display.
             Self::Attempted { cause, .. } => write!(f, "{cause}"),
         }
@@ -168,6 +172,12 @@ impl BackendError {
                 attempts, cause, ..
             } => return cause.diagnosis().after(*attempts),
             Self::NoGatewayToken { .. } => return Diagnosis::of(Category::Unconfigured).after(0),
+            // A missing CLI is a machine that is not set up, as a missing token variable is. A CLI
+            // that gave no token is a sign-in that is missing or ended.
+            Self::GoogleCloud(crate::gcloud::GcloudError::NotInstalled) => {
+                return Diagnosis::of(Category::Unconfigured).after(0);
+            }
+            Self::GoogleCloud(_) => return Diagnosis::of(Category::Unauthorized).after(0),
             Self::Aichat(error) => match error {
                 // Callers handle cancellation separately; its fallback diagnosis stays internal.
                 ChatError::Encode(_) | ChatError::Cancelled => Category::Internal,
@@ -1045,9 +1055,31 @@ impl<'a> Backend<'a> {
         say: impl FnMut(String),
     ) -> Result<(), BackendError> {
         let Some(bedrock) = config.bedrock_for(model) else {
-            return Ok(());
+            return if Self::signs_in_with_google_cloud(config, model) {
+                crate::gcloud::sign_in_if_needed(say).map_err(BackendError::GoogleCloud)
+            } else {
+                Ok(())
+            };
         };
         Self::sign_in_to(bedrock, say)
+    }
+
+    /// Whether `model` is served by a Vertex AI project that no key was found for, so that the
+    /// Google Cloud CLI is what signs it in ([BACKEND-65]).
+    ///
+    /// [BACKEND-65]: ../../../docs/specs/backends.md#BACKEND-65
+    fn signs_in_with_google_cloud(config: &Config, model: &str) -> bool {
+        Self::signs_in_with_google_cloud_by(config, model, |name| std::env::var(name).ok())
+    }
+
+    fn signs_in_with_google_cloud_by(
+        config: &Config,
+        model: &str,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> bool {
+        config
+            .provider_for(model)
+            .is_some_and(|(provider, _)| provider.needs_google_cloud_token(lookup))
     }
 
     /// [`Backend::sign_in_if_needed`] for one AWS account, named by the account rather than by a
@@ -1160,9 +1192,12 @@ impl<'a> Backend<'a> {
     /// having the sign-in report back, because what it would return is "nothing happened", and a
     /// caller that has already dismantled its display to find that out has paid the whole cost.
     pub fn needs_sign_in(config: &Config, model: &str) -> bool {
-        config
-            .bedrock_for(model)
-            .is_some_and(|bedrock| !Self::signed_in_to(bedrock))
+        match config.bedrock_for(model) {
+            Some(bedrock) => !Self::signed_in_to(bedrock),
+            None => {
+                Self::signs_in_with_google_cloud(config, model) && !crate::gcloud::is_signed_in()
+            }
+        }
     }
 
     /// Whether the premium key would be presented on this backend's requests.
@@ -1468,13 +1503,22 @@ fn gateway_client<'a>(
     wire_model: &str,
     egress: &'a Egress,
 ) -> Result<GatewayClient<'a>, BackendError> {
-    let (token, headers) = gateway_request_parts(provider, |name| std::env::var(name).ok())?;
+    let ((token, headers), access_token) = gateway_parts_or_google_token(
+        provider,
+        |name| std::env::var(name).ok(),
+        crate::gcloud::token,
+    )?;
     Ok(match provider.protocol() {
-        Protocol::ChatCompletions => GatewayClient::Chat(
-            AichatClient::new(config, egress)
+        Protocol::ChatCompletions => {
+            let client = AichatClient::new(config, egress)
                 .for_gateway(provider, wire_model, token)
-                .with_gateway_headers(headers),
-        ),
+                .with_gateway_headers(headers);
+            GatewayClient::Chat(if access_token {
+                client.with_access_token()
+            } else {
+                client
+            })
+        }
         Protocol::Messages => GatewayClient::Messages(
             AnthropicClient::new(config, egress, provider, wire_model, token)
                 .with_gateway_headers(headers),
@@ -1513,6 +1557,25 @@ fn gateway_request_parts(
     let token = gateway_token(provider, &lookup)?;
     let headers = provider.request_headers(&lookup);
     Ok((token, headers))
+}
+
+/// [`gateway_request_parts`], asking `google_token` for an access token where the provider is a
+/// Vertex AI project and no key resolves ([BACKEND-65]). The last member says the token is one.
+///
+/// A key that resolves is used and `google_token` is not called, so a person with a key never
+/// starts the CLI.
+///
+/// [BACKEND-65]: ../../../docs/specs/backends.md#BACKEND-65
+fn gateway_parts_or_google_token(
+    provider: &bravebot_config::provider::Provider,
+    lookup: impl Fn(&str) -> Option<String>,
+    google_token: impl FnOnce() -> Result<bravebot_config::Secret, crate::gcloud::GcloudError>,
+) -> Result<(GatewayRequestParts, bool), BackendError> {
+    if provider.needs_google_cloud_token(&lookup) {
+        let token = google_token().map_err(BackendError::GoogleCloud)?;
+        return Ok(((Some(token), provider.request_headers(&lookup)), true));
+    }
+    Ok((gateway_request_parts(provider, &lookup)?, false))
 }
 
 /// A client for a configured gateway, whichever protocol it speaks.
@@ -4678,6 +4741,135 @@ mod tests {
             "no remedy: {said}"
         );
         assert!(said.contains("options.apiKey"), "no remedy: {said}");
+    }
+
+    fn vertex_config(entry: &str) -> Config {
+        with_providers(&format!(r#"{{"provider": {{"google-vertex": {entry}}}}}"#))
+    }
+
+    const VERTEX_MODEL: &str = "google-vertex/google/gemini-2.5-flash";
+    const A_PROJECT: &str = r#"{"options": {"project": "example-project-1"}}"#;
+    const A_PROJECT_AND_A_KEY_VARIABLE: &str =
+        r#"{"env": ["GOOGLE_API_KEY"], "options": {"project": "example-project-1"}}"#;
+
+    fn a_key_in_the_environment(name: &str) -> Option<String> {
+        (name == env_var::GOOGLE_API_KEY).then(|| "a-key".to_string())
+    }
+
+    /// BACKEND-65: with a project and no key the CLI's token is what the request carries, and it
+    /// is marked as an access token so that it goes as a bearer. A block naming no variable and a
+    /// block naming one that holds nothing are both a project with no key.
+    #[test]
+    fn a_vertex_project_with_no_key_is_sent_the_token_the_cli_gives() {
+        for entry in [A_PROJECT, A_PROJECT_AND_A_KEY_VARIABLE] {
+            let config = vertex_config(entry);
+            let (provider, _) = config.provider_for(VERTEX_MODEL).expect("offered");
+            let ((token, _), access_token) = gateway_parts_or_google_token(
+                provider,
+                |_| None,
+                || Ok(bravebot_config::Secret::new("placeholder-t")),
+            )
+            .expect("resolved");
+            assert_eq!(token.expect("a token").expose(), "placeholder-t", "{entry}");
+            assert!(access_token, "{entry}");
+        }
+    }
+
+    /// BACKEND-65: a key that resolves is used and the CLI is never started.
+    #[test]
+    fn a_vertex_project_with_a_key_never_asks_the_cli() {
+        let config = vertex_config(A_PROJECT_AND_A_KEY_VARIABLE);
+        let (provider, _) = config.provider_for(VERTEX_MODEL).expect("offered");
+        let ((token, _), access_token) =
+            gateway_parts_or_google_token(provider, a_key_in_the_environment, || {
+                panic!("the CLI was asked although a key resolved")
+            })
+            .expect("resolved");
+        assert_eq!(token.expect("a key").expose(), "a-key");
+        assert!(!access_token);
+    }
+
+    /// BACKEND-65: the CLI's refusal ends the request before anything is sent, as its own failure.
+    #[test]
+    fn a_refusal_by_the_cli_ends_the_request_naming_the_cli() {
+        let config = vertex_config(A_PROJECT);
+        let (provider, _) = config.provider_for(VERTEX_MODEL).expect("offered");
+        for refusal in [
+            crate::gcloud::GcloudError::NotInstalled,
+            crate::gcloud::GcloudError::Refused {
+                detail: "no credentials".into(),
+            },
+        ] {
+            let failure = gateway_parts_or_google_token(provider, |_| None, || Err(refusal))
+                .expect_err("refused");
+            assert!(matches!(failure, BackendError::GoogleCloud(_)));
+            assert!(
+                format!("{failure}").contains("gcloud auth application-default login"),
+                "{failure}"
+            );
+        }
+    }
+
+    /// BACKEND-65: express mode, a proxy named in `baseURL`, a block with an `authorization` header of
+    /// its own and another gateway are not asked of the CLI, since the token goes to Google's Vertex
+    /// host and nowhere else, and only where nothing else authenticates the request.
+    #[test]
+    fn only_a_vertex_project_at_a_google_host_with_no_other_credential_is_given_the_cli_token() {
+        for (state, entry) in [
+            ("express mode", r#"{"options": {}}"#),
+            (
+                "a proxy",
+                r#"{"options": {"project": "example-project-1", "baseURL": "https://proxy.example.invalid/v1"}}"#,
+            ),
+            (
+                "a header of its own",
+                r#"{"options": {"project": "example-project-1", "headers": {"authorization": "Bearer mine"}}}"#,
+            ),
+        ] {
+            let config = vertex_config(entry);
+            let (provider, _) = config.provider_for(VERTEX_MODEL).expect("offered");
+            let ((_, _), access_token) = gateway_parts_or_google_token(
+                provider,
+                |_| None,
+                || panic!("{state}: the CLI was asked"),
+            )
+            .expect("resolved without it");
+            assert!(!access_token, "{state}");
+        }
+        let gateway = with_a_gateway();
+        let (provider, _) = gateway.provider_for("z-ai/glm-4.6").expect("offered");
+        let failure = gateway_parts_or_google_token(provider, |_| None, || panic!("asked"))
+            .expect_err("refused");
+        assert!(matches!(failure, BackendError::NoGatewayToken { .. }));
+    }
+
+    /// BACKEND-9, BACKEND-65: the sign-in is due for a model such a project serves and for no
+    /// other, and not where a key resolves.
+    #[test]
+    fn the_cli_sign_in_is_due_only_for_a_vertex_project_with_no_key() {
+        let config = vertex_config(A_PROJECT_AND_A_KEY_VARIABLE);
+        let none = |_: &str| None;
+        assert!(Backend::signs_in_with_google_cloud_by(
+            &config,
+            VERTEX_MODEL,
+            none
+        ));
+        assert!(!Backend::signs_in_with_google_cloud_by(
+            &config,
+            VERTEX_MODEL,
+            a_key_in_the_environment
+        ));
+        assert!(!Backend::signs_in_with_google_cloud_by(
+            &config,
+            DEFAULT_MODEL,
+            none
+        ));
+        let express = vertex_config(r#"{"options": {}}"#);
+        assert!(!Backend::signs_in_with_google_cloud_by(
+            &express,
+            VERTEX_MODEL,
+            none
+        ));
     }
 
     /// A block naming nowhere for a credential to live is somebody saying the gateway wants none,

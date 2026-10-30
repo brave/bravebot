@@ -23,6 +23,7 @@ governs:
   - crates/cli/src/doctor.rs
   - crates/cli/src/plain.rs
   - crates/bedrock/src/credentials.rs
+  - crates/agent/src/gcloud.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/turns.rs
   - crates/tui/src/app/models.rs
@@ -542,6 +543,44 @@ the model or the messages a turn built would be deciding what was asked rather t
 `verified-by: bravebot_aichat::lib::model_options_cannot_overwrite_what_the_turn_built`
 `verified-by: bravebot_aichat::lib::a_model_with_no_options_adds_nothing_to_the_body`
 `verified-by: bravebot_config::provider::model_options_are_carried_without_being_interpreted`
+
+<a id="BACKEND-66"></a>
+### BACKEND-66: a model's variants are named option sets a person picks, merged as its options are
+
+A configured model may carry `variants`, a map of a name to an object. A variant the person picked is
+merged into the request body as the model's `options` are ([BACKEND-15](#BACKEND-15)): carried whole,
+never interpreted, and unable to replace a field the turn itself built, which includes the level
+`/effort` chose ([BACKEND-20](#BACKEND-20)) and the model and the messages. Where a variant and the
+model's `options` set one field the variant's wins, and a request that names no variant carries the
+options alone, so a model with variants sends the body it sent before it had them. A variant with
+`"disabled": true`, or whose body is not an object, is not listed and cannot be picked.
+
+`/variant` lists the names the model in force offers, picks one, or with `off` drops the pick. A name
+the model does not offer changes nothing and says which it does, and a model that offers none says so
+rather than store a name for a later model to take. The pick is a person's own act and the program
+never makes one: nothing derives a variant from the prompt, the conversation or a previous turn, and
+none is in force until somebody typed a name. It is held for the session and is not recorded. A name is
+looked up in whichever model is in force when a request is built, so a pick made under one model adds
+nothing under another that has no variant of that name.
+
+Variants are read from the layers that may name `provider` ([BACKEND-24](#BACKEND-24)), because they
+are part of the block. They are merged into a request to a gateway in each protocol that merges
+`options`, and a Bedrock request, which merges none, carries none.
+
+**Why.** Without a variant, a person who wants a thinking budget or a verbosity for some turns and not
+others edits the settings file between them. Bundling the fields under a name makes the switch one word, and
+carrying them as `options` are keeps the program from learning what any of them mean, which is the
+footing [BACKEND-15](#BACKEND-15) rests on. Letting the pick lose to the turn's own fields is what keeps
+a file from deciding what was asked, and keeping the choice a person's is what keeps
+[BACKEND-20](#BACKEND-20) true of every field a variant can carry.
+
+`verified-by: bravebot_config::provider::a_disabled_variant_is_not_listed`
+`verified-by: bravebot_config::provider::a_variant_is_merged_over_the_models_options`
+`verified-by: bravebot_aichat::lib::a_chosen_variant_reaches_the_body_and_none_chosen_adds_nothing`
+`verified-by: bravebot_aichat::lib::a_variant_cannot_overwrite_what_the_turn_built`
+`verified-by: bravebot_agent::turn::a_chosen_variant_is_merged_into_the_planners_request`
+`verified-by: bravebot_tui::app::a_variant_the_model_offers_is_picked_and_reaches_the_next_turn`
+`verified-by: bravebot_tui::app::a_model_offering_no_variants_takes_no_pick`
 
 <a id="BACKEND-16"></a>
 ### BACKEND-16: a gateway credential is named rather than resolved ahead of time
@@ -1280,7 +1319,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | the fifteen `env` names of the network, Google and Bedrock sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside the checkout; a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
@@ -2268,12 +2307,15 @@ above the process environment and therefore above every other source. It is
 These names may be pinned, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
 `AWS_PROFILE`, the three tier models of BACKEND-33's table, and the `provider` block. Every other
-name in the file decides nothing, the signing key and the key id included, save the server lists
-below. A pinned name is resolved from this file alone, and a name it does not pin resolves exactly
+name in the file decides nothing, the signing key and the key id included, save `crashReports` and
+the server lists below. A pinned name is resolved from this file alone, and a name it does not pin resolves exactly
 as it would with no such file.
 
-The file may also keep an MCP server from starting, and that is the one thing it decides that is
-not a destination: `"mcp": { "allow": [...], "deny": [...] }` names servers by the host a url
+The file may also turn crash reports off with `"crashReports": false`, which outranks the person's
+own file and which `true` does not reverse ([CRASH-4](crash-reports.md#CRASH-4)).
+
+The file may also keep an MCP server from starting, which is not a destination either:
+`"mcp": { "allow": [...], "deny": [...] }` names servers by the host a url
 reaches or the command a program runs, and a session starts none the lists refuse.
 [SERVERS-12](mcp-servers.md#SERVERS-12) is those keys, and says why the layer may keep a server
 from starting and never add one.
@@ -3096,8 +3138,10 @@ exactly what is offered, as for any other gateway.
 ### BACKEND-50: the environment names a Google Vertex service when no block does
 
 `GOOGLE_API_KEY` configures the `google-vertex` service, whether it is exported or set in the `env`
-block of the person's own settings file ([BACKEND-33](#BACKEND-33) withholds the three names from a checkout's), and has to hold a value: a missing or blank key configures nothing. With
-`GOOGLE_CLOUD_PROJECT` beside it, and `VERTEX_LOCATION` where the location is not `global`, the
+block of the person's own settings file ([BACKEND-33](#BACKEND-33) withholds the three names from a checkout's), and has to hold a value: a missing or blank key configures nothing, unless
+`GOOGLE_CLOUD_PROJECT` is set, which configures the service of [BACKEND-49](#BACKEND-49) with no key
+([BACKEND-65](#BACKEND-65)). With
+`GOOGLE_CLOUD_PROJECT` beside the key, and `VERTEX_LOCATION` where the location is not `global`, the
 service is the one of [BACKEND-49](#BACKEND-49), and a project or location that BACKEND-49 refuses
 configures nothing. With no project, or a blank one, it is the express service of
 [BACKEND-58](#BACKEND-58), and `VERTEX_LOCATION` is not read. The service it configures lists no
@@ -4127,6 +4171,88 @@ others.
 `verified-by: bravebot_tui::app::a_turn_waits_for_a_lookup_once_and_the_loop_still_takes_its_late_answer`
 `verified-by: bravebot_tui::app::a_turn_waits_for_the_window_it_is_sized_against_for_a_bounded_time`
 
+<a id="BACKEND-65"></a>
+### BACKEND-65: a Vertex AI project with no key is signed in by the Google Cloud CLI
+
+Where a request goes to a `google-vertex` service that a project builds ([BACKEND-49](#BACKEND-49)), at
+a Google Vertex host over `https`, and no key resolves ([BACKEND-50](#BACKEND-50)) and the block states no
+`authorization` header, bravebot asks the Google Cloud CLI for an access token with
+`gcloud auth application-default print-access-token` and sends it as `authorization: Bearer <token>`.
+A key that resolves is sent as [BACKEND-51](#BACKEND-51) says and the program is not started. Express
+mode, and an entry whose `baseURL` is not a Google Vertex host, are never sent a token.
+
+The environment names the service by `GOOGLE_CLOUD_PROJECT` alone ([BACKEND-50](#BACKEND-50)). The
+program is `gcloud`, found on `PATH` without the directories a stage may write, started with fixed arguments and
+this agent's own credentials taken off its environment, and no value from a settings file, a model or the
+workspace reaches it ([BACKEND-1](#BACKEND-1), [SANDBOX-30](sandboxing.md#SANDBOX-30)). It is not named by
+a file. `GOOGLE_APPLICATION_CREDENTIALS` is read by the CLI and not by bravebot.
+
+The sign-in is asked for before work starts, and only for a model this service answers
+([BACKEND-9](#BACKEND-9)): where the CLI gives no token, `gcloud auth application-default login` is run and
+each line it writes is shown as it arrives. A CLI that is missing, or that gives no token, ends the request before
+anything is sent, naming `gcloud auth application-default login`, and the output it printed is not quoted.
+The token is in no trace, no error and no session record.
+
+**Why.** An organisation can disallow API keys for a project, and a person who is signed in with `gcloud`
+has no key to give. The CLI resolves the credential file, impersonation and refresh, which are Google's to
+change, and the token is a bearer at the host the project and location build, which is a destination
+somebody reviewed ([routing.md](routing.md)). A `baseURL` that names a proxy would send the person's
+Google sign-in to a host the program did not compile in, so it is sent a key or nothing.
+
+No answer is kept, where [BACKEND-10](#BACKEND-10) keeps one until near its expiry: the command
+states no expiry, and an answer without one is not kept. A token is asked for with each request and the
+check before a turn is one more run of the program.
+
+`verified-by: bravebot_config::provider::only_a_project_reached_at_a_google_vertex_host_takes_the_google_cloud_token`
+`verified-by: bravebot_config::provider::a_key_or_an_authorization_header_of_the_blocks_own_leaves_no_need_for_a_token`
+`verified-by: bravebot_config::lib::a_project_alone_names_the_service_the_google_cloud_cli_signs_in`
+`verified-by: bravebot_aichat::lib::a_google_vertex_access_token_is_sent_as_a_bearer_and_not_in_the_key_header`
+`verified-by: bravebot_agent::backend::a_vertex_project_with_no_key_is_sent_the_token_the_cli_gives`
+`verified-by: bravebot_agent::backend::a_vertex_project_with_a_key_never_asks_the_cli`
+`verified-by: bravebot_agent::backend::a_refusal_by_the_cli_ends_the_request_naming_the_cli`
+`verified-by: bravebot_agent::backend::only_a_vertex_project_at_a_google_host_with_no_other_credential_is_given_the_cli_token`
+`verified-by: bravebot_agent::backend::the_cli_sign_in_is_due_only_for_a_vertex_project_with_no_key`
+`verified-by: bravebot_cli::doctor::a_vertex_project_with_no_key_is_reported_as_signed_in_by_the_google_cloud_cli`
+`verified-by: bravebot_agent::gcloud::the_token_is_asked_for_with_the_application_default_credentials_command`
+`verified-by: bravebot_agent::gcloud::the_program_is_given_the_application_default_credentials_arguments`
+`verified-by: bravebot_agent::gcloud::a_token_the_cli_prints_is_returned_without_its_newline`
+`verified-by: bravebot_agent::gcloud::a_refusal_reports_the_first_line_of_stderr_and_never_a_token_it_printed`
+`verified-by: bravebot_agent::gcloud::a_reply_that_is_not_one_token_is_refused_and_not_quoted`
+`verified-by: bravebot_agent::gcloud::a_gcloud_a_stage_may_write_is_not_the_one_run`
+`verified-by: bravebot_agent::gcloud::the_sign_in_reports_each_line_the_cli_writes_and_its_failure`
+
+<a id="BACKEND-68"></a>
+### BACKEND-68: a provider entry may narrow a fetched roster with a whitelist and a blacklist
+
+A `provider` entry may carry `whitelist` and `blacklist`, each an array of model ids as the gateway
+names them. They are applied to the rows a gateway listed ([BACKEND-19](#BACKEND-19)), after the rows
+that service cannot reach are left out: the whitelist first, so that only the ids it names remain, then
+the blacklist, which removes the ids it names from those. A window and a parameter list the gateway
+reported are kept for each row that remains. An id that the gateway does not list changes nothing, an
+entry with neither key is offered everything it listed, and a `whitelist` that is an empty array offers
+nothing. A value that is not an array is no list, and an item that is not a non-empty string is not
+read.
+
+The lists apply only to a fetched roster. An entry that names `models` is offered those and is not
+asked ([BACKEND-19](#BACKEND-19)), so neither list removes a model the entry names. Both are read
+from the layers that may name `provider` ([BACKEND-24](#BACKEND-24)). A name in either list only
+narrows what is offered and grants nothing, so [BACKEND-1](#BACKEND-1) holds, and a model the managed
+layer denies stays denied whatever a person's whitelist names ([BACKEND-48](#BACKEND-48)). `doctor`
+says, for an entry that has them, how many ids each list names. It asks no gateway for a roster, so
+how many rows a list hid is not reported. Import copies both lists ([IMPORT-3](import.md#IMPORT-3)).
+
+**Why.** A gateway's roster is too large to list and not all of it works: for OpenAI the listing
+includes embedding, speech and image models. Naming `models` turns the fetch off and loses the
+reported windows, so hiding a few rows without a list costs every window the gateway reports. A list is a
+person's statement about what to offer, which is the same footing as `models`, so it is read where
+`provider` is and decides nothing from fetched content: the ids compared are the ones the person
+wrote against the ids the gateway listed, and the result is only which rows a picker draws.
+
+`verified-by: bravebot_config::provider::a_whitelist_and_a_blacklist_are_read_as_lists_of_ids`
+`verified-by: bravebot_aichat::models::a_whitelist_and_a_blacklist_narrow_a_fetched_roster_in_that_order`
+`verified-by: bravebot_cli::doctor::doctor_counts_the_ids_a_gateways_lists_name`
+`verified-by: bravebot_config::import::only_the_fields_bravebot_reads_are_written`
+
 ## Known costs
 
 - **Each change of mode costs a full prefix write.** BACKEND-27 and BACKEND-32 mark a cache prefix
@@ -4696,3 +4822,37 @@ others.
 - **A level the service refuses inside the stream is not given up.** Only a refusal by status is, so a
   service that answers 200 and then reports the level as an unsupported value fails the turn at that level,
   and the refusal is not remembered. No service has been seen to do this.
+
+<a id="BACKEND-67"></a>
+### BACKEND-67: a Cloudflare entry is reached at a host built from its account id
+
+A `provider` entry keyed `cloudflare-workers-ai` that states `options.accountId` reaches Cloudflare
+Workers AI through its OpenAI-compatible endpoint, `https://api.cloudflare.com/client/v4/accounts/<accountId>/ai/v1`.
+An entry keyed `cloudflare-ai-gateway` that states `options.accountId` and `options.gatewayId`
+reaches Cloudflare AI Gateway through its OpenAI-compatible route,
+`https://gateway.ai.cloudflare.com/v1/<accountId>/<gatewayId>/compat`. A model on the gateway is named
+`<provider>/<model>`, as `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, and bravebot sends
+the name as written. An `options.baseURL` the entry states is where its requests go regardless, as
+[BACKEND-17](#BACKEND-17) says of every known name.
+
+An entry whose id is missing, or holds a character outside the ones allowed in it, configures no
+service: an account id is letters and digits, and a gateway id is letters, digits, `-` and `_`. The
+gateway has no default id, so an entry that states none configures nothing.
+
+An entry that names no `env` and states no `apiKey` reads its key from `CLOUDFLARE_API_KEY`
+(Workers AI) or `CLOUDFLARE_API_TOKEN` (AI Gateway), the variables opencode reads. The key is sent
+in `authorization` to the built host and to no other, as [BACKEND-16](#BACKEND-16) says of any
+variable a gateway names. The ids are read from `options` only, and `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_GATEWAY_ID` are not read, because a block does no substitution.
+The `cf-aig-authorization` header of a gateway that requires authentication is written in
+`options.headers`.
+
+**Why.** The account id is written into the path of a compiled-in host, so one holding `/`, `@`, `?`
+or `#` would send the key to another route than the one the person named, the argument
+[BACKEND-49](#BACKEND-49) makes about a project. Refusing the entry is the only answer that cannot
+send it anywhere. A guessed gateway id would be a request that fails far from the mistake, as a
+guessed project does.
+
+`verified-by: bravebot_config::provider::a_cloudflare_entry_is_reached_at_the_host_its_ids_build`
+`verified-by: bravebot_config::provider::a_cloudflare_id_that_would_move_the_request_configures_nothing`
+`verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_cloudflare_host_and_a_named_credential_beats_the_default`

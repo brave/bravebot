@@ -16,6 +16,7 @@ governs:
   - crates/tui/src/render/hint.rs
   - crates/config/src/settings.rs
   - install.sh
+  - install.ps1
 documented-by:
   - docs/website/docs/reference/cli.md
   - docs/website/docs/customize/configuration.md
@@ -140,21 +141,25 @@ parameter that would.
 `verified-by: bravebot_tui::app::the_banner_goes_when_the_words_are_sent_or_cleared_and_stays_gone`
 
 <a id="LINK-6"></a>
-### LINK-6: the installer registers the handler on Linux, and a setting stops links being opened
+### LINK-6: the installer registers the handler on Linux and Windows, and a setting stops links being opened
 
 On Linux, `install.sh` writes `bravebot-handler.desktop` into `$XDG_DATA_HOME/applications` (or
 `~/.local/share/applications`), with `Terminal=true`, an `Exec` line running the installed binary
 with `--handle-uri %u`, and `MimeType=x-scheme-handler/bravebot;`, then points the scheme at it
 through `xdg-mime` where that is installed. Nothing is registered where `BRAVEBOT_NO_DEEP_LINKS` is
 set, where there is no data directory to write in, or where the binary's path holds a character an
-`Exec` line would read as something else. A registration that fails does not fail the install. The
+`Exec` line would read as something else. On Windows, `install.ps1` replaces the person's own
+`HKCU\Software\Classes\bravebot` key with a URL protocol entry whose `shell\open\command` runs the
+installed `bravebot.exe`, a console program that Windows opens a terminal for, as
+`"<path>" --handle-uri "%1"`. It writes nothing where `BRAVEBOT_NO_DEEP_LINKS` is set or where the
+path holds a quote, a percent sign or a line break, and registers only after the binary is in
+place. A registration that fails does not fail the install. The
 `deepLinks` setting, when it is the boolean `false`, makes `--handle-uri` refuse every link, with the
 status for a configuration problem ([CLI-6](cli.md#CLI-6)), before a link is read; a quoted `"false"`
 leaves links on. An administrator who wants the registration gone removes the entry.
 
-macOS and Windows are not built: the first needs an application bundle that declares the scheme, and
-the second a registry entry written by the installer package. Until they are, a link does nothing
-there.
+macOS is not built: it needs an application bundle that declares the scheme. Until it is, a link
+does nothing there.
 
 **Why.** Registration is how an operating system finds the program, and it is the person's to
 withhold. The setting is the one thing a person can say once and keep, for a machine whose
@@ -168,3 +173,8 @@ settings file is merged from. A person who sets only the setting keeps an entry 
 `verified-by: bravebot_cli::running::a_link_that_asks_for_more_or_is_switched_off_starts_nothing`
 `verified-by: bravebot_cli::installer_deep_link::the_entry_runs_the_binary_in_a_terminal_with_the_link`
 `verified-by: bravebot_cli::installer_deep_link::nothing_is_registered_where_it_is_switched_off_or_the_path_is_unsafe`
+`verified-by: bravebot_cli::installer_powershell::the_install_registers_the_binary_as_the_handler_for_bravebot_links`
+`verified-by: bravebot_cli::installer_powershell::nothing_is_registered_where_links_are_switched_off`
+`verified-by: bravebot_cli::installer_powershell::a_path_a_command_line_would_misread_is_not_written_into_the_handler`
+`verified-by: bravebot_cli::installer_powershell::a_refused_link_registration_leaves_the_install_and_says_so`
+`verified-by: bravebot_cli::installer_powershell::a_refused_install_registers_no_handler`

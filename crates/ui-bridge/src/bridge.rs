@@ -358,6 +358,7 @@ impl Bridge {
                 request.optional_string("interface").as_deref(),
                 self.settings.as_deref(),
             )),
+            "window.fault" => crate::window_fault::record(request),
             other => Err(Failure::bad_request(format!("unknown method `{other}`"))),
         }
     }

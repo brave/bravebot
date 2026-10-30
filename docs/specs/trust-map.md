@@ -348,15 +348,22 @@ its current file decisions rather than substituting the map from before the turn
 also retain current file decisions on every returned error or cancellation, as
 [manifest.md](manifest.md) requires.
 
-Approvals based on a preview are checked against the path's revision before effect entry or
-vouching. A changed path cannot spend the old approval. Changes to another path do not invalidate
-that approval. A backup records the trust of its bytes at capture under the same boundary. On a
-volume that folds case (TRUST-2), every spelling of a path is that path, both for the writer an
-active path refuses and for the revision an approval is checked against, so a run line redirecting
-to one file under two such spellings is refused as a second writer to it. Canonically equivalent
-spellings are one path here on every volume, because refusing a writer and invalidating an approval
-only narrow. On a volume that holds two such names apart, a second writer to the other name may be
-refused, and on one that does not, no second writer to the one file is let in.
+Approvals based on a preview are checked before effect entry against the path's revision taken
+when the preview was drawn, so a changed path cannot spend the old approval. A vouch is checked
+against the path's stamp, which is that revision and the number of `run` lines started, both
+taken when the preview was drawn and compared as numbers. A `run` line that starts while the
+person is asked voids a vouch, because a program opens files its line does not name and moves no
+revision. A vouch answered after that is thrown away and the read says so. A change to another
+path invalidates neither an approval nor a vouch, but any `run` line that started voids a vouch.
+The count is compared only for a vouch and for the write-back exception in
+[WRITE-4](tools/write-file.md#WRITE-4), which compares it separately. A backup records the trust
+of its bytes at capture under the same boundary. On a volume that folds case (TRUST-2), every
+spelling of a path is that path, both for the writer an active path refuses and for the revision an
+approval is checked against, so a run line redirecting to one file under two such spellings is
+refused as a second writer to it. Canonically equivalent spellings are one path here on every
+volume, because refusing a writer and invalidating an approval only narrow. On a volume that holds
+two such names apart, a second writer to the other name may be refused, and on one that does not,
+no second writer to the one file is let in.
 
 `verified-by: bravebot_tui::sessions::failed_manifest_retains_file_decisions_live_and_resumed`
 `verified-by: bravebot_tui::sessions::cancelled_manifest_retains_file_decisions_live_and_resumed`
@@ -381,6 +388,10 @@ refused, and on one that does not, no second writer to the one file is let in.
 `verified-by: bravebot_core::file_authority::a_decision_through_an_equivalent_spelling_moves_the_revision_of_the_path`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_through_a_canonically_equivalent_spelling_is_read_back_untrusted_under_either`
 `verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_equivalent_spellings_is_refused_as_a_second_writer`
+`verified-by: bravebot_core::policy::a_vouch_for_the_version_shown_is_spent_on_it`
+`verified-by: bravebot_core::policy::a_vouch_is_not_spent_on_a_version_nobody_was_shown`
+`verified-by: bravebot_core::policy::a_vouch_is_not_spent_after_a_program_started_while_the_question_was_open`
+`verified-by: bravebot_agent::tools::a_yes_is_not_spent_when_a_program_started_while_the_person_was_asked`
 
 **Why writing trusted data never asks.** Trusted data means the turn observed nothing untrusted,
 so it holds no byte an attacker influenced, and the destination only ever gains trust. There is
@@ -1108,10 +1119,22 @@ resume, a fork, the session `/clear` begins and the copy `/branch` carries on in
 ([SESSION-31](sessions.md#SESSION-31)) each open a new directory, and the one belonging to the
 session they followed is removed rather than handed on.
 
+Ending the session waits a quarter of a second at most for the directory to go. The removal runs on
+a thread of its own that keeps the directory's lock until it has finished, so a directory too large
+to go in that time is still being removed while the process runs, and a session opening beside it
+does not take it for a leftover ([TRUST-25](#TRUST-25)). If the process ends first, what remains is
+what a killed session leaves, and the next session to open takes it. On Windows, where nothing takes
+what a session leaves, ending the session waits for the whole removal.
+
 **Why.** A resume can come days later, and bytes surviving that gap are a cache nothing evicts.
 There is nothing to reconstruct anyway, since the name carries what tells one directory from its
 neighbours rather than the session's identifier. What a cleared context wrote is not something the
 session after it should find lying there either.
+
+**Why the wait is bounded.** A directory can hold a large tree, and a person leaving should not wait
+on removing one. The sweep ([TRUST-25](#TRUST-25)) already takes a directory whose session is gone,
+so handing it the remainder adds no way for one to be left that a killed session did not already
+have.
 
 A `/cd` needs nothing done to the directory, which is the one lifetime rule this location removes
 rather than restates: the directory is not under the working directory, so a move does not leave it
@@ -1119,6 +1142,9 @@ behind, and there is no ordering to get right between removing it and still bein
 (TRUST-13).
 
 `verified-by: bravebot_agent::scratch::nothing_written_in_it_outlives_the_session`
+`verified-by: bravebot_agent::scratch::ending_a_session_does_not_wait_for_a_directory_that_is_slow_to_go`
+`verified-by: bravebot_agent::scratch::leaving_waits_for_a_directory_that_goes_quickly`
+`verified-by: bravebot_agent::scratch::a_directory_being_removed_stays_held_until_it_is_gone`
 `verified-by: bravebot_agent::scratch::no_two_sessions_are_given_the_same_directory`
 
 <a id="TRUST-16"></a>

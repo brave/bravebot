@@ -1280,6 +1280,9 @@ pub struct Config {
     /// `None`, and `inherit`, leave a processor on the turn's own model. [`Config::processor`]
     /// resolves a tier word in it.
     pub processor_model: Option<String>,
+    /// The format `/commit-message` follows when no words are typed after the command, as the
+    /// person's own settings wrote it (CMD-23).
+    pub commit_message_instructions: Option<String>,
     /// The cache lifetime the settings in force chose for requests to a gateway, if they chose one.
     ///
     /// `None` sends no lifetime, so every service keeps its own default. Bedrock accounts carry the
@@ -1562,6 +1565,8 @@ impl Config {
         config.summary_model = settings.summary_model().map(str::to_string);
         config.plan_model = settings.plan_model().map(str::to_string);
         config.processor_model = settings.processor_model().map(str::to_string);
+        config.commit_message_instructions =
+            settings.commit_message_instructions().map(str::to_string);
         let ttl = settings.prompt_cache_ttl();
         config.prompt_cache_ttl = ttl;
         config.bedrock = config.bedrock.map(|account| account.with_cache_ttl(ttl));
@@ -1712,6 +1717,7 @@ impl Config {
             summary_model: None,
             plan_model: None,
             processor_model: None,
+            commit_message_instructions: None,
             prompt_cache_ttl: None,
             context_budget,
             budget_was_chosen,
@@ -4978,16 +4984,10 @@ mod tests {
     fn the_environment_route_needs_a_key_and_a_project_the_host_can_be_built_from() {
         for (state, lookup) in [
             (
-                "a project alone",
-                (|k: &str| {
-                    (k == env_var::GOOGLE_CLOUD_PROJECT).then(|| PLACEHOLDER_PROJECT.to_string())
-                }) as fn(&str) -> Option<String>,
+                "a blank key and no project",
+                (|k: &str| (k == env_var::GOOGLE_API_KEY).then(|| "  ".to_string()))
+                    as fn(&str) -> Option<String>,
             ),
-            ("a blank key", |k: &str| match k {
-                env_var::GOOGLE_API_KEY => Some("  ".into()),
-                env_var::GOOGLE_CLOUD_PROJECT => Some(PLACEHOLDER_PROJECT.into()),
-                _ => None,
-            }),
             ("a project that would move the request", |k: &str| match k {
                 env_var::GOOGLE_API_KEY => Some(PLACEHOLDER_KEY.into()),
                 env_var::GOOGLE_CLOUD_PROJECT => Some("p@evil.invalid".into()),
@@ -5004,6 +5004,41 @@ mod tests {
             let config = resolved(&Settings::default(), lookup, complete_env).expect("configured");
             assert!(vertex_of(&config).is_none(), "{state} configured a service");
         }
+    }
+
+    /// BACKEND-65: a project with no key, or a blank one, configures the project's service, which
+    /// the Google Cloud CLI signs in, and its credential is absent rather than a token.
+    #[test]
+    fn a_project_alone_names_the_service_the_google_cloud_cli_signs_in() {
+        type Lookup = fn(&str) -> Option<String>;
+        let alone: [(&str, Lookup); 2] = [
+            ("a project alone", |k| {
+                (k == env_var::GOOGLE_CLOUD_PROJECT).then(|| PLACEHOLDER_PROJECT.to_string())
+            }),
+            ("a blank key", |k| match k {
+                env_var::GOOGLE_API_KEY => Some("  ".into()),
+                env_var::GOOGLE_CLOUD_PROJECT => Some(PLACEHOLDER_PROJECT.into()),
+                _ => None,
+            }),
+        ];
+        for (state, lookup) in alone {
+            let config = resolved(&Settings::default(), lookup, complete_env).expect("configured");
+            let vertex = vertex_of(&config).unwrap_or_else(|| panic!("{state} named no service"));
+            assert_eq!(
+                vertex.protocol(),
+                provider::Protocol::ChatCompletions,
+                "{state}"
+            );
+            assert!(vertex.takes_google_cloud_token(), "{state}");
+            assert!(
+                matches!(vertex.credential(lookup), provider::Credential::Absent),
+                "{state}"
+            );
+            assert!(vertex.needs_google_cloud_token(lookup), "{state}");
+        }
+        let with_a_key = resolved(&Settings::default(), google_env, complete_env).expect("ok");
+        let vertex = vertex_of(&with_a_key).expect("a service");
+        assert!(!vertex.needs_google_cloud_token(google_env));
     }
 
     #[test]

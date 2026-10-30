@@ -332,6 +332,9 @@ fn carry_out_while_working(
                 session.note(t!(session_sandbox_turn_follows_it).to_string());
             }
         }),
+        Action::Variant(word) => {
+            session.answer_while_working(|session| set_variant(session, beside.config, &word));
+        }
         Action::Advisor(word) => {
             session.answer_while_working(|session| set_advisor(session, beside.config, &word));
         }
@@ -506,6 +509,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         } else {
             Action::SetEffort(level.to_string())
         };
+    }
+    if let Some(word) = argument_to(line, VARIANT_COMMAND) {
+        return Action::Variant(word.to_string());
     }
     if let Some(word) = argument_to(line, ADVISOR_COMMAND) {
         return Action::Advisor(word.to_string());
@@ -1842,6 +1848,19 @@ struct Switch {
     sandbox: crate::sandbox_command::Sandboxed,
 }
 
+/// What `run` settled for one session before `event_loop` begins it, carried from `run` through
+/// `event_loop` to `begin_session`. A `/resume` begins another session with a new one of these.
+struct Startup {
+    confinement: String,
+    sockets_with_a_path_reachable: bool,
+    sandbox: crate::sandbox_command::Sandboxed,
+    start: Start,
+    named: Option<String>,
+    links: Links,
+    skip_permissions: bool,
+    prompts: bravebot_agent::turn::SystemPrompts,
+}
+
 /// Run the interface until the user leaves.
 #[expect(
     clippy::too_many_arguments,
@@ -1918,15 +1937,17 @@ pub fn run(
                     &mut terminal,
                     config,
                     &workspace,
-                    confinement.clone(),
-                    sockets_with_a_path_reachable,
-                    sandbox.clone(),
                     &mut servers,
-                    start,
-                    named.take(),
-                    std::mem::take(&mut links),
-                    skip_permissions,
-                    prompts.clone(),
+                    Startup {
+                        confinement: confinement.clone(),
+                        sockets_with_a_path_reachable,
+                        sandbox: sandbox.clone(),
+                        start,
+                        named: named.take(),
+                        links: std::mem::take(&mut links),
+                        skip_permissions,
+                        prompts: prompts.clone(),
+                    },
                     moments,
                     &mut switch,
                 );
@@ -2049,7 +2070,11 @@ fn handed_to_the_background(
         return Err(t!(bg_unsupported).to_string());
     }
     let Some(mode) = bravebot_session::jobs::Mode::of(session.permission_mode()) else {
-        return Err(t!(session_bg_bypass).to_string());
+        return Err(match session.permission_mode() {
+            bravebot_agent::PermissionMode::Auto => t!(session_bg_auto),
+            _ => t!(session_bg_bypass),
+        }
+        .to_string());
     };
     if let Some(flag) = lost {
         return Err(t!(session_bg_option_lost, flag = flag));
@@ -2180,6 +2205,7 @@ impl RunSettings {
             .with_cache(bravebot_agent::home::cache())
             .with_model(session.model().map(str::to_string))
             .with_effort(session.effort_in_force())
+            .with_variant(session.variant().map(str::to_string))
             .in_account_session(session.account_session().clone())
             .with_permissions(permissions.clone())
             .with_permission_mode(session.live_permission_mode())
@@ -2363,24 +2389,23 @@ fn adopt_settings(
 ///
 /// `Err` is a session that ended before it began: the person left at one of the questions, the
 /// definition it was started under was refused, or the record to resume is held by another process.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "`event_loop` forwards the arguments it was given, and `begin_session` has that one caller"
-)]
 fn begin_session(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
     workspace: &Workspace,
-    confinement: String,
-    sockets_with_a_path_reachable: bool,
-    sandbox: crate::sandbox_command::Sandboxed,
     servers: &mut crate::state::Servers,
-    start: Start,
-    named: Option<String>,
-    links: Links,
-    skip_permissions: bool,
-    prompts: bravebot_agent::turn::SystemPrompts,
+    startup: Startup,
 ) -> Result<Begun, Ended> {
+    let Startup {
+        confinement,
+        sockets_with_a_path_reachable,
+        sandbox,
+        start,
+        named,
+        links,
+        skip_permissions,
+        prompts,
+    } = startup;
     // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
     // the turns after it must see one. The primary root never changes, so nothing keyed on it
     // (the session record, where AGENTS.md is looked for) moves underneath.
@@ -2699,26 +2724,16 @@ fn start_the_session(
 /// terminal, and a generic backend's error type carries no bounds to convert from.
 ///
 /// Returns the session left behind, where there is one to pick up again.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "`run` forwards the arguments it was given and the switch, and `event_loop` has that one caller"
-)]
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
     workspace: &Workspace,
-    confinement: String,
-    sockets_with_a_path_reachable: bool,
-    sandbox: crate::sandbox_command::Sandboxed,
     servers: &mut crate::state::Servers,
-    start: Start,
-    named: Option<String>,
-    links: Links,
-    skip_permissions: bool,
-    prompts: bravebot_agent::turn::SystemPrompts,
+    startup: Startup,
     moments: &mut bravebot_agent::hooks::SessionMoments,
     switch: &mut Option<Switch>,
 ) -> io::Result<Ended> {
+    let skip_permissions = startup.skip_permissions;
     let Begun {
         mut workspace,
         settings,
@@ -2728,20 +2743,7 @@ fn event_loop(
         mut stored,
         mut scratch,
         mut answers,
-    } = match begin_session(
-        terminal,
-        config,
-        workspace,
-        confinement,
-        sockets_with_a_path_reachable,
-        sandbox,
-        servers,
-        start,
-        named,
-        links,
-        skip_permissions,
-        prompts,
-    ) {
+    } = match begin_session(terminal, config, workspace, servers, startup) {
         Ok(begun) => begun,
         Err(ended) => return Ok(ended),
     };
@@ -3025,6 +3027,7 @@ fn event_loop(
             Action::SetTheme(name) => set_theme(held.session, &name),
             Action::ChooseEffort => choose_effort(terminal, held.session),
             Action::SetEffort(level) => set_effort(held.session, &level),
+            Action::Variant(word) => set_variant(held.session, config, &word),
             Action::Advisor(word) => set_advisor(held.session, config, &word),
             Action::Style(word) => set_style(held.session, held.workspace, &word),
             Action::Mode(word) => set_mode(
@@ -3279,7 +3282,9 @@ fn command_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
     }
     // A mode's key never asks for a stop, so what it reads in return is not handed on.
     if let Some(action) = claimed_by_a_mode(session, key) {
-        let _ = act_while_working(session, action, crate::clipboard::paste);
+        if !sessions_screen::say_why_it_waits(session, &action, sessions_screen::Busy::Command) {
+            let _ = act_while_working(session, action, crate::clipboard::paste);
+        }
     } else if stops_a_command(session, key) {
         stop_what_is_running(session, cancel);
     }
@@ -3528,30 +3533,48 @@ fn drive_worker(
     }
 }
 
-/// Hand a question's answer back to the worker that is blocked on it.
-///
-/// In this order: stop the work when the answer asks for it, so the worker sees the stop as soon as
-/// it wakes; run `note`, which says on the transcript or records on the session whatever the answer
-/// leaves behind; then send the decision. A closed channel means the worker is already gone, so
-/// there is nothing to answer and the loop collects its result.
-///
-/// Nothing here reads what a request carried or what the person typed: the answer type decides
-/// whether it stops and what the worker is told ([`Answered`]), and `reply` only chooses the shape
-/// the worker expects for that kind of question.
-fn reply_to<A: crate::confirm::Answered>(
-    session: &mut Session,
-    cancel: &Cancel,
-    answer_tx: &mpsc::Sender<crate::remote_confirm::Reply>,
-    answer: A,
-    note: impl FnOnce(&mut Session, &A),
-    reply: impl FnOnce(A::Decision) -> crate::remote_confirm::Reply,
-) {
-    // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
-    if answer.stops_the_turn() {
-        stop_what_is_running(session, cancel);
+/// The two ends a loop that draws a worker's questions answers them through: the token that stops
+/// the work and the channel the worker is blocked on.
+struct Replying<'a> {
+    cancel: &'a Cancel,
+    answer_tx: &'a mpsc::Sender<crate::remote_confirm::Reply>,
+}
+
+impl Replying<'_> {
+    /// Hand a question's answer back to the worker that is blocked on it.
+    ///
+    /// In this order: stop the work when the answer asks for it, so the worker sees the stop as soon
+    /// as it wakes; run `note`, which says on the transcript or records on the session whatever the
+    /// answer leaves behind; then send the decision. A closed channel means the worker is already
+    /// gone, so there is nothing to answer and the loop collects its result.
+    ///
+    /// Nothing here reads what a request carried or what the person typed: the answer type decides
+    /// whether it stops and what the worker is told ([`Answered`]), and `wrap` only chooses the
+    /// shape the worker expects for that kind of question.
+    fn reply<A: crate::confirm::Answered>(
+        &self,
+        session: &mut Session,
+        answer: A,
+        note: impl FnOnce(&mut Session, &A),
+        wrap: impl FnOnce(A::Decision) -> crate::remote_confirm::Reply,
+    ) {
+        // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
+        if answer.stops_the_turn() {
+            stop_what_is_running(session, self.cancel);
+        }
+        note(session, &answer);
+        let _ = self.answer_tx.send(wrap(answer.decision()));
     }
-    note(session, &answer);
-    let _ = answer_tx.send(reply(answer.decision()));
+
+    /// [`Replying::reply`] for a question whose answer leaves nothing to say on the transcript.
+    fn plainly<A: crate::confirm::Answered>(
+        &self,
+        session: &mut Session,
+        answer: A,
+        wrap: impl FnOnce(A::Decision) -> crate::remote_confirm::Reply,
+    ) {
+        self.reply(session, answer, |_, _| {}, wrap);
+    }
 }
 
 /// The vetting prompts' standing key: turning auto-vetting on is the interface's own decision, so it
@@ -3630,16 +3653,15 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
 fn drain_worker_until_stopped(
     from_worker: &mpsc::Receiver<crate::remote_confirm::ToMain>,
     wait: Duration,
-    cancel: &Cancel,
-    answer_tx: &mpsc::Sender<crate::remote_confirm::Reply>,
+    replying: &Replying<'_>,
     mut handle: impl FnMut(crate::remote_confirm::ToMain),
 ) -> bool {
     drain_worker(from_worker, wait, |message| {
-        if cancel.is_cancelled()
+        if replying.cancel.is_cancelled()
             && let Some(reply) = refusal(&message)
         {
             // A closed channel means the worker is already gone, as at every other reply.
-            let _ = answer_tx.send(reply);
+            let _ = replying.answer_tx.send(reply);
             return;
         }
         handle(message);
@@ -6678,6 +6700,7 @@ mod tests {
             url: "https://example.test/".into(),
             host: "example.test".into(),
             redirected_from: None,
+            classified: Default::default(),
         })
     }
 
@@ -6719,10 +6742,12 @@ mod tests {
         let mut session = Session::new("none");
         let mut seen_by_the_note = None;
 
-        reply_to(
+        Replying {
+            cancel: &cancel,
+            answer_tx: &answer_tx,
+        }
+        .reply(
             &mut session,
-            &cancel,
-            &answer_tx,
             Answer::Interrupt,
             |session, _| {
                 seen_by_the_note = Some((cancel.is_cancelled(), answer_rx.try_recv().is_err()));
@@ -6754,17 +6779,46 @@ mod tests {
         let cancel = Cancel::new();
         let mut session = Session::new("none");
 
-        reply_to(
-            &mut session,
-            &cancel,
-            &answer_tx,
-            Answer::Approve,
-            |_, _| {},
-            Reply::Fetch,
-        );
+        Replying {
+            cancel: &cancel,
+            answer_tx: &answer_tx,
+        }
+        .reply(&mut session, Answer::Approve, |_, _| {}, Reply::Fetch);
 
         assert!(!cancel.is_cancelled(), "an approval stopped the turn");
         assert_eq!(answer_rx.try_recv(), Ok(Reply::Fetch(Decision::Approve)));
+    }
+
+    /// `plainly` is `reply` with nothing to say on the transcript: a stopping answer still stops the
+    /// work before the decision is sent, the session is left without a note, and exactly one reply
+    /// goes back.
+    #[test]
+    fn a_plain_answer_stops_the_work_notes_nothing_and_replies_once() {
+        use crate::confirm::Answer;
+        use crate::remote_confirm::Reply;
+        use bravebot_agent::confirm::Decision;
+
+        let (answer_tx, answer_rx) = std::sync::mpsc::channel();
+        let cancel = Cancel::new();
+        let mut session = Session::new("none");
+        let before = session.transcript.len();
+        let replying = Replying {
+            cancel: &cancel,
+            answer_tx: &answer_tx,
+        };
+
+        replying.plainly(&mut session, Answer::Approve, Reply::Fetch);
+        assert!(!cancel.is_cancelled(), "an approval stopped the turn");
+        assert_eq!(answer_rx.try_recv(), Ok(Reply::Fetch(Decision::Approve)));
+
+        replying.plainly(&mut session, Answer::Interrupt, Reply::Fetch);
+        assert!(cancel.is_cancelled(), "an interrupt did not stop the turn");
+        assert_eq!(answer_rx.try_recv(), Ok(Reply::Fetch(Decision::Reject)));
+        assert!(
+            answer_rx.try_recv().is_err(),
+            "more than one reply per answer"
+        );
+        assert_eq!(session.transcript.len(), before, "a plain answer noted");
     }
 
     /// A worker that has already gone has dropped its end of the channel. The stop and the note are
@@ -6780,10 +6834,12 @@ mod tests {
         let mut session = Session::new("none");
         let mut noted = false;
 
-        reply_to(
+        Replying {
+            cancel: &cancel,
+            answer_tx: &answer_tx,
+        }
+        .reply(
             &mut session,
-            &cancel,
-            &answer_tx,
             Answer::Interrupt,
             |_, _| noted = true,
             Reply::Fetch,
@@ -6811,8 +6867,12 @@ mod tests {
 
         let cancel = Cancel::new();
         let mut reached_the_screen = Vec::new();
+        let replying = Replying {
+            cancel: &cancel,
+            answer_tx: &answer_tx,
+        };
         let carrying_on =
-            drain_worker_until_stopped(&inbound, Duration::ZERO, &cancel, &answer_tx, |message| {
+            drain_worker_until_stopped(&inbound, Duration::ZERO, &replying, |message| {
                 match message {
                     ToMain::Write(request) => {
                         reached_the_screen.push(request.path);
@@ -6850,11 +6910,14 @@ mod tests {
         outbound.send(write_question("notes.md")).expect("queued");
 
         let mut reached_the_screen = Vec::new();
+        let cancel = Cancel::new();
         drain_worker_until_stopped(
             &inbound,
             Duration::ZERO,
-            &Cancel::new(),
-            &answer_tx,
+            &Replying {
+                cancel: &cancel,
+                answer_tx: &answer_tx,
+            },
             |message| {
                 if let crate::remote_confirm::ToMain::Write(request) = message {
                     reached_the_screen.push(request.path);
@@ -13094,9 +13157,10 @@ mod tests {
     /// the key does not, at the plain prompt and while a turn runs, at each step as far as the row
     /// draws a name to click on, with one difference: the key reaches bypass and the click never
     /// does, because a stray click on the indicator would otherwise stop every later question
-    /// being asked. The regressions it rejects are a click that cycles by another order than the key,
-    /// one that reaches a mode the key does not, one that writes a note, and one that moves into
-    /// bypass, which the key still does from the same state.
+    /// being asked. Auto is the same: the key reaches it, and a click passes it by because it hands
+    /// the run and fetch questions to a model. The regressions it rejects are a click that cycles by
+    /// another order than the key, one that reaches a mode the key does not, one that writes a note,
+    /// and one that moves into bypass or auto, which the key still does from the same state.
     #[test]
     fn a_click_on_the_permission_mode_moves_as_the_key_does_and_never_into_bypass() {
         use bravebot_agent::PermissionMode;
@@ -13117,7 +13181,7 @@ mod tests {
                 };
             };
             let (mut clicked, mut keyed) = (start(turn_running), start(turn_running));
-            let (mut steps, mut key_reached_bypass) = (0, false);
+            let (mut steps, mut key_reached_bypass, mut key_reached_auto) = (0, false, false);
             while let Some(name) = crate::status::named_mode(clicked.permission_mode(), false) {
                 let buffer = drawn(&mut clicked);
                 let (row, column) = find_cell(&buffer, name);
@@ -13126,14 +13190,20 @@ mod tests {
                 clicked.last_click = None;
                 click(&mut clicked, row, column + 1);
                 press_the_key(&mut keyed);
-                assert_ne!(
-                    clicked.permission_mode(),
-                    PermissionMode::Bypass,
-                    "step {steps}, turn running: {turn_running}: the click moved into bypass"
+                assert!(
+                    !matches!(
+                        clicked.permission_mode(),
+                        PermissionMode::Bypass | PermissionMode::Auto
+                    ),
+                    "step {steps}, turn running: {turn_running}: the click moved into a mode that stops asking"
                 );
-                if keyed.permission_mode() == PermissionMode::Bypass {
-                    key_reached_bypass = true;
-                    // The key goes on round from bypass to where the click already is.
+                // The key goes on round from auto and bypass to where the click already is.
+                while matches!(
+                    keyed.permission_mode(),
+                    PermissionMode::Bypass | PermissionMode::Auto
+                ) {
+                    key_reached_bypass |= keyed.permission_mode() == PermissionMode::Bypass;
+                    key_reached_auto |= keyed.permission_mode() == PermissionMode::Auto;
                     press_the_key(&mut keyed);
                 }
                 assert_eq!(
@@ -13154,6 +13224,10 @@ mod tests {
                 key_reached_bypass,
                 "the key no longer reaches bypass from the state the click left"
             );
+            assert!(
+                key_reached_auto,
+                "the key no longer reaches auto from the state the click left"
+            );
         }
     }
 
@@ -13165,7 +13239,7 @@ mod tests {
     fn a_click_on_the_permission_mode_in_bypass_moves_out_of_it() {
         use bravebot_agent::PermissionMode;
         let mut session = Session::new("none");
-        for _ in 0..3 {
+        for _ in 0..4 {
             session.cycle_permission_mode();
         }
         assert_eq!(session.permission_mode(), PermissionMode::Bypass);
@@ -21286,6 +21360,87 @@ mod tests {
         );
     }
 
+    /// A configuration whose one model offers two variants and a third that is disabled.
+    fn a_config_with_variants() -> Config {
+        let mut config = a_config_with_a_named_roster();
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                "models": {"m": {"variants": {
+                    "high": {"reasoningEffort": "high"},
+                    "terse": {"textVerbosity": "low"},
+                    "off": {"disabled": true}
+                }}, "bare": {}}
+            }}}"#,
+        )
+        .providers()
+        .to_vec();
+        config
+    }
+
+    /// BACKEND-66: a variant the model offers is picked by name and reaches the next turn's task, one
+    /// it does not offer changes nothing and names those it does, and `off` drops the pick. The
+    /// regressions it rejects are a pick that never reaches the task, an unchecked name stored as
+    /// typed, and a disabled variant offered.
+    #[test]
+    fn a_variant_the_model_offers_is_picked_and_reaches_the_next_turn() {
+        let config = a_config_with_variants();
+        let run_settings = RunSettings::from_settings(&bravebot_config::Settings::default());
+        let permissions = Permissions::new();
+        let mut session = Session::new("none");
+        session.name_model("gw/m".to_string());
+
+        set_variant(&mut session, &config, "");
+        assert!(
+            last_note(&session).contains("high, terse"),
+            "{}",
+            last_note(&session)
+        );
+        assert!(
+            !last_note(&session).contains("terse, off"),
+            "a disabled variant was listed"
+        );
+
+        set_variant(&mut session, &config, "typo");
+        assert_eq!(session.variant(), None);
+        assert!(last_note(&session).contains("high, terse"));
+
+        set_variant(&mut session, &config, "terse");
+        assert_eq!(session.variant(), Some("terse"));
+        assert_eq!(
+            run_settings
+                .task("hi", &session, &permissions)
+                .variant
+                .as_deref(),
+            Some("terse")
+        );
+
+        set_variant(&mut session, &config, "off");
+        assert_eq!(session.variant(), None);
+        assert_eq!(
+            run_settings.task("hi", &session, &permissions).variant,
+            None
+        );
+    }
+
+    /// BACKEND-66: a model that offers no variant takes no pick, so a name typed for it is not
+    /// stored and waiting to apply to the next model that happens to have one of that name.
+    #[test]
+    fn a_model_offering_no_variants_takes_no_pick() {
+        let config = a_config_with_variants();
+        let mut session = Session::new("none");
+        session.name_model("gw/bare".to_string());
+
+        set_variant(&mut session, &config, "high");
+
+        assert_eq!(session.variant(), None);
+        assert!(
+            last_note(&session).contains("offers no variants"),
+            "{}",
+            last_note(&session)
+        );
+    }
+
     /// ADVISOR-9: a model the session names is the one the next turn offers the planner, resolved
     /// as `--advisor` resolves it, and it reaches the turn's task.
     #[test]
@@ -28353,6 +28508,7 @@ mod tests {
                 THEME_COMMAND,
                 THINKING_COMMAND,
                 TODOS_COMMAND,
+                VARIANT_COMMAND,
                 WATCH_COMMAND,
             ]
         );
@@ -34760,9 +34916,9 @@ mod tests {
         assert!(session.input().is_empty());
     }
 
-    /// The ladder the key walks, from the box. Three rungs where the flag was not given, and back to
-    /// asking: a key that stopped cycling would leave somebody in a mode they could not press their
-    /// way out of.
+    /// The ladder the key walks, from the box. Four rungs and bypass where the flag was not given,
+    /// and back to asking: a key that stopped cycling would leave somebody in a mode they could not
+    /// press their way out of.
     #[test]
     fn shift_tab_cycles_the_permission_mode() {
         use bravebot_agent::PermissionMode;
@@ -34772,6 +34928,7 @@ mod tests {
         for expected in [
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
             PermissionMode::Bypass,
             PermissionMode::Ask,
         ] {
@@ -34819,11 +34976,11 @@ mod tests {
         let mut session = Session::new("none");
         assert!(!session.began_in_bypass());
         let mut reached = false;
-        for _ in 0..4 {
+        for _ in 0..5 {
             handle_key(&mut session, shift(KeyCode::Tab));
             reached |= session.permission_mode() == PermissionMode::Bypass;
         }
-        assert!(reached, "four presses never reached bypass");
+        assert!(reached, "five presses never reached bypass");
         assert_eq!(session.permission_mode(), PermissionMode::Ask);
         assert!(!session.began_in_bypass());
     }
@@ -34875,6 +35032,7 @@ mod tests {
         session.cycle_permission_mode();
         session.cycle_permission_mode();
         session.cycle_permission_mode();
+        session.cycle_permission_mode();
         assert_eq!(session.permission_mode(), PermissionMode::Bypass);
 
         rules.read_for(
@@ -34886,9 +35044,9 @@ mod tests {
         );
 
         assert_eq!(session.permission_mode(), PermissionMode::Ask);
-        session.cycle_permission_mode();
-        session.cycle_permission_mode();
-        session.cycle_permission_mode();
+        for _ in 0..4 {
+            session.cycle_permission_mode();
+        }
         assert_eq!(session.permission_mode(), PermissionMode::Ask);
 
         std::fs::remove_dir_all(&root).ok();
@@ -34906,6 +35064,7 @@ mod tests {
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
             PermissionMode::Bypass,
         ] {
             handle_key(&mut session, shift(KeyCode::Tab));

@@ -22,6 +22,10 @@ pub(crate) const BYPASS_APPROVALS_AND_SANDBOX: &str = "--dangerously-bypass-appr
 /// `--accept-edits`, which answers the write prompt of a one-shot run and no other (CLI-1).
 pub(crate) const ACCEPT_EDITS: &str = "--accept-edits";
 
+/// Opens a one-shot run in the auto mode, in which a classifier answers a run the sandbox confines
+/// and a first fetch of a URL (AUTO-1, AUTO-3).
+pub(crate) const AUTO: &str = "--auto";
+
 /// The flags that begin a one-shot run when one leads the line, so that `main` dispatches on this
 /// list and [`is_a_one_shot`] reads the same one.
 pub(crate) const TASK_FLAGS: [&str; 20] = [
@@ -76,7 +80,7 @@ pub(crate) fn starts_neither_a_session_nor_a_task(first: &str) -> Option<&'stati
 }
 
 /// Whether the arguments left after the flags are taken start a one-shot run, which is what
-/// [`ACCEPT_EDITS`] is for: a session has a mode key to say the same thing with, and the commands
+/// [`ACCEPT_EDITS`] and [`AUTO`] are for: a session has a mode key to say the same thing with, and the commands
 /// that start no run have no write to answer.
 ///
 /// `continues_with_a_task` is whether a leading `--resume` or `--continue` carries a task.

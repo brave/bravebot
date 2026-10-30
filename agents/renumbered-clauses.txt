@@ -20,3 +20,5 @@
 # A line is never pruned. Once the renumber is on main the entry suppresses nothing, and that is
 # what it is for: somebody following a citation of the old id needs to be told where the clause
 # went.
+
+docs/specs/backends.md:BACKEND-67: a Cloudflare entry is reached at a host built from its account id

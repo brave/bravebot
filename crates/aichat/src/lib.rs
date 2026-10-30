@@ -506,6 +506,9 @@ struct Gateway<'a> {
     /// one the gateway has never heard of.
     model: String,
     token: Option<Secret>,
+    /// Whether the token is an OAuth access token, sent as a bearer whatever header the provider
+    /// puts its own key in ([`AichatClient::with_access_token`]).
+    access_token: bool,
     /// Whether a redirect in answer is a failure and nothing is sent to the address it names, as it
     /// is for a request to a host this program compiled in
     /// ([`AichatClient::refusing_redirects`]).
@@ -570,9 +573,19 @@ impl<'a> AichatClient<'a> {
             provider,
             model: model.into(),
             token,
+            access_token: false,
             redirects_refused: false,
             headers: Vec::new(),
         });
+        self
+    }
+
+    /// Send the gateway's token as an OAuth bearer, as a Google Cloud access token is, rather than in
+    /// the header the provider takes its key in. Does nothing where no gateway is set.
+    pub fn with_access_token(mut self) -> Self {
+        if let Some(gateway) = self.gateway.as_mut() {
+            gateway.access_token = true;
+        }
         self
     }
 
@@ -756,9 +769,9 @@ impl<'a> AichatClient<'a> {
                 gateway
                     .provider
                     .model(&gateway.model)
-                    .and_then(|model| model.options.as_ref()),
+                    .and_then(|model| model.request_options(request.variant.as_deref())),
             ) {
-                for (key, value) in options {
+                for (key, value) in &options {
                     object.entry(key.clone()).or_insert_with(|| value.clone());
                 }
             }
@@ -772,7 +785,11 @@ impl<'a> AichatClient<'a> {
                 http = http.refusing_redirects();
             }
             if let Some(token) = gateway.token.as_ref().map(Secret::expose) {
-                let (name, value) = gateway.provider.credential_header(token);
+                let (name, value) = if gateway.access_token {
+                    bravebot_config::provider::Provider::bearer_header(token)
+                } else {
+                    gateway.provider.credential_header(token)
+                };
                 http = if gateway.redirects_refused {
                     http.socket_header(name, value)
                 } else {
@@ -1770,6 +1787,30 @@ mod tests {
         assert_eq!(header(&http, "x-goog-api-key"), None);
     }
 
+    /// BACKEND-65: a Google Cloud access token is an OAuth credential, and the service reads it as
+    /// a bearer. It is not the key header's value, which the service refuses a token in.
+    #[test]
+    fn a_google_vertex_access_token_is_sent_as_a_bearer_and_not_in_the_key_header() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = vertex_provider();
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(
+                &provider,
+                "google/gemini-2.5-flash",
+                Some(Secret::new("placeholder-access-token")),
+            )
+            .with_access_token()
+            .prepare(&request("google-vertex/google/gemini-2.5-flash"))
+            .expect("prepared");
+
+        assert_eq!(
+            header(&http, "authorization"),
+            Some("Bearer placeholder-access-token")
+        );
+        assert_eq!(header(&http, "x-goog-api-key"), None);
+    }
+
     /// A conversation can change service between two turns. Only Google is sent the member it
     /// attached, since another service ignores it or refuses the request for carrying it.
     #[test]
@@ -1981,6 +2022,62 @@ mod tests {
                 .and_then(|it| it.as_array())
                 .map(Vec::len),
             Some(1)
+        );
+    }
+
+    /// BACKEND-66: the variant a request names reaches the body as `options` do, and a request that
+    /// names none sends the body it sent before the model had variants.
+    #[test]
+    fn a_chosen_variant_reaches_the_body_and_none_chosen_adds_nothing() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = provider(
+            r#"{"m": {"variants": {"high": {"reasoningEffort": "high", "disabled": false}}}}"#,
+        );
+        let client = AichatClient::new(&config, &egress);
+
+        let chosen = client
+            .for_gateway(&provider, "m", Some(Secret::new("a-token")))
+            .prepare(&request("m").with_variant(Some("high".to_string())))
+            .expect("prepared");
+        assert_eq!(
+            body(&chosen).get("reasoningEffort"),
+            Some(&serde_json::json!("high"))
+        );
+
+        let unchosen = AichatClient::new(&config, &egress)
+            .for_gateway(&provider, "m", Some(Secret::new("a-token")))
+            .prepare(&request("m"))
+            .expect("prepared");
+        let body = body(&unchosen);
+        let keys: Vec<&String> = body.as_object().expect("an object").keys().collect();
+        assert_eq!(keys, ["messages", "model"]);
+    }
+
+    /// BACKEND-66: a variant cannot replace what the turn built, the level `/effort` chose
+    /// included.
+    #[test]
+    fn a_variant_cannot_overwrite_what_the_turn_built() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = provider(
+            r#"{"m": {"variants": {"v": {"model": "something/else", "messages": [], "reasoning_effort": "low"}}}}"#,
+        );
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(&provider, "m", Some(Secret::new("a-token")))
+            .prepare(
+                &request("m")
+                    .with_effort(Some(protocol::Effort::High))
+                    .with_variant(Some("v".to_string())),
+            )
+            .expect("prepared");
+
+        let body = body(&http);
+        assert_eq!(body.get("model"), Some(&serde_json::json!("m")));
+        assert_eq!(body["messages"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            body.get("reasoning_effort"),
+            Some(&serde_json::json!("high"))
         );
     }
 

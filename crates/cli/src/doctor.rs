@@ -502,6 +502,9 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     ignored(settings.processor_ignored(), |path| {
         t!(doctor_settings_processor_ignored, path = path)
     });
+    ignored(settings.commit_message_ignored(), |path| {
+        t!(doctor_settings_commit_message_ignored, path = path)
+    });
     ignored(settings.agent_ignored(), |path| {
         t!(doctor_settings_agent_ignored, path = path)
     });
@@ -1383,6 +1386,24 @@ fn report_gateway(provider: &bravebot_config::provider::Provider) {
         report_aws_session(profile.as_deref());
     }
     fact(t!(doctor_tiers), gateway_models(provider));
+    if let Some(lists) = gateway_lists(provider) {
+        fact(t!(doctor_gateway_lists_label), lists);
+    }
+}
+
+/// What `doctor` says about a block's `whitelist` and `blacklist`, or `None` where it has neither.
+///
+/// Counts the ids each names. `doctor` asks no gateway for its roster, so how many rows a list
+/// hides is known only to a session that fetched one.
+pub(crate) fn gateway_lists(provider: &bravebot_config::provider::Provider) -> Option<String> {
+    let mut said = Vec::new();
+    if let Some(kept) = provider.whitelist.as_ref() {
+        said.push(t!(doctor_gateway_whitelist, count = kept.len()).to_string());
+    }
+    if !provider.blacklist.is_empty() {
+        said.push(t!(doctor_gateway_blacklist, count = provider.blacklist.len()).to_string());
+    }
+    (!said.is_empty()).then(|| said.join(", "))
 }
 
 /// What `doctor` says a gateway offers: the models its block names, else the list compiled in for a
@@ -1429,6 +1450,9 @@ pub(crate) fn gateway_credential(
     lookup: impl Fn(&str) -> Option<String>,
 ) -> String {
     use bravebot_config::provider::{Credential, Source};
+    if provider.needs_google_cloud_token(&lookup) {
+        return t!(doctor_gateway_token_google_cloud).to_string();
+    }
     match provider.credential_and_source(lookup) {
         (Credential::Token(_), Some(Source::Stored)) => t!(doctor_gateway_token_stored).to_string(),
         (Credential::Token(_), _) => t!(doctor_gateway_token).to_string(),
@@ -3459,6 +3483,26 @@ mod tests {
         );
     }
 
+    /// BACKEND-65: a Vertex AI project with no key is reported as signed in by the Google Cloud CLI,
+    /// and not as a credential to go and set.
+    #[test]
+    fn a_vertex_project_with_no_key_is_reported_as_signed_in_by_the_google_cloud_cli() {
+        let project = configured_gateway(
+            r#"{"provider": {"google-vertex": {"options": {"project": "example-project-1"}}}}"#,
+        );
+        assert_eq!(
+            gateway_credential(&project, |_| None),
+            t!(doctor_gateway_token_google_cloud)
+        );
+        let express = configured_gateway(
+            r#"{"provider": {"google-vertex": {"env": ["GOOGLE_API_KEY"], "options": {}}}}"#,
+        );
+        assert_eq!(
+            gateway_credential(&express, |_| None),
+            t!(doctor_gateway_token_absent, id = "google-vertex")
+        );
+    }
+
     /// BACKEND-16: a block of a known id naming no credential and no endpoint is reported as missing
     /// one, since the host it reaches refuses a request without a key.
     #[test]
@@ -3573,6 +3617,24 @@ mod tests {
             }}}"#,
         );
         assert_eq!(gateway_models(&names_one), "google/gemini-3-flash-preview");
+    }
+
+    /// BACKEND-68: `doctor` says how many ids each list names, and nothing where there is none.
+    #[test]
+    fn doctor_counts_the_ids_a_gateways_lists_name() {
+        let plain = configured_gateway(
+            r#"{"provider": {"gw": {"options": {"baseURL": "https://gw.invalid/v1"}}}}"#,
+        );
+        assert_eq!(gateway_lists(&plain), None);
+
+        let listed = configured_gateway(
+            r#"{"provider": {"gw": {"options": {"baseURL": "https://gw.invalid/v1"},
+                "whitelist": ["a", "b", "c"], "blacklist": ["b"]}}}"#,
+        );
+        let said = gateway_lists(&listed).expect("lists");
+        assert!(said.contains('3') && said.contains('1'), "{said}");
+        assert!(said.to_lowercase().contains("whitelist"), "{said}");
+        assert!(said.to_lowercase().contains("blacklist"), "{said}");
     }
 
     fn development_fixture(name: &str) -> Scratch {

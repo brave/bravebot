@@ -362,50 +362,9 @@ pub(super) fn draw_saying(
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::brand_primary(), t!(write_title));
 
-    let (verb, colour) = match request.intent {
-        Intent::Create => (t!(write_create), theme::ok()),
-        Intent::Overwrite => (t!(write_overwrite), theme::running()),
-        Intent::Edit => (t!(write_edit), theme::brand_primary()),
-    };
-
     let diff = &request.diff;
 
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(
-                format!("{verb} "),
-                Style::default().fg(colour).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                bravebot_agent::confirm::shown_name(&request.path),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(
-                    "  {}",
-                    t!(write_tally, added = diff.added(), removed = diff.removed())
-                ),
-                Style::default().fg(theme::muted()),
-            ),
-        ]),
-        Line::raw(""),
-    ];
-
-    // A diff that could not be computed must say so. Rendering nothing would read as
-    // "this write changes nothing", which is the opposite of the truth.
-    if !diff.is_exact() {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "  {}",
-                t!(
-                    write_too_large_to_show,
-                    added = diff.added(),
-                    removed = diff.removed()
-                )
-            ),
-            Style::default().fg(theme::running()),
-        )));
-    }
+    let mut lines = heading_rows(request);
 
     // The same margin the transcript draws down everything the model was not allowed to read.
     // A body out of a quarantined file is that, and the person about to approve it is the only
@@ -585,6 +544,56 @@ pub(super) fn draw_saying(
         scroll,
         seen,
     )
+}
+
+/// The rows that open the prompt: what the write does to which file with how many lines added
+/// and removed, a blank row, and where the diff could not be computed the sentence saying so.
+fn heading_rows(request: &WriteRequest) -> Vec<Line<'static>> {
+    let (verb, colour) = match request.intent {
+        Intent::Create => (t!(write_create), theme::ok()),
+        Intent::Overwrite => (t!(write_overwrite), theme::running()),
+        Intent::Edit => (t!(write_edit), theme::brand_primary()),
+    };
+
+    let diff = &request.diff;
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(
+                format!("{verb} "),
+                Style::default().fg(colour).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                bravebot_agent::confirm::shown_name(&request.path),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    "  {}",
+                    t!(write_tally, added = diff.added(), removed = diff.removed())
+                ),
+                Style::default().fg(theme::muted()),
+            ),
+        ]),
+        Line::raw(""),
+    ];
+
+    // A diff that could not be computed must say so. Rendering nothing would read as
+    // "this write changes nothing", which is the opposite of the truth.
+    if !diff.is_exact() {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                t!(
+                    write_too_large_to_show,
+                    added = diff.added(),
+                    removed = diff.removed()
+                )
+            ),
+            Style::default().fg(theme::running()),
+        )));
+    }
+    lines
 }
 
 /// The rows saying what `a` and `r` settle, where they are offered, with the blank row that

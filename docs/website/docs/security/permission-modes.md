@@ -6,7 +6,7 @@ description: What asking, accepting edits, plan mode and bypassing each answer f
 
 # Permission modes
 
-**Shift-Tab** walks the session through four modes, and the one in force is drawn under the input
+**Shift-Tab** walks the session through five modes, and the one in force is drawn under the input
 box. A mode is a standing answer to the [questions a session puts to you](permissions.md), given once
 instead of one at a time.
 
@@ -15,6 +15,7 @@ instead of one at a time.
 | **asking** | nothing: every write, run, command output and unvouched file is put to you |
 | **accepting edits** | the write prompt, except for a write that would create a credential |
 | **plan mode** | it refuses a write rather than asking about one |
+| **auto** | the write prompt as accepting edits does, and a command the sandbox confines and the first fetch of a URL when a classifier allows it |
 | **bypassing** | every permission question, including the two that decide trust |
 
 **Asking is where a session opens**, and it is what holds when nobody has chosen. The key comes round

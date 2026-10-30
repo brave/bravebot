@@ -115,6 +115,8 @@ are not UTF-8, such as Latin-1 text, with each such byte shown as U+FFFD. The re
 decoded the file, and `edit_file` refuses a file that is not UTF-8, since it would write the file
 back as UTF-8. `write_file` refuses the same file when the trust map vouches for it, since the body
 would replace it as UTF-8, and replaces a file nobody vouched for as it would any other.
+For a file nobody vouched for, a processor or a `vet_content` check is given the decoded text, and
+anything that would write that text to a file or hand it to a program as the file is refused.
 
 **A picture is quarantined whatever the trust map says, and leaves quarantine only through
 [`vet_content`](#vet_content).** A file whose extension names a picture or a PDF comes back as a

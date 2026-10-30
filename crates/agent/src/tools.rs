@@ -457,6 +457,13 @@ pub struct Tools<'a> {
     /// this turn was not offered is answered the way any other unknown name is rather than
     /// quietly working.
     pub advising: Option<crate::advisor::Advising<'a>>,
+    /// What the auto mode's classifier is given of the session, or `None` where it is not to be
+    /// consulted: another mode, a delegate, or a session the person has typed nothing to (AUTO-3).
+    ///
+    /// Built from the lines the person typed, selected by the tag recorded when they arrived.
+    /// The mode is read again where a question is put, so a mode chosen after this was built
+    /// decides the question and not this field.
+    pub classifying: Option<crate::classifier::Classifying<'a>>,
     /// What this turn sends messages to other background sessions with, and what it has sent, or
     /// `None` where the session cannot send (MSG-12).
     ///
@@ -3162,10 +3169,10 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         // preview and decides nothing further: the head of it is cut inside the kernel, so the
         // driver never holds the text, and a file with nothing to show is asked about like any
         // other. The prompt says so in place of the preview.
-        let (body, preview_revision) = policy.capture_files(|_policy, capture| {
+        let (body, preview_stamp) = policy.capture_files(|_policy, capture| {
             (
                 workspace.peek_labelled_for_review(&proposed_path),
-                capture.revision_of(&keyed),
+                capture.stamp_of(&keyed),
             )
         });
         let shaped = policy.render_in_place("read_file", &body, |text| {
@@ -3222,7 +3229,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             reason_label,
         };
         if confirmer.confirm_vouch(&request) == Decision::Approve {
-            approval_outlived = !policy.vouch_if_unchanged(&keyed, preview_revision);
+            approval_outlived = !policy.vouch_if_unchanged(&keyed, preview_stamp);
             // A record that outlived the yes would take it back on the next turn (MEMORY-5).
             if !approval_outlived {
                 crate::memory::trusted_again(
@@ -3440,6 +3447,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             credentials: described(&found),
         };
         if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+            policy.refuse_unapproved_exposure("read_file");
             // The planner is told that much and no more. Enough to stop it reading the same file
             // a second way, and nothing about what was found, because a finding may not enter a
             // model's context however the question was answered.
@@ -3557,11 +3565,17 @@ fn credentials_an_edit_would_show<S: Sink>(
 /// The same shaping an eager read would have applied, from the same two functions, so a
 /// deferred read and an immediate one put the same bytes in the same slot. Deferring changes
 /// when a file is read and nothing else about it.
+///
+/// A file in another encoding is read as the text it decodes to, and the result says so, so that
+/// the slot records it and nothing writes it back as the file (READ-3).
 pub(crate) fn read_into_slot(
     workspace: &Workspace,
     path: &str,
-) -> Result<String, crate::workspace::WorkspaceError> {
-    workspace.page(path, 1, usize::MAX).map(|page| {
+) -> Result<bravebot_core::Fill, crate::workspace::WorkspaceError> {
+    workspace.page_decoded(path).map(|mut page| {
+        // The note about a decoding is for the planner reading a page. It is not part of the file.
+        let decoded = std::mem::replace(&mut page.decoding, bravebot_filetype::Decoding::Utf8)
+            != bravebot_filetype::Decoding::Utf8;
         let mut text = render_page(&page, ChangeToken::Withheld);
         // A file that went through a slot used to come back a byte shorter than it went in,
         // because the lines are joined with newlines between them and none after. Every
@@ -3570,7 +3584,11 @@ pub(crate) fn read_into_slot(
         if page.ends_with_newline && !text.ends_with('\n') {
             text.push('\n');
         }
-        text
+        if decoded {
+            bravebot_core::Fill::decoded(text)
+        } else {
+            text.into()
+        }
     })
 }
 
@@ -3607,7 +3625,9 @@ pub(crate) fn materialise<S: Sink>(
                     match bravebot_filetype::by_name::media_for(path) {
                         Some(media) => {
                             picture = Some(media);
-                            workspace.attachment_text(path, media)
+                            workspace
+                                .attachment_text(path, media)
+                                .map(bravebot_core::Fill::from)
                         }
                         None => read_into_slot(workspace, path),
                     }
@@ -6003,6 +6023,7 @@ fn edit_file<S: Sink, C: Confirmer>(
                         credentials: described(&exposed),
                     };
                     if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+                        policy.refuse_unapproved_exposure("edit_file");
                         // The planner is told its edit landed and why the lines are missing, and
                         // nothing about what was found: a finding may not enter a model's context
                         // however the question was answered.
@@ -6941,6 +6962,7 @@ fn release_output<S: Sink, C: Confirmer>(
         // for, nobody was asked and a check answered in their place, so naming the user would be a
         // false claim and naming the check would hand the planner the word it must not read.
         if confirmer.confirm_read_output(&request) == Decision::Reject {
+            policy.refuse_unapproved_release("read_output", &slot.to_string());
             return Err(Box::new(Produced::problem(format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, or say in your reply what you needed from it."
@@ -7194,6 +7216,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // carries: under bypass with screening asked for the answer came from a check rather than
         // from a person, and neither fact is the planner's to be told.
         if confirmer.confirm_vetted_read(&request) == Decision::Reject {
+            policy.refuse_unapproved_release("vet_content", &slot.to_string());
             return Produced::problem(format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, pass {slot} to spawn_processor, or say in your reply what you needed \
@@ -8539,6 +8562,67 @@ fn run_call<S: Sink>(
     })
 }
 
+/// What the auto mode's classifier says of a line the policy is about to ask about, or that it was
+/// not consulted (AUTO-3).
+///
+/// Consulted only in auto, and only for a line the sandbox holds that did not ask to start with no
+/// profile: the classifier is shown the words of the line and not the binary they resolve to, so
+/// the confinement is what holds the line to those words. The plan and the directory are the
+/// driver's own structure and no labelled value is built or released here.
+fn consult_about_a_run<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    plan: &bravebot_core::command::Plan,
+    requested: &[bravebot_sandbox::scope::Requested],
+    stdin: bool,
+    unconfined: bool,
+    confined: bool,
+) -> crate::confirm::Classified {
+    if unconfined || !confined || tools.permission_mode.get() != crate::PermissionMode::Auto {
+        return crate::confirm::Classified::NotAsked;
+    }
+    // Only a line it can be shown whole: nothing fed to it from a reference, no credential scope
+    // asked for, nothing private released.
+    if !requested.is_empty() || stdin || plan.releases_private() {
+        return crate::confirm::Classified::NotAsked;
+    }
+    let Some(classifying) = tools.classifying.as_ref() else {
+        return crate::confirm::Classified::NotAsked;
+    };
+    let directory = plan.directory.display().to_string();
+    crate::classifier::consult(
+        policy,
+        &mut tools.chat,
+        classifying,
+        &crate::classifier::Question::Run {
+            line: &plan.line,
+            directory: &directory,
+        },
+    )
+}
+
+/// What the auto mode's classifier says of fetching a URL the policy is about to ask about, or that
+/// it was not consulted. Never asked for a download, which puts bytes into a file (AUTO-3).
+fn consult_about_a_fetch<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    url: &str,
+    host: &str,
+) -> crate::confirm::Classified {
+    if tools.permission_mode.get() != crate::PermissionMode::Auto {
+        return crate::confirm::Classified::NotAsked;
+    }
+    let Some(classifying) = tools.classifying.as_ref() else {
+        return crate::confirm::Classified::NotAsked;
+    };
+    crate::classifier::consult(
+        policy,
+        &mut tools.chat,
+        classifying,
+        &crate::classifier::Question::Fetch { url, host },
+    )
+}
+
 /// Put a plan to the person and act on what they answer.
 ///
 /// Called only when the policy says this line is to be asked about. The answer is recorded, the
@@ -8551,7 +8635,7 @@ fn run_call<S: Sink>(
 )]
 fn ask_about_the_run<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
-    tools: &Tools<'_>,
+    tools: &mut Tools<'_>,
     confirmer: &mut C,
     plan: &bravebot_core::command::Plan,
     record: Option<&crate::remembered::Store>,
@@ -8565,6 +8649,15 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     // argument list, so the order is a matter of reading rather than of correctness.
     let varied = policy.arguments_have_varied(plan);
     policy.asked_about(plan);
+    let classified = consult_about_a_run(
+        policy,
+        tools,
+        plan,
+        requested,
+        stdin.is_some(),
+        unconfined,
+        confinement.is_some(),
+    );
     let request = crate::confirm::RunRequest {
         plan: plan.clone(),
         // Offered only where it would stop a later prompt, which the policy decides: not for a
@@ -8619,6 +8712,7 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
                 confinement.key_choice(&plan.steps(), crate::reach::Store::new(home).path())
             })
             .map(Box::new),
+        classified,
     };
     // Read before the question is put, for the reason a write's is.
     let mode = tools.permission_mode.get();
@@ -8696,6 +8790,20 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
                 .map(|confinement| confinement.with_chosen_key(chosen));
         }
     }
+    remember_the_answer(policy, tools, plan, record, requested, unconfined, &answer);
+    Ok(())
+}
+
+/// Write down what a run's answer asked to have remembered, where the policy allows it.
+fn remember_the_answer<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    plan: &bravebot_core::command::Plan,
+    record: Option<&crate::remembered::Store>,
+    requested: &[bravebot_sandbox::scope::Requested],
+    unconfined: bool,
+    answer: &crate::confirm::RunDecision,
+) {
     // The second of the two refusals RUN-19 makes, at the layer that acts on the answer. The
     // policy is asked again rather than the drawing being read back: a front end answering
     // with a key the prompt never offered must not be able to put a line into a record that
@@ -8714,7 +8822,6 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
             store.remember_scope(&scope, session);
         }
     }
-    Ok(())
 }
 
 /// What the planner is told when a run line failed before it finished.
@@ -9579,6 +9686,30 @@ fn fetch_rules_refusal<S: Sink>(policy: &mut Policy<'_, S>, url: &str) -> Option
     }
 }
 
+/// [`fetch_not_approved`] for `fetch_url`, which is also the one fetch the classifier is put the
+/// first question about a URL of (AUTO-3). Asked only where the policy would ask the person.
+fn fetch_url_not_approved<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    url: &str,
+    host: &str,
+) -> Option<Produced> {
+    let classified = match policy.fetch_needs_approval(url) {
+        true => consult_about_a_fetch(policy, tools, url, host),
+        false => crate::confirm::Classified::NotAsked,
+    };
+    fetch_not_approved(
+        policy,
+        confirmer,
+        "fetch_url",
+        url,
+        host,
+        classified,
+        tools.permission_mode.get(),
+    )
+}
+
 /// Puts a host that needs approval to the person (FETCH-2, FETCH-4) and returns the refusal when
 /// they reject it, shared by `fetch_url` and `download_url`, which `call` names for the trail
 /// (TRACE-1). The answer is the person's, so no labelled content is read here.
@@ -9588,6 +9719,8 @@ fn fetch_not_approved<S: Sink, C: Confirmer>(
     call: &str,
     url: &str,
     host: &str,
+    classified: crate::confirm::Classified,
+    mode: crate::PermissionMode,
 ) -> Option<Produced> {
     if !policy.fetch_needs_approval(url) {
         return None;
@@ -9596,8 +9729,18 @@ fn fetch_not_approved<S: Sink, C: Confirmer>(
         url: url.to_string(),
         host: host.to_string(),
         redirected_from: None,
+        classified,
     };
-    if confirmer.confirm_fetch(&request) != Decision::Reject {
+    let answer = confirmer.confirm_fetch(&request);
+    // Recorded for auto alone: no other mode's fetch answer has ever been, and its trail is not
+    // changed here (AUTO-8).
+    if mode == crate::PermissionMode::Auto {
+        policy.record_answer(
+            mode.answers_this_fetch_unasked(&request)
+                .then(|| mode.name()),
+        );
+    }
+    if answer != Decision::Reject {
         return None;
     }
     policy.refuse_unapproved_fetch(call);
@@ -9640,7 +9783,7 @@ fn fetch_url<S: Sink, C: Confirmer>(
     if let Some(refusal) = fetch_rules_refusal(policy, &url) {
         return refusal;
     }
-    if let Some(refusal) = fetch_not_approved(policy, confirmer, "fetch_url", &url, &host) {
+    if let Some(refusal) = fetch_url_not_approved(policy, tools, confirmer, &url, &host) {
         return refusal;
     }
 
@@ -9744,6 +9887,7 @@ fn fetch_followed_to<S: Sink, C: Confirmer>(
         url: url.to_string(),
         host: host.clone(),
         redirected_from: Some(approved.to_string()),
+        classified: crate::confirm::Classified::NotAsked,
     };
     if confirmer.confirm_fetch(&question) == Decision::Reject {
         policy.refuse_unapproved_fetch("fetch_url");
@@ -9856,7 +10000,15 @@ fn download_url<S: Sink, C: Confirmer>(
 
     // After the destination is known to be admissible, so the person is not asked about a host
     // for a path that would have been refused.
-    if let Some(refusal) = fetch_not_approved(policy, confirmer, "download_url", &url, &host) {
+    if let Some(refusal) = fetch_not_approved(
+        policy,
+        confirmer,
+        "download_url",
+        &url,
+        &host,
+        crate::confirm::Classified::NotAsked,
+        tools.permission_mode.get(),
+    ) {
         return refusal;
     }
 
@@ -12410,6 +12562,7 @@ fn read_git<S: Sink, C: Confirmer>(
             credentials: describe_all(&pending),
         };
         if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+            policy.refuse_unapproved_exposure("read_git");
             return Produced::refused_with_a_note(
                 format!(
                     "refused: what read_git would show from {git_shown} holds what looks like a \
@@ -15727,6 +15880,37 @@ mod tests {
                 "{decoding:?}"
             );
         }
+    }
+
+    /// A slot is filled with the text a file in another encoding decodes to, marked as a decoding,
+    /// and the text carries no note about the decoding: the note is for the planner reading a page,
+    /// and a slot's text is the document a processor works on. A UTF-8 file is not marked.
+    #[test]
+    fn a_slot_filled_from_a_file_in_another_encoding_is_marked_and_carries_no_note() {
+        let dir = crate::testutil::scratch_dir(&format!(
+            "bravebot-slot-decoded-fill-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch");
+        let wide: Vec<u8> = [0xFFu8, 0xFE]
+            .into_iter()
+            .chain("alpha\nbeta\n".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        std::fs::write(dir.join("wide.txt"), wide).unwrap();
+        std::fs::write(dir.join("latin1.txt"), b"caf\xe9\n").unwrap();
+        std::fs::write(dir.join("plain.txt"), "plain\n").unwrap();
+        let workspace = Workspace::new(&dir).expect("workspace");
+
+        let wide = read_into_slot(&workspace, "wide.txt").expect("a UTF-16 file reads");
+        assert_eq!((wide.text.as_str(), wide.decoded), ("alpha\nbeta\n", true));
+        let latin1 = read_into_slot(&workspace, "latin1.txt").expect("a Latin-1 file reads");
+        assert_eq!(
+            (latin1.text.as_str(), latin1.decoded),
+            ("caf\u{fffd}\n", true)
+        );
+        let plain = read_into_slot(&workspace, "plain.txt").expect("a UTF-8 file reads");
+        assert_eq!((plain.text.as_str(), plain.decoded), ("plain\n", false));
     }
 
     /// The same ban across every tool rather than only `run`, because the tool a shell arrives in
@@ -21958,6 +22142,7 @@ mod tests {
                 remembering: None,
                 budget_left: None,
                 advising: None,
+                classifying: None,
                 messaging: None,
             })
         }
@@ -25948,6 +26133,168 @@ mod tests {
                     sink.events()
                 );
             }
+        }
+    }
+
+    /// TRUST-4 at the `read_file` call: the stamp is taken beside the preview and handed to the
+    /// vouch, so a yes given while a `run` line started is not spent on the file.
+    mod vouching_after_a_preview {
+        use super::arguments::{Scratch, told, with_tools};
+        use super::*;
+        use crate::confirm::{
+            Confirmer, RunDecision, RunRequest, Unattended, VouchRequest, WriteDecision,
+            WriteRequest,
+        };
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        /// Answers a vouch question yes, after starting a `run` line when it holds an authority to
+        /// start one on. Counts the questions it was asked. Every other question is Unattended's.
+        struct SaysYes {
+            starts_a_program_on: Option<FileAuthority>,
+            asked: usize,
+        }
+
+        impl Confirmer for SaysYes {
+            fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
+                self.asked += 1;
+                if let Some(authority) = &self.starts_a_program_on {
+                    authority.note_program_started();
+                }
+                Decision::Approve
+            }
+            fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
+                Unattended.confirm_write(request)
+            }
+            fn confirm_run(&mut self, request: &RunRequest) -> RunDecision {
+                Unattended.confirm_run(request)
+            }
+            fn confirm_read_output(&mut self, request: &crate::confirm::OutputRequest) -> Decision {
+                Unattended.confirm_read_output(request)
+            }
+            fn confirm_vetted_read(&mut self, request: &crate::confirm::VetRequest) -> Decision {
+                Unattended.confirm_vetted_read(request)
+            }
+            fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
+                Unattended.confirm_fetch(request)
+            }
+            fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
+                Unattended.confirm_server(request)
+            }
+            fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
+                Unattended.confirm_manifest(request)
+            }
+            fn confirm_exposing_read(
+                &mut self,
+                request: &crate::confirm::ExposureRequest,
+            ) -> Decision {
+                Unattended.confirm_exposing_read(request)
+            }
+            fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
+                Unattended.confirm_tool_list(request)
+            }
+            fn confirm_mcp_call(
+                &mut self,
+                request: &crate::confirm::McpCallRequest,
+            ) -> crate::confirm::CallDecision {
+                Unattended.confirm_mcp_call(request)
+            }
+            fn confirm_path(&mut self, request: &crate::confirm::PathRequest) -> Decision {
+                Unattended.confirm_path(request)
+            }
+            fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
+                Unattended.confirm_host(request)
+            }
+            fn confirm_message(
+                &mut self,
+                request: &crate::confirm::MessageRequest,
+            ) -> crate::confirm::MessageDecision {
+                Unattended.confirm_message(request)
+            }
+            fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
+                Unattended.confirm_move(request)
+            }
+            fn ask_user(
+                &mut self,
+                asking: &bravebot_core::ask::Asking,
+            ) -> Vec<bravebot_core::ask::Answer> {
+                Unattended.ask_user(asking)
+            }
+            fn interjection(&mut self) -> Option<String> {
+                Unattended.interjection()
+            }
+        }
+
+        /// Reads `note.txt`, which nobody vouched for, with a person who answers yes, in bypass so
+        /// that no confined check is made. Returns what the planner was told, whether the file is
+        /// still quarantined afterwards, and how many times the person was asked.
+        fn read_while(starts_a_program: bool) -> (String, bool, usize) {
+            let scratch = Scratch::new("vouch-after-program");
+            std::fs::write(scratch.path.join("note.txt"), "a line\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read a note");
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy");
+            let mut person = SaysYes {
+                starts_a_program_on: starts_a_program.then(|| policy.file_authority()),
+                asked: 0,
+            };
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": "1",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json!({"path": "note.txt", "why": "to see the note"}).to_string(),
+                }
+            }))
+            .expect("a call");
+
+            let output = with_tools(&workspace, |tools| {
+                tools.permission_mode.set(crate::PermissionMode::Bypass);
+                dispatch(
+                    &mut policy,
+                    tools,
+                    &mut person,
+                    &mut crate::report::IgnoreReports,
+                    &call,
+                )
+            });
+            let said = told(&mut policy, &output.text);
+            (said, policy.read_is_quarantined("note.txt"), person.asked)
+        }
+
+        /// The regression it rejects: `read_file` passing the vouch only the path's revision, or
+        /// taking the stamp after the question was answered. A program started while the question
+        /// was open moves no revision, so either leaves the file trusted on a yes that was about
+        /// text a program may have rewritten since. The first case is the control: with no
+        /// program started the same yes is spent, so a read that never vouched would not pass.
+        #[test]
+        fn a_yes_is_not_spent_when_a_program_started_while_the_person_was_asked() {
+            let (said, still_quarantined, asked) = read_while(false);
+            assert_eq!(asked, 1, "{said}");
+            assert!(
+                !still_quarantined,
+                "a yes with nothing changed was not spent: {said}"
+            );
+
+            let (said, still_quarantined, asked) = read_while(true);
+            assert_eq!(asked, 1, "{said}");
+            assert!(
+                still_quarantined,
+                "a yes was spent on a file a program may have rewritten: {said}"
+            );
+            assert!(
+                said.contains("changed while the user was being asked about it"),
+                "the planner was not told the answer was thrown away: {said}"
+            );
         }
     }
 }

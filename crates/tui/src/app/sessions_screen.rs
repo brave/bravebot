@@ -16,6 +16,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use super::actions::Held;
+use super::keys::Action;
 use super::opening::switch_session;
 use super::{Elsewhere, Ended, How, Switch, left_behind};
 use crate::sessions_screen::{Effect, SessionsScreen};
@@ -177,6 +178,45 @@ pub(super) fn ask_to_stop_the_turn(session: &mut Session, root: &Path, effect: E
     if !asked {
         say(session, t!(sessions_screen_note_wait_for_turn));
     }
+}
+
+/// What a working loop other than a turn's is busy with, as the sentence about it names it.
+#[derive(Clone, Copy)]
+pub(super) enum Busy {
+    /// A compaction, an aside, a commit message, a handoff, an enhanced prompt or a goal check.
+    Request,
+    /// A plan run.
+    Plan,
+    /// A command for the shell.
+    Command,
+}
+
+/// Say why opening, copying or beginning a session does nothing while a loop that is not a turn's
+/// has the keys, where a turn asks about stopping it (SCREEN-15). `true` where `action` was one of
+/// those and has been answered.
+///
+/// None of these loops can be stopped by a question the way a turn can: a compaction cannot be
+/// half-done, and the others end on their own in moments. The session this terminal is in only
+/// leaves the screen, so that is done as it is during a turn.
+pub(super) fn say_why_it_waits(session: &mut Session, action: &Action, busy: Busy) -> bool {
+    let Action::SessionsScreen(effect) = action else {
+        return false;
+    };
+    match effect {
+        Effect::Open(task) if task.current => {
+            session.close_sessions_screen();
+        }
+        Effect::Open(_) | Effect::Fork(_) | Effect::New(_) => {
+            let sentence = match busy {
+                Busy::Request => t!(sessions_screen_note_busy_request),
+                Busy::Plan => t!(sessions_screen_note_busy_plan),
+                Busy::Command => t!(sessions_screen_note_busy_command),
+            };
+            say(session, sentence);
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// The sentence a session is refused with at rest that the list can already tell, or `None` where

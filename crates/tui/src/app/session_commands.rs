@@ -192,6 +192,52 @@ pub(super) fn set_language(session: &mut Session, word: &str) {
 /// then refused where the machine-level layer refuses it or nothing is configured to answer it
 /// (ADVISOR-9). A name that changes nothing says why, since the next turn would otherwise offer a
 /// tool whose every call fails.
+/// Pick, list or drop the named option set of the model in force (BACKEND-45).
+///
+/// A name the model has no variant for changes nothing and says which it has, so a typo does not
+/// leave somebody believing a request carries what they meant.
+pub(super) fn set_variant(session: &mut Session, config: &Config, word: &str) {
+    let word = word.trim();
+    let model = session
+        .model()
+        .map_or_else(|| config.default_model.clone(), str::to_string);
+    let offered: Vec<String> = config
+        .provider_for(&model)
+        .and_then(|(provider, wire)| provider.model(wire))
+        .map(|entry| {
+            entry
+                .variant_names()
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if word == VARIANT_OFF {
+        session.choose_variant(None);
+        session.note(t!(session_variant_dropped).to_string());
+        return;
+    }
+    if offered.is_empty() {
+        session.note(t!(session_variant_none_offered, model = model));
+        return;
+    }
+    let names = offered.join(", ");
+    if word.is_empty() {
+        let note = match session.variant() {
+            Some(name) => t!(session_variant_in_force, variant = name, names = names),
+            None => t!(session_variant_listed, names = names),
+        };
+        session.note(note);
+        return;
+    }
+    if offered.iter().any(|name| name == word) {
+        session.choose_variant(Some(word.to_string()));
+        session.note(t!(session_variant_set, variant = word));
+    } else {
+        session.note(t!(session_no_such_variant, variant = word, names = names));
+    }
+}
+
 pub(super) fn set_advisor(session: &mut Session, config: &Config, word: &str) {
     let word = word.trim();
     if word.is_empty() {

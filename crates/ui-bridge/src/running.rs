@@ -203,9 +203,22 @@ pub enum Mcp {
 
 impl State {
     pub fn fresh(trust: TrustStore) -> Self {
+        Self::blank(
+            Conversation::new(),
+            Answers::opening(trust, TrustedPrograms::new(), Default::default()),
+        )
+    }
+
+    /// A state holding the exchange and the answers it opens with, and nothing else.
+    ///
+    /// The fields no record holds (`kept`, `runs`, `mcp`, `scratch`, `question_ids`,
+    /// `question_answers`, `moments`, `roster`, `account` and `answered_by_mode`) are written here
+    /// and nowhere else, so a session opened, one resumed and a fork start them alike. The scratch
+    /// directory and the account session are made once per call, so each state has its own.
+    fn blank(conversation: Conversation, answers: Answers<crate::rules::SettingsRules>) -> Self {
         Self {
-            conversation: Conversation::new(),
-            answers: Answers::opening(trust, TrustedPrograms::new(), Default::default()),
+            conversation,
+            answers,
             directories: Vec::new(),
             answered_by_mode: false,
             kept: None,
@@ -253,8 +266,6 @@ impl State {
         // the record must not go on saying they were.
         handle.set_agent(None);
         Ok(Self {
-            conversation: Conversation::restored(record.conversation.clone()),
-            answers: Answers::opening(trust, record.trusted_programs(project), Default::default()),
             // None where the record's sitting had bypass on: `Record::trust_map` took the rules
             // back, and a directory with no rule would be reachable and vouched for by nothing.
             directories: record
@@ -262,8 +273,6 @@ impl State {
                 .iter()
                 .map(PathBuf::from)
                 .collect(),
-            answered_by_mode: false,
-            kept: None,
             handle: Some(handle),
             turns: record.turns,
             history: record.history.clone(),
@@ -276,14 +285,10 @@ impl State {
             asides: bravebot_session::sessions::recall(project, record).asides,
             rewind: bravebot_session::rewind::RewindStack::of(record.rewind_points(project)),
             first_prompt: Some(record.title.clone()),
-            runs: 0,
-            mcp: Mcp::Unstarted,
-            scratch: Scratch::open(),
-            question_ids: Arc::new(AtomicU64::new(0)),
-            question_answers: Arc::default(),
-            moments: None,
-            roster: Arc::default(),
-            account: bravebot_agent::chatgpt::AccountSession::begin(),
+            ..Self::blank(
+                Conversation::restored(record.conversation.clone()),
+                Answers::opening(trust, record.trusted_programs(project), Default::default()),
+            )
         })
     }
 
@@ -327,11 +332,7 @@ impl State {
         first_prompt: Option<String>,
     ) -> Self {
         Self {
-            conversation: Conversation::restored(before),
-            answers: Answers::opening(trust, programs, Default::default()),
             directories,
-            answered_by_mode: false,
-            kept: None,
             handle: Some(handle),
             turns,
             // The parent's boundaries are offsets into a conversation this one has cut, so none
@@ -346,14 +347,10 @@ impl State {
             asides: Vec::new(),
             rewind: Default::default(),
             first_prompt,
-            runs: 0,
-            mcp: Mcp::Unstarted,
-            scratch: Scratch::open(),
-            question_ids: Arc::new(AtomicU64::new(0)),
-            question_answers: Arc::default(),
-            moments: None,
-            roster: Arc::default(),
-            account: bravebot_agent::chatgpt::AccountSession::begin(),
+            ..Self::blank(
+                Conversation::restored(before),
+                Answers::opening(trust, programs, Default::default()),
+            )
         }
     }
 }

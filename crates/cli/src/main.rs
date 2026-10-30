@@ -54,12 +54,12 @@ use crate::finish::{
     stopped_before_the_turn, what_ran, with_declined,
 };
 use crate::flags::{
-    ACCEPT_EDITS, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS, TASK_FLAGS, VET,
-    bypass_made_unreachable, continues_with_a_task, flag_named, interactive_out_of_place,
-    is_a_one_shot, opens_a_session, sandbox_refusal, starts_no_program, take_agent, take_flag,
-    take_links, take_log_level, take_run_network, take_sandbox, take_sandbox_filesystem,
-    take_settings, take_system_prompts, take_tool_limit, wants_json, without_a_definition,
-    without_a_prompt_to_give, without_a_tool_set_to_limit,
+    ACCEPT_EDITS, AUTO, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS,
+    TASK_FLAGS, VET, bypass_made_unreachable, continues_with_a_task, flag_named,
+    interactive_out_of_place, is_a_one_shot, opens_a_session, sandbox_refusal, starts_no_program,
+    take_agent, take_flag, take_links, take_log_level, take_run_network, take_sandbox,
+    take_sandbox_filesystem, take_settings, take_system_prompts, take_tool_limit, wants_json,
+    without_a_definition, without_a_prompt_to_give, without_a_tool_set_to_limit,
 };
 use crate::invocation::{
     Given, Invocation, input_lines_conflict, limit_not_with_a_goal, limit_not_with_a_manifest,
@@ -92,7 +92,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 struct Settled {
     as_json: bool,
     skip_permissions: bool,
-    accept_edits: bool,
+    /// The mode a flag other than the bypass flag opened a one-shot run in (`--accept-edits` or
+    /// `--auto`), or `None` where neither was given and the run asks.
+    starts_in: Option<bravebot_agent::PermissionMode>,
     carried: Option<String>,
     agent: Option<String>,
     links: bravebot_tui::app::Links,
@@ -226,6 +228,28 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
             t!(cli_accept_edits_not_with_bypass, flag = bypass_flag),
         ));
     }
+    // The auto mode is refused beside either of the others for the same reason: each answers a
+    // different set of questions, and a line that gave two does not say which its author meant.
+    let auto = take_flag(args, AUTO);
+    if auto && skip_permissions {
+        return Err(stopped_before_the_turn(
+            wants_json(args),
+            Ending::Argument,
+            t!(cli_auto_not_with_bypass, flag = bypass_flag),
+        ));
+    }
+    if auto && accept_edits {
+        return Err(stopped_before_the_turn(
+            wants_json(args),
+            Ending::Argument,
+            t!(cli_auto_not_with_accept_edits).to_string(),
+        ));
+    }
+    let starts_in = match (accept_edits, auto) {
+        (_, true) => Some(bravebot_agent::PermissionMode::Auto),
+        (true, false) => Some(bravebot_agent::PermissionMode::AcceptEdits),
+        (false, false) => None,
+    };
 
     // Read off the arguments as typed, before the flag below takes anything out of them: a result
     // object was asked for by the command line that failed, whichever token the failure consumed.
@@ -420,17 +444,21 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // Refused rather than ignored where there is no one-shot run to open in the mode: a session
     // has the mode key, and a line that asked for a run to write unasked and was started as
     // something that asks would leave its author believing the flag had been honoured.
-    if accept_edits && !is_a_one_shot(args, continues_with_a_task(args)) {
+    if starts_in.is_some() && !is_a_one_shot(args, continues_with_a_task(args)) {
         return Err(stopped_before_the_turn(
             as_json,
             Ending::Argument,
-            t!(cli_accept_edits_needs_a_run).to_string(),
+            match starts_in {
+                Some(bravebot_agent::PermissionMode::Auto) => t!(cli_auto_needs_a_run),
+                _ => t!(cli_accept_edits_needs_a_run),
+            }
+            .to_string(),
         ));
     }
     Ok(Settled {
         as_json,
         skip_permissions,
-        accept_edits,
+        starts_in,
         carried,
         agent,
         links,
@@ -475,7 +503,7 @@ fn main() -> ExitCode {
     let Settled {
         as_json,
         skip_permissions,
-        accept_edits,
+        starts_in,
         carried,
         agent,
         links,
@@ -515,7 +543,7 @@ fn main() -> ExitCode {
         Some("--handle-uri") => open_link(&args[1..], as_json, agent, skip_permissions, prompts),
         // Picking up where a session left off, chosen from a list or named outright.
         Some("--resume" | "-r" | "--continue" | "-c") if continues_with_a_task(&args) => {
-            run_task(&args, skip_permissions, accept_edits, agent, prompts)
+            run_task(&args, skip_permissions, starts_in, agent, prompts)
         }
         Some("--resume" | "-r") => match args.get(1) {
             Some(id) => resume_named(id, agent, links, skip_permissions, prompts),
@@ -565,7 +593,7 @@ fn main() -> ExitCode {
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
         // would otherwise be caught below as unknown options.
         Some(flag) if TASK_FLAGS.contains(&flag) => {
-            run_task(&args, skip_permissions, accept_edits, agent, prompts)
+            run_task(&args, skip_permissions, starts_in, agent, prompts)
         }
         Some("doctor") if args.get(1).map(String::as_str) == Some("--sandbox-check") => {
             match args.len() {
@@ -633,7 +661,7 @@ fn main() -> ExitCode {
             refused_with_the_usage(as_json, t!(cli_unknown_option, flag = flag))
         }
         // Anything else is treated as the task prompt.
-        Some(_) => run_task(&args, skip_permissions, accept_edits, agent, prompts),
+        Some(_) => run_task(&args, skip_permissions, starts_in, agent, prompts),
     }
 }
 
@@ -782,11 +810,11 @@ fn a_plan_is_put(stdin_is_terminal: bool, stderr_is_terminal: bool) -> bool {
 fn run_task(
     args: &[String],
     skip_permissions: bool,
-    accept_edits: bool,
+    starts_in: Option<bravebot_agent::PermissionMode>,
     agent: Option<String>,
     prompts: SystemPrompts,
 ) -> ExitCode {
-    match prepare_the_run(args, skip_permissions, accept_edits, agent, prompts) {
+    match prepare_the_run(args, skip_permissions, starts_in, agent, prompts) {
         Ok(prepared) if prepared.input_lines => run_the_lines(prepared),
         Ok(mut prepared) => {
             let continued = prepared.continued.take();
@@ -864,7 +892,7 @@ impl Prepared {
 fn prepare_the_run(
     args: &[String],
     skip_permissions: bool,
-    accept_edits: bool,
+    starts_in: Option<bravebot_agent::PermissionMode>,
     agent: Option<String>,
     prompts: SystemPrompts,
 ) -> Result<Prepared, ExitCode> {
@@ -1111,10 +1139,10 @@ fn prepare_the_run(
     // Bypassing where the flag was given, accepting edits where the narrower one was, and asking
     // otherwise. There is no mode key here: a one-shot run has no session to hold a mode and
     // nobody to press anything, so the command line is the whole of what can say.
-    let permission_mode = match (skip_permissions, accept_edits) {
+    let permission_mode = match (skip_permissions, starts_in) {
         (true, _) => bravebot_agent::PermissionMode::Bypass,
-        (false, true) => bravebot_agent::PermissionMode::AcceptEdits,
-        (false, false) => bravebot_agent::PermissionMode::Ask,
+        (false, Some(mode)) => mode,
+        (false, None) => bravebot_agent::PermissionMode::Ask,
     };
     // Resolved against the configuration rather than at parse, since a tier word names a model
     // only the configuration knows: the AWS account's ARN for that tier where it named one, and
@@ -3503,6 +3531,7 @@ mod tests {
             url: "https://example.invalid/a".to_string(),
             host: "example.invalid".to_string(),
             redirected_from: None,
+            classified: Default::default(),
         });
         let gates: Vec<_> = unattended.declined().iter().map(|d| d.gate).collect();
         assert_eq!(gates, ["manifest_plan", "web_fetch"]);
@@ -3553,6 +3582,7 @@ mod tests {
             url: "https://example.invalid/a".to_string(),
             host: "example.invalid".to_string(),
             redirected_from: None,
+            classified: Default::default(),
         });
         unattended.confirm_run(&run);
         unattended.confirm_manifest(&a_plan());

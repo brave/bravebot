@@ -236,3 +236,107 @@ fn a_second_click_on_a_row_over_a_running_turn_asks_as_enter_does() {
     assert!(question_of(&session).is_some());
     assert!(!cancel.is_cancelled());
 }
+
+/// Each loop but a turn's, with the Sessions screen open over it on one session, and the press that
+/// loop takes a key with.
+type Press = Box<dyn Fn(&mut Session, KeyEvent)>;
+
+fn over_each_other_loop() -> Vec<(&'static str, Session, Press)> {
+    let over = |mut session: Session| {
+        session.open_sessions_screen(fixtures::sessions_screen_of(vec![saved("a")]));
+        session
+    };
+    let mut asking = over(Session::new("none"));
+    asking.begin_aside();
+    let mut commanding = over(Session::new("none"));
+    commanding.begin_command();
+    vec![
+        (
+            "request",
+            asking,
+            Box::new(|session, key| {
+                one_request_key(session, key, &Cancel::new());
+            }),
+        ),
+        (
+            "goal check",
+            over(a_turn_running_on("first")),
+            Box::new(|session, key| {
+                goal_check_key(session, key, &Cancel::new());
+            }),
+        ),
+        (
+            "plan",
+            over(a_turn_running_on("first")),
+            Box::new(|session, key| {
+                plan_run_key(session, key, &Cancel::new());
+            }),
+        ),
+        (
+            "command",
+            commanding,
+            Box::new(|session, key| command_key(session, key, &Cancel::new())),
+        ),
+    ]
+}
+
+/// SCREEN-15. Rejects: Enter, `f` or `n` over a compaction, an aside, a goal check, a plan run or a
+/// command that does nothing and says nothing, that stops what runs, or that asks the question a
+/// turn is asked and so offers to stop what cannot be half-done.
+#[test]
+fn a_loop_that_is_not_a_turn_says_why_opening_copying_or_beginning_waits() {
+    if !crate::test_profile::in_isolated_profile() {
+        return;
+    }
+    for (loop_name, ..) in over_each_other_loop() {
+        for code in [KeyCode::Enter, KeyCode::Char('f'), KeyCode::Char('n')] {
+            let (_, mut session, press) = over_each_other_loop()
+                .into_iter()
+                .find(|(name, ..)| *name == loop_name)
+                .expect("the loop");
+            assert!(session.showing_sessions(), "{loop_name}: no screen");
+
+            press(&mut session, key(code));
+
+            let screen = session.sessions_screen().expect("still showing");
+            let said = screen
+                .notice()
+                .unwrap_or_else(|| panic!("{loop_name} {code:?}: nothing was said"));
+            assert!(
+                said.contains("ends this one"),
+                "{loop_name} {code:?}: said {said:?}"
+            );
+            assert!(
+                screen.confirming().is_none(),
+                "{loop_name} {code:?}: a question was put over what cannot be stopped by one"
+            );
+            assert!(session.take_held_for_the_end_of_the_turn().is_none());
+        }
+    }
+}
+
+/// SCREEN-15. Rejects: a notice that does not name what is running, so a person cannot tell a
+/// refused key from a dead one.
+#[test]
+fn the_notice_names_what_is_running() {
+    if !crate::test_profile::in_isolated_profile() {
+        return;
+    }
+    for (loop_name, mut session, press) in over_each_other_loop() {
+        press(&mut session, key(KeyCode::Enter));
+        let said = session
+            .sessions_screen()
+            .and_then(|screen| screen.notice())
+            .expect("a notice")
+            .to_string();
+        let word = if loop_name == "goal check" {
+            "request"
+        } else {
+            loop_name
+        };
+        assert!(
+            said.starts_with(&format!("A {word} is running")),
+            "{loop_name}: said {said:?}"
+        );
+    }
+}

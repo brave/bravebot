@@ -33,6 +33,8 @@ was, and the conversation budget stays where it was too.
 | the entry | `name` | something friendlier to show than the id |
 | | `env` | variable names that may hold the bearer token, tried in order |
 | | `models` | the models to offer, keyed by the name the gateway knows each by |
+| | `whitelist` | model ids; of a fetched roster, only these are offered |
+| | `blacklist` | model ids; of a fetched roster, these are not offered |
 | `options` | `baseURL` | where requests go |
 | | `contextWindow` | the context window of every model that states none, in prompt tokens (bravebot's own field) |
 | | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated (bravebot's own field) |
@@ -114,7 +116,7 @@ models it offers, and how an entry reaches the Responses API.
 
 ### Google Vertex AI
 
-[Reaching Google Vertex AI with an API key](google-vertex.md) says how an entry keyed `google-vertex`
+[Reaching Google Vertex AI](google-vertex.md) says how an entry keyed `google-vertex`
 reaches Vertex AI with or without a project, and what express mode is.
 
 ### The credential
@@ -194,6 +196,12 @@ Nothing is capped. Ordering does that work instead: the model a session would us
 rest are sorted by name. A listing that cannot be fetched contributes nothing and takes nothing away
 from the rest of the roster.
 
+**`whitelist` and `blacklist` narrow a fetched roster** without listing every model. Each is an array
+of ids as the gateway names them. The whitelist is applied first and the blacklist then removes from
+what remains, and the window a gateway reported is kept for each model left. An id the gateway does not
+list changes nothing. Neither list applies to a block that lists `models`, which is offered as
+written. `bravebot doctor` says how many ids each list names. Importing an opencode entry copies both.
+
 ### Naming one
 
 Where one model is reachable through more than one service, put the gateway's id in front of the name
@@ -229,6 +237,36 @@ worse one it silently routes somewhere you did not intend.
 
 It cannot replace what the turn itself built. The settings file names a destination, not what was
 asked.
+
+### Switching between sets of options with `variants`
+
+A model may carry `variants`: named sets of the same kind of fields `options` holds, which you pick
+between during a session.
+
+```json
+{
+  "provider": {
+    "my-gateway": {
+      "options": { "baseURL": "https://gateway.example/v1" },
+      "models": {
+        "my-model": {
+          "variants": {
+            "deep": { "reasoningEffort": "high", "textVerbosity": "low" },
+            "quick": { "reasoningEffort": "low" },
+            "retired": { "disabled": true }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`/variant` lists the names the model in force offers, `/variant deep` picks one, and `/variant off`
+drops the pick. Nothing is in force until you type a name, and the pick lasts for the session. The
+chosen set is merged into the request as the model's `options` are, over them where both set a field,
+and never over what the turn built, so the level `/effort` chose is the one sent. A variant marked
+`"disabled": true` is not listed. A name the model has no variant for adds nothing.
 
 ### Showing a model's thinking
 

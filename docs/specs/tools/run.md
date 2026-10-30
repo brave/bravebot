@@ -711,7 +711,8 @@ never held the credential sees. A `NAME=value` the line writes in front of a pro
 one of them back: the removal is applied again after the line's own assignments, since the line is
 the planner's and not the person's own.
 
-Those credentials are the signing key and its key id, and every variable the `env` of a gateway in
+Those credentials are the signing key, its key id and the crash report submission URL
+(`BACKTRACE_SUBMIT_URL`, whose path holds the project's submission token), and every variable the `env` of a gateway in
 force names as a place its bearer token may live. The gateways in force are the managed layer's where
 it states any, otherwise the person's own provider blocks and the Vertex AI service the environment
 names, so the set follows the configuration with no second list to keep in step. A variable no block
@@ -722,7 +723,8 @@ starts lose the variable. `run.scrubEnv` remains the person's own list and adds 
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB=0` restores every variable, gateway variables included.
 
 **The planner is told what is removed.** The description of `run`, on a turn that offers it, names
-the credentials this agent holds, the signing key and its key id, and says that the variables the
+the credentials this agent holds, the signing key, its key id and the crash report submission URL,
+and says that the variables the
 person's settings name as a gateway's token or to be withheld are removed as well, without listing
 them. It says that a program reporting one of them unset, or failing for want of one, says nothing
 about whether the person has set it. Nothing is said where the filtering is switched off. The build
@@ -741,7 +743,7 @@ person's setup, and a planner that cannot tell the removal from a gap reports it
 instructs the person to configure what their shell already holds. Every build, test and check that
 needs a removed variable then fails for a reason nothing in the planner's context explains.
 
-**Why only the fixed names are listed.** The two credentials are the same for everyone and fixed in
+**Why only the fixed names are listed.** The three names are the same for everyone and fixed in
 the source. The other names are strings from a settings file: an entry in a provider's `env` is
 free-form and can be a key pasted into the wrong field, and `run.scrubEnv` takes entries from a
 checkout's layer as well. Listing them would send a person's mistake to the model provider with every
@@ -778,6 +780,7 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_agent::exec::the_plumbing_a_program_needs_is_still_inherited`
 `verified-by: bravebot_agent::exec::the_filtering_can_be_switched_off_by_its_documented_spelling_only`
 `verified-by: bravebot_config::scrub::this_agents_credentials_are_withheld_without_being_configured`
+`verified-by: bravebot_config::scrub::the_crash_report_address_is_withheld_without_being_configured`
 `verified-by: bravebot_config::scrub::nothing_of_the_users_own_is_withheld_by_guesswork`
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_withheld_as_well`
 `verified-by: bravebot_config::scrub::the_variables_a_provider_block_names_are_withheld`

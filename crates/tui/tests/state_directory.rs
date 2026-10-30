@@ -40,6 +40,7 @@ impl Scratch {
         // SAFETY: `HOME` is held for as long as this value lives, so no other test in this binary
         // is reading or writing the variable while this one owns it.
         unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::remove_var("BRAVEBOT_HOME") };
         Self { home, _lock: lock }
     }
 

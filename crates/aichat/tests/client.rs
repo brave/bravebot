@@ -4815,6 +4815,45 @@ fn a_models_options_reach_the_anthropic_body_and_cannot_overwrite_what_the_turn_
     assert_eq!(body["max_tokens"], 32_000);
 }
 
+/// BACKEND-66: a chosen variant reaches the Anthropic body as `options` do, wins over an option of
+/// the same name, and cannot overwrite what the turn built.
+#[test]
+fn a_chosen_variant_reaches_the_anthropic_body_and_cannot_overwrite_what_the_turn_built() {
+    let (endpoint, received) = serve(MESSAGES_REPLY);
+    let config = config_for(&endpoint);
+    let provider = anthropic_with(
+        &endpoint,
+        r#", "models": {"claude-test": {
+            "options": {"thinking": {"type": "enabled", "budget_tokens": 1000}, "top_k": 5},
+            "variants": {"deep": {
+                "thinking": {"type": "enabled", "budget_tokens": 16000},
+                "max_tokens": 1,
+                "model": "somebody-elses"
+            }}
+        }}"#,
+    );
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+        .complete(
+            &mut policy,
+            &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")])
+                .with_variant(Some("deep".to_string())),
+        )
+        .expect("the reply was read");
+
+    let body = json_of(&received.recv().expect("the request arrived"));
+    assert_eq!(
+        body["thinking"],
+        serde_json::json!({"type": "enabled", "budget_tokens": 16000})
+    );
+    assert_eq!(body["top_k"], 5);
+    assert_eq!(body["model"], "claude-test");
+    assert_eq!(body["max_tokens"], 32_000);
+}
+
 /// A request carrying a system prompt, so it has a breakpoint, and a level, which is the pair of
 /// things a model may refuse that nobody asked for.
 fn asking_with_a_prompt(model: &str) -> ChatRequest {
@@ -6716,6 +6755,60 @@ fn a_models_generation_settings_join_the_ones_the_turn_set_and_do_not_replace_th
     assert_eq!(settings["thinkingConfig"]["thinkingBudget"], 1024, "{body}");
 }
 
+/// BACKEND-66: a variant that names `generationConfig` replaces the one `options` names, as it
+/// does any key of `options`, and then joins the settings the turn set. The temperature `options`
+/// set is not carried into a variant that sets only a thinking budget; a request naming no variant
+/// still gets it.
+#[test]
+fn a_variants_generation_config_replaces_the_options_one_and_joins_the_turns_settings() {
+    let text_for = |endpoint: &str| {
+        format!(
+            r#"{{"provider": {{"google-vertex": {{"npm": "@ai-sdk/google-vertex",
+            "options": {{"baseURL": "{endpoint}/v1"}},
+            "models": {{"gemini-settings": {{
+                "limit": {{"context": 100000, "output": 777}},
+                "options": {{"generationConfig": {{"temperature": 0.2, "topK": 3}}}},
+                "variants": {{"deep": {{"generationConfig": {{"thinkingConfig": {{"thinkingBudget": 4096}}}}}}}}
+            }}}}}}}}}}"#
+        )
+    };
+    let mut bodies = Vec::new();
+    for variant in [Some("deep".to_string()), None] {
+        let (endpoint, received) = serve(GENERATE_CONTENT_REPLY);
+        let serde_json::Value::Object(root) =
+            serde_json::from_str(&text_for(&endpoint)).expect("json")
+        else {
+            panic!("not an object");
+        };
+        let provider = bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider");
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        express_client(&egress, &provider, "gemini-settings")
+            .complete(
+                &mut policy,
+                &ChatRequest::new("gemini-settings", vec![Message::user("hello")])
+                    .with_variant(variant),
+            )
+            .expect("the reply was read");
+        bodies.push(json_of(&received.recv().expect("the request arrived")));
+    }
+
+    let chosen = &bodies[0]["generationConfig"];
+    assert_eq!(chosen["thinkingConfig"]["thinkingBudget"], 4096, "{chosen}");
+    assert_eq!(chosen["maxOutputTokens"], 777, "{chosen}");
+    assert!(chosen.get("temperature").is_none(), "{chosen}");
+    assert!(chosen.get("topK").is_none(), "{chosen}");
+
+    let unchosen = &bodies[1]["generationConfig"];
+    assert_eq!(unchosen["temperature"], 0.2, "{unchosen}");
+    assert_eq!(unchosen["topK"], 3, "{unchosen}");
+    assert!(unchosen.get("thinkingConfig").is_none(), "{unchosen}");
+}
+
 /// A reply the ceiling stopped while the model was still reasoning writes nothing and returns no
 /// reasoning, so the count is what says it thought, and the bill is the figures the service stated
 /// even though it left out the reply's own count. With no ceiling stated, the one reported is what
@@ -7353,6 +7446,53 @@ fn a_models_options_reach_the_responses_body_and_cannot_overwrite_what_the_turn_
             "{owned} was supplied by an option: {body}"
         );
     }
+}
+
+/// BACKEND-66: a chosen variant reaches the Responses body as `options` do, wins over an option of
+/// the same name, and cannot overwrite what the turn built.
+#[test]
+fn a_chosen_variant_reaches_the_responses_body_and_cannot_overwrite_what_the_turn_built() {
+    let (endpoint, received) = serve_stream(text_reply(&["ok"]));
+    let text = format!(
+        r#"{{"provider": {{"a-responses-gateway": {{"npm": "@ai-sdk/openai",
+            "options": {{"baseURL": "{endpoint}/v1"}},
+            "models": {{"a-model": {{
+                "options": {{"user": "from-options", "service_tier": "flex"}},
+                "variants": {{"v": {{"user": "from-variant", "verbosity": "low",
+                    "model": "another-model", "store": true, "stream": false,
+                    "reasoning": {{"effort": "low", "summary": "concise"}}}}}}
+            }}}}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    let provider = bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider");
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    responses_client(&egress, &provider, "a-model")
+        .complete(
+            &mut policy,
+            &ChatRequest::new("a-responses-gateway/a-model", vec![Message::user("hi")])
+                .with_effort(Some(Effort::High))
+                .with_variant(Some("v".to_string())),
+        )
+        .expect("the reply was read");
+
+    let body = json_of(&received.recv().expect("the request arrived"));
+    assert_eq!(body["user"], "from-variant");
+    assert_eq!(body["verbosity"], "low");
+    assert_eq!(body["service_tier"], "flex");
+    assert_eq!(body["model"], "a-model");
+    assert_eq!(
+        body["reasoning"],
+        serde_json::json!({"effort": "high", "summary": "auto"})
+    );
+    assert_eq!(body["store"], false);
+    assert_eq!(body["stream"], true);
 }
 
 /// A final event this cannot read is an unreadable reply, which a second request would only repeat,

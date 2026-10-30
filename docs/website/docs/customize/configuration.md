@@ -307,7 +307,7 @@ one thing leaves everything else in force:
 | `env`, `keybindings`, `sessionsKeys` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `agent`, `style`, `sharedSkillDirectories`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
 | `references` | your own file and a `--settings` file outside the project; a project or local file's block, and a `--settings` file that resolves inside the project, is ignored and reported, and a later file's block replaces an earlier one's |
 | `run.network` | your own file and the file `--settings` names may set either word; a project or local file may set `closed` and never `open`, and is reported when it tried |
 | `sandbox.network.deniedHosts`, `sandbox.network.onUnlisted: refuse` | every file's entries are kept |
@@ -355,6 +355,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `summaryModel` | the model compaction summaries and `/goal` checks run on ([below](#summarymodel)) |
 | `planModel` | the model a turn that begins in plan mode runs on ([below](#planmodel)) |
 | `processorModel` | the model an isolated processor runs on ([below](#processormodel)) |
+| `commitMessage.instructions` | the format `/commit-message` follows when none is typed ([below](#commitmessageinstructions)) |
 | `references` | directories outside the project that the planner may consult, each with a name and a description ([below](#references)) |
 | `agent` | the definition every turn of a session is addressed to when `--agent` names none ([below](#agent)) |
 | `effort` | how hard the model is asked to think when nobody has chosen ([below](#effort)) |
@@ -536,6 +537,17 @@ other.** A `.bravebot/settings.json` or `.bravebot/settings.local.json` that nam
 reported by `bravebot doctor`. A model your administrator refuses is not used as a fallback.
 
 The name is read as [`model`](#model) is, so `opus`, `sonnet` and `haiku` name a tier.
+
+### `commitMessage.instructions`
+
+```json
+{ "commitMessage": { "instructions": "Use Conventional Commits; subject under 50 characters." } }
+```
+
+The format [`/commit-message`](../reference/commands.md#commit-message-source-format) follows when you
+type none after the command, so a house style is written once. Words typed after the command replace
+it for that draft. It is read from your own file and the file `--settings` names only: a project or
+local file that writes `commitMessage` is ignored and reported by `bravebot doctor`.
 
 ### `processorModel`
 
@@ -935,8 +947,9 @@ says.
 `false` makes `bravebot --handle-uri`, which the operating system runs for a `bravebot://open` link,
 refuse every link with the configuration status before it reads one. Only the boolean `false` does
 this: `"false"` in quotes or any other value leaves links on. It does not remove the registration the
-installer made; set `BRAVEBOT_NO_DEEP_LINKS=1` when running `install.sh` to leave that out, or delete
-`bravebot-handler.desktop` from `~/.local/share/applications`.
+installer made; set `BRAVEBOT_NO_DEEP_LINKS=1` when running `install.sh` or `install.ps1` to leave that
+out, or delete `bravebot-handler.desktop` from `~/.local/share/applications` on Linux, or the
+`HKCU\Software\Classes\bravebot` registry key on Windows.
 
 ### `tui.mouse`
 
@@ -1047,7 +1060,8 @@ prompts, file contents, credentials, working directory, host name, anything a mo
 said, or an identifier that stays the same from one report to the next. The service sees the network
 address a request came from, as any server does.
 
-Only your own `~/.bravebot/settings.json` is read for this key. A `.bravebot/settings.json` in a
+Only your own `~/.bravebot/settings.json` and the [managed file](managed-settings.md) are read for this
+key, and a managed `false` turns reports off whatever your file says. A `.bravebot/settings.json` in a
 checkout can neither turn reports off nor turn them on again after you did, and a build made without
 a submission address, which is every build from source that did not have one set, sends nothing. A
 session started with `--incognito` has no state directory to leave a report in, so it leaves and

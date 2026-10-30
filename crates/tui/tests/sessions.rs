@@ -57,6 +57,7 @@ impl Scratch {
         // SAFETY: `HOME` is held for as long as this value lives, so no other test in this
         // binary is reading or writing the variable while this one owns it.
         unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::remove_var("BRAVEBOT_HOME") };
         Self {
             home,
             project,
@@ -5653,6 +5654,109 @@ fn the_checkouts_no_record_lists_are_named_and_nothing_is_named_where_a_record_i
     let directory = sessions::project_directory(workspace.root()).expect("a directory");
     std::fs::write(directory.join("torn.json"), "{\"id\": ").expect("a torn record");
     assert!(sessions::checkouts_no_record_lists(&workspace).is_empty());
+}
+
+/// A project with a `.git` directory and the checkouts `c1` and `c2` on disk, each at the mode a
+/// session leaves a claimed checkout at, which is the only mode the opening sweep takes. Answers
+/// the workspace, the state directory and the directory holding the checkouts.
+#[cfg(unix)]
+fn a_project_with_two_claimed_checkouts(scratch: &Scratch) -> (Workspace, PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(scratch.project.join(".git")).expect("a repository directory");
+    let workspace = Workspace::new(&scratch.project).expect("workspace");
+    let state = bravebot_agent::home::directory().expect("a home");
+    std::fs::create_dir_all(&state).expect("state");
+    let at = state
+        .canonicalize()
+        .expect("state")
+        .join("checkouts")
+        .join(bravebot_agent::home::key_for(workspace.root()));
+    for id in ["c1", "c2"] {
+        let checkout = at.join(id);
+        std::fs::create_dir_all(&checkout).expect("a checkout");
+        std::fs::write(checkout.join("README"), "left behind\n").expect("a file in it");
+        std::fs::set_permissions(&checkout, std::fs::Permissions::from_mode(0o700))
+            .expect("claim the checkout");
+    }
+    (workspace, state, at)
+}
+
+/// CHECKOUT-16: the opening sweep removes nothing where a record of the project cannot be read,
+/// since that record might list any of the checkouts.
+///
+/// The failure this rejects is a sweep that carries on with an empty list when the records cannot
+/// be read, which takes every checkout a session still keeps.
+#[cfg(unix)]
+#[test]
+fn the_opening_sweep_removes_nothing_where_a_record_cannot_be_read() {
+    let scratch = Scratch::new("sweep-unreadable");
+    let (workspace, state, at) = a_project_with_two_claimed_checkouts(&scratch);
+    let directory = sessions::project_directory(workspace.root()).expect("a directory");
+    std::fs::create_dir_all(&directory).expect("the records directory");
+    std::fs::write(directory.join("torn.json"), "{\"id\": ").expect("a torn record");
+
+    sessions::sweep_unlisted_checkouts_in(&workspace, &state);
+
+    assert!(at.join("c1").join("README").exists());
+    assert!(at.join("c2").join("README").exists());
+}
+
+/// CHECKOUT-16: the opening sweep leaves a checkout a record lists and removes one it does not.
+///
+/// The failures this rejects are a sweep that treats every checkout as unlisted, which takes the
+/// listed one, and one that treats every checkout as listed, which leaves the other.
+#[cfg(unix)]
+#[test]
+fn the_opening_sweep_leaves_a_checkout_a_record_lists_and_removes_the_other() {
+    let scratch = Scratch::new("sweep-listed");
+    let (workspace, state, at) = a_project_with_two_claimed_checkouts(&scratch);
+    let kept = a_kept_checkout();
+    let conversation = a_conversation();
+    let mut handle = Handle::begin(workspace.root(), Front::Terminal, bravebot_stamp::BUILD);
+    handle.save(
+        "make a space invaders game",
+        Standing {
+            history: None,
+            conversation: &conversation.snapshot(),
+            turns: 1,
+            tokens: 1,
+            split: Default::default(),
+            spend: &BTreeMap::new(),
+            timing: &BTreeMap::new(),
+            model: None,
+            todos: &BTreeMap::new(),
+            asides: &[],
+            trust: &a_trust_map(),
+            programs: &TrustedPrograms::new(),
+            directories: &[],
+            manifest: None,
+            rewind: &[],
+            checkouts: std::slice::from_ref(&kept),
+            touched: None,
+            answered_by_mode: false,
+        },
+    );
+
+    sessions::sweep_unlisted_checkouts_in(&workspace, &state);
+
+    assert!(at.join("c1").join("README").exists(), "c1 is listed");
+    assert!(!at.join("c2").exists(), "c2 is listed by no record");
+}
+
+/// CHECKOUT-16: with no record at all, the opening sweep removes every checkout nothing holds.
+///
+/// The failure this rejects is a sweep that treats a project with no records as one whose records
+/// cannot be read, which would leave every checkout of a project that never saved a session.
+#[cfg(unix)]
+#[test]
+fn the_opening_sweep_removes_every_checkout_where_no_record_exists() {
+    let scratch = Scratch::new("sweep-no-record");
+    let (workspace, state, at) = a_project_with_two_claimed_checkouts(&scratch);
+
+    sessions::sweep_unlisted_checkouts_in(&workspace, &state);
+
+    assert!(!at.join("c1").exists());
+    assert!(!at.join("c2").exists());
 }
 
 /// A record from before checkouts were kept reads as having none.

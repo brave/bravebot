@@ -3428,7 +3428,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Doing nothing for a slot that already holds its bytes, so a consumer can ask without
     /// knowing whether an earlier one already did.
-    pub fn materialise<F>(
+    pub fn materialise<F, R>(
         &mut self,
         tool: &str,
         slot: &SlotId,
@@ -3436,7 +3436,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         read: F,
     ) -> Gated<()>
     where
-        F: FnOnce(&str) -> Result<String, String>,
+        F: FnOnce(&str) -> Result<R, String>,
+        R: Into<crate::slot::Fill>,
     {
         let Some(deferred) = slots.deferred(slot, &PathAuthority::mint()) else {
             return Ok(());
@@ -3466,13 +3467,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // The path's revision before the bytes are taken, so that a write landing while the file
         // is read leaves the slot older than the file and not the other way round.
         let revision = self.trust.stamp_of(&path);
-        let text = read(&path).map_err(|detail| Denial {
-            principle: Principle::Confinement,
-            message: format!("{tool}: {slot} could not be read: {detail}"),
-        })?;
+        let crate::slot::Fill { text, decoded } =
+            read(&path).map(Into::into).map_err(|detail| Denial {
+                principle: Principle::Confinement,
+                message: format!("{tool}: {slot} could not be read: {detail}"),
+            })?;
 
         let measured = slots
-            .fill(slot, Labelled::new(text, label), revision)
+            .fill(slot, Labelled::new(text, label), revision, decoded)
             .map_err(|e| Denial {
                 principle: Principle::Confinement,
                 message: format!("{tool}: {slot} could not be filled: {e}"),
@@ -3691,6 +3693,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             format!(
                 "call {call} to the advisor {model}: a question of {question} character(s), \
                  costing {cost} tokens"
+            ),
+        );
+    }
+
+    /// Record one question put to the auto mode's classifier: which model, what kind of question,
+    /// the word it gave, and what the call cost.
+    ///
+    /// `question` and `word` are fixed text chosen by the caller, and `model` is the session's own
+    /// setting, so the entry holds no word of what the classifier was shown or wrote (AUTO-7,
+    /// TRACE-2). A word of "not allowed" is how a block, an unreadable reply and a failed call all
+    /// read here, as they do to everything else that reads the answer (AUTO-6).
+    pub fn record_classification(
+        &mut self,
+        model: &str,
+        question: &'static str,
+        word: &'static str,
+        cost: u64,
+    ) {
+        self.allow(
+            "auto_mode",
+            format!(
+                "the classifier {model} was asked about a {question} and said {word}, costing \
+                 {cost} tokens"
             ),
         );
     }
@@ -4655,7 +4680,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let mut pictures = 0usize;
 
         for slot in spec.reads() {
-            let content = slots.take_for_effect(slot).map_err(|e| Denial {
+            let content = slots.take_for_reading(slot).map_err(|e| Denial {
                 principle: Principle::Confinement,
                 message: format!("{}: {e}", spec.id()),
             })?;
@@ -4820,7 +4845,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let Some(about) = spec.about() else {
             return reply;
         };
-        let Ok(original) = slots.take_for_effect(about) else {
+        let Ok(original) = slots.take_for_reading(about) else {
             return reply;
         };
 
@@ -4900,11 +4925,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         about: Option<&SlotId>,
         slots: &mut crate::slot::SlotStore,
     ) {
-        let home = match about.and_then(|about| {
-            slots
-                .path_of(about, &PathAuthority::mint())
-                .map(|path| (path.to_string(), about.clone()))
-        }) {
+        // An answer replaces the document it is about, so it is written to that file or nowhere. A
+        // document that is a decoding of another encoding is not the file's own text, and writing
+        // an answer over the file would put UTF-8 where the file held UTF-16 or U+FFFD where it
+        // held a byte, so such an answer is for no file.
+        let home = match about
+            .filter(|about| !slots.is_decoded(about))
+            .and_then(|about| {
+                slots
+                    .path_of(about, &PathAuthority::mint())
+                    .map(|path| (path.to_string(), about.clone()))
+            }) {
             Some((path, named_by)) => crate::slot::Home::Only { path, named_by },
             None => crate::slot::Home::Unsaid,
         };
@@ -5067,7 +5098,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             None => None,
         };
 
-        let content = slots.take_for_effect(slot).map_err(|e| Denial {
+        let content = slots.take_for_reading(slot).map_err(|e| Denial {
             principle: Principle::Confinement,
             message: format!("{slot}: {e}"),
         })?;
@@ -6391,18 +6422,25 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
     }
 
-    /// Vouch for `path` only if nothing has decided about it since `shown_at`.
+    /// Vouch for `path` only if nothing has decided about it, and no `run` line has started, since
+    /// `shown_at` was taken.
     ///
     /// A preview is what the answer was about. If that path, or a tree above it, was decided about
-    /// while the question was on the screen, the text the person read is not what a rule minted now
-    /// would cover, so the answer is thrown away rather than spent on bytes nobody saw.
+    /// while the question was on the screen, or a program started that may have rewritten it
+    /// without anybody being told, the text the person read is not what a rule minted now would
+    /// cover, so the answer is thrown away rather than spent on bytes nobody saw. The two stamps
+    /// are compared as numbers and nothing else is read from them.
     ///
     /// Refusing is recorded and reported. A yes that quietly does nothing leaves a person watching
     /// a file they just trusted come back quarantined with nothing saying why, and the caller needs
     /// the answer to say so.
-    pub fn vouch_if_unchanged(&mut self, path: &str, shown_at: u64) -> bool {
+    pub fn vouch_if_unchanged(
+        &mut self,
+        path: &str,
+        shown_at: crate::file_authority::Stamp,
+    ) -> bool {
         let vouched = self.capture_files(|policy, capture| {
-            if capture.revision_of(path) != shown_at {
+            if capture.stamp_of(path) != shown_at {
                 return false;
             }
             policy.vouch_for_named_path(path);
@@ -7767,7 +7805,51 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
-    /// The one sentence each of the three says, from words of this file's own, so no caller can put
+    /// Record that showing the planner what looks like a credential in a read was put to the person
+    /// and not approved, so none of it was shown (TRACE-1). `call` is the tool, `read_file`,
+    /// `edit_file` or `read_git`. The reasons are those of [`Policy::refuse_unapproved_write`], and
+    /// the sentence names neither the path nor what was found (TRACE-2).
+    pub fn refuse_unapproved_exposure(&mut self, call: &str) {
+        self.refuse_unapproved(call, "display of a credential", "none of it was shown");
+    }
+
+    /// Record that releasing held-back bytes to the planner was put to the person and not
+    /// approved, so they were kept back (TRACE-1). `tool` is `read_output` or `vet_content` and
+    /// `slot` the reference the driver minted for the bytes, never anything they held (TRACE-2).
+    pub fn refuse_unapproved_release(&mut self, tool: &str, slot: &str) {
+        self.refuse_unapproved(
+            &format!("{tool} {slot}"),
+            "read",
+            "the bytes were kept back",
+        );
+    }
+
+    /// Record that the tools an MCP server offers were put to the person and not approved, so none
+    /// was offered (TRACE-1). The server is named by the alias the person gave it, as
+    /// [`Policy::refuse_unapproved_call`] names one, and the list is not named at all (TRACE-2).
+    pub fn refuse_unapproved_tool_list(&mut self, alias: &str) {
+        self.refuse_unapproved(alias, "tool list", "none of its tools was offered");
+    }
+
+    /// Record that following an MCP server to the address its reply named was put to the person
+    /// and not approved, so the server was not reached there (TRACE-1). The address is the server's
+    /// own bytes and is not in the sentence (TRACE-2).
+    pub fn refuse_unapproved_move(&mut self, alias: &str) {
+        self.refuse_unapproved(
+            alias,
+            "move",
+            "the server was not reached at the new address",
+        );
+    }
+
+    /// Record that starting a language server was put to the person and not approved, so none was
+    /// started (TRACE-1). The server is named by the language, the driver's own word for it, and
+    /// not by the program, its arguments or the workspace (TRACE-2).
+    pub fn refuse_unapproved_server(&mut self, language: &str) {
+        self.refuse_unapproved(language, "start", "no language server was started");
+    }
+
+    /// The one sentence each of these says, from words of this file's own, so no caller can put
     /// anything a call carried into the trail (TRACE-2).
     fn refuse_unapproved(&mut self, call: &str, asked: &'static str, undone: &'static str) {
         let _ = self.deny(
@@ -7972,37 +8054,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(())
     }
 
-    /// Like [`Policy::before_action`], but the field additionally requires a matching
-    /// single-use grant. Used for irreversible effects.
-    ///
-    /// The grant is consumed on success. A grant for the wrong value does not match,
-    /// so it cannot be redirected.
-    pub fn before_granted_action(
-        &mut self,
-        tool: &str,
-        field: &str,
-        value: &Labelled<String>,
-    ) -> Gated<()> {
-        self.before_action(tool, field, Role::Routing, value)?;
-
-        // Safe to read: before_action just proved this is (T,pub).
-        let concrete = value.clone().into_trusted().map_err(|_| Denial {
-            principle: Principle::IntegrityGate,
-            message: format!("grant check on non-trusted field '{field}'"),
-        })?;
-
-        self.consume_grant(tool, field, &concrete)
-    }
-
     /// Check a destination a person endorsed, and consume the endorsement.
     ///
-    /// The counterpart to [`Policy::before_granted_action`] for the one field whose authority is
-    /// the endorsement rather than its label. A destination arrives as the planner proposed it,
-    /// so it is untrusted, and [`Policy::promote_confined_read`] is not what lets it through:
-    /// promotion exists for a read, and a write routed on a promoted path would have the model's
-    /// own proposal as the reason it landed where it did. What comes back is the exact value a
-    /// person approved, with nothing relabelled, so the effect leaves no trusted path behind for
-    /// another field to route on.
+    /// This is for the one field whose authority is the endorsement rather than its label. A
+    /// destination arrives as the planner proposed it, so it is untrusted, and
+    /// [`Policy::promote_confined_read`] is not what lets it through: promotion exists for a
+    /// read, and a write routed on a promoted path would have the model's own proposal as the
+    /// reason it landed where it did. What comes back is the exact value a person approved, with
+    /// nothing relabelled, so the effect leaves no trusted path behind for another field to
+    /// route on.
     ///
     /// Confidentiality is still the label's to decide. A private destination is refused, because
     /// a name derived from the user's data is that data, and a directory entry is somewhere this
@@ -8561,6 +8621,7 @@ mod tests {
         policy
             .materialise("write_file", &slot, &mut slots, |_| {
                 panic!("a slot that holds its bytes must not be read again")
+                    as Result<String, String>
             })
             .expect("asking twice is not an error");
     }
@@ -9094,6 +9155,77 @@ five
         assert_eq!(
             produced.note.expect("it said why").declassify(&proof),
             "This is a server, not the game, so I have left it as it is."
+        );
+    }
+
+    /// A file in another encoding is read into a slot as the text it decodes to, and a slot like
+    /// that is for reading. A processor and a check are given it. Resolving it for an effect is
+    /// refused, and so is writing an answer about it over the file, since the answer would be
+    /// UTF-8 where the file held another encoding.
+    #[test]
+    fn a_decoded_slot_is_read_by_a_processor_and_never_written_back() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = SlotId::new("ref:1");
+        let entries = Labelled::new(vec!["wide.txt".to_string()], Label::untrusted_private());
+        policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                0,
+                std::slice::from_ref(&slot),
+                &mut slots,
+            )
+            .expect("an entry may be reserved");
+        policy
+            .materialise("process", &slot, &mut slots, |_| {
+                Ok(crate::slot::Fill::decoded("decoded text\n".to_string()))
+            })
+            .expect("the file is read");
+
+        assert!(
+            slots.verbatim_of(&slot, &PathAuthority::mint()).is_none(),
+            "a decoding was recorded as a copy of the file"
+        );
+        let refused = policy
+            .resolve("write_file", &slot, &slots)
+            .expect_err("a decoding must not be written as the file");
+        assert!(
+            refused.message.contains("another encoding"),
+            "unhelpful refusal: {}",
+            refused.message
+        );
+
+        let spec = policy
+            .before_processor(
+                "p",
+                std::slice::from_ref(&slot),
+                &Labelled::trusted("summarise it".to_string()),
+                Some(slot.clone()),
+                &slots,
+            )
+            .expect("a spec");
+        policy
+            .compose_processor_input(&spec, &slots)
+            .expect("a processor may read a decoding");
+        policy
+            .before_vetting(&slot, None, &slots)
+            .expect("a check may read a decoding");
+
+        let answer = SlotId::new("ref:2");
+        slots
+            .writer_for(answer.clone(), Label::untrusted_private())
+            .unwrap()
+            .write("the answer")
+            .unwrap();
+        policy.answers_for(&answer, Some(&slot), &mut slots);
+        assert!(
+            policy
+                .write_belongs_here("wide.txt", &answer, &slots)
+                .is_err(),
+            "an answer about a decoding may be written over the file it was decoded from"
         );
     }
 
@@ -15123,82 +15255,6 @@ five
         );
     }
 
-    #[test]
-    fn a_granted_action_needs_a_matching_endorsement() {
-        let mut sink = RecordingSink::new();
-        let mut policy = Policy::begin(
-            routing_with("command", "cargo test"),
-            ReleasePlan::new(),
-            all_capabilities(),
-            &mut sink,
-        )
-        .unwrap();
-
-        let command = Labelled::trusted("cargo test".to_string());
-        assert!(
-            policy
-                .before_granted_action("shell", "command", &command)
-                .is_err(),
-            "no endorsement issued yet"
-        );
-
-        policy.issue_grant("shell", "command", "cargo test");
-        assert!(
-            policy
-                .before_granted_action("shell", "command", &command)
-                .is_ok()
-        );
-    }
-
-    /// An endorsement is single-use, so it cannot authorise a second execution.
-    #[test]
-    fn an_endorsement_cannot_be_replayed() {
-        let mut sink = RecordingSink::new();
-        let mut policy = Policy::begin(
-            routing_with("command", "cargo test"),
-            ReleasePlan::new(),
-            all_capabilities(),
-            &mut sink,
-        )
-        .unwrap();
-
-        let command = Labelled::trusted("cargo test".to_string());
-        policy.issue_grant("shell", "command", "cargo test");
-        assert!(
-            policy
-                .before_granted_action("shell", "command", &command)
-                .is_ok()
-        );
-        assert!(
-            policy
-                .before_granted_action("shell", "command", &command)
-                .is_err(),
-            "endorsement must be consumed"
-        );
-    }
-
-    /// An endorsement is bound to an exact value, so it cannot be redirected to a
-    /// different command.
-    #[test]
-    fn an_endorsement_does_not_transfer_to_another_value() {
-        let mut sink = RecordingSink::new();
-        let mut policy = Policy::begin(
-            routing_with("command", "cargo test"),
-            ReleasePlan::new(),
-            all_capabilities(),
-            &mut sink,
-        )
-        .unwrap();
-
-        policy.issue_grant("shell", "command", "cargo test");
-        let other = Labelled::trusted("rm -rf /".to_string());
-        assert!(
-            policy
-                .before_granted_action("shell", "command", &other)
-                .is_err()
-        );
-    }
-
     /// The iterative-agent escape hatch: a model-proposed path may become routing for a
     /// confined read.
     #[test]
@@ -19271,6 +19327,51 @@ five
             );
         }
 
+        /// TRACE-1: each question about a read, a tool list, a move or a language server that is put
+        /// to the person and not approved is a refusal under `approval`, in fixed words that carry
+        /// only what the driver named it by (TRACE-2), and the turn does not end as clean. The
+        /// regression it rejects is a no that leaves nothing in the trail. Each case is given a
+        /// distinct name, so a sentence that drops the name, or reuses one case's wording for
+        /// another, fails it.
+        #[test]
+        fn a_question_the_person_did_not_approve_is_a_refusal_under_approval() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_unapproved_exposure("read_git");
+            turn.refuse_unapproved_release("vet_content", "ref:4");
+            turn.refuse_unapproved_tool_list("notes");
+            turn.refuse_unapproved_move("weather");
+            turn.refuse_unapproved_server("Go");
+            assert!(
+                !turn.finish(),
+                "a turn with an unapproved question ended clean"
+            );
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            let said = [
+                "read_git: the display of a credential was not approved, so none of it was shown",
+                "vet_content ref:4: the read was not approved, so the bytes were kept back",
+                "notes: the tool list was not approved, so none of its tools was offered",
+                "weather: the move was not approved, so the server was not reached at the new address",
+                "Go: the start was not approved, so no language server was started",
+            ];
+            assert_eq!(
+                refused,
+                said.map(|reason| ("approval", Principle::Capability, reason))
+            );
+        }
+
         /// TRACE-8: each way a delegate can end is its own record, with its time and its rounds
         /// against its bound, and a run that answered at its bound reads as one the bound stopped
         /// rather than as one that finished.
@@ -19793,8 +19894,7 @@ five
             let mut writer_sink = RecordingSink::new();
             let (spent, trusted) = {
                 let mut policy = open_policy(&mut sink);
-                let shown_at =
-                    policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js"));
+                let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
 
                 // A sibling's write, entered and published the way the workspace enters one: the
                 // path is reserved under one boundary and what it holds is published under another,
@@ -19835,13 +19935,59 @@ five
         fn a_vouch_for_the_version_shown_is_spent_on_it() {
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
-            let shown_at = policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js"));
+            let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
 
             assert!(
                 policy.vouch_if_unchanged("vendor/lib.js", shown_at),
                 "an answer about the version in front of the person was not spent on it"
             );
             assert!(policy.trust().is_trusted("vendor/lib.js"));
+        }
+
+        /// A `run` line that starts while the question is open voids the answer, whatever the line
+        /// names.
+        ///
+        /// A program opens files its line does not name, so the authority is told of no write to
+        /// the path and its revision does not move; only the count of started programs does. A
+        /// check against the revision alone spends the yes on a file a program may have rewritten
+        /// after the person read it, and the next read returns those bytes as trusted text.
+        #[test]
+        fn a_vouch_is_not_spent_after_a_program_started_while_the_question_was_open() {
+            let mut sink = RecordingSink::new();
+            let (spent, trusted) = {
+                let mut policy = open_policy(&mut sink);
+                let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
+                let revision_then =
+                    policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js"));
+
+                // A line from a delegate running beside this turn, naming nothing here.
+                policy.file_authority().note_program_started();
+
+                // The premise: no revision moved, so only the whole stamp can tell.
+                assert_eq!(
+                    policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js")),
+                    revision_then,
+                    "a program starting moved the path's revision"
+                );
+                (
+                    policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                    policy.trust().is_trusted("vendor/lib.js"),
+                )
+            };
+
+            assert!(
+                !spent,
+                "an answer was spent on a file a program may have rewritten since it was shown"
+            );
+            assert!(
+                !trusted,
+                "a file a program may have rewritten came back trusted"
+            );
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                trail.contains("changed while the question was being answered"),
+                "nothing says why a file the person trusted came back quarantined: {trail}"
+            );
         }
     }
 

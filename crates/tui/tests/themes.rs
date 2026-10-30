@@ -44,6 +44,7 @@ fn started_in(home: &Path, workspace: &Path, body: impl FnOnce()) {
 
     // SAFETY: single-threaded within the lock, and restored when `_restored` is dropped.
     unsafe { std::env::set_var("HOME", home) };
+    unsafe { std::env::remove_var("BRAVEBOT_HOME") };
     std::env::set_current_dir(workspace).expect("enter the workspace");
 
     body();

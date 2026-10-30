@@ -193,8 +193,10 @@ cross-compiles without running Windows tests. Docker Desktop cannot exercise Lan
 CI's native Linux tests cover that gap. Release cross-builds remain separate.
 
 Most tests that touch the state directory point `HOME` at a scratch directory, and `BRAVEBOT_HOME`
-answers before `HOME`, so unset it in the shell that runs the tests: with it set, a test reaches the
-directory it names, which is yours.
+answers before `HOME`, so each of them clears it as well, and `crates/cli/tests/test_home.rs` fails a
+test that sets `HOME` and does not. A new test clears it beside the `HOME` (`.env_remove`,
+`std::env::remove_var`, or `("BRAVEBOT_HOME", None)` in a list of variables), or marks the line
+`// state-home-kept: <why>`.
 
 `make check` runs the whole suite and takes minutes. It is what to run before pushing a branch and
 what CI runs, not what to run between two edits to the same file, and never twice to confirm the

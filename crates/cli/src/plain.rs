@@ -3878,6 +3878,7 @@ mod tests {
             url: "https://other.example/a".to_string(),
             host: "other.example".to_string(),
             redirected_from: Some("example.com".to_string()),
+            classified: Default::default(),
         };
         let mut asking = Prompting::new(
             std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
@@ -4001,6 +4002,7 @@ mod tests {
                     url: "https://example.com/a".to_string(),
                     host: "example.com".to_string(),
                     redirected_from: None,
+                    classified: Default::default(),
                 });
             }),
             held(Held::Fetch)

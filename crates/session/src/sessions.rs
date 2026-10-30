@@ -2972,11 +2972,17 @@ pub fn sweep_unlisted_checkouts(workspace: &Workspace) {
     let workspace = workspace.clone();
     let _ = std::thread::Builder::new()
         .name("checkout sweep".into())
-        .spawn(move || {
-            if let Some(listed) = listed_checkouts(workspace.root()) {
-                workspace.sweep_checkouts(&state, &|id| listed.contains(id));
-            }
-        });
+        .spawn(move || sweep_unlisted_checkouts_in(&workspace, &state));
+}
+
+/// The sweep [`sweep_unlisted_checkouts`] runs on its thread, taken to completion on the calling
+/// one: remove the checkouts under `workspace`'s key in `state` that no record lists and nothing
+/// holds. Nothing is removed where a record of the project cannot be read, since that record might
+/// list any of them.
+pub fn sweep_unlisted_checkouts_in(workspace: &Workspace, state: &Path) {
+    if let Some(listed) = listed_checkouts(workspace.root()) {
+        workspace.sweep_checkouts(state, &|id| listed.contains(id));
+    }
 }
 
 /// What `/checkouts` names beside the ones this session keeps: the checkouts no record lists, where
