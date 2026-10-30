@@ -47,8 +47,9 @@ fn begun() -> BTreeMap<String, usize> {
 #[test]
 fn a_session_of_the_account_is_begun_only_where_a_session_begins() {
     let expected: BTreeMap<String, usize> = [
-        // A request made in no session is given one, so it shares no cache with another.
-        ("crates/agent/src/backend.rs", 1),
+        // A request made in no session is given one, so it shares no cache with another: the
+        // account's, and a gateway's whose block set `options.setCacheKey` (BACKEND-66).
+        ("crates/agent/src/backend.rs", 2),
         // A task told no session begins one with its first request, which is a delegate's and a
         // task built for one turn.
         ("crates/agent/src/turn/task.rs", 1),
