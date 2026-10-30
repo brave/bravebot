@@ -342,7 +342,6 @@ cli-goal-failed = the goal could not be checked: { $problem }
 cli-output-schema-needs-a-path = --output-schema requires the path of a JSON Schema file
 cli-input-format-unknown = --input-format takes lines
 cli-trust-input-lines-needs-lines = --trust-input-lines requires --input-format lines
-cli-input-lines-not-with-incognito = --input-format lines does not go with --incognito: each turn is carried on from the session record, and an incognito run writes none
 cli-input-lines-not-with-a-manifest = --input-format lines does not go with --mode manifest: a manifest run has one task and no turns to add
 cli-input-lines-no-prompt = no prompt line arrived before the input ended
 cli-input-lines-session-lost = the session this run carries on from cannot be read back, so the turn was not run: { $problem }

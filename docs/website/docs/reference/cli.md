@@ -652,8 +652,11 @@ already hold as many bytes as that cap). The event holds nothing the line said. 
 line is ignored, and a field a line's type does not use is skipped.
 
 The flags are refused with status 2 before stdin is read when `--input-format` names anything but
-`lines`, with `--mode manifest` and with `--incognito`, and when `--trust-input-lines` comes without
+`lines` and with `--mode manifest`, and when `--trust-input-lines` comes without
 `--input-format lines`.
+
+Under `--incognito` no record is written, so each turn is carried on from the conversation held in
+memory for as long as the process runs. Every result names no session.
 
 ## Continuing a session from a one-shot run
 

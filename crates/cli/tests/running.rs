@@ -20511,6 +20511,163 @@ fn a_run_reading_lines_runs_each_prompt_as_a_turn_over_one_conversation() {
     );
 }
 
+/// CLI-36, INCOG-3: an incognito run reading lines carries each turn on from the one before in
+/// memory, since it writes no record to carry on from. A run that gave each turn an empty
+/// conversation would answer the second prompt as though nothing had come before it, and one that
+/// wrote a record to carry on from would leave the session on disk.
+#[test]
+fn an_incognito_run_reading_lines_carries_its_turns_in_memory_and_writes_no_record() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-incognito").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines", "--incognito"]);
+    run.send(&prompt_line("FIRST-WORDS"));
+    let first = run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("SECOND-WORDS"));
+    run.send(&prompt_line("THIRD-WORDS"));
+    let (rest, status, stderr) = run.finish();
+
+    let first = results(&first)[0].clone();
+    let later = results(&rest);
+    assert_eq!(first["ok"], true, "{stderr}");
+    assert_eq!(later.len(), 2, "{rest:?}");
+    assert_eq!(later[1]["reply"], "reply 3", "{rest:?}");
+    assert!(
+        first["session"].is_null() && later.iter().all(|result| result["session"].is_null()),
+        "an incognito turn named a record: {first} {later:?}"
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 3);
+    assert!(!sent[0].contains("SECOND-WORDS"));
+    assert!(
+        sent[1].contains("FIRST-WORDS") && sent[1].contains("SECOND-WORDS"),
+        "the second request did not carry the conversation: {}",
+        sent[1]
+    );
+    assert!(
+        sent[2].contains("FIRST-WORDS")
+            && sent[2].contains("SECOND-WORDS")
+            && sent[2].contains("THIRD-WORDS"),
+        "the third request did not carry the conversation: {}",
+        sent[2]
+    );
+}
+
+/// CLI-36: an incognito run carries the kept facts it injected and the trust map it built into the
+/// turn after, and does not build either again. The fact is put in front of the first prompt and
+/// not the second, which asks for the same thing, and the kept answer that trusts the directory is
+/// read and said once. A turn that took the empty set, or built its trust map afresh, would inject
+/// the fact again and say the answer a second time.
+#[test]
+fn an_incognito_run_reading_lines_carries_its_facts_and_its_trust_map() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-incognito-carry")
+        .with_settings(&settings_for(&gateway))
+        .with_state(
+            "facts/deploy-window.md",
+            "---\nsource: person\nlabel: public\nverified: 2026-10-01\n---\ndeploy window closes friday evening\n",
+        );
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+    let Some(identity) = bravebot_agent::trusted::Identity::of(&cwd) else {
+        // A filesystem that cannot say when a directory was made keeps no answer to read.
+        return;
+    };
+    let store = bravebot_agent::trusted::Store::new(&scratch.path.join(".bravebot"), &cwd);
+    assert!(
+        store.keep(&identity, "1-2", 7, false),
+        "the answer was not kept"
+    );
+
+    let mut run = LinesRun::start_in(&scratch, &cwd, &["--trust-input-lines", "--incognito"]);
+    run.send(&prompt_line("deploy window closes friday evening"));
+    let first = run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("deploy window closes friday evening again"));
+    let (rest, status, stderr) = run.finish();
+
+    assert_eq!(results(&first)[0]["ok"], true, "{stderr}");
+    assert_eq!(results(&rest).len(), 1, "{rest:?}");
+    assert_eq!(status, Some(0), "{stderr}");
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 2);
+    assert!(
+        sent[0].contains("(verified 2026-10-01): deploy window closes friday evening"),
+        "the control: the first request carried no kept fact, so the second says nothing: {}",
+        sent[0]
+    );
+    assert!(
+        !sent[1].contains("(verified 2026-10-01): deploy window closes friday evening"),
+        "the second turn injected the fact the first already had: {}",
+        sent[1]
+    );
+    assert_eq!(
+        stderr.matches("you trusted it").count(),
+        1,
+        "the second turn built its trust map again instead of carrying the first's: {stderr}"
+    );
+}
+
+/// CLI-36: a turn that failed leaves an incognito run's carried copy as the turn before left it. The
+/// second turn is stopped, and the third runs over the first's words and not the stopped turn's. A
+/// carry updated from a failed turn would put the second prompt in the third request, and one
+/// cleared by it would leave the third without the first.
+#[test]
+fn a_stopped_turn_leaves_an_incognito_run_carried_on_from_the_turn_before() {
+    let (arrived, in_flight) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    let held = std::sync::Mutex::new(held);
+    let asked = AtomicUsize::new(0);
+    let gateway = a_gateway(r#"["tools"]"#, move |_| {
+        let at = asked.fetch_add(1, Ordering::SeqCst);
+        if at == 1 {
+            let _ = arrived.send(());
+            let _ = held
+                .lock()
+                .expect("release")
+                .recv_timeout(Duration::from_secs(60));
+        }
+        streamed(&format!("reply {}", at + 1))
+    });
+    let scratch = Scratch::new("cli-lines-incognito-stop").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines", "--incognito"]);
+    run.send(&prompt_line("FIRST-WORDS"));
+    let first = run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("SECOND-WORDS"));
+    in_flight
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the second request is in flight");
+    run.send(r#"{"type":"stop"}"#);
+    run.send(&prompt_line("THIRD-WORDS"));
+    run.sync();
+    release.send(()).expect("release the second reply");
+    let (rest, status, stderr) = run.finish();
+
+    assert_eq!(results(&first)[0]["ok"], true, "{stderr}");
+    let later = results(&rest);
+    assert_eq!(later.len(), 2, "{rest:?}");
+    assert_eq!(
+        later[0]["ok"], false,
+        "the stopped turn succeeded: {rest:?}"
+    );
+    assert_eq!(later[1]["ok"], true, "{rest:?}");
+    assert_eq!(status, Some(0), "{stderr}");
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    assert!(
+        sent[2].contains("FIRST-WORDS") && sent[2].contains("THIRD-WORDS"),
+        "the third request lost the turn before the stopped one: {}",
+        sent[2]
+    );
+    assert!(
+        !sent[2].contains("SECOND-WORDS") && !sent[2].contains("reply 2"),
+        "the third request carried the stopped turn: {}",
+        sent[2]
+    );
+}
+
 /// The words on the command line are the first turn and are the person's own, and a prompt line
 /// after them is a second turn over the same conversation.
 #[test]
@@ -20857,7 +21014,7 @@ fn a_line_does_not_approve_a_write() {
 #[test]
 fn input_lines_is_refused_beside_what_it_cannot_go_with() {
     let scratch = Scratch::new("cli-lines-refused");
-    let cases: [(&[&str], &str); 6] = [
+    let cases: [(&[&str], &str); 4] = [
         (
             &["--json-stream", "--input-format", "csv"],
             "--input-format takes lines",
@@ -20879,20 +21036,6 @@ fn input_lines_is_refused_beside_what_it_cannot_go_with() {
                 "manifest",
             ],
             "does not go with --mode manifest",
-        ),
-        (
-            &["--incognito", "--json-stream", "--input-format", "lines"],
-            "does not go with --incognito",
-        ),
-        (
-            &[
-                "--json-stream",
-                "--input-format",
-                "lines",
-                "--trust-input-lines",
-                "--incognito",
-            ],
-            "does not go with --incognito",
         ),
     ];
     for (arguments, problem) in cases {

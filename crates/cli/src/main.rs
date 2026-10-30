@@ -818,8 +818,14 @@ fn run_task(
         Ok(prepared) if prepared.input_lines => run_the_lines(prepared),
         Ok(mut prepared) => {
             let continued = prepared.continued.take();
-            let (code, ..) =
-                run_and_report(&prepared, &prepared.task, continued, None, &Cancel::new());
+            let (code, ..) = run_and_report(
+                &prepared,
+                &prepared.task,
+                continued,
+                None,
+                &Cancel::new(),
+                None,
+            );
             prepared.dismantle();
             code
         }
@@ -933,12 +939,7 @@ fn prepare_the_run(
     } = invocation;
 
     // Refused before stdin is read, since a run that reads lines owns the rest of the stream.
-    if let Some(conflict) = input_lines_conflict(
-        input_lines,
-        trust_input_lines,
-        mode,
-        bravebot_core::incognito::engaged(),
-    ) {
+    if let Some(conflict) = input_lines_conflict(input_lines, trust_input_lines, mode) {
         return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
     }
 
@@ -1473,13 +1474,16 @@ fn check_the_model_can_serve_the_run(
 ///
 /// `task` is the prompt to run, which is the one in `prepared` for a run of one turn and the
 /// words of a line for each turn of a run reading lines. `continued` is the record to carry on,
-/// and `lines` is where such a run's questions go and its steers come from (CLI-36).
+/// and `lines` is where such a run's questions go and its steers come from (CLI-36). `carry` is
+/// where an incognito run reading lines keeps its conversation between turns, in the place of a
+/// record.
 fn run_and_report(
     prepared: &Prepared,
     task: &Task,
     continued: Option<continued::Continuing>,
     lines: Option<&lines::Channel>,
     cancel: &Cancel,
+    carry: Option<&mut Option<continued::Carried>>,
 ) -> (ExitCode, Option<String>, bool) {
     let Prepared {
         workspace,
@@ -1579,6 +1583,7 @@ fn run_and_report(
                     goal: goal.as_deref(),
                     model,
                     cancel,
+                    carry,
                 },
                 continued,
                 &mut confirmer,
@@ -1767,7 +1772,8 @@ fn run_and_report(
 }
 
 /// A run reading lines from stdin: one turn for each `prompt`, each carried on from the record the
-/// turn before wrote, until the input has ended and nothing is left waiting (CLI-36).
+/// turn before wrote, or from memory where the run is incognito, until the input has ended and
+/// nothing is left waiting (CLI-36).
 ///
 /// The words on the command line, where there are any, are the first turn and are the person's own.
 /// A line's words are the person's only where they vouched for the channel; otherwise they are
@@ -1794,6 +1800,10 @@ fn run_the_lines(mut prepared: Prepared) -> ExitCode {
     // standing. A turn that answered and wrote none leaves nothing to carry on from.
     let mut kept = continued.as_ref().map(|record| record.id.clone());
     let mut unsaved = false;
+    // An incognito run writes no record to carry on from, so each turn leaves what the next needs
+    // in memory, for as long as the process lives (CLI-36, INCOG-3).
+    let incognito = bravebot_core::incognito::engaged();
+    let mut carry: Option<continued::Carried> = None;
     let mut turns = 0usize;
     let mut exit = None;
     loop {
@@ -1820,8 +1830,12 @@ fn run_the_lines(mut prepared: Prepared) -> ExitCode {
             task.files.clear();
             task.session_excerpts.clear();
         }
+        if let Some(held) = &carry {
+            task = task.with_injected_facts(held.injected_facts.clone());
+        }
         let record = match (turns, kept.as_deref()) {
             (0, _) => Ok(continued.take()),
+            (_, _) if incognito => Ok(None),
             (_, _) if unsaved => Err(t!(cli_input_lines_session_unsaved).to_string()),
             (_, None) => Ok(None),
             (_, Some(id)) => continued::find(
@@ -1840,13 +1854,19 @@ fn run_the_lines(mut prepared: Prepared) -> ExitCode {
                 continue;
             }
         };
-        let (code, wrote, answered) =
-            run_and_report(&prepared, &task, record, Some(&channel), &cancel);
+        let (code, wrote, answered) = run_and_report(
+            &prepared,
+            &task,
+            record,
+            Some(&channel),
+            &cancel,
+            incognito.then_some(&mut carry),
+        );
         channel.idle();
         exit = Some(code);
         match wrote {
             Some(id) => kept = Some(id),
-            None => unsaved |= answered,
+            None => unsaved |= answered && !incognito,
         }
     }
     let code = exit.unwrap_or_else(|| {
@@ -1870,6 +1890,9 @@ struct TurnRun<'a> {
     model: &'a str,
     /// The token a stop reaches this turn by.
     cancel: &'a Cancel,
+    /// Where an incognito run reading lines holds what the next turn carries on from, and where it
+    /// finds what the turn before left (CLI-36).
+    carry: Option<&'a mut Option<continued::Carried>>,
 }
 
 /// The `Mode::Turn` arm of a one-shot run: the turn, continued from `continued` where there is one,
@@ -1896,6 +1919,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         goal,
         model,
         cancel,
+        carry,
     } = run;
     let mut session: Option<String> = None;
     // Taken before the task is given to the turn, which is where a mode that was bypass ends up
@@ -1914,12 +1938,19 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
             }
             carried
         }
-        None => unattended_trust(workspace.root(), trust_workspace),
+        None => match carry.as_deref().and_then(Option::as_ref) {
+            Some(held) => held.trust.clone(),
+            None => unattended_trust(workspace.root(), trust_workspace),
+        },
     };
-    let mut conversation = continued
-        .as_ref()
-        .map(|record| bravebot_agent::Conversation::restored(record.conversation.clone()))
-        .unwrap_or_default();
+    let mut conversation = match (
+        continued.as_ref(),
+        carry.as_deref().and_then(Option::as_ref),
+    ) {
+        (Some(record), _) => bravebot_agent::Conversation::restored(record.conversation.clone()),
+        (None, Some(held)) => bravebot_agent::Conversation::restored(held.conversation.clone()),
+        (None, None) => bravebot_agent::Conversation::default(),
+    };
     // The names the earlier run's file tools had reached, so the nested instructions and
     // path-scoped rules they loaded are in force from this run's first request (INSTR-14,
     // INSTR-16).
@@ -1988,6 +2019,15 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         injected_facts,
     } = completed.decisions;
     if let Ok(finished) = &completed.outcome {
+        // Only a turn that answered leaves anything for the next, as one that wrote a record does:
+        // a failed turn leaves the conversation as the turn before left it.
+        if let Some(slot) = carry {
+            *slot = Some(continued::Carried {
+                conversation: conversation.snapshot(),
+                trust: trust.clone(),
+                injected_facts: injected_facts.clone(),
+            });
+        }
         session = continued::keep(
             workspace.root(),
             continued.take().zip(rewind),
