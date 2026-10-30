@@ -5525,4 +5525,75 @@ fn a_declined_resource_list_is_refused_for_the_session_and_not_asked_again() {
         list_requests, 1,
         "server received second resources/list request: {called:?}"
     );
+/// One turn in which the planner calls the weather tool, with `session` as the server set and
+/// `confirmer` answering. Returns the trail and whether the turn ended as clean.
+fn the_trail_of_a_weather_turn<C: Confirmer + Send>(
+    scratch: &Scratch,
+    session: bravebot_agent::mcp::Session,
+    confirmer: &mut C,
+) -> (RecordingSink, bool) {
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let workspace = Workspace::new(scratch.project()).expect("workspace");
+    let mut trail = RecordingSink::new();
+    let outcome = turns::run(
+        &config_for(&endpoint),
+        &Egress::new(),
+        &workspace,
+        &Task::new("the forecast for Paris").with_mcp(Some(session)),
+        confirmer,
+        &mut trail,
+    )
+    .expect("the turn runs");
+    (trail, outcome.clean)
+}
+
+/// TRACE-1: a tool list put to the person and not approved, and a move of a server put to them and
+/// not approved, are each a refusal under `approval` that names the server by its alias, in fixed
+/// words that carry neither the list nor where the reply pointed. The regression it rejects is a
+/// no that leaves the question in the trail and nothing about its answer, so the turn reads as
+/// clean and nobody can say why the server's tools were not offered or why it was not followed.
+/// The approved list is the control: an entry written for every question put fails it.
+#[test]
+fn a_tool_list_and_a_move_the_person_does_not_approve_are_recorded_as_refusals() {
+    let scratch = Scratch::new("trace-list-no");
+    let (url, server) = serve_weather();
+    let offered = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let mut declining = Answering::new(Decision::Reject, CallDecision::approve());
+    let (trail, clean) = the_trail_of_a_weather_turn(&scratch, offered, &mut declining);
+    assert_eq!(
+        refused_under(&trail, "approval"),
+        ["weather: the tool list was not approved, so none of its tools was offered"],
+        "a declined list was not recorded once, under the alias"
+    );
+    assert!(!clean, "a turn whose list was declined read as clean");
+
+    let scratch = Scratch::new("trace-list-yes");
+    let (url, server) = serve_weather();
+    let agreed = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let mut agreeing = Answering::new(Decision::Approve, CallDecision::approve());
+    let (trail, clean) = the_trail_of_a_weather_turn(&scratch, agreed, &mut agreeing);
+    assert_eq!(
+        refused_under(&trail, "approval"),
+        Vec::<String>::new(),
+        "an approved list was recorded as refused"
+    );
+    assert!(clean, "a turn whose list was approved read as unclean");
+
+    let scratch = Scratch::new("trace-move-no");
+    let moving = moving(&scratch, true, Managed::default());
+    let mut declining = Answering::new(Decision::Approve, CallDecision::approve());
+    let (trail, clean) =
+        the_trail_of_a_weather_turn(&scratch, moving.session.clone(), &mut declining);
+    assert_eq!(declining.moves.len(), 1, "the move was not put to them");
+    assert_eq!(
+        refused_under(&trail, "approval"),
+        ["weather: the move was not approved, so the server was not reached at the new address"],
+        "a declined move was not recorded once, under the alias"
+    );
+    assert!(!clean, "a turn whose move was declined read as clean");
 }

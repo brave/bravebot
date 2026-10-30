@@ -28,7 +28,8 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [worktrees.md](worktrees.md) | `WORKTREE` | 10 | a session working in a worktree the driver made for it: asking for one, its name, what the session keeps of it, resuming into it and leaving it (proposed, nothing built) |
 | [turns.md](turns.md) | `TURN` | 14 | how long a turn may go on, what happens when it does not stop, what is said when it produces nothing, checks nothing or runs into its output ceiling, what a session does when it has spent its limit, what is done about the same call three times running, how the reads of one round are run together, what the note under a finished turn says about refusals, what is done about the planner's task list when a turn answers with tasks still open, what the planner is told when a turn ends in a failure, and what a limit a person gave a run does to it |
 | [prompting.md](prompting.md) | `PROMPT` | 14 | every moment the system stops and puts something to a human, what an answer grants, and where each answer is kept |
-| [permission-modes.md](permission-modes.md) | `MODE` | 14 | a standing answer to those prompts: accepting edits, planning, or asking about nothing at all |
+| [permission-modes.md](permission-modes.md) | `MODE` | 14 | a standing answer to those prompts: accepting edits, planning, auto, or asking about nothing at all |
+| [auto-mode.md](auto-mode.md) | `AUTO` | 9 | a fifth permission mode in which a classifier that reads only the person's typed lines and the action answers a confined run and the first fetch question, and every other question is asked (the setting that removes the mode from the ladder, a model of its own and the desktop window are not built) |
 | [references.md](references.md) | `REFER` | 6 | directories outside the working one that a person declared in their settings, what declaring one grants, and what the planner is told (repository entries and `@alias` proposed, not built) |
 | [naming-files.md](naming-files.md) | `NAME` | 11 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
 | [pasting.md](pasting.md) | `PASTE` | 12 | what Ctrl-V puts into a turn, text, a picture or a copied file, and on what footing |
@@ -40,7 +41,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [instructions.md](instructions.md) | `INSTR` | 17 | which instruction files are looked for, where, in what order, and where what they say ends up |
 | [cli.md](cli.md) | `CLI` | 39 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
 | [manifest.md](manifest.md) | `MANIFEST` | 14 | plan the whole run first, then execute it with no model in the control path |
-| [terminal-input.md](terminal-input.md) | `INPUT` | 49 | what the user types into: the box, the keys, and where a terminal's own limits show through |
+| [terminal-input.md](terminal-input.md) | `INPUT` | 50 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 30 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, what `/help` asks the planner to answer from the documentation, what `/changelog` shows, what `/todos` prints, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/lsp` says, what `/open` lists, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, how a prompt file is expanded, how a line that starts with the word of an MCP server's prompt runs it, and what `/mode` keeps applied |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 39 | what is drawn back: the transcript, a resumed session, a fenced block in a reply, and how content reaches the screen |
 | [session-view.md](session-view.md) | `RPCVIEW` | 8 | the opt-in shared Rust view for fresh local bridge sessions, the stdio TypeScript client that applies it, and the anonymous channel they speak over |
@@ -58,7 +59,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [browser.md](browser.md) | `BROWSER` | 17 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 10 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 12 | every request that leaves this process, and what comes back |
-| [backends.md](backends.md) | `BACKEND` | 65 | which service answers a request, and what a person may choose between |
+| [backends.md](backends.md) | `BACKEND` | 69 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 12 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama, LM Studio or llama-server serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 18 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 18 | sending a prompt again and again until somebody stops it, or once after a delay |
@@ -76,12 +77,12 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [plugins.md](plugins.md) | `PLUGIN` | 10 | proposed, nothing built: a bundle of skills, definitions, hooks and servers installed by one command a person types, and the marketplace index it may come from |
 | [state-directory.md](state-directory.md) | `STATE` | 4 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
-| [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 9 | a file of hosts, statuses and counts, never content, for a person to attach to a bug report, and the bug report that names it, from the terminal or the desktop app |
+| [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 10 | a file of hosts, statuses, counts and fixed words, never content, for a person to attach to a bug report, and the bug report that names it, from the terminal or the desktop app, and a failure of the desktop window's page |
 | [trace.md](trace.md) | `TRACE` | 11 | what is recorded about every decision the system makes, what that record may contain, and the view of the request a turn built |
 | [localization.md](localization.md) | `LOCALE` | 8 | every word said to a person, and which of them change with the reader's language |
 | [acp.md](acp.md) | `ACP` | 9 | an editor hosting a session over the Agent Client Protocol: what a prompt, an attachment and an answer may carry, and what a failed turn says |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
-| [releases.md](releases.md) | `RELEASE` | 21 | what names a version, what starts a release, and what an installer trusts about what it fetched |
+| [releases.md](releases.md) | `RELEASE` | 22 | what names a version, what starts a release, and what an installer trusts about what it fetched |
 | [updates.md](updates.md) | `UPDATE` | 12 | learning that a newer version is out, and the line or link that installs it |
 | [crash-reports.md](crash-reports.md) | `CRASH` | 10 | what a panic tells the maintainers: the one file it leaves, what the file may hold, when and where it is sent, and how a person stops it |
 

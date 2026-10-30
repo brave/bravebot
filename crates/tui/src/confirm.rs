@@ -579,6 +579,7 @@ mod tests {
             ),
             host: "169.254.169.254".to_string(),
             redirected_from: None,
+            classified: Default::default(),
         }
     }
 

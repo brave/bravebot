@@ -405,6 +405,7 @@ walk from above would skip its directory ([SEARCH-7](#SEARCH-7)), as a directory
 `verified-by: bravebot_agent::workspace::a_search_cannot_name_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_search_may_name_one_file_as_its_target_through_the_tool`
 `verified-by: bravebot_agent::workspace::a_file_named_outright_is_searched_where_a_walk_from_above_would_skip_its_directory`
+`verified-by: bravebot_agent::workspace::a_file_vouched_under_a_link_spelling_outside_every_opened_directory_keeps_that_trust_in_a_search`
 
 <a id="SEARCH-12"></a>
 ### SEARCH-12: a search may return the files that match, or a count, instead of the lines

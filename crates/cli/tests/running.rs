@@ -3514,6 +3514,120 @@ fn accept_edits_is_refused_with_the_bypass_flag_and_outside_a_one_shot_run() {
     assert!(!scratch.path.join("out.txt").exists());
 }
 
+/// AUTO-2, CLI-1: `--auto` lets a one-shot run write where nobody can be asked, as accepting edits
+/// does, and the same run without it does not.
+#[test]
+fn an_auto_run_writes_and_a_plain_run_does_not() {
+    assert!(
+        !a_write_run_made_the_file("cli-running-auto-none", &[], "out.txt", "hi"),
+        "the control wrote, so the run below says nothing"
+    );
+    assert!(
+        a_write_run_made_the_file("cli-running-auto-write", &["--auto"], "out.txt", "hi"),
+        "the flag did not let the write through"
+    );
+}
+
+/// AUTO-2: a write that would create a credential is refused under `--auto` where nobody can be
+/// asked, as it is under accepting edits. The bypass run is the control that the file is writable.
+#[test]
+fn an_auto_run_refuses_a_write_that_would_create_a_credential() {
+    let body = "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n";
+    assert!(
+        !a_write_run_made_the_file(
+            "cli-running-auto-credential",
+            &["--auto"],
+            "config/master.key",
+            body
+        ),
+        "an auto run wrote a credential nobody was shown"
+    );
+}
+
+/// AUTO-3, AUTO-6, CLI-1: under `--auto` a command the sandbox confines runs on the classifier's
+/// allow word, and does not run on a no or on a reply that only contains the word, where nobody
+/// can be asked. The plain run of the same line is the control that the refusal is the mode's.
+#[cfg(unix)]
+#[test]
+fn an_auto_run_runs_a_command_the_classifier_allows_and_refuses_one_it_does_not() {
+    if !bravebot_sandbox::confinement_works_here() {
+        return;
+    }
+    let made = |name: &str, flag: Option<&str>, classifier_says: &'static str| {
+        let gateway = a_gateway_asking_to_run_and_classifying("touch made.txt", classifier_says);
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let mut arguments: Vec<&str> = flag.into_iter().collect();
+        arguments.extend(["-p", "make a file"]);
+        let output = bravebot_started_in(&scratch.path, &project, &environment, &arguments);
+        let _ = said(&output);
+        gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        project.join("made.txt").exists()
+    };
+    assert!(
+        !made("cli-running-auto-control", None, "allow"),
+        "a plain run ran the command, so the refusals below say nothing"
+    );
+    assert!(
+        made("cli-running-auto-allowed", Some("--auto"), "allow"),
+        "the classifier's allow word did not run the command"
+    );
+    assert!(
+        !made("cli-running-auto-denied", Some("--auto"), "deny"),
+        "a no ran the command"
+    );
+    assert!(
+        !made(
+            "cli-running-auto-argued",
+            Some("--auto"),
+            "allow, if you must"
+        ),
+        "a reply that only contains the word ran the command"
+    );
+}
+
+/// CLI-1: `--auto` is refused beside the bypass flag, beside `--accept-edits`, and where there is
+/// no one-shot run to open in the mode, each with the argument status and nothing sent to the
+/// gateway.
+#[test]
+fn auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run() {
+    let gateway = a_gateway_writing("out.txt", "hi");
+    let scratch = Scratch::new("cli-running-auto-refused").with_settings(&settings_for(&gateway));
+    for (arguments, says) in [
+        (
+            &["--auto", "--dangerously-skip-permissions", "-p", "x"][..],
+            "--dangerously-skip-permissions",
+        ),
+        (
+            &["--auto", "--accept-edits", "-p", "x"][..],
+            "--accept-edits",
+        ),
+        (&["--auto", "--plain"][..], "one-shot"),
+        (&["--auto", "--bg", "x"][..], "one-shot"),
+        (&["--auto"][..], "one-shot"),
+    ] {
+        let output = bravebot_started_in(&scratch.path, &scratch.path, AT_A_GATEWAY, arguments);
+        let (_, stderr) = said(&output);
+        assert!(
+            stderr.contains("--auto is refused") || stderr.contains("is for a one-shot"),
+            "{arguments:?}: {stderr}"
+        );
+        assert!(stderr.contains(says), "{arguments:?}: {stderr}");
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+    }
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a refused line sent a request"
+    );
+    assert!(!scratch.path.join("out.txt").exists());
+}
+
 /// CLI-6: a write nobody could approve is an effect a gate refused, so the run exits on status 4
 /// and says `BB1004`, however calmly the planner then reports it. The reply still reaches stdout.
 ///
@@ -5520,6 +5634,38 @@ fn a_gateway_asking_to_run(command: &'static str) -> Gateway {
     })
 }
 
+/// As [`a_gateway_asking_to_run`], and answering the auto mode's classifier with `said` where the
+/// request is the classifier's, which it recognises by the phrase the classifier's instruction
+/// carries. A planner's request is answered as it is there.
+#[cfg(unix)]
+fn a_gateway_asking_to_run_and_classifying(command: &'static str, said: &'static str) -> Gateway {
+    a_gateway(r#"["tools"]"#, move |body| {
+        let frame = match (
+            body.contains("permission classifier"),
+            body.contains(r#""role":"tool""#),
+        ) {
+            (true, _) => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":said},
+                "finish_reason":"stop"}]}),
+            (false, true) => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+            (false, false) => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"run",
+                        "arguments":serde_json::json!({"command": command, "why": "make a file"})
+                            .to_string()}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
 /// SANDBOX-16: the person's key choice reaches the git process started by `run`, and an entry for
 /// another owner or no entry leaves its ssh command unset. Starting a CLI process exercises both
 /// startup settlement and `Tools::confinement`; tests that supply identities directly miss either
@@ -6544,6 +6690,42 @@ fn doctor_names_the_file_of_a_checkouts_processor_model_that_is_not_obeyed() {
         "the line did not name the checkout's file: {line}"
     );
     assert!(!stdout.contains("attacker-chosen-model"), "{stdout}");
+}
+
+/// A checkout's `commitMessage` is dropped and `doctor` names the checkout's file, so whoever wrote
+/// it is told which file to change rather than left to conclude `/commit-message` follows it (CMD-23).
+#[test]
+fn doctor_names_the_file_of_a_checkouts_commit_message_instructions_that_are_not_obeyed() {
+    let scratch = Scratch::new("cli-running-doctor-commit-message-checkout");
+    let cwd = a_checkout_saying(
+        &scratch,
+        r#"{"commitMessage": {"instructions": "attacker-chosen-format"}}"#,
+    );
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let file = Path::new("checkout")
+        .join(".bravebot")
+        .join("settings.json");
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("commitMessage in"))
+        .unwrap_or_else(|| panic!("doctor did not mention commitMessage: {stdout}{stderr}"));
+    assert!(
+        line.contains(&format!("{} is not obeyed", file.display())),
+        "the line did not name the checkout's file: {line}"
+    );
+    assert!(!stdout.contains("attacker-chosen-format"), "{stdout}");
 }
 
 /// A one-shot run takes one turn and exits, so nothing is left holding the line to send it again:
@@ -20329,6 +20511,163 @@ fn a_run_reading_lines_runs_each_prompt_as_a_turn_over_one_conversation() {
     );
 }
 
+/// CLI-36, INCOG-3: an incognito run reading lines carries each turn on from the one before in
+/// memory, since it writes no record to carry on from. A run that gave each turn an empty
+/// conversation would answer the second prompt as though nothing had come before it, and one that
+/// wrote a record to carry on from would leave the session on disk.
+#[test]
+fn an_incognito_run_reading_lines_carries_its_turns_in_memory_and_writes_no_record() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-incognito").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines", "--incognito"]);
+    run.send(&prompt_line("FIRST-WORDS"));
+    let first = run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("SECOND-WORDS"));
+    run.send(&prompt_line("THIRD-WORDS"));
+    let (rest, status, stderr) = run.finish();
+
+    let first = results(&first)[0].clone();
+    let later = results(&rest);
+    assert_eq!(first["ok"], true, "{stderr}");
+    assert_eq!(later.len(), 2, "{rest:?}");
+    assert_eq!(later[1]["reply"], "reply 3", "{rest:?}");
+    assert!(
+        first["session"].is_null() && later.iter().all(|result| result["session"].is_null()),
+        "an incognito turn named a record: {first} {later:?}"
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 3);
+    assert!(!sent[0].contains("SECOND-WORDS"));
+    assert!(
+        sent[1].contains("FIRST-WORDS") && sent[1].contains("SECOND-WORDS"),
+        "the second request did not carry the conversation: {}",
+        sent[1]
+    );
+    assert!(
+        sent[2].contains("FIRST-WORDS")
+            && sent[2].contains("SECOND-WORDS")
+            && sent[2].contains("THIRD-WORDS"),
+        "the third request did not carry the conversation: {}",
+        sent[2]
+    );
+}
+
+/// CLI-36: an incognito run carries the kept facts it injected and the trust map it built into the
+/// turn after, and does not build either again. The fact is put in front of the first prompt and
+/// not the second, which asks for the same thing, and the kept answer that trusts the directory is
+/// read and said once. A turn that took the empty set, or built its trust map afresh, would inject
+/// the fact again and say the answer a second time.
+#[test]
+fn an_incognito_run_reading_lines_carries_its_facts_and_its_trust_map() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-incognito-carry")
+        .with_settings(&settings_for(&gateway))
+        .with_state(
+            "facts/deploy-window.md",
+            "---\nsource: person\nlabel: public\nverified: 2026-10-01\n---\ndeploy window closes friday evening\n",
+        );
+    let cwd = scratch.path.join("project");
+    std::fs::create_dir_all(&cwd).expect("create the project");
+    let Some(identity) = bravebot_agent::trusted::Identity::of(&cwd) else {
+        // A filesystem that cannot say when a directory was made keeps no answer to read.
+        return;
+    };
+    let store = bravebot_agent::trusted::Store::new(&scratch.path.join(".bravebot"), &cwd);
+    assert!(
+        store.keep(&identity, "1-2", 7, false),
+        "the answer was not kept"
+    );
+
+    let mut run = LinesRun::start_in(&scratch, &cwd, &["--trust-input-lines", "--incognito"]);
+    run.send(&prompt_line("deploy window closes friday evening"));
+    let first = run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("deploy window closes friday evening again"));
+    let (rest, status, stderr) = run.finish();
+
+    assert_eq!(results(&first)[0]["ok"], true, "{stderr}");
+    assert_eq!(results(&rest).len(), 1, "{rest:?}");
+    assert_eq!(status, Some(0), "{stderr}");
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 2);
+    assert!(
+        sent[0].contains("(verified 2026-10-01): deploy window closes friday evening"),
+        "the control: the first request carried no kept fact, so the second says nothing: {}",
+        sent[0]
+    );
+    assert!(
+        !sent[1].contains("(verified 2026-10-01): deploy window closes friday evening"),
+        "the second turn injected the fact the first already had: {}",
+        sent[1]
+    );
+    assert_eq!(
+        stderr.matches("you trusted it").count(),
+        1,
+        "the second turn built its trust map again instead of carrying the first's: {stderr}"
+    );
+}
+
+/// CLI-36: a turn that failed leaves an incognito run's carried copy as the turn before left it. The
+/// second turn is stopped, and the third runs over the first's words and not the stopped turn's. A
+/// carry updated from a failed turn would put the second prompt in the third request, and one
+/// cleared by it would leave the third without the first.
+#[test]
+fn a_stopped_turn_leaves_an_incognito_run_carried_on_from_the_turn_before() {
+    let (arrived, in_flight) = mpsc::channel();
+    let (release, held) = mpsc::channel();
+    let held = std::sync::Mutex::new(held);
+    let asked = AtomicUsize::new(0);
+    let gateway = a_gateway(r#"["tools"]"#, move |_| {
+        let at = asked.fetch_add(1, Ordering::SeqCst);
+        if at == 1 {
+            let _ = arrived.send(());
+            let _ = held
+                .lock()
+                .expect("release")
+                .recv_timeout(Duration::from_secs(60));
+        }
+        streamed(&format!("reply {}", at + 1))
+    });
+    let scratch = Scratch::new("cli-lines-incognito-stop").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines", "--incognito"]);
+    run.send(&prompt_line("FIRST-WORDS"));
+    let first = run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("SECOND-WORDS"));
+    in_flight
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the second request is in flight");
+    run.send(r#"{"type":"stop"}"#);
+    run.send(&prompt_line("THIRD-WORDS"));
+    run.sync();
+    release.send(()).expect("release the second reply");
+    let (rest, status, stderr) = run.finish();
+
+    assert_eq!(results(&first)[0]["ok"], true, "{stderr}");
+    let later = results(&rest);
+    assert_eq!(later.len(), 2, "{rest:?}");
+    assert_eq!(
+        later[0]["ok"], false,
+        "the stopped turn succeeded: {rest:?}"
+    );
+    assert_eq!(later[1]["ok"], true, "{rest:?}");
+    assert_eq!(status, Some(0), "{stderr}");
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    assert!(
+        sent[2].contains("FIRST-WORDS") && sent[2].contains("THIRD-WORDS"),
+        "the third request lost the turn before the stopped one: {}",
+        sent[2]
+    );
+    assert!(
+        !sent[2].contains("SECOND-WORDS") && !sent[2].contains("reply 2"),
+        "the third request carried the stopped turn: {}",
+        sent[2]
+    );
+}
+
 /// The words on the command line are the first turn and are the person's own, and a prompt line
 /// after them is a second turn over the same conversation.
 #[test]
@@ -20675,7 +21014,7 @@ fn a_line_does_not_approve_a_write() {
 #[test]
 fn input_lines_is_refused_beside_what_it_cannot_go_with() {
     let scratch = Scratch::new("cli-lines-refused");
-    let cases: [(&[&str], &str); 6] = [
+    let cases: [(&[&str], &str); 4] = [
         (
             &["--json-stream", "--input-format", "csv"],
             "--input-format takes lines",
@@ -20697,20 +21036,6 @@ fn input_lines_is_refused_beside_what_it_cannot_go_with() {
                 "manifest",
             ],
             "does not go with --mode manifest",
-        ),
-        (
-            &["--incognito", "--json-stream", "--input-format", "lines"],
-            "does not go with --incognito",
-        ),
-        (
-            &[
-                "--json-stream",
-                "--input-format",
-                "lines",
-                "--trust-input-lines",
-                "--incognito",
-            ],
-            "does not go with --incognito",
         ),
     ];
     for (arguments, problem) in cases {

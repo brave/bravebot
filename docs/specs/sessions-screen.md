@@ -565,6 +565,12 @@ here, by a process started in its directory, or joined where a background proces
 [SCREEN-8](#SCREEN-8) says. If the turn ends by itself while the question is up, `y` carries out what
 was asked with nothing to stop.
 
+Only a turn is asked about. While a compaction, an aside, a commit message, a handoff, a goal check, a
+plan run or a command for the shell runs, the same keys put no question: none of them can be stopped
+part-way and left as it was, and each ends on its own. The list says in one line that names what is
+running that opening, copying or beginning a session ends this one, so it is done when that has ended.
+Opening the session this terminal is in only leaves the screen, as it does during a turn.
+
 **Why.** A person who sees in the list that another session is waiting on them wants to go to it, and
 refusing until the turn ends sends them back to the transcript to stop the turn by hand and to the
 list again. One question, answered by one key that no other key can stand in for, keeps a stray press
@@ -576,6 +582,8 @@ from ending work the person did not mean to end.
 `verified-by: bravebot_tui::app::tests::interrupt::the_session_in_use_is_opened_by_leaving_the_screen_without_a_question`
 `verified-by: bravebot_tui::app::tests::interrupt::a_session_that_would_be_refused_is_refused_before_the_turn_is_stopped`
 `verified-by: bravebot_tui::app::tests::interrupt::a_second_click_on_a_row_over_a_running_turn_asks_as_enter_does`
+`verified-by: bravebot_tui::app::tests::interrupt::a_loop_that_is_not_a_turn_says_why_opening_copying_or_beginning_waits`
+`verified-by: bravebot_tui::app::tests::interrupt::the_notice_names_what_is_running`
 `verified-by: bravebot_tui::sessions_screen::the_question_about_a_running_turn_is_answered_by_y_alone`
 `verified-by: bravebot_tui::render::sessions_screen::the_question_about_a_running_turn_names_the_session_and_what_is_done`
 

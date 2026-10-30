@@ -21,8 +21,8 @@
 //! less than the person could see themselves.
 
 use crate::confirm::{
-    Confirmer, Decision, OutputRequest, PromptAlert, RunDecision, RunRequest, VetRequest,
-    VouchRequest, WriteDecision, WriteRequest,
+    Classified, Confirmer, Decision, OutputRequest, PromptAlert, RunDecision, RunRequest,
+    VetRequest, VouchRequest, WriteDecision, WriteRequest,
 };
 use bravebot_core::vetting::{Endorsed, Verdict};
 
@@ -50,6 +50,15 @@ pub enum PermissionMode {
     /// [`Confining::confirm_vouch`] for what the last of those costs, and
     /// [`Confining::confirm_vetted_read`] for the one answer this mode does not give itself.
     Bypass,
+    /// Writes go through unasked as [`PermissionMode::AcceptEdits`] answers them, a run the sandbox
+    /// confines and the first question about a URL are put to a classifier that reads only the
+    /// person's words and the action, and every other question is put to the person.
+    ///
+    /// The classifier removes a question and never refuses one: anything but its allow word leaves
+    /// the question with the person (AUTO-2, AUTO-6). The key reaches it, a one-shot run opens in it
+    /// with `--auto`, and no settings file, window request, recorded session or background session
+    /// does (AUTO-1).
+    Auto,
 }
 
 impl PermissionMode {
@@ -57,7 +66,9 @@ impl PermissionMode {
     ///
     /// `Bypass` is not among them: it is left off where a settings layer made it unreachable, so the
     /// ladder depends on that and is built by [`PermissionMode::cycle`] rather than listed here.
-    const LADDER: [Self; 3] = [Self::Ask, Self::AcceptEdits, Self::Plan];
+    /// `Auto` is the rung before it, so a press that is one too many from planning lands in the mode
+    /// that asks a model, and the one after that lands in the mode that asks nothing (AUTO-1).
+    const LADDER: [Self; 4] = [Self::Ask, Self::AcceptEdits, Self::Plan, Self::Auto];
 
     /// The next mode round the ladder.
     ///
@@ -86,6 +97,7 @@ impl PermissionMode {
             Self::AcceptEdits => "accept-edits",
             Self::Plan => "plan",
             Self::Bypass => "bypass",
+            Self::Auto => "auto",
         }
     }
 
@@ -102,7 +114,30 @@ impl PermissionMode {
     /// and the trail's record of who answered both ask this, so the record cannot credit the mode
     /// with a prompt it passed on (TRACE-7).
     pub fn answers_this_run_unasked(self, request: &RunRequest) -> bool {
-        self.answers_a_run_unasked() && !request.unconfined
+        match self {
+            // Auto answers a run only on the classifier's word, and only a line the sandbox
+            // confines and that did not ask to start without a profile (AUTO-3). The classifier
+            // judges the words of the line and cannot see what its program name resolves to, so
+            // the profile is what holds the line to them.
+            Self::Auto => {
+                request.classified == Classified::Allowed
+                    && request.confined.is_some()
+                    && !request.unconfined
+            }
+            _ => self.answers_a_run_unasked() && !request.unconfined,
+        }
+    }
+
+    /// Whether this fetch question is answered yes without being drawn.
+    ///
+    /// Only in auto, only on the classifier's word, and never for the host a redirect led to: that
+    /// host is a server's choice and no classifier is shown it (AUTO-3, FETCH-4). Bypassing
+    /// answers a fetch too, but [`Confining::confirm_fetch`] does that on its own and the trail has
+    /// never credited it, so this is the question auto asks.
+    pub fn answers_this_fetch_unasked(self, request: &crate::confirm::FetchRequest) -> bool {
+        self == Self::Auto
+            && request.classified == Classified::Allowed
+            && request.redirected_from.is_none()
     }
 
     /// Whether the start of a language server is answered yes without drawing a prompt.
@@ -125,7 +160,7 @@ impl PermissionMode {
     pub fn answers_a_write_unasked(self, creates_a_credential: bool, protected: bool) -> bool {
         match self {
             Self::Plan | Self::Bypass => true,
-            Self::AcceptEdits => !creates_a_credential && !protected,
+            Self::AcceptEdits | Self::Auto => !creates_a_credential && !protected,
             Self::Ask => false,
         }
     }
@@ -186,7 +221,7 @@ impl PermissionMode {
                  tool is offered to you, so they can approve it and choose how the work \
                  continues; otherwise they will leave this mode and ask you to carry it out.",
             ),
-            Self::Ask | Self::AcceptEdits | Self::Bypass => None,
+            Self::Ask | Self::AcceptEdits | Self::Bypass | Self::Auto => None,
         }
     }
 }
@@ -257,6 +292,7 @@ impl LiveMode {
             x if x == PermissionMode::AcceptEdits as u8 => PermissionMode::AcceptEdits,
             x if x == PermissionMode::Plan as u8 => PermissionMode::Plan,
             x if x == PermissionMode::Bypass as u8 => PermissionMode::Bypass,
+            x if x == PermissionMode::Auto as u8 => PermissionMode::Auto,
             _ => PermissionMode::Ask,
         }
     }
@@ -455,9 +491,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     fn confirm_read_output(&mut self, request: &OutputRequest) -> Decision {
         match self.mode.get() {
             PermissionMode::Bypass => self.screened(request.verdict),
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.asking().confirm_read_output(request)
-            }
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_read_output(request),
         }
     }
 
@@ -472,9 +509,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     fn confirm_vetted_read(&mut self, request: &VetRequest) -> Decision {
         match self.mode.get() {
             PermissionMode::Bypass => self.screened(request.verdict),
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.asking().confirm_vetted_read(request)
-            }
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_vetted_read(request),
         }
     }
 
@@ -490,12 +528,15 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// a server's choice, and a run told to ask nobody is still not told that a server may send
     /// its fetch wherever it likes, which is what the gate refuses without this question (FETCH-4).
     fn confirm_fetch(&mut self, request: &crate::confirm::FetchRequest) -> Decision {
-        match self.mode.get() {
+        let mode = self.mode.get();
+        match mode {
             PermissionMode::Bypass if request.redirected_from.is_none() => Decision::Approve,
+            PermissionMode::Auto if mode.answers_this_fetch_unasked(request) => Decision::Approve,
             PermissionMode::Bypass
             | PermissionMode::Ask
             | PermissionMode::AcceptEdits
-            | PermissionMode::Plan => self.asking().confirm_fetch(request),
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_fetch(request),
         }
     }
 
@@ -546,9 +587,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.asking().confirm_manifest(request)
-            }
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_manifest(request),
         }
     }
 
@@ -563,9 +605,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     fn confirm_vouch(&mut self, request: &VouchRequest) -> Decision {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.asking().confirm_vouch(request)
-            }
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_vouch(request),
         }
     }
 
@@ -583,9 +626,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.asking().confirm_exposing_read(request)
-            }
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_exposing_read(request),
         }
     }
 
@@ -598,9 +642,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     fn confirm_tool_list(&mut self, request: &crate::confirm::ToolListRequest) -> Decision {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Approve,
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.asking().confirm_tool_list(request)
-            }
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_tool_list(request),
         }
     }
 
@@ -633,9 +678,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     ) -> crate::confirm::CallDecision {
         match self.mode.get() {
             PermissionMode::Bypass => crate::confirm::CallDecision::approve(),
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.asking().confirm_mcp_call(request)
-            }
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_mcp_call(request),
         }
     }
 
@@ -660,9 +706,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     fn confirm_host(&mut self, request: &crate::confirm::HostRequest) -> Decision {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Reject,
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.asking().confirm_host(request)
-            }
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_host(request),
         }
     }
 
@@ -678,9 +725,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     ) -> crate::confirm::MessageDecision {
         match self.mode.get() {
             PermissionMode::Bypass => crate::confirm::MessageDecision::Decline,
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.asking().confirm_message(request)
-            }
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_message(request),
         }
     }
 
@@ -693,9 +741,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
         match self.mode.get() {
             PermissionMode::Bypass => Decision::Reject,
-            PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => {
-                self.asking().confirm_move(request)
-            }
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_move(request),
         }
     }
 
@@ -979,6 +1028,7 @@ mod tests {
             (PermissionMode::Ask, 1, MessageDecision::ForTheTurn),
             (PermissionMode::AcceptEdits, 1, MessageDecision::ForTheTurn),
             (PermissionMode::Plan, 1, MessageDecision::ForTheTurn),
+            (PermissionMode::Auto, 1, MessageDecision::ForTheTurn),
             (PermissionMode::Bypass, 0, MessageDecision::Decline),
         ] {
             let mut yes = YesToMessages(0);
@@ -999,6 +1049,7 @@ mod tests {
             (PermissionMode::Ask, 1, Decision::Approve),
             (PermissionMode::AcceptEdits, 1, Decision::Approve),
             (PermissionMode::Plan, 1, Decision::Approve),
+            (PermissionMode::Auto, 1, Decision::Approve),
             (PermissionMode::Bypass, 0, Decision::Reject),
         ] {
             let mut yes = YesToHosts(0);
@@ -1087,6 +1138,7 @@ mod tests {
             (PermissionMode::Ask, vec!["alert", "asked"]),
             (PermissionMode::AcceptEdits, vec!["alert", "asked"]),
             (PermissionMode::Plan, vec!["alert", "asked"]),
+            (PermissionMode::Auto, vec!["alert", "asked"]),
             (PermissionMode::Bypass, Vec::new()),
         ] {
             let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1113,6 +1165,7 @@ mod tests {
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
             PermissionMode::Bypass,
         ] {
             let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1548,6 +1601,7 @@ mod tests {
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
             PermissionMode::Bypass,
         ] {
             for sandbox in SandboxMode::ALL {
@@ -1649,6 +1703,11 @@ mod tests {
         let mut confining = Confining::new(&mut moved, PermissionMode::Ask, false);
         assert_eq!(confining.confirm_move(&a_move()), Decision::Approve);
         assert_eq!(moved.0, 1, "asking did not put the move to the person");
+
+        let mut moved = SaysItMoved::default();
+        let mut confining = Confining::new(&mut moved, PermissionMode::Auto, false);
+        assert_eq!(confining.confirm_move(&a_move()), Decision::Approve);
+        assert_eq!(moved.0, 1, "auto did not put the move to the person");
     }
 
     /// Bypassing answers a fetch the planner proposed and not the host a redirect led it to: that
@@ -1660,6 +1719,7 @@ mod tests {
             url: "https://docs.example.com/api".to_string(),
             host: "cdn.example.net".to_string(),
             redirected_from: redirected_from.map(str::to_string),
+            classified: Default::default(),
         };
         let mut inner = Unattended;
         let mut confining = Confining::new(&mut inner, PermissionMode::Bypass, false);
@@ -1753,6 +1813,7 @@ mod tests {
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
         ] {
             let mut refusing = Unattended;
             let mut confining = Confining::new(&mut refusing, asks, true);
@@ -1798,6 +1859,7 @@ mod tests {
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
         ] {
             for screening in [false, true] {
                 assert!(
@@ -1847,6 +1909,7 @@ mod tests {
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
         ] {
             for verdict in verdicts {
                 assert_eq!(
@@ -1881,6 +1944,7 @@ mod tests {
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
         ] {
             let mut approving = ApprovePlans;
             let mut confining = Confining::new(&mut approving, asks, false);
@@ -1901,18 +1965,336 @@ mod tests {
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Bypass,
+            PermissionMode::Auto,
         ] {
             assert!(quiet.instruction().is_none(), "{quiet:?} spoke up");
         }
     }
 
-    /// The ladder one key walks. Three rungs where bypass is unreachable, back to the start from the last: a
-    /// key that stopped cycling would be a mode somebody could not leave.
+    /// AUTO-1: auto is the rung after planning and before bypassing, whether or not bypassing is
+    /// reachable. The regressions it rejects: auto placed after bypass, which would make the
+    /// mode that asks nothing the first one a person reaches past planning, and auto left off the
+    /// ladder, which would leave a session no way into it.
     #[test]
-    fn the_key_cycles_three_modes_where_bypass_is_unreachable() {
+    fn the_key_reaches_auto_after_planning_and_before_bypass() {
+        assert_eq!(PermissionMode::Plan.cycle(true), PermissionMode::Auto);
+        assert_eq!(PermissionMode::Plan.cycle(false), PermissionMode::Auto);
+        assert_eq!(PermissionMode::Auto.cycle(true), PermissionMode::Bypass);
+        assert_eq!(PermissionMode::Auto.cycle(false), PermissionMode::Ask);
+    }
+
+    /// AUTO-2, MODE-2: a write goes through, and the two writes accepting edits puts to a person are
+    /// put to a person here. The confirmer behind the mode refuses, so a yes is the mode's own, and
+    /// an approving one shows the question reached it. The two modes are compared for every
+    /// combination of the findings, so a change to one rule that leaves the other behind fails.
+    #[test]
+    fn auto_answers_a_write_as_accepting_edits_does() {
+        for (credential, protected) in [(false, false), (true, false), (false, true), (true, true)]
+        {
+            assert_eq!(
+                PermissionMode::Auto.answers_a_write_unasked(credential, protected),
+                PermissionMode::AcceptEdits.answers_a_write_unasked(credential, protected),
+                "credential {credential}, protected {protected}"
+            );
+        }
+        let a_protected_write = || WriteRequest {
+            path: ".git/hooks/pre-commit".to_string(),
+            protected: true,
+            ..a_write()
+        };
+        let mut refusing = Unattended;
+        let mut confining = Confining::new(&mut refusing, PermissionMode::Auto, false);
+        assert_eq!(
+            confining.confirm_write(&a_write()),
+            WriteDecision::approve()
+        );
+        assert_eq!(
+            confining.confirm_write(&a_protected_write()),
+            WriteDecision::reject(),
+            "auto answered a write that runs code later"
+        );
+        assert_eq!(
+            confining.confirm_write(&a_credential_write()),
+            WriteDecision::reject(),
+            "auto answered a write that would create a credential"
+        );
+
+        let mut approving = crate::confirm::ApproveWrites;
+        let mut confining = Confining::new(&mut approving, PermissionMode::Auto, false);
+        assert_eq!(
+            confining.confirm_write(&a_protected_write()),
+            WriteDecision::approve(),
+            "the question did not reach the confirmer behind the mode"
+        );
+    }
+
+    /// AUTO-2: no classifier exists yet, so a run and a fetch are put to the confirmer behind the
+    /// mode as asking puts them. An approving confirmer shows the question reached it, and a
+    /// refusing one shows the mode did not answer.
+    #[test]
+    fn auto_puts_a_run_and_a_fetch_to_the_confirmer_behind_it() {
+        let a_fetch = crate::confirm::FetchRequest {
+            url: "https://example.com/".to_string(),
+            host: "example.com".to_string(),
+            redirected_from: None,
+            classified: crate::confirm::Classified::NotAsked,
+        };
+        let mut refusing = Unattended;
+        let mut confining = Confining::new(&mut refusing, PermissionMode::Auto, false);
+        assert!(!confining.confirm_run(&a_run()).approved());
+        assert_eq!(confining.confirm_fetch(&a_fetch), Decision::Reject);
+        assert!(!PermissionMode::Auto.answers_this_run_unasked(&a_run()));
+
+        let mut approving = ApproveRuns;
+        let mut confining = Confining::new(&mut approving, PermissionMode::Auto, false);
+        assert!(confining.confirm_run(&a_run()).approved());
+    }
+
+    fn a_confined_line() -> crate::confirm::Confined {
+        crate::confirm::Confined {
+            reads_the_machine: true,
+            directories: vec!["/tmp/project".into()],
+            network: bravebot_sandbox::network::Network::Open,
+            filesystem: Default::default(),
+            requested: Vec::new(),
+            requested_reaches: Vec::new(),
+            carried: Vec::new(),
+            writes_git_directories: false,
+        }
+    }
+
+    /// AUTO-3, AUTO-6: the classifier's allow word answers a run the sandbox confines, and nothing
+    /// else does. The confirmer behind the mode refuses, so a yes is the mode's own. The regressions
+    /// it rejects: a no, a missing word and a line the sandbox does not hold being answered, a word
+    /// on the request answering in a mode that did not ask for a classifier, and an answered run
+    /// vouching for a program or being remembered past the session.
+    #[test]
+    fn auto_answers_a_run_only_on_the_classifiers_allow_word_for_a_confined_line() {
+        let a_run_said = |word, confined: bool, unconfined: bool| RunRequest {
+            classified: word,
+            confined: confined.then(a_confined_line),
+            unconfined,
+            ..a_run()
+        };
+        let answered = |mode: PermissionMode, request: RunRequest| {
+            let mut refusing = Unattended;
+            Confining::new(&mut refusing, mode, false).confirm_run(&request)
+        };
+
+        let yes = answered(
+            PermissionMode::Auto,
+            a_run_said(Classified::Allowed, true, false),
+        );
+        assert!(yes.approved(), "auto did not take the classifier's yes");
+        assert!(!yes.remember, "an answered run vouched for a program");
+        assert!(
+            !yes.record,
+            "an answered run was remembered past the session"
+        );
+
+        for (word, confined, unconfined, why) in [
+            (Classified::NotAllowed, true, false, "a no"),
+            (Classified::NotAsked, true, false, "no word"),
+            (
+                Classified::Allowed,
+                false,
+                false,
+                "a line the sandbox does not hold",
+            ),
+            (
+                Classified::Allowed,
+                true,
+                true,
+                "a line that asked for no profile",
+            ),
+        ] {
+            assert!(
+                !answered(PermissionMode::Auto, a_run_said(word, confined, unconfined)).approved(),
+                "auto answered a run on {why}"
+            );
+        }
+        for other in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+        ] {
+            assert!(
+                !answered(other, a_run_said(Classified::Allowed, true, false)).approved(),
+                "{other:?} took a word it did not ask for"
+            );
+        }
+    }
+
+    /// AUTO-3, AUTO-6: the classifier's allow word answers the first question about a URL and not
+    /// the question about the host a redirect led to. The regressions it rejects: a redirect hop
+    /// answered by a model that was never shown the host, a no answering, and a word answering in
+    /// a mode that did not ask for a classifier.
+    #[test]
+    fn auto_answers_a_fetch_only_on_the_classifiers_allow_word_and_not_a_redirect() {
+        let a_fetch_said = |word, redirected: bool| crate::confirm::FetchRequest {
+            url: "https://example.com/".to_string(),
+            host: "example.com".to_string(),
+            redirected_from: redirected.then(|| "origin.example".to_string()),
+            classified: word,
+        };
+        let answered = |mode: PermissionMode, request: crate::confirm::FetchRequest| {
+            let mut refusing = Unattended;
+            Confining::new(&mut refusing, mode, false).confirm_fetch(&request)
+        };
+
+        assert_eq!(
+            answered(
+                PermissionMode::Auto,
+                a_fetch_said(Classified::Allowed, false)
+            ),
+            Decision::Approve
+        );
+        for (word, redirected, why) in [
+            (Classified::Allowed, true, "a redirect"),
+            (Classified::NotAllowed, false, "a no"),
+            (Classified::NotAsked, false, "no word"),
+        ] {
+            assert_eq!(
+                answered(PermissionMode::Auto, a_fetch_said(word, redirected)),
+                Decision::Reject,
+                "auto answered a fetch on {why}"
+            );
+        }
+        for other in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+        ] {
+            assert_eq!(
+                answered(other, a_fetch_said(Classified::Allowed, false)),
+                Decision::Reject,
+                "{other:?} took a word it did not ask for"
+            );
+        }
+    }
+
+    /// AUTO-8: the trail credits auto for exactly the questions it answered, because both the
+    /// confirmer and the record ask the same predicate. The regression it rejects: a record that
+    /// credits the mode with a question it passed to the person.
+    #[test]
+    fn the_record_credits_auto_only_for_a_question_the_classifier_answered() {
+        let confined = |word| RunRequest {
+            classified: word,
+            confined: Some(a_confined_line()),
+            ..a_run()
+        };
+        assert!(PermissionMode::Auto.answers_this_run_unasked(&confined(Classified::Allowed)));
+        assert!(!PermissionMode::Auto.answers_this_run_unasked(&confined(Classified::NotAllowed)));
+        assert!(!PermissionMode::Auto.answers_this_run_unasked(&confined(Classified::NotAsked)));
+        assert!(!PermissionMode::Ask.answers_this_run_unasked(&confined(Classified::Allowed)));
+    }
+
+    /// AUTO-4: of the questions bypassing answers, auto answers none. Bypassing is run first and has
+    /// to answer most of them, so the table is one that can tell an answering mode from an asking
+    /// one. The confirmer behind the mode refuses, so a yes is the mode's own.
+    #[test]
+    fn auto_puts_every_question_a_mode_may_not_answer_to_the_person() {
+        use bravebot_sandbox::SandboxMode;
+        let a_fetch = crate::confirm::FetchRequest {
+            url: "https://example.com/".to_string(),
+            host: "example.com".to_string(),
+            redirected_from: None,
+            classified: crate::confirm::Classified::NotAsked,
+        };
+        let a_tool_list = crate::confirm::ToolListRequest {
+            alias: "docs".to_string(),
+            tools: Vec::new(),
+            refused: 0,
+            withheld: 0,
+            verdict: Verdict::Safe,
+            reason: None,
+        };
+        let a_call = crate::confirm::McpCallRequest {
+            alias: "docs".to_string(),
+            tool: "search".to_string(),
+            arguments: Vec::new(),
+            description: None,
+            may_stand: false,
+        };
+        let an_exposure = crate::confirm::ExposureRequest {
+            path: ".env".to_string(),
+            credentials: Vec::new(),
+        };
+        let a_path = crate::confirm::PathRequest {
+            path: "/tmp/elsewhere".into(),
+            write: true,
+            why: "to build there".to_string(),
+        };
+        let answered = |mode: PermissionMode| -> Vec<&'static str> {
+            let mut refusing = Unattended;
+            let mut confining =
+                Confining::new(&mut refusing, mode, false).with_sandbox_mode(SandboxMode::Off);
+            let mut yes = Vec::new();
+            let mut note = |name: &'static str, said_yes: bool| {
+                if said_yes {
+                    yes.push(name);
+                }
+            };
+            note("run", confining.confirm_run(&a_run()).approved());
+            note(
+                "read output",
+                confining.confirm_read_output(&an_output(Verdict::Safe)) == Decision::Approve,
+            );
+            note(
+                "vetted read",
+                confining.confirm_vetted_read(&a_vetted_read(Verdict::Safe)) == Decision::Approve,
+            );
+            note(
+                "fetch",
+                confining.confirm_fetch(&a_fetch) == Decision::Approve,
+            );
+            note(
+                "language server",
+                confining.confirm_server(&a_server()) == Decision::Approve,
+            );
+            note(
+                "plan",
+                confining.confirm_manifest(&a_plan()) == Decision::Approve,
+            );
+            note(
+                "vouch",
+                confining.confirm_vouch(&a_vouch(Verdict::Safe)) == Decision::Approve,
+            );
+            note(
+                "exposing read",
+                confining.confirm_exposing_read(&an_exposure) == Decision::Approve,
+            );
+            note(
+                "tool list",
+                confining.confirm_tool_list(&a_tool_list) == Decision::Approve,
+            );
+            note(
+                "tool call",
+                confining.confirm_mcp_call(&a_call).decision == Decision::Approve,
+            );
+            note("path", confining.confirm_path(&a_path) == Decision::Approve);
+            yes
+        };
+        let by_bypass = answered(PermissionMode::Bypass);
+        assert!(
+            by_bypass.len() >= 10,
+            "bypassing answers most of these, or the table proves nothing about auto: {by_bypass:?}"
+        );
+        assert_eq!(
+            answered(PermissionMode::Auto),
+            Vec::<&str>::new(),
+            "auto answered a question a mode may not"
+        );
+        assert_eq!(answered(PermissionMode::Ask), Vec::<&str>::new());
+    }
+
+    /// The ladder one key walks. Four rungs where bypass is unreachable, back to the start from the
+    /// last: a key that stopped cycling would be a mode somebody could not leave.
+    #[test]
+    fn the_key_cycles_four_modes_where_bypass_is_unreachable() {
         let mut mode = PermissionMode::default();
         let mut seen = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..5 {
             mode = mode.cycle(false);
             seen.push(mode);
         }
@@ -1921,6 +2303,7 @@ mod tests {
             vec![
                 PermissionMode::AcceptEdits,
                 PermissionMode::Plan,
+                PermissionMode::Auto,
                 PermissionMode::Ask,
                 PermissionMode::AcceptEdits,
             ]
@@ -1933,7 +2316,7 @@ mod tests {
     fn bypass_is_reachable_unless_a_layer_made_it_unreachable() {
         let mut mode = PermissionMode::default();
         let mut seen = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..5 {
             mode = mode.cycle(true);
             seen.push(mode);
         }
@@ -1942,6 +2325,7 @@ mod tests {
             vec![
                 PermissionMode::AcceptEdits,
                 PermissionMode::Plan,
+                PermissionMode::Auto,
                 PermissionMode::Bypass,
                 PermissionMode::Ask,
             ],
@@ -1964,6 +2348,7 @@ mod tests {
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
             PermissionMode::Bypass,
         ] {
             let mut choosing = ChoosesFirst;
@@ -2057,6 +2442,7 @@ mod tests {
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
             PermissionMode::Bypass,
         ] {
             let mut typing = Interjects(Some("use the other file".to_string()));
@@ -2081,7 +2467,7 @@ mod tests {
         assert_eq!(PermissionMode::Bypass.cycle(true), PermissionMode::Ask);
         // And back round to it, so nothing is one-way.
         let mut mode = PermissionMode::Bypass;
-        for _ in 0..4 {
+        for _ in 0..5 {
             mode = mode.cycle(true);
         }
         assert_eq!(mode, PermissionMode::Bypass);

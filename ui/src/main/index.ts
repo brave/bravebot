@@ -70,6 +70,7 @@ import { relaunchUnlessRunning } from './relaunch'
 import { parseAppearance } from '../shared/theme'
 import { readExperience, removeConversation, writeExperience } from './experience'
 import { compose as composeReport, openPage, save as saveReport, showLog, type Ask } from './bug-report'
+import { faultReporter } from './window-fault'
 import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
 import { forgetSummons, noteTurnEnded, summons } from './summons'
 import { Summoning, sendSummonedTurn, type Answer } from './summon-turn'
@@ -410,6 +411,9 @@ function createWindow(): void {
     return { action: 'deny' }
   })
   window.webContents.on('will-navigate', (event) => event.preventDefault())
+  // The page's process ending is the one failure the page cannot report itself (DIAG-10).
+  window.webContents.on('render-process-gone', (_event, details) =>
+    reportFault({ kind: 'renderer_gone', reason: details.reason, exit: details.exitCode }))
 
   bridge = new Bridge((message) => {
     if (message.session && message.event === 'turn.started') runningHandles.add(message.session)
@@ -544,6 +548,8 @@ const ALLOWED = new Set([
   'turn.send',
   'turn.cancel',
   'turn.interject',
+  'session.enhance',
+  'session.enhance.cancel',
   'mentions.offer',
   'mentions.named',
   'confirm.reply',
@@ -593,6 +599,9 @@ const ALLOWED = new Set([
  */
 const askBridge: Ask = (method, params) =>
   bridge ? bridge.request(method, params) : Promise.reject(new Error('the agent is not running'))
+
+/** What the page and Electron say about a failure, forwarded for the agent to log (DIAG-10). */
+const reportFault = faultReporter(askBridge)
 
 /** What the save sheet offers per format. */
 const FILTERS: Record<ExportFormat, Electron.FileFilter> = {
@@ -1115,6 +1124,17 @@ app.whenReady().then(() => {
   // What the window can currently do, so the menu can grey what it cannot. The renderer is
   // the only thing that knows this, and it says so rather than being asked: a menu that has
   // to poll would be a second copy of the transcript's state, arriving late.
+  // The page saying it failed. Only the app window's own top frame is heard, and what it says is
+  // cut down to the fields the agent reads before it is forwarded.
+  ipcMain.on('bravebot:fault', (event, report: unknown) => {
+    if (window && event.senderFrame === window.webContents.mainFrame) reportFault(report)
+  })
+  ipcMain.on('bravebot:window:reload', (event) => {
+    if (window && event.senderFrame === window.webContents.mainFrame) window.webContents.reload()
+  })
+  app.on('child-process-gone', (_event, details) =>
+    reportFault({ kind: 'child_gone', process: details.type, reason: details.reason, exit: details.exitCode }))
+
   ipcMain.on('bravebot:menu:state', (_event, value: unknown) => {
     const state = parseWindowState(value)
     if (state) refreshMenu(state)

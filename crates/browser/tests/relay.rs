@@ -934,6 +934,7 @@ fn installing_with_no_manifest_directory_uses_the_location_brave_reads() {
         command
             .args(["install", OURS])
             .env("HOME", home.path())
+            .env_remove("BRAVEBOT_HOME")
             .env("BRAVEBOT_BROWSER_DIR", directory.path())
             .env_remove("XDG_CONFIG_HOME")
             .stdout(Stdio::null());

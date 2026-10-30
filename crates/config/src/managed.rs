@@ -102,6 +102,9 @@ const MODEL_DENY: &str = "models.deny";
 /// by.
 const RUN_NETWORK: &str = "run.network";
 
+/// Where it turns crash reports off, and the name `doctor` reports the pin by (CRASH-4).
+const CRASH_REPORTS_KEY: &str = "crashReports";
+
 /// Where the rules it refuses are listed, and the name `doctor` reports each list by (PERM-19).
 const RULES_DENY: &str = "permissions.deny";
 
@@ -320,6 +323,14 @@ pub struct Managed {
     hosts: crate::sandbox_network::Hosts,
     /// The host keys it gave a value they cannot read, which pin nothing.
     hosts_unreadable: Vec<&'static str>,
+    /// Whether it wrote `crashReports` as `false` (CRASH-4).
+    ///
+    /// Read from this layer for the reason the keys above are: a key that can only turn a report
+    /// off takes nothing from the person at the machine, so an administrator asking for it is not
+    /// choosing for them. Only `false` is a pin. `true` is not read, since this layer cannot turn
+    /// on what the person turned off, and a value that is not a boolean is absence, as it is in
+    /// the person's own file.
+    crash_reports_off: bool,
     /// The file, where there is one there at all.
     ///
     /// Recorded for a file that exists rather than for one that was understood, so that a report can
@@ -380,6 +391,7 @@ impl Managed {
         Self {
             narrowing,
             narrowing_unreadable,
+            crash_reports_off: root.get(CRASH_REPORTS_KEY) == Some(&serde_json::Value::Bool(false)),
             rules: crate::settings::managed_rules(&root),
             hosts,
             hosts_unreadable,
@@ -504,6 +516,12 @@ impl Managed {
         self.sandbox_unreadable
     }
 
+    /// Whether this layer turned crash reports off, which the person's own file cannot undo
+    /// (CRASH-4).
+    pub fn crash_reports_off(&self) -> bool {
+        self.crash_reports_off
+    }
+
     /// The keys it named as something other than a boolean, which are absence.
     pub fn narrowing_unreadable(&self) -> impl Iterator<Item = &str> {
         self.narrowing_unreadable.iter().copied()
@@ -560,6 +578,7 @@ impl Managed {
             .chain(self.models.allowed.is_some().then_some(MODEL_ALLOW))
             .chain((!self.models.denied.is_empty()).then_some(MODEL_DENY))
             .chain(self.narrowing.named())
+            .chain(self.crash_reports_off.then_some(CRASH_REPORTS_KEY))
             .chain((!self.rules.deny.is_empty()).then_some(RULES_DENY))
             .chain((!self.rules.ask.is_empty()).then_some(RULES_ASK))
             .chain(self.network.is_some().then_some(RUN_NETWORK))
@@ -959,6 +978,24 @@ mod tests {
             managed.narrowing_unreadable().collect::<Vec<_>>(),
             vec![crate::Narrowing::BYPASS_UNREACHABLE]
         );
+    }
+
+    /// CRASH-4: `crashReports: false` is a pin and is named among them. `true` and a value that is
+    /// not a boolean pin nothing, so the layer can only turn reports off.
+    #[test]
+    fn a_managed_crash_reports_false_is_a_pin_and_nothing_else_is() {
+        let off = scratch("managed-crash-off", r#"{"crashReports": false}"#);
+        assert!(off.crash_reports_off());
+        assert_eq!(off.pinned().collect::<Vec<_>>(), vec!["crashReports"]);
+        for (name, text) in [
+            ("on", r#"{"crashReports": true}"#),
+            ("quoted", r#"{"crashReports": "false"}"#),
+            ("absent", "{}"),
+        ] {
+            let managed = scratch(&format!("managed-crash-{name}"), text);
+            assert!(!managed.crash_reports_off(), "{text}");
+            assert!(managed.is_empty(), "{text}");
+        }
     }
 
     /// PERM-19: `deny` and `ask` are read from the managed file, as text or as an object, and named

@@ -11,6 +11,7 @@
 //! three names no credential and is asked without one, which is what a local Ollama wants.
 
 use crate::Secret;
+use crate::settings::positive;
 use std::fmt;
 use std::time::Duration;
 
@@ -318,6 +319,13 @@ pub(crate) fn known_variable(id: &str) -> Option<&'static str> {
         .map(|(_, _, variable)| *variable)
 }
 
+/// The id naming Cloudflare Workers AI, reached at a host built from `options.accountId`.
+pub(crate) const CLOUDFLARE_WORKERS_AI_ID: &str = "cloudflare-workers-ai";
+
+/// The id naming Cloudflare AI Gateway, reached at a host built from `options.accountId` and
+/// `options.gatewayId`.
+pub(crate) const CLOUDFLARE_AI_GATEWAY_ID: &str = "cloudflare-ai-gateway";
+
 /// The id naming Google Vertex AI, which is reached through its OpenAI-compatible endpoint.
 ///
 /// Not in [`KNOWN_ENDPOINTS`] for the reason Bedrock is not: the endpoint carries the project and
@@ -398,6 +406,45 @@ pub struct Model {
     /// enumerating them is a schema that changes when the gateway adds a field. Trusted exactly as
     /// far as a variable the person exported would be, and no model output can reach it.
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
+    /// The named option sets a person may switch between, in the order the file listed them.
+    ///
+    /// Each is carried as `options` is and merged under it. A variant the file marked
+    /// `"disabled": true` is not here, and neither is one whose body is not an object.
+    pub variants: Vec<Variant>,
+}
+
+/// One named set of options a model may be asked with ([BACKEND-45](../../../docs/specs/backends.md#BACKEND-45)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Variant {
+    /// What a person types to pick it.
+    pub name: String,
+    /// Merged into the request body, never interpreted.
+    pub options: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Model {
+    /// The names a person may pick from, in the file's order.
+    pub fn variant_names(&self) -> Vec<&str> {
+        self.variants.iter().map(|it| it.name.as_str()).collect()
+    }
+
+    /// The options a request carries for this model when `variant` is the one chosen.
+    ///
+    /// The variant's own keys come first, so where it and `options` set one field the variant's
+    /// wins: it is the more specific thing somebody said. A name the model has no variant for adds
+    /// nothing, so a pick made for one model does not reach another. `None` where there is nothing
+    /// to add.
+    pub fn request_options(
+        &self,
+        variant: Option<&str>,
+    ) -> Option<serde_json::Map<String, serde_json::Value>> {
+        let chosen = variant.and_then(|name| self.variants.iter().find(|it| it.name == name));
+        let mut merged = chosen.map(|it| it.options.clone()).unwrap_or_default();
+        for (key, value) in self.options.iter().flatten() {
+            merged.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+        (!merged.is_empty()).then_some(merged)
+    }
 }
 
 /// The most times a request is sent again that a block may state.
@@ -578,6 +625,11 @@ pub struct Provider {
     /// Nothing for an AWS entry: its account is what a client reaches and carries its own
     /// ([`crate::bedrock::Bedrock::patience`]), so the figures have one home.
     pub patience: Patience,
+    /// Whether `options.setCacheKey` is `true`, so a chat-completions request carries a
+    /// `prompt_cache_key` ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)).
+    ///
+    /// Off unless the block says so: the value lets the host tie a session's requests together.
+    pub set_cache_key: bool,
     /// A reply ceiling somebody exported, which outranks whatever the models state.
     ///
     /// Set where the account's own copy is, once the environment has been read: a block is parsed
@@ -608,6 +660,15 @@ pub struct Provider {
     /// kept: a header somebody wrote and this program refuses is the one worth saying out loud,
     /// since a gateway that answers 401 says nothing about a line in a settings file.
     pub headers_refused: Vec<(String, HeaderFault)>,
+    /// The ids of a fetched roster this block offers and no others, where the block has a
+    /// `whitelist`. `None` where it has none; `Some` of an empty list offers nothing.
+    ///
+    /// Applied to the rows a gateway lists, never to `models`, so it narrows what is offered and
+    /// grants nothing ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)).
+    pub whitelist: Option<Vec<String>>,
+    /// The ids of a fetched roster this block does not offer, from its `blacklist`, applied after
+    /// [`Self::whitelist`].
+    pub blacklist: Vec<String>,
 }
 
 /// The wire protocol a provider's requests are written in.
@@ -781,8 +842,18 @@ impl Provider {
             && id != GOOGLE_VERTEX_ID
             && id != AWS_PROVIDER_ID
             && known_endpoint(id).is_some();
+        let cloudflare_ids = || {
+            (
+                string(options.and_then(|options| options.get("accountId"))),
+                string(options.and_then(|options| options.get("gatewayId"))),
+            )
+        };
         let base_url = match stated {
             Some(url) => url.to_string(),
+            None if id == CLOUDFLARE_WORKERS_AI_ID || id == CLOUDFLARE_AI_GATEWAY_ID => {
+                let (account, gateway) = cloudflare_ids();
+                cloudflare_endpoint(id, account.as_deref(), gateway.as_deref())?
+            }
             None if id == GOOGLE_VERTEX_ID && project.is_none() => {
                 VERTEX_EXPRESS_ENDPOINT.to_string()
             }
@@ -800,7 +871,14 @@ impl Provider {
             id: id.to_string(),
             name: string(entry.get("name")),
             base_url: base_url.trim_end_matches('/').to_string(),
-            env: names(entry.get("env")),
+            env: match (names(entry.get("env")), cloudflare_key_variable(id)) {
+                (named, Some(default))
+                    if named.is_empty() && !names_a_credential && stated.is_none() =>
+                {
+                    vec![default.to_string()]
+                }
+                (named, _) => named,
+            },
             api_key: options
                 .and_then(|options| string(options.get("apiKey")))
                 .map(Secret::new),
@@ -809,11 +887,17 @@ impl Provider {
             models: models(entry.get("models")),
             context_window: options.and_then(|options| positive(options.get("contextWindow"))),
             patience: Patience::from_options(options),
+            set_cache_key: options
+                .and_then(|options| options.get("setCacheKey"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
             output_budget: None,
             protocol,
             bedrock: None,
             headers,
             headers_refused,
+            whitelist: id_list(entry.get("whitelist")),
+            blacklist: names(entry.get("blacklist")),
         })
     }
 
@@ -857,11 +941,14 @@ impl Provider {
             models: Vec::new(),
             context_window: None,
             patience: Patience::default(),
+            set_cache_key: false,
             output_budget: None,
             protocol,
             bedrock: None,
             headers: Vec::new(),
             headers_refused: Vec::new(),
+            whitelist: None,
+            blacklist: Vec::new(),
         })
     }
 
@@ -901,11 +988,14 @@ impl Provider {
             models,
             context_window: None,
             patience: Patience::default(),
+            set_cache_key: false,
             output_budget: None,
             protocol: Protocol::ChatCompletions,
             bedrock: Some(bedrock),
             headers: Vec::new(),
             headers_refused,
+            whitelist: None,
+            blacklist: Vec::new(),
         })
     }
 
@@ -1460,6 +1550,42 @@ pub(crate) fn vertex_endpoint(project: Option<&str>, location: Option<&str>) -> 
     ))
 }
 
+/// The variable the key of a Cloudflare entry is read from where the entry names no credential.
+fn cloudflare_key_variable(id: &str) -> Option<&'static str> {
+    match id {
+        CLOUDFLARE_WORKERS_AI_ID => Some("CLOUDFLARE_API_KEY"),
+        CLOUDFLARE_AI_GATEWAY_ID => Some("CLOUDFLARE_API_TOKEN"),
+        _ => None,
+    }
+}
+
+/// The endpoint of a Cloudflare Workers AI or AI Gateway entry, without a trailing slash.
+///
+/// `None` where an id is missing or holds a character that would move the request: both ids are
+/// written into the path of a compiled-in host. An account id is letters and digits, and a gateway
+/// id is letters, digits, `-` and `_`.
+pub(crate) fn cloudflare_endpoint(
+    id: &str,
+    account: Option<&str>,
+    gateway: Option<&str>,
+) -> Option<String> {
+    let account =
+        account.filter(|a| !a.is_empty() && a.chars().all(|c| c.is_ascii_alphanumeric()))?;
+    if id == CLOUDFLARE_WORKERS_AI_ID {
+        return Some(format!(
+            "https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1"
+        ));
+    }
+    let gateway = gateway.filter(|g| {
+        !g.is_empty()
+            && g.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    })?;
+    Some(format!(
+        "https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/compat"
+    ))
+}
+
 /// A string value with surrounding space removed, or `None` when nothing is left.
 fn string(value: Option<&serde_json::Value>) -> Option<String> {
     value
@@ -1469,19 +1595,19 @@ fn string(value: Option<&serde_json::Value>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// A whole number above zero, where the value is one.
-fn positive(value: Option<&serde_json::Value>) -> Option<u64> {
-    value
-        .and_then(serde_json::Value::as_u64)
-        .filter(|figure| *figure > 0)
-}
-
 /// The `env` array: variable names that may hold the token.
 fn names(value: Option<&serde_json::Value>) -> Vec<String> {
     let Some(serde_json::Value::Array(names)) = value else {
         return Vec::new();
     };
     names.iter().filter_map(|name| string(Some(name))).collect()
+}
+
+/// A list of model ids that is present, or `None` where the key is absent or not an array.
+///
+/// Distinguished from an empty array, which is a list that names nothing.
+fn id_list(value: Option<&serde_json::Value>) -> Option<Vec<String>> {
+    matches!(value, Some(serde_json::Value::Array(_))).then(|| names(value))
 }
 
 /// The `models` block as Bedrock entries, in the order the file listed it.
@@ -1672,7 +1798,31 @@ fn models(value: Option<&serde_json::Value>) -> Vec<Model> {
                     }
                     _ => None,
                 }),
+                variants: entry
+                    .and_then(|entry| entry.get("variants"))
+                    .map(variants)
+                    .unwrap_or_default(),
             }
+        })
+        .collect()
+}
+
+/// The `variants` block of a model: each name with an object body that is not `"disabled": true`.
+fn variants(value: &serde_json::Value) -> Vec<Variant> {
+    let serde_json::Value::Object(block) = value else {
+        return Vec::new();
+    };
+    block
+        .iter()
+        .filter_map(|(name, body)| {
+            let mut options = body.as_object()?.clone();
+            let disabled = options.remove("disabled");
+            (disabled != Some(serde_json::Value::Bool(true)) && !name.trim().is_empty()).then(
+                || Variant {
+                    name: name.clone(),
+                    options,
+                },
+            )
         })
         .collect()
 }
@@ -1724,6 +1874,29 @@ mod tests {
         ] {
             assert_eq!(without_userinfo(stated), shown, "{stated}");
         }
+    }
+
+    /// BACKEND-68: the lists are read as arrays of ids, an empty `whitelist` is a list, and a
+    /// value of another shape is no list.
+    #[test]
+    fn a_whitelist_and_a_blacklist_are_read_as_lists_of_ids() {
+        let found = parsed(
+            r#"{"provider": {
+                "both": {"options": {"baseURL": "https://a.invalid/v1"},
+                         "whitelist": ["x", " y ", 3, ""], "blacklist": ["z"]},
+                "empty": {"options": {"baseURL": "https://b.invalid/v1"}, "whitelist": []},
+                "wrong": {"options": {"baseURL": "https://c.invalid/v1"},
+                          "whitelist": "x", "blacklist": {"z": 1}},
+                "none": {"options": {"baseURL": "https://d.invalid/v1"}}
+            }}"#,
+        );
+        let by = |id: &str| found.iter().find(|p| p.id == id).expect("provider");
+        assert_eq!(by("both").whitelist, Some(vec!["x".into(), "y".into()]));
+        assert_eq!(by("both").blacklist, ["z"]);
+        assert_eq!(by("empty").whitelist, Some(Vec::new()));
+        assert_eq!(by("wrong").whitelist, None);
+        assert!(by("wrong").blacklist.is_empty());
+        assert_eq!(by("none").whitelist, None);
     }
 
     fn parsed(text: &str) -> Vec<Provider> {
@@ -1863,6 +2036,22 @@ mod tests {
             .map(|(id, _)| id)
             .collect();
         assert_eq!(refused, ["bad"]);
+    }
+
+    /// BACKEND-69: only `true` turns the key on. The regressions it rejects are any present value
+    /// turning it on, and a string `"true"` being read as a switch.
+    #[test]
+    fn only_a_true_set_cache_key_turns_the_key_on() {
+        let set = |value: &str| {
+            parsed(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://gw.example.invalid/v1", "setCacheKey": {value}}}}}}}}}"#
+            ))[0]
+                .set_cache_key
+        };
+        assert!(set("true"));
+        for other in ["false", r#""true""#, "1", "null"] {
+            assert!(!set(other), "{other}");
+        }
     }
 
     /// The `google-vertex` entry written as `entry`, which holds the whole block.
@@ -2181,6 +2370,104 @@ mod tests {
         assert_eq!(other.compiled_roster(), None);
         assert!(all[0].takes_extra_content());
         assert!(!other.takes_extra_content());
+    }
+
+    /// Reads one entry as the `provider` block of a settings file would hold it.
+    fn cloudflare(id: &str, entry: &str) -> Vec<Provider> {
+        let text = format!(r#"{{"provider": {{"{id}": {entry}}}}}"#);
+        Provider::all(
+            serde_json::from_str::<serde_json::Value>(&text)
+                .unwrap()
+                .as_object()
+                .unwrap(),
+        )
+    }
+
+    /// A Cloudflare entry names an account or gateway id instead of a host, so the request has to go to
+    /// the host those ids build: a key sent anywhere else is a key sent to the wrong route.
+    #[test]
+    fn a_cloudflare_entry_is_reached_at_the_host_its_ids_build() {
+        let workers = cloudflare(
+            "cloudflare-workers-ai",
+            r#"{"options": {"accountId": "abc123"}}"#,
+        );
+        assert_eq!(
+            workers[0].base_url,
+            "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1"
+        );
+        assert_eq!(workers[0].env, ["CLOUDFLARE_API_KEY"]);
+        let gateway = cloudflare(
+            "cloudflare-ai-gateway",
+            r#"{"options": {"accountId": "abc123", "gatewayId": "my-gw_1"}}"#,
+        );
+        assert_eq!(
+            gateway[0].base_url,
+            "https://gateway.ai.cloudflare.com/v1/abc123/my-gw_1/compat"
+        );
+        assert_eq!(
+            gateway[0].chat_completions_url(),
+            "https://gateway.ai.cloudflare.com/v1/abc123/my-gw_1/compat/chat/completions"
+        );
+        assert_eq!(gateway[0].env, ["CLOUDFLARE_API_TOKEN"]);
+    }
+
+    /// An id is written into the path of a compiled-in host, so one holding `/`, `@`, `?` or `#` would
+    /// send the key to another route; such an entry must configure nothing rather than a moved request.
+    #[test]
+    fn a_cloudflare_id_that_would_move_the_request_configures_nothing() {
+        for account in ["a/b", "a@evil.invalid", "a?x", "a#x", "", "a.b"] {
+            let options =
+                format!(r#"{{"options": {{"accountId": "{account}", "gatewayId": "g"}}}}"#);
+            for id in ["cloudflare-workers-ai", "cloudflare-ai-gateway"] {
+                assert!(cloudflare(id, &options).is_empty(), "{id} {account}");
+            }
+        }
+        for gateway in ["g/x", "g@evil.invalid", "g?x", "g#x", "", "g.x"] {
+            let options =
+                format!(r#"{{"options": {{"accountId": "a1", "gatewayId": "{gateway}"}}}}"#);
+            assert!(
+                cloudflare("cloudflare-ai-gateway", &options).is_empty(),
+                "{gateway}"
+            );
+        }
+        assert!(cloudflare("cloudflare-workers-ai", "{}").is_empty());
+        assert!(
+            cloudflare(
+                "cloudflare-ai-gateway",
+                r#"{"options": {"accountId": "a1"}}"#
+            )
+            .is_empty()
+        );
+    }
+
+    /// A person who states an endpoint or names a credential has said where the key goes, so neither is
+    /// overridden by the host built from the ids or by the default token variable.
+    #[test]
+    fn a_stated_endpoint_beats_the_cloudflare_host_and_a_named_credential_beats_the_default() {
+        let all = cloudflare(
+            "cloudflare-workers-ai",
+            r#"{"env": ["MY_KEY"], "options": {"baseURL": "https://proxy.example.invalid/v1/"}}"#,
+        );
+        assert_eq!(all[0].base_url, "https://proxy.example.invalid/v1");
+        assert_eq!(all[0].env, ["MY_KEY"]);
+        let keyed = cloudflare(
+            "cloudflare-workers-ai",
+            r#"{"options": {"accountId": "a1", "apiKey": "k"}}"#,
+        );
+        assert!(keyed[0].env.is_empty());
+        let proxied = cloudflare(
+            "cloudflare-workers-ai",
+            r#"{"options": {"baseURL": "https://proxy.example.invalid/v1"}}"#,
+        );
+        assert!(proxied[0].env.is_empty());
+        assert!(
+            cloudflare(
+                "some-other",
+                r#"{"options": {"baseURL": "https://x.invalid/v1"}}"#
+            )[0]
+            .env
+            .is_empty()
+        );
     }
 
     /// The point of the block: a `provider` entry copied out of `opencode.json` configures this
@@ -2591,6 +2878,59 @@ mod tests {
         assert_eq!(
             options.get("provider").and_then(|it| it.get("order")),
             Some(&serde_json::json!(["amazon-bedrock"]))
+        );
+    }
+
+    /// BACKEND-66: a model's variants are listed in the file's order, one marked disabled is not
+    /// listed, and a body that is not an object is not a variant.
+    #[test]
+    fn a_disabled_variant_is_not_listed() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1"},
+                "models": {"m": {"variants": {
+                    "high": {"reasoningEffort": "high"},
+                    "off": {"disabled": true, "reasoningEffort": "none"},
+                    "terse": {"textVerbosity": "low"},
+                    "broken": "not an object"
+                }}}
+            }}}"#);
+
+        let model = provider.model("m").expect("offered");
+
+        assert_eq!(model.variant_names(), ["high", "terse"]);
+        assert!(
+            model.variants[0].options.get("disabled").is_none(),
+            "the marker was carried into the request options"
+        );
+    }
+
+    /// BACKEND-66: the variant chosen wins over the model's own `options` where both set a field, a
+    /// name the model lacks adds nothing, and with none chosen the options are what they were.
+    #[test]
+    fn a_variant_is_merged_over_the_models_options() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1"},
+                "models": {"m": {
+                    "options": {"textVerbosity": "medium", "route": "a"},
+                    "variants": {"terse": {"textVerbosity": "low"}}
+                }}
+            }}}"#);
+        let model = provider.model("m").expect("offered");
+
+        let chosen = model.request_options(Some("terse")).expect("options");
+        assert_eq!(chosen.get("textVerbosity"), Some(&serde_json::json!("low")));
+        assert_eq!(chosen.get("route"), Some(&serde_json::json!("a")));
+
+        let unchosen = model.request_options(None).expect("options");
+        assert_eq!(
+            unchosen.get("textVerbosity"),
+            Some(&serde_json::json!("medium"))
+        );
+
+        let elsewhere = model.request_options(Some("high")).expect("options");
+        assert_eq!(
+            elsewhere, unchosen,
+            "a name the model lacks changed the request"
         );
     }
 

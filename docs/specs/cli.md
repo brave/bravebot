@@ -59,13 +59,15 @@ rather than answered on the user's behalf. A rule written in advance that refuse
 an ask, holds here as it does in a session; one that allows does not, since what it answers is a
 prompt and there is nobody to prompt.
 
-`--dangerously-skip-permissions` and `--accept-edits` are the two ways a run nobody is watching may
-write, and each is the person's own instruction rather than a default: what they select, and what
-they cost, is [permission-modes.md](permission-modes.md). The first answers every question; the
-second answers the write prompt and no other, so a run, a fetch and a write the credential scan
-found a value in are still refused, because nobody can be asked. The two are refused together, and
-`--accept-edits` is refused where the line starts no one-shot run, since a session has the mode key
-for the same thing. The planner's questions are declined in both modes, because they are not
+`--dangerously-skip-permissions`, `--accept-edits` and `--auto` are the three ways a run nobody is
+watching may write, and each is the person's own instruction rather than a default: what they
+select, and what they cost, is [permission-modes.md](permission-modes.md) and
+[auto-mode.md](auto-mode.md). The first answers every question; the second answers the write prompt
+and no other, so a run, a fetch and a write the credential scan found a value in are still refused,
+because nobody can be asked. The third answers the write prompt the same way, and a run the sandbox
+confines and the first question about a URL when a classifier says to allow it, and refuses anything
+the classifier does not allow. The three are refused in pairs, and `--accept-edits` and `--auto` are
+refused where the line starts no one-shot run, since a session has the mode key for the same thing. The planner's questions are declined in both modes, because they are not
 permissions. A run given `--input-format lines` puts them to the program sending its lines instead,
 which picks among the choices the planner offered and writes none of the words (CLI-36).
 
@@ -95,6 +97,8 @@ answer. Writing stays refused without one of the flags above.
 `verified-by: bravebot_cli::running::an_accept_edits_run_writes_and_a_plain_run_does_not`
 `verified-by: bravebot_cli::running::accept_edits_is_refused_with_the_bypass_flag_and_outside_a_one_shot_run`
 `verified-by: bravebot_cli::main::the_accept_edits_flag_is_taken_out_and_belongs_to_a_one_shot_run`
+`verified-by: bravebot_cli::running::auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run`
+`verified-by: bravebot_cli::running::an_auto_run_runs_a_command_the_classifier_allows_and_refuses_one_it_does_not`
 `verified-by: bravebot_cli::main::an_allow_rule_decides_nothing_for_a_run_nobody_is_watching`
 `verified-by: bravebot_cli::main::the_flag_is_what_lets_an_allow_rule_decide_again`
 `verified-by: bravebot_cli::running::a_one_shot_run_that_trusts_its_workspace_still_refuses_a_write_without_the_skip_flag`
@@ -2191,10 +2195,15 @@ file piped in whole fills no more memory than one piped to `-p` does. A read of 
 ends the input as the end of it does.
 
 Refused with the status for an argument (CLI-6), before stdin is read: `--input-format` with a word
-other than `lines`; `--trust-input-lines` without `--input-format lines`;
-`--input-format lines` with `--mode manifest`, which has one task and no turns to add; and
-`--input-format lines` with `--incognito`, since each turn is carried on from the record the one
-before wrote and an incognito run writes none.
+other than `lines`; `--trust-input-lines` without `--input-format lines`; and
+`--input-format lines` with `--mode manifest`, which has one task and no turns to add.
+
+**Under `--incognito`.** An incognito run writes no record ([INCOG-3](incognito.md#INCOG-3)), so
+each turn after the first is carried on from the conversation, the trust map and the kept facts the
+turn before held in memory, and nothing is written for it to read back. The conversation is restored
+from that copy as a record restores one, so a later turn is in the position of CLI-25's resumed
+session, and the copy is gone when the process ends. A turn that failed leaves the copy as the turn
+before it left it. Every turn's result object names no session.
 
 **Why.** Without this, a program driving bravebot needs one process for each turn (CLI-25) and
 cannot steer, answer or stop a turn that is running. One process that it talks to for as long as it
@@ -2233,9 +2242,9 @@ effect and put no word of the program's into the planner's context. The program 
 launched the run, and its command line already gives the planner words as the person's own
 ([LABEL-8](labels.md#LABEL-8)), which is more than a position among words the planner wrote.
 
-**A known cost.** A later turn is carried on from the record, as a resumed session is
-([SESSION-2](sessions.md#SESSION-2)), so a reference to quarantined content an earlier turn made
-names nothing on it and the planner is told so. On a channel nobody vouched for, whose every line is
+**A known cost.** A later turn is carried on from the record, or from memory under `--incognito`,
+as a resumed session is ([SESSION-2](sessions.md#SESSION-2)), so a reference to quarantined content
+an earlier turn made names nothing on it and the planner is told so. On a channel nobody vouched for, whose every line is
 quarantined, a turn cannot work on the words of the line before it.
 
 **A known cost.** The planner is told that the user chose a position a program picked, since the
@@ -2254,6 +2263,9 @@ one the person chose to run with the flag.
 `verified-by: bravebot_agent::interjections::drain_returns_every_line_oldest_first_and_empties_the_buffer`
 `verified-by: bravebot_agent::interjections::a_line_for_a_turn_that_is_not_reading_is_handed_back`
 `verified-by: bravebot_cli::lines::a_steer_sent_while_no_turn_runs_starts_a_turn_of_its_own`
+`verified-by: bravebot_cli::running::an_incognito_run_reading_lines_carries_its_turns_in_memory_and_writes_no_record`
+`verified-by: bravebot_cli::running::an_incognito_run_reading_lines_carries_its_facts_and_its_trust_map`
+`verified-by: bravebot_cli::running::a_stopped_turn_leaves_an_incognito_run_carried_on_from_the_turn_before`
 `verified-by: bravebot_cli::lines::a_stop_or_a_steer_right_behind_a_prompt_reaches_the_turn_that_prompt_starts`
 `verified-by: bravebot_cli::lines::a_second_answer_to_a_question_does_not_replace_the_first`
 `verified-by: bravebot_cli::lines::a_reader_that_panics_ends_the_input_and_leaves_nothing_waiting`

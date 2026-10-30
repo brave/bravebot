@@ -1181,6 +1181,7 @@ fn command_approval_preserves_plan_shape_environment_and_redirections() {
         reach_record: None,
         unconfined: false,
         key_choice: None,
+        classified: Default::default(),
         confined: None,
         record: None,
         pattern: None,
@@ -1500,6 +1501,7 @@ fn a_run_prompt_carries_what_the_planner_asked_the_line_to_be_lent() {
             reads: vec![],
             stdin: None,
         },
+        classified: Default::default(),
     };
     let value = wire::run_request(2, &request);
     assert_eq!(value["requestedScopes"], json!(["aws", "docker"]));
@@ -1553,6 +1555,7 @@ fn a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_t
             reads: vec![],
             stdin: None,
         },
+        classified: Default::default(),
     };
 
     let value = wire::run_request(4, &request);
@@ -1595,6 +1598,7 @@ fn a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field
             reads: vec![],
             stdin: None,
         },
+        classified: Default::default(),
     };
 
     let value = wire::run_request(5, &request);
@@ -1764,6 +1768,7 @@ fn a_fetch_prompt_carries_the_host_beside_the_url_and_nothing_of_a_body() {
             url: "https://example.com@evil.test/docs".into(),
             host: "evil.test".into(),
             redirected_from: None,
+            classified: Default::default(),
         },
     );
 
@@ -1791,6 +1796,7 @@ fn a_fetch_a_redirect_led_to_names_the_host_that_was_approved() {
             url: "https://docs.example.com/start".into(),
             host: "cdn.example.net".into(),
             redirected_from: Some("docs.example.com".into()),
+            classified: Default::default(),
         },
     );
 
@@ -1810,6 +1816,7 @@ fn a_fetch_from_a_metadata_service_says_so_across_the_bridge() {
             url: "http://169.254.169.254/latest/meta-data/".into(),
             host: "169.254.169.254".into(),
             redirected_from: None,
+            classified: Default::default(),
         },
     );
 
@@ -2272,4 +2279,19 @@ fn a_host_prompt_carries_the_hosts_and_nothing_else() {
         value,
         json!({"request": 4, "hosts": ["registry.example.com", "10.0.0.1"]})
     );
+}
+
+/// AUTO-1, MODE-11: a window cannot ask for auto, and a mode it can ask for is still read. The
+/// wire has a name for auto so a session that held the mode could be drawn. The regression it
+/// rejects is a request naming the mode being read as another one, which would leave a client
+/// drawing a mode its session is not in.
+#[test]
+fn a_window_cannot_choose_auto() {
+    use bravebot_agent::PermissionMode;
+    assert!(wire::permission_mode(&json!("auto")).is_err());
+    assert_eq!(
+        wire::permission_mode(&json!("plan")).ok(),
+        Some(PermissionMode::Plan)
+    );
+    assert_eq!(wire::permission_mode_name(PermissionMode::Auto), "auto");
 }

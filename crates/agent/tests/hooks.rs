@@ -433,6 +433,53 @@ fn a_hook_that_outstays_the_bound_is_stopped() {
     );
 }
 
+/// HOOK-7: a hook stopped at its bound ends the programs it started as well, not only the one the
+/// person named. The hook starts a background `sleep` and records its number; the fault this
+/// rejects is a stop that signals the hook's own process alone, which leaves that `sleep` running.
+#[test]
+fn a_stopped_hook_ends_the_programs_it_started() {
+    let scratch = Scratch::new("stops-children");
+    let record = scratch.path.join("sleeper");
+    let program = script(
+        &scratch.path,
+        "spawner",
+        &format!(
+            "#!/bin/sh\nsleep 61 &\necho $! > '{}'\nwait\n",
+            record.display()
+        ),
+    );
+    let hooks = declaring("turn-finished", &[program.to_str().expect("a path")]);
+
+    let fired = fire_within(
+        &hooks,
+        Moment::TurnFinished,
+        None,
+        &scratch.path,
+        Duration::from_secs(2),
+    );
+
+    assert_eq!(
+        fired[0].trouble,
+        Some(Trouble::Stopped(Duration::from_secs(2)))
+    );
+    let number = std::fs::read_to_string(&record)
+        .expect("the hook recorded the program it started before it was stopped");
+    let number = rustix::process::Pid::from_raw(number.trim().parse().expect("a process number"))
+        .expect("a process number is not zero");
+    // A signal of none asks whether the number names a process. Collected by init once its parent
+    // is gone, so an answer of "no such process" is the program having ended.
+    let running = || rustix::process::test_kill_process(number).is_ok();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while running() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let alive = running();
+    if alive {
+        let _ = rustix::process::kill_process(number, rustix::process::Signal::KILL);
+    }
+    assert!(!alive, "the program the hook started outlived the hook");
+}
+
 /// HOOK-7: the bound a hook that states no `timeout` is held to is the thirty seconds the clause
 /// gives, a number the other tests do not state because they pass a short one in its place.
 #[test]
@@ -587,6 +634,7 @@ fn a_hook_is_not_handed_a_gateways_environment_token() {
     // variables are put back before any assertion.
     unsafe {
         std::env::set_var("HOME", &home);
+        std::env::remove_var("BRAVEBOT_HOME");
         std::env::set_var("ACME_GATEWAY_TOKEN", "a-live-gateway-token");
         std::env::remove_var("BRAVEBOT_SUBPROCESS_ENV_SCRUB");
     }

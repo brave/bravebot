@@ -29,8 +29,8 @@ guards:
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 124
-      - crates/core/src/slot.rs: 6
+      - crates/core/src/policy.rs: 125
+      - crates/core/src/slot.rs: 7
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 3
       - crates/mcp/src/lib.rs: 1
@@ -52,7 +52,7 @@ guards:
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 4
-      - crates/agent/tests/workspace.rs: 63
+      - crates/agent/tests/workspace.rs: 65
       - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
@@ -79,7 +79,7 @@ guards:
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
       - crates/agent/tests/workspace.rs: 287
-      - crates/core/src/policy.rs: 28
+      - crates/core/src/policy.rs: 26
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
   - symbol: Labelled::relabel
@@ -96,7 +96,7 @@ guards:
       - crates/core/src/slot.rs: 1
   - symbol: SlotStore::verbatim_of
     sites:
-      - crates/core/src/policy.rs: 2
+      - crates/core/src/policy.rs: 3
       - crates/core/src/slot.rs: 1
   - symbol: SlotStore::home_of
     sites:
@@ -138,6 +138,7 @@ guards:
     sites:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/attached.rs: 1
+      - crates/agent/src/classifier.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
       - crates/agent/src/turn.rs: 15
@@ -173,6 +174,7 @@ guards:
     sites:
       - crates/agent/src/advisor.rs: 1
       - crates/agent/src/aside.rs: 1
+      - crates/agent/src/classifier.rs: 1
       - crates/agent/src/compact.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/manifest.rs: 1
@@ -496,6 +498,7 @@ and the content has no say in it.
 | a fact kept by `remember` or the person | trusted, with the confidentiality its `label` field states, private when missing, because a kept fact is in the user's own memory and is written only by the person or by a save they were shown; a private one makes what the planner writes private once it is read | `verified-by: bravebot_core::policy::a_kept_fact_is_trusted_with_the_confidentiality_it_states` `verified-by: bravebot_core::policy::labelling_a_kept_fact_is_recorded_in_the_audit_trail` `verified-by: bravebot_core::policy::reading_a_private_fact_makes_the_context_private` `verified-by: bravebot_core::policy::reading_a_public_fact_leaves_the_context_as_it_was` |
 | what the planner wrote | the integrity of the context it was written in, and private once private content was let out of quarantine for the planner: a slot `vet_content` let through, output `read_output` read to it, a delegate's report it was given, or a context it resumed that already held one. A workspace file it was shown does not count, because that is the project's own data and counting it would make every call after the first read ask | `verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted` `verified-by: bravebot_core::policy::a_vetted_private_slot_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_vetted_public_slot_leaves_what_the_planner_writes_public` `verified-by: bravebot_core::policy::a_vetted_private_picture_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::output_read_aloud_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_private_report_from_a_delegate_is_held` `verified-by: bravebot_core::policy::a_resumed_context_keeps_what_it_held_and_cannot_be_made_public` |
 | a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
+| the auto mode's classifier's reply | the context's, as any reply taken out of a transport's envelope gets. The driver reads one word of it, and only where that label is trusted and public; a reply labelled any other way is read as a refusal to allow ([AUTO-6](auto-mode.md#AUTO-6)) | `verified-by: bravebot_agent::turn::a_context_that_is_private_or_untrusted_is_not_put_to_the_classifier` `verified-by: bravebot_agent::classifier::only_the_allow_word_alone_allows` |
 | an answer a person typed to a question | trusted, because a person wrote it, and as private as the questions it answers, since the reply repeats them | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` `verified-by: bravebot_core::policy::private_questions_are_asked_and_the_reply_stays_private` |
 | the body a person saved from their editor over a proposed write | trusted and public, because a person wrote it and it goes into their workspace as the proposal it replaces was already going to; refused where that proposal was untrusted or still private | `verified-by: bravebot_core::policy::an_edited_body_is_trusted_and_public` `verified-by: bravebot_core::policy::a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it` |
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
@@ -871,12 +874,16 @@ arrives at all.
   the map does not vouch for, `read_file` does not open the file to hand back text, it defers a
   slot ([READ-1](tools/read-file.md#READ-1)). It still has to say now whether the file is text, as
   [READ-3](tools/read-file.md#READ-3) requires, so `Workspace::survey` in `bravebot-agent` reads the
-  first 8 KiB and `bravebot_filetype::looks_binary` tests it for a NUL byte or more than 30 percent
-  control characters. A file that fails is refused to the planner in the driver's own words, "is a
-  binary file, so it cannot be read as text", and one that passes becomes a reference with a byte
-  count. The same test runs again over the whole file, followed by a check that it is valid UTF-8,
-  when a slot is filled or a whole read is made (`Workspace::read` and `page`). A page the planner
-  is shown goes through `bravebot_filetype::decode_text` instead, which looks for a UTF-16 or UTF-32
+  first 8 KiB and `bravebot_filetype::decode_text` reads it: a UTF-16 or UTF-32 byte order mark is
+  honoured, and the result is binary where the NUL byte or control character test fails. A file that
+  fails is refused to the planner in the driver's own words, "is a binary file, so it cannot be read
+  as text", and one that passes becomes a reference with a byte count. A slot is filled with the
+  same `decode_text` over the whole file, and the slot records whether its text is a decoding, a
+  second bit about the shape of the file's first bytes. The slot's consumers read that bit: a
+  processor's input and a check take the text, and everything that writes it or hands it to a
+  program refuses it. A whole read an edit works from and a plan's page keep to text that is UTF-8
+  as it stands (`Workspace::read` and `page`). A page the planner
+  is shown goes through `bravebot_filetype::decode_text`, which looks for a UTF-16 or UTF-32
   byte order mark before the NUL test, decodes a file with one, and reads any other file that
   passes the test as UTF-8 with each invalid byte replaced, unless the replacements are more than
   30 percent of it. It then applies the same sniff to the decoded text. A page that is a decoding

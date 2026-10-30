@@ -504,6 +504,7 @@ fn a_language_server_is_not_handed_a_gateways_environment_token() {
     // or writes the environment, and both variables are put back before any assertion.
     unsafe {
         std::env::set_var("HOME", &home);
+        std::env::remove_var("BRAVEBOT_HOME");
         std::env::set_var("ACME_GATEWAY_TOKEN", "a-live-gateway-token");
         std::env::remove_var("BRAVEBOT_SUBPROCESS_ENV_SCRUB");
     }
@@ -1421,6 +1422,64 @@ fn a_declined_language_server_preserves_rewind_coverage() {
     assert_eq!(starts(&recorded), 0);
     assert!(point.is_complete());
     assert!(workspace.rewind_coverage().is_complete());
+}
+
+/// TRACE-1: a language server the person does not approve is a refusal under `approval` naming the
+/// language, in fixed words that carry neither the program, its arguments nor the workspace. The
+/// regression it rejects is a no that leaves the question in the trail and nothing about its
+/// answer, so the turn reads as clean and nobody can say why no server answered.
+#[test]
+fn a_language_server_the_person_does_not_approve_is_recorded_as_a_refusal() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let scratch = Scratch::new("agent-lsp-declined-trail");
+    let (workspace, recorded) = a_workspace_with_a_server(&scratch);
+    let (endpoint, _received) = serve_sequence(vec![
+        a_question_about_a_symbol(),
+        reply_with("server declined"),
+    ]);
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: true,
+        approve_writes: false,
+    };
+    let mut trail = RecordingSink::new();
+    let outcome = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("where is Held declared"),
+        &mut Conversation::new(),
+        &mut asking,
+        &mut bravebot_agent::IgnoreReports,
+        &mut trail,
+        trusting_the_workspace(&workspace),
+        TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    )
+    .outcome
+    .expect("the refusal still lets the turn answer");
+    assert_eq!(starts(&recorded), 0);
+    let refused: Vec<String> = trail
+        .blocked()
+        .filter_map(|event| match event {
+            bravebot_core::event::Event::GateBlocked {
+                gate: "approval",
+                reason,
+                ..
+            } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        refused,
+        ["Rust: the start was not approved, so no language server was started"],
+        "a refused start was not recorded once, under the language"
+    );
+    assert!(
+        !outcome.clean,
+        "a turn whose server was refused read as clean"
+    );
 }
 
 /// What a turn that asks about one symbol left behind, for the permission mode and the sandbox mode

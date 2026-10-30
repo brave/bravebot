@@ -1,3 +1,4 @@
+import type { Enhancement } from './enhancing'
 import type { FileAttachment } from '../shared/files'
 import type { Staged, Staging } from './staging'
 import type {
@@ -180,6 +181,8 @@ export interface Live {
   sendRefused?: string | null
   /** What drops and pastes staged in this session's composer, and the counter its markers are numbered by. */
   staging?: Staging
+  /** The rewrite of the box that is out, the one standing in it, and what the person was last told of it (INPUT-50). */
+  enhancement?: Enhancement
 }
 
 /**

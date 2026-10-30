@@ -1529,6 +1529,7 @@ mod tests {
             url: "http://169.254.169.254/latest".into(),
             host: "169.254.169.254".into(),
             redirected_from: None,
+            classified: Default::default(),
         };
         let metadata = fetch.ambient_authority().is_some();
         assert!(metadata, "the fixture is not a metadata service");

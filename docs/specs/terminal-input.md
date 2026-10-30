@@ -1262,7 +1262,7 @@ reaches for it before reading anything.
 `verified-by: bravebot_tui::app::either_spelling_of_shift_tab_cycles_the_mode`
 `verified-by: bravebot_tui::app::the_mode_key_leaves_the_line_alone`
 `verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`
-`verified-by: bravebot_agent::permission_mode::the_key_cycles_three_modes_where_bypass_is_unreachable`
+`verified-by: bravebot_agent::permission_mode::the_key_cycles_four_modes_where_bypass_is_unreachable`
 `verified-by: bravebot_agent::permission_mode::a_session_started_in_bypass_can_cycle_out_of_it`
 
 
@@ -3105,3 +3105,61 @@ the answer, so handling each is work for nothing, while handling the last is all
 `verified-by: bravebot_tui::input::a_burst_of_pointer_positions_is_read_as_the_last_of_it`
 `verified-by: bravebot_tui::input::only_a_position_directly_behind_another_is_not_handed_out`
 `verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`
+
+<a id="INPUT-50"></a>
+### INPUT-50: the desktop window rewrites its message box to be more specific, and the rewrite waits there to be edited
+
+The window's message box has the control the terminal has as Ctrl-P ([INPUT-48](#INPUT-48)): a
+button beside the attach button, and Ctrl+Shift+E (⌘⇧E on macOS) in the box. It sends
+`session.enhance`, which takes the session and the draft and answers `{ "started": true }` at once,
+and the answer comes later as an `enhance.done` event. The request is the one the terminal makes,
+[`bravebot_agent::aside::Question::enhance`](../../crates/agent/src/aside.rs): the draft behind the
+driver's instruction, over the exchange the planner already holds and with no tools. The exchange is
+read and not changed, the request reads no file, and nothing is sent to a turn. What it cost is
+charged to the session. `session.enhance.cancel` stops a request that is out, which the window offers
+as **Stop** and as Escape, and closing the session stops it too.
+
+`enhance.done` carries a `status`. `ready` carries `text`, the rewrite, and `removed`, how many
+characters that draw as nothing were taken out of it ([pasting.md](pasting.md)); `untrusted` offers
+nothing, because the exchange has met something the planner would not be shown, so words written
+over it are ones the planner could not have held; `unusable` is an answer that is empty or longer
+than 4000 characters, offered rather than cut to something the model did not write; `stopped`; and
+`failed` with the sentence the failure gives. The bridge reads the answer for its length and for
+those characters and for nothing else, and the window reads nothing of it at all.
+
+A `ready` rewrite replaces the draft as text, and the person edits it and sends it as they send any
+message. It is written only over the line it was asked for: a draft changed since the request went
+out is left alone and the window says so. Escape in the box, or **Put back mine** on the note, puts
+back the line the person wrote, and enhancing a rewrite again keeps the first line as the one put
+back. Emptying the box, which sending does, ends the rewrite, so a later Escape means what it meant
+before. Where nothing was offered the draft is as written and the note says why.
+
+The request is refused while a turn runs, since the exchange belongs to the turn then, for an empty
+draft and for one longer than 4000 characters. The window leaves a draft that names an attached
+picture, a dropped file or a picked bot as written, because a rewrite of words would lose the marker
+that stands for it, and it says so. A draft that begins with a slash and a name is not special here:
+the window sends such a line as a prompt.
+
+**Known costs.** The characters taken out of a rewrite are every one that
+[`bravebot_core::invisible::draws_as_nothing`](../../crates/core/src/invisible.rs) names, joiners and
+variation selectors included, where a terminal's paste keeps the ones a script or an emoji sequence is
+written with, so a rewrite with an emoji joined by a zero-width joiner comes back as separate emoji.
+
+**Why.** A prompt typed in a hurry leaves the planner to guess the file, the function and what done
+looks like, and the terminal already helps with that. The window sends the same request through the
+bridge so that both front ends share the one Rust implementation, and puts the answer where a person
+reads and edits it, since a rewrite a model wrote is the person's message only once they send it.
+
+`verified-by: bravebot_ui_bridge::enhance::a_rewrite_the_exchange_kept_is_offered`
+`verified-by: bravebot_ui_bridge::enhance::a_rewrite_the_exchange_did_not_keep_is_withheld`
+`verified-by: bravebot_ui_bridge::enhance::a_rewrite_that_is_empty_or_too_long_is_not_offered`
+`verified-by: bravebot_ui_bridge::enhance::characters_that_draw_as_nothing_are_taken_out_and_counted`
+`verified-by: bravebot_ui_bridge::enhance::a_stopped_request_is_not_a_failure`
+`verified-by: bravebot_ui_bridge::enhance::what_a_withheld_answer_cost_is_reported`
+`verified-by: bravebot_ui_bridge::enhance::a_draft_with_nothing_in_it_or_too_much_is_refused_before_a_request`
+`verified-by: bravebot_ui_bridge::enhancing::a_draft_is_rewritten_over_the_exchange_with_no_tools_and_no_turn`
+`verified-by: bravebot_ui_bridge::enhancing::a_rewrite_is_not_added_to_the_exchange`
+`verified-by: bravebot_ui_bridge::enhancing::a_draft_with_nothing_in_it_or_too_much_asks_nothing_of_the_service`
+`verified-by: bravebot_ui_bridge::enhancing::a_running_turn_refuses_a_rewrite_and_asks_nothing_of_the_service`
+`verified-by: bravebot_ui_bridge::enhancing::cancelling_a_rewrite_that_is_out_ends_it_as_stopped`
+`verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/enhancing.test.mjs drives the window's own functions with the bridge's answers: a rewrite replaces only the line it was asked for and keeps that line to put back, a draft typed since is left alone, a second rewrite still puts back the first line, an answer that offers nothing leaves the box and says why, the box is refused for a staged marker, the one refusal the bridge cannot make, and emptying the box ends the rewrite; make check-ui runs the test)`

@@ -1213,6 +1213,7 @@ mod tests {
                 reads: Vec::new(),
                 stdin: None,
             },
+            classified: Default::default(),
         }
     }
 
@@ -1958,6 +1959,7 @@ mod tests {
                 reads: vec![secret],
                 stdin: None,
             },
+            classified: Default::default(),
         }
     }
 
@@ -2076,6 +2078,7 @@ mod tests {
             // so there is nowhere an answer to it would be written.
             record: None,
             pattern: None,
+            classified: Default::default(),
         }
     }
 
@@ -2242,6 +2245,7 @@ mod tests {
             },
             record: None,
             pattern: None,
+            classified: Default::default(),
         }
     }
 

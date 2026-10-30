@@ -391,6 +391,11 @@ impl FileCapture<'_> {
         self.authority.revision_of(path)
     }
 
+    /// What is known of `path` now: its revision and how many `run` lines have started.
+    pub fn stamp_of(&self, path: &str) -> Stamp {
+        self.authority.stamp_of(path)
+    }
+
     /// Reserve a path before releasing this boundary to perform a write.
     pub fn begin(&self, path: &str) -> Option<FileEffect> {
         self.authority.begin(path)

@@ -272,6 +272,7 @@ pub fn named_mode(
         PermissionMode::AcceptEdits => Some(t!(mode_accept_edits)),
         PermissionMode::Plan => Some(t!(mode_plan)),
         PermissionMode::Bypass => Some(t!(mode_bypass)),
+        PermissionMode::Auto => Some(t!(mode_auto)),
     }
 }
 

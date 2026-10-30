@@ -1495,6 +1495,21 @@ fn gateway(
         written.insert("options".to_string(), Value::Object(kept_options));
     }
 
+    // A gateway's roster is asked for, and these narrow it. An AWS entry offers the models it
+    // names and has no roster to narrow.
+    if !aws {
+        for list in ["whitelist", "blacklist"] {
+            if let Some(Value::Array(ids)) = entry.get(list) {
+                let ids: Vec<Value> = ids
+                    .iter()
+                    .filter_map(|id| string(Some(id)))
+                    .map(Value::String)
+                    .collect();
+                written.insert(list.to_string(), Value::Array(ids));
+            }
+        }
+    }
+
     if let Some(Value::Object(models)) = entry.get("models") {
         let models: Map<String, Value> = models
             .iter()
@@ -2538,6 +2553,7 @@ mod tests {
                     "api": "https://elsewhere.invalid",
                     "env": ["GW_TOKEN"],
                     "whitelist": ["m"],
+                    "blacklist": ["old", 7, " "],
                     "options": {"baseURL": "https://gw.invalid/v1", "headers": {"X-Sent": "yes"}, "timeout": 5},
                     "models": {"m": {
                         "name": "Model",
@@ -2560,6 +2576,8 @@ mod tests {
             serde_json::json!({
                 "name": "Gateway",
                 "env": ["GW_TOKEN"],
+                "whitelist": ["m"],
+                "blacklist": ["old"],
                 "options": {"baseURL": "https://gw.invalid/v1"},
                 "models": {"m": {
                     "limit": {"context": 1000, "output": 100},

@@ -69,8 +69,14 @@ READ_BY_THE_SEAM_GUARD = frozenset({
     "ui/src/renderer/App.tsx",
 })
 
+# Files that belong to another area and are also read by a test in the cli crate. They add the
+# Rust checks to what their own area needs.
+ALSO_READ_BY_RUST = frozenset({
+    "docs/website/docs/install.md",
+})
+
 # Outside crates/, and read by a test all the same.
-READ_BY_RUST = ("CHANGELOG.md",)
+READ_BY_RUST = ("CHANGELOG.md", "README.md")
 
 # Read by a test, and by the build of the agent crate, which carries each spec's clause headings.
 READ_BY_RUST_UNDER = ("docs/specs/",)
@@ -101,7 +107,6 @@ WINDOWS_INSTALLER_SCRIPTS = (
 # tell from a read by itself.
 NAMED_NOT_READ = {
     ".gitignore": "the name git reads in any repository, and a fixture's in the git tests",
-    "README.md": "a fixture's name in the manifest, policy and reference tests",
     "agents/AGENTS.md": "a marker doctor checks exists, which its tests write for themselves",
     "agents/setup.py": "a marker doctor checks exists, which its tests write for themselves",
     "docs/development/agent-configuration.md": "a marker doctor checks exists, likewise",
@@ -115,7 +120,7 @@ PACKAGE_FILES = (
 
 # Read by nothing heavier than the checks that always run.
 QUIET = (
-    "README.md", "LICENSE", ".github/SECURITY.md", ".gitignore",
+    "LICENSE", ".github/SECURITY.md", ".gitignore",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
 QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
@@ -150,7 +155,7 @@ def classify(path, desktop, fuzz):
     """The areas a change to `path` could affect, where `desktop` is desktop_crates() and `fuzz`
     is fuzz_crates()."""
     found = classify_by_area(path, desktop, fuzz)
-    if path in READ_BY_THE_SEAM_GUARD:
+    if path in READ_BY_THE_SEAM_GUARD or path in ALSO_READ_BY_RUST:
         found = found | {"rust"}
     return found
 
@@ -429,6 +434,7 @@ CASES = (
     ("CHANGELOG.md", {"rust"}),
     ("docs/specs/routing.md", {"rust"}),
     ("docs/specs/tools/read-file.md", {"rust"}),
+    ("docs/website/docs/install.md", {"docs", "help", "rust"}),
     ("docs/website/docs/intro.md", {"docs", "help"}),
     ("docs/website/docs/using/watches.md", {"docs", "help"}),
     ("docs/website/package-lock.json", {"docs", "npm"}),
@@ -470,7 +476,7 @@ CASES = (
     ("crates/agent/src/kept_answers.rs", {"rust", "fuzz"}),
     ("docs/specs/prompting.md", {"rust"}),
     ("contrib/check-locales.py", NOTHING),
-    ("README.md", NOTHING),
+    ("README.md", {"rust"}),
     (".github/SECURITY.md", NOTHING),
 )
 

@@ -17,6 +17,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/model` | | Choose which model to think with |
 | `/theme` | `[name]` | Choose which theme paints the interface |
 | `/effort` | `[level]` | Choose how hard to think before answering |
+| `/variant` | `[name \| off]` | Pick a named set of options the model offers, list them, or drop the pick |
 | `/config` | | Choose how the input box edits text |
 | `/language` | `[tag \| auto]` | Choose the interface language for the next start, or drop the choice |
 | `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
@@ -308,6 +309,14 @@ says so and goes on without it. Only the instructions apply; the skill's `model`
 The mode's name is shown in the bottom border of the box while it is in force, it is written to the
 session's record, and a resumed session is back in it and says so. A delegate is not given it.
 Typed while a turn runs, `/mode` waits for the turn to end.
+
+## `/variant [name | off]`
+
+Lists the [variants](../customize/providers/openai-compatible.md#switching-between-sets-of-options-with-variants)
+the model in force offers. With a name, `/variant deep` picks it for the next request, and `off` drops
+the pick. A name the model does not offer changes nothing and says which it does. The pick lasts for the
+session and is not written anywhere. Typed while a turn runs, it is taken at once and the next turn is
+the first sent with it.
 
 ## `/effort [level]`
 
@@ -1038,7 +1047,9 @@ Drafts a commit message from changes and puts it in the input box. The source is
 
 Words after the source are the format you want: `/commit-message --staged use Conventional
 Commits`. The two flags only count as the first word, so `/commit-message use Conventional Commits`
-drafts from the staged changes in that format. A range that is not two plain revisions is refused
+drafts from the staged changes in that format. With none, the draft follows
+[`commitMessage.instructions`](../customize/configuration.md#commitmessageinstructions) where your
+settings hold it, and words you type replace it. A range that is not two plain revisions is refused
 with a usage note.
 
 The planner does not see the diff. The program reads it without starting `git`, under the rules

@@ -150,6 +150,8 @@ pub const DENIED: &[&str] = &[
     // Say where the machine keeps its state and what the host's settings name, for the person at
     // the host to read and post.
     "bug-report.compose",
+    // What the desktop window reports about its own page, which a client of the host has none of.
+    "window.fault",
     "update.status",
     // Read files or attach them to a turn.
     "mentions.offer",
@@ -167,6 +169,10 @@ pub const DENIED: &[&str] = &[
     // Words a person types into a turn already running (INPUT-10). The only client of the host
     // today is not a window with a message box that stays live while a turn runs.
     "turn.interject",
+    // A request to the session's model on the person's draft, for a message box to put in the box
+    // (INPUT-50). The only client of the host today has no box to put it in.
+    "session.enhance",
+    "session.enhance.cancel",
     // Answers that widen what a session may do or read beyond `trust.reply` above, which are not
     // offered to any client yet.
     "output.reply",

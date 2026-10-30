@@ -166,6 +166,9 @@ fr:sessions-screen-keys-unreadable
 fr:sessions-screen-manifest
 fr:sessions-screen-model-unknown
 fr:sessions-screen-note-archived
+fr:sessions-screen-note-busy-command
+fr:sessions-screen-note-busy-plan
+fr:sessions-screen-note-busy-request
 fr:sessions-screen-note-current
 fr:sessions-screen-note-delete-failed
 fr:sessions-screen-note-deleted

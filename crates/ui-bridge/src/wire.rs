@@ -100,6 +100,7 @@ pub fn permission_mode_name(mode: PermissionMode) -> &'static str {
         PermissionMode::AcceptEdits => "acceptEdits",
         PermissionMode::Plan => "plan",
         PermissionMode::Bypass => "bypass",
+        PermissionMode::Auto => "auto",
     }
 }
 

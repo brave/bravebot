@@ -422,22 +422,15 @@ pub(crate) fn manifest_conflict(
 
 /// Why `--input-format lines` or `--trust-input-lines` cannot go with the rest of the command line,
 /// as the sentence that refuses it, or `None` where nothing is wrong (CLI-36).
-///
-/// `--incognito` is refused because each turn is carried on from the record the one before wrote,
-/// and an incognito run writes none.
 pub(crate) fn input_lines_conflict(
     input_lines: bool,
     trust_input_lines: bool,
     mode: Mode,
-    incognito: bool,
 ) -> Option<String> {
     if !input_lines {
         return trust_input_lines.then(|| t!(cli_trust_input_lines_needs_lines).to_string());
     }
-    if mode == Mode::Manifest {
-        return Some(t!(cli_input_lines_not_with_a_manifest).to_string());
-    }
-    incognito.then(|| t!(cli_input_lines_not_with_incognito).to_string())
+    (mode == Mode::Manifest).then(|| t!(cli_input_lines_not_with_a_manifest).to_string())
 }
 
 /// The sentence that refuses a run limit given to a manifest run, which plans before it makes any

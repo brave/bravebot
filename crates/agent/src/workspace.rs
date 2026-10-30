@@ -1066,6 +1066,14 @@ impl Workspace {
         self.page_reaching(relative, offset, limit, &[], Decode::Exact, false)
     }
 
+    /// The whole file as a slot holds it: the file's own text where it is UTF-8, and the text a
+    /// UTF-16 or UTF-32 file with a byte order mark, or a file with bytes that are not UTF-8,
+    /// decodes to. The page says which in [`Page::decoding`], and a slot filled from a decoding
+    /// records that it is one, so it is never written or handed to a program as the file.
+    pub fn page_decoded(&self, relative: &str) -> Result<Page, WorkspaceError> {
+        self.page_reaching(relative, 1, usize::MAX, &[], Decode::Allowed, false)
+    }
+
     /// [`Workspace::page`] that may also land in the directory of a skill loaded this turn, and
     /// that reads a file in another encoding decoded where `decode` allows it.
     fn page_reaching(
@@ -1161,9 +1169,10 @@ impl Workspace {
     /// verdict on the same file. A file that turns to rubbish after that prefix is caught when
     /// the bytes are actually read, which is where an eager read would have caught it too.
     ///
-    /// A byte order mark is not honoured here. The slot this answer reserves is filled as
-    /// [`Workspace::page`] reads, which refuses a UTF-16 file, so honouring the mark would report
-    /// the file as text now and refuse it when something needs its bytes.
+    /// A byte order mark is honoured, and bytes that are not UTF-8 are tolerated as they are in
+    /// [`decode_text`], since the slot this answer reserves is filled with the same decoding
+    /// ([`Workspace::page_decoded`]). The slot records that its text is a decoding, so what writes
+    /// or hands on a slot's text refuses it (READ-3).
     pub fn survey(&self, relative: &str) -> Result<usize, WorkspaceError> {
         let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
         let io = |e: std::io::Error| WorkspaceError::Io {
@@ -1176,7 +1185,8 @@ impl Workspace {
         let mut head = vec![0u8; SNIFF_BYTES];
         let mut file = std::fs::File::open(&resolved).map_err(io)?;
         let read = read_up_to(&mut file, &mut head).map_err(io)?;
-        if looks_binary(&head[..read]) {
+        head.truncate(read);
+        if decode_text(head).is_none() {
             return Err(WorkspaceError::Binary {
                 path: relative.to_string(),
             });
@@ -2483,10 +2493,18 @@ impl Workspace {
             // Labelled after the walk, because which paths were visited is not known before it. A
             // listing is trusted only if every path in it is. A directory name is a name out of the
             // same tree, so it is observed with the files rather than beside them.
-            let label = policy.observe_paths(
-                Capability::FileRead,
-                found.iter().chain(stopped_at.iter()).map(String::as_str),
-            )?;
+            //
+            // Under the name the call typed, as a read of one of these files would be asked, and
+            // not under the spelling the listing shows: that is where the walk landed, which a
+            // link or a reach outside every open directory makes a different key from the one the
+            // file was vouched under.
+            let keys: Vec<String> = found
+                .iter()
+                .chain(stopped_at.iter())
+                .map(|reported| self.key_below(&relative, &root, reported))
+                .collect();
+            let label =
+                policy.observe_paths(Capability::FileRead, keys.iter().map(String::as_str))?;
 
             // `walk` collects one entry past the cap so reaching it is detectable. Which entries
             // survive is down to traversal order, so a truncated listing is a sample of the tree
@@ -2579,17 +2597,30 @@ impl Workspace {
             // reaches only the second, so the spelling is read and counted once.
             paths.dedup();
 
-            let (vouched, unvouched): (Vec<String>, Vec<String>) = paths
+            // Each file is asked about under the name a read of it by the typed spelling would be
+            // asked under, and not under the spelling it is opened by, which is where the walk
+            // landed (TRUST-18). The two differ through a link or a reach outside every open
+            // directory.
+            let keyed: Vec<(String, String)> = paths
                 .into_iter()
-                .partition(|path| !policy.read_is_quarantined(path));
-            let label =
-                policy.observe_paths(Capability::FileRead, vouched.iter().map(String::as_str))?;
+                .map(|path| {
+                    let key = self.key_below(&relative, &root, &path);
+                    (path, key)
+                })
+                .collect();
+            let (vouched, unvouched): (Vec<_>, Vec<_>) = keyed
+                .into_iter()
+                .partition(|(_, key)| !policy.read_is_quarantined(key));
+            let label = policy.observe_paths(
+                Capability::FileRead,
+                vouched.iter().map(|(_, key)| key.as_str()),
+            )?;
 
             let mut texts: Vec<(String, String)> = Vec::new();
             let mut skipped = 0usize;
             let mut bytes = 0usize;
             let mut truncated = hit_the_cap;
-            for path in vouched {
+            for (path, key) in vouched {
                 let absolute = self.root.join(&path);
                 let size = std::fs::metadata(&absolute).map_or(usize::MAX, |meta| {
                     usize::try_from(meta.len()).unwrap_or(usize::MAX)
@@ -2607,7 +2638,7 @@ impl Workspace {
                     continue;
                 };
                 bytes += text.len();
-                let held = Labelled::new(text, policy.label_in_force(&path));
+                let held = Labelled::new(text, policy.label_in_force(&key));
                 if !policy.scan_a_read("repo_map", &path, 1, &held).is_empty() {
                     skipped += 1;
                     continue;
@@ -2862,9 +2893,15 @@ impl Workspace {
             paths.sort();
             let considered = paths.len();
 
-            // Trusted only if every file the search reads is trusted.
+            // Trusted only if every file the search reads is trusted. Each file is asked about
+            // under the name the call typed, as a read of it would be, and not under the
+            // spelling the result shows (TRUST-18).
+            let keys: Vec<String> = paths
+                .iter()
+                .map(|reported| self.key_below(&relative, &root, reported))
+                .collect();
             let label =
-                policy.observe_paths(Capability::FileRead, paths.iter().map(String::as_str))?;
+                policy.observe_paths(Capability::FileRead, keys.iter().map(String::as_str))?;
 
             // Collected one past the cap for the same reason as `walk`: reaching the limit has
             // to be distinguishable from happening to have exactly that many matches.
@@ -3950,6 +3987,41 @@ impl Workspace {
     /// project's ([`bravebot_core::spelling::to_key`]).
     pub(crate) fn trust_key(&self, named: &str) -> String {
         self.keyed(named, BACKSLASH_SEPARATES, self.home.as_deref())
+    }
+
+    /// The name the trust map is asked about for a file a walk of `root` reported as `reported`,
+    /// when the call that began the walk typed `typed`.
+    ///
+    /// The name typed, joined with the file's path below `root`, through [`Workspace::trust_key`]:
+    /// the name a read of that file by that spelling is asked under. `reported` is the spelling
+    /// the result shows, which is where the walk landed. A vouch is recorded under the name that
+    /// was typed, so asking under the landing misses it whenever a link or a reach outside every
+    /// open directory makes the two differ, and a file in an untrusted subtree reached through a
+    /// link inside it would be asked under the destination's rule instead of its own. The
+    /// landing is not keyed on for the second reason (TRUST-18).
+    ///
+    /// Taken from the path the walk built from `root` and the name typed, never from a file's
+    /// bytes.
+    fn key_below(&self, typed: &str, root: &Path, reported: &str) -> String {
+        let reported = Path::new(reported);
+        let absolute = if reported.is_absolute() {
+            reported.to_path_buf()
+        } else {
+            self.root.join(reported)
+        };
+        let below = absolute.strip_prefix(root).unwrap_or(&absolute);
+        let typed: PathBuf = Path::new(typed)
+            .components()
+            .filter(|component| !matches!(component, Component::CurDir))
+            .collect();
+        // A file named as the target is its own root, with nothing below it. Joining the empty
+        // path would append a separator to the name.
+        let named = if below.as_os_str().is_empty() {
+            typed
+        } else {
+            typed.join(below)
+        };
+        self.trust_key(&named.to_string_lossy())
     }
 
     /// Whether `trust` trusts the working directory, which names a project by its origin
@@ -6306,5 +6378,58 @@ mod tests {
             "{problems:?}"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Writes `bytes` to a file named `left` in a fresh scratch directory called `name`, and
+    /// returns its path.
+    fn destination_holding(name: &str, bytes: &[u8]) -> PathBuf {
+        let directory = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch");
+        let path = directory.join("left");
+        std::fs::write(&path, bytes).expect("destination");
+        path
+    }
+
+    /// CRED-11: a destination the line removed or never created has nothing to scan, and the scan
+    /// reports that as no text rather than as an empty file.
+    #[test]
+    fn a_destination_that_is_not_there_has_no_text_to_scan() {
+        let directory = crate::testutil::scratch_dir("left-at-missing");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch");
+
+        assert_eq!(left_at(&directory.join("never-created"), 16), None);
+    }
+
+    /// CRED-11: a destination exactly as large as the budget is scanned, so a credential in a file
+    /// of that size is found.
+    #[test]
+    fn a_destination_exactly_the_size_of_the_budget_is_read_in_full() {
+        let path = destination_holding("left-at-exact", b"0123456789abcdef");
+
+        assert_eq!(left_at(&path, 16).as_deref(), Some("0123456789abcdef"));
+    }
+
+    /// CRED-11: a destination one byte past the budget is passed over rather than truncated, so
+    /// the scan never judges half a file.
+    #[test]
+    fn a_destination_one_byte_past_the_budget_is_not_read() {
+        let path = destination_holding("left-at-over", b"0123456789abcdefg");
+
+        assert_eq!(left_at(&path, 16), None);
+    }
+
+    /// CRED-11: a file that is text with a byte that is not UTF-8 after a credential is still
+    /// scanned, with the bad byte replaced and the credential intact.
+    #[test]
+    fn a_destination_with_a_byte_that_is_not_text_is_decoded_with_the_rest_kept() {
+        // The documented AWS example key, split so the source holds no whole key.
+        let declared = format!("AWS_ACCESS_KEY_ID={}{}\n", "AKIA", "IOSFODNN7EXAMPLE");
+        let mut held = declared.clone().into_bytes();
+        held.push(0xff);
+        let path = destination_holding("left-at-lossy", &held);
+
+        assert_eq!(left_at(&path, 1024), Some(format!("{declared}\u{FFFD}")));
     }
 }

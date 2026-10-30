@@ -110,6 +110,18 @@ longer than 4,000 characters is not put in the box, and neither is one written a
 conversation has read something untrusted, since words written over that conversation are not ones
 the planner could have held. Your line stays where it was, and a note says why.
 
+### In the desktop app
+
+The desktop app's message box has the same thing: the sparkles button beside the attach button, or
+Ctrl+Shift+E (⌘⇧E on macOS) in the box. The rewrite replaces the text in the box and nothing is sent
+until you send it. Escape, or **Put back mine** on the note under the box, returns to what you wrote,
+and **Stop** or Escape while the request is out leaves your text as it was. A rewrite is not put over
+text you changed while it was being made. The same lines leave the box alone as in the terminal: an
+empty box, a turn running, more than 4,000 characters, a rewrite that comes back empty or too long,
+and a conversation that has read something untrusted. A message that names an attached picture, a
+dropped file or a bot picked for it is left as written too, since a rewrite of words would lose the
+marker that stands for it.
+
 ## Editing the way vi does
 
 [`/config`](../reference/commands.md#config) chooses between the ordinary box and vi's editing keys,

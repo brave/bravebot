@@ -74,7 +74,8 @@ made deliberately.
 
 No session record is written, no title is written, and the directory the records would live in is
 not created. A session that ran incognito does not appear in the resume list and cannot be resumed,
-including by the session itself.
+including by the session itself. A run reading input lines ([CLI-36](cli.md#CLI-36)) holds its
+conversation in memory between turns and writes none of it.
 
 An ordinary session from before may still be resumed and read. It stops being updated for as long
 as the incognito session runs, so what is on disk afterwards is what the last ordinary session left

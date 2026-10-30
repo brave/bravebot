@@ -173,3 +173,14 @@
   font: var(--type-caption-strong);
   pointer-events: none;
 }
+
+/* The window when the page itself failed (DIAG-10). The card is the error card's, centred. */
+.window-fault {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: var(--leo-spacing-2xl);
+  background: var(--surface-app);
+  user-select: text;
+}
+.window-fault-card { width: min(520px, 100%); }

@@ -28,6 +28,7 @@ mod report;
 mod send;
 mod store;
 
+use bravebot_config::Managed;
 use bravebot_config::Settings;
 use bravebot_config::env_var::CRASH_REPORTS;
 use bravebot_config::install::{Install, installed_how};
@@ -101,7 +102,7 @@ pub fn start_with(process: Process, endpoint: Option<String>) {
         bravebot_agent::home::writable(),
         environment.as_deref(),
         endpoint,
-        Settings::written_crash_reports,
+        || answered(&Managed::load(), Settings::written_crash_reports),
     ) {
         begin(process, state, endpoint);
     }
@@ -127,6 +128,18 @@ fn plan(
         return None;
     }
     Some((state, endpoint))
+}
+
+/// What the settings say about reports: the managed layer's `false`, and otherwise the person's own
+/// file, which is not read once the managed layer has said no (CRASH-4).
+///
+/// The managed layer can only turn reports off, so its `false` outranks the person's `true` and
+/// nothing it writes turns them on.
+fn answered(managed: &Managed, own: impl FnOnce() -> Option<bool>) -> Option<bool> {
+    match managed.crash_reports_off() {
+        true => Some(false),
+        false => own(),
+    }
 }
 
 /// Whether reports are on, given what the person's settings file and the environment said.
@@ -192,6 +205,37 @@ mod tests {
         for loose in ["", "1", "false", "off", "no", " 0", "0 ", "00"] {
             assert!(enabled(None, Some(loose)), "{loose:?} turned reports off");
         }
+    }
+
+    fn managed_saying(text: &str) -> Managed {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let file = dir.path().join("managed.json");
+        std::fs::write(&file, text).expect("a managed file");
+        Managed::at(&file)
+    }
+
+    /// CRASH-4: a managed `crashReports: false` turns reports off whatever the person's file says,
+    /// and the person's file is not read once it has. Nothing the managed layer writes turns them
+    /// on. The faults this rejects are the person's `true` outranking the pin, the managed layer
+    /// having no say, and a managed `true` overriding the person's `false`.
+    #[test]
+    fn a_managed_false_outranks_the_persons_own_file() {
+        let off = managed_saying(r#"{"crashReports": false}"#);
+        let never = || -> Option<bool> { panic!("the person's file was read after a managed no") };
+        assert_eq!(answered(&off, never), Some(false));
+        assert!(!enabled(answered(&off, never), None));
+
+        let silent = managed_saying("{}");
+        assert_eq!(answered(&silent, || Some(true)), Some(true));
+        assert_eq!(answered(&silent, || Some(false)), Some(false));
+        assert_eq!(answered(&silent, || None), None);
+
+        let on = managed_saying(r#"{"crashReports": true}"#);
+        assert_eq!(answered(&on, || Some(false)), Some(false));
+        assert_eq!(answered(&on, || None), None);
+
+        let quoted = managed_saying(r#"{"crashReports": "false"}"#);
+        assert_eq!(answered(&quoted, || Some(true)), Some(true));
     }
 
     /// Each executable has a word of its own and each install channel has one, and no two share

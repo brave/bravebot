@@ -21,7 +21,7 @@ what a confined program cannot reach are under [Confinement](security.md#confine
 ```
 
 Variables to withhold from a program the agent runs, on top of bravebot's own credentials, which are
-withheld with no configuration at all. Those credentials are the signing key and its key id, and every
+withheld with no configuration at all. Those credentials are the signing key, its key id and the crash report submission URL, and every
 variable a [provider block](../customize/providers/openai-compatible.md) names in its `env` as the place a gateway's token is read from,
 so a gateway token held in `OPENROUTER_API_KEY` or in a name of your own is withheld without being
 listed here. A variable no provider block names is yours and stays. A block you add mid-session

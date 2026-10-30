@@ -13,6 +13,9 @@ pub(crate) const THEME_COMMAND: &str = "/theme";
 
 /// The line that opens the effort picker, or takes a level named after the word.
 pub(crate) const EFFORT_COMMAND: &str = "/effort";
+/// Picks one of the named option sets the model in force carries (BACKEND-45).
+pub(crate) const VARIANT_COMMAND: &str = "/variant";
+pub(crate) const VARIANT_OFF: &str = "off";
 
 /// The line that names the model the planner may consult, says which it may, or drops the choice.
 pub(crate) const ADVISOR_COMMAND: &str = "/advisor";
@@ -321,20 +324,8 @@ impl Command {
     /// stays narrow.
     pub fn typed_hint(&self) -> String {
         match self.name {
-            EFFORT_COMMAND => {
-                let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
-                    .iter()
-                    .map(|level| level.as_str())
-                    .collect();
-                format!("[{}]", levels.join(" | "))
-            }
-            SANDBOX_COMMAND => {
-                let modes: Vec<&str> = bravebot_sandbox::SandboxMode::ALL
-                    .iter()
-                    .map(|mode| mode.name())
-                    .collect();
-                format!("[{}]", modes.join(" | "))
-            }
+            EFFORT_COMMAND => format!("[{}]", effort_words().join(" | ")),
+            SANDBOX_COMMAND => format!("[{}]", sandbox_words().join(" | ")),
             LIMIT_COMMAND => format!("[<n>[k|m] | <n> credits | {LIMIT_OFF}]"),
             REVIEW_COMMAND => {
                 use crate::review_command::{COMMIT, PULL_REQUEST, SINCE, STAGED};
@@ -357,6 +348,22 @@ impl Command {
             _ => self.argument.to_string(),
         }
     }
+}
+
+/// The levels `/effort` takes, in the order the picker lists them.
+fn effort_words() -> Vec<&'static str> {
+    bravebot_aichat::protocol::Effort::ALL
+        .iter()
+        .map(|level| level.as_str())
+        .collect()
+}
+
+/// The modes `/sandbox` takes, in the order the picker lists them.
+fn sandbox_words() -> Vec<&'static str> {
+    bravebot_sandbox::SandboxMode::ALL
+        .iter()
+        .map(|mode| mode.name())
+        .collect()
 }
 
 /// What Enter on a command does while a turn is running, which turns on what the command touches.
@@ -395,8 +402,8 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 62] {
-    [
+pub fn commands() -> Vec<Command> {
+    vec![
         Command {
             name: STATUS_COMMAND,
             argument: "",
@@ -492,6 +499,12 @@ pub fn commands() -> [Command; 62] {
             argument: "[tag | auto]",
             description: t!(command_language),
             mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: VARIANT_COMMAND,
+            argument: "[name | off]",
+            description: t!(command_variant),
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: HELP_COMMAND,
@@ -815,18 +828,10 @@ pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
         return complete_word(OPEN_COMMAND, typed, &[OPEN_EDIT]);
     }
     if let Some(typed) = line.strip_prefix(EFFORT_COMMAND) {
-        let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
-            .iter()
-            .map(|level| level.as_str())
-            .collect();
-        return complete_word(EFFORT_COMMAND, typed, &levels);
+        return complete_word(EFFORT_COMMAND, typed, &effort_words());
     }
     let typed = line.strip_prefix(SANDBOX_COMMAND)?;
-    let modes: Vec<&str> = bravebot_sandbox::SandboxMode::ALL
-        .iter()
-        .map(|mode| mode.name())
-        .collect();
-    complete_word(SANDBOX_COMMAND, typed, &modes)
+    complete_word(SANDBOX_COMMAND, typed, &sandbox_words())
 }
 
 fn complete_word(command: &str, after: &str, words: &[&str]) -> Option<String> {
@@ -974,7 +979,7 @@ enum Acts {
 fn acts_on(command: &str) -> Acts {
     match command {
         ISSUE_COMMAND | PR_COMMAND => Acts::Link,
-        MODEL_COMMAND | EFFORT_COMMAND | ADVISOR_COMMAND => Acts::Choice,
+        MODEL_COMMAND | EFFORT_COMMAND | VARIANT_COMMAND | ADVISOR_COMMAND => Acts::Choice,
         NOTE_COMMAND | RENAME_COMMAND => Acts::NotesAndName,
         STYLE_COMMAND => Acts::Style,
         FORGET_TRUST_COMMAND => Acts::KeptAnswer,
@@ -1058,6 +1063,7 @@ const LEAVES_NOTES_AND_NAME_ALONE: &[&str] = &[
     SANDBOX_COMMAND,
     MODEL_COMMAND,
     EFFORT_COMMAND,
+    VARIANT_COMMAND,
     ADVISOR_COMMAND,
 ];
 
@@ -1108,6 +1114,7 @@ const LEAVES_THE_STYLE_ALONE: &[&str] = &[
     SANDBOX_COMMAND,
     MODEL_COMMAND,
     EFFORT_COMMAND,
+    VARIANT_COMMAND,
     ADVISOR_COMMAND,
 ];
 
@@ -1156,6 +1163,7 @@ const LEAVES_THE_KEPT_ANSWER_ALONE: &[&str] = &[
     SANDBOX_COMMAND,
     MODEL_COMMAND,
     EFFORT_COMMAND,
+    VARIANT_COMMAND,
     ADVISOR_COMMAND,
 ];
 
@@ -1274,6 +1282,41 @@ pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// The hint drawn after `/effort ` and `/sandbox `, and the words Tab completes there, both
+    /// offer the levels and modes the types list, in their order. The regression it rejects is a
+    /// word list that is written out again at one of the two sites and drifts from the other: a
+    /// level left out of the hint, or a mode Tab cannot finish.
+    #[test]
+    fn the_effort_and_sandbox_hints_and_completions_offer_the_same_words() {
+        let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
+            .iter()
+            .map(|level| level.as_str())
+            .collect();
+        let modes: Vec<&str> = bravebot_sandbox::SandboxMode::ALL
+            .iter()
+            .map(|mode| mode.name())
+            .collect();
+        assert_eq!(effort_words(), levels);
+        assert_eq!(sandbox_words(), modes);
+        for (command, words) in [(EFFORT_COMMAND, levels), (SANDBOX_COMMAND, modes)] {
+            let hint = commands()
+                .iter()
+                .find(|candidate| candidate.name == command)
+                .map(Command::typed_hint)
+                .unwrap_or_default();
+            assert_eq!(hint, format!("[{}]", words.join(" | ")), "{command} hint");
+            for word in words {
+                // The word without its last letter fits that word alone, so Tab finishes it.
+                let started = &word[..word.len() - 1];
+                assert_eq!(
+                    complete_argument(&format!("{command} {started}"), &[]),
+                    Some(format!("{command} {word}")),
+                    "{command} completes {word}"
+                );
+            }
+        }
+    }
+
     /// Every command that can wait is placed against what a waiting line could change in the commands
     /// that act on a record's link, on the choice a request is built with and on the notes and the
     /// name a record holds (CMD-8). The three rules
@@ -1323,6 +1366,7 @@ mod tests {
             (GOAL_COMMAND, false, true, true, true, true),
             (MODEL_COMMAND, false, true, false, false, false),
             (EFFORT_COMMAND, false, true, false, false, false),
+            (VARIANT_COMMAND, false, true, false, false, false),
             (ADVISOR_COMMAND, false, true, false, false, false),
             (RENAME_COMMAND, false, false, false, false, false),
             (NOTE_COMMAND, false, false, false, false, false),

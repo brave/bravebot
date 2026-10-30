@@ -191,7 +191,10 @@ fn accepted(directories: &[String], mut answer: impl FnMut(&str) -> Answer) -> O
 pub fn answered_by(mode: PermissionMode, directory: &Path) -> Option<TrustStore> {
     match mode {
         PermissionMode::Bypass => Some(trusting_the_workspace(directory)),
-        PermissionMode::Ask | PermissionMode::AcceptEdits | PermissionMode::Plan => None,
+        PermissionMode::Ask
+        | PermissionMode::AcceptEdits
+        | PermissionMode::Plan
+        | PermissionMode::Auto => None,
     }
 }
 

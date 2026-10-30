@@ -9,18 +9,6 @@ One `##` heading per file, the path as the scan prints it, then the issue, the i
 reason that issue gave. A file with two entries has two headings. Add an entry when a split issue
 says something stays; do not add one for a file that was split with nothing held back.
 
-## crates/tui/src/app.rs
-
-Issue #2442. `fetch_models` and `fetch_gateway_models` stay: the only `insert_trusted` calls in
-`app.rs` are in them, so they write the trust map. The trust and rules group stays too: `Answers`,
-`Rules`, `opening_trust`, `forget_trust`, and the add, close and change directory methods. Reason:
-they write the trust map, and `app.rs` otherwise holds no label gate.
-
-## crates/tui/src/state.rs
-
-Issue #2445. Every method that reads pasted or attached text stays in `state.rs`: the paste, drop
-and attachment methods. Reason: no decision about labelled content moves.
-
 ## crates/agent/src/turn.rs
 
 Issue #2100. Every block that calls a label gate stays: `collect_delegates`, `answer_the_turn`,
@@ -42,8 +30,8 @@ needs the review in `docs/development/reviewing-for-the-rule.md`.
 
 ## crates/cli/src/main.rs
 
-Issue #2099. The `Ok(outcome)` arm of `run_task` stays inline with its logic unchanged: it checks
-the reply against the output schema and picks the exit status from the result (CLI-28). The dispatch
-`match` in `main()` stays, because it is a table. The tests stay in `main.rs`'s `mod tests`, because
-the specs cite them by path in `verified-by:`. Reason: no decision about labelled content moves, and
-messages, endings and exit statuses stay as they were.
+Issue #2099. The `Ok(outcome)` arm of `run_and_report` stays inline with its logic unchanged: it
+checks the reply against the output schema and picks the exit status from the result (CLI-28). The
+dispatch `match` in `main()` stays, because it is a table. The tests stay in `main.rs`'s
+`mod tests`, because the specs cite them by path in `verified-by:`. Reason: no decision about
+labelled content moves, and messages, endings and exit statuses stay as they were.

@@ -118,6 +118,10 @@ fn ignored(settings: &Settings) -> Vec<Value> {
         "processorModel",
         settings.processor_ignored().collect(),
     ));
+    ignored.extend(named(
+        "commitMessage",
+        settings.commit_message_ignored().collect(),
+    ));
     ignored.extend(named("agent", settings.agent_ignored().collect()));
     ignored.extend(named("style", settings.style_ignored().collect()));
     ignored.extend(named(

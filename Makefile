@@ -1074,8 +1074,8 @@ app-installers-windows:
 # none of it is needed here.
 #
 # The package files carry no signature of their own: what is signed is the checksum each one is
-# published with, as it is for the Linux binaries. Serving them from the apt and dnf
-# repositories, whose metadata is signed, is the publish side's.
+# published with, as it is for the Linux binaries, and what a repository client checks is the
+# signed metadata over them, which the publish job writes and signs.
 
 # The assets' two architectures, and the name rpmbuild wants for each: an asset and its .deb
 # name agree, so a pair is the asset and its rpm name.

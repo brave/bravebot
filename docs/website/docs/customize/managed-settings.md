@@ -78,6 +78,10 @@ answered by this file and nothing else is consulted for it; these two take the s
 file gave, so somebody may ask for either where this file did not, and no file of theirs can lift it
 where it did.
 
+`"crashReports": false` turns crash reports off on the machine, whatever the user's own
+`~/.bravebot/settings.json` says. It can only turn them off: `true` is not read, and a value that is
+not a boolean is ignored. See [`crashReports`](configuration.md#crashreports).
+
 `"permissions": { "deny": [...], "ask": [...] }` are rules, written as they are in any settings file, and
 they are added to the rules every other file wrote. A deny rule here refuses on every session on the
 machine in every mode, and nothing in a checkout or in a person's own file removes it:

@@ -53,6 +53,8 @@ sentence the planner reads names none of them.
 
 A `run` line put to the person and not approved, by an answer of no, Ctrl-C or nobody being there
 to ask, is recorded as a refusal under `approval` saying the line was not approved and did not run.
+A question the auto mode's classifier did not allow is not a refusal: it is put to the person, and
+the `auto_mode` entry before it ([TRACE-7](#TRACE-7)) is what tells its no from the person's.
 Its `sandbox` entry, which names the mode the programs ran in, is written only once the line is
 approved, so a line that did not start is not recorded as having run.
 
@@ -84,6 +86,25 @@ not approve it is recorded the same way, as a refusal under `approval`. The entr
 `alias:tool`, the alias the person gave the server and the word on the list they vouched for, and
 says the call was not approved and the server was not called. A call a `deny` rule refuses was never
 put to a person and is recorded under `mcp_call` alone.
+
+Five questions that are not a tool call's own approval are recorded the same way, as a refusal under
+`approval`, when the person does not approve them. Each entry is fixed words and names the question
+only by what the driver called it, never by what it held:
+
+- A read held back for what looks like a credential, in `read_file`, in the lines around an edit
+  and in `read_git`, names the tool and says none of it was shown. It names neither the path nor
+  what was found.
+- Held-back output (`read_output`) and a vetted read (`vet_content`) name the tool and the
+  reference, `ref:N`, and say the bytes were kept back.
+- The tools an MCP server offers name the alias the person gave the server and say none of its
+  tools was offered.
+- Following an MCP server to the address its reply named names the alias and says the server was
+  not reached at the new address. The address is the server's own bytes and is not written.
+- Starting a language server names the language and says no server was started. It names neither
+  the program, its arguments nor the workspace.
+
+A question whose answer is already recorded, such as a path's reach or a host's grant, is not
+among them.
 
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
@@ -135,6 +156,11 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_core::policy::an_mcp_call_the_person_did_not_approve_is_a_refusal_under_approval`
 `verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::mcp::a_call_a_rule_refuses_is_not_recorded_as_one_the_person_did_not_approve`
+`verified-by: bravebot_core::policy::a_question_the_person_did_not_approve_is_a_refusal_under_approval`
+`verified-by: bravebot_agent::turn::a_read_the_person_does_not_agree_to_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_credential_in_history_is_held_back_until_the_person_agrees`
+`verified-by: bravebot_agent::mcp::a_tool_list_and_a_move_the_person_does_not_approve_are_recorded_as_refusals`
+`verified-by: bravebot_agent::lsp::a_language_server_the_person_does_not_approve_is_recorded_as_a_refusal`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
@@ -285,6 +311,13 @@ A language server's start that the mode answers ([LSP-5](tools/lsp.md#LSP-5)) is
 being asked about, since the policy decides nothing about one. Other prompts a mode answers, such
 as a fetch, are not named here.
 
+Each question put to the auto mode's classifier ([AUTO-8](auto-mode.md#AUTO-8)) is one entry under
+`auto_mode`, written before the question is answered. It names the model, the kind of question
+(`run` or `fetch`), the word the classifier gave and what the call cost, and holds no word of what it
+was shown or wrote. The `approval` entry after it says "answered by auto mode, nobody was asked" where
+the word was allow, and "no mode answered" otherwise. The first question about a URL is recorded this
+way in auto and in no other mode.
+
 Answers that were never a prompt already say so in their own entry: a rule in the settings file, a
 command the user vouched for, and the audited table.
 
@@ -299,6 +332,8 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 `verified-by: bravebot_agent::manifest::a_planned_write_names_what_answered_it`
 `verified-by: bravebot_agent::lsp::bypass_with_the_sandbox_off_starts_a_language_server_and_the_trail_names_the_mode`
 `verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`
+`verified-by: bravebot_agent::turn::auto_answers_a_confined_run_on_the_classifiers_allow_word_and_asks_the_person_otherwise`
+`verified-by: bravebot_agent::turn::auto_answers_a_fetch_on_the_classifiers_allow_word_and_asks_the_person_otherwise`
 
 <a id="TRACE-8"></a>
 ### TRACE-8: the trail says how each delegate ended and why

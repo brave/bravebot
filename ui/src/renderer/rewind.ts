@@ -78,10 +78,13 @@ export function undoRow(entries: readonly Entry[], points: readonly RewindPoint[
 /** A request the bridge answered with an error. The code is kept so a caller decides on it, not on the wording. */
 export class RequestFailed extends Error {
   readonly code: string
+  /** The bridge's own sentence, without the code in front of it. */
+  readonly reason: string
 
   constructor(code: string, message: string) {
     super(`${code}: ${message}`)
     this.code = code
+    this.reason = message
   }
 }
 

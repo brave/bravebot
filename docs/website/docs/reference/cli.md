@@ -652,8 +652,11 @@ already hold as many bytes as that cap). The event holds nothing the line said. 
 line is ignored, and a field a line's type does not use is skipped.
 
 The flags are refused with status 2 before stdin is read when `--input-format` names anything but
-`lines`, with `--mode manifest` and with `--incognito`, and when `--trust-input-lines` comes without
+`lines` and with `--mode manifest`, and when `--trust-input-lines` comes without
 `--input-format lines`.
+
+Under `--incognito` no record is written, so each turn is carried on from the conversation held in
+memory for as long as the process runs. Every result names no session.
 
 ## Continuing a session from a one-shot run
 
@@ -721,8 +724,8 @@ to draw the session on. Use `-p` for a run nobody watches.
 bravebot --handle-uri 'bravebot://open?dir=%2Fhome%2Fme%2Fproject&prompt=fix+the+failing+test'
 ```
 
-What a `bravebot://open` link runs. On Linux `install.sh` registers it, so opening such a link in a
-browser starts a terminal with this command. You do not type it.
+What a `bravebot://open` link runs. On Linux `install.sh` and on Windows `install.ps1` register it, so
+opening such a link in a browser starts a terminal with this command. You do not type it.
 
 A link carries two optional parameters, percent-encoded: `dir`, an absolute path, and `prompt`.
 Anything else in a link, a mode, a tool, a model or `dangerously-skip-permissions` among them,
@@ -737,7 +740,7 @@ refuses the whole link with the argument status, since a link has no say in how 
   The note goes when the box is emptied or the message is sent.
 
 Links are switched off by [`deepLinks`](../customize/configuration.md#deeplinks), and the installer
-registers nothing where `BRAVEBOT_NO_DEEP_LINKS` is set. macOS and Windows register nothing yet.
+registers nothing where `BRAVEBOT_NO_DEEP_LINKS` is set. macOS registers nothing yet.
 
 ## `--plain`
 

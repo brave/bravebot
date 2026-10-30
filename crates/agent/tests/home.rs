@@ -230,6 +230,7 @@ fn an_absent_home_names_no_profile_directory_for_a_tilde() {
 fn an_empty_home_is_treated_as_no_home_at_all() {
     let found = with_no_home(|| {
         // SAFETY: `with_no_home` holds the lock, and restores this along with the rest.
+        // state-home-kept: `with_no_home` has already cleared it
         unsafe { std::env::set_var("HOME", "") };
         bravebot_agent::home::directory()
     });

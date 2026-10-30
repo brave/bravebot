@@ -97,11 +97,34 @@ function Get-Item {
     }
 }
 
+# The link handler's keys, under the person's own `HKCU:\Software\Classes`. Each call is a line of
+# what was done and to which key, name and value, in order, so what the script wrote is read from
+# the log and a script that wrote a different key or a different value is not answered.
+function New-Item {
+    [CmdletBinding()] param([Parameter(Mandatory)][string]$Path, [switch]$Force)
+    if ($Path -notlike 'HKCU:\Software\Classes\bravebot\*') { throw "no stand-in for $Path" }
+    if ($env:DEEP_LINK_WRITE -eq 'denied') { throw 'Requested registry access is not allowed.' }
+    Add-Content -LiteralPath $env:DEEP_LINK_LOG -Value "new`t$Path"
+    [pscustomobject]@{}
+}
+
+function Remove-Item {
+    [CmdletBinding()] param([Parameter(Mandatory)][string]$LiteralPath, [switch]$Recurse, [switch]$Force)
+    if ($LiteralPath -notlike 'HKCU:*') { return Microsoft.PowerShell.Management\Remove-Item @PSBoundParameters }
+    if ($LiteralPath -ne 'HKCU:\Software\Classes\bravebot') { throw "no stand-in for $LiteralPath" }
+    Add-Content -LiteralPath $env:DEEP_LINK_LOG -Value "remove`t$LiteralPath"
+}
+
 function Set-ItemProperty {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$LiteralPath, [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string]$Value, [Parameter(Mandatory)][string]$Type)
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Value, [Parameter(Mandatory)][string]$Type)
+    if ($LiteralPath -like 'HKCU:\Software\Classes\bravebot*') {
+        if ($env:DEEP_LINK_WRITE -eq 'denied') { throw 'Requested registry access is not allowed.' }
+        Add-Content -LiteralPath $env:DEEP_LINK_LOG -Value "set`t$LiteralPath`t$Name`t$Type`t$Value"
+        return
+    }
     if ($LiteralPath -ne 'HKCU:\Environment') { throw "no stand-in for $LiteralPath" }
     if ($env:REGISTRY_WRITE -eq 'denied') { throw 'Requested registry access is not allowed.' }
     Add-Content -LiteralPath $env:REGISTRY_LOG -Value "write $Name"
@@ -267,6 +290,8 @@ struct Install<'a> {
     stored_path: Option<String>,
     /// Whether the stand-in for writing the registry refuses.
     registry_write_denied: bool,
+    /// Whether the stand-in for writing the link handler's keys refuses.
+    deep_link_write_denied: bool,
     /// Whether this run made the directories and removes them when it is done.
     owned: bool,
 }
@@ -286,6 +311,9 @@ struct Outcome {
     /// Every read and write the script made of the user's stored environment, in order, each as
     /// `read <name> <options>` or `write <name>`.
     registry: Vec<String>,
+    /// What the script did to the link handler's keys, in order, each as `new`, `remove` or `set`
+    /// followed by the key, and for `set` the name, the kind and the value, separated by tabs.
+    deep_link: Vec<String>,
     /// The user's stored `Path` after the run, and the kind it was last written as.
     stored_path_after: Option<String>,
     stored_kind: Option<String>,
@@ -320,6 +348,7 @@ impl<'a> Install<'a> {
             on_path: true,
             stored_path: None,
             registry_write_denied: false,
+            deep_link_write_denied: false,
             owned,
         }
     }
@@ -364,6 +393,11 @@ impl<'a> Install<'a> {
 
     fn with_registry_write_denied(mut self) -> Self {
         self.registry_write_denied = true;
+        self
+    }
+
+    fn with_deep_link_write_denied(mut self) -> Self {
+        self.deep_link_write_denied = true;
         self
     }
 
@@ -413,6 +447,7 @@ impl<'a> Install<'a> {
         let path = self.session_path_at_start();
         let registry = self.root.join("registry");
         let registry_log = self.root.join("log").join("registry");
+        let deep_link_log = self.root.join("log").join("deep-link");
         let session_path = self.root.join("log").join("session-path");
         if let Some(stored) = &self.stored_path {
             std::fs::write(registry.join("Path"), stored).expect("store a user path");
@@ -433,6 +468,15 @@ impl<'a> Install<'a> {
             .env("ASKED", &asked)
             .env("REGISTRY", &registry)
             .env("REGISTRY_LOG", &registry_log)
+            .env("DEEP_LINK_LOG", &deep_link_log)
+            .env(
+                "DEEP_LINK_WRITE",
+                if self.deep_link_write_denied {
+                    "denied"
+                } else {
+                    "allowed"
+                },
+            )
             .env("SESSION_PATH", &session_path)
             .env(
                 "REGISTRY_WRITE",
@@ -459,17 +503,23 @@ impl<'a> Install<'a> {
             .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1");
         match self.profile {
             Profile::Home => {
-                command.env("HOME", self.profile_dir());
+                command
+                    .env("HOME", self.profile_dir())
+                    .env_remove("BRAVEBOT_HOME");
             }
             // The script reads HOME first, so a HOME that names something would win. A shell on
             // Windows that sets none is what an empty one stands for.
             Profile::Windows => {
                 command
                     .env("HOME", "")
+                    .env_remove("BRAVEBOT_HOME")
                     .env("USERPROFILE", self.profile_dir());
             }
             Profile::Neither => {
-                command.env("HOME", "").env("USERPROFILE", "");
+                command
+                    .env("HOME", "")
+                    .env_remove("BRAVEBOT_HOME")
+                    .env("USERPROFILE", "");
             }
         }
         if let Some(directory) = &self.install_dir {
@@ -506,6 +556,7 @@ impl<'a> Install<'a> {
             asked: lines(&asked),
             in_working_directory: entries(&working),
             registry: lines(&registry_log),
+            deep_link: lines(&deep_link_log),
             stored_path_after: std::fs::read_to_string(registry.join("Path")).ok(),
             stored_kind: std::fs::read_to_string(registry.join("Path.kind")).ok(),
             session_path_before: std::fs::read_to_string(format!(
@@ -1140,6 +1191,7 @@ fn nothing_the_environment_names_chooses_where_the_script_downloads_from() {
         "BRAVEBOT_HOME",
         "INSTALL_DIR",
         "BRAVEBOT_NO_MODIFY_PATH",
+        "BRAVEBOT_NO_DEEP_LINKS",
         "LOCALAPPDATA",
         "PATH",
         "PROCESSOR_ARCHITEW6432",
@@ -1593,4 +1645,125 @@ fn a_destination_that_cannot_be_replaced_is_refused_and_left_as_it_was() {
     );
     assert_eq!(outcome.stored_path_after.as_deref(), Some("/opt/one"));
     assert_eq!(outcome.session_path, outcome.session_path_before);
+}
+
+/// The three keys a `bravebot://` handler is made of, as the script writes them for a binary at
+/// `binary`: the scheme's key emptied first, then the key holding the command, then the scheme's
+/// name, its marker as a URL protocol, and the command that runs the binary with the link as its
+/// one argument.
+fn link_entry(binary: &Path) -> Vec<String> {
+    let key = r"HKCU:\Software\Classes\bravebot";
+    vec![
+        format!("remove\t{key}"),
+        format!("new\t{key}\\shell\\open\\command"),
+        format!("set\t{key}\t(default)\tString\tURL:bravebot"),
+        format!("set\t{key}\tURL Protocol\tString\t"),
+        format!(
+            "set\t{key}\\shell\\open\\command\t(default)\tString\t\"{}\" --handle-uri \"%1\"",
+            binary.display()
+        ),
+    ]
+}
+
+/// LINK-6: an install writes the URL protocol entry whose command runs the installed binary with
+/// the link as its only argument, quoted so a path with a space is one word. A command with no
+/// `--handle-uri`, an unquoted link or path, or a scheme key left without its `URL Protocol` value
+/// would register something that opens no session.
+#[test]
+fn the_install_registers_the_binary_as_the_handler_for_bravebot_links() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("link-handler");
+    let install = Install::new(tools, "link-handler");
+    let outcome = install.run_release(&release);
+    assert_installed(&install, &outcome, &release);
+
+    assert_eq!(outcome.deep_link, link_entry(&install.bin().join(BINARY)));
+}
+
+/// LINK-6: the switch that stops the installer registering a link handler on Linux stops it here,
+/// and the binary is installed all the same.
+#[test]
+fn nothing_is_registered_where_links_are_switched_off() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("link-switched-off");
+    let install =
+        Install::new(tools, "link-switched-off").with_environment("BRAVEBOT_NO_DEEP_LINKS", "1");
+    let outcome = install.run_release(&release);
+    assert_installed(&install, &outcome, &release);
+
+    assert_eq!(outcome.deep_link, Vec::<String>::new());
+}
+
+/// LINK-6: a path holding a character the command line would read as something else is not written
+/// into a command, and the install is still made. A quote ends the quoted path early, so what
+/// follows it would be run as arguments the link did not choose, and a percent sign is read by the
+/// shell as the start of a substitution.
+#[test]
+fn a_path_a_command_line_would_misread_is_not_written_into_the_handler() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("link-misread");
+    for (name, leaf) in [("link-quote", "bin\"two"), ("link-percent", "bin%1%two")] {
+        let directory = scratch_root().join(name).join(leaf);
+        let install = Install::new(tools, name).installing_to(Some(directory.clone()));
+        let outcome = install.run_release(&release);
+
+        assert!(outcome.succeeded, "{name}: {}", outcome.output);
+        assert_eq!(
+            read(&directory.join(BINARY)).as_deref(),
+            Some(&release[..]),
+            "{name}: the executable was not installed"
+        );
+        assert_eq!(
+            outcome.deep_link,
+            Vec::<String>::new(),
+            "{name}: a handler was registered for the path"
+        );
+        assert!(
+            outcome.output.contains("links were not registered"),
+            "{name}: {}",
+            outcome.output
+        );
+    }
+}
+
+/// LINK-6: a registry the person's account cannot write does not undo the install, and the script
+/// says the links were not registered.
+#[test]
+fn a_refused_link_registration_leaves_the_install_and_says_so() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let release = brave("link-denied");
+    let install = Install::new(tools, "link-denied").with_deep_link_write_denied();
+    let outcome = install.run_release(&release);
+    assert_installed(&install, &outcome, &release);
+
+    assert!(
+        outcome
+            .output
+            .contains("could not register bravebot:// links")
+            && outcome.output.contains("Requested registry access"),
+        "{}",
+        outcome.output
+    );
+}
+
+/// LINK-6: an install that is refused registers no handler, so a link is never handed to a binary
+/// that was not installed.
+#[test]
+fn a_refused_install_registers_no_handler() {
+    let Some(tools) = setup() else {
+        return;
+    };
+    let install = Install::new(tools, "link-refused");
+    let outcome = install.run_release(&binary(None, None));
+
+    assert!(!outcome.succeeded, "installed: {}", outcome.output);
+    assert_eq!(outcome.deep_link, Vec::<String>::new());
 }

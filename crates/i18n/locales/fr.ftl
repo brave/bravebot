@@ -141,6 +141,7 @@ mode-ask = ◇ demande avant d'agir
 mode-accept-edits = ⏵ modifications acceptées
 mode-plan = ⏸ mode plan
 mode-bypass = ⏵⏵ permissions contournées
+mode-auto = ⏵⏵ mode automatique
 
 cli-options-heading = Options :
 cli-option-file = Inclure un fichier de l'espace de travail comme contexte (répétable)
@@ -199,6 +200,12 @@ cli-accept-edits-not-with-bypass =
     --accept-edits est refusé avec { $flag } : le second répond à toutes les questions du premier et à d'autres, précisez donc lequel vous voulez
 cli-accept-edits-needs-a-run =
     --accept-edits s'applique à une exécution ponctuelle, comme -p "tâche". Une session a la touche de mode
+cli-auto-not-with-bypass =
+    --auto est refusé avec { $flag } : le second répond à toutes les questions du premier et à d'autres, précisez donc lequel vous voulez
+cli-auto-not-with-accept-edits =
+    --auto est refusé avec --accept-edits : auto répond aussi à une écriture comme le fait l'acceptation des modifications, donnez donc --auto seul
+cli-auto-needs-a-run =
+    --auto s'applique à une exécution ponctuelle, comme -p "tâche". Une session a la touche de mode
 cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
@@ -215,6 +222,10 @@ cli-bypass-and-sandbox-disagree =
 cli-option-accept-edits =
     Pour une exécution ponctuelle, écrire les fichiers sans demander. Les commandes, les
     récupérations et une écriture qui créerait un identifiant restent refusées
+cli-option-auto =
+    Pour une exécution ponctuelle, laisser un classificateur répondre pour une commande que le bac à
+    sable confine et pour la première récupération d'une URL, et écrire les fichiers sans demander.
+    Tout ce que le classificateur n'autorise pas est refusé, de même qu'une écriture qui créerait un identifiant
 cli-option-help = Afficher ce message
 cli-option-version = Afficher la version
 
@@ -307,7 +318,6 @@ cli-goal-failed = l'objectif n'a pas pu être vérifié : { $problem }
 cli-output-schema-needs-a-path = --output-schema demande le chemin d'un fichier de schéma JSON
 cli-input-format-unknown = --input-format accepte lines
 cli-trust-input-lines-needs-lines = --trust-input-lines demande --input-format lines
-cli-input-lines-not-with-incognito = --input-format lines ne va pas avec --incognito : chaque tour est poursuivi à partir de l'enregistrement de la session, et une exécution incognito n'en écrit aucun
 cli-input-lines-not-with-a-manifest = --input-format lines ne va pas avec --mode manifest : une exécution planifiée a une seule tâche et aucun tour à ajouter
 cli-input-lines-no-prompt = aucune ligne prompt n'est arrivée avant la fin de l'entrée
 cli-input-lines-session-lost = la session que cette exécution poursuit n'est plus lisible, donc le tour n'a pas été exécuté : { $problem }
@@ -558,6 +568,9 @@ doctor-gateway-keys-unreadable =
 doctor-ended = le rapport ci-dessus contient un problème qui fait échouer cette exécution
 doctor-gateway-models-absent = aucun configuré (la passerelle est interrogée)
 doctor-gateway-models-compiled = { $models } (intégrés, ce service n'ayant pas de liste ; nommez tout autre modèle de la même façon)
+doctor-gateway-lists-label = listes de modèles
+doctor-gateway-whitelist = la liste blanche nomme { $count } des modèles listés par la passerelle, et les autres sont masqués
+doctor-gateway-blacklist = la liste noire masque { $count } des modèles listés par la passerelle
 doctor-region = région
 doctor-profile = profil
 doctor-profile-absent = identifiants par défaut
@@ -619,6 +632,9 @@ doctor-settings-plan-ignored =
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-processor-ignored =
     processorModel dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-commit-message-ignored =
+    commitMessage dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-agent-ignored =
     agent dans { $path } n'est pas appliqué : il n'est lu que depuis
@@ -2665,6 +2681,7 @@ command-request = Montrer la dernière requête envoyée au modèle, et l'origin
 command-model = Choisir avec quel modèle réfléchir
 command-theme = Choisir quel thème habille l'interface
 command-effort = Choisir l'effort de réflexion avant de répondre
+command-variant = Choisir un jeu d'options nommé que le modèle propose, les lister, ou abandonner le choix
 command-advisor = Nommer le modèle que le planificateur peut consulter, dire lequel, ou abandonner le choix
 command-style = Choisir la manière dont le planificateur répond : lister les styles, en choisir un, ou effacer le choix
 command-mode = Garder une compétence appliquée à chaque tour : lister, choisir ou quitter
@@ -2959,6 +2976,7 @@ session-cd-needs-a-path = /cd demande un répertoire, comme /cd ~/projets/autre
 session-directory-changed = travail désormais dans { $directory }, et approuvé pour cette session
 # Le mode où se trouvait la personne, retiré par une couche de réglages du répertoire où elle est allée.
 session-bypass-made-unreachable = permissions.bypassUnreachable est défini ici : le contournement est désactivé et la session demande de nouveau
+session-bg-auto = /bg est refusé en mode automatique, car une session que personne ne regarde n'a personne à qui poser la question lorsque le classificateur ne l'autorise pas. Passez d'abord dans un autre mode, ou utilisez une exécution unique.
 session-bg-bypass = /bg est refusé en contournement, car une session que personne ne surveille ne tourne pas dans un mode qui répond à toutes les questions. Changez de mode d'abord, ou utilisez une exécution ponctuelle.
 session-bg-option-lost = /bg est refusé, car cette session a été démarrée avec { $flag }, que la session en arrière-plan ne reçoit pas. Démarrez une session sans cette option pour utiliser /bg.
 session-bg-sandbox-moved = /bg est refusé, car /sandbox a placé cette session en mode { $mode }, et une session en arrière-plan démarre en mode { $settled }. Lancez /sandbox { $settled } d'abord pour utiliser /bg.
@@ -3020,6 +3038,12 @@ session-no-such-language = aucun catalogue pour { $language } ; les catalogues s
 session-no-such-effort = aucun niveau d'effort nommé { $effort } ; essayez /effort pour la liste
 session-effort-not-read = ce modèle ne lit aucun niveau d'effort ; les requêtes n'en portent pas
 session-effort-kept-for-account = une session ChatGPT garde le niveau d'effort avec lequel elle a commencé, { $began }, donc { $chosen } s'applique à partir de la session suivante, que /clear commence
+session-variant-set = les requêtes vers ce modèle portent la variante { $variant } dès le prochain tour
+session-variant-dropped = aucune variante ; les requêtes ne portent que les options propres du modèle
+session-variant-in-force = la variante { $variant } est active ; ce modèle propose { $names }
+session-variant-listed = aucune variante n'est active ; ce modèle propose { $names }
+session-variant-none-offered = { $model } ne propose aucune variante
+session-no-such-variant = ce modèle n'a pas de variante nommée { $variant } ; il propose { $names }
 session-advisor-set = le planificateur peut consulter { $model } dès le prochain tour, ce qui dépense les jetons de ce modèle
 session-advisor-in-force = le planificateur peut consulter { $model }
 session-advisor-none = aucun conseiller ; essayez /advisor suivi d'un nom de modèle

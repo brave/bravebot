@@ -33,10 +33,13 @@ was, and the conversation budget stays where it was too.
 | the entry | `name` | something friendlier to show than the id |
 | | `env` | variable names that may hold the bearer token, tried in order |
 | | `models` | the models to offer, keyed by the name the gateway knows each by |
+| | `whitelist` | model ids; of a fetched roster, only these are offered |
+| | `blacklist` | model ids; of a fetched roster, these are not offered |
 | `options` | `baseURL` | where requests go |
 | | `contextWindow` | the context window of every model that states none, in prompt tokens (bravebot's own field) |
 | | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated (bravebot's own field) |
 | | `idleTimeoutMs` | how long a reply may go quiet before it is given up on, in milliseconds, 120000 where unstated (bravebot's own field) |
+| | `setCacheKey` | `true` to send a `prompt_cache_key` in each chat-completions request, the same value for every request of a session and another value in the next session, for a service that routes by it to serve a session's prompt cache. Off where unstated, since it lets the host tie a session's requests together (bravebot's own field) |
 | | `apiKey` | a token written into the file directly |
 | | `headers` | extra request headers, keyed by header name |
 | a model | `limit.context` | that model's context window, in prompt tokens |
@@ -194,6 +197,12 @@ Nothing is capped. Ordering does that work instead: the model a session would us
 rest are sorted by name. A listing that cannot be fetched contributes nothing and takes nothing away
 from the rest of the roster.
 
+**`whitelist` and `blacklist` narrow a fetched roster** without listing every model. Each is an array
+of ids as the gateway names them. The whitelist is applied first and the blacklist then removes from
+what remains, and the window a gateway reported is kept for each model left. An id the gateway does not
+list changes nothing. Neither list applies to a block that lists `models`, which is offered as
+written. `bravebot doctor` says how many ids each list names. Importing an opencode entry copies both.
+
 ### Naming one
 
 Where one model is reachable through more than one service, put the gateway's id in front of the name
@@ -229,6 +238,36 @@ worse one it silently routes somewhere you did not intend.
 
 It cannot replace what the turn itself built. The settings file names a destination, not what was
 asked.
+
+### Switching between sets of options with `variants`
+
+A model may carry `variants`: named sets of the same kind of fields `options` holds, which you pick
+between during a session.
+
+```json
+{
+  "provider": {
+    "my-gateway": {
+      "options": { "baseURL": "https://gateway.example/v1" },
+      "models": {
+        "my-model": {
+          "variants": {
+            "deep": { "reasoningEffort": "high", "textVerbosity": "low" },
+            "quick": { "reasoningEffort": "low" },
+            "retired": { "disabled": true }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`/variant` lists the names the model in force offers, `/variant deep` picks one, and `/variant off`
+drops the pick. Nothing is in force until you type a name, and the pick lasts for the session. The
+chosen set is merged into the request as the model's `options` are, over them where both set a field,
+and never over what the turn built, so the level `/effort` chose is the one sent. A variant marked
+`"disabled": true` is not listed. A name the model has no variant for adds nothing.
 
 ### Showing a model's thinking
 

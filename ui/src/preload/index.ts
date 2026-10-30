@@ -28,6 +28,7 @@ import type { Summon } from '../shared/summons'
 import type { Listing, OpenOutcome, FilePreview, FileSearch, FileAttachment } from '../shared/files'
 import type { Appearance } from '../shared/theme'
 import type { Experience } from '../shared/experience'
+import type { PageFault } from '../shared/window-fault'
 import type { Drop, DropOutcome } from '../shared/drops'
 import type { Paste, PasteOutcome } from '../shared/pastes'
 import type { Composed, SaveOutcome } from '../shared/bug-report'
@@ -204,6 +205,22 @@ const api = {
    */
   relaunch(): Promise<boolean> {
     return ipcRenderer.invoke('bravebot:app:relaunch') as Promise<boolean>
+  },
+
+  /**
+   * Say that the page failed, so the agent can write it in the diagnostic log (DIAG-10). Nothing
+   * comes back: the page cannot ask what was written.
+   */
+  reportFault(fault: PageFault): void {
+    ipcRenderer.send('bravebot:fault', fault)
+  },
+
+  /**
+   * Load the page again. The window refuses every navigation, so the page cannot do this itself,
+   * and a packaged app has no menu item for it.
+   */
+  reloadWindow(): void {
+    ipcRenderer.send('bravebot:window:reload')
   },
 
   /** Listen for appearance changes written through the main process. */

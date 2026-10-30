@@ -562,6 +562,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             remembering: task.remembering.as_deref(),
             budget_left: None,
             advising: None,
+            classifying: None,
             messaging: None,
             delegated: false,
             confined_to: None,
@@ -2858,7 +2859,7 @@ where
     } else {
         let mut parts = vec![Part::Text { text: said }];
 
-        for index in 0..task.attachments.len() {
+        for (index, attachment) in task.attachments.iter().enumerate() {
             let key = format!("attachment_{index}");
             // The routing table was precommitted from these same indices.
             // nosemgrep: trailofbits.rs.panic-in-function-returning-result.panic-in-function-returning-result
@@ -2870,7 +2871,7 @@ where
             if left_out_by_rule(workspace, policy, reporter, &mut notices, &path) {
                 continue;
             }
-            let media = task.attachments[index].media.clone();
+            let media = attachment.media.clone();
 
             // Attaching the file is the grant, exactly as naming one with `@` is. Recorded before
             // the read so the read sees it, and under the name the read will ask about.
@@ -3650,6 +3651,12 @@ where
             } else {
                 None
             };
+            // Taken only in auto: it is the one mode that reads them, and the scan is over the whole
+            // conversation.
+            let typed = match task.permission_mode.get() == crate::PermissionMode::Auto {
+                true => conversation.typed_by_the_person(),
+                false => Vec::new(),
+            };
             let (quarantine, reads) = conversation.for_a_tool();
             // Used only while the context is what it was when the read ran. A call after one
             // whose result the planner was shown runs under the context that result left, and
@@ -3668,6 +3675,7 @@ where
                         quarantine,
                         reads,
                         &request.messages,
+                        &typed,
                     ),
                     &mut asking,
                     reporter,
@@ -5825,6 +5833,43 @@ mod tests {
             );
 
             assert_eq!(carried, [carried_by(&session), carried_by(&session)]);
+        }
+
+        /// A gateway whose block set `options.setCacheKey` is cached by the key its requests carry
+        /// (BACKEND-69), so every round of a turn on it carries the identifier of the turn's session.
+        /// The regressions it rejects are a gateway backend that is not given the session, and a
+        /// request arm that passes no session where it has one.
+        #[test]
+        fn every_round_of_a_turn_on_a_cache_keyed_gateway_carries_the_identifier_of_its_session() {
+            let session = AccountSession::begin();
+            let mut config = configured(None);
+            let root = serde_json::json!({"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://gw.example.invalid/v1",
+                    "apiKey": "x",
+                    "setCacheKey": true
+                },
+                "models": {"m": {}}
+            }}});
+            config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+
+            let taken = take(
+                "gateway-session-rounds",
+                &config,
+                Task::new("look it up")
+                    .with_model(Some("gw/m".into()))
+                    .in_account_session(session.clone()),
+                vec![
+                    said("", &[("read_file", r#"{"path":"absent.txt"}"#)], None),
+                    said("done", &[], None),
+                ],
+            );
+            taken.outcome.expect("the turn answered");
+
+            assert_eq!(
+                scripted::sessions(),
+                [carried_by(&session), carried_by(&session)]
+            );
         }
 
         /// Two turns of a session are the requests the service is meant to tie together, and two

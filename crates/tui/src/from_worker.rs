@@ -152,6 +152,7 @@ mod tests {
                 url: "https://example.test/".into(),
                 host: "example.test".into(),
                 redirected_from: None,
+                classified: Default::default(),
             }),
             ToMain::Ask(bravebot_core::ask::Asking::default()),
         ];

@@ -7,6 +7,8 @@
 # where the lists themselves merge cleanly, and a count nothing reads is wrong quietly. Count the
 # lines, or read the warnings check-spec prints.
 
+docs/specs/auto-mode.md:AUTO-7: the planner is told nothing about what decided, and the classifier's reason is neither kept nor shown
+docs/specs/auto-mode.md:AUTO-9: a delegate is answered as the turn that spawned it, and the classifier is not consulted for it
 docs/specs/background-sessions.md:BG-1: a background session is an ordinary session in a process the terminal does not own
 docs/specs/background-sessions.md:BG-10: a reply is the next prompt and answers nothing that was asked
 docs/specs/background-sessions.md:BG-14: a background session in a git repository works in a checkout of its own

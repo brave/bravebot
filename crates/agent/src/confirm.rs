@@ -289,6 +289,29 @@ pub struct RunRequest {
     /// could offer two or more keys, in a session that may write the answer down. The acting layer
     /// reads the answer against this list and not against what was drawn.
     pub key_choice: Option<Box<KeyChoice>>,
+    /// What the auto mode's classifier said about this line, or that it was not asked (AUTO-3).
+    ///
+    /// A closed word that the driver reads and a mode other than auto ignores, so a word on a
+    /// request cannot answer in a session that did not ask for a classifier.
+    pub classified: Classified,
+}
+
+/// What the auto mode's classifier said about one question (AUTO-6).
+///
+/// Two answers and a third for "not asked". Everything the classifier could say other than the
+/// allow word is [`Classified::NotAllowed`], so a block, an unreadable reply, a timeout, an error and
+/// a reply labelled quarantined cannot be told apart by anything that reads this, and none of them
+/// answers the question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Classified {
+    /// The classifier was not consulted: another mode, a question it does not answer, or a context
+    /// it must not be shown.
+    #[default]
+    NotAsked,
+    /// The classifier was consulted and said to allow.
+    Allowed,
+    /// The classifier was consulted and said anything else.
+    NotAllowed,
 }
 
 /// What a confined `run` is held to, in the words a prompt needs.
@@ -597,6 +620,7 @@ impl RunRequest {
             reach_record: None,
             unconfined: false,
             key_choice: None,
+            classified: Classified::NotAsked,
             plan: bravebot_core::command::Plan {
                 line: String::new(),
                 directory: std::path::PathBuf::from(directory),
@@ -1006,6 +1030,9 @@ pub struct FetchRequest {
     /// every front end words it as a redirect and not as a fresh fetch. `host` is then a server's
     /// own bytes, drawn for the person to read, and `url` is the one that was approved.
     pub redirected_from: Option<String>,
+    /// What the auto mode's classifier said about fetching this URL, or that it was not asked.
+    /// Never asked for a redirect hop (AUTO-3).
+    pub classified: Classified,
 }
 
 impl FetchRequest {
@@ -3577,6 +3604,7 @@ mod tests {
             reach_record: None,
             unconfined: false,
             key_choice: None,
+            classified: Classified::NotAsked,
         };
         let offered = request(
             a_listed_line(),

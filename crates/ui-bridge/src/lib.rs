@@ -46,6 +46,7 @@ pub mod connectors;
 pub mod control_link;
 pub mod definitions;
 pub mod emit;
+pub mod enhance;
 pub mod fork;
 pub mod hooks;
 #[cfg(unix)]
@@ -62,6 +63,7 @@ pub mod store;
 pub mod turn;
 pub mod update_status;
 pub mod view;
+pub mod window_fault;
 pub mod wire;
 pub mod workers;
 

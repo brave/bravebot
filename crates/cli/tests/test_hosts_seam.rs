@@ -99,7 +99,16 @@ const NOT_WALKED: [&str; 5] = [
     "__pycache__",
 ];
 
-/// Every file under `directory` that `keep` accepts, by path, depth first.
+/// Whether `entry` is a directory a walk goes into, judged by the entry itself and not what a link
+/// points at. `make init` links each skill under `.agents/skills`, `.claude/skills` and others to its
+/// directory under `agents/skills`, and a walk that followed them would read each file there once
+/// more for each link.
+fn is_real_directory(entry: &std::fs::DirEntry) -> bool {
+    entry.file_type().is_ok_and(|kind| kind.is_dir())
+}
+
+/// Every file under `directory` that `keep` accepts, by path, depth first. A link to a directory is
+/// neither walked nor kept.
 fn files_where(
     directory: &std::path::Path,
     keep: &impl Fn(&std::path::Path) -> bool,
@@ -112,7 +121,7 @@ fn files_where(
         let path = entry.path();
         let name = entry.file_name();
         if path.is_dir() {
-            if !NOT_WALKED.iter().any(|skipped| name == *skipped) {
+            if is_real_directory(&entry) && !NOT_WALKED.iter().any(|skipped| name == *skipped) {
                 found.extend(files_where(&path, keep));
             }
         } else if keep(&path) {
@@ -517,9 +526,9 @@ fn holds_a_command(path: &std::path::Path) -> bool {
         || path.extension().is_some_and(|extension| extension == "rs"))
 }
 
-/// Every file the walk for commands reads, by path relative to the workspace and its text. A file
-/// with a NUL byte in it is an image, an archive or a font, and holds no command.
-fn command_files() -> Vec<(String, String)> {
+/// Every file under `directory` the walk for commands reads, sorted. A link to a directory is
+/// neither walked nor read.
+fn command_paths(directory: &std::path::Path) -> Vec<PathBuf> {
     fn walk(directory: &std::path::Path, found: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(directory) else {
             return;
@@ -532,7 +541,7 @@ fn command_files() -> Vec<(String, String)> {
                     .iter()
                     .chain(NOT_WALKED_FOR_COMMANDS.iter())
                     .any(|skipped| name == *skipped);
-                if !skipped {
+                if is_real_directory(&entry) && !skipped {
                     walk(&path, found);
                 }
             } else if holds_a_command(&path) {
@@ -541,9 +550,15 @@ fn command_files() -> Vec<(String, String)> {
         }
     }
     let mut paths = Vec::new();
-    walk(&workspace(), &mut paths);
+    walk(directory, &mut paths);
     paths.sort();
     paths
+}
+
+/// Every file the walk for commands reads, by path relative to the workspace and its text. A file
+/// with a NUL byte in it is an image, an archive or a font, and holds no command.
+fn command_files() -> Vec<(String, String)> {
+    command_paths(&workspace())
         .iter()
         .filter_map(|path| {
             let bytes = std::fs::read(path).ok()?;
@@ -1396,6 +1411,72 @@ fn the_command_walk_reads_a_file_whatever_it_is_called_and_leaves_out_what_the_c
     assert!(
         !paths.iter().any(|path| path.ends_with(".rs")),
         "a Rust source was read"
+    );
+}
+
+/// `make init` links each skill under `.claude/skills` and others to its directory under
+/// `agents/skills`. The fixture links both a directory of skills and one skill. A walk that followed
+/// those links would read each file under `agents/skills` once more for each link, and the guard that
+/// counts the commands that may name a seam would fail in every checkout that ran `make init`. The
+/// fixture also links a single file, which the walks still read, so a walk that skipped every link
+/// fails here.
+#[cfg(unix)]
+#[test]
+fn the_walks_read_a_linked_directory_only_where_it_is_and_read_a_linked_file() {
+    // Under the workspace, because the command walk names a file by its path relative to it, and
+    // under `target`, which the walks of the repository leave out.
+    let root = workspace().join(format!("target/seam-walk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("agents/skills/maintenance")).expect("make the skill");
+    std::fs::write(
+        root.join("agents/skills/maintenance/run.sh"),
+        "cargo build\n",
+    )
+    .expect("write the script");
+    std::fs::write(
+        root.join("agents/skills/maintenance/Cargo.toml"),
+        "[package]\n",
+    )
+    .expect("write the manifest");
+    std::fs::create_dir_all(root.join(".claude")).expect("make .claude");
+    std::os::unix::fs::symlink(root.join("agents/skills"), root.join(".claude/skills"))
+        .expect("link the skills");
+    std::os::unix::fs::symlink(
+        root.join("agents/skills/maintenance"),
+        root.join("maintenance"),
+    )
+    .expect("link the skill");
+    std::os::unix::fs::symlink(
+        root.join("agents/skills/maintenance/run.sh"),
+        root.join("tool.sh"),
+    )
+    .expect("link the script");
+    std::fs::create_dir_all(root.join("crate")).expect("make the crate");
+    std::os::unix::fs::symlink(
+        root.join("agents/skills/maintenance/Cargo.toml"),
+        root.join("crate/Cargo.toml"),
+    )
+    .expect("link the manifest");
+
+    let commands = command_paths(&root);
+    let manifests = files_where(&root, &|path| path.ends_with("Cargo.toml"));
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert_eq!(
+        commands,
+        [
+            root.join("agents/skills/maintenance/run.sh"),
+            root.join("tool.sh")
+        ],
+        "the command walk followed a link to a directory or left out a link to a file"
+    );
+    assert_eq!(
+        manifests,
+        [
+            root.join("agents/skills/maintenance/Cargo.toml"),
+            root.join("crate/Cargo.toml")
+        ],
+        "the manifest walk followed a link to a directory or left out a link to a file"
     );
 }
 

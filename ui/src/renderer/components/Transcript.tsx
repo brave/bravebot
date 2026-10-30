@@ -1,4 +1,5 @@
 import { Watches } from './Watches'
+import type { Enhancement } from '../enhancing'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
 import { Fragment, memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
@@ -75,6 +76,7 @@ interface Live {
   rewind?: RewindPoint[]
   sendRefused?: string | null
   staging?: Staging
+  enhancement?: Enhancement
 }
 
 /**
@@ -112,6 +114,12 @@ interface Props {
   onQueue: () => void
   onInterject: () => void
   interjected: string[]
+  /** Ask for the box to be made more specific (INPUT-50). */
+  onEnhance: () => void
+  onStopEnhance: () => void
+  /** Escape over a rewrite: put back what was written, and say whether there was one. */
+  onRestoreEnhanced: () => boolean
+  onDismissEnhancement: () => void
   queued: string[]
   queuePaused: boolean
   onResumeQueued: () => void
@@ -304,6 +312,10 @@ export function Transcript({
   onQueue,
   onInterject,
   interjected,
+  onEnhance,
+  onStopEnhance,
+  onRestoreEnhanced,
+  onDismissEnhancement,
   queued, queuePaused, onResumeQueued, onDismissRefusal,
   onRemoveQueued,
   live,
@@ -466,6 +478,10 @@ export function Transcript({
   const send = useEvent(() => { latest(); onSubmit(); toComposer() })
   const queue = useEvent(onQueue)
   const interject = useEvent(onInterject)
+  const enhance = useEvent(onEnhance)
+  const stopEnhance = useEvent(onStopEnhance)
+  const restoreEnhanced = useEvent(onRestoreEnhanced)
+  const dismissEnhancement = useEvent(onDismissEnhancement)
   const cancel = useEvent(onCancel)
   const plan = useEvent(() => { latest(); onPlan?.() })
   const draftChanged = useEvent(onDraft)
@@ -886,6 +902,11 @@ export function Transcript({
           onQueue={queue}
           onInterject={interject}
           interjected={interjected}
+          enhancement={live.enhancement}
+          onEnhance={enhance}
+          onStopEnhance={stopEnhance}
+          onRestoreEnhanced={restoreEnhanced}
+          onDismissEnhancement={dismissEnhancement}
           onCancel={cancel}
           onPlan={onPlan ? plan : undefined}
           onModel={chooseModelFor}

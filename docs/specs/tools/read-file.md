@@ -95,15 +95,21 @@ comes from the path ([READ-1](#READ-1)) and never from how a file decoded.
 
 **A decoding is not the file's bytes.** An edit writes its text back to the file, and the text a
 slot holds is written to a file or handed to a program as the file, so neither may be a decoding of
-another encoding. The whole read an edit works from, the read that fills a slot and the page a
-plan reads accept only text that is UTF-8 as it stands. They refuse a file with a mark or with
-invalid bytes as text in an encoding other than UTF-8, a fact about the file and not a decoding
-error. The survey a deferred read makes answers for the slot it reserves, so it ignores a byte
-order mark: in a directory nobody vouched for, a UTF-16 file is reported as binary when the
-planner asks, and a Latin-1 file is refused when something needs its bytes. A `write_file` body is
-the planner's own text and replaces the file as [WRITE-1](write-file.md#WRITE-1) says, except that
-[WRITE-8](write-file.md#WRITE-8) refuses it over a file the trust map vouches for that is text in
-another encoding, since the body would land as UTF-8.
+another encoding. The whole read an edit works from and the page a plan reads accept only text that
+is UTF-8 as it stands. They refuse a file with a mark or with invalid bytes as text in an encoding
+other than UTF-8, a fact about the file and not a decoding error.
+
+A slot read for a path nobody vouched for may hold the decoding, and records that it does. The
+survey a deferred read makes honours a byte order mark and tolerates invalid bytes as the page does,
+so a UTF-16 or Latin-1 file is text when the planner asks. The slot is filled with the decoded text,
+with no note about the decoding in it, and marked as a decoding. A processor's input and a check
+read it. Everything else that takes a slot's text refuses it as a file in another encoding:
+`write_file` with `contents_ref`, a plan's write, and `run` with `stdin_ref`. A slot that is a
+decoding is not recorded as a copy of the file, and a processor's answer about one is for no file,
+so it is written nowhere. A `write_file` body is the planner's own text and replaces the file as
+[WRITE-1](write-file.md#WRITE-1) says, except that [WRITE-8](write-file.md#WRITE-8) refuses it over
+a file the trust map vouches for that is text in another encoding, since the body would land as
+UTF-8.
 
 **Why.** A UTF-16 source file from a Windows tool, and a Latin-1 file with one accented character,
 are text a person reads in an editor. Reported as binary, they leave the planner with no way to read
@@ -120,7 +126,12 @@ UTF-8 over a UTF-16 file.
 `verified-by: bravebot_agent::workspace::a_whole_read_of_a_file_that_is_not_utf8_is_refused_as_another_encoding`
 `verified-by: bravebot_agent::workspace::a_slot_is_never_filled_from_a_decoding_of_another_encoding`
 `verified-by: bravebot_agent::manifest::a_paged_read_in_a_plan_never_carries_a_decoding_of_another_encoding`
-`verified-by: bravebot_agent::workspace::a_deferred_read_of_a_utf16_file_is_reported_as_binary`
+`verified-by: bravebot_agent::workspace::a_deferred_read_of_a_file_in_another_encoding_is_reported_as_text`
+`verified-by: bravebot_agent::workspace::a_page_for_a_slot_decodes_a_file_in_another_encoding_without_a_note`
+`verified-by: bravebot_agent::tools::a_slot_filled_from_a_file_in_another_encoding_is_marked_and_carries_no_note`
+`verified-by: bravebot_core::slot::a_slot_holding_a_decoding_is_read_but_never_given_to_an_effect`
+`verified-by: bravebot_core::policy::a_decoded_slot_is_read_by_a_processor_and_never_written_back`
+`verified-by: bravebot_agent::turn::a_processor_reads_a_file_in_another_encoding_as_its_text`
 `verified-by: bravebot_agent::workspace::a_decoded_page_is_labelled_by_its_path_alone`
 `verified-by: bravebot_agent::turn::a_utf16_file_is_read_as_text_and_an_edit_of_it_is_refused`
 `verified-by: bravebot_agent::turn::a_file_with_a_stray_invalid_byte_is_read_with_a_replacement_character_and_an_edit_is_refused`

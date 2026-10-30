@@ -54,12 +54,12 @@ use crate::finish::{
     stopped_before_the_turn, what_ran, with_declined,
 };
 use crate::flags::{
-    ACCEPT_EDITS, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS, TASK_FLAGS, VET,
-    bypass_made_unreachable, continues_with_a_task, flag_named, interactive_out_of_place,
-    is_a_one_shot, opens_a_session, sandbox_refusal, starts_no_program, take_agent, take_flag,
-    take_links, take_log_level, take_run_network, take_sandbox, take_sandbox_filesystem,
-    take_settings, take_system_prompts, take_tool_limit, wants_json, without_a_definition,
-    without_a_prompt_to_give, without_a_tool_set_to_limit,
+    ACCEPT_EDITS, AUTO, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS,
+    TASK_FLAGS, VET, bypass_made_unreachable, continues_with_a_task, flag_named,
+    interactive_out_of_place, is_a_one_shot, opens_a_session, sandbox_refusal, starts_no_program,
+    take_agent, take_flag, take_links, take_log_level, take_run_network, take_sandbox,
+    take_sandbox_filesystem, take_settings, take_system_prompts, take_tool_limit, wants_json,
+    without_a_definition, without_a_prompt_to_give, without_a_tool_set_to_limit,
 };
 use crate::invocation::{
     Given, Invocation, input_lines_conflict, limit_not_with_a_goal, limit_not_with_a_manifest,
@@ -92,7 +92,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 struct Settled {
     as_json: bool,
     skip_permissions: bool,
-    accept_edits: bool,
+    /// The mode a flag other than the bypass flag opened a one-shot run in (`--accept-edits` or
+    /// `--auto`), or `None` where neither was given and the run asks.
+    starts_in: Option<bravebot_agent::PermissionMode>,
     carried: Option<String>,
     agent: Option<String>,
     links: bravebot_tui::app::Links,
@@ -226,6 +228,28 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
             t!(cli_accept_edits_not_with_bypass, flag = bypass_flag),
         ));
     }
+    // The auto mode is refused beside either of the others for the same reason: each answers a
+    // different set of questions, and a line that gave two does not say which its author meant.
+    let auto = take_flag(args, AUTO);
+    if auto && skip_permissions {
+        return Err(stopped_before_the_turn(
+            wants_json(args),
+            Ending::Argument,
+            t!(cli_auto_not_with_bypass, flag = bypass_flag),
+        ));
+    }
+    if auto && accept_edits {
+        return Err(stopped_before_the_turn(
+            wants_json(args),
+            Ending::Argument,
+            t!(cli_auto_not_with_accept_edits).to_string(),
+        ));
+    }
+    let starts_in = match (accept_edits, auto) {
+        (_, true) => Some(bravebot_agent::PermissionMode::Auto),
+        (true, false) => Some(bravebot_agent::PermissionMode::AcceptEdits),
+        (false, false) => None,
+    };
 
     // Read off the arguments as typed, before the flag below takes anything out of them: a result
     // object was asked for by the command line that failed, whichever token the failure consumed.
@@ -420,17 +444,21 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // Refused rather than ignored where there is no one-shot run to open in the mode: a session
     // has the mode key, and a line that asked for a run to write unasked and was started as
     // something that asks would leave its author believing the flag had been honoured.
-    if accept_edits && !is_a_one_shot(args, continues_with_a_task(args)) {
+    if starts_in.is_some() && !is_a_one_shot(args, continues_with_a_task(args)) {
         return Err(stopped_before_the_turn(
             as_json,
             Ending::Argument,
-            t!(cli_accept_edits_needs_a_run).to_string(),
+            match starts_in {
+                Some(bravebot_agent::PermissionMode::Auto) => t!(cli_auto_needs_a_run),
+                _ => t!(cli_accept_edits_needs_a_run),
+            }
+            .to_string(),
         ));
     }
     Ok(Settled {
         as_json,
         skip_permissions,
-        accept_edits,
+        starts_in,
         carried,
         agent,
         links,
@@ -475,7 +503,7 @@ fn main() -> ExitCode {
     let Settled {
         as_json,
         skip_permissions,
-        accept_edits,
+        starts_in,
         carried,
         agent,
         links,
@@ -515,7 +543,7 @@ fn main() -> ExitCode {
         Some("--handle-uri") => open_link(&args[1..], as_json, agent, skip_permissions, prompts),
         // Picking up where a session left off, chosen from a list or named outright.
         Some("--resume" | "-r" | "--continue" | "-c") if continues_with_a_task(&args) => {
-            run_task(&args, skip_permissions, accept_edits, agent, prompts)
+            run_task(&args, skip_permissions, starts_in, agent, prompts)
         }
         Some("--resume" | "-r") => match args.get(1) {
             Some(id) => resume_named(id, agent, links, skip_permissions, prompts),
@@ -565,7 +593,7 @@ fn main() -> ExitCode {
         // The task flags may lead: `bravebot -p "task"` and `bravebot --mode manifest "task"`
         // would otherwise be caught below as unknown options.
         Some(flag) if TASK_FLAGS.contains(&flag) => {
-            run_task(&args, skip_permissions, accept_edits, agent, prompts)
+            run_task(&args, skip_permissions, starts_in, agent, prompts)
         }
         Some("doctor") if args.get(1).map(String::as_str) == Some("--sandbox-check") => {
             match args.len() {
@@ -633,7 +661,7 @@ fn main() -> ExitCode {
             refused_with_the_usage(as_json, t!(cli_unknown_option, flag = flag))
         }
         // Anything else is treated as the task prompt.
-        Some(_) => run_task(&args, skip_permissions, accept_edits, agent, prompts),
+        Some(_) => run_task(&args, skip_permissions, starts_in, agent, prompts),
     }
 }
 
@@ -782,16 +810,22 @@ fn a_plan_is_put(stdin_is_terminal: bool, stderr_is_terminal: bool) -> bool {
 fn run_task(
     args: &[String],
     skip_permissions: bool,
-    accept_edits: bool,
+    starts_in: Option<bravebot_agent::PermissionMode>,
     agent: Option<String>,
     prompts: SystemPrompts,
 ) -> ExitCode {
-    match prepare_the_run(args, skip_permissions, accept_edits, agent, prompts) {
+    match prepare_the_run(args, skip_permissions, starts_in, agent, prompts) {
         Ok(prepared) if prepared.input_lines => run_the_lines(prepared),
         Ok(mut prepared) => {
             let continued = prepared.continued.take();
-            let (code, ..) =
-                run_and_report(&prepared, &prepared.task, continued, None, &Cancel::new());
+            let (code, ..) = run_and_report(
+                &prepared,
+                &prepared.task,
+                continued,
+                None,
+                &Cancel::new(),
+                None,
+            );
             prepared.dismantle();
             code
         }
@@ -864,7 +898,7 @@ impl Prepared {
 fn prepare_the_run(
     args: &[String],
     skip_permissions: bool,
-    accept_edits: bool,
+    starts_in: Option<bravebot_agent::PermissionMode>,
     agent: Option<String>,
     prompts: SystemPrompts,
 ) -> Result<Prepared, ExitCode> {
@@ -905,12 +939,7 @@ fn prepare_the_run(
     } = invocation;
 
     // Refused before stdin is read, since a run that reads lines owns the rest of the stream.
-    if let Some(conflict) = input_lines_conflict(
-        input_lines,
-        trust_input_lines,
-        mode,
-        bravebot_core::incognito::engaged(),
-    ) {
+    if let Some(conflict) = input_lines_conflict(input_lines, trust_input_lines, mode) {
         return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
     }
 
@@ -1111,10 +1140,10 @@ fn prepare_the_run(
     // Bypassing where the flag was given, accepting edits where the narrower one was, and asking
     // otherwise. There is no mode key here: a one-shot run has no session to hold a mode and
     // nobody to press anything, so the command line is the whole of what can say.
-    let permission_mode = match (skip_permissions, accept_edits) {
+    let permission_mode = match (skip_permissions, starts_in) {
         (true, _) => bravebot_agent::PermissionMode::Bypass,
-        (false, true) => bravebot_agent::PermissionMode::AcceptEdits,
-        (false, false) => bravebot_agent::PermissionMode::Ask,
+        (false, Some(mode)) => mode,
+        (false, None) => bravebot_agent::PermissionMode::Ask,
     };
     // Resolved against the configuration rather than at parse, since a tier word names a model
     // only the configuration knows: the AWS account's ARN for that tier where it named one, and
@@ -1445,13 +1474,16 @@ fn check_the_model_can_serve_the_run(
 ///
 /// `task` is the prompt to run, which is the one in `prepared` for a run of one turn and the
 /// words of a line for each turn of a run reading lines. `continued` is the record to carry on,
-/// and `lines` is where such a run's questions go and its steers come from (CLI-36).
+/// and `lines` is where such a run's questions go and its steers come from (CLI-36). `carry` is
+/// where an incognito run reading lines keeps its conversation between turns, in the place of a
+/// record.
 fn run_and_report(
     prepared: &Prepared,
     task: &Task,
     continued: Option<continued::Continuing>,
     lines: Option<&lines::Channel>,
     cancel: &Cancel,
+    carry: Option<&mut Option<continued::Carried>>,
 ) -> (ExitCode, Option<String>, bool) {
     let Prepared {
         workspace,
@@ -1551,6 +1583,7 @@ fn run_and_report(
                     goal: goal.as_deref(),
                     model,
                     cancel,
+                    carry,
                 },
                 continued,
                 &mut confirmer,
@@ -1739,7 +1772,8 @@ fn run_and_report(
 }
 
 /// A run reading lines from stdin: one turn for each `prompt`, each carried on from the record the
-/// turn before wrote, until the input has ended and nothing is left waiting (CLI-36).
+/// turn before wrote, or from memory where the run is incognito, until the input has ended and
+/// nothing is left waiting (CLI-36).
 ///
 /// The words on the command line, where there are any, are the first turn and are the person's own.
 /// A line's words are the person's only where they vouched for the channel; otherwise they are
@@ -1766,6 +1800,10 @@ fn run_the_lines(mut prepared: Prepared) -> ExitCode {
     // standing. A turn that answered and wrote none leaves nothing to carry on from.
     let mut kept = continued.as_ref().map(|record| record.id.clone());
     let mut unsaved = false;
+    // An incognito run writes no record to carry on from, so each turn leaves what the next needs
+    // in memory, for as long as the process lives (CLI-36, INCOG-3).
+    let incognito = bravebot_core::incognito::engaged();
+    let mut carry: Option<continued::Carried> = None;
     let mut turns = 0usize;
     let mut exit = None;
     loop {
@@ -1792,8 +1830,12 @@ fn run_the_lines(mut prepared: Prepared) -> ExitCode {
             task.files.clear();
             task.session_excerpts.clear();
         }
+        if let Some(held) = &carry {
+            task = task.with_injected_facts(held.injected_facts.clone());
+        }
         let record = match (turns, kept.as_deref()) {
             (0, _) => Ok(continued.take()),
+            (_, _) if incognito => Ok(None),
             (_, _) if unsaved => Err(t!(cli_input_lines_session_unsaved).to_string()),
             (_, None) => Ok(None),
             (_, Some(id)) => continued::find(
@@ -1812,13 +1854,19 @@ fn run_the_lines(mut prepared: Prepared) -> ExitCode {
                 continue;
             }
         };
-        let (code, wrote, answered) =
-            run_and_report(&prepared, &task, record, Some(&channel), &cancel);
+        let (code, wrote, answered) = run_and_report(
+            &prepared,
+            &task,
+            record,
+            Some(&channel),
+            &cancel,
+            incognito.then_some(&mut carry),
+        );
         channel.idle();
         exit = Some(code);
         match wrote {
             Some(id) => kept = Some(id),
-            None => unsaved |= answered,
+            None => unsaved |= answered && !incognito,
         }
     }
     let code = exit.unwrap_or_else(|| {
@@ -1842,6 +1890,9 @@ struct TurnRun<'a> {
     model: &'a str,
     /// The token a stop reaches this turn by.
     cancel: &'a Cancel,
+    /// Where an incognito run reading lines holds what the next turn carries on from, and where it
+    /// finds what the turn before left (CLI-36).
+    carry: Option<&'a mut Option<continued::Carried>>,
 }
 
 /// The `Mode::Turn` arm of a one-shot run: the turn, continued from `continued` where there is one,
@@ -1868,6 +1919,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         goal,
         model,
         cancel,
+        carry,
     } = run;
     let mut session: Option<String> = None;
     // Taken before the task is given to the turn, which is where a mode that was bypass ends up
@@ -1886,12 +1938,19 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
             }
             carried
         }
-        None => unattended_trust(workspace.root(), trust_workspace),
+        None => match carry.as_deref().and_then(Option::as_ref) {
+            Some(held) => held.trust.clone(),
+            None => unattended_trust(workspace.root(), trust_workspace),
+        },
     };
-    let mut conversation = continued
-        .as_ref()
-        .map(|record| bravebot_agent::Conversation::restored(record.conversation.clone()))
-        .unwrap_or_default();
+    let mut conversation = match (
+        continued.as_ref(),
+        carry.as_deref().and_then(Option::as_ref),
+    ) {
+        (Some(record), _) => bravebot_agent::Conversation::restored(record.conversation.clone()),
+        (None, Some(held)) => bravebot_agent::Conversation::restored(held.conversation.clone()),
+        (None, None) => bravebot_agent::Conversation::default(),
+    };
     // The names the earlier run's file tools had reached, so the nested instructions and
     // path-scoped rules they loaded are in force from this run's first request (INSTR-14,
     // INSTR-16).
@@ -1960,6 +2019,15 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         injected_facts,
     } = completed.decisions;
     if let Ok(finished) = &completed.outcome {
+        // Only a turn that answered leaves anything for the next, as one that wrote a record does:
+        // a failed turn leaves the conversation as the turn before left it.
+        if let Some(slot) = carry {
+            *slot = Some(continued::Carried {
+                conversation: conversation.snapshot(),
+                trust: trust.clone(),
+                injected_facts: injected_facts.clone(),
+            });
+        }
         session = continued::keep(
             workspace.root(),
             continued.take().zip(rewind),
@@ -3503,6 +3571,7 @@ mod tests {
             url: "https://example.invalid/a".to_string(),
             host: "example.invalid".to_string(),
             redirected_from: None,
+            classified: Default::default(),
         });
         let gates: Vec<_> = unattended.declined().iter().map(|d| d.gate).collect();
         assert_eq!(gates, ["manifest_plan", "web_fetch"]);
@@ -3553,6 +3622,7 @@ mod tests {
             url: "https://example.invalid/a".to_string(),
             host: "example.invalid".to_string(),
             redirected_from: None,
+            classified: Default::default(),
         });
         unattended.confirm_run(&run);
         unattended.confirm_manifest(&a_plan());

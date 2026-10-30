@@ -67,6 +67,19 @@ pub fn find(directory: &Path, asked: &Resume) -> Result<Continuing, String> {
     Ok(Continuing { record, handle })
 }
 
+/// What a turn of an incognito run reading lines hands the next one, in place of the record an
+/// incognito run does not write (CLI-36, INCOG-3).
+///
+/// Held in memory for the life of the process and never written. It carries what a record carries
+/// into a continued turn that the process does not already hold: the conversation as a record
+/// restores it, the trust map and the facts already put before the planner.
+#[derive(Clone)]
+pub struct Carried {
+    pub conversation: bravebot_agent::conversation::Snapshot,
+    pub trust: TrustStore,
+    pub injected_facts: std::collections::BTreeSet<String>,
+}
+
 /// The points the continued turn can be rewound to: the record's own, and one opened for this turn
 /// from the record as it stood before it (SESSION-19).
 ///
