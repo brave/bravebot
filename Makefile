@@ -900,38 +900,25 @@ app-dmg:
 
 # Signing, notarising and checksumming the Mac application, run by the release job on the Mac node
 # after `app-bundles` and in the order `app-release-signed` gives. The Developer ID identity and the
-# notarytool keychain profile come from the job's environment, as SIGN_IDENTITY and NOTARY_PROFILE;
-# nothing here holds either, and a target that lacks one stops before it runs a tool.
+# notarytool keychain profile come from the job, as the variables SIGN_IDENTITY and NOTARY_PROFILE
+# in its environment or on the make command line, which make passes on to the script; nothing here
+# holds either.
 #
-# `app-sign` signs each bundle from the inside out: the two executables in Contents/Resources on
-# their own, then the executables inside frameworks, which are the files in a Helpers directory
-# (Electron Framework's crashpad handler and app shim loader) and the executable files in a
-# framework's Resources directory (Squirrel's ShipIt), and every dylib and framework under
-# Contents/Frameworks, then the helper apps there,
-# then the outer app last. Every signature carries the hardened runtime and a secure timestamp.
-# The helper apps are signed with the helpers' entitlements and the outer app with the app's, both
-# checked in under ui/build/; the two Rust executables, frameworks and dylibs carry none, since only
-# the Electron processes run JIT-compiled code. The flag that applies one set of entitlements to
-# everything beneath it is never passed, because the helpers would then carry the app's
-# entitlements and a nested item signed first would be signed again.
+# `app-sign`, `app-notarize` and `app-dmg-notarize` run ui/scripts/sign-mac.mjs, which calls
+# @electron/osx-sign and @electron/notarize and stops before it runs a tool when the identity or the
+# profile it needs is unset or a bundle or image it works on is missing. It runs here and not inside
+# the packager because packaging sets the fuses after the packager returns, and that rewrites the
+# Electron binary a signature covers.
 #
-# `app-notarize` submits each signed app, waits for the verdict, and goes on only when it is
-# Accepted: notarytool can exit 0 for a rejected submission. Then it staples the ticket to the app
-# and has Gatekeeper assess it. `app-dmg-notarize` does the same for each image, signed first, and
-# assesses it as an installer image. `app-dmg-sha256` writes the digest of each image in the form
-# `checksums` uses, so it runs last: stapling rewrites the image, and a digest taken earlier does
-# not match the bytes uploaded.
-SIGN_IDENTITY ?=
-NOTARY_PROFILE ?=
-APP_ENTITLEMENTS = ui/build/entitlements.mac.plist
-APP_HELPER_ENTITLEMENTS = ui/build/entitlements.mac.inherit.plist
-CODESIGN = codesign --force --options runtime --timestamp --sign "$(SIGN_IDENTITY)"
-NOTARISE_FN = notarise() { \
-	verdict=$$(xcrun notarytool submit "$$1" --keychain-profile "$(NOTARY_PROFILE)" --wait 2>&1) \
-		|| { printf '%s\n' "$$verdict" >&2; return 1; }; \
-	printf '%s\n' "$$verdict"; \
-	printf '%s\n' "$$verdict" | grep -q 'status: Accepted' \
-		|| { echo "notarisation of $$1 was not accepted" >&2; return 1; }; }
+# The libraries sign every binary from the inside out with the hardened runtime and a secure
+# timestamp, none with `--deep`, and the app last. The app and the helper apps carry the entitlements
+# checked in under ui/build/, and the two Rust executables, frameworks and dylibs carry none. They
+# submit, require the status Accepted, which `notarytool` does not make its exit status, and staple.
+# These targets then have Gatekeeper assess each result: an app as an executable and an image as an
+# installer image. `app-dmg-sha256` writes the digest of each image in the form `checksums` uses, so
+# it runs last: stapling rewrites the image, and a digest taken earlier does not match the bytes
+# uploaded.
+SIGN_MAC = cd ui && node scripts/sign-mac.mjs
 
 .PHONY: app-release-signed
 app-release-signed:
@@ -943,64 +930,24 @@ app-release-signed:
 
 .PHONY: app-sign
 app-sign:
-	@set -e; \
-	test -n "$(SIGN_IDENTITY)" || { echo "SIGN_IDENTITY is not set: the Developer ID Application identity to sign with" >&2; exit 1; }; \
-	for pair in $(APP_ARCHES); do \
-		electron=$${pair#*:}; app="ui/dist/Brave Bot-darwin-$$electron/Brave Bot.app"; \
-		test -d "$$app" || { echo "no $$app: run \`make app-bundles\` first" >&2; exit 1; }; \
-	done; \
-	for pair in $(APP_ARCHES); do \
-		electron=$${pair#*:}; app="ui/dist/Brave Bot-darwin-$$electron/Brave Bot.app"; \
-		for name in bravebot-rpc bravebot-ui-files; do \
-			$(CODESIGN) "$$app/Contents/Resources/$$name"; \
-		done; \
-		find "$$app/Contents/Frameworks" -depth -type f \( -path '*.framework/*Helpers/*' -o \( -path '*.framework/*Resources/*' -perm -u+x \) \) -print | \
-			while IFS= read -r item; do $(CODESIGN) "$$item"; done; \
-		find "$$app/Contents/Frameworks" -depth \( -name '*.dylib' -o -name '*.framework' \) -print | \
-			while IFS= read -r item; do $(CODESIGN) "$$item"; done; \
-		find "$$app/Contents/Frameworks" -depth -name '*.app' -print | \
-			while IFS= read -r item; do $(CODESIGN) --entitlements $(APP_HELPER_ENTITLEMENTS) "$$item"; done; \
-		$(CODESIGN) --entitlements $(APP_ENTITLEMENTS) "$$app"; \
-		codesign --verify --strict --verbose=2 "$$app"; \
-		echo "signed $$app"; \
-	done
+	@set -e; set --; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "dist/Brave Bot-darwin-$${pair#*:}/Brave Bot.app"; done; \
+	$(SIGN_MAC) sign "$$@"
 
 .PHONY: app-notarize
 app-notarize:
-	@set -e; \
-	test -n "$(NOTARY_PROFILE)" || { echo "NOTARY_PROFILE is not set: the notarytool keychain profile to submit with" >&2; exit 1; }; \
-	$(NOTARISE_FN); \
-	for pair in $(APP_ARCHES); do \
-		electron=$${pair#*:}; app="ui/dist/Brave Bot-darwin-$$electron/Brave Bot.app"; \
-		test -d "$$app" || { echo "no $$app: run \`make app-sign\` first" >&2; exit 1; }; \
-	done; \
-	stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
-	for pair in $(APP_ARCHES); do \
-		arch=$${pair%%:*}; electron=$${pair#*:}; app="ui/dist/Brave Bot-darwin-$$electron/Brave Bot.app"; \
-		ditto -c -k --keepParent "$$app" "$$stage/$$arch.zip"; \
-		notarise "$$stage/$$arch.zip"; \
-		xcrun stapler staple "$$app"; \
-		spctl -a -t exec -vv "$$app"; \
-		echo "notarised and stapled $$app"; \
-	done
+	@set -e; set --; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "dist/Brave Bot-darwin-$${pair#*:}/Brave Bot.app"; done; \
+	$(SIGN_MAC) notarize "$$@"; \
+	for app in "$$@"; do spctl -a -t exec -vv "ui/$$app"; done
 
 .PHONY: app-dmg-notarize
 app-dmg-notarize:
-	@set -e; \
-	test -n "$(SIGN_IDENTITY)" || { echo "SIGN_IDENTITY is not set: the Developer ID Application identity to sign with" >&2; exit 1; }; \
-	test -n "$(NOTARY_PROFILE)" || { echo "NOTARY_PROFILE is not set: the notarytool keychain profile to submit with" >&2; exit 1; }; \
-	$(NOTARISE_FN); \
+	@set -e; set --; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "../dist/bravebot-app-darwin-$${pair%%:*}.dmg"; done; \
+	$(SIGN_MAC) image "$$@"; \
 	for pair in $(APP_ARCHES); do \
-		arch=$${pair%%:*}; dmg=dist/bravebot-app-darwin-$$arch.dmg; \
-		test -f "$$dmg" || { echo "no $$dmg: run \`make app-dmg\` first" >&2; exit 1; }; \
-	done; \
-	for pair in $(APP_ARCHES); do \
-		arch=$${pair%%:*}; dmg=dist/bravebot-app-darwin-$$arch.dmg; \
-		codesign --force --timestamp --sign "$(SIGN_IDENTITY)" "$$dmg"; \
-		notarise "$$dmg"; \
-		xcrun stapler staple "$$dmg"; \
-		spctl -a -t open --context context:primary-signature -vv "$$dmg"; \
-		echo "notarised and stapled $$dmg"; \
+		spctl -a -t open --context context:primary-signature -vv "dist/bravebot-app-darwin-$${pair%%:*}.dmg"; \
 	done
 
 .PHONY: app-dmg-sha256

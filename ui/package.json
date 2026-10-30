@@ -70,6 +70,8 @@
     "drive:agent-rpc": "pnpm run bridge && node scripts/drive-agent-rpc.mjs"
   },
   "devDependencies": {
+    "@electron/notarize": "^3.1.1",
+    "@electron/osx-sign": "^2.7.0",
     "@electron/packager": "^20.3.0",
     "@types/hast": "^3.0.5",
     "@types/node": "^22.20.1",

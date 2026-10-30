@@ -1,8 +1,10 @@
 // The entitlements the release job signs the macOS app with.
 //
 // A hardened-runtime build that is granted more than it needs widens what a compromised renderer
-// can do, and one that is granted less fails to start its renderer. Each file holds the one
-// entitlement V8 needs, and a second key is added only when a notarised build is shown to need it.
+// can do, and one that is granted less fails to start its renderer. The app's and the helpers' hold
+// the one entitlement V8 needs, and a second key is added only when a notarised build is shown to
+// need it. The file for everything else grants nothing: `@electron/osx-sign` always passes an
+// entitlements file, so signing an item with none means passing a file with no keys.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -10,7 +12,12 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const BUILD = join(dirname(fileURLToPath(import.meta.url)), '..', 'build')
-const FILES = ['entitlements.mac.plist', 'entitlements.mac.inherit.plist']
+const JIT = [['com.apple.security.cs.allow-jit', true]]
+const FILES = [
+  ['entitlements.mac.plist', JIT, 'grants allow-jit and nothing else'],
+  ['entitlements.mac.inherit.plist', JIT, 'grants allow-jit and nothing else'],
+  ['entitlements.mac.none.plist', [], 'grants nothing'],
+]
 
 // A property list whose top level is a dictionary of boolean entries, read strictly: any other
 // element, a malformed entry or text outside the entries is a failure, so a file that a stricter
@@ -25,10 +32,10 @@ function booleanDictionary(text) {
   return entries
 }
 
-for (const name of FILES) {
-  test(`${name} parses and grants allow-jit and nothing else`, () => {
+for (const [name, entries, grants] of FILES) {
+  test(`${name} parses and ${grants}`, () => {
     const text = readFileSync(join(BUILD, name), 'utf8')
-    assert.deepEqual(booleanDictionary(text), [['com.apple.security.cs.allow-jit', true]])
+    assert.deepEqual(booleanDictionary(text), entries)
   })
 }
 

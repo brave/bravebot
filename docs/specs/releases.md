@@ -23,6 +23,8 @@ governs:
   - contrib/check-pnpm-lockfiles.py
   - crates/cli/tests/release_instructions.rs
   - crates/cli/tests/app_signing.rs
+  - ui/scripts/sign-mac.mjs
+  - ui/scripts/sign-mac.test.mjs
 documented-by:
   - docs/website/docs/quickstart.md
   - docs/website/docs/install.md
@@ -610,33 +612,35 @@ package's key does not decide what is trusted for this one.
 
 `make app-release-signed` signs each Mac bundle with the Developer ID identity the job gives it,
 then notarises, staples and assesses the bundle, builds the disk images, and does the same for
-each image. Every item is signed before the item that contains it: the two executables in
-`Contents/Resources`, the executables inside frameworks, the dylibs and frameworks, the helper
-apps, and the app last. Each signature has the hardened runtime and a secure timestamp, none is
-made with `--deep`, the app carries `ui/build/entitlements.mac.plist`, the helper apps carry
-`ui/build/entitlements.mac.inherit.plist`, and the two executables, frameworks and dylibs carry
-none. A submission is stapled only when the status the service returned is `Accepted`, whatever the
-exit status of `notarytool`. The app is assessed with `spctl -a -t exec` and an image with
-`spctl -a -t open --context context:primary-signature`. A target stops before it runs a tool when
-the identity or the profile it needs is unset or a bundle or image it works on is missing.
+each image. `ui/scripts/sign-mac.mjs` signs and notarises, with `@electron/osx-sign` and
+`@electron/notarize`. Every item is signed before the item that contains it, the main executable
+after the rest of the app and the app last. Each signature has the hardened runtime and a secure
+timestamp, and none is made with `--deep`. The app and its main executable carry
+`ui/build/entitlements.mac.plist`, the helper apps and what is in them carry
+`ui/build/entitlements.mac.inherit.plist`, and everything else, including the two executables in
+`Contents/Resources`, carries `ui/build/entitlements.mac.none.plist`, which has no keys. A
+submission is stapled only when the status the service returned is `Accepted`, whatever the exit
+status of `notarytool`. The app is assessed with `spctl -a -t exec` and an image with `spctl -a -t
+open --context context:primary-signature`. The script stops before it runs a tool when the
+identity or the profile it needs is unset or a bundle or image it works on is missing, and it
+signs an image before it submits it.
 
 **Why.** A signature seals what it contains, so signing a container first and its contents after
 breaks the seal the container made, and `--deep` signs everything with one set of entitlements, so
 a helper would carry the entitlements of the app. Notarisation refuses an unsigned executable, a
 binary without the hardened runtime, and one without a secure timestamp. `notarytool submit
---wait` exits 0 for a rejected submission, so the status it prints is what decides. An image
-is hashed after it is stapled ([RELEASE-8](#RELEASE-8)).
+--wait` exits 0 for a rejected submission, so the status it prints is what decides. The two
+libraries are the ones the packager runs for its `osxSign` and `osxNotarize` options. They find
+the executables in the bundle by reading the files, so a change to where Electron puts them does
+not leave one unsigned. They run after packaging and not as options of the packager, because
+`ui/scripts/package.mjs` sets the fuses after the packager returns and that rewrites the Electron
+binary a signature covers. An image is hashed after it is stapled ([RELEASE-8](#RELEASE-8)).
 
-`verified-by: bravebot_cli::app_signing::the_bundle_is_signed_from_the_inside_out`
-`verified-by: bravebot_cli::app_signing::every_signature_is_hardened_timestamped_and_not_deep`
-`verified-by: bravebot_cli::app_signing::each_item_is_signed_with_the_entitlements_it_is_meant_to_carry`
-`verified-by: bravebot_cli::app_signing::signing_stops_before_a_tool_runs_when_it_cannot_complete`
-`verified-by: bravebot_cli::app_signing::notarising_stops_before_a_tool_runs_when_it_cannot_complete`
-`verified-by: bravebot_cli::app_signing::an_accepted_app_is_stapled_then_assessed_as_an_executable`
-`verified-by: bravebot_cli::app_signing::a_rejected_submission_stops_before_stapling`
-`verified-by: bravebot_cli::app_signing::an_accepted_image_is_signed_stapled_and_assessed_as_an_installer`
+`verified-by: bravebot_cli::app_signing::the_apps_are_signed_by_the_script_with_the_identity_the_job_gives`
+`verified-by: bravebot_cli::app_signing::a_notarised_app_is_assessed_as_an_executable`
+`verified-by: bravebot_cli::app_signing::a_notarised_image_is_assessed_as_an_installer`
 `verified-by: bravebot_cli::app_signing::the_sub_targets_run_in_the_order_that_puts_the_ticket_in_the_image`
-`verified-by: by-construction (the identity, the profile and the Apple account are the job's; the tests run the targets against stand-ins for the signing and notary tools, so whether the real tools accept the result, and whether the notary service accepts the app, is first seen by the job that runs them)`
+`verified-by: by-construction (ui/scripts/sign-mac.test.mjs runs @electron/osx-sign and @electron/notarize against stand-ins for codesign, security, xcrun and ditto, and asserts that every item is signed before the one containing it, that each signature has the hardened runtime, a secure timestamp and the identity and none is deep, which entitlements file each item carries, that a rejected submission is not stapled though notarytool exits 0, that an image is signed and submitted as it is, and that nothing runs when the identity, the profile or a path is missing; ui/scripts/entitlements.test.mjs holds the three entitlements files to their contents; make check-ui-build runs both in the Front end CI job. The identity, the profile and the Apple account are the job's, so whether the real tools accept the result, and whether the notary service accepts the app, is first seen by the job that runs them)`
 
 ## Known costs
 

@@ -1,13 +1,14 @@
 //! What `make app-sign`, `app-notarize`, `app-dmg-notarize`, `app-dmg-sha256` and
-//! `app-release-signed` ask of `codesign`, `notarytool`, `stapler` and `spctl`, and in what order.
+//! `app-release-signed` hand to `ui/scripts/sign-mac.mjs` and `spctl`, and in what order.
 //!
 //! [RELEASE-23] is the clause. The targets are shell in a makefile, so running them against a copy
 //! of the Makefile in a scratch directory is the only way a Rust test can hold them to it. The
-//! tools are made here: each records its arguments, `notarytool` answers with the verdict the test
-//! sets, `stapler` appends to the image it is given as the real one rewrites it, and `ditto` and
-//! `hdiutil` write a file where the real ones write an archive. What the real tools accept, and
-//! whether Apple notarises the result, was not checked: that needs a Developer ID identity and
-//! the notary service.
+//! tools are made here: `node` records the call to the script and, for an image, appends to it as
+//! stapling rewrites it, and `spctl`, `ditto` and `hdiutil` record their arguments, with `ditto`
+//! copying a tree and `hdiutil` writing a file where the real ones write an archive. What the
+//! script asks of `codesign` and `notarytool` is held by `ui/scripts/sign-mac.test.mjs`, which runs
+//! the libraries it calls. What the real tools accept, and whether Apple notarises the result, was
+//! not checked: that needs a Developer ID identity and the notary service.
 //!
 //! Unix only, because the stand-in tools are shell scripts and the targets are run by `make`.
 //! Skipped where `make` or `shasum` is not on `PATH`, and says so.
@@ -23,8 +24,6 @@ use std::process::{Command, Output};
 
 const IDENTITY: &str = "Developer ID Application: Test";
 const PROFILE: &str = "test-profile";
-const APP_ENTITLEMENTS: &str = "ui/build/entitlements.mac.plist";
-const HELPER_ENTITLEMENTS: &str = "ui/build/entitlements.mac.inherit.plist";
 
 /// Records its arguments, tab separated, one call to a line.
 const RECORD: &str = r#"printf '%s\t' "$TOOL" >> "$FAKE_LOG"
@@ -32,30 +31,25 @@ for argument in "$@"; do printf '%s\t' "$argument" >> "$FAKE_LOG"; done
 printf '\n' >> "$FAKE_LOG"
 "#;
 
-const FAKE_CODESIGN: &str = "#!/bin/sh\nTOOL=codesign\n";
 const FAKE_SPCTL: &str = "#!/bin/sh\nTOOL=spctl\n";
 
-/// `notarytool submit` answers with the status the test names and exits 0 whatever it is, as the
-/// real one does for a rejected submission. `stapler staple` changes the bytes of an image.
-const FAKE_XCRUN: &str = r#"#!/bin/sh
-TOOL=xcrun
-case "$1 $2" in
-  "notarytool submit")
-    printf '  id: 1\n  status: %s\n' "${FAKE_VERDICT:-Accepted}" ;;
-  "stapler staple")
-    if [ -d "$3" ]; then : > "$3/Contents/ticket"; else printf 'stapled\n' >> "$3"; fi ;;
-esac
+/// Stands in for `node scripts/sign-mac.mjs <command> <path>...`. The call is recorded with the
+/// directory it ran in and the two settings it was given. For `image` each path is appended to, as
+/// notarising and stapling rewrite the image.
+const FAKE_NODE: &str = r#"#!/bin/sh
+printf 'node\t%s\t%s\t%s\t' "$PWD" "SIGN_IDENTITY=$SIGN_IDENTITY" "NOTARY_PROFILE=$NOTARY_PROFILE" >> "$FAKE_LOG"
+for argument in "$@"; do printf '%s\t' "$argument" >> "$FAKE_LOG"; done
+printf '\n' >> "$FAKE_LOG"
+if [ "$2" = image ]; then
+  shift 2
+  for image in "$@"; do printf 'stapled\n' >> "$image"; done
+fi
 "#;
 
-/// Makes an archive of the first form and copies a tree for the second.
+/// Copies a tree.
 const FAKE_DITTO: &str = r#"#!/bin/sh
 TOOL=ditto
-if [ "$1" = "-c" ]; then
-  for argument in "$@"; do last="$argument"; done
-  printf 'zip\n' > "$last"
-else
-  cp -R "$1" "$2"
-fi
+cp -R "$1" "$2"
 "#;
 
 const FAKE_HDIUTIL: &str = r#"#!/bin/sh
@@ -87,8 +81,8 @@ fn tools_available() -> bool {
             .is_ok_and(|output| output.status.success())
 }
 
-/// A copy of the Makefile beside the two bundles an `app-bundles` run leaves, each with the
-/// executables, a framework holding a helper, a dylib and a helper app, and the stand-in tools.
+/// A copy of the Makefile beside the two bundles an `app-bundles` run leaves, and the stand-in
+/// tools.
 struct Tree {
     root: PathBuf,
 }
@@ -104,50 +98,28 @@ impl Tree {
         std::fs::copy(workspace().join("Makefile"), root.join("Makefile")).expect("copy Makefile");
         for electron in ["arm64", "x64"] {
             let bundle = root.join(format!("ui/dist/Brave Bot-darwin-{electron}"));
-            let app = bundle.join("Brave Bot.app/Contents");
-            for file in [
-                "Resources/bravebot-rpc",
-                "Resources/bravebot-ui-files",
-                "Frameworks/Electron Framework.framework/Versions/A/Helpers/crashpad_handler",
-                "Frameworks/Squirrel.framework/Versions/A/Resources/ShipIt",
-                "Frameworks/Squirrel.framework/Versions/A/Resources/Info.plist",
-                "Frameworks/Electron Framework.framework/Versions/A/Libraries/libffmpeg.dylib",
-                "Frameworks/Brave Bot Helper.app/Contents/MacOS/Brave Bot Helper",
-                "MacOS/Brave Bot",
-            ] {
-                let path = app.join(file);
-                std::fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
-                std::fs::write(&path, "binary\n").expect("write file");
-                // Electron's framework Resources hold ShipIt, which is executable, beside
-                // property lists, which are not and are not signed on their own.
-                let mode = if file.ends_with("Info.plist") {
-                    0o644
-                } else {
-                    0o755
-                };
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
-                    .expect("set mode");
-            }
+            let executable = bundle.join("Brave Bot.app/Contents/MacOS/Brave Bot");
+            std::fs::create_dir_all(executable.parent().expect("parent")).expect("create dir");
+            std::fs::write(&executable, "binary\n").expect("write executable");
             for licence in ["LICENSE", "LICENSES.chromium.html"] {
                 std::fs::write(bundle.join(licence), "licence\n").expect("write licence");
             }
         }
         for (name, body) in [
-            ("codesign", FAKE_CODESIGN),
-            ("spctl", FAKE_SPCTL),
-            ("xcrun", FAKE_XCRUN),
-            ("ditto", FAKE_DITTO),
-            ("hdiutil", FAKE_HDIUTIL),
+            ("spctl", format!("{FAKE_SPCTL}{RECORD}")),
+            ("ditto", format!("{FAKE_DITTO}{RECORD}")),
+            ("hdiutil", format!("{FAKE_HDIUTIL}{RECORD}")),
+            ("node", FAKE_NODE.to_owned()),
         ] {
             let path = root.join("bin").join(name);
-            std::fs::write(&path, format!("{body}{RECORD}")).expect("write tool");
+            std::fs::write(&path, body).expect("write tool");
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
                 .expect("make tool executable");
         }
         Self { root }
     }
 
-    fn make(&self, target: &str, verdict: &str, variables: &[(&str, &str)]) -> Output {
+    fn make(&self, target: &str, variables: &[(&str, &str)]) -> Output {
         let path = format!(
             "{}:{}",
             self.root.join("bin").display(),
@@ -159,8 +131,7 @@ impl Tree {
             .arg(&self.root)
             .arg(target)
             .env("PATH", path)
-            .env("FAKE_LOG", self.log())
-            .env("FAKE_VERDICT", verdict);
+            .env("FAKE_LOG", self.log());
         for (name, value) in variables {
             command.arg(format!("{name}={value}"));
         }
@@ -171,7 +142,6 @@ impl Tree {
     fn run(&self, target: &str) -> Output {
         self.make(
             target,
-            "Accepted",
             &[("SIGN_IDENTITY", IDENTITY), ("NOTARY_PROFILE", PROFILE)],
         )
     }
@@ -194,12 +164,16 @@ impl Tree {
             .collect()
     }
 
-    /// The signing calls, with the path each signs.
-    fn signatures(&self) -> Vec<Vec<String>> {
-        self.calls()
-            .into_iter()
-            .filter(|call| call[0] == "codesign" && call.iter().any(|a| a == "--sign"))
-            .collect()
+    /// Writes an image where `app-dmg` leaves one.
+    fn add_images(&self) {
+        for arch in ["arm64", "amd64"] {
+            std::fs::write(
+                self.root
+                    .join(format!("dist/bravebot-app-darwin-{arch}.dmg")),
+                "image\n",
+            )
+            .expect("write");
+        }
     }
 }
 
@@ -213,11 +187,16 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-/// The path a call acts on: its last argument.
-fn target(call: &[String]) -> &str {
-    call.last().expect("a call has arguments")
+/// The calls to the script with `command`: the directory, the two settings, the script, then the
+/// command and the paths.
+fn script_calls<'a>(calls: &'a [Vec<String>], command: &str) -> Vec<&'a Vec<String>> {
+    calls
+        .iter()
+        .filter(|call| call[0] == "node" && call[5] == command)
+        .collect()
 }
 
+/// The position of the first call that `wanted` accepts.
 fn position(calls: &[Vec<String>], wanted: impl Fn(&[String]) -> bool, what: &str) -> usize {
     calls
         .iter()
@@ -225,176 +204,44 @@ fn position(calls: &[Vec<String>], wanted: impl Fn(&[String]) -> bool, what: &st
         .unwrap_or_else(|| panic!("no call for {what} in {calls:?}"))
 }
 
-fn signed_at(path_part: &'static str) -> impl Fn(&[String]) -> bool {
-    move |call: &[String]| call.iter().any(|a| a == "--sign") && target(call).ends_with(path_part)
-}
-
-/// For each bundle, the two executables are signed before the helper inside a framework and the
-/// executable in a framework's `Resources` (Squirrel's `ShipIt`), those and the dylib before the
-/// framework, the framework before the helper app, and the helper app before the outer app, which
-/// is last. A property list beside `ShipIt` is not signed on its own.
+/// Both bundles go to the script in one call, from `ui/` where the libraries it needs are
+/// installed, with the identity the job gave.
 ///
-/// The regression it rejects: signing the outer app first or `--deep`, which seals a nested item
-/// before it is signed, so the outer signature is invalidated when the nested one is made and
-/// notarisation rejects the app.
+/// The regression it rejects: one call per architecture, which signs the first before the second
+/// is found missing, running the script from the repository root, where `@electron/osx-sign`
+/// cannot be found, and not passing the identity on.
 #[test]
-fn the_bundle_is_signed_from_the_inside_out() {
+fn the_apps_are_signed_by_the_script_with_the_identity_the_job_gives() {
     if !tools_available() {
         return;
     }
-    let tree = Tree::new("order");
+    let tree = Tree::new("sign");
     let output = tree.run("app-sign");
     assert!(output.status.success(), "{}", stderr(&output));
-    let calls = tree.signatures();
-    for electron in ["arm64", "x64"] {
-        let app = format!("Brave Bot-darwin-{electron}/Brave Bot.app");
-        let inside = |part: &'static str| {
-            let wanted = signed_at(part);
-            calls
-                .iter()
-                .position(|call| wanted(call) && target(call).contains(app.as_str()))
-                .unwrap_or_else(|| panic!("{part} of {app} not signed: {calls:?}"))
-        };
-        let rpc = inside("Resources/bravebot-rpc");
-        let files = inside("Resources/bravebot-ui-files");
-        let crashpad = inside("Helpers/crashpad_handler");
-        let shipit = inside("Resources/ShipIt");
-        let dylib = inside("libffmpeg.dylib");
-        let framework = inside("Electron Framework.framework");
-        let helper_app = inside("Brave Bot Helper.app");
-        let outer = calls
-            .iter()
-            .position(|call| target(call).ends_with(app.as_str()))
-            .expect("outer app signed");
-        assert!(rpc < crashpad && files < crashpad, "{calls:?}");
-        assert!(crashpad < framework && dylib < framework, "{calls:?}");
-        assert!(
-            rpc < shipit && files < shipit && shipit < framework,
-            "{calls:?}"
-        );
-        assert!(
-            !calls
-                .iter()
-                .any(|call| target(call).ends_with("Info.plist")),
-            "a property list was signed on its own: {calls:?}"
-        );
-        assert!(framework < helper_app, "{calls:?}");
-        assert!(helper_app < outer, "{calls:?}");
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|call| target(call).ends_with(&app))
-                .count(),
-            1,
-            "the outer app is signed more than once: {calls:?}"
-        );
-        let last_for_app = calls
-            .iter()
-            .rposition(|call| target(call).contains(&app))
-            .expect("signed");
-        assert_eq!(
-            outer, last_for_app,
-            "something is signed after the app: {calls:?}"
-        );
-    }
-}
-
-/// Every signature asks for the hardened runtime and a secure timestamp, uses the identity it was
-/// given, and none passes `--deep`.
-///
-/// The regression it rejects: dropping `--options runtime` or `--timestamp`, which notarisation
-/// refuses, and `--deep`, which applies one set of entitlements to everything beneath the app.
-#[test]
-fn every_signature_is_hardened_timestamped_and_not_deep() {
-    if !tools_available() {
-        return;
-    }
-    let tree = Tree::new("flags");
-    let output = tree.run("app-sign");
-    assert!(output.status.success(), "{}", stderr(&output));
-    let calls = tree.signatures();
-    assert_eq!(calls.len(), 18, "two bundles of nine signatures: {calls:?}");
-    for call in &calls {
-        let joined = call.join(" ");
-        assert!(joined.contains("--options runtime"), "{joined}");
-        assert!(call.iter().any(|a| a == "--timestamp"), "{joined}");
-        assert!(joined.contains(&format!("--sign {IDENTITY}")), "{joined}");
-        assert!(!joined.contains("--deep"), "{joined}");
-    }
-}
-
-/// The outer app is signed with the app's entitlements, the helper app with the helpers', and the
-/// two Rust executables, frameworks, dylibs and the framework's helper with none.
-///
-/// The regression it rejects: swapping the two files, giving every item the app's, or giving the
-/// agent and the file helper, which are Rust executables that run no JIT-compiled code, the
-/// `allow-jit` entitlement meant for the Electron processes, which widens what a compromised agent
-/// process may do.
-#[test]
-fn each_item_is_signed_with_the_entitlements_it_is_meant_to_carry() {
-    if !tools_available() {
-        return;
-    }
-    let tree = Tree::new("entitlements");
-    let output = tree.run("app-sign");
-    assert!(output.status.success(), "{}", stderr(&output));
-    let entitlements = |call: &[String]| {
-        call.iter()
-            .position(|a| a == "--entitlements")
-            .map(|index| call[index + 1].clone())
-    };
-    for call in tree.signatures() {
-        let path = target(&call);
-        let wanted = if path.ends_with("Brave Bot.app") {
-            Some(APP_ENTITLEMENTS)
-        } else if path.ends_with("Brave Bot Helper.app") {
-            Some(HELPER_ENTITLEMENTS)
-        } else {
-            None
-        };
-        assert_eq!(entitlements(&call).as_deref(), wanted, "{path}");
-    }
-}
-
-/// With no identity nothing is signed, and a missing second bundle stops the target before the
-/// first is signed.
-///
-/// The regression it rejects: signing with an empty identity, which `codesign` reads as ad hoc and
-/// so produces a signature notarisation refuses, and signing one architecture before finding the
-/// other missing.
-#[test]
-fn signing_stops_before_a_tool_runs_when_it_cannot_complete() {
-    if !tools_available() {
-        return;
-    }
-    let tree = Tree::new("refuse");
-    let output = tree.make("app-sign", "Accepted", &[]);
-    assert!(!output.status.success());
-    assert!(
-        stderr(&output).contains("SIGN_IDENTITY"),
-        "{}",
-        stderr(&output)
+    let calls = tree.calls();
+    let signing = script_calls(&calls, "sign");
+    assert_eq!(signing.len(), 1, "{calls:?}");
+    let call = signing[0];
+    assert!(call[1].ends_with("/ui"), "{call:?}");
+    assert_eq!(call[2], format!("SIGN_IDENTITY={IDENTITY}"), "{call:?}");
+    assert_eq!(call[4], "scripts/sign-mac.mjs", "{call:?}");
+    assert_eq!(
+        call[6..],
+        [
+            "dist/Brave Bot-darwin-arm64/Brave Bot.app",
+            "dist/Brave Bot-darwin-x64/Brave Bot.app"
+        ],
+        "{call:?}"
     );
-    assert!(tree.calls().is_empty(), "{:?}", tree.calls());
-
-    std::fs::remove_dir_all(tree.root.join("ui/dist/Brave Bot-darwin-x64")).expect("remove");
-    let output = tree.run("app-sign");
-    assert!(!output.status.success());
-    assert!(
-        stderr(&output).contains("make app-bundles"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(tree.calls().is_empty(), "{:?}", tree.calls());
 }
 
-/// An app is submitted, stapled, then assessed as an executable, and each of those happens for
-/// both architectures.
+/// Each app is notarised with the profile the job gave, then assessed as an executable.
 ///
-/// The regression it rejects: stapling before the submission is accepted, skipping the assessment,
-/// or assessing with the image's test (`-t open`), which accepts what `-t exec` refuses.
+/// The regression it rejects: skipping the assessment, which is the only check that Gatekeeper
+/// accepts the stapled app, assessing before the script has stapled, or assessing with the
+/// image's test (`-t open`), which accepts what `-t exec` refuses.
 #[test]
-fn an_accepted_app_is_stapled_then_assessed_as_an_executable() {
+fn a_notarised_app_is_assessed_as_an_executable() {
     if !tools_available() {
         return;
     }
@@ -402,213 +249,81 @@ fn an_accepted_app_is_stapled_then_assessed_as_an_executable() {
     let output = tree.run("app-notarize");
     assert!(output.status.success(), "{}", stderr(&output));
     let calls = tree.calls();
+    let notarising = script_calls(&calls, "notarize");
+    assert_eq!(notarising.len(), 1, "{calls:?}");
+    assert_eq!(
+        notarising[0][3],
+        format!("NOTARY_PROFILE={PROFILE}"),
+        "{calls:?}"
+    );
+    let notarised = position(&calls, |call| call[0] == "node", "notarising");
     for electron in ["arm64", "x64"] {
-        let app = format!("Brave Bot-darwin-{electron}/Brave Bot.app");
-        let staple = position(
-            &calls,
-            |call| call[1] == "stapler" && target(call).ends_with(&app),
-            "stapling the app",
-        );
+        let app = format!("ui/dist/Brave Bot-darwin-{electron}/Brave Bot.app");
         let assess = position(
             &calls,
-            |call| call[0] == "spctl" && target(call).ends_with(&app),
+            |call| call[0] == "spctl" && call.last() == Some(&app),
             "assessing the app",
         );
-        assert!(staple < assess, "{calls:?}");
-        let assessed = calls[assess].join(" ");
-        assert!(assessed.contains("-a -t exec"), "{assessed}");
-    }
-    let submissions: Vec<_> = calls
-        .iter()
-        .filter(|call| call[1] == "notarytool")
-        .collect();
-    assert_eq!(submissions.len(), 2, "{calls:?}");
-    for submission in submissions {
-        let joined = submission.join(" ");
-        assert!(joined.contains("--wait"), "{joined}");
-        assert!(
-            joined.contains(&format!("--keychain-profile {PROFILE}")),
-            "{joined}"
-        );
+        assert!(notarised < assess, "{calls:?}");
+        assert_eq!(calls[assess][1..4], ["-a", "-t", "exec"], "{calls:?}");
     }
 }
 
-/// A submission the service did not accept stops the target before anything is stapled or
-/// assessed, though `notarytool` exited 0.
+/// Each image goes to the script with both settings, because it is signed with the identity and
+/// submitted with the profile, then is assessed as an installer image.
 ///
-/// The regression it rejects: trusting the exit status of `notarytool submit --wait`, which is 0
-/// for an `Invalid` verdict, so a rejected app is stapled, which fails late and reads as a
-/// problem with stapling.
+/// The regression it rejects: assessing an image with the executable test, which refuses a disk
+/// image, and giving the script only the profile, which leaves the image unsigned for the service
+/// to refuse.
 #[test]
-fn a_rejected_submission_stops_before_stapling() {
-    if !tools_available() {
-        return;
-    }
-    for (target_name, subject) in [("app-notarize", "app"), ("app-dmg-notarize", "image")] {
-        let tree = Tree::new(&format!("rejected-{subject}"));
-        if subject == "image" {
-            std::fs::write(
-                tree.root.join("dist/bravebot-app-darwin-arm64.dmg"),
-                "image\n",
-            )
-            .expect("write");
-            std::fs::write(
-                tree.root.join("dist/bravebot-app-darwin-amd64.dmg"),
-                "image\n",
-            )
-            .expect("write");
-        }
-        let output = tree.make(
-            target_name,
-            "Invalid",
-            &[("SIGN_IDENTITY", IDENTITY), ("NOTARY_PROFILE", PROFILE)],
-        );
-        assert!(!output.status.success(), "{subject} was accepted");
-        assert!(
-            stderr(&output).contains("not accepted"),
-            "{}",
-            stderr(&output)
-        );
-        let calls = tree.calls();
-        assert!(
-            calls
-                .iter()
-                .all(|call| call[1] != "stapler" && call[0] != "spctl"),
-            "{subject}: {calls:?}"
-        );
-    }
-}
-
-/// A target that notarises stops before it runs a tool when the profile, the identity it signs an
-/// image with, a bundle or an image is missing, and says what to set or run.
-///
-/// The regression it rejects: submitting the first architecture and finding the second missing
-/// afterwards, which leaves one app or image notarised and the release half done, and running
-/// `notarytool` with an empty profile, which fails late with an error about the keychain.
-#[test]
-fn notarising_stops_before_a_tool_runs_when_it_cannot_complete() {
-    if !tools_available() {
-        return;
-    }
-    let tree = Tree::new("notarise-refuse");
-    for arch in ["arm64", "amd64"] {
-        std::fs::write(
-            tree.root
-                .join(format!("dist/bravebot-app-darwin-{arch}.dmg")),
-            "image\n",
-        )
-        .expect("write");
-    }
-    for (target_name, variables, says) in [
-        (
-            "app-notarize",
-            vec![("SIGN_IDENTITY", IDENTITY)],
-            "NOTARY_PROFILE",
-        ),
-        (
-            "app-dmg-notarize",
-            vec![("SIGN_IDENTITY", IDENTITY)],
-            "NOTARY_PROFILE",
-        ),
-        (
-            "app-dmg-notarize",
-            vec![("NOTARY_PROFILE", PROFILE)],
-            "SIGN_IDENTITY",
-        ),
-    ] {
-        let output = tree.make(target_name, "Accepted", &variables);
-        assert!(!output.status.success(), "{target_name} ran without {says}");
-        assert!(stderr(&output).contains(says), "{}", stderr(&output));
-        assert!(tree.calls().is_empty(), "{target_name}: {:?}", tree.calls());
-    }
-
-    std::fs::remove_dir_all(tree.root.join("ui/dist/Brave Bot-darwin-x64")).expect("remove");
-    let output = tree.run("app-notarize");
-    assert!(!output.status.success());
-    assert!(
-        stderr(&output).contains("make app-sign"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(tree.calls().is_empty(), "{:?}", tree.calls());
-
-    std::fs::remove_file(tree.root.join("dist/bravebot-app-darwin-amd64.dmg")).expect("remove");
-    let output = tree.run("app-dmg-notarize");
-    assert!(!output.status.success());
-    assert!(
-        stderr(&output).contains("make app-dmg"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(tree.calls().is_empty(), "{:?}", tree.calls());
-}
-
-/// An image is signed, submitted, stapled and then assessed as an installer image with the
-/// primary-signature context, in that order, for both architectures.
-///
-/// The regression it rejects: notarising an image that is not signed, which the service refuses,
-/// and assessing it with the executable test, which refuses a disk image.
-#[test]
-fn an_accepted_image_is_signed_stapled_and_assessed_as_an_installer() {
+fn a_notarised_image_is_assessed_as_an_installer() {
     if !tools_available() {
         return;
     }
     let tree = Tree::new("dmg-notarize");
-    for arch in ["arm64", "amd64"] {
-        std::fs::write(
-            tree.root
-                .join(format!("dist/bravebot-app-darwin-{arch}.dmg")),
-            "image\n",
-        )
-        .expect("write");
-    }
+    tree.add_images();
     let output = tree.run("app-dmg-notarize");
     assert!(output.status.success(), "{}", stderr(&output));
     let calls = tree.calls();
+    let images = script_calls(&calls, "image");
+    assert_eq!(images.len(), 1, "{calls:?}");
+    assert_eq!(
+        images[0][2..4],
+        [
+            format!("SIGN_IDENTITY={IDENTITY}"),
+            format!("NOTARY_PROFILE={PROFILE}")
+        ],
+        "{calls:?}"
+    );
+    assert_eq!(
+        images[0][6..],
+        [
+            "../dist/bravebot-app-darwin-arm64.dmg",
+            "../dist/bravebot-app-darwin-amd64.dmg"
+        ],
+        "{calls:?}"
+    );
+    let notarised = position(&calls, |call| call[0] == "node", "notarising");
     for arch in ["arm64", "amd64"] {
         let dmg = format!("dist/bravebot-app-darwin-{arch}.dmg");
-        let sign = position(
-            &calls,
-            |call| call[0] == "codesign" && target(call) == dmg,
-            "signing the image",
-        );
-        let submit = position(
-            &calls,
-            |call| {
-                call[1] == "notarytool" && call.iter().any(|a| a.ends_with(&format!("{arch}.dmg")))
-            },
-            "submitting the image",
-        );
-        let staple = position(
-            &calls,
-            |call| call[1] == "stapler" && target(call) == dmg,
-            "stapling the image",
-        );
         let assess = position(
             &calls,
-            |call| call[0] == "spctl" && target(call) == dmg,
+            |call| call[0] == "spctl" && call.last() == Some(&dmg),
             "assessing the image",
         );
-        assert!(
-            sign < submit && submit < staple && staple < assess,
+        assert!(notarised < assess, "{calls:?}");
+        assert_eq!(
+            calls[assess][1..5],
+            ["-a", "-t", "open", "--context"],
             "{calls:?}"
         );
-        let assessed = calls[assess].join(" ");
-        assert!(
-            assessed.contains("-a -t open --context context:primary-signature"),
-            "{assessed}"
-        );
-        assert!(
-            calls[sign].iter().any(|a| a == "--timestamp"),
-            "{:?}",
-            calls[sign]
-        );
+        assert_eq!(calls[assess][5], "context:primary-signature", "{calls:?}");
     }
 }
 
 /// The sub-targets of `app-release-signed` run in the order that puts a stapled ticket inside each
-/// image: every app is signed before any is submitted, every app is stapled before an image is
-/// built, and every image is built before one is signed and stapled.
+/// image: every app is signed before any is notarised, every app is notarised before an image is
+/// built, and every image is built before one is signed and notarised.
 ///
 /// The regression it rejects: swapping `app-dmg` above `app-notarize`, which builds images holding
 /// apps with no ticket, and `app-notarize` above `app-sign`, which submits an unsigned app. The
@@ -622,47 +337,39 @@ fn the_sub_targets_run_in_the_order_that_puts_the_ticket_in_the_image() {
     let output = tree.run("app-release-signed");
     assert!(output.status.success(), "{}", stderr(&output));
     let calls = tree.calls();
-    let is = |tool: &'static str, word: &'static str| {
-        move |call: &[String]| call[0] == tool && call.iter().any(|a| a == word)
+    for call in calls.iter().filter(|call| call[0] == "node") {
+        assert_eq!(
+            call[2..4],
+            [
+                format!("SIGN_IDENTITY={IDENTITY}"),
+                format!("NOTARY_PROFILE={PROFILE}")
+            ],
+            "a sub-target did not get the settings: {call:?}"
+        );
+    }
+    let at = |command: &str| {
+        position(
+            &calls,
+            |call| call[0] == "node" && call[5] == command,
+            command,
+        )
     };
-    let last = |wanted: &dyn Fn(&[String]) -> bool, what: &str| {
-        calls
-            .iter()
-            .rposition(|call| wanted(call))
-            .unwrap_or_else(|| panic!("no call for {what} in {calls:?}"))
-    };
-    let app_sign = last(
-        &|call| is("codesign", "--sign")(call) && target(call).ends_with("Brave Bot.app"),
-        "signing an app",
-    );
-    let submit_app = position(&calls, is("xcrun", "submit"), "the first submission");
-    let app_staple = last(
-        &|call| is("xcrun", "staple")(call) && target(call).ends_with("Brave Bot.app"),
-        "stapling an app",
-    );
     let first_image = position(&calls, |call| call[0] == "hdiutil", "building an image");
-    let last_image = last(&|call| call[0] == "hdiutil", "building an image");
-    let image_sign = position(
-        &calls,
-        |call| is("codesign", "--sign")(call) && target(call).ends_with(".dmg"),
-        "signing an image",
-    );
-    let image_staple = position(
-        &calls,
-        |call| is("xcrun", "staple")(call) && target(call).ends_with(".dmg"),
-        "stapling an image",
-    );
+    let last_image = calls
+        .iter()
+        .rposition(|call| call[0] == "hdiutil")
+        .expect("an image was built");
     assert!(
-        app_sign < submit_app,
+        at("sign") < at("notarize"),
         "an app was submitted before it was signed: {calls:?}"
     );
     assert!(
-        app_staple < first_image,
-        "an image was built before an app was stapled: {calls:?}"
+        at("notarize") < first_image,
+        "an image was built before an app was notarised: {calls:?}"
     );
     assert!(
-        last_image < image_sign && last_image < image_staple,
-        "an image was signed or stapled before all were built: {calls:?}"
+        last_image < at("image"),
+        "an image was signed or notarised before all were built: {calls:?}"
     );
 }
 
@@ -769,7 +476,7 @@ fn the_cli_checksums_leave_a_disk_image_out() {
     for name in ["bravebot-darwin-arm64", "bravebot-app-darwin-arm64.dmg"] {
         std::fs::write(tree.root.join("dist").join(name), "bytes\n").expect("write");
     }
-    let output = tree.make("checksums", "Accepted", &[]);
+    let output = tree.make("checksums", &[]);
     assert!(output.status.success(), "{}", stderr(&output));
     let sums = std::fs::read_to_string(tree.root.join("dist/SHA256SUMS")).expect("read sums");
     assert!(sums.contains("bravebot-darwin-arm64"), "{sums}");

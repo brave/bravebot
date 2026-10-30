@@ -166,7 +166,7 @@ which runs these in order, each of which can be run alone after the one before i
 
 ```sh
 make app-bundles        # ui/dist/Brave Bot-darwin-arm64/ and ui/dist/Brave Bot-darwin-x64/
-make app-sign           # codesign each bundle from the inside out
+make app-sign           # sign each bundle from the inside out
 make app-notarize       # submit, wait, staple and assess each Brave Bot.app
 make app-dmg            # dist/bravebot-app-darwin-<arch>.dmg
 make app-dmg-notarize   # sign, submit, wait, staple and assess each image
@@ -175,32 +175,44 @@ make app-dmg-sha256     # dist/bravebot-app-darwin-<arch>.dmg.sha256, of the fin
 
 The job that runs it supplies `SIGN_IDENTITY`, the Developer ID Application identity in the Mac
 node's keychain, and `NOTARY_PROFILE`, the `notarytool` keychain profile. No target holds either,
-and each stops before it runs a tool when one it needs is unset.
+and `ui/scripts/sign-mac.mjs` stops before it runs a tool when one it needs is unset or a bundle
+or image it works on is missing.
 
-`app-sign` signs from the inside out: the two executables in `Contents/Resources/`, which
-`codesign --deep` does not look at and notarisation rejects unsigned, then the executables in the
-frameworks, which are the files in a `Helpers` directory and the executable files in a `Resources`
-directory (Squirrel's `ShipIt`), every dylib and framework under `Contents/Frameworks`, the
-helper apps there, and the app last. Every signature has the hardened runtime and a secure
+`app-sign`, `app-notarize` and `app-dmg-notarize` run that script, which calls
+`@electron/osx-sign` and `@electron/notarize`. These are the libraries the packager runs for its
+`osxSign` and `osxNotarize` options. The script calls them after packaging and not as options of
+`ui/scripts/package.mjs`, because that script sets the fuses after the packager returns and
+setting them rewrites the Electron binary, which a signature covers.
+
+`@electron/osx-sign` signs every binary in the bundle from the inside out, which includes the two
+executables in `Contents/Resources/` that `codesign --deep` does not look at and notarisation
+rejects unsigned, the executables in the frameworks, every dylib and framework, the helper apps and
+the main executable, and the app last. Every signature has the hardened runtime and a secure
 timestamp, and none is made with `--deep`, which would give every item the same entitlements. The
-app is signed with `ui/build/entitlements.mac.plist`, and the helper apps with
-`ui/build/entitlements.mac.inherit.plist`. Each holds `com.apple.security.cs.allow-jit` and
-nothing else, and `ui/scripts/entitlements.test.mjs` holds them to that. The two executables,
-frameworks and dylibs carry none: the executables are Rust programs that run no JIT-compiled code,
-so `allow-jit` would only widen what a compromised agent process may do.
+app and its main executable are signed with `ui/build/entitlements.mac.plist`, and the helper apps
+and what is in them with `ui/build/entitlements.mac.inherit.plist`. Each holds
+`com.apple.security.cs.allow-jit` and nothing else, which is also all that the library's own
+defaults give the renderer and GPU helpers. Everything else is signed with
+`ui/build/entitlements.mac.none.plist`, which has no keys, because the library always passes an
+entitlements file. That is the two executables in `Contents/Resources/`, which are Rust programs
+that run no JIT-compiled code, so `allow-jit` would only widen what a compromised agent process may
+do, and the frameworks and dylibs. `ui/scripts/entitlements.test.mjs` holds the three files to
+their contents.
 
-`app-notarize` and `app-dmg-notarize` read the status `notarytool submit --wait` prints and stop
-unless it is `Accepted`, because `notarytool` exits 0 for a rejected submission. They then staple
-and run `spctl -a -t exec` on the app, and `spctl -a -t open --context context:primary-signature`
-on the image. The image is signed before it is submitted. `app-dmg-sha256` runs last because
+`@electron/notarize` checks the signature, submits with `notarytool submit --wait`, requires the
+status to be `Accepted` because `notarytool` exits 0 for a rejected submission, and staples. For an
+image the script signs it first. The targets then run `spctl -a -t exec` on each app, and `spctl -a
+-t open --context context:primary-signature` on each image. `app-dmg-sha256` runs last because
 stapling rewrites the image: a digest taken before it does not match what is uploaded. `make
 checksums` removes every `.sha256` in `dist/`, so the job runs it before `app-dmg-sha256`.
 
-`crates/cli/tests/app_signing.rs` runs these targets against stand-ins for `codesign`,
-`xcrun`, `spctl`, `ditto` and `hdiutil`, so it holds the order, the flags, the entitlements and the
-stop on a rejection. Whether the real tools accept the result, and whether Apple notarises it, has
-not been run: it needs the Developer ID identity and the notary service, which only the release job
-has ([RELEASE-23](../specs/releases.md#RELEASE-23)).
+`ui/scripts/sign-mac.test.mjs` runs the two libraries against stand-ins for `codesign`,
+`security`, `xcrun` and `ditto`, so it holds the order, the flags, the entitlements and the stop on
+a rejection. `crates/cli/tests/app_signing.rs` runs the targets against stand-ins for `node`,
+`spctl`, `ditto` and `hdiutil`, so it holds what each target hands the script, the assessments, the
+order of the targets and the checksums. Whether the real tools accept the result, and whether Apple
+notarises it, has not been run: it needs the Developer ID identity and the notary service, which
+only the release job has ([RELEASE-23](../specs/releases.md#RELEASE-23)).
 
 No CI job packages or signs the app and the tag does not either. The Jenkins job `brave-bot-build`
 runs the targets above on the Mac node. Where the job gets the two executables is a default recorded
