@@ -819,7 +819,9 @@ impl Provider {
             name: string(entry.get("name")),
             base_url: base_url.trim_end_matches('/').to_string(),
             env: match (names(entry.get("env")), cloudflare_key_variable(id)) {
-                (named, Some(default)) if named.is_empty() && !names_a_credential => {
+                (named, Some(default))
+                    if named.is_empty() && !names_a_credential && stated.is_none() =>
+                {
                     vec![default.to_string()]
                 }
                 (named, _) => named,
@@ -2318,6 +2320,11 @@ mod tests {
             r#"{"options": {"accountId": "a1", "apiKey": "k"}}"#,
         );
         assert!(keyed[0].env.is_empty());
+        let proxied = cloudflare(
+            "cloudflare-workers-ai",
+            r#"{"options": {"baseURL": "https://proxy.example.invalid/v1"}}"#,
+        );
+        assert!(proxied[0].env.is_empty());
         assert!(
             cloudflare(
                 "some-other",
