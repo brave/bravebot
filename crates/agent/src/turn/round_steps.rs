@@ -1365,6 +1365,7 @@ pub(super) fn tools_for_a_call<'a>(
     quarantine: &'a mut bravebot_core::slot::SlotStore,
     reads: &'a mut crate::conversation::ShownReads,
     messages: &'a [Message],
+    typed: &'a [String],
 ) -> tools::Tools<'a> {
     let Inputs {
         config,
@@ -1406,6 +1407,10 @@ pub(super) fn tools_for_a_call<'a>(
             context: messages,
             asked: &mut state.advice_asked,
         }),
+        // Only a session the person has typed to, and never a delegate: its task is a sentence the
+        // driver composed, so there is nothing of the person's for the classifier to read (AUTO-3).
+        classifying: (task.delegate.is_none() && !typed.is_empty())
+            .then_some(crate::classifier::Classifying { typed }),
         messaging: task
             .courier
             .as_deref()

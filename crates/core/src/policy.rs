@@ -3695,6 +3695,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record one question put to the auto mode's classifier: which model, what kind of question,
+    /// the word it gave, and what the call cost.
+    ///
+    /// `question` and `word` are fixed text chosen by the caller, and `model` is the session's own
+    /// setting, so the entry holds no word of what the classifier was shown or wrote (AUTO-7,
+    /// TRACE-2). A word of "not allowed" is how a block, an unreadable reply and a failed call all
+    /// read here, as they do to everything else that reads the answer (AUTO-6).
+    pub fn record_classification(
+        &mut self,
+        model: &str,
+        question: &'static str,
+        word: &'static str,
+        cost: u64,
+    ) {
+        self.allow(
+            "auto_mode",
+            format!(
+                "the classifier {model} was asked about a {question} and said {word}, costing \
+                 {cost} tokens"
+            ),
+        );
+    }
+
     /// Take the message the planner wants to send to another session, to be sent under the label
     /// its own context gives it (MSG-2).
     ///

@@ -53,6 +53,8 @@ sentence the planner reads names none of them.
 
 A `run` line put to the person and not approved, by an answer of no, Ctrl-C or nobody being there
 to ask, is recorded as a refusal under `approval` saying the line was not approved and did not run.
+A question the auto mode's classifier did not allow is not a refusal: it is put to the person, and
+the `auto_mode` entry before it ([TRACE-7](#TRACE-7)) is what tells its no from the person's.
 Its `sandbox` entry, which names the mode the programs ran in, is written only once the line is
 approved, so a line that did not start is not recorded as having run.
 
@@ -309,6 +311,13 @@ A language server's start that the mode answers ([LSP-5](tools/lsp.md#LSP-5)) is
 being asked about, since the policy decides nothing about one. Other prompts a mode answers, such
 as a fetch, are not named here.
 
+Each question put to the auto mode's classifier ([AUTO-8](auto-mode.md#AUTO-8)) is one entry under
+`auto_mode`, written before the question is answered. It names the model, the kind of question
+(`run` or `fetch`), the word the classifier gave and what the call cost, and holds no word of what it
+was shown or wrote. The `approval` entry after it says "answered by auto mode, nobody was asked" where
+the word was allow, and "no mode answered" otherwise. The first question about a URL is recorded this
+way in auto and in no other mode.
+
 Answers that were never a prompt already say so in their own entry: a rule in the settings file, a
 command the user vouched for, and the audited table.
 
@@ -323,6 +332,8 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 `verified-by: bravebot_agent::manifest::a_planned_write_names_what_answered_it`
 `verified-by: bravebot_agent::lsp::bypass_with_the_sandbox_off_starts_a_language_server_and_the_trail_names_the_mode`
 `verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`
+`verified-by: bravebot_agent::turn::auto_answers_a_confined_run_on_the_classifiers_allow_word_and_asks_the_person_otherwise`
+`verified-by: bravebot_agent::turn::auto_answers_a_fetch_on_the_classifiers_allow_word_and_asks_the_person_otherwise`
 
 <a id="TRACE-8"></a>
 ### TRACE-8: the trail says how each delegate ended and why

@@ -30,8 +30,9 @@ documented-by:
 
 ## Scope
 
-A standing answer to the questions a person is otherwise asked one at a time. Four modes: asking,
-accepting edits, planning, and bypassing every check. One key cycles them, and `/plan` sets planning. The mode in force is
+A standing answer to the questions a person is otherwise asked one at a time. Five modes: asking,
+accepting edits, planning, auto ([auto-mode.md](auto-mode.md)), and bypassing every check. One key
+cycles them, and `/plan` sets planning. The mode in force is
 drawn under the input box for as long as it holds.
 
 What each of those questions *is*, and what a prompt owes its reader, is
@@ -325,9 +326,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 <a id="MODE-5"></a>
 ### MODE-5: bypassing is one rung of the ladder the key walks, and a flag opens the session on it, unless a layer made it unreachable
 
-The key walks asking, accepting edits, planning and bypassing, in that order, and back to asking,
+The key walks asking, accepting edits, planning, auto and bypassing, in that order, and back to asking,
 in every session. `--dangerously-skip-permissions` does not put the mode on the ladder; it opens the
-session in it. Without the flag a session opens asking and reaches bypass by pressing the key three
+session in it. Without the flag a session opens asking and reaches bypass by pressing the key four
 times. Nothing is asked when it gets there: the line under the input box draws the mode in colour
 ([INPUT-13](terminal-input.md#INPUT-13)), and that is the only notice.
 
@@ -373,6 +374,7 @@ and an administrator may pin ([PERM-18](permissions.md#PERM-18)). It is checked 
 read and where the key is read, so the two cannot disagree about whether the mode is available.
 
 `verified-by: bravebot_agent::permission_mode::bypass_is_reachable_unless_a_layer_made_it_unreachable`
+`verified-by: bravebot_agent::permission_mode::the_key_reaches_auto_after_planning_and_before_bypass`
 `verified-by: bravebot_cli::main::the_bypass_flag_is_refused_where_a_layer_made_the_mode_unreachable`
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
 `verified-by: bravebot_tui::app::the_key_reaches_bypass_without_the_flag`
@@ -502,9 +504,10 @@ directories that sitting held, since the mode answered for them ([TRUST-6](trust
 <a id="MODE-11"></a>
 ### MODE-11: the desktop offers asking, accepting edits and planning, one mode per open session
 
-The desktop window offers three of the four modes: asking, accepting edits and planning. Bypassing
-is not among them and no request reaches it. The window has no command line for the flag in MODE-5
-to be given on, so a request naming bypass is refused rather than read as another mode.
+The desktop window offers three of the five modes: asking, accepting edits and planning. Auto and
+bypassing are not among them and no request reaches either. The window has no command line for the
+flag in MODE-5 to be given on, so a request naming either is refused rather than read as another
+mode.
 
 The mode belongs to one open session, and every session opens asking, a resumed session and a fork
 included (MODE-10). The bridge holds it, rather than each turn's request carrying it, because a
@@ -609,9 +612,9 @@ invented (MODE-7), so no mode answers it for the person.
 
 ## Known costs
 
-- **Bypassing is one key press past planning.** The ladder ends there, so a person leaving plan mode
-  with the key passes through it, and a press that is one too many lands in the mode that asks about
-  nothing. The line under the box names it in colour, and the next press returns to asking. A machine
+- **Bypassing is two key presses past planning, and auto is the one between.** The ladder ends at
+  bypassing, so a person leaving plan mode with the key passes through auto, and a press that is one
+  too many after that lands in the mode that asks about nothing. The line under the box names it in colour, and the next press returns to asking. A machine
   that should not allow this says so with `permissions.bypassUnreachable` (MODE-5).
 - **Accepting edits accepts a write to any path the workspace reaches.** The mode answers the write
   prompt, and the prompt is the only thing that would have shown the person the path. A rule in the

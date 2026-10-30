@@ -2064,7 +2064,11 @@ fn handed_to_the_background(
         return Err(t!(bg_unsupported).to_string());
     }
     let Some(mode) = bravebot_session::jobs::Mode::of(session.permission_mode()) else {
-        return Err(t!(session_bg_bypass).to_string());
+        return Err(match session.permission_mode() {
+            bravebot_agent::PermissionMode::Auto => t!(session_bg_auto),
+            _ => t!(session_bg_bypass),
+        }
+        .to_string());
     };
     if let Some(flag) = lost {
         return Err(t!(session_bg_option_lost, flag = flag));
@@ -6686,6 +6690,7 @@ mod tests {
             url: "https://example.test/".into(),
             host: "example.test".into(),
             redirected_from: None,
+            classified: Default::default(),
         })
     }
 
@@ -13142,9 +13147,10 @@ mod tests {
     /// the key does not, at the plain prompt and while a turn runs, at each step as far as the row
     /// draws a name to click on, with one difference: the key reaches bypass and the click never
     /// does, because a stray click on the indicator would otherwise stop every later question
-    /// being asked. The regressions it rejects are a click that cycles by another order than the key,
-    /// one that reaches a mode the key does not, one that writes a note, and one that moves into
-    /// bypass, which the key still does from the same state.
+    /// being asked. Auto is the same: the key reaches it, and a click passes it by because it hands
+    /// the run and fetch questions to a model. The regressions it rejects are a click that cycles by
+    /// another order than the key, one that reaches a mode the key does not, one that writes a note,
+    /// and one that moves into bypass or auto, which the key still does from the same state.
     #[test]
     fn a_click_on_the_permission_mode_moves_as_the_key_does_and_never_into_bypass() {
         use bravebot_agent::PermissionMode;
@@ -13165,7 +13171,7 @@ mod tests {
                 };
             };
             let (mut clicked, mut keyed) = (start(turn_running), start(turn_running));
-            let (mut steps, mut key_reached_bypass) = (0, false);
+            let (mut steps, mut key_reached_bypass, mut key_reached_auto) = (0, false, false);
             while let Some(name) = crate::status::named_mode(clicked.permission_mode(), false) {
                 let buffer = drawn(&mut clicked);
                 let (row, column) = find_cell(&buffer, name);
@@ -13174,14 +13180,20 @@ mod tests {
                 clicked.last_click = None;
                 click(&mut clicked, row, column + 1);
                 press_the_key(&mut keyed);
-                assert_ne!(
-                    clicked.permission_mode(),
-                    PermissionMode::Bypass,
-                    "step {steps}, turn running: {turn_running}: the click moved into bypass"
+                assert!(
+                    !matches!(
+                        clicked.permission_mode(),
+                        PermissionMode::Bypass | PermissionMode::Auto
+                    ),
+                    "step {steps}, turn running: {turn_running}: the click moved into a mode that stops asking"
                 );
-                if keyed.permission_mode() == PermissionMode::Bypass {
-                    key_reached_bypass = true;
-                    // The key goes on round from bypass to where the click already is.
+                // The key goes on round from auto and bypass to where the click already is.
+                while matches!(
+                    keyed.permission_mode(),
+                    PermissionMode::Bypass | PermissionMode::Auto
+                ) {
+                    key_reached_bypass |= keyed.permission_mode() == PermissionMode::Bypass;
+                    key_reached_auto |= keyed.permission_mode() == PermissionMode::Auto;
                     press_the_key(&mut keyed);
                 }
                 assert_eq!(
@@ -13202,6 +13214,10 @@ mod tests {
                 key_reached_bypass,
                 "the key no longer reaches bypass from the state the click left"
             );
+            assert!(
+                key_reached_auto,
+                "the key no longer reaches auto from the state the click left"
+            );
         }
     }
 
@@ -13213,7 +13229,7 @@ mod tests {
     fn a_click_on_the_permission_mode_in_bypass_moves_out_of_it() {
         use bravebot_agent::PermissionMode;
         let mut session = Session::new("none");
-        for _ in 0..3 {
+        for _ in 0..4 {
             session.cycle_permission_mode();
         }
         assert_eq!(session.permission_mode(), PermissionMode::Bypass);
@@ -34642,9 +34658,9 @@ mod tests {
         assert!(session.input().is_empty());
     }
 
-    /// The ladder the key walks, from the box. Three rungs where the flag was not given, and back to
-    /// asking: a key that stopped cycling would leave somebody in a mode they could not press their
-    /// way out of.
+    /// The ladder the key walks, from the box. Four rungs and bypass where the flag was not given,
+    /// and back to asking: a key that stopped cycling would leave somebody in a mode they could not
+    /// press their way out of.
     #[test]
     fn shift_tab_cycles_the_permission_mode() {
         use bravebot_agent::PermissionMode;
@@ -34654,6 +34670,7 @@ mod tests {
         for expected in [
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
             PermissionMode::Bypass,
             PermissionMode::Ask,
         ] {
@@ -34701,11 +34718,11 @@ mod tests {
         let mut session = Session::new("none");
         assert!(!session.began_in_bypass());
         let mut reached = false;
-        for _ in 0..4 {
+        for _ in 0..5 {
             handle_key(&mut session, shift(KeyCode::Tab));
             reached |= session.permission_mode() == PermissionMode::Bypass;
         }
-        assert!(reached, "four presses never reached bypass");
+        assert!(reached, "five presses never reached bypass");
         assert_eq!(session.permission_mode(), PermissionMode::Ask);
         assert!(!session.began_in_bypass());
     }
@@ -34757,6 +34774,7 @@ mod tests {
         session.cycle_permission_mode();
         session.cycle_permission_mode();
         session.cycle_permission_mode();
+        session.cycle_permission_mode();
         assert_eq!(session.permission_mode(), PermissionMode::Bypass);
 
         rules.read_for(
@@ -34768,9 +34786,9 @@ mod tests {
         );
 
         assert_eq!(session.permission_mode(), PermissionMode::Ask);
-        session.cycle_permission_mode();
-        session.cycle_permission_mode();
-        session.cycle_permission_mode();
+        for _ in 0..4 {
+            session.cycle_permission_mode();
+        }
         assert_eq!(session.permission_mode(), PermissionMode::Ask);
 
         std::fs::remove_dir_all(&root).ok();
@@ -34788,6 +34806,7 @@ mod tests {
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
+            PermissionMode::Auto,
             PermissionMode::Bypass,
         ] {
             handle_key(&mut session, shift(KeyCode::Tab));

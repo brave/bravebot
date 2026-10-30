@@ -138,8 +138,8 @@ impl Held {
 
 /// The mode a background session runs in, for as long as its process runs (BG-8).
 ///
-/// Bypass is not a variant: a background session cannot be in it, so the roster has no way to say
-/// that one is.
+/// Bypass and auto are not variants: a background session cannot be in either, so the roster has no
+/// way to say that one is (BG-7, AUTO-1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Mode {
@@ -156,7 +156,7 @@ impl Mode {
             PermissionMode::Ask => Some(Self::Ask),
             PermissionMode::AcceptEdits => Some(Self::AcceptEdits),
             PermissionMode::Plan => Some(Self::Plan),
-            PermissionMode::Bypass => None,
+            PermissionMode::Bypass | PermissionMode::Auto => None,
         }
     }
 
@@ -804,6 +804,17 @@ mod tests {
         let said = held_refusal("0123456789abcdef", usize::MAX);
         assert!(said.contains("bravebot attach 01234567"), "{said}");
         assert!(!said.contains("012345678"), "{said}");
+    }
+
+    /// AUTO-1, BG-7: a background session cannot be in auto, so the roster has no word for it and a
+    /// foreground session in it cannot be handed over. The regression it rejects is a mode that
+    /// changes who answers a question carried into a session nobody is watching.
+    #[test]
+    fn a_background_session_cannot_be_in_auto() {
+        use bravebot_agent::PermissionMode;
+        assert_eq!(Mode::of(PermissionMode::Auto), None);
+        assert_eq!(Mode::named("auto"), None);
+        assert_eq!(Mode::of(PermissionMode::Plan), Some(Mode::Plan));
     }
 
     fn job(id: &str) -> Job {

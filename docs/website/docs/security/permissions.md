@@ -331,7 +331,7 @@ because consent to talk to a host is not a claim about what it returns. See
 
 ## Answering in advance: modes
 
-**Shift-Tab** walks the session through four modes (asking, accepting edits, plan mode and
+**Shift-Tab** walks the session through five modes (asking, accepting edits, plan mode, auto and
 bypassing), and the one in force is drawn under the input box. A mode is a standing answer to the
 questions above, given once instead of one at a time. [Permission modes](permission-modes.md) has what
 each one answers, what accepting edits stops at, what `--dangerously-skip-permissions` skips, and the

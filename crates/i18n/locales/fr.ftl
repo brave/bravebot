@@ -141,6 +141,7 @@ mode-ask = ◇ demande avant d'agir
 mode-accept-edits = ⏵ modifications acceptées
 mode-plan = ⏸ mode plan
 mode-bypass = ⏵⏵ permissions contournées
+mode-auto = ⏵⏵ mode automatique
 
 cli-options-heading = Options :
 cli-option-file = Inclure un fichier de l'espace de travail comme contexte (répétable)
@@ -199,6 +200,12 @@ cli-accept-edits-not-with-bypass =
     --accept-edits est refusé avec { $flag } : le second répond à toutes les questions du premier et à d'autres, précisez donc lequel vous voulez
 cli-accept-edits-needs-a-run =
     --accept-edits s'applique à une exécution ponctuelle, comme -p "tâche". Une session a la touche de mode
+cli-auto-not-with-bypass =
+    --auto est refusé avec { $flag } : le second répond à toutes les questions du premier et à d'autres, précisez donc lequel vous voulez
+cli-auto-not-with-accept-edits =
+    --auto est refusé avec --accept-edits : auto répond aussi à une écriture comme le fait l'acceptation des modifications, donnez donc --auto seul
+cli-auto-needs-a-run =
+    --auto s'applique à une exécution ponctuelle, comme -p "tâche". Une session a la touche de mode
 cli-option-vet =
     Pour cette exécution, laisser une vérification répondre : le contenu où elle ne trouve rien est
     promu sans vous demander, et quand personne ne peut être consulté, tout le reste est retenu
@@ -215,6 +222,10 @@ cli-bypass-and-sandbox-disagree =
 cli-option-accept-edits =
     Pour une exécution ponctuelle, écrire les fichiers sans demander. Les commandes, les
     récupérations et une écriture qui créerait un identifiant restent refusées
+cli-option-auto =
+    Pour une exécution ponctuelle, laisser un classificateur répondre pour une commande que le bac à
+    sable confine et pour la première récupération d'une URL, et écrire les fichiers sans demander.
+    Tout ce que le classificateur n'autorise pas est refusé, de même qu'une écriture qui créerait un identifiant
 cli-option-help = Afficher ce message
 cli-option-version = Afficher la version
 
@@ -2959,6 +2970,7 @@ session-cd-needs-a-path = /cd demande un répertoire, comme /cd ~/projets/autre
 session-directory-changed = travail désormais dans { $directory }, et approuvé pour cette session
 # Le mode où se trouvait la personne, retiré par une couche de réglages du répertoire où elle est allée.
 session-bypass-made-unreachable = permissions.bypassUnreachable est défini ici : le contournement est désactivé et la session demande de nouveau
+session-bg-auto = /bg est refusé en mode automatique, car une session que personne ne regarde n'a personne à qui poser la question lorsque le classificateur ne l'autorise pas. Passez d'abord dans un autre mode, ou utilisez une exécution unique.
 session-bg-bypass = /bg est refusé en contournement, car une session que personne ne surveille ne tourne pas dans un mode qui répond à toutes les questions. Changez de mode d'abord, ou utilisez une exécution ponctuelle.
 session-bg-option-lost = /bg est refusé, car cette session a été démarrée avec { $flag }, que la session en arrière-plan ne reçoit pas. Démarrez une session sans cette option pour utiliser /bg.
 session-bg-sandbox-moved = /bg est refusé, car /sandbox a placé cette session en mode { $mode }, et une session en arrière-plan démarre en mode { $settled }. Lancez /sandbox { $settled } d'abord pour utiliser /bg.

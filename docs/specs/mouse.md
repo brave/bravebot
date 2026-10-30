@@ -365,7 +365,7 @@ the listing is the session's own, with nothing a tool returned in it
 
 On the row under the box, a left click that sweeps nothing on the permission mode, where the row
 draws one, moves to the next mode round the ladder the key that cycles it goes round
-([MODE-8](permission-modes.md#MODE-8)), except that it never moves into bypass. As for
+([MODE-8](permission-modes.md#MODE-8)), except that it never moves into bypass or auto. As for
 [MOUSE-12](#MOUSE-12), the press and the release are on one cell and the press is a single click, so a
 drag is a selection, and a click over the scroller or a history search does nothing. The rest of the row is not a target, nor is a mode the row does not draw: the
 ordinary mode has no name there, and a row too narrow for the mode is cleared whole. While a command
@@ -375,8 +375,10 @@ the row then ([MOUSE-48](#MOUSE-48)). The other hints of the row are [MOUSE-48](
 Bypass answers every later question without asking ([MODE-5](permission-modes.md#MODE-5)). A click
 can be made by accident, or by a terminal that reports a position it was not at, and it must not be
 able to grant that. From plan a click moves to the ordinary mode, and a click in bypass moves to the
-ordinary mode too. The key reaches bypass where it is reachable. The key stays the way to do it
-without a mouse, and is the only way into bypass.
+ordinary mode too. Auto hands the run and fetch questions to a model
+([AUTO-1](auto-mode.md#AUTO-1)), so a click passes it by in the same way: from plan a click moves to
+the ordinary mode. The key reaches bypass where it is reachable. The key stays the way to do it
+without a mouse, and is the only way into bypass and into auto.
 
 `verified-by: bravebot_tui::app::a_click_on_the_footers_permission_mode_cycles_it`
 `verified-by: bravebot_tui::app::a_click_on_the_permission_mode_moves_as_the_key_does_and_never_into_bypass`

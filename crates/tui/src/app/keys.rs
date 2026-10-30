@@ -2438,7 +2438,7 @@ fn click_footer(session: &mut Session, target: crate::state::Footer) -> Action {
     match target {
         // The ladder short of bypassing: a click never grants what stops every later question
         // being asked (MOUSE-14).
-        Footer::Mode => session.cycle_permission_mode_short_of_bypass(),
+        Footer::Mode => session.cycle_permission_mode_by_click(),
         Footer::Trail => session.toggle_trail(),
         Footer::Shortcuts => session.toggle_shortcuts(),
         Footer::Info => session.toggle_panel(),

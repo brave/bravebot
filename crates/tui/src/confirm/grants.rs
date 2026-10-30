@@ -595,6 +595,7 @@ mod tests {
             url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/".to_string(),
             host: "169.254.169.254".to_string(),
             redirected_from: None,
+            classified: Default::default(),
         });
         assert!(drawn.contains("metadata service"), "{drawn}");
         assert!(drawn.contains("credentials of the role"), "{drawn}");
@@ -608,6 +609,7 @@ mod tests {
             url: "https://docs.example.com/start".to_string(),
             host: "cdn.example.net".to_string(),
             redirected_from: Some("docs.example.com".to_string()),
+            classified: Default::default(),
         });
         assert!(drawn.contains("talking to cdn.example.net"), "{drawn}");
         assert!(
@@ -619,6 +621,7 @@ mod tests {
             url: "https://docs.example.com/start".to_string(),
             host: "docs.example.com".to_string(),
             redirected_from: None,
+            classified: Default::default(),
         });
         assert!(!plain.contains("redirected"), "{plain}");
     }
@@ -630,6 +633,7 @@ mod tests {
             url: "https://example.test/page".to_string(),
             host: "example.test".to_string(),
             redirected_from: None,
+            classified: Default::default(),
         });
         assert!(!drawn.contains("metadata service"), "{drawn}");
     }
@@ -643,6 +647,7 @@ mod tests {
             url: format!("https://docs.example.invalid/{}", "section/".repeat(250)),
             host: "docs.example.invalid".to_string(),
             redirected_from: None,
+            classified: Default::default(),
         };
         for width in [56, 64, 80] {
             let (rows, drawn) = fetch_screen(&request, (width, 24), 0);

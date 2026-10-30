@@ -48,7 +48,7 @@ rules here.
 | why the planner has no shell, and what `run` may do | [shell-mode.md](docs/specs/shell-mode.md), [run.md](docs/specs/tools/run.md) |
 | `@`, pasting, dropping a file | [naming-files.md](docs/specs/naming-files.md), [pasting.md](docs/specs/pasting.md), [dropping.md](docs/specs/dropping.md) |
 | when a person is asked, and what an answer grants | [prompting.md](docs/specs/prompting.md) |
-| answering those prompts in advance: accepting edits, planning, bypassing | [permission-modes.md](docs/specs/permission-modes.md) |
+| answering those prompts in advance: accepting edits, planning, auto, bypassing | [permission-modes.md](docs/specs/permission-modes.md) |
 | `AGENTS.md` and skills | [skills.md](docs/specs/skills.md) |
 | running a command of a person's own when something happens | [hooks.md](docs/specs/hooks.md) |
 | which crate may do what | [layering.md](docs/specs/layering.md) |
