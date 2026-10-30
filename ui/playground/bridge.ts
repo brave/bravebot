@@ -446,6 +446,8 @@ const bridge: BravebotApi = {
   writeTheme: (name) => { appearance = name; localStorage.setItem('playground:theme', name); for (const listen of themeListeners) listen({ chosen: name }) },
   onThemeChanged: (listener) => { themeListeners.add(listener); return () => themeListeners.delete(listener) },
   relaunch: async () => false,
+  caffeinateConfirmed: async () => false,
+  confirmCaffeinate: async () => undefined,
   reportFault: () => undefined,
   reloadWindow: () => location.reload(),
   readRecents: async () => [DIRECTORY, '/Users/example/tide-tables', '/Users/example/a-very-long-project-name-that-needs-truncation'],
