@@ -1280,6 +1280,9 @@ pub struct Config {
     /// `None`, and `inherit`, leave a processor on the turn's own model. [`Config::processor`]
     /// resolves a tier word in it.
     pub processor_model: Option<String>,
+    /// The format `/commit-message` follows when no words are typed after the command, as the
+    /// person's own settings wrote it (CMD-23).
+    pub commit_message_instructions: Option<String>,
     /// The cache lifetime the settings in force chose for requests to a gateway, if they chose one.
     ///
     /// `None` sends no lifetime, so every service keeps its own default. Bedrock accounts carry the
@@ -1562,6 +1565,8 @@ impl Config {
         config.summary_model = settings.summary_model().map(str::to_string);
         config.plan_model = settings.plan_model().map(str::to_string);
         config.processor_model = settings.processor_model().map(str::to_string);
+        config.commit_message_instructions =
+            settings.commit_message_instructions().map(str::to_string);
         let ttl = settings.prompt_cache_ttl();
         config.prompt_cache_ttl = ttl;
         config.bedrock = config.bedrock.map(|account| account.with_cache_ttl(ttl));
@@ -1712,6 +1717,7 @@ impl Config {
             summary_model: None,
             plan_model: None,
             processor_model: None,
+            commit_message_instructions: None,
             prompt_cache_ttl: None,
             context_budget,
             budget_was_chosen,

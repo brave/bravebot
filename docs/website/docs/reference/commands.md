@@ -1038,7 +1038,9 @@ Drafts a commit message from changes and puts it in the input box. The source is
 
 Words after the source are the format you want: `/commit-message --staged use Conventional
 Commits`. The two flags only count as the first word, so `/commit-message use Conventional Commits`
-drafts from the staged changes in that format. A range that is not two plain revisions is refused
+drafts from the staged changes in that format. With none, the draft follows
+[`commitMessage.instructions`](../customize/configuration.md#commitmessageinstructions) where your
+settings hold it, and words you type replace it. A range that is not two plain revisions is refused
 with a usage note.
 
 The planner does not see the diff. The program reads it without starting `git`, under the rules

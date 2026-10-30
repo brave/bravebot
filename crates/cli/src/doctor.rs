@@ -502,6 +502,9 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     ignored(settings.processor_ignored(), |path| {
         t!(doctor_settings_processor_ignored, path = path)
     });
+    ignored(settings.commit_message_ignored(), |path| {
+        t!(doctor_settings_commit_message_ignored, path = path)
+    });
     ignored(settings.agent_ignored(), |path| {
         t!(doctor_settings_agent_ignored, path = path)
     });

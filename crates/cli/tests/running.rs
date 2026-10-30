@@ -6692,6 +6692,42 @@ fn doctor_names_the_file_of_a_checkouts_processor_model_that_is_not_obeyed() {
     assert!(!stdout.contains("attacker-chosen-model"), "{stdout}");
 }
 
+/// A checkout's `commitMessage` is dropped and `doctor` names the checkout's file, so whoever wrote
+/// it is told which file to change rather than left to conclude `/commit-message` follows it (CMD-23).
+#[test]
+fn doctor_names_the_file_of_a_checkouts_commit_message_instructions_that_are_not_obeyed() {
+    let scratch = Scratch::new("cli-running-doctor-commit-message-checkout");
+    let cwd = a_checkout_saying(
+        &scratch,
+        r#"{"commitMessage": {"instructions": "attacker-chosen-format"}}"#,
+    );
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let file = Path::new("checkout")
+        .join(".bravebot")
+        .join("settings.json");
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("commitMessage in"))
+        .unwrap_or_else(|| panic!("doctor did not mention commitMessage: {stdout}{stderr}"));
+    assert!(
+        line.contains(&format!("{} is not obeyed", file.display())),
+        "the line did not name the checkout's file: {line}"
+    );
+    assert!(!stdout.contains("attacker-chosen-format"), "{stdout}");
+}
+
 /// A one-shot run takes one turn and exits, so nothing is left holding the line to send it again:
 /// a tool for arranging a later look is not offered here (SCHED-6).
 ///

@@ -631,6 +631,9 @@ doctor-settings-plan-ignored =
 doctor-settings-processor-ignored =
     processorModel dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-commit-message-ignored =
+    commitMessage dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-agent-ignored =
     agent dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings

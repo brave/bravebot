@@ -515,7 +515,10 @@ pub(super) fn commit_message_animated(
             &account,
             &worker_workspace,
             &asked.source,
-            asked.format.as_deref(),
+            crate::commit_message_command::format_for(
+                asked.format.as_deref(),
+                worker_config.commit_message_instructions.as_deref(),
+            ),
             model.as_deref(),
             &mut sink,
             worker_trust,

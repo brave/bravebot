@@ -724,6 +724,8 @@ doctor-settings-plan-ignored =
     planModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-processor-ignored =
     processorModel in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+doctor-settings-commit-message-ignored =
+    commitMessage in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-agent-ignored =
     agent in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-shared-skill-directories-ignored =
