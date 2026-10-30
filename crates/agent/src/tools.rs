@@ -8561,10 +8561,17 @@ fn consult_about_a_run<S: Sink>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     plan: &bravebot_core::command::Plan,
+    requested: &[bravebot_sandbox::scope::Requested],
+    stdin: bool,
     unconfined: bool,
     confined: bool,
 ) -> crate::confirm::Classified {
     if unconfined || !confined || tools.permission_mode.get() != crate::PermissionMode::Auto {
+        return crate::confirm::Classified::NotAsked;
+    }
+    // Only a line it can be shown whole: nothing fed to it from a reference, no credential scope
+    // asked for, nothing private released.
+    if !requested.is_empty() || stdin || plan.releases_private() {
         return crate::confirm::Classified::NotAsked;
     }
     let Some(classifying) = tools.classifying.as_ref() else {
@@ -8630,12 +8637,15 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     // argument list, so the order is a matter of reading rather than of correctness.
     let varied = policy.arguments_have_varied(plan);
     policy.asked_about(plan);
-    // Put to the classifier only a line it can be shown whole: nothing fed to it from a
-    // reference, no credential scope asked for, nothing private released (AUTO-3).
-    let classified = match requested.is_empty() && stdin.is_none() && !plan.releases_private() {
-        true => consult_about_a_run(policy, tools, plan, unconfined, confinement.is_some()),
-        false => crate::confirm::Classified::NotAsked,
-    };
+    let classified = consult_about_a_run(
+        policy,
+        tools,
+        plan,
+        requested,
+        stdin.is_some(),
+        unconfined,
+        confinement.is_some(),
+    );
     let request = crate::confirm::RunRequest {
         plan: plan.clone(),
         // Offered only where it would stop a later prompt, which the policy decides: not for a
@@ -8768,6 +8778,20 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
                 .map(|confinement| confinement.with_chosen_key(chosen));
         }
     }
+    remember_the_answer(policy, tools, plan, record, requested, unconfined, &answer);
+    Ok(())
+}
+
+/// Write down what a run's answer asked to have remembered, where the policy allows it.
+fn remember_the_answer<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    plan: &bravebot_core::command::Plan,
+    record: Option<&crate::remembered::Store>,
+    requested: &[bravebot_sandbox::scope::Requested],
+    unconfined: bool,
+    answer: &crate::confirm::RunDecision,
+) {
     // The second of the two refusals RUN-19 makes, at the layer that acts on the answer. The
     // policy is asked again rather than the drawing being read back: a front end answering
     // with a key the prompt never offered must not be able to put a line into a record that
@@ -8786,7 +8810,6 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
             store.remember_scope(&scope, session);
         }
     }
-    Ok(())
 }
 
 /// What the planner is told when a run line failed before it finished.
