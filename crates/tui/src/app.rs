@@ -3282,7 +3282,9 @@ fn command_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
     }
     // A mode's key never asks for a stop, so what it reads in return is not handed on.
     if let Some(action) = claimed_by_a_mode(session, key) {
-        let _ = act_while_working(session, action, crate::clipboard::paste);
+        if !sessions_screen::say_why_it_waits(session, &action, sessions_screen::Busy::Command) {
+            let _ = act_while_working(session, action, crate::clipboard::paste);
+        }
     } else if stops_a_command(session, key) {
         stop_what_is_running(session, cancel);
     }

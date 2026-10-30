@@ -3,6 +3,25 @@
 
 use super::*;
 
+/// A key while a plan runs: both stop keys stop the run and neither leaves, exactly as in a turn. A
+/// person watching a plan go wrong is asking for the plan to stop; the next press, at the box, is
+/// the one that leaves. Opening, copying or beginning a session from the Sessions screen says why
+/// it waits (SCREEN-15).
+pub(super) fn plan_run_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) -> Action {
+    if key.kind == KeyEventKind::Release {
+        return Action::None;
+    }
+    if stops_the_turn(session, key) {
+        stop_what_is_running(session, cancel);
+        return Action::None;
+    }
+    let action = handle_key_while_working(session, key);
+    if sessions_screen::say_why_it_waits(session, &action, sessions_screen::Busy::Plan) {
+        return Action::None;
+    }
+    act_while_working(session, action, crate::clipboard::paste)
+}
+
 /// Plan one task in full, put the frozen plan to the person, and walk it, redrawing throughout.
 ///
 /// The other kind of run, started from a session rather than from the command line. Between
@@ -146,21 +165,7 @@ pub(super) fn manifest_animated(
         terminal,
         session,
         &from_worker,
-        |session, key| {
-            if key.kind == KeyEventKind::Release {
-                return Action::None;
-            }
-            // Both keys stop the run and neither leaves, exactly as in a turn. A person
-            // watching a plan go wrong is asking for the plan to stop; the next press, at
-            // the box, is the one that leaves.
-            if stops_the_turn(session, key) {
-                stop_what_is_running(session, &cancel);
-                Action::None
-            } else {
-                let action = handle_key_while_working(session, key);
-                act_while_working(session, action, crate::clipboard::paste)
-            }
-        },
+        |session, key| plan_run_key(session, key, &cancel),
         |terminal, session, message| {
             // Progress, with no reply to give. The goal as the planner understood it and the frozen
             // plan both arrive as narration, and each step as an activity, so the transcript of a
