@@ -567,8 +567,8 @@ Variants are read from the layers that may name `provider` ([BACKEND-24](#BACKEN
 are part of the block. They are merged into a request to a gateway in each protocol that merges
 `options`, and a Bedrock request, which merges none, carries none.
 
-**Why.** A person who wants a thinking budget or a verbosity for some turns and not others had to edit
-the settings file between them. Bundling the fields under a name makes the switch one word, and
+**Why.** Without a variant, a person who wants a thinking budget or a verbosity for some turns and not
+others edits the settings file between them. Bundling the fields under a name makes the switch one word, and
 carrying them as `options` are keeps the program from learning what any of them mean, which is the
 footing [BACKEND-15](#BACKEND-15) rests on. Letting the pick lose to the turn's own fields is what keeps
 a file from deciding what was asked, and keeping the choice a person's is what keeps
