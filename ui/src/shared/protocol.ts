@@ -1013,6 +1013,13 @@ export interface EventMap {
   'turn.started': { turn: number; sandbox?: SandboxMode }
   /** The planner has read the oldest line sent with `turn.interject`. `prompt` is the words it was given. */
   'turn.interjected': { prompt: string }
+  /**
+   * What a `session.enhance` request came back with (INPUT-50). `ready` carries `text`, the rewrite
+   * to put in the box, and `removed`, how many characters that draw as nothing were taken out of it.
+   * `untrusted` offers nothing, because the conversation has met something the planner would not be
+   * shown. `unusable` is an empty rewrite or one past `limit` characters. `failed` carries `message`.
+   */
+  'enhance.done': { status: 'ready' | 'untrusted' | 'unusable' | 'stopped' | 'failed'; text?: string; removed?: number; limit?: number; message?: string }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
   phase: { phase: Phase }
