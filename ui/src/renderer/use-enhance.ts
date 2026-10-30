@@ -3,6 +3,7 @@ import { conversationPreferences, setConversation } from './experience'
 import { begun, forgotten, refusal, restored, settled, type Enhanced } from './enhancing'
 import { type Live, liveKey } from './live'
 import { call } from './rpc'
+import { RequestFailed } from './rewind'
 import { named } from './staging'
 
 /** What `useEnhance` takes from the component that owns the sessions. */
@@ -22,7 +23,7 @@ export function useEnhance({ openedLives, updateSession, setProblem }: EnhanceIn
     const live = openedLives.current.get(handle)
     if (!live || live.enhancement?.asking) return
     const draft = draftOf(live)
-    const why = refusal(draft, live.running, named(live.staging, draft).length > 0)
+    const why = refusal(named(live.staging, draft).length > 0)
     if (why) {
       updateSession(handle, (old) => (old ? { ...old, enhancement: { ...old.enhancement, note: why } } : old))
       return
@@ -31,8 +32,11 @@ export function useEnhance({ openedLives, updateSession, setProblem }: EnhanceIn
     try {
       await call('session.enhance', { session: handle, draft, model: live.model ?? null })
     } catch (error) {
-      updateSession(handle, (old) => (old ? { ...old, enhancement: { ...old.enhancement, asking: null } } : old))
-      setProblem(String(error))
+      // A refusal is the bridge's sentence, shown as the note; any other failure is a problem.
+      const refused = error instanceof RequestFailed
+      const note = refused ? error.reason : null
+      updateSession(handle, (old) => (old ? { ...old, enhancement: { ...old.enhancement, asking: null, note } } : old))
+      if (!refused) setProblem(String(error))
     }
   }, [])
 

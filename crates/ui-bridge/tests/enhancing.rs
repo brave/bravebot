@@ -23,6 +23,9 @@ const PATIENCE: Duration = Duration::from_secs(60);
 /// What the stub says when it is asked to rewrite a draft.
 const REWRITE: &str = "Add a retry with backoff to `fetch_page` in `src/net.rs`, three attempts.";
 
+/// A turn or a draft holding this is never answered, so it is still out when the test acts.
+const HELD: &str = "hold this request";
+
 /// The phrase only the rewrite request holds.
 const ASKS_FOR_A_REWRITE: &str = "Rewrite it so that it is more specific";
 
@@ -107,7 +110,11 @@ fn answer(mut stream: std::net::TcpStream, seen: &Mutex<Vec<Value>>) {
     } else {
         let asked: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
         let rewriting = asked.to_string().contains(ASKS_FOR_A_REWRITE);
+        let held = asked.to_string().contains(HELD);
         seen.lock().unwrap().push(asked);
+        if held {
+            std::thread::park();
+        }
         let text = if rewriting {
             REWRITE
         } else {
@@ -239,6 +246,18 @@ impl Window {
         until(&self.said, |m| m["event"] == "turn.done");
     }
 
+    /// Wait until the service has been sent `count` requests.
+    fn wait_for_requests(&self, count: usize) {
+        let deadline = std::time::Instant::now() + PATIENCE;
+        while self.requests().len() < count {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the service never received request {count}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn requests(&self) -> Vec<Value> {
         self.seen.lock().unwrap().clone()
     }
@@ -338,4 +357,48 @@ fn a_draft_with_nothing_in_it_or_too_much_asks_nothing_of_the_service() {
         window.requests().is_empty(),
         "a refused draft reached the service"
     );
+}
+
+/// INPUT-50: a turn that is running refuses the request, and nothing reaches the service for it.
+#[test]
+fn a_running_turn_refuses_a_rewrite_and_asks_nothing_of_the_service() {
+    let mut window = Window::open("bridge-enhance-turn-running");
+    let session = window.session.clone();
+    let sent = window.ask(
+        "turn.send",
+        json!({"session": session, "prompt": format!("{HELD} for the turn")}),
+    );
+    assert!(sent.get("ok").is_some(), "{sent}");
+    window.wait_for_requests(1);
+
+    let refused = window.ask(
+        "session.enhance",
+        json!({"session": session, "draft": "add retries to the fetch"}),
+    );
+
+    assert_eq!(refused["error"]["code"], "turn_in_flight", "{refused}");
+    assert_eq!(
+        window.requests().len(),
+        1,
+        "a refused rewrite reached the service"
+    );
+}
+
+/// INPUT-50: `session.enhance.cancel` stops a rewrite that is out, and the event says it was
+/// stopped and not that it failed.
+#[test]
+fn cancelling_a_rewrite_that_is_out_ends_it_as_stopped() {
+    let mut window = Window::open("bridge-enhance-cancelled");
+    let session = window.session.clone();
+    let started = window.ask(
+        "session.enhance",
+        json!({"session": session, "draft": format!("{HELD} and add retries")}),
+    );
+    assert_eq!(started["ok"]["started"], true, "{started}");
+    window.wait_for_requests(1);
+
+    window.ask("session.enhance.cancel", json!({"session": session}));
+    let done = until(&window.said, |m| m["event"] == "enhance.done");
+
+    assert_eq!(done["data"]["status"], "stopped", "{done}");
 }

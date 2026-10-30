@@ -79,15 +79,9 @@ test('Escape has nothing to put back where the box holds no rewrite', () => {
   assert.equal(e.restored({ asking: { asked: 'x' } }), null)
 })
 
-test('the box is refused for a running turn, nothing written, a staged marker and an overlong line', () => {
-  assert.ok(e.refusal('add retries', true, false))
-  assert.ok(e.refusal('  \n', false, false))
-  assert.ok(e.refusal('see [Image #1]', false, true))
-  assert.equal(e.refusal('add retries', false, false), null)
-  assert.equal(e.refusal('x'.repeat(e.ENHANCE_LIMIT), false, false), null)
-  assert.ok(e.refusal('x'.repeat(e.ENHANCE_LIMIT + 1), false, false))
-  const accents = 'é'.repeat(e.ENHANCE_LIMIT)
-  assert.equal(e.refusal(accents, false, false), null)
+test('only a staged marker is refused here; the bridge owns the other refusals', () => {
+  assert.ok(e.refusal(true))
+  assert.equal(e.refusal(false), null)
 })
 
 test('emptying the box ends a rewrite, and a box with text keeps it', () => {

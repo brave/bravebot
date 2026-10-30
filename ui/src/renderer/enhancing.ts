@@ -11,9 +11,6 @@
 
 import type { EventMap } from '../shared/protocol'
 
-/** The most a rewrite is offered at, in characters, which the bridge holds the answer to as well. */
-export const ENHANCE_LIMIT = 4000
-
 /** What the bridge said a request came back with. */
 export type Enhanced = EventMap['enhance.done']
 
@@ -38,14 +35,12 @@ export interface Enhancement {
  * Why the box cannot be rewritten now, or `null` where it can.
  *
  * A picture, a dropped file or a summoned bot is named in the line by a marker, which a rewrite of
- * words would lose. A turn that runs owns the conversation the request is asked over.
+ * words would lose. The bridge cannot see what is staged, so this is the one refusal the window
+ * makes; an empty or overlong line and a running turn are the bridge's to refuse, and its sentence
+ * is the note.
  */
-export function refusal(draft: string, running: boolean, staged: boolean): string | null {
-  if (running) return 'Wait for the turn to end: the rewrite is made from the conversation as it stands.'
-  if (!draft.trim()) return 'Write a message first, and it can be made more specific.'
-  if (staged) return 'A message with attached files, pictures or a bot picked for it is left as written.'
-  if ([...draft.trim()].length > ENHANCE_LIMIT) return `A message over ${ENHANCE_LIMIT} characters is left as written.`
-  return null
+export function refusal(staged: boolean): string | null {
+  return staged ? 'A message with attached files, pictures or a bot picked for it is left as written.' : null
 }
 
 /** The request goes out for `draft`. */
@@ -87,7 +82,7 @@ function unmade(data: Enhanced): string {
     case 'untrusted':
       return 'This conversation has read something untrusted, so a rewrite is not offered. Your message is as you wrote it.'
     case 'unusable':
-      return `The rewrite was empty or over ${data.limit ?? ENHANCE_LIMIT} characters, so it was not used. Your message is as you wrote it.`
+      return `The rewrite was empty or over ${data.limit} characters, so it was not used. Your message is as you wrote it.`
     case 'stopped':
       return 'Stopped. Your message is as you wrote it.'
     case 'failed':
