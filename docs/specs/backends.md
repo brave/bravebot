@@ -4749,3 +4749,37 @@ check before a turn is one more run of the program.
 - **A level the service refuses inside the stream is not given up.** Only a refusal by status is, so a
   service that answers 200 and then reports the level as an unsupported value fails the turn at that level,
   and the refusal is not remembered. No service has been seen to do this.
+
+<a id="BACKEND-66"></a>
+### BACKEND-66: a Cloudflare entry is reached at a host built from its account id
+
+A `provider` entry keyed `cloudflare-workers-ai` that states `options.accountId` reaches Cloudflare
+Workers AI through its OpenAI-compatible endpoint, `https://api.cloudflare.com/client/v4/accounts/<accountId>/ai/v1`.
+An entry keyed `cloudflare-ai-gateway` that states `options.accountId` and `options.gatewayId`
+reaches Cloudflare AI Gateway through its OpenAI-compatible route,
+`https://gateway.ai.cloudflare.com/v1/<accountId>/<gatewayId>/compat`. A model on the gateway is named
+`<provider>/<model>`, as `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, and bravebot sends
+the name as written. An `options.baseURL` the entry states is where its requests go regardless, as
+[BACKEND-17](#BACKEND-17) says of every known name.
+
+An entry whose id is missing, or holds a character outside the ones allowed in it, configures no
+service: an account id is letters and digits, and a gateway id is letters, digits, `-` and `_`. The
+gateway has no default id, so an entry that states none configures nothing.
+
+An entry that names no `env` and states no `apiKey` reads its key from `CLOUDFLARE_API_KEY`
+(Workers AI) or `CLOUDFLARE_API_TOKEN` (AI Gateway), the variables opencode reads. The key is sent
+in `authorization` to the built host and to no other, as [BACKEND-16](#BACKEND-16) says of any
+variable a gateway names. The ids are read from `options` only, and `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_GATEWAY_ID` are not read, because a block does no substitution.
+The `cf-aig-authorization` header of a gateway that requires authentication is written in
+`options.headers`.
+
+**Why.** The account id is written into the path of a compiled-in host, so one holding `/`, `@`, `?`
+or `#` would send the key to another route than the one the person named, the argument
+[BACKEND-49](#BACKEND-49) makes about a project. Refusing the entry is the only answer that cannot
+send it anywhere. A guessed gateway id would be a request that fails far from the mistake, as a
+guessed project does.
+
+`verified-by: bravebot_config::provider::a_cloudflare_entry_is_reached_at_the_host_its_ids_build`
+`verified-by: bravebot_config::provider::a_cloudflare_id_that_would_move_the_request_configures_nothing`
+`verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_cloudflare_host_and_a_named_credential_beats_the_default`
