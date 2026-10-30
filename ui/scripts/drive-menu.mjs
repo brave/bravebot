@@ -111,6 +111,8 @@ check(
 const ALLOWED_IDS = [
   'session.new', 'session.close', 'turn.send', 'turn.cancel',
   'view.fold-left', 'view.fold-right', 'view.reset-columns', 'app.about', 'help.doctor',
+  // Shows the release notes the agent carries, as plain text. It reaches one read-only method.
+  'help.changelog',
   'session.export-text', 'session.export-markdown', 'session.export-pdf',
   // A setting, not an action: it decides what goes in an exported file, and like everything
   // else in this list it reaches no agent method.
@@ -130,6 +132,12 @@ const ALLOWED_IDS = [
   // Open About and the bug report. Neither decides anything, and the report is written only where
   // its Save button and a native sheet put it.
   'help.update', 'help.bug-report',
+  // Opens a dialog for a note kept on the record. It reaches `session.note`, which sends the
+  // model nothing.
+  'session.note',
+  // A setting, not an action: it keeps the computer awake while a turn runs. It reaches no agent
+  // method, and the first time it is turned on a dialog says what it does.
+  'app.caffeinate',
 ]
 const ours = every.filter((i) => i.id && !i.role).map((i) => i.id)
 check(
@@ -146,8 +154,8 @@ check(
 // `session.rewind` puts files back to what they held, and only after a dialog naming each one.
 const allowed = (readFileSync('src/main/index.ts', 'utf8').match(/const ALLOWED = new Set\(\[([^\]]*)\]/) ?? [])[1]
 check(
-  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 43,
-  'the main-process allow-list is 43 methods including model discovery, rewind and the update status, none of which decides anything',
+  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 54,
+  'the main-process allow-list is 54 methods including model discovery, rewind, notes, the release notes and the update status, none of which decides anything',
 )
 
 // --- accelerators are declared (they cannot be *dispatched* from here) -----------------

@@ -68,7 +68,7 @@
 
 /* ------------------------------------------------------------------ rows */
 
-.todos, .files, .confined-list { list-style: none; margin: 0; padding: 0; }
+.todos, .files, .confined-list, .notes { list-style: none; margin: 0; padding: 0; }
 
 .todos li {
   display: flex;
@@ -100,6 +100,18 @@
    row, but its hollow mark (the marker's own default ink) keeps it apart from `done` and
    `cancelled`, since nobody struck it. */
 .todos li.left-open { color: var(--ink-tertiary); }
+
+/* A note is the person's own words, so it keeps its line breaks and wraps rather than truncating. */
+.notes li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-xs);
+  padding: var(--leo-spacing-s) var(--leo-spacing-m);
+  font: var(--type-meta);
+}
+.note-turn { color: var(--ink-tertiary); font: var(--type-caption); }
+.note-text { color: var(--ink-primary); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.note-add { margin-top: var(--leo-spacing-m); }
 
 .file-row, .confined-row {
   display: flex;

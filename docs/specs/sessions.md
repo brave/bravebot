@@ -1667,6 +1667,12 @@ review whose summary of such a session is empty leaves the session undecided and
 so the next run offers it again; a session with no new note needs no summary, and one with notes
 but no problems is marked once its summary is written.
 
+The desktop window adds a note from Chat › Add Note… or the Notes section of its context panel,
+and lists the record's notes there as plain text. The note belongs to the last finished turn. The
+window waits for a running turn to end before it adds one, because the turn holds the session
+until then, and a chat with no record yet, before its first turn, has nowhere to keep a note and
+is told to send a message first.
+
 **Why.** A person watching a session sees things the record does not show: the wrong file was
 edited, the answer was slow, the plan was misread. Saying so where the session is, at the turn it
 happened on, is cheaper and more exact than reconstructing it at review time.
@@ -1685,6 +1691,9 @@ as data.
 `verified-by: bravebot_session::sessions::a_fork_carries_the_notes`
 `verified-by: bravebot_session::sessions::a_record_from_before_notes_reads_as_having_none`
 `verified-by: bravebot_tui::app::the_note_command_carries_the_whole_note`
+`verified-by: bravebot_ui_bridge::bridge::a_desktop_note_is_kept_on_the_record_and_not_in_the_conversation`
+`verified-by: bravebot_ui_bridge::bridge::an_empty_desktop_note_records_nothing`
+`verified-by: bravebot_ui_bridge::bridge::a_desktop_note_is_refused_while_a_turn_runs_and_before_the_first`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_note_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_note_typed_mid_turn_is_recorded_on_that_turn_and_given_to_no_one`
 `verified-by: bravebot_tui::app::a_note_with_no_text_mid_turn_records_nothing`

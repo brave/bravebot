@@ -223,6 +223,16 @@ const api = {
     ipcRenderer.send('bravebot:window:reload')
   },
 
+  /** Whether the person has agreed, once, to keep the computer awake during turns. */
+  caffeinateConfirmed(): Promise<boolean> {
+    return ipcRenderer.invoke('bravebot:caffeinate:confirmed') as Promise<boolean>
+  },
+
+  /** Remember that agreement. The main process holds nothing awake until it has. */
+  confirmCaffeinate(): Promise<void> {
+    return ipcRenderer.invoke('bravebot:caffeinate:confirm') as Promise<void>
+  },
+
   /** Listen for appearance changes written through the main process. */
   onThemeChanged(listener: (state: ThemeState) => void): () => void {
     const handler = (_event: IpcRendererEvent, state: ThemeState) => listener(state)

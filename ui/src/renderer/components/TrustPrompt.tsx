@@ -25,7 +25,7 @@ interface Props {
 export function TrustPrompt({ directory, keeping, confinedLines, onAnswer }: Props): React.JSX.Element {
   return (
     <Modal title="Project trust" size="sm" className="trust" subtitle="Do you trust this directory?" subtitleId="trust-title" actions={<>
-      <Button kind="plain-faint" className="modal-leading" onClick={() => onAnswer(false)} data-test="trust-decline">
+      <Button kind="plain-faint" onClick={() => onAnswer(false)} data-test="trust-decline">
         Don't trust
       </Button>
       <Button kind="filled" onClick={() => onAnswer(true)} data-test="trust-approve">

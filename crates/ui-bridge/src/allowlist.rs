@@ -39,6 +39,11 @@ pub const OFFERED: &[Operation] = &[
         method: "instance.info",
         fields: &[],
     },
+    // The release notes compiled into this program. Reads nothing and needs no session.
+    Operation {
+        method: "changelog.read",
+        fields: &[],
+    },
     Operation {
         method: "session.new",
         fields: &["directory"],
@@ -125,6 +130,7 @@ pub const DENIED: &[&str] = &[
     "session.purge",
     "session.import",
     "session.rewind",
+    "session.note",
     "models.list",
     // Change how the host's own sessions behave, which a person at the host decides.
     "session.mode",
@@ -153,6 +159,9 @@ pub const DENIED: &[&str] = &[
     // What the desktop window reports about its own page, which a client of the host has none of.
     "window.fault",
     "update.status",
+    // The host's own person's agreement to keep its computer awake (CMD-12).
+    "caffeinate.confirmed",
+    "caffeinate.confirm",
     // Read files or attach them to a turn.
     "mentions.offer",
     "mentions.named",
@@ -252,6 +261,7 @@ mod tests {
             ("run.reply", "remember"),
             ("trust.reply", "remember"),
             ("session.new", "settings"),
+            ("changelog.read", "path"),
         ] {
             let failure = check(&request(method, json!({ extra: true })))
                 .err()

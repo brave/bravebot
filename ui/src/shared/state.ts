@@ -24,7 +24,7 @@ import { parseSummons, type Summon } from './summons'
 import { parseAppearance } from './theme'
 
 /** The panels in the context column, in the order they appear there. */
-export const PANEL_NAMES = ['plan', 'read', 'writes', 'confined', 'files'] as const
+export const PANEL_NAMES = ['plan', 'read', 'writes', 'confined', 'notes', 'files'] as const
 
 export type PanelName = (typeof PANEL_NAMES)[number]
 

@@ -66,6 +66,7 @@
     "prestart": "pnpm run deps && pnpm run setup:electron",
     "drive:manual-walkthrough": "pnpm run build && node scripts/drive-manual-walkthrough.mjs",
     "drive:rewind": "pnpm run build && node scripts/drive-rewind.mjs",
+    "drive:note-changelog-awake": "pnpm run build && node scripts/drive-note-changelog-awake.mjs",
     "drive:agent-settings": "pnpm run build && node scripts/drive-agent-settings.mjs",
     "drive:agent-rpc": "pnpm run bridge && node scripts/drive-agent-rpc.mjs"
   },

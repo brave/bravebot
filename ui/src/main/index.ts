@@ -8,7 +8,7 @@
  */
 
 import { saveHooks } from './agent-settings'
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, powerSaveBlocker, shell } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Bridge, BridgeError } from './bridge'
@@ -18,6 +18,7 @@ import { parseContextRef, parseWindowState } from '../shared/commands'
 import { installMenu, popupContext, rebuildMenu, refreshMenu } from './menu'
 import { noteProject, recents } from './recents'
 import { putBots, putLayout, putTheme, putView, readState } from './state'
+import { Caffeinate, trackTurns } from './caffeinate'
 import { isProjectPath } from '../shared/recents'
 import { forgetFork, forks, noteFork } from './forks'
 import {
@@ -87,6 +88,8 @@ import { Summoning, sendSummonedTurn, type Answer } from './summon-turn'
  */
 const botHandles = new Map<string, string>()
 const runningHandles = new Set<string>()
+/** Keeps the computer awake while a turn runs, when the window's setting says so (CMD-12). */
+let caffeinate: Caffeinate | null = null
 
 /**
  * The handles currently running a turn this app sent rather than a person.
@@ -416,8 +419,8 @@ function createWindow(): void {
     reportFault({ kind: 'renderer_gone', reason: details.reason, exit: details.exitCode }))
 
   bridge = new Bridge((message) => {
-    if (message.session && message.event === 'turn.started') runningHandles.add(message.session)
-    if (message.session && (message.event === 'turn.done' || message.event === 'turn.error')) runningHandles.delete(message.session)
+    trackTurns(runningHandles, message)
+    caffeinate?.setBusy(runningHandles.size > 0)
     // What this app has to say about the event, held until the event itself has been sent. See
     // the note where it is called.
     let after: (() => void) | null = null
@@ -510,6 +513,7 @@ function createWindow(): void {
     bridge?.dispose()
     bridge = null
     runningHandles.clear()
+    caffeinate?.windowClosed()
     botHandles.clear()
     owedCarryOver.clear()
     window = null
@@ -545,6 +549,7 @@ const ALLOWED = new Set([
   'session.mode',
   'session.sandbox',
   'session.rewind',
+  'session.note',
   'turn.send',
   'turn.cancel',
   'turn.interject',
@@ -573,6 +578,7 @@ const ALLOWED = new Set([
   'permissions.list',
   'permissions.revoke',
   'doctor',
+  'changelog.read',
   'hooks.inspect',
   'language.get',
   'language.set',
@@ -637,6 +643,7 @@ function noteOpenedRoot(method: string, params: unknown, ok: unknown): void {
 
 app.whenReady().then(() => {
   if (!app.isPackaged && process.platform === 'darwin') app.dock?.setIcon(join(DEV_ICON_DIR, 'icon.png'))
+  caffeinate = new Caffeinate(powerSaveBlocker)
   ipcMain.handle('bravebot:request', async (_event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !ALLOWED.has(method)) {
       return { error: { code: 'bad_request', message: `not a permitted method: ${String(method)}` } }
@@ -1135,7 +1142,22 @@ app.whenReady().then(() => {
 
   ipcMain.on('bravebot:menu:state', (_event, value: unknown) => {
     const state = parseWindowState(value)
-    if (state) refreshMenu(state)
+    if (!state) return
+    refreshMenu(state)
+    caffeinate?.setEnabled(state.caffeinated)
+  })
+
+  // The agreement is `/caffeinate`'s, in the agent's state directory, so either one asks once.
+  ipcMain.handle('bravebot:caffeinate:confirmed', async () => {
+    if (!caffeinate?.isConfirmed && bridge) {
+      const read = await bridge.request<{ confirmed: boolean }>('caffeinate.confirmed')
+      if (read.confirmed) caffeinate?.confirm()
+    }
+    return caffeinate?.isConfirmed ?? false
+  })
+  ipcMain.handle('bravebot:caffeinate:confirm', async () => {
+    await bridge?.request('caffeinate.confirm')
+    caffeinate?.confirm()
   })
 
   // A right-click on something in the window. The reference is validated rather than
@@ -1162,6 +1184,7 @@ app.on('window-all-closed', () => {
  * deliberate rather than a consequence of a dropped pipe.
  */
 app.on('before-quit', () => {
+  caffeinate?.release()
   bridge?.dispose()
   bridge = null
 })

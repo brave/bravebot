@@ -89,8 +89,9 @@ export type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
  * trapping and inertness — the hand-written trap and `#root.inert` toggling are gone.
  *
  * Every dialog has the same head: the title, then at most one line saying what it is for. The
- * primary action sits at the right-hand end of the footer; a secondary one that should stand
- * apart from it (Cancel, Stop all) carries `modal-leading` and goes to the left.
+ * primary action sits at the right-hand end of the footer, with Cancel or a refusal just left of it.
+ * An action that is not an answer to the dialog (Stop all, History) carries `modal-leading` and
+ * goes to the left.
  */
 export function Modal({
   title,

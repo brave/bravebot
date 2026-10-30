@@ -38,6 +38,7 @@ export type CommandId =
   | 'turn.cancel'
   | 'mode.cycle'
   | 'turn.rewind'
+  | 'session.note'
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
@@ -45,6 +46,8 @@ export type CommandId =
   | 'view.focus-composer'
   | 'view.theme'
   | 'app.about'
+  | 'app.caffeinate'
+  | 'help.changelog'
   | 'help.doctor'
   | 'help.update'
   | 'help.bug-report'
@@ -123,6 +126,11 @@ export interface WindowState {
    * renderer holds them.
    */
   canRewind: boolean
+  /**
+   * Whether the computer is kept awake while a turn runs (CMD-12). A setting the renderer holds,
+   * like `includeTools`, and off at every launch.
+   */
+  caffeinated: boolean
   folded: { left: boolean; right: boolean }
 }
 
@@ -133,6 +141,7 @@ export const NOTHING_OPEN: WindowState = {
   canExport: false,
   includeTools: false,
   canRewind: false,
+  caffeinated: false,
   folded: { left: false, right: false },
 }
 
@@ -176,6 +185,9 @@ export const COMMANDS: readonly Command[] = [
   },
   // No accelerator: Cmd+Z belongs to the text being edited, and this one asks first anyway.
   { id: 'turn.rewind', label: 'Undo Last Turn…', requires: 'rewindable' },
+  // Kept on the record and never sent to the model (SESSION-36). Not while a turn runs: the
+  // turn holds the record until it ends.
+  { id: 'session.note', label: 'Add Note…', requires: 'forkable' },
   {
     id: 'view.fold-left',
     label: 'Hide Chat List',
@@ -197,6 +209,10 @@ export const COMMANDS: readonly Command[] = [
   // shortcuts left are worth more to the folds.
   { id: 'view.theme', label: 'Appearance…', requires: 'always' },
   { id: 'app.about', label: 'About Brave Bot', requires: 'always' },
+  // App-wide, and the first time it is turned on a dialog says what it does and does not do.
+  { id: 'app.caffeinate', label: 'Keep Computer Awake During Turns', requires: 'always', checkbox: true },
+  // The release notes compiled into the agent, shown as plain text. Nothing is fetched.
+  { id: 'help.changelog', label: 'Release Notes…', requires: 'always' },
   { id: 'help.doctor', label: 'Run Diagnostics…', requires: 'always' },
   // Opens About, which says what the last check found. It asks nothing of the network: the check
   // is at most hourly and never in front of anything (UPDATE-1, UPDATE-6).
@@ -244,7 +260,9 @@ export function isEnabled(requires: Requires, state: WindowState): boolean {
  * be a state with two homes.
  */
 export function isChecked(id: CommandId, state: WindowState): boolean {
-  return id === 'session.export-tools' ? state.includeTools : false
+  if (id === 'session.export-tools') return state.includeTools
+  if (id === 'app.caffeinate') return state.caffeinated
+  return false
 }
 
 /**
@@ -260,7 +278,7 @@ export function isChecked(id: CommandId, state: WindowState): boolean {
  */
 export function parseWindowState(value: unknown): WindowState | null {
   if (typeof value !== 'object' || value === null) return null
-  const { hasSession, running, canSend, canExport, includeTools, canRewind, folded } = value as Record<
+  const { hasSession, running, canSend, canExport, includeTools, canRewind, caffeinated, folded } = value as Record<
     string,
     unknown
   >
@@ -270,10 +288,11 @@ export function parseWindowState(value: unknown): WindowState | null {
   if (typeof canExport !== 'boolean') return null
   if (typeof includeTools !== 'boolean') return null
   if (typeof canRewind !== 'boolean') return null
+  if (typeof caffeinated !== 'boolean') return null
   if (typeof folded !== 'object' || folded === null) return null
   const { left, right } = folded as Record<string, unknown>
   if (typeof left !== 'boolean' || typeof right !== 'boolean') return null
-  return { hasSession, running, canSend, canExport, includeTools, canRewind, folded: { left, right } }
+  return { hasSession, running, canSend, canExport, includeTools, canRewind, caffeinated, folded: { left, right } }
 }
 
 /**

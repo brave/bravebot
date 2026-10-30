@@ -245,6 +245,7 @@ impl Bridge {
             "session.mode" => self.set_permission_mode(request),
             "session.sandbox" => self.set_sandbox_mode(request),
             "session.rewind" => self.rewind_session(request),
+            "session.note" => self.note_session(request),
             "turn.send" => self.send_turn(request),
             "mentions.offer" => {
                 let open = self
@@ -352,6 +353,14 @@ impl Bridge {
             "hooks.inspect" => crate::hooks::inspect(),
             "language.get" => Ok(crate::language::get(request)),
             "language.set" => crate::language::set(request),
+            "changelog.read" => Ok(crate::help::changelog()),
+            "caffeinate.confirmed" => {
+                Ok(json!({"confirmed": bravebot_session::store::load_caffeinate_confirmed()}))
+            }
+            "caffeinate.confirm" => {
+                bravebot_session::store::save_caffeinate_confirmed();
+                Ok(json!({"kept": bravebot_session::store::load_caffeinate_confirmed()}))
+            }
             "bot.define" => crate::definitions::make(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),
@@ -639,6 +648,8 @@ impl Bridge {
             // compaction had already taken without having to watch it happen.
             "archived": record.conversation.archive.len(),
             "todos": todos,
+            // SESSION-36: shown beside the conversation, never sent to the model.
+            "notes": notes_json(&record.notes),
             "trust": {
                 "known": record.trust.is_some(),
                 "rules": record.trust.as_ref().map(|rules| {
@@ -1759,6 +1770,45 @@ impl Bridge {
         });
 
         Ok(json!({ "run": run, "target": target }))
+    }
+
+    /// Keep a note the person typed on the session's record, on the last finished turn, as the
+    /// terminal's `/note` does (SESSION-36). The note is not part of the conversation.
+    ///
+    /// Refused while a turn runs, since the worker holds the record until the turn ends, and on a
+    /// session that has no record yet.
+    fn note_session(&mut self, request: &Request) -> Result<Value, Failure> {
+        use bravebot_session::sessions::Noted;
+        let handle = request.string("session")?;
+        let text = request.string("text")?;
+        self.reap(&handle);
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if open.running.is_some() {
+            return Err(Failure::new(
+                ErrorCode::TurnInFlight,
+                "Wait for the current turn to finish before adding a note.",
+            ));
+        }
+        let mut guard = open
+            .state
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::Internal, "session state is poisoned"))?;
+        let state = &mut *guard;
+        let turns = state.turns;
+        let Some(stored) = state.handle.as_mut() else {
+            return Err(Failure::bad_request(
+                "Send a message first. A note is kept on the chat's record, and it has none yet.",
+            ));
+        };
+        let noted = match stored.add_note(turns, &text) {
+            Noted::Kept => "kept",
+            Noted::Unwritable => "unwritable",
+            Noted::Empty => "empty",
+        };
+        Ok(json!({ "noted": noted, "notes": notes_json(stored.notes()) }))
     }
 
     /// Put the session back to where it stood `steps` turns ago, on disk and in the conversation
@@ -3631,6 +3681,14 @@ fn todos_json(
         .collect()
 }
 
+/// The notes a person kept on a session (SESSION-36), as a front-end draws them.
+fn notes_json(notes: &[bravebot_session::sessions::Note]) -> Vec<Value> {
+    notes
+        .iter()
+        .map(|note| json!({ "turn": note.turn, "text": note.text }))
+        .collect()
+}
+
 /// A trust map as a front-end reads it.
 ///
 /// The same decisions the record is written with, so a rule reads the same whether it came off
@@ -4342,6 +4400,128 @@ mod coverage_tests {
         assert!(loaded.rewind.is_empty());
         assert!(loaded.server_children_may_run());
         state.handle.as_mut().unwrap().discard_unwritten("");
+    }
+
+    fn note(bridge: &mut Bridge, session: &str, text: &str) -> Result<Value, Failure> {
+        let line = json!({"id": 1, "method": "session.note", "params": {
+            "session": session, "text": text
+        }})
+        .to_string();
+        bridge.dispatch(&Request::parse(&line).unwrap())
+    }
+
+    /// SESSION-36: a note the window adds is written to the record at once, on the last finished
+    /// turn, and the record's notes come back when the session is opened. Nothing is added to
+    /// the conversation.
+    #[test]
+    fn a_desktop_note_is_kept_on_the_record_and_not_in_the_conversation() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("note-kept");
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.as_path();
+        let record: Record = serde_json::from_value(json!({
+            "id": "noted", "directory": root, "title": "work", "turns": 2,
+            "started": 1, "updated": 1,
+            "conversation": bravebot_agent::Conversation::new().snapshot()
+        }))
+        .unwrap();
+        let mut state =
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free");
+        save(
+            root,
+            &mut state,
+            2,
+            &bravebot_session::audit::Trail::default(),
+        );
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened(root.to_path_buf(), state, true, None, false));
+
+        let answered = note(&mut bridge, &handle, "  check the flaky test  ").unwrap();
+        assert_eq!(answered["noted"], "kept");
+        assert_eq!(
+            answered["notes"],
+            json!([{"turn": 2, "text": "check the flaky test"}])
+        );
+
+        let loaded = bravebot_session::sessions::load(root, &record.id).unwrap();
+        assert_eq!(loaded.notes.len(), 1);
+        assert_eq!(loaded.notes[0].turn, 2);
+        assert!(loaded.conversation.messages.is_empty());
+        let opened = bridge.recount(&handle, root, &loaded, false);
+        assert_eq!(
+            opened["notes"],
+            json!([{"turn": 2, "text": "check the flaky test"}])
+        );
+        let open = bridge.open.get(&handle).unwrap();
+        open.state
+            .lock()
+            .unwrap()
+            .handle
+            .as_mut()
+            .unwrap()
+            .discard_unwritten("");
+    }
+
+    /// SESSION-36: text with nothing in it is not a note and records nothing.
+    #[test]
+    fn an_empty_desktop_note_records_nothing() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("note-empty");
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.as_path();
+        let record: Record = serde_json::from_value(json!({
+            "id": "unnoted", "directory": root, "title": "work",
+            "started": 1, "updated": 1,
+            "conversation": bravebot_agent::Conversation::new().snapshot()
+        }))
+        .unwrap();
+        let state =
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free");
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open::opened(root.to_path_buf(), state, true, None, false));
+
+        let answered = note(&mut bridge, &handle, " \n ").unwrap();
+        assert_eq!(answered["noted"], "empty");
+        assert_eq!(answered["notes"], json!([]));
+    }
+
+    /// A note waits for the turn in flight to end, and a session with no record yet has nowhere
+    /// to keep one.
+    #[test]
+    fn a_desktop_note_is_refused_while_a_turn_runs_and_before_the_first() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("note-refused");
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let fresh = bridge.mint(Open::opened(
+            directory.clone(),
+            State::fresh(TrustStore::new(&directory)),
+            true,
+            None,
+            false,
+        ));
+        let failure = note(&mut bridge, &fresh, "later").expect_err("refused");
+        assert_eq!(failure.code, ErrorCode::BadRequest);
+
+        let started = Running::start();
+        let busy = bridge.mint(Open {
+            running: Some(started.running),
+            ..Open::opened(
+                directory.clone(),
+                State::fresh(TrustStore::new(&directory)),
+                true,
+                None,
+                false,
+            )
+        });
+        let failure = note(&mut bridge, &busy, "later").expect_err("refused");
+        assert_eq!(failure.code, ErrorCode::TurnInFlight);
     }
 }
 

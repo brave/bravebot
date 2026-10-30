@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   BridgeEvent,
   ForkedSession,
+  NotedSession,
   OpenedSession,
   PermissionMode,
   SandboxMode,
@@ -24,7 +25,7 @@ import { Gutter, useColumns } from './components/Gutter'
 import { shown } from './columns'
 import { TrustPrompt } from './components/TrustPrompt'
 import { Unconfigured } from './components/Unconfigured'
-import { Notice } from './components/Notice'
+import { Notice, releaseNotesNotice, type ReleaseNotes } from './components/Notice'
 import { TooltipLayer } from './components/TooltipLayer'
 import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
@@ -56,6 +57,8 @@ import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
 import { ImportSessions } from './components/ImportSessions'
 import { type Purged, purgeReport, turnRunningIn } from './purge'
+import { NoteDialog } from './components/NoteDialog'
+import { CaffeinateConfirm, KEPT_OFF, keepAwakeAgreed, keepAwakeChosen, type KeepAwake } from './components/CaffeinateConfirm'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
 import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy } from './live'
@@ -111,7 +114,7 @@ export function App(): React.JSX.Element {
     } catch { setBackendReady(false) }
   }, [live?.handle])
   useEffect(() => { void checkBackend() }, [checkBackend])
-  const [notice, setNotice] = useState<{ title: string; body: string } | null>(null)
+  const [notice, setNotice] = useState<{ title: string; subtitle?: string; body: string } | null>(null)
   const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
   const [bugReportOpen, setBugReportOpen] = useState(false)
   /** What the last update check found (UPDATE-12). Asked once at start and again when About opens. */
@@ -290,6 +293,7 @@ export function App(): React.JSX.Element {
         },
         entries: t.fromSaid(opened.said),
         todos: Object.values(opened.todos).flat(),
+        notes: opened.notes ?? [],
         // A record with no stored map was written before maps were kept. Nothing
         // recorded is not the same as nothing trusted, so it is asked about again.
         contextTokens: opened.contextTokens,
@@ -564,6 +568,43 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
+  // Plain text, not Markdown: the notes link every issue, and the agent has already written each
+  // link as its label, so nothing in this dialog opens anything.
+  const changelog = useCallback(async () => {
+    try {
+      setNotice(releaseNotesNotice(await call<ReleaseNotes>('changelog.read')))
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+
+  // Keeping the computer awake during turns (CMD-12): off at launch, and the main process holds
+  // the computer awake only while this is on and a turn runs.
+  const [keepAwake, setKeepAwake] = useState<KeepAwake>(KEPT_OFF)
+  const caffeinated = keepAwake.on
+  const caffeinate = useCallback(async () => {
+    setKeepAwake(await keepAwakeChosen(keepAwake, () => window.bravebot.caffeinateConfirmed()))
+  }, [keepAwake])
+  const enableCaffeinate = useCallback(async () => {
+    setKeepAwake(await keepAwakeAgreed(() => window.bravebot.confirmCaffeinate()))
+  }, [])
+
+  // The open chat's handle while its note dialog is up.
+  const [noting, setNoting] = useState<string | null>(null)
+  const askNote = useCallback(() => { if (liveRef.current) setNoting(liveRef.current.handle) }, [])
+  const addNote = useCallback(async (text: string) => {
+    if (!noting) return true
+    try {
+      const noted = await call<NotedSession>('session.note', { session: noting, text })
+      updateSession(noting, (old) => (old ? { ...old, notes: noted.notes } : old))
+      if (noted.noted === 'unwritable') setProblem('The note is held for this window only, because this chat has no record to keep it in.')
+      return noted.noted !== 'empty'
+    } catch (error) {
+      setProblem(String(error))
+      return false
+    }
+  }, [noting, updateSession])
+
   const { includeTools, toggleTools, canExport, exportSession } = useExport(live, setProblem)
 
   const resetColumns = useCallback(() => {
@@ -828,6 +869,9 @@ export function App(): React.JSX.Element {
     find: () => document.dispatchEvent(new Event(FIND_EVENT)),
     focusComposer: () => document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT)),
     about: () => void about(),
+    caffeinate: () => void caffeinate(),
+    changelog: () => void changelog(),
+    note: askNote,
     doctor: () => void doctor(),
     bugReport: () => setBugReportOpen(true),
     openSession,
@@ -852,9 +896,10 @@ export function App(): React.JSX.Element {
       canExport,
       includeTools,
       canRewind: live !== null && !live.running && (live.rewind?.length ?? 0) > 0,
+      caffeinated,
       folded: collapsed,
     }),
-    [live, draft, collapsed, canExport, includeTools, backendReady],
+    [live, draft, collapsed, canExport, includeTools, backendReady, caffeinated],
   )
   usePublishedState(menuState)
 
@@ -1049,7 +1094,7 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      <Context live={live} audit={auditPanel} details={details} />
+      <Context live={live} audit={auditPanel} details={details} onAddNote={askNote} />
       </div>
       </div>
       {agentsOpen && (
@@ -1082,7 +1127,7 @@ export function App(): React.JSX.Element {
         onReportBug={() => { setAboutInfo(null); setBugReportOpen(true) }} onClose={() => setAboutInfo(null)} />}
       {bugReportOpen && <BugReport onClose={() => setBugReportOpen(false)} />}
       {notice && (
-        <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
+        <Notice title={notice.title} subtitle={notice.subtitle} body={notice.body} onClose={() => setNotice(null)} />
       )}
       {projectAction?.kind === 'purge' && (
         <PurgeProject directory={projectAction.directory} opened={projectAction.opened} onClose={leaveProjectAction}
@@ -1090,6 +1135,12 @@ export function App(): React.JSX.Element {
       )}
       {projectAction?.kind === 'import' && (
         <ImportSessions directory={projectAction.directory} onClose={leaveProjectAction} onImported={() => void refresh()} />
+      )}
+      {noting && live?.handle === noting && (
+        <NoteDialog running={live.running} onCancel={() => setNoting(null)} onAdd={addNote} />
+      )}
+      {keepAwake.asking && (
+        <CaffeinateConfirm onCancel={() => setKeepAwake(KEPT_OFF)} onEnable={() => void enableCaffeinate()} />
       )}
       {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
       {rewinding && live?.handle === rewinding.handle && (() => {

@@ -48,6 +48,7 @@ pub mod definitions;
 pub mod emit;
 pub mod enhance;
 pub mod fork;
+pub mod help;
 pub mod hooks;
 #[cfg(unix)]
 pub mod host;

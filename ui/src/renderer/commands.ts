@@ -40,6 +40,12 @@ export interface CommandActions {
   /** Put the caret in the composer. */
   focusComposer: () => void
   about: () => void
+  /** Turn keeping the computer awake during turns on or off. */
+  caffeinate: () => void
+  /** Show the release notes the agent carries. */
+  changelog: () => void
+  /** Ask for a note to keep on the open chat's record. */
+  note: () => void
   doctor: () => void
   /** Open the bug report, which shows what a saved one would hold before anything is written. */
   bugReport: () => void
@@ -131,6 +137,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.cycleMode()
         case 'turn.rewind':
           return act.undoTurn()
+        case 'session.note':
+          return act.note()
         case 'view.fold-left':
           return act.toggle('left')
         case 'view.fold-right':
@@ -145,6 +153,10 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.theme()
         case 'app.about':
           return act.about()
+        case 'app.caffeinate':
+          return act.caffeinate()
+        case 'help.changelog':
+          return act.changelog()
         case 'help.doctor':
           return act.doctor()
         case 'help.update':

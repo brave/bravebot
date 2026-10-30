@@ -1,9 +1,9 @@
 import { memo, useState } from 'react'
 import { FileTree } from './FileTree'
 import { type PanelName } from '../../shared/state'
-import { isConfined, type Activity, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Activity, type SessionNote, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import type { Entry } from '../transcript'
-import { Collapse, Icon, Label, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
+import { Button, Collapse, Icon, Label, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { LabelChip } from './LabelChip'
 import { middleTruncate } from '../truncate'
@@ -14,6 +14,7 @@ interface Live {
   summary: { directory: string }
   entries: Entry[]
   todos: TodoRow[]
+  notes?: SessionNote[]
   quarantine: Shown[]
   phase: Waiting | null
   tokens: number
@@ -37,18 +38,21 @@ interface Live {
  * The right-hand column: what this session has touched, and the folder it is touching it in.
  *
  * The first four panels are derived from the transcript rather than tracked separately, so the two
- * cannot disagree about what happened. The fifth is the exception and says so: a file tree reads
- * the disk, because the question it answers — what else is in there, and what does this file look
- * like in a real editor — is not one the transcript can be asked.
+ * cannot disagree about what happened. The notes are read off the record. The last is the
+ * exception and says so: a file tree reads the disk, because the question it answers — what else is
+ * in there, and what does this file look like in a real editor — is not one the transcript can be
+ * asked.
  */
-export const Context = memo(function Context({ live, audit, details }: {
+export const Context = memo(function Context({ live, audit, details, onAddNote }: {
   live: Live | null
+  /** Open the dialog that adds a note to this session's record. */
+  onAddNote?: () => void
   audit?: React.ReactNode
   /** Drawn in place of the panels, for a bot's own page and its home conversation, which have no project to inspect. */
   details?: React.ReactNode
 }): React.JSX.Element {
   const [tab, setTab] = useState<'overview' | 'files'>('overview')
-  const off = new Set<PanelName>(tab === 'overview' ? ['files'] : ['plan', 'read', 'writes', 'confined'])
+  const off = new Set<PanelName>(tab === 'overview' ? ['files'] : ['plan', 'read', 'writes', 'confined', 'notes'])
   const reveal = (path: string) => {
     const entry = [...(live?.entries ?? [])].reverse().find((entry) =>
       entry.kind === 'tool' ? fileTarget(entry.activity.target) === path : entry.kind === 'confirm' ? entry.request.path === path : false)
@@ -62,6 +66,7 @@ export const Context = memo(function Context({ live, audit, details }: {
   const files = touched(live.entries)
   const writes = written(live.entries)
   const replayed = live.entries.filter((entry) => entry.kind === 'replayed-tool')
+  const notes = live.notes ?? []
 
   // A session read back off disk has calls in its transcript and nothing behind them:
   // the record keeps what a turn did, not what came of it. Saying "nothing read yet"
@@ -78,6 +83,7 @@ export const Context = memo(function Context({ live, audit, details }: {
     read: onlyReplayed ? 'Calls made' : 'Files read',
     writes: 'Changes',
     confined: 'Confined content',
+    notes: 'Notes',
     files: 'Files',
   }
 
@@ -226,8 +232,32 @@ export const Context = memo(function Context({ live, audit, details }: {
         )}
       </Section>
 
-      {/* Last, and on purpose. The four panels above are derived from the transcript — what the
-          session touched — and this one reads the disk. Putting it under them keeps that boundary
+      {/* Read off the record rather than the transcript, and plain text: the person wrote them,
+          and they are never sent to the model. */}
+      <Section id="notes" title="Notes" count={notes.length} off={off.has('notes')}
+        about="Notes you kept on this chat record. Never sent to the model.">
+        {notes.length === 0 ? (
+          <Empty icon="note">No notes.</Empty>
+        ) : (
+          <ul className="notes" data-test="notes">
+            {notes.map((note, index) => (
+              <li key={index}>
+                <span className="note-turn num">Turn {note.turn}</span>
+                <span className="note-text">{note.text}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {onAddNote && (
+          <Button kind="plain-faint" size="small" className="note-add" isDisabled={live.running} onClick={onAddNote} data-test="notes-add">
+            <Icon slot="icon-before" name="plus-add" />
+            Add note…
+          </Button>
+        )}
+      </Section>
+
+      {/* Last, and on purpose. The panels above are derived from the session — what it
+          touched and what was noted on it — and this one reads the disk. Putting it under them keeps that boundary
           visible instead of interleaving two kinds of claim.
 
           No count: the others count something the session did, where this would count entries in

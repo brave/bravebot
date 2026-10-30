@@ -87,6 +87,20 @@ names the bridge listed for that folder, matched exactly. The titles it lists ar
 program's text and are drawn as plain text. A copy is this app's record from then on: deleting
 the session in Claude Code does not remove it, and it goes only when deleted here.
 
+A note added from the window (`session.note`) is written to the session's record and nowhere
+else. It is not a prompt, is not queued and is not in what a turn is given, so it never reaches a
+model ([SESSION-36](../../docs/specs/sessions.md#SESSION-36)). The window draws notes as plain text.
+The host does not offer the method to its clients.
+
+Keep Computer Awake During Turns holds Electron's `powerSaveBlocker` (`prevent-app-suspension`)
+in the main process, only while the setting is on and a turn runs, and lets go when either ends,
+when the window closes and when the app quits. The screen still locks, but the computer stays up
+with whatever credentials it holds, so nothing is held until the person has agreed to a dialog that
+says so; the main process ignores the setting without that agreement. The agreement is
+`/caffeinate`'s, read and written through `caffeinate.confirmed` and `caffeinate.confirm`, which
+only the main process sends and the host does not offer. It is off at every launch
+([CMD-12](../../docs/specs/commands.md#CMD-12)).
+
 ## Decisions and refusal
 
 The transcript presents write, command, command-output, path-vouch, fetch, language-server,
