@@ -257,6 +257,11 @@ naming no variable is written with `GOOGLE_API_KEY`, the variable opencode reads
 are present and at least one of them is above zero, so the written entry states the same window and
 ceiling the source did, and a `limit` bravebot passes over is not written.
 
+**A gateway's `whitelist` and `blacklist` are copied whole.** Each is written as the array of ids the source
+held, with a value that is not a non-empty string dropped, so the written entry narrows a fetched roster as
+the source's did ([BACKEND-68](backends.md#BACKEND-68)). An AWS entry has no roster and is written with
+neither.
+
 **The model goes with its entry.** A top-level `model` is written only beside the entry this import
 writes for its provider. Where that entry is left as it is, because the settings file already has one
 or `managed.json` pins the `provider` block, the model is not written: it was chosen against

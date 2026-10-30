@@ -1386,6 +1386,24 @@ fn report_gateway(provider: &bravebot_config::provider::Provider) {
         report_aws_session(profile.as_deref());
     }
     fact(t!(doctor_tiers), gateway_models(provider));
+    if let Some(lists) = gateway_lists(provider) {
+        fact(t!(doctor_gateway_lists_label), lists);
+    }
+}
+
+/// What `doctor` says about a block's `whitelist` and `blacklist`, or `None` where it has neither.
+///
+/// Counts the ids each names. `doctor` asks no gateway for its roster, so how many rows a list
+/// hides is known only to a session that fetched one.
+pub(crate) fn gateway_lists(provider: &bravebot_config::provider::Provider) -> Option<String> {
+    let mut said = Vec::new();
+    if let Some(kept) = provider.whitelist.as_ref() {
+        said.push(t!(doctor_gateway_whitelist, count = kept.len()).to_string());
+    }
+    if !provider.blacklist.is_empty() {
+        said.push(t!(doctor_gateway_blacklist, count = provider.blacklist.len()).to_string());
+    }
+    (!said.is_empty()).then(|| said.join(", "))
 }
 
 /// What `doctor` says a gateway offers: the models its block names, else the list compiled in for a
@@ -3599,6 +3617,24 @@ mod tests {
             }}}"#,
         );
         assert_eq!(gateway_models(&names_one), "google/gemini-3-flash-preview");
+    }
+
+    /// BACKEND-68: `doctor` says how many ids each list names, and nothing where there is none.
+    #[test]
+    fn doctor_counts_the_ids_a_gateways_lists_name() {
+        let plain = configured_gateway(
+            r#"{"provider": {"gw": {"options": {"baseURL": "https://gw.invalid/v1"}}}}"#,
+        );
+        assert_eq!(gateway_lists(&plain), None);
+
+        let listed = configured_gateway(
+            r#"{"provider": {"gw": {"options": {"baseURL": "https://gw.invalid/v1"},
+                "whitelist": ["a", "b", "c"], "blacklist": ["b"]}}}"#,
+        );
+        let said = gateway_lists(&listed).expect("lists");
+        assert!(said.contains('3') && said.contains('1'), "{said}");
+        assert!(said.to_lowercase().contains("whitelist"), "{said}");
+        assert!(said.to_lowercase().contains("blacklist"), "{said}");
     }
 
     fn development_fixture(name: &str) -> Scratch {

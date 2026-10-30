@@ -655,6 +655,15 @@ pub struct Provider {
     /// kept: a header somebody wrote and this program refuses is the one worth saying out loud,
     /// since a gateway that answers 401 says nothing about a line in a settings file.
     pub headers_refused: Vec<(String, HeaderFault)>,
+    /// The ids of a fetched roster this block offers and no others, where the block has a
+    /// `whitelist`. `None` where it has none; `Some` of an empty list offers nothing.
+    ///
+    /// Applied to the rows a gateway lists, never to `models`, so it narrows what is offered and
+    /// grants nothing ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)).
+    pub whitelist: Option<Vec<String>>,
+    /// The ids of a fetched roster this block does not offer, from its `blacklist`, applied after
+    /// [`Self::whitelist`].
+    pub blacklist: Vec<String>,
 }
 
 /// The wire protocol a provider's requests are written in.
@@ -878,6 +887,8 @@ impl Provider {
             bedrock: None,
             headers,
             headers_refused,
+            whitelist: id_list(entry.get("whitelist")),
+            blacklist: names(entry.get("blacklist")),
         })
     }
 
@@ -926,6 +937,8 @@ impl Provider {
             bedrock: None,
             headers: Vec::new(),
             headers_refused: Vec::new(),
+            whitelist: None,
+            blacklist: Vec::new(),
         })
     }
 
@@ -970,6 +983,8 @@ impl Provider {
             bedrock: Some(bedrock),
             headers: Vec::new(),
             headers_refused,
+            whitelist: None,
+            blacklist: Vec::new(),
         })
     }
 
@@ -1577,6 +1592,13 @@ fn names(value: Option<&serde_json::Value>) -> Vec<String> {
     names.iter().filter_map(|name| string(Some(name))).collect()
 }
 
+/// A list of model ids that is present, or `None` where the key is absent or not an array.
+///
+/// Distinguished from an empty array, which is a list that names nothing.
+fn id_list(value: Option<&serde_json::Value>) -> Option<Vec<String>> {
+    matches!(value, Some(serde_json::Value::Array(_))).then(|| names(value))
+}
+
 /// The `models` block as Bedrock entries, in the order the file listed it.
 ///
 /// The same block the gateway path reads, taken into the shape that backend speaks. `name` is read
@@ -1841,6 +1863,29 @@ mod tests {
         ] {
             assert_eq!(without_userinfo(stated), shown, "{stated}");
         }
+    }
+
+    /// BACKEND-68: the lists are read as arrays of ids, an empty `whitelist` is a list, and a
+    /// value of another shape is no list.
+    #[test]
+    fn a_whitelist_and_a_blacklist_are_read_as_lists_of_ids() {
+        let found = parsed(
+            r#"{"provider": {
+                "both": {"options": {"baseURL": "https://a.invalid/v1"},
+                         "whitelist": ["x", " y ", 3, ""], "blacklist": ["z"]},
+                "empty": {"options": {"baseURL": "https://b.invalid/v1"}, "whitelist": []},
+                "wrong": {"options": {"baseURL": "https://c.invalid/v1"},
+                          "whitelist": "x", "blacklist": {"z": 1}},
+                "none": {"options": {"baseURL": "https://d.invalid/v1"}}
+            }}"#,
+        );
+        let by = |id: &str| found.iter().find(|p| p.id == id).expect("provider");
+        assert_eq!(by("both").whitelist, Some(vec!["x".into(), "y".into()]));
+        assert_eq!(by("both").blacklist, ["z"]);
+        assert_eq!(by("empty").whitelist, Some(Vec::new()));
+        assert_eq!(by("wrong").whitelist, None);
+        assert!(by("wrong").blacklist.is_empty());
+        assert_eq!(by("none").whitelist, None);
     }
 
     fn parsed(text: &str) -> Vec<Provider> {

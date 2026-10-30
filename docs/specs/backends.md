@@ -4218,6 +4218,38 @@ check before a turn is one more run of the program.
 `verified-by: bravebot_agent::gcloud::a_gcloud_a_stage_may_write_is_not_the_one_run`
 `verified-by: bravebot_agent::gcloud::the_sign_in_reports_each_line_the_cli_writes_and_its_failure`
 
+<a id="BACKEND-68"></a>
+### BACKEND-68: a provider entry may narrow a fetched roster with a whitelist and a blacklist
+
+A `provider` entry may carry `whitelist` and `blacklist`, each an array of model ids as the gateway
+names them. They are applied to the rows a gateway listed ([BACKEND-19](#BACKEND-19)), after the rows
+that service cannot reach are left out: the whitelist first, so that only the ids it names remain, then
+the blacklist, which removes the ids it names from those. A window and a parameter list the gateway
+reported are kept for each row that remains. An id that the gateway does not list changes nothing, an
+entry with neither key is offered everything it listed, and a `whitelist` that is an empty array offers
+nothing. A value that is not an array is no list, and an item that is not a non-empty string is not
+read.
+
+The lists apply only to a fetched roster. An entry that names `models` is offered those and is not
+asked ([BACKEND-19](#BACKEND-19)), so neither list removes a model the entry names. Both are read
+from the layers that may name `provider` ([BACKEND-24](#BACKEND-24)). A name in either list only
+narrows what is offered and grants nothing, so [BACKEND-1](#BACKEND-1) holds, and a model the managed
+layer denies stays denied whatever a person's whitelist names ([BACKEND-48](#BACKEND-48)). `doctor`
+says, for an entry that has them, how many ids each list names. It asks no gateway for a roster, so
+how many rows a list hid is not reported. Import copies both lists ([IMPORT-3](import.md#IMPORT-3)).
+
+**Why.** A gateway's roster is too large to list and not all of it works: for OpenAI the listing
+includes embedding, speech and image models. Naming `models` turns the fetch off and loses the
+reported windows, so a person who wants to hide a few rows had no way to do it. A list is a
+person's statement about what to offer, which is the same footing as `models`, so it is read where
+`provider` is and decides nothing from fetched content: the ids compared are the ones the person
+wrote against the ids the gateway listed, and the result is only which rows a picker draws.
+
+`verified-by: bravebot_config::provider::a_whitelist_and_a_blacklist_are_read_as_lists_of_ids`
+`verified-by: bravebot_aichat::models::a_whitelist_and_a_blacklist_narrow_a_fetched_roster_in_that_order`
+`verified-by: bravebot_cli::doctor::doctor_counts_the_ids_a_gateways_lists_name`
+`verified-by: bravebot_config::import::only_the_fields_bravebot_reads_are_written`
+
 ## Known costs
 
 - **Each change of mode costs a full prefix write.** BACKEND-27 and BACKEND-32 mark a cache prefix
