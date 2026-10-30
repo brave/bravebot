@@ -92,6 +92,7 @@ person could approve the field alone ([RUN-2](tools/run.md#RUN-2), [FETCH-2](too
 `verified-by: bravebot_agent::permission_mode::auto_answers_a_fetch_only_on_the_classifiers_allow_word_and_not_a_redirect`
 `verified-by: bravebot_agent::turn::a_run_with_nothing_to_hold_it_is_not_put_to_the_classifier`
 `verified-by: bravebot_agent::turn::no_mode_but_auto_consults_the_classifier`
+`verified-by: bravebot_agent::turn::a_run_with_a_scope_a_reference_or_a_private_release_is_not_put_to_the_classifier`
 
 <a id="AUTO-4"></a>
 ### AUTO-4: the classifier answers no question that a mode may not answer, and none whose bytes can derive from untrusted content

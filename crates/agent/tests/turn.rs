@@ -65333,6 +65333,26 @@ struct AutoRun {
 }
 
 fn an_auto_run(mode: bravebot_agent::PermissionMode, said: &str, command: &str) -> AutoRun {
+    an_auto_run_calling(
+        mode,
+        said,
+        &[],
+        &json!({ "command": command }).to_string(),
+        false,
+    )
+}
+
+/// [`an_auto_run`] for a last call whose input is `input`, made after each of `before`, which the
+/// planner calls first. `with_profile` gives the session a profile directory, which a request for
+/// a credential scope needs before it is asked about at all. A page is in the tree for a call to
+/// read.
+fn an_auto_run_calling(
+    mode: bravebot_agent::PermissionMode,
+    said: &str,
+    before: &[&str],
+    input: &str,
+    with_profile: bool,
+) -> AutoRun {
     // A name of its own for each run: tests run side by side and a scratch directory is named by
     // the process and this, so a shared name would have one run delete another's files.
     static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -65340,14 +65360,19 @@ fn an_auto_run(mode: bravebot_agent::PermissionMode, said: &str, command: &str) 
         "auto-classifier-run-{}",
         RUNS.fetch_add(1, Ordering::Relaxed)
     ));
+    std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let (endpoint, received) = serve_sequence_answering_checks_with(
-        vec![reply_with(said)],
-        vec![
-            tool_request_2("run", &json!({ "command": command }).to_string()),
-            reply_with("done"),
-        ],
-    );
+    // One word for each call the classifier could be put, so a call wrongly put to it is answered
+    // rather than left to fail for want of a reply.
+    let words = (0..=before.len()).map(|_| reply_with(said)).collect();
+    let calls = before
+        .iter()
+        .copied()
+        .chain(std::iter::once(input))
+        .map(|call| tool_request_2("run", call))
+        .chain(std::iter::once(reply_with("done")))
+        .collect();
+    let (endpoint, received) = serve_sequence_answering_checks_with(words, calls);
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -65355,14 +65380,20 @@ fn an_auto_run(mode: bravebot_agent::PermissionMode, said: &str, command: &str) 
     let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
     let seen = asked.seen.clone();
     let mut confirmer = bravebot_agent::Confining::new(&mut asked, live.clone(), false);
+    let mut task = Task::new("make the file made.txt")
+        .with_permission_mode(live)
+        .with_confined_runs(true);
+    if with_profile {
+        task = task.with_profile(Some(
+            bravebot_agent::home::profile().unwrap_or_else(|| scratch.path.join("profile")),
+        ));
+    }
 
     turns::run_with_trust(
         &config,
         &egress,
         &workspace,
-        &Task::new("make the file made.txt")
-            .with_permission_mode(live)
-            .with_confined_runs(true),
+        &task,
         &mut confirmer,
         &mut sink,
         trusting_the_workspace(),
@@ -65532,6 +65563,59 @@ fn a_run_with_nothing_to_hold_it_is_not_put_to_the_classifier() {
     );
     assert_eq!(seen.lock().unwrap().len(), 1, "the person was not asked");
     assert!(!scratch.path.join("made.txt").exists());
+}
+
+/// AUTO-3: a confined line that asked for a credential scope, is fed a reference on standard input,
+/// or releases a private file is not put to the classifier, whatever it would have said, and goes
+/// to the person. The classifier is shown the line and the directory and nothing a reference holds
+/// or a scope lends, so its word is not a person's reading of the whole. Each line is one the
+/// classifier would allow if asked and the sandbox confines, so only the guard in
+/// `ask_about_the_run` keeps it from the model. The regression it rejects: the guard reduced to
+/// the confinement, which approves such a line unasked on a model's word.
+#[test]
+fn a_run_with_a_scope_a_reference_or_a_private_release_is_not_put_to_the_classifier() {
+    use bravebot_agent::PermissionMode;
+    if bravebot_sandbox::base::Prelude::current().is_none() {
+        // No sandbox to confine the line, so the classifier is not consulted for any other reason
+        // and the test would pass against the regression.
+        return;
+    }
+    for (what, before, input, profile) in [
+        (
+            "a credential scope",
+            &[][..],
+            r#"{"command":"touch made.txt","scopes":["aws"]}"#,
+            true,
+        ),
+        (
+            "a reference on standard input",
+            &[r#"{"command":"sed -n p page.txt"}"#][..],
+            r#"{"command":"sed -n 2p > made.txt","stdin_ref":"ref:1"}"#,
+            false,
+        ),
+        (
+            "a private release",
+            &[][..],
+            r#"{"command":"sed -n 2p < page.txt > made.txt"}"#,
+            false,
+        ),
+    ] {
+        let run = an_auto_run_calling(PermissionMode::Auto, "allow", before, input, profile);
+        // The first call of the reference case is a line the classifier may rightly be shown, so
+        // only the guarded line is looked for there, and any request at all is one in the others.
+        let last = if before.is_empty() { "" } else { "sed -n 2p" };
+        let shown: Vec<&String> = run
+            .classifier
+            .iter()
+            .filter(|body| body.contains(last))
+            .collect();
+        assert!(
+            shown.is_empty(),
+            "{what}: the classifier was put the line: {shown:?}"
+        );
+        assert_eq!(run.asked, 1, "{what}: the person was not asked");
+        assert!(!run.made_it, "{what}: ran on the classifier's word");
+    }
 }
 
 /// AUTO-3, AUTO-8: the classifier's allow word answers the first question about a URL, and its no

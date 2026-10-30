@@ -121,7 +121,8 @@ fn cut(line: &str) -> &str {
     while !line.is_char_boundary(end) {
         end -= 1;
     }
-    &line[..end]
+    // `end` is on a character boundary, so this is the whole prefix and never the fallback.
+    line.get(..end).unwrap_or(line)
 }
 
 /// The classifier's word read from its reply: [`Classified::Allowed`] for the allow word and
@@ -161,9 +162,8 @@ pub fn consult<S: Sink>(
 
     let request = request_for(&model, classifying.typed, question);
     let mut client = chat.backend(&model);
-    let completion = match client.complete_streaming(policy, &request, |_| {}) {
-        Ok(completion) => completion,
-        Err(_) => return answered(policy, &model, question, Classified::NotAllowed, 0),
+    let Ok(completion) = client.complete_streaming(policy, &request, |_| {}) else {
+        return answered(policy, &model, question, Classified::NotAllowed, 0);
     };
     let cost = completion.usage.prompt_tokens + completion.usage.completion_tokens;
 

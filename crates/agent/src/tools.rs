@@ -9651,6 +9651,30 @@ fn fetch_rules_refusal<S: Sink>(policy: &mut Policy<'_, S>, url: &str) -> Option
     }
 }
 
+/// [`fetch_not_approved`] for `fetch_url`, which is also the one fetch the classifier is put the
+/// first question about a URL of (AUTO-3). Asked only where the policy would ask the person.
+fn fetch_url_not_approved<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    url: &str,
+    host: &str,
+) -> Option<Produced> {
+    let classified = match policy.fetch_needs_approval(url) {
+        true => consult_about_a_fetch(policy, tools, url, host),
+        false => crate::confirm::Classified::NotAsked,
+    };
+    fetch_not_approved(
+        policy,
+        confirmer,
+        "fetch_url",
+        url,
+        host,
+        classified,
+        tools.permission_mode.get(),
+    )
+}
+
 /// Puts a host that needs approval to the person (FETCH-2, FETCH-4) and returns the refusal when
 /// they reject it, shared by `fetch_url` and `download_url`, which `call` names for the trail
 /// (TRACE-1). The answer is the person's, so no labelled content is read here.
@@ -9724,19 +9748,7 @@ fn fetch_url<S: Sink, C: Confirmer>(
     if let Some(refusal) = fetch_rules_refusal(policy, &url) {
         return refusal;
     }
-    let classified = match policy.fetch_needs_approval(&url) {
-        true => consult_about_a_fetch(policy, tools, &url, &host),
-        false => crate::confirm::Classified::NotAsked,
-    };
-    if let Some(refusal) = fetch_not_approved(
-        policy,
-        confirmer,
-        "fetch_url",
-        &url,
-        &host,
-        classified,
-        tools.permission_mode.get(),
-    ) {
+    if let Some(refusal) = fetch_url_not_approved(policy, tools, confirmer, &url, &host) {
         return refusal;
     }
 
