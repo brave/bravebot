@@ -935,8 +935,9 @@ says.
 `false` makes `bravebot --handle-uri`, which the operating system runs for a `bravebot://open` link,
 refuse every link with the configuration status before it reads one. Only the boolean `false` does
 this: `"false"` in quotes or any other value leaves links on. It does not remove the registration the
-installer made; set `BRAVEBOT_NO_DEEP_LINKS=1` when running `install.sh` to leave that out, or delete
-`bravebot-handler.desktop` from `~/.local/share/applications`.
+installer made; set `BRAVEBOT_NO_DEEP_LINKS=1` when running `install.sh` or `install.ps1` to leave that
+out, or delete `bravebot-handler.desktop` from `~/.local/share/applications` on Linux, or the
+`HKCU\Software\Classes\bravebot` registry key on Windows.
 
 ### `tui.mouse`
 

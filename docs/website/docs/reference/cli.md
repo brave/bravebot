@@ -721,8 +721,8 @@ to draw the session on. Use `-p` for a run nobody watches.
 bravebot --handle-uri 'bravebot://open?dir=%2Fhome%2Fme%2Fproject&prompt=fix+the+failing+test'
 ```
 
-What a `bravebot://open` link runs. On Linux `install.sh` registers it, so opening such a link in a
-browser starts a terminal with this command. You do not type it.
+What a `bravebot://open` link runs. On Linux `install.sh` and on Windows `install.ps1` register it, so
+opening such a link in a browser starts a terminal with this command. You do not type it.
 
 A link carries two optional parameters, percent-encoded: `dir`, an absolute path, and `prompt`.
 Anything else in a link, a mode, a tool, a model or `dangerously-skip-permissions` among them,
@@ -737,7 +737,7 @@ refuses the whole link with the argument status, since a link has no say in how 
   The note goes when the box is emptied or the message is sent.
 
 Links are switched off by [`deepLinks`](../customize/configuration.md#deeplinks), and the installer
-registers nothing where `BRAVEBOT_NO_DEEP_LINKS` is set. macOS and Windows register nothing yet.
+registers nothing where `BRAVEBOT_NO_DEEP_LINKS` is set. macOS registers nothing yet.
 
 ## `--plain`
 
