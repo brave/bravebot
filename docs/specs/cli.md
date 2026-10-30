@@ -2264,6 +2264,8 @@ one the person chose to run with the flag.
 `verified-by: bravebot_agent::interjections::a_line_for_a_turn_that_is_not_reading_is_handed_back`
 `verified-by: bravebot_cli::lines::a_steer_sent_while_no_turn_runs_starts_a_turn_of_its_own`
 `verified-by: bravebot_cli::running::an_incognito_run_reading_lines_carries_its_turns_in_memory_and_writes_no_record`
+`verified-by: bravebot_cli::running::an_incognito_run_reading_lines_carries_its_facts_and_its_trust_map`
+`verified-by: bravebot_cli::running::a_stopped_turn_leaves_an_incognito_run_carried_on_from_the_turn_before`
 `verified-by: bravebot_cli::lines::a_stop_or_a_steer_right_behind_a_prompt_reaches_the_turn_that_prompt_starts`
 `verified-by: bravebot_cli::lines::a_second_answer_to_a_question_does_not_replace_the_first`
 `verified-by: bravebot_cli::lines::a_reader_that_panics_ends_the_input_and_leaves_nothing_waiting`
