@@ -13866,12 +13866,14 @@ fn a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another
 // (TRUST-18, SEARCH-2, LIST-1).
 
 /// A policy over `trust`, for one call of a file tool.
+#[cfg(unix)]
 fn policy_over<'a>(trust: &TrustStore, sink: &'a mut RecordingSink) -> Policy<'a, RecordingSink> {
     Policy::begin(routing(), ReleasePlan::new(), all_file_capabilities(), sink)
         .expect("policy")
         .with_trust(trust.clone())
 }
 
+#[cfg(unix)]
 fn read_integrity(workspace: &Workspace, trust: &TrustStore, path: &str) -> Integrity {
     let mut sink = RecordingSink::new();
     let mut policy = policy_over(trust, &mut sink);
@@ -13883,6 +13885,7 @@ fn read_integrity(workspace: &Workspace, trust: &TrustStore, path: &str) -> Inte
 }
 
 /// The label of a search for `needle` with `target` as its directory, and how many files it read.
+#[cfg(unix)]
 fn search_integrity(workspace: &Workspace, trust: &TrustStore, target: &str) -> (Integrity, usize) {
     let mut sink = RecordingSink::new();
     let mut policy = policy_over(trust, &mut sink);
@@ -13902,6 +13905,7 @@ fn search_integrity(workspace: &Workspace, trust: &TrustStore, target: &str) -> 
 }
 
 /// The label of a listing of `target`, and how many files it names.
+#[cfg(unix)]
 fn listing_integrity(
     workspace: &Workspace,
     trust: &TrustStore,
