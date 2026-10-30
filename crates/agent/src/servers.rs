@@ -521,6 +521,8 @@ enum Plan {
         timeouts: Timeouts,
         tools: Vec<String>,
         exclude_tools: Vec<String>,
+        /// The hosts the declaration lists for it, where it lists any.
+        allowed_hosts: Option<Vec<String>>,
     },
     Http {
         url: String,
@@ -954,6 +956,7 @@ fn planned(
         timeouts: declaration.timeouts(),
         tools: tools.clone(),
         exclude_tools: exclude_tools.clone(),
+        allowed_hosts: declaration.allowed_hosts().map(<[String]>::to_vec),
     })
 }
 
@@ -1047,6 +1050,7 @@ pub fn foreseen(
         mut reads,
         directory,
         declared,
+        allowed_hosts,
         ..
     } = (match planned(declaration, environment) {
         Ok(plan) => plan,
@@ -1097,8 +1101,13 @@ pub fn foreseen(
     policy.readable.retain(|row| *row != own);
     policy.writable.retain(|row| row.path != own);
     let granted = sandbox.capabilities();
+    let hosts = crate::confine::hosts_for_a_server(hosts, allowed_hosts.as_deref());
     let policy = match crate::confine::foreseen_under_the_session_network(
-        policy, &program, network, hosts, &granted,
+        policy,
+        &program,
+        network,
+        hosts.as_ref(),
+        &granted,
     ) {
         Ok(held) => held,
         Err(reason) => {
@@ -1534,6 +1543,15 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
             )
         ));
     }
+    if let Some(hosts) = declaration.allowed_hosts() {
+        lines.push(format!(
+            "{indent}{}",
+            match hosts.is_empty() {
+                true => t!(mcp_allowed_hosts_none).to_string(),
+                false => t!(mcp_allowed_hosts, hosts = hosts.join(", ")),
+            }
+        ));
+    }
     if !declaration.tools().is_empty() {
         lines.push(format!(
             "{indent}{}",
@@ -1586,6 +1604,8 @@ pub fn problem(found: &Problem) -> String {
         ),
         Problem::Tool(name) => t!(mcp_problem_tool, name = name),
         Problem::Tools(key) => t!(mcp_problem_tools, key = *key),
+        Problem::Hosts(entry) if entry.is_empty() => t!(mcp_problem_hosts_list).to_string(),
+        Problem::Hosts(entry) => t!(mcp_problem_hosts, entry = shown(entry)),
     }
 }
 
@@ -1917,6 +1937,7 @@ fn start_under(
                 timeouts,
                 tools,
                 exclude_tools,
+                allowed_hosts,
             } => {
                 reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
                 let sandbox = match &sandbox {
@@ -1956,8 +1977,13 @@ fn start_under(
                     continue;
                 };
                 let granted = granting.clone().unwrap_or_else(|| sandbox.capabilities());
+                let hosts = crate::confine::hosts_for_a_server(session.1, allowed_hosts.as_deref());
                 let (policy, proxied) = match crate::confine::held_to_the_session_network(
-                    policy, &program, session.0, session.1, &granted,
+                    policy,
+                    &program,
+                    session.0,
+                    hosts.as_ref(),
+                    &granted,
                 ) {
                     Ok(held) => held,
                     Err(reason) => {
@@ -4256,6 +4282,7 @@ mod tests {
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            allowed_hosts: None,
         };
         let granting = Capabilities {
             network_denial_enforced: true,
@@ -4867,6 +4894,7 @@ done
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            allowed_hosts: None,
         };
         Some(start(
             vec![("weather".to_string(), plan)],
@@ -5027,6 +5055,7 @@ while {answering}"#
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            allowed_hosts: None,
         };
         let mut notes = Vec::new();
 
@@ -5560,6 +5589,7 @@ while {answering}"#
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            allowed_hosts: None,
         };
         let mut notes = Vec::new();
 
@@ -5651,6 +5681,7 @@ while {answering}"#
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            allowed_hosts: None,
         };
         let mut notes = Vec::new();
 
@@ -5734,6 +5765,7 @@ done
             timeouts,
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            allowed_hosts: None,
         };
         let home = Home {
             directory: Some(state),
@@ -5978,6 +6010,7 @@ done
             timeouts: Timeouts::default(),
             tools: vec!["echo".to_string(), "ping".to_string()],
             exclude_tools: vec!["ping".to_string()],
+            allowed_hosts: None,
         };
         let mut notes = Vec::new();
         let started = start(
@@ -6163,6 +6196,7 @@ done
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            allowed_hosts: None,
         };
         let mut notes = Vec::new();
         let started = start(
@@ -6243,6 +6277,95 @@ done
         )
         .expect_err("a platform that cannot deny the network does not start the server");
         assert!(refused.contains("run.network"), "{refused}");
+    }
+
+    /// SERVERS-10: a server's own list holds it to the proxy where the session has none, and where
+    /// the session has one the declaration only narrows it: an entry the session does not allow is
+    /// dropped, the session's refusals still apply, and an empty list refuses every host.
+    #[test]
+    fn a_servers_own_host_list_can_narrow_the_sessions_and_never_widen_it() {
+        let own = words(&["api.mine.example", "*.cdn.example", "other.example"]);
+        let allowed = |hosts: &Option<Hosts>| {
+            hosts
+                .as_ref()
+                .and_then(|hosts| hosts.allowed.as_ref())
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .map(|host| host.entry.clone())
+                        .collect::<Vec<_>>()
+                })
+        };
+
+        assert_eq!(crate::confine::hosts_for_a_server(None, None), None);
+        let session = listing(
+            Some(&["api.mine.example", "*.cdn.example"]),
+            &["bad.cdn.example"],
+        );
+        assert_eq!(
+            crate::confine::hosts_for_a_server(Some(&session), None),
+            Some(session.clone())
+        );
+
+        let alone = crate::confine::hosts_for_a_server(None, Some(&own));
+        assert_eq!(allowed(&alone), Some(own.clone()));
+
+        let narrowed = crate::confine::hosts_for_a_server(Some(&session), Some(&own));
+        assert_eq!(
+            allowed(&narrowed),
+            Some(words(&["api.mine.example", "*.cdn.example"]))
+        );
+        assert_eq!(narrowed.as_ref().map(|hosts| hosts.denied.len()), Some(1));
+        let list = crate::host_proxy::list_for(
+            &allowed(&narrowed).unwrap(),
+            &["bad.cdn.example".to_string()],
+            false,
+            &[],
+        )
+        .unwrap();
+        assert!(list.decide("api.mine.example").is_allowed());
+        assert!(list.decide("x.cdn.example").is_allowed());
+        assert!(!list.decide("other.example").is_allowed());
+        assert!(!list.decide("bad.cdn.example").is_allowed());
+
+        let nothing = crate::confine::hosts_for_a_server(None, Some(&[]));
+        assert_eq!(allowed(&nothing), Some(Vec::new()));
+    }
+
+    /// SERVERS-10: a server whose declaration lists hosts is held to the proxy though the session
+    /// sets no list, and one listing none is held to a proxy that refuses every host.
+    #[test]
+    fn a_servers_declared_list_holds_it_to_the_proxy_with_no_session_list() {
+        let program = Path::new("/usr/bin/weather-mcp");
+        for declared in [words(&["api.mine.example"]), Vec::new()] {
+            let hosts = crate::confine::hosts_for_a_server(None, Some(&declared));
+            let (held, proxied) = crate::confine::held_to_the_session_network(
+                a_servers_policy(),
+                program,
+                Network::Open,
+                hosts.as_ref(),
+                &limited_to_a_port(true),
+            )
+            .expect("held to the proxy");
+            let port = held.egress_only_to.expect("egress is limited to one port");
+            assert!(
+                proxied
+                    .iter()
+                    .any(|(name, value)| name == "HTTPS_PROXY"
+                        && value.ends_with(&format!(":{port}"))),
+                "{proxied:?}"
+            );
+        }
+        let hosts = crate::confine::hosts_for_a_server(None, Some(&words(&["api.mine.example"])));
+        let refused = crate::confine::held_to_the_session_network(
+            a_servers_policy(),
+            program,
+            Network::Open,
+            hosts.as_ref(),
+            &limited_to_a_port(false),
+        )
+        .expect_err("a platform that cannot hold a program to the proxy refuses the server");
+        assert!(refused.contains("allowed_hosts"), "{refused}");
     }
 
     /// SANDBOX-24: a server under a host list reaches the proxy's port alone and is given its
@@ -6330,6 +6453,7 @@ done
                     timeouts: Timeouts::default(),
                     tools: Vec::new(),
                     exclude_tools: Vec::new(),
+                    allowed_hosts: None,
                 },
             )]
         };
@@ -6395,6 +6519,7 @@ done
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            allowed_hosts: None,
         };
         let hosts = listing(Some(&["mine.example"]), &[]);
         let mut notes = Vec::new();
@@ -6402,6 +6527,69 @@ done
         let started = start_under(
             None,
             (Network::Open, Some(&hosts)),
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        assert_eq!(started.len(), 1, "{notes:?}");
+        let seen = std::fs::read_to_string(work.join("proxy-was")).expect("the server wrote it");
+        assert!(
+            seen.starts_with("http://127.0.0.1:"),
+            "the server was given {seen}"
+        );
+    }
+
+    /// SERVERS-10: a server whose declaration lists hosts is held to the proxy under a session that sets
+    /// no list, and is given its variables after the declaration's own.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_with_its_own_host_list_is_started_with_the_proxys_variables_and_no_session_list() {
+        let root = scratch("cli-servers-own-hosts")
+            .canonicalize()
+            .expect("the scratch directory resolves");
+        let held = bravebot_sandbox::for_current_platform()
+            .map(|sandbox| sandbox.capabilities().egress_limited_to_a_port)
+            .unwrap_or(false);
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() || !held {
+            eprintln!("SKIPPED (no confinement that holds a program to a port here)");
+            return;
+        }
+        let program = installed(&root.join("server"), "weather-mcp");
+        let (_, answering) = HOME_WRITING_SERVER
+            .split_once("while ")
+            .expect("the server answers in a loop");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\nprintf '%s' \"$HTTPS_PROXY\" > proxy-was\nwhile {answering}"),
+        )
+        .expect("write the server");
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).expect("work");
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let plan = Plan::Stdio {
+            program,
+            arguments: Vec::new(),
+            variables: Variables::new().with("HTTPS_PROXY", "http://elsewhere.example:1"),
+            searched: Vec::new(),
+            reads: Vec::new(),
+            directory: Some(work.clone()),
+            declared: digested(&["weather-mcp"]),
+            timeouts: Timeouts::default(),
+            tools: Vec::new(),
+            exclude_tools: Vec::new(),
+            allowed_hosts: Some(vec!["mine.example".to_string()]),
+        };
+        let mut notes = Vec::new();
+
+        let started = start_under(
+            None,
+            (Network::Open, None),
             vec![("weather".to_string(), plan)],
             &home,
             Stream::Null,

@@ -166,6 +166,17 @@ impl HostList {
         }
     }
 
+    /// Whether the allowed entries cover every name `rule` covers. Denied entries are not read.
+    ///
+    /// A wildcard rule is covered only by a wildcard on the same domain or on a domain above it, so
+    /// a list of `api.example.com` does not cover `*.example.com`.
+    pub fn allows_every_name_of(&self, rule: &HostRule) -> bool {
+        self.allowed.iter().any(|allowed| match rule.wildcard {
+            false => allowed.covers(&rule.name),
+            true => allowed.wildcard && (allowed.name == rule.name || allowed.covers(&rule.name)),
+        })
+    }
+
     /// Whether an exact entry of the allowed list is `address` and no denied entry covers it. An
     /// IPv4-mapped address is compared as its IPv4 address. A wildcard names no address, so
     /// `*.0.0.1` does not let a tunnel reach `127.0.0.1`, and no entry can spell an IPv6 address.
@@ -201,6 +212,32 @@ pub fn registry_hosts(toolchain: Toolchain) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A narrower list is one every name of which the wider list allows. A wildcard is covered only
+    /// by a wildcard at or above its domain, and an exact entry by an exact one or a wildcard over it.
+    #[test]
+    fn a_list_allows_every_name_of_a_rule_only_when_each_name_is_covered() {
+        let (list, _) = HostList::parse(["api.example.com", "*.github.io"], []);
+        let rule = |entry: &str| HostRule::parse(entry).expect("a rule");
+        for covered in [
+            "api.example.com",
+            "API.example.com.",
+            "me.github.io",
+            "*.me.github.io",
+            "*.github.io",
+        ] {
+            assert!(list.allows_every_name_of(&rule(covered)), "{covered}");
+        }
+        for wider in [
+            "*.example.com",
+            "other.example.com",
+            "github.io",
+            "*.io",
+            "*.com",
+        ] {
+            assert!(!list.allows_every_name_of(&rule(wider)), "{wider}");
+        }
+    }
 
     /// A record carries a host name or an address, normalised, and nothing else. The regression
     /// it rejects is a name with a control character, a space or a bracket reaching a trail.
