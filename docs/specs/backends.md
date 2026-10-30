@@ -4788,8 +4788,8 @@ check before a turn is one more run of the program.
   service that answers 200 and then reports the level as an unsupported value fails the turn at that level,
   and the refusal is not remembered. No service has been seen to do this.
 
-<a id="BACKEND-66"></a>
-### BACKEND-66: a Cloudflare entry is reached at a host built from its account id
+<a id="BACKEND-67"></a>
+### BACKEND-67: a Cloudflare entry is reached at a host built from its account id
 
 A `provider` entry keyed `cloudflare-workers-ai` that states `options.accountId` reaches Cloudflare
 Workers AI through its OpenAI-compatible endpoint, `https://api.cloudflare.com/client/v4/accounts/<accountId>/ai/v1`.
