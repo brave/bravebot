@@ -1281,7 +1281,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | the fifteen `env` names of the network, Google and Bedrock sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside the checkout; a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or

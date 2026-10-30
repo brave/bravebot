@@ -1308,6 +1308,13 @@ Conventional Commits` is the staged changes in that format. Words after the sour
 own and go to the processor as the format they want. A range that is not two such names is a usage
 note and nothing is read or sent.
 
+With no words after the source, the draft follows `commitMessage.instructions` where the person's
+settings state one, and words typed after the command replace those instructions whole. The key is
+read from the person's own settings file and the file `--settings` names only, as `processorModel`
+is ([PROC-13](processors.md#PROC-13)): the text steers a model that reads files nobody vouched for,
+so a project or local file that writes `commitMessage` is dropped and `doctor` names it
+([BACKEND-24](backends.md#BACKEND-24)).
+
 The driver reads the diff with the reader `read_git` uses, under a policy of its own that holds
 `FileRead` and the network and no conversation, and hands it to a processor
 ([PROC-14](processors.md#PROC-14)). It is not a turn: nothing joins the transcript, the
@@ -1349,6 +1356,9 @@ prompt to agree.
 `verified-by: bravebot_tui::commit_message_command::a_range_names_its_source_and_the_rest_is_the_format`
 `verified-by: bravebot_tui::commit_message_command::a_flag_only_counts_as_the_first_word`
 `verified-by: bravebot_tui::commit_message_command::a_range_that_is_not_two_plain_revisions_is_refused`
+`verified-by: bravebot_tui::commit_message_command::typed_words_replace_the_standing_instructions`
+`verified-by: bravebot_config::settings::a_project_layer_cannot_write_the_commit_message_instructions`
+`verified-by: bravebot_cli::running::doctor_names_the_file_of_a_checkouts_commit_message_instructions_that_are_not_obeyed`
 `verified-by: bravebot_tui::commit_message_command::the_box_begins_with_the_leading_words_whatever_the_draft_says`
 `verified-by: bravebot_agent::commit_message::a_range_is_drafted_from_its_diff_and_the_request_holds_no_tool`
 `verified-by: bravebot_agent::commit_message::an_index_that_matches_head_sends_nothing`

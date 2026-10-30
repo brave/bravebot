@@ -146,6 +146,12 @@ const RETENTION_KEY: &str = "retentionDays";
 /// reads both spell it here.
 const CRASH_REPORTS_KEY: &str = "crashReports";
 
+/// The block holding `commitMessage.instructions`, which only the person's own files may write.
+///
+/// Named as a constant because the per-layer look that removes it from a checkout's file, the parse
+/// of the merged root and the list of keys this build reads all spell it here.
+const COMMIT_MESSAGE_BLOCK: &str = "commitMessage";
+
 /// Which layers may name a key of [`HOME_ONLY`].
 #[derive(Clone, Copy)]
 enum Entitled {
@@ -199,6 +205,9 @@ const HOME_ONLY: &[(&str, Entitled)] = &[
     // The model it names is sent the files a processor reads, which makes it a destination, and a
     // checkout cannot choose one: [`Settings::processor_ignored`].
     ("processorModel", Entitled::OwnOrNamed),
+    // Its words steer a model that reads files nobody vouched for, and a checkout's file would be
+    // writing the instructions of the person's commit messages: [`Settings::commit_message_ignored`].
+    (COMMIT_MESSAGE_BLOCK, Entitled::OwnOrNamed),
     // A definition chosen for every turn is a prompt and a narrowing nobody vouched for where a
     // checkout wrote it, so only a file the person wrote or named can choose one:
     // [`Settings::agent_ignored`].
@@ -262,6 +271,7 @@ const READ_KEYS: &[&str] = &[
     "attribution",
     "awaySummaryEnabled",
     "awaySummaryIdleSeconds",
+    COMMIT_MESSAGE_BLOCK,
     CRASH_REPORTS_KEY,
     "deepLinks",
     "deferMcpToolsAbove",
@@ -395,6 +405,11 @@ pub struct Settings {
     ///
     /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
     processor_model: Option<String>,
+    /// What `commitMessage.instructions` said, if it said anything but blank.
+    ///
+    /// The words as the file spelled them but for their edges: they are a person's own, written
+    /// for `/commit-message` to follow when no format is typed after the command.
+    commit_message_instructions: Option<String>,
     /// What the top-level `agent` key named, if it named anything.
     ///
     /// The name as the file spelled it. Matching it against the definitions a session resolved is
@@ -1478,6 +1493,8 @@ impl Settings {
             // as it does in a definition (DELEGATE-22).
             processor_model: word(root, "processorModel")
                 .and_then(|name| processor_model_named(&name)),
+            commit_message_instructions: object(root, COMMIT_MESSAGE_BLOCK)
+                .and_then(|block| word(block, "instructions")),
             agent: word(root, "agent"),
             references,
             references_unread,
@@ -1688,6 +1705,21 @@ impl Settings {
     pub fn processor_model(&self) -> Option<&str> {
         self.processor_model.as_deref()
     }
+
+    /// The format `/commit-message` follows when no words are typed after the command, if the
+    /// settings in force state one.
+    ///
+    /// Read from the person's own file and the file `--settings` names only, for the reason
+    /// [`Settings::model`] is.
+    pub fn commit_message_instructions(&self) -> Option<&str> {
+        self.commit_message_instructions.as_deref()
+    }
+
+    /// The files that wrote `commitMessage` from a layer not entitled to, weakest first.
+    pub fn commit_message_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.not_obeyed(COMMIT_MESSAGE_BLOCK)
+    }
+
     /// The definition the settings in force name for every turn of a session to be addressed to,
     /// where `--agent` did not name one (ADDRESS-13).
     ///
@@ -2326,6 +2358,7 @@ impl Settings {
             && self.summary_model.is_none()
             && self.plan_model.is_none()
             && self.processor_model.is_none()
+            && self.commit_message_instructions.is_none()
             && self.agent.is_none()
     }
 
@@ -2552,6 +2585,11 @@ impl Settings {
             .chain(self.summary_model.is_some().then_some("summaryModel"))
             .chain(self.plan_model.is_some().then_some("planModel"))
             .chain(self.processor_model.is_some().then_some("processorModel"))
+            .chain(
+                self.commit_message_instructions
+                    .is_some()
+                    .then_some("commitMessage.instructions"),
+            )
             .chain(self.agent.is_some().then_some("agent"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.style.is_some().then_some("style"))
@@ -7971,6 +8009,7 @@ mod tests {
         ("summaryModel", false, false),
         ("planModel", false, false),
         ("processorModel", false, false),
+        ("commitMessage", false, false),
         ("agent", false, false),
         ("style", false, false),
         ("sharedSkillDirectories", false, false),
@@ -7997,6 +8036,7 @@ mod tests {
             ("summaryModel", |s| paths(s.summary_ignored())),
             ("planModel", |s| paths(s.plan_ignored())),
             ("processorModel", |s| paths(s.processor_ignored())),
+            ("commitMessage", |s| paths(s.commit_message_ignored())),
             ("agent", |s| paths(s.agent_ignored())),
             ("style", |s| paths(s.style_ignored())),
             ("sharedSkillDirectories", |s| {
@@ -8753,6 +8793,51 @@ mod tests {
             .global(r#"{"processorModel": "Inherit"}"#)
             .read();
         assert_eq!(inherit.processor_model(), None);
+    }
+
+    /// CMD-23: `commitMessage.instructions` steers a model that reads files nobody vouched for, so
+    /// a checkout's layers cannot write it, the layers that can are reported for the ones that
+    /// could not, and a blank value is none.
+    #[test]
+    fn a_project_layer_cannot_write_the_commit_message_instructions() {
+        let settings = Layers::new("commit-message-layers")
+            .global(r#"{"commitMessage": {"instructions": "  Conventional Commits "}}"#)
+            .project(r#"{"commitMessage": {"instructions": "this-checkout"}}"#)
+            .local(r#"{"commitMessage": {"instructions": "also-this-checkout"}}"#)
+            .read();
+        assert_eq!(
+            settings.commit_message_instructions(),
+            Some("Conventional Commits")
+        );
+        assert_eq!(settings.commit_message_ignored().count(), 2);
+
+        let only_project = Layers::new("commit-message-only-project")
+            .project(r#"{"commitMessage": {"instructions": "this-checkout"}}"#)
+            .read();
+        assert_eq!(only_project.commit_message_instructions(), None);
+        assert_eq!(only_project.commit_message_ignored().count(), 1);
+
+        let named = Layers::new("commit-message-named")
+            .global(r#"{"commitMessage": {"instructions": "personal"}}"#)
+            .named(r#"{"commitMessage": {"instructions": "named"}}"#)
+            .read();
+        assert_eq!(named.commit_message_instructions(), Some("named"));
+        assert_eq!(named.commit_message_ignored().count(), 0);
+
+        for blank in [
+            r#"{"commitMessage": {"instructions": "   "}}"#,
+            r#"{"commitMessage": {"instructions": 3}}"#,
+            r#"{"commitMessage": "Conventional Commits"}"#,
+        ] {
+            assert_eq!(
+                Layers::new("commit-message-blank")
+                    .global(blank)
+                    .read()
+                    .commit_message_instructions(),
+                None,
+                "{blank}"
+            );
+        }
     }
 
     /// BACKEND-56: the plan model is a destination for the conversation, so a checkout's layers

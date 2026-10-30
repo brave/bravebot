@@ -54,6 +54,13 @@ fn split_word(text: &str) -> (&str, &str) {
     }
 }
 
+/// The format one draft follows: the words typed after the command where there are any, and the
+/// person's `commitMessage.instructions` where there are none. Typed words replace the setting
+/// whole, so a one-off format is not read beside a standing one that may contradict it (CMD-23).
+pub(crate) fn format_for<'a>(typed: Option<&'a str>, setting: Option<&'a str>) -> Option<&'a str> {
+    typed.or(setting)
+}
+
 /// What the box holds once `message` is drafted: the lead, a blank line, and the message.
 pub fn box_text(message: &str) -> String {
     format!("{LEAD}\n\n{}", message.trim())
@@ -125,6 +132,22 @@ mod tests {
         ] {
             assert_eq!(parse(typed), None, "{typed:?}");
         }
+    }
+
+    /// CMD-23: no typed words follow the setting, and typed words replace it rather than add to it.
+    #[test]
+    fn typed_words_replace_the_standing_instructions() {
+        let setting = Some("Conventional Commits");
+        assert_eq!(format_for(None, setting), setting);
+        assert_eq!(
+            format_for(Some("one line only"), setting),
+            Some("one line only")
+        );
+        assert_eq!(format_for(None, None), None);
+        assert_eq!(
+            format_for(Some("one line only"), None),
+            Some("one line only")
+        );
     }
 
     /// What reaches the planner begins with the driver's words whatever the draft begins with.
