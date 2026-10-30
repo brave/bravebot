@@ -178,7 +178,7 @@ shown or wrote. The `approval` entry after it reads "answered by auto mode, nobo
 the classifier's word answered the question, and "no mode answered, left to the confirmer" where it
 did not, so a question left with the person is not credited to the mode
 ([TRACE-7](trace.md#TRACE-7), [MODE-8](permission-modes.md#MODE-8)). The same holds for the first
-question about a URL, which no mode's answer was recorded for before.
+question about a URL.
 
 **Why.** A reader of the trail must be able to tell a question a person answered from one a model did
 ([CHECK-8](vetting.md#CHECK-8)), and a release credited to the wrong one is a defect.
