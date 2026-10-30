@@ -189,14 +189,14 @@ executables in `Contents/Resources/` that `codesign --deep` does not look at and
 rejects unsigned, the executables in the frameworks, every dylib and framework, the helper apps and
 the main executable, and the app last. Every signature has the hardened runtime and a secure
 timestamp, and none is made with `--deep`, which would give every item the same entitlements. The
-app and its main executable are signed with `ui/build/entitlements.mac.plist`, and the helper apps
-and what is in them with `ui/build/entitlements.mac.inherit.plist`. Each holds
-`com.apple.security.cs.allow-jit` and nothing else, which is also all that the library's own
-defaults give the renderer and GPU helpers. Everything else is signed with
+app, its main executable, the helper apps and what is in them are signed with
+`ui/build/entitlements.mac.plist`, which holds `com.apple.security.cs.allow-jit` and nothing else.
+That is also all that the library's own defaults give the renderer and GPU helpers. Everything else
+is signed with
 `ui/build/entitlements.mac.none.plist`, which has no keys, because the library always passes an
 entitlements file. That is the two executables in `Contents/Resources/`, which are Rust programs
 that run no JIT-compiled code, so `allow-jit` would only widen what a compromised agent process may
-do, and the frameworks and dylibs. `ui/scripts/entitlements.test.mjs` holds the three files to
+do, and the frameworks and dylibs. `ui/scripts/entitlements.test.mjs` holds the two files to
 their contents.
 
 `@electron/notarize` checks the signature, submits with `notarytool submit --wait`, requires the

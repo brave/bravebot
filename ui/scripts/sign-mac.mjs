@@ -27,23 +27,24 @@ import { promisify } from 'node:util'
 
 const BUILD = join(dirname(fileURLToPath(import.meta.url)), '..', 'build')
 
-// Only the Electron processes run JIT-compiled code. The Rust executables, the frameworks and the
-// dylibs carry an empty set, since `allow-jit` would only widen what a compromised agent process
-// may do. `@electron/osx-sign` always passes an entitlements file, so none is a file with no keys.
+// Only the Electron processes run JIT-compiled code. They carry `allow-jit`, and the Rust
+// executables, the frameworks and the dylibs carry an empty set, since `allow-jit` would only widen
+// what a compromised agent process may do. `@electron/osx-sign` always passes an entitlements file,
+// so none is a file with no keys.
 export const ENTITLEMENTS = {
-  app: join(BUILD, 'entitlements.mac.plist'),
-  helper: join(BUILD, 'entitlements.mac.inherit.plist'),
+  electron: join(BUILD, 'entitlements.mac.plist'),
   none: join(BUILD, 'entitlements.mac.none.plist'),
 }
 
-// The entitlements for `file`, a path in or equal to `app`. The app and its main executable carry
-// the app's. Anything inside a helper app, which is an `.app` under `Contents/Frameworks`, carries
-// the helpers'. Everything else carries none.
+// The entitlements for `file`, a path in or equal to `app`. The app, its main executable, and the
+// helper apps (`.app` bundles under `Contents/Frameworks`) with everything in them are the Electron
+// processes. Everything else carries none.
 export function entitlementsFor(app, file) {
   const inside = relative(app, file)
-  if (inside === '' || inside.startsWith(join('Contents', 'MacOS') + sep)) return ENTITLEMENTS.app
-  if (inside.split(sep).some((part) => part.endsWith('.app'))) return ENTITLEMENTS.helper
-  return ENTITLEMENTS.none
+  const electron = inside === ''
+    || inside.startsWith(join('Contents', 'MacOS') + sep)
+    || inside.split(sep).some((part) => part.endsWith('.app'))
+  return electron ? ENTITLEMENTS.electron : ENTITLEMENTS.none
 }
 
 export function signOptions(app, identity) {

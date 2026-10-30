@@ -615,10 +615,10 @@ then notarises, staples and assesses the bundle, builds the disk images, and doe
 each image. `ui/scripts/sign-mac.mjs` signs and notarises, with `@electron/osx-sign` and
 `@electron/notarize`. Every item is signed before the item that contains it, the main executable
 after the rest of the app and the app last. Each signature has the hardened runtime and a secure
-timestamp, and none is made with `--deep`. The app and its main executable carry
-`ui/build/entitlements.mac.plist`, the helper apps and what is in them carry
-`ui/build/entitlements.mac.inherit.plist`, and everything else, including the two executables in
-`Contents/Resources`, carries `ui/build/entitlements.mac.none.plist`, which has no keys. A
+timestamp, and none is made with `--deep`. The app, its main executable, the helper apps and what
+is in them carry `ui/build/entitlements.mac.plist`, and everything else, including the two
+executables in `Contents/Resources`, carries `ui/build/entitlements.mac.none.plist`, which has no
+keys. A
 submission is stapled only when the status the service returned is `Accepted`, whatever the exit
 status of `notarytool`. The app is assessed with `spctl -a -t exec` and an image with `spctl -a -t
 open --context context:primary-signature`. The script stops before it runs a tool when the
@@ -627,7 +627,7 @@ signs an image before it submits it.
 
 **Why.** A signature seals what it contains, so signing a container first and its contents after
 breaks the seal the container made, and `--deep` signs everything with one set of entitlements, so
-a helper would carry the entitlements of the app. Notarisation refuses an unsigned executable, a
+the two Rust executables would carry `allow-jit`. Notarisation refuses an unsigned executable, a
 binary without the hardened runtime, and one without a secure timestamp. `notarytool submit
 --wait` exits 0 for a rejected submission, so the status it prints is what decides. The two
 libraries are the ones the packager runs for its `osxSign` and `osxNotarize` options. They find
@@ -640,7 +640,7 @@ binary a signature covers. An image is hashed after it is stapled ([RELEASE-8](#
 `verified-by: bravebot_cli::app_signing::a_notarised_app_is_assessed_as_an_executable`
 `verified-by: bravebot_cli::app_signing::a_notarised_image_is_assessed_as_an_installer`
 `verified-by: bravebot_cli::app_signing::the_sub_targets_run_in_the_order_that_puts_the_ticket_in_the_image`
-`verified-by: by-construction (ui/scripts/sign-mac.test.mjs runs @electron/osx-sign and @electron/notarize against stand-ins for codesign, security, xcrun and ditto, and asserts that every item is signed before the one containing it, that each signature has the hardened runtime, a secure timestamp and the identity and none is deep, which entitlements file each item carries, that a rejected submission is not stapled though notarytool exits 0, that an image is signed and submitted as it is, that nothing runs when the identity, the profile or a path is missing, and that the script runs from another directory with a relative path; ui/scripts/entitlements.test.mjs holds the three entitlements files to their contents; make check-ui-build runs both in the Front end CI job. The identity, the profile and the Apple account are the job's, so whether the real tools accept the result, and whether the notary service accepts the app, is first seen by the job that runs them)`
+`verified-by: by-construction (ui/scripts/sign-mac.test.mjs runs @electron/osx-sign and @electron/notarize against stand-ins for codesign, security, xcrun and ditto, and asserts that every item is signed before the one containing it, that each signature has the hardened runtime, a secure timestamp and the identity and none is deep, which entitlements file each item carries, that a rejected submission is not stapled though notarytool exits 0, that an image is signed and submitted as it is, that nothing runs when the identity, the profile or a path is missing, and that the script runs from another directory with a relative path; ui/scripts/entitlements.test.mjs holds the two entitlements files to their contents; make check-ui-build runs both in the Front end CI job. The identity, the profile and the Apple account are the job's, so whether the real tools accept the result, and whether the notary service accepts the app, is first seen by the job that runs them)`
 
 ## Known costs
 

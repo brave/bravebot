@@ -912,8 +912,9 @@ app-dmg:
 # the fuses after the packager returns, and that rewrites the Electron binary a signature covers.
 #
 # The libraries sign every binary from the inside out with the hardened runtime and a secure
-# timestamp, none with `--deep`, and the app last. The app and the helper apps carry the entitlements
-# checked in under ui/build/, and the two Rust executables, frameworks and dylibs carry none. They
+# timestamp, none with `--deep`, and the app last. The app, its main executable and the helper apps
+# carry the entitlements checked in under ui/build/, and the two Rust executables, frameworks and
+# dylibs carry none. They
 # submit, require the status Accepted, which `notarytool` does not make its exit status, and staple.
 # These targets then have Gatekeeper assess each result: an app as an executable and an image as an
 # installer image. `app-dmg-sha256` writes the digest of each image in the form `checksums` uses, so

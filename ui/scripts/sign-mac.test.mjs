@@ -27,8 +27,7 @@ const skip = process.platform === 'win32' ? 'the stand-in tools are shell script
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SCRIPT = join(HERE, 'sign-mac.mjs')
 const BUILD = join(HERE, '..', 'build')
-const APP_PLIST = join(BUILD, 'entitlements.mac.plist')
-const HELPER_PLIST = join(BUILD, 'entitlements.mac.inherit.plist')
+const ELECTRON_PLIST = join(BUILD, 'entitlements.mac.plist')
 const NONE_PLIST = join(BUILD, 'entitlements.mac.none.plist')
 const HASH = '0123456789ABCDEF0123456789ABCDEF01234567'
 const IDENTITY = 'Developer ID Application: Test'
@@ -168,23 +167,21 @@ test('every signature has the hardened runtime and a secure timestamp, uses the 
   }
 })
 
-// The app and its main executable carry the app's entitlements, a helper app and what is in it the
-// helpers', and everything else none.
+// The app, its main executable, the helper apps and what is in them carry the entitlements of the
+// Electron processes, and everything else carries none.
 //
-// The regression it rejects: swapping the two files, giving every item the app's, or giving the
+// The regression it rejects: giving every item the Electron processes' entitlements, or giving the
 // agent and the file helper, which are Rust executables that run no JIT-compiled code, the
 // `allow-jit` entitlement meant for the Electron processes, which widens what a compromised agent
-// process may do.
+// process may do, and giving the Electron processes none, which stops their renderers starting.
 test('each item is signed with the entitlements it is meant to carry', { skip }, async (t) => {
   const { apps, calls } = fixture(t)
   await run('sign', SETTINGS, apps)
   for (const { path, args } of signatures(calls())) {
     const app = apps.find((candidate) => path.startsWith(candidate))
     const inside = path.slice(app.length + 1)
-    let wanted = NONE_PLIST
-    if (path === app || inside === 'Contents/MacOS/Brave Bot') wanted = APP_PLIST
-    else if (inside.startsWith('Contents/Frameworks/Brave Bot Helper')) wanted = HELPER_PLIST
-    assert.equal(after(args, '--entitlements'), wanted, path)
+    const electron = path === app || inside === 'Contents/MacOS/Brave Bot' || inside.startsWith('Contents/Frameworks/Brave Bot Helper')
+    assert.equal(after(args, '--entitlements'), electron ? ELECTRON_PLIST : NONE_PLIST, path)
   }
 })
 
