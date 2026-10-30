@@ -44,6 +44,7 @@ fn bravebot(home: &Path, project: &Path, arguments: &[&str]) -> Command {
         .args(arguments)
         .current_dir(project)
         .env("HOME", home)
+        .env_remove("BRAVEBOT_HOME")
         .env("USERPROFILE", home)
         .env_remove(bravebot_agent::home::STATE_VARIABLE)
         .stdin(Stdio::piped())

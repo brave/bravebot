@@ -27,7 +27,8 @@ fn ask(home: &Path, environment: &[(&str, &str)], requests: &[(&str, Value)]) ->
         .current_dir(home)
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("HOME", home);
+        .env("HOME", home)
+        .env_remove("BRAVEBOT_HOME");
     for (name, value) in environment {
         command.env(name, value);
     }

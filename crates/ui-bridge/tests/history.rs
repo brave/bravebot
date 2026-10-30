@@ -208,7 +208,10 @@ enum Machine {
 /// one would answer out of a model rather than out of this test.
 fn front_end(home: &Path, endpoint: &str, machine: Machine) -> Child {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"));
-    command.env_clear().env("HOME", home);
+    command
+        .env_clear()
+        .env("HOME", home)
+        .env_remove("BRAVEBOT_HOME");
     match machine {
         Machine::English => command.env("BRAVEBOT_LOCALE", "en-US"),
         Machine::French => command

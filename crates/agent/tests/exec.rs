@@ -521,6 +521,7 @@ fn with_a_gateway_token(scratch: &Scratch) -> EnvGuard {
     .expect("write the settings");
     with_env(&[
         ("HOME", Some(home.to_str().expect("a path"))),
+        ("BRAVEBOT_HOME", None),
         ("ACME_GATEWAY_TOKEN", Some("a-live-gateway-token")),
         ("ACME_GATEWAY_FALLBACK", Some("a-live-fallback-token")),
         ("BRAVEBOT_SUBPROCESS_ENV_SCRUB", None),

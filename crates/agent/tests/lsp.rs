@@ -490,6 +490,7 @@ fn a_language_server_is_not_handed_a_gateways_environment_token() {
     // or writes the environment, and both variables are put back before any assertion.
     unsafe {
         std::env::set_var("HOME", &home);
+        std::env::remove_var("BRAVEBOT_HOME");
         std::env::set_var("ACME_GATEWAY_TOKEN", "a-live-gateway-token");
         std::env::remove_var("BRAVEBOT_SUBPROCESS_ENV_SCRUB");
     }

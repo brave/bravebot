@@ -847,6 +847,7 @@ fn the_binary_writes_only_protocol_messages_to_stdout() {
     std::fs::create_dir_all(home.join(".bravebot")).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_bravebot-acp"))
         .env("HOME", &home)
+        .env_remove("BRAVEBOT_HOME")
         .env("USERPROFILE", &home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

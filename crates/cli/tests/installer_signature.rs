@@ -576,6 +576,7 @@ impl<'a> Install<'a> {
         let output = command
             .env("PATH", &path)
             .env("HOME", &home)
+            .env_remove("BRAVEBOT_HOME")
             .env("TMPDIR", &temporary)
             .env("GNUPGHOME", &own_keyring)
             .env("REQUESTS", &requests)
