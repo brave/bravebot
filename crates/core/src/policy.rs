@@ -6422,18 +6422,25 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
     }
 
-    /// Vouch for `path` only if nothing has decided about it since `shown_at`.
+    /// Vouch for `path` only if nothing has decided about it, and no `run` line has started, since
+    /// `shown_at` was taken.
     ///
     /// A preview is what the answer was about. If that path, or a tree above it, was decided about
-    /// while the question was on the screen, the text the person read is not what a rule minted now
-    /// would cover, so the answer is thrown away rather than spent on bytes nobody saw.
+    /// while the question was on the screen, or a program started that may have rewritten it
+    /// without anybody being told, the text the person read is not what a rule minted now would
+    /// cover, so the answer is thrown away rather than spent on bytes nobody saw. The two stamps
+    /// are compared as numbers and nothing else is read from them.
     ///
     /// Refusing is recorded and reported. A yes that quietly does nothing leaves a person watching
     /// a file they just trusted come back quarantined with nothing saying why, and the caller needs
     /// the answer to say so.
-    pub fn vouch_if_unchanged(&mut self, path: &str, shown_at: u64) -> bool {
+    pub fn vouch_if_unchanged(
+        &mut self,
+        path: &str,
+        shown_at: crate::file_authority::Stamp,
+    ) -> bool {
         let vouched = self.capture_files(|policy, capture| {
-            if capture.revision_of(path) != shown_at {
+            if capture.stamp_of(path) != shown_at {
                 return false;
             }
             policy.vouch_for_named_path(path);
@@ -19887,8 +19894,7 @@ five
             let mut writer_sink = RecordingSink::new();
             let (spent, trusted) = {
                 let mut policy = open_policy(&mut sink);
-                let shown_at =
-                    policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js"));
+                let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
 
                 // A sibling's write, entered and published the way the workspace enters one: the
                 // path is reserved under one boundary and what it holds is published under another,
@@ -19929,13 +19935,59 @@ five
         fn a_vouch_for_the_version_shown_is_spent_on_it() {
             let mut sink = RecordingSink::new();
             let mut policy = open_policy(&mut sink);
-            let shown_at = policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js"));
+            let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
 
             assert!(
                 policy.vouch_if_unchanged("vendor/lib.js", shown_at),
                 "an answer about the version in front of the person was not spent on it"
             );
             assert!(policy.trust().is_trusted("vendor/lib.js"));
+        }
+
+        /// A `run` line that starts while the question is open voids the answer, whatever the line
+        /// names.
+        ///
+        /// A program opens files its line does not name, so the authority is told of no write to
+        /// the path and its revision does not move; only the count of started programs does. A
+        /// check against the revision alone spends the yes on a file a program may have rewritten
+        /// after the person read it, and the next read returns those bytes as trusted text.
+        #[test]
+        fn a_vouch_is_not_spent_after_a_program_started_while_the_question_was_open() {
+            let mut sink = RecordingSink::new();
+            let (spent, trusted) = {
+                let mut policy = open_policy(&mut sink);
+                let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
+                let revision_then =
+                    policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js"));
+
+                // A line from a delegate running beside this turn, naming nothing here.
+                policy.file_authority().note_program_started();
+
+                // The premise: no revision moved, so only the whole stamp can tell.
+                assert_eq!(
+                    policy.capture_files(|_, capture| capture.revision_of("vendor/lib.js")),
+                    revision_then,
+                    "a program starting moved the path's revision"
+                );
+                (
+                    policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                    policy.trust().is_trusted("vendor/lib.js"),
+                )
+            };
+
+            assert!(
+                !spent,
+                "an answer was spent on a file a program may have rewritten since it was shown"
+            );
+            assert!(
+                !trusted,
+                "a file a program may have rewritten came back trusted"
+            );
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                trail.contains("changed while the question was being answered"),
+                "nothing says why a file the person trusted came back quarantined: {trail}"
+            );
         }
     }
 
