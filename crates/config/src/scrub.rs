@@ -306,6 +306,15 @@ mod tests {
         assert!(names.iter().any(|name| name == "BRAVE_SERVICES_KEY_ID"));
     }
 
+    /// RUN-12: the crash report address carries the submission token, so it is withheld with no
+    /// configuration, as the two credentials above it are. The fault this rejects is leaving the
+    /// name out of the set, which hands the token to every program a shell that exports it started.
+    #[test]
+    fn the_crash_report_address_is_withheld_without_being_configured() {
+        let names = names(&Settings::default());
+        assert!(names.iter().any(|name| name == "BACKTRACE_SUBMIT_URL"));
+    }
+
     /// What the planner is told is the fixed set and nothing a configuration adds. An entry in a
     /// provider's `env` can hold any string, so a name from a settings file is withheld from a
     /// program and never said to the planner.
@@ -313,7 +322,11 @@ mod tests {
     fn the_credentials_told_to_the_planner_are_the_fixed_ones() {
         assert_eq!(
             builtin_credentials(),
-            ["SERVICES_KEY_AICHAT", "BRAVE_SERVICES_KEY_ID"]
+            [
+                "SERVICES_KEY_AICHAT",
+                "BRAVE_SERVICES_KEY_ID",
+                "BACKTRACE_SUBMIT_URL"
+            ]
         );
     }
 
@@ -413,6 +426,7 @@ mod tests {
             "GATEWAY_SECOND_TOKEN",
             "SERVICES_KEY_AICHAT",
             "BRAVE_SERVICES_KEY_ID",
+            "BACKTRACE_SUBMIT_URL",
         ] {
             assert!(
                 names.iter().any(|name| name == expected),
@@ -469,6 +483,7 @@ mod tests {
             [
                 "SERVICES_KEY_AICHAT",
                 "BRAVE_SERVICES_KEY_ID",
+                "BACKTRACE_SUBMIT_URL",
                 "GATEWAY_TOKEN"
             ]
         );

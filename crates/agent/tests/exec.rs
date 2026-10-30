@@ -472,6 +472,10 @@ fn this_agents_own_credentials_do_not_reach_a_program_it_runs() {
     let _guard = with_env(&[
         ("SERVICES_KEY_AICHAT", Some("a-live-signing-key")),
         ("BRAVE_SERVICES_KEY_ID", Some("a-live-key-id")),
+        (
+            "BACKTRACE_SUBMIT_URL",
+            Some("https://a-live-token.example/post"),
+        ),
     ]);
 
     // `env` rather than a shell expansion: the point is what the process was handed, and a stage
@@ -490,6 +494,10 @@ fn this_agents_own_credentials_do_not_reach_a_program_it_runs() {
     assert!(
         !ran.stdout.contains("a-live-key-id"),
         "the key id reached a program the planner chose"
+    );
+    assert!(
+        !ran.stdout.contains("a-live-token.example"),
+        "the crash report address reached a program the planner chose"
     );
 }
 

@@ -26670,6 +26670,7 @@ fn a_turn_tells_the_planner_which_variables_run_removes() {
     for stated in [
         "`SERVICES_KEY_AICHAT`",
         "`BRAVE_SERVICES_KEY_ID`",
+        "`BACKTRACE_SUBMIT_URL`",
         "says nothing about whether the person has set it",
     ] {
         assert!(

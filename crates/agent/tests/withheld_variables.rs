@@ -106,7 +106,11 @@ fn the_planner_is_told_the_fixed_credentials_and_no_string_a_settings_file_wrote
     }
 
     let described = run_description();
-    for told in ["`SERVICES_KEY_AICHAT`", "`BRAVE_SERVICES_KEY_ID`"] {
+    for told in [
+        "`SERVICES_KEY_AICHAT`",
+        "`BRAVE_SERVICES_KEY_ID`",
+        "`BACKTRACE_SUBMIT_URL`",
+    ] {
         assert!(described.contains(told), "{told} is not named: {described}");
     }
     for written in [
