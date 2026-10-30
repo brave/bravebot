@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-agent"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "base64 0.22.1",
  "bravebot-aichat",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-aichat"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "bravebot-config",
  "bravebot-core",
@@ -137,7 +137,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-bedrock"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "bravebot-aichat",
  "bravebot-config",
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-config"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "bravebot-sandbox",
  "serde",
@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-connector"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "bravebot-core",
  "bravebot-sandbox",
@@ -173,15 +173,15 @@ dependencies = [
 
 [[package]]
 name = "bravebot-core"
-version = "0.19.0"
+version = "0.20.0"
 
 [[package]]
 name = "bravebot-diag"
-version = "0.19.0"
+version = "0.20.0"
 
 [[package]]
 name = "bravebot-filetype"
-version = "0.19.0"
+version = "0.20.0"
 
 [[package]]
 name = "bravebot-fuzz"
@@ -197,11 +197,11 @@ dependencies = [
 
 [[package]]
 name = "bravebot-i18n"
-version = "0.19.0"
+version = "0.20.0"
 
 [[package]]
 name = "bravebot-lsp"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "bravebot-core",
  "bravebot-diag",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-mcp"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "bravebot-config",
  "bravebot-core",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-net"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "bravebot-core",
  "bravebot-diag",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-sandbox"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "landlock",
  "libc",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-signing"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "base64 0.22.1",
  "hmac",
@@ -255,7 +255,7 @@ dependencies = [
 
 [[package]]
 name = "bravebot-skus"
-version = "0.19.0"
+version = "0.20.0"
 dependencies = [
  "hmac",
  "rand",
