@@ -64313,6 +64313,8 @@ fn a_distrusted_file_deep_under_git_keeps_the_repository_closed() {
 /// CRED-15. A commit that added a key puts the key in the diff, so what read_git would show is
 /// scanned as a file read is, and held back until the person agrees. Both directions, since a scan
 /// that held every such answer back would make a repository with a `.env` in its history unreadable.
+/// TRACE-1: the declined read is a refusal under `approval` naming `read_git`, and the approved one
+/// writes none.
 #[test]
 fn a_credential_in_history_is_held_back_until_the_person_agrees() {
     for (name, agrees) in [("declined", false), ("approved", true)] {
@@ -64366,6 +64368,16 @@ fn a_credential_in_history_is_held_back_until_the_person_agrees() {
                  context: {answered}"
             );
         }
+        let expected: &[&str] = if agrees {
+            &[]
+        } else {
+            &["read_git: the display of a credential was not approved, so none of it was shown"]
+        };
+        assert_eq!(
+            refused_under_approval(&sink),
+            expected,
+            "a read_git the person {name} was not recorded as the trail should hold it"
+        );
     }
 }
 

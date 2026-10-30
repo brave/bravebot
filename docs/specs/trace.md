@@ -156,6 +156,7 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::mcp::a_call_a_rule_refuses_is_not_recorded_as_one_the_person_did_not_approve`
 `verified-by: bravebot_core::policy::a_question_the_person_did_not_approve_is_a_refusal_under_approval`
 `verified-by: bravebot_agent::turn::a_read_the_person_does_not_agree_to_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_credential_in_history_is_held_back_until_the_person_agrees`
 `verified-by: bravebot_agent::mcp::a_tool_list_and_a_move_the_person_does_not_approve_are_recorded_as_refusals`
 `verified-by: bravebot_agent::lsp::a_language_server_the_person_does_not_approve_is_recorded_as_a_refusal`
 
