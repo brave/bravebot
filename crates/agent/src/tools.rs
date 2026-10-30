@@ -6471,9 +6471,17 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     // Refused here as well as in the kernel, so a planner naming a file is told what to do about
     // it rather than being told a gate said no.
     if !tools.slots.is_from_command(&slot) {
+        // `vet_content` is offered only where the turn is not a delegate's (the dispatch arm),
+        // so a delegate is not pointed at a tool it does not have.
+        let route = if tools.delegated {
+            "A delegate has no way to ask for it to be shown; say in your report what you needed \
+             from it."
+        } else {
+            "Where you have to read it yourself, vet_content is how to ask for it."
+        };
         return Produced::problem(format!(
             "refused: {slot} is not something a program printed, so there is nothing to show. \
-             Only a reference that came back from run can be read this way."
+             Only a reference that came back from run can be read this way. {route}"
         ));
     }
 
@@ -22589,6 +22597,58 @@ mod tests {
         ) -> String {
             let proof = policy.authorise_display_release("test inspects the tool result");
             text.clone().declassify(&proof)
+        }
+
+        /// What `read_output` answers for a reference that holds a file's bytes, not output.
+        fn refusal_for_a_file_reference(delegated: bool) -> String {
+            let scratch = Scratch::new("read-output-not-a-program");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let output = with_tools(&workspace, |tools| {
+                tools.delegated = delegated;
+                tools
+                    .slots
+                    .writer_for(
+                        bravebot_core::slot::SlotId::new("ref:1"),
+                        bravebot_core::label::Label::trusted_private(),
+                    )
+                    .expect("a writer")
+                    .write("a file's bytes")
+                    .expect("written");
+                read_output(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveWrites,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"ref": "ref:1"}),
+                )
+            });
+            assert!(output.failed);
+            told(&mut policy, &output.text)
+        }
+
+        /// OUTPUT-2. A reference that is not command output is refused with the route the quarantine
+        /// message and the tool description give, `vet_content`, where the caller has that tool. A
+        /// delegate is not offered it (dispatch refuses it), so its refusal names no tool it lacks.
+        /// The regression it rejects is a refusal that names no route, which leaves the planner
+        /// with a refusal and nothing to do next, and one that sends a delegate to `vet_content`.
+        #[test]
+        fn a_refused_read_of_a_non_output_reference_names_vet_content_where_it_is_offered() {
+            let told = refusal_for_a_file_reference(false);
+            assert!(
+                told.starts_with("refused: ref:1 is not something a program printed"),
+                "{told}"
+            );
+            assert!(told.contains("vet_content is how to ask for it"), "{told}");
+
+            let told = refusal_for_a_file_reference(true);
+            assert!(
+                told.starts_with("refused: ref:1 is not something a program printed"),
+                "{told}"
+            );
+            assert!(!told.contains("vet_content"), "{told}");
+            assert!(told.contains("say in your report"), "{told}");
         }
 
         /// Whether the trail says this argument was read as the planner's own words. The gate

@@ -13861,3 +13861,276 @@ fn a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another
     )
     .expect("a directory beside is reached");
 }
+
+// A search and a listing ask the trust map about a file under the name a read of it is asked under
+// (TRUST-18, SEARCH-2, LIST-1).
+
+/// A policy over `trust`, for one call of a file tool.
+fn policy_over<'a>(trust: &TrustStore, sink: &'a mut RecordingSink) -> Policy<'a, RecordingSink> {
+    Policy::begin(routing(), ReleasePlan::new(), all_file_capabilities(), sink)
+        .expect("policy")
+        .with_trust(trust.clone())
+}
+
+fn read_integrity(workspace: &Workspace, trust: &TrustStore, path: &str) -> Integrity {
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_over(trust, &mut sink);
+    workspace
+        .read(&mut policy, &trusted_text(path))
+        .expect("the file is read")
+        .label()
+        .integrity
+}
+
+/// The label of a search for `needle` with `target` as its directory, and how many files it read.
+fn search_integrity(workspace: &Workspace, trust: &TrustStore, target: &str) -> (Integrity, usize) {
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_over(trust, &mut sink);
+    let found = workspace
+        .grep(
+            &mut policy,
+            std::slice::from_ref(&trusted_text("needle")),
+            &trusted_text(target),
+            None,
+            true,
+            1,
+        )
+        .expect("the search runs");
+    let integrity = found.label().integrity;
+    let proof = policy.authorise_content_release("test", "matches");
+    (integrity, found.declassify(&proof).searched)
+}
+
+/// The label of a listing of `target`, and how many files it names.
+fn listing_integrity(
+    workspace: &Workspace,
+    trust: &TrustStore,
+    target: &str,
+) -> (Integrity, usize) {
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_over(trust, &mut sink);
+    let listing = workspace
+        .list(&mut policy, &trusted_text(target), None, None)
+        .expect("the listing runs");
+    let integrity = listing.label().integrity;
+    let proof = policy.authorise_content_release("test", "paths");
+    (integrity, listing.declassify(&proof).files.len())
+}
+
+/// A directory outside the project and outside every opened directory, reached only because the
+/// permission mode reaches it, through a link whose spelling is not where it lands. The person
+/// vouched for the file under the spelling that was typed. The regression it rejects: a search or
+/// listing that asks the map under the spelling the walk landed on, which is a different key, so
+/// the one file read as trusted comes back from a search of it as untrusted and the result is
+/// quarantined.
+#[cfg(unix)]
+#[test]
+fn a_file_vouched_under_a_link_spelling_outside_every_opened_directory_keeps_that_trust_in_a_search()
+ {
+    let places = BypassPlaces::new("search-labels-link-file");
+    let links = Scratch::new("search-labels-link-file-links");
+    std::fs::write(places.beside.join("notes.txt"), "needle\n").unwrap();
+    let via = links.path.join("via");
+    std::os::unix::fs::symlink(&places.beside, &via).unwrap();
+    let typed_file = via.join("notes.txt").display().to_string();
+
+    let mut trust = TrustStore::new(places.workspace.root());
+    trust.trust(&typed_file);
+
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("search", false)));
+    assert_eq!(
+        read_integrity(&places.workspace, &trust, &typed_file),
+        Integrity::Trusted,
+        "the vouched file is not trusted when read, so the fixture proves nothing"
+    );
+    assert_eq!(
+        search_integrity(&places.workspace, &trust, &typed_file),
+        (Integrity::Trusted, 1),
+        "a search of the one file the read returned as trusted was quarantined"
+    );
+    places.workspace.hold_bypass_reach(None);
+}
+
+/// The same with the vouch recorded for the directory and the call naming the directory, so a walk
+/// reports each file under the spelling it landed on. Search and listing must each key the files
+/// under the typed name joined with the path below it, which is the name a read of one is asked
+/// under.
+#[cfg(unix)]
+#[test]
+fn files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk() {
+    let places = BypassPlaces::new("search-labels-link-directory");
+    let links = Scratch::new("search-labels-link-directory-links");
+    std::fs::create_dir_all(places.beside.join("deep")).unwrap();
+    std::fs::write(places.beside.join("notes.txt"), "needle\n").unwrap();
+    std::fs::write(places.beside.join("deep/more.txt"), "needle\n").unwrap();
+    let via = links.path.join("via");
+    std::os::unix::fs::symlink(&places.beside, &via).unwrap();
+    let typed_directory = via.display().to_string();
+
+    let mut trust = TrustStore::new(places.workspace.root());
+    trust.trust(&typed_directory);
+
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("search", false)));
+    assert_eq!(
+        read_integrity(
+            &places.workspace,
+            &trust,
+            &via.join("deep/more.txt").display().to_string()
+        ),
+        Integrity::Trusted,
+        "a file below the vouched directory is not trusted when read, so the fixture proves nothing"
+    );
+    assert_eq!(
+        search_integrity(&places.workspace, &trust, &typed_directory),
+        (Integrity::Trusted, 2),
+        "a search of a vouched directory reached through a link was quarantined"
+    );
+    assert_eq!(
+        listing_integrity(&places.workspace, &trust, &typed_directory),
+        (Integrity::Trusted, 2),
+        "a listing of a vouched directory reached through a link was quarantined"
+    );
+    places.workspace.hold_bypass_reach(None);
+}
+
+/// A file in an untrusted subtree stays untrusted when a search or a listing reaches it through a
+/// link inside that subtree (TRUST-18). The link leads to a trusted directory of the project, so
+/// asking the map under the destination, or under the spelling the walk reports, would return the
+/// rule of a different name. The regression it rejects: keying a search or a listing on where the
+/// walk landed, which launders the subtree through the link.
+#[cfg(unix)]
+#[test]
+fn a_search_or_listing_through_a_link_in_an_untrusted_subtree_stays_untrusted() {
+    let scratch = Scratch::new("search-labels-laundering");
+    std::fs::create_dir_all(scratch.path.join("open")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    std::fs::write(scratch.path.join("open/f.txt"), "needle\n").unwrap();
+    std::os::unix::fs::symlink("../open", scratch.path.join("sub/ln")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(".");
+    trust.distrust("sub");
+
+    assert_eq!(
+        read_integrity(&workspace, &trust, "open/f.txt"),
+        Integrity::Trusted,
+        "the destination is trusted, so the fixture proves nothing"
+    );
+    assert_eq!(
+        read_integrity(&workspace, &trust, "sub/ln/f.txt"),
+        Integrity::Untrusted,
+        "a read through the link is not untrusted, so the fixture proves nothing"
+    );
+    assert_eq!(
+        search_integrity(&workspace, &trust, "sub/ln/f.txt"),
+        (Integrity::Untrusted, 1),
+        "a search of one file through a link in an untrusted subtree read it as trusted"
+    );
+    assert_eq!(
+        search_integrity(&workspace, &trust, "sub/ln"),
+        (Integrity::Untrusted, 1),
+        "a search of a directory reached through a link in an untrusted subtree read it as trusted"
+    );
+    assert_eq!(
+        listing_integrity(&workspace, &trust, "sub/ln"),
+        (Integrity::Untrusted, 1),
+        "a listing of a directory reached through a link in an untrusted subtree read it as trusted"
+    );
+}
+
+/// A directory added by name and reached through a link above it keeps its rule in a search and a
+/// listing, as a read of a file in it does. The regression it rejects: a fix that keys a walked
+/// file by the typed name alone, or by the project's relative spelling, and so loses the rule the
+/// added directory's vouch wrote.
+#[cfg(unix)]
+#[test]
+fn files_in_an_added_directory_named_through_a_link_are_labelled_as_a_read_labels_them() {
+    let scratch = Scratch::new("search-labels-added-link");
+    let base = scratch.path.canonicalize().expect("canonical scratch");
+    let holder = base.join("holder");
+    std::fs::create_dir_all(holder.join("project")).unwrap();
+    std::fs::create_dir_all(holder.join("inner")).unwrap();
+    std::fs::write(holder.join("inner/notes.txt"), "needle\n").unwrap();
+    std::os::unix::fs::symlink(&holder, base.join("link")).unwrap();
+
+    let mut workspace = Workspace::new(holder.join("project")).expect("workspace");
+    let added = workspace
+        .add_directory(base.join("link").to_str().expect("utf-8 path"))
+        .expect("a directory named through a link is added");
+    let mut trust = TrustStore::new(workspace.root());
+    trust.trust(&added.display().to_string());
+
+    let linked = base.join("link/inner").display().to_string();
+    let linked_file = base.join("link/inner/notes.txt").display().to_string();
+    assert_eq!(
+        read_integrity(&workspace, &trust, &linked_file),
+        Integrity::Trusted
+    );
+    assert_eq!(
+        search_integrity(&workspace, &trust, &linked_file),
+        (Integrity::Trusted, 1)
+    );
+    assert_eq!(
+        search_integrity(&workspace, &trust, &linked),
+        (Integrity::Trusted, 1)
+    );
+    assert_eq!(
+        listing_integrity(&workspace, &trust, &linked),
+        (Integrity::Trusted, 1)
+    );
+}
+
+/// A repository map of a directory reached through a link outside every opened directory, vouched
+/// for under the spelling typed, holds the files in it, as a read of one does (TRUST-18). The
+/// regression it rejects: asking the map under the spelling the walk landed on, which is a
+/// different key, so every file is counted as unvouched and the map is empty.
+#[cfg(unix)]
+#[test]
+fn a_repo_map_of_a_vouched_directory_reached_through_a_link_holds_its_files() {
+    let places = BypassPlaces::new("search-labels-map-link");
+    let links = Scratch::new("search-labels-map-link-links");
+    std::fs::create_dir_all(places.beside.join("deep")).unwrap();
+    std::fs::write(places.beside.join("top.rs"), "pub fn top_function() {}\n").unwrap();
+    std::fs::write(
+        places.beside.join("deep/low.rs"),
+        "pub fn low_function() {}\n",
+    )
+    .unwrap();
+    let via = links.path.join("via");
+    std::os::unix::fs::symlink(&places.beside, &via).unwrap();
+    let typed_directory = via.display().to_string();
+
+    let mut trust = TrustStore::new(places.workspace.root());
+    trust.trust(&typed_directory);
+
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("repo_map", false)));
+    assert_eq!(
+        read_integrity(
+            &places.workspace,
+            &trust,
+            &via.join("deep/low.rs").display().to_string()
+        ),
+        Integrity::Trusted,
+        "a file below the vouched directory is not trusted when read, so the fixture proves nothing"
+    );
+    let (map, integrity) = map_of(&places.workspace, trust, None, &typed_directory)
+        .expect("the map of a directory reached through a link");
+    places.workspace.hold_bypass_reach(None);
+    assert_eq!(
+        (map.files, map.unvouched, integrity),
+        (2, 0, Integrity::Trusted),
+        "{map:?}"
+    );
+    assert!(
+        map.body.contains("top_function") && map.body.contains("low_function"),
+        "{}",
+        map.body
+    );
+}

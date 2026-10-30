@@ -93,6 +93,7 @@ has read it is a different thing, single-use, writing no rule and leaving the tr
 what it said, and it is [vetting.md](../vetting.md).
 
 `verified-by: bravebot_core::policy::a_file_cannot_be_promoted_by_reading_it_aloud`
+`verified-by: bravebot_agent::tools::a_refused_read_of_a_non_output_reference_names_vet_content_where_it_is_offered`
 
 <a id="OUTPUT-3"></a>
 ### OUTPUT-3: the person is told what a check made of the output before they answer
