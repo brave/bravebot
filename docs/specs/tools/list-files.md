@@ -31,6 +31,8 @@ would have typed a path, carries no position.
 
 `verified-by: bravebot_agent::workspace::list_enumerates_files_recursively`
 `verified-by: bravebot_agent::turn::untrusted_listings_never_reach_the_model`
+`verified-by: bravebot_agent::workspace::files_vouched_under_a_link_spelling_outside_every_opened_directory_keep_that_trust_in_a_walk`
+`verified-by: bravebot_agent::workspace::a_search_or_listing_through_a_link_in_an_untrusted_subtree_stays_untrusted`
 
 <a id="LIST-2"></a>
 ### LIST-2: a quarantined listing returns one reference per entry, not one for the listing

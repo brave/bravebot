@@ -2493,10 +2493,18 @@ impl Workspace {
             // Labelled after the walk, because which paths were visited is not known before it. A
             // listing is trusted only if every path in it is. A directory name is a name out of the
             // same tree, so it is observed with the files rather than beside them.
-            let label = policy.observe_paths(
-                Capability::FileRead,
-                found.iter().chain(stopped_at.iter()).map(String::as_str),
-            )?;
+            //
+            // Under the name the call typed, as a read of one of these files would be asked, and
+            // not under the spelling the listing shows: that is where the walk landed, which a
+            // link or a reach outside every open directory makes a different key from the one the
+            // file was vouched under.
+            let keys: Vec<String> = found
+                .iter()
+                .chain(stopped_at.iter())
+                .map(|reported| self.key_below(&relative, &root, reported))
+                .collect();
+            let label =
+                policy.observe_paths(Capability::FileRead, keys.iter().map(String::as_str))?;
 
             // `walk` collects one entry past the cap so reaching it is detectable. Which entries
             // survive is down to traversal order, so a truncated listing is a sample of the tree
@@ -2589,17 +2597,30 @@ impl Workspace {
             // reaches only the second, so the spelling is read and counted once.
             paths.dedup();
 
-            let (vouched, unvouched): (Vec<String>, Vec<String>) = paths
+            // Each file is asked about under the name a read of it by the typed spelling would be
+            // asked under, and not under the spelling it is opened by, which is where the walk
+            // landed (TRUST-18). The two differ through a link or a reach outside every open
+            // directory.
+            let keyed: Vec<(String, String)> = paths
                 .into_iter()
-                .partition(|path| !policy.read_is_quarantined(path));
-            let label =
-                policy.observe_paths(Capability::FileRead, vouched.iter().map(String::as_str))?;
+                .map(|path| {
+                    let key = self.key_below(&relative, &root, &path);
+                    (path, key)
+                })
+                .collect();
+            let (vouched, unvouched): (Vec<_>, Vec<_>) = keyed
+                .into_iter()
+                .partition(|(_, key)| !policy.read_is_quarantined(key));
+            let label = policy.observe_paths(
+                Capability::FileRead,
+                vouched.iter().map(|(_, key)| key.as_str()),
+            )?;
 
             let mut texts: Vec<(String, String)> = Vec::new();
             let mut skipped = 0usize;
             let mut bytes = 0usize;
             let mut truncated = hit_the_cap;
-            for path in vouched {
+            for (path, key) in vouched {
                 let absolute = self.root.join(&path);
                 let size = std::fs::metadata(&absolute).map_or(usize::MAX, |meta| {
                     usize::try_from(meta.len()).unwrap_or(usize::MAX)
@@ -2617,7 +2638,7 @@ impl Workspace {
                     continue;
                 };
                 bytes += text.len();
-                let held = Labelled::new(text, policy.label_in_force(&path));
+                let held = Labelled::new(text, policy.label_in_force(&key));
                 if !policy.scan_a_read("repo_map", &path, 1, &held).is_empty() {
                     skipped += 1;
                     continue;
@@ -2872,9 +2893,15 @@ impl Workspace {
             paths.sort();
             let considered = paths.len();
 
-            // Trusted only if every file the search reads is trusted.
+            // Trusted only if every file the search reads is trusted. Each file is asked about
+            // under the name the call typed, as a read of it would be, and not under the
+            // spelling the result shows (TRUST-18).
+            let keys: Vec<String> = paths
+                .iter()
+                .map(|reported| self.key_below(&relative, &root, reported))
+                .collect();
             let label =
-                policy.observe_paths(Capability::FileRead, paths.iter().map(String::as_str))?;
+                policy.observe_paths(Capability::FileRead, keys.iter().map(String::as_str))?;
 
             // Collected one past the cap for the same reason as `walk`: reaching the limit has
             // to be distinguishable from happening to have exactly that many matches.
@@ -3960,6 +3987,41 @@ impl Workspace {
     /// project's ([`bravebot_core::spelling::to_key`]).
     pub(crate) fn trust_key(&self, named: &str) -> String {
         self.keyed(named, BACKSLASH_SEPARATES, self.home.as_deref())
+    }
+
+    /// The name the trust map is asked about for a file a walk of `root` reported as `reported`,
+    /// when the call that began the walk typed `typed`.
+    ///
+    /// The name typed, joined with the file's path below `root`, through [`Workspace::trust_key`]:
+    /// the name a read of that file by that spelling is asked under. `reported` is the spelling
+    /// the result shows, which is where the walk landed. A vouch is recorded under the name that
+    /// was typed, so asking under the landing misses it whenever a link or a reach outside every
+    /// open directory makes the two differ, and a file in an untrusted subtree reached through a
+    /// link inside it would be asked under the destination's rule instead of its own. The
+    /// landing is not keyed on for the second reason (TRUST-18).
+    ///
+    /// Taken from the path the walk built from `root` and the name typed, never from a file's
+    /// bytes.
+    fn key_below(&self, typed: &str, root: &Path, reported: &str) -> String {
+        let reported = Path::new(reported);
+        let absolute = if reported.is_absolute() {
+            reported.to_path_buf()
+        } else {
+            self.root.join(reported)
+        };
+        let below = absolute.strip_prefix(root).unwrap_or(&absolute);
+        let typed: PathBuf = Path::new(typed)
+            .components()
+            .filter(|component| !matches!(component, Component::CurDir))
+            .collect();
+        // A file named as the target is its own root, with nothing below it. Joining the empty
+        // path would append a separator to the name.
+        let named = if below.as_os_str().is_empty() {
+            typed
+        } else {
+            typed.join(below)
+        };
+        self.trust_key(&named.to_string_lossy())
     }
 
     /// Whether `trust` trusts the working directory, which names a project by its origin
