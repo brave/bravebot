@@ -41,6 +41,45 @@ Running the line again is how an install made this way is updated. The script re
 the binary, so a second run with no directory named replaces that one rather than leaving two on
 your `PATH`.
 
+## Debian, Ubuntu and Fedora packages
+
+`bravebot` is a package of its own, in an apt repository at
+`https://bravebot-apt-release.s3.brave.com` and a dnf repository at
+`https://bravebot-rpm-release.s3.brave.com`. Both are signed with the release key whose
+fingerprint is `13F28F0405C49B0B232DBA1BC1E827646A2DE416`, and the client checks that signature
+before it installs anything. The package puts the binary at `/usr/bin/bravebot` and requires glibc
+2.30 or newer.
+
+For apt, fetch the key to the place the source names, check its fingerprint, then add the source:
+
+```sh
+sudo curl -fsSL -o /usr/share/keyrings/bravebot-archive-keyring.gpg \
+  https://bravebot-apt-release.s3.brave.com/bravebot-archive-keyring.gpg
+gpg --show-keys --with-fingerprint /usr/share/keyrings/bravebot-archive-keyring.gpg
+sudo curl -fsSL -o /etc/apt/sources.list.d/bravebot.sources \
+  https://bravebot-apt-release.s3.brave.com/bravebot.sources
+sudo apt update
+sudo apt install bravebot
+```
+
+The fingerprint `gpg` prints has to be the one above.
+
+For dnf:
+
+```sh
+sudo curl -fsSL -o /etc/yum.repos.d/bravebot.repo \
+  https://bravebot-rpm-release.s3.brave.com/bravebot.repo
+sudo dnf install bravebot
+```
+
+The first install asks whether to import the key, and shows its fingerprint. Accept only the one
+above. The repository file sets `gpgcheck=1`, so dnf checks the signature on each package against
+that key.
+
+A package installed this way is updated with `sudo apt update && sudo apt upgrade bravebot` or
+`sudo dnf upgrade bravebot`. The startup notice does not recognise a copy in `/usr/bin`, so it
+says nothing about newer releases for one.
+
 On Windows there is a PowerShell script, for a machine with no Node on it. It needs no
 Administrator:
 
@@ -185,6 +224,13 @@ writable, does not ask the registry at all.
 ## Uninstall
 
 Remove it the way it was installed.
+
+An apt or dnf install goes with the package manager. `~/.bravebot` is kept, as for every route:
+
+```sh
+sudo apt remove bravebot
+sudo dnf remove bravebot
+```
 
 An npm install goes with npm:
 

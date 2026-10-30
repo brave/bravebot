@@ -243,10 +243,9 @@ make cli-packages-linux
 ```
 
 Packages for the CLI, one per architecture under the name `bravebot`, from the same binaries the
-releases page publishes; the apt and dnf repositories that will serve them are
-[#1048](https://github.com/brave/bravebot/issues/1048). It reads `dist/bravebot-linux-<arch>` and
-writes `dist/bravebot-linux-<arch>.deb` and `dist/bravebot-linux-<arch>.rpm` for amd64 and arm64,
-on a Linux host and needing no Rust toolchain. The payload is the one binary at `/usr/bin/bravebot`,
+releases page publishes. It reads `dist/bravebot-linux-<arch>` and writes
+`dist/bravebot-linux-<arch>.deb` and `dist/bravebot-linux-<arch>.rpm` for amd64 and arm64, on a
+Linux host and needing no Rust toolchain. The payload is the one binary at `/usr/bin/bravebot`,
 and those four names are the ones the publish job uploads.
 
 A target packs each format where its tool is: `cli-packages-linux-deb` where `dpkg-deb` is, and
@@ -260,8 +259,31 @@ The dependencies declared are the binary's own, from its dynamic section: `libm`
 from the Electron dependency list the app declares is copied, since none of it is needed. The
 package files carry no signature of their own. Each is published with its `.sha256` and the
 signature on that checksum, as the Linux binaries are, so a download can be verified before it
-is installed. Serving them from the apt and dnf repositories, whose metadata is signed, is
-[#1048](https://github.com/brave/bravebot/issues/1048).
+is installed. The repositories that serve them are described next.
+
+#### The apt and dnf repositories
+
+This tree builds the packages and gives the install instructions in the README and on
+[the install page](../website/docs/install.md#debian-ubuntu-and-fedora-packages). The publish job
+in devops generates the repositories over them, signs them with the release key of
+[RELEASE-14](../specs/releases.md#RELEASE-14) and uploads them
+([RELEASE-22](../specs/releases.md#RELEASE-22)), as it does for the binaries. Nothing in this tree
+writes, signs or uploads a repository. The job is tracked in
+[#3459](https://github.com/brave/bravebot/issues/3459).
+
+The repositories are published at `https://bravebot-apt-release.s3.brave.com` and
+`https://bravebot-rpm-release.s3.brave.com`. The apt repository is `dists/stable` with a signed
+`Release`, served as `InRelease` and `Release.gpg`. The dnf repository is a tree per architecture
+with a signed `repomd.xml`, and its rpms are signed with the release key. The install instructions
+fetch `bravebot-archive-keyring.gpg` and `bravebot.sources` from the first host and `bravebot.repo`
+from the second. A change to the host, the key or those file names changes the README, the install
+page and `crates/cli/tests/release_instructions.rs` with it.
+
+**What is not checked here.** That `apt` and `dnf` install the package from the published
+repositories. By hand, in a container of each supported release: follow the instructions on the
+install page, check that the key's fingerprint is `13F28F0405C49B0B232DBA1BC1E827646A2DE416`,
+install, run `bravebot --version` and remove the package. The supported releases and this check are
+[#3466](https://github.com/brave/bravebot/issues/3466).
 
 ### The Windows installers
 
