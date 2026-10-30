@@ -2235,8 +2235,7 @@ mod tests {
         assert!(!other.takes_extra_content());
     }
 
-    /// The point of the block: a `provider` entry copied out of `opencode.json` configures this
-    /// agent without being rewritten first.
+    /// Reads one entry as the `provider` block of a settings file would hold it.
     fn cloudflare(id: &str, entry: &str) -> Vec<Provider> {
         let text = format!(r#"{{"provider": {{"{id}": {entry}}}}}"#);
         Provider::all(
@@ -2247,6 +2246,8 @@ mod tests {
         )
     }
 
+    /// A Cloudflare entry names an account or gateway id instead of a host, so the request has to go to
+    /// the host those ids build: a key sent anywhere else is a key sent to the wrong route.
     #[test]
     fn a_cloudflare_entry_is_reached_at_the_host_its_ids_build() {
         let workers = cloudflare(
@@ -2273,6 +2274,8 @@ mod tests {
         assert_eq!(gateway[0].env, ["CLOUDFLARE_API_TOKEN"]);
     }
 
+    /// An id is written into the path of a compiled-in host, so one holding `/`, `@`, `?` or `#` would
+    /// send the key to another route; such an entry must configure nothing rather than a moved request.
     #[test]
     fn a_cloudflare_id_that_would_move_the_request_configures_nothing() {
         for account in ["a/b", "a@evil.invalid", "a?x", "a#x", "", "a.b"] {
@@ -2300,6 +2303,8 @@ mod tests {
         );
     }
 
+    /// A person who states an endpoint or names a credential has said where the key goes, so neither is
+    /// overridden by the host built from the ids or by the default token variable.
     #[test]
     fn a_stated_endpoint_beats_the_cloudflare_host_and_a_named_credential_beats_the_default() {
         let all = cloudflare(
@@ -2323,6 +2328,8 @@ mod tests {
         );
     }
 
+    /// The point of the block: a `provider` entry copied out of `opencode.json` configures this
+    /// agent without being rewritten first.
     #[test]
     fn a_provider_block_is_read() {
         let provider = one(r#"{"provider": {"openrouter": {
