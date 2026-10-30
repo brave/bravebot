@@ -2648,6 +2648,43 @@ pub fn held_to_the_session_network(
     )
 }
 
+/// The hosts a local server is held to: the list its declaration carries, narrowed to what the
+/// session's list also allows, and the session's denied entries and `onUnlisted` as they are
+/// (SANDBOX-24, SERVERS-10).
+///
+/// A declaration can only narrow the session's list, so a server file written by someone else
+/// cannot reach a host the person's own settings or the managed layer do not allow. Where the
+/// session has no allowed list, the declaration's is the list. A declaration with no list leaves
+/// the session's as it is.
+pub fn hosts_for_a_server(session: Option<&Hosts>, declared: Option<&[String]>) -> Option<Hosts> {
+    let Some(declared) = declared else {
+        return session.cloned();
+    };
+    let kept = |entry: &String| {
+        session
+            .and_then(|hosts| hosts.allowed.as_deref())
+            .is_none_or(|allowed| {
+                let (list, _) = bravebot_sandbox::hosts::HostList::parse(
+                    allowed.iter().map(|host| host.entry.as_str()),
+                    [],
+                );
+                bravebot_sandbox::hosts::HostRule::parse(entry)
+                    .is_some_and(|rule| list.allows_every_name_of(&rule))
+            })
+    };
+    let entry = |entry: &String| bravebot_config::sandbox_network::HostEntry {
+        entry: entry.clone(),
+        by: None,
+    };
+    Some(Hosts {
+        allowed: Some(declared.iter().filter(|e| kept(e)).map(entry).collect()),
+        denied: session
+            .map(|hosts| hosts.denied.clone())
+            .unwrap_or_default(),
+        on_unlisted: session.and_then(|hosts| hosts.on_unlisted),
+    })
+}
+
 /// The policy [`held_to_the_session_network`] would give a server, for a caller that must start no
 /// proxy: where a host list holds the server to one, the policy is limited to a port that is not
 /// any proxy's, which is all a view of it reads. Every refusal is the one a launch would make.
@@ -2741,8 +2778,8 @@ fn cannot_hold_to_the_proxy(
     capabilities: &bravebot_sandbox::policy::Capabilities,
 ) -> Option<String> {
     (policy.egress_only_to.is_some() && !capabilities.egress_limited_to_a_port).then(|| {
-        "the allowed hosts are set for this session (sandbox.network.allowedHosts) and this \
-         platform cannot hold a program to the proxy that applies them"
+        "the allowed hosts are set for this session (sandbox.network.allowedHosts) or this server \
+         (allowed_hosts) and this platform cannot hold a program to the proxy that applies them"
             .to_string()
     })
 }

@@ -125,7 +125,7 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push('\n');
     said.push_str(t!(mcp_forms_heading));
     for form in [
-        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--tools <list>] [--exclude-tools <list>] [--stdio] -- <program> [args...]",
+        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--tools <list>] [--exclude-tools <list>] [--stdio] -- <program> [args...]",
         "bravebot mcp add <alias> [-s <scope>] [--tools <list>] [--exclude-tools <list>] --http <url> [--bearer-env <name>] [--header-env <header>=<name>...]",
         "bravebot mcp enable <alias> [-s <scope>]",
         "bravebot mcp disable <alias> [-s <scope>]",
@@ -314,6 +314,7 @@ fn declared(
     let mut tool = None;
     let mut tools = Vec::new();
     let mut exclude_tools = Vec::new();
+    let mut allowed_hosts: Option<Vec<String>> = None;
     let mut index = 0;
     while index < flags.len() {
         let flag = flags[index].as_str();
@@ -421,6 +422,17 @@ fn declared(
                 }
                 taken = 1;
             }
+            "--allowed-hosts" => {
+                let Some(word) = value.filter(|word| !word.starts_with('-')) else {
+                    return Err(argument(t!(mcp_allowed_hosts_needs_a_list)).into());
+                };
+                allowed_hosts = Some(hosts_in(word)?);
+            }
+            joined if joined.starts_with("--allowed-hosts=") => {
+                let word = joined.strip_prefix("--allowed-hosts=").unwrap_or_default();
+                allowed_hosts = Some(hosts_in(word)?);
+                taken = 1;
+            }
             "--startup-timeout" => {
                 startup = Some(seconds(value, Timeouts::STARTUP_KEY)?);
             }
@@ -521,6 +533,7 @@ fn declared(
             }
             Declaration::stdio(argv, variables, directory)
                 .and_then(|declaration| declaration.storing(env))
+                .and_then(|declaration| declaration.hosting(allowed_hosts))
                 .and_then(|declaration| declaration.filtering(tools, exclude_tools))
                 .map(|declaration| declaration.timing(timeouts))
                 .map_err(Refusal::Problem)
@@ -536,9 +549,25 @@ fn declared(
         }
         Some(Transport::Http(url)) => Declaration::http(url)
             .and_then(|declaration| declaration.heading(env_http_headers, bearer_env))
+            .and_then(|declaration| declaration.hosting(allowed_hosts))
             .and_then(|declaration| declaration.filtering(tools, exclude_tools))
             .map(|declaration| declaration.timing(timeouts))
             .map_err(Refusal::Problem),
+    }
+}
+
+/// The entries of a comma-separated list of hosts, where there is at least one. Each is checked as
+/// a declaration's is.
+fn hosts_in(word: &str) -> Result<Vec<String>, Refusal> {
+    let entries: Vec<String> = word
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string)
+        .collect();
+    match entries.is_empty() {
+        true => Err(argument(t!(mcp_allowed_hosts_needs_a_list)).into()),
+        false => Ok(entries),
     }
 }
 
@@ -2724,6 +2753,87 @@ mod tests {
             screen
                 .lines()
                 .any(|line| line.trim() == "exclude tools: delete"),
+            "{screen}"
+        );
+    }
+
+    /// SERVERS-10: `--allowed-hosts` writes a server's own host list, in either spelling, refuses
+    /// what is not a host or a list, is not taken by a remote server, and the question names it.
+    #[test]
+    fn allowed_hosts_is_declared_on_a_local_server_and_shown_in_the_question() {
+        let directory = scratch("cli-mcp-allowed-hosts");
+        let declared_by = |flags: &[&str]| declared(&words(flags), 1, &mut None);
+        for flags in [
+            &[
+                "--allowed-hosts",
+                "api.mine.example, *.cdn.example",
+                "--",
+                "/opt/srv",
+            ][..],
+            &[
+                "--allowed-hosts=api.mine.example,*.cdn.example",
+                "--",
+                "/opt/srv",
+            ],
+        ] {
+            let local = declared_by(flags).ok().expect("a declaration");
+            assert_eq!(
+                local.allowed_hosts(),
+                Some(&words(&["api.mine.example", "*.cdn.example"])[..])
+            );
+        }
+        assert_eq!(
+            declared_by(&["--", "/opt/srv"])
+                .ok()
+                .unwrap()
+                .allowed_hosts(),
+            None
+        );
+
+        let refused = |flags: &[&str]| declared_by(flags).expect_err("refused");
+        for flags in [
+            &["--allowed-hosts", "--", "/opt/srv"][..],
+            &["--allowed-hosts=", "--", "/opt/srv"],
+            &["--allowed-hosts", " , ", "--", "/opt/srv"],
+        ] {
+            match refused(flags) {
+                Refusal::Said((Ending::Argument, said)) => {
+                    assert_eq!(
+                        said,
+                        t!(mcp_allowed_hosts_needs_a_list).to_string(),
+                        "{flags:?}"
+                    )
+                }
+                _ => panic!("{flags:?} was not refused as an argument"),
+            }
+        }
+        assert!(matches!(
+            refused(&["--allowed-hosts", "*", "--", "/opt/srv"]),
+            Refusal::Problem(Problem::Hosts(entry)) if entry == "*"
+        ));
+        assert!(matches!(
+            refused(&[
+                "--http",
+                "https://mcp.example.com/mcp",
+                "--allowed-hosts",
+                "a.example"
+            ]),
+            Refusal::Problem(Problem::Remote("allowed_hosts"))
+        ));
+
+        let args = [
+            "add",
+            "srv",
+            "--allowed-hosts",
+            "api.mine.example,*.cdn.example",
+            "--",
+            "/opt/srv",
+        ];
+        let (_, screen) = typing(&directory, &args, "n\n");
+        assert!(
+            screen
+                .lines()
+                .any(|line| line.trim() == "may reach only: api.mine.example, *.cdn.example"),
             "{screen}"
         );
     }

@@ -37,6 +37,7 @@
 //!     "docs": { "transport": "http", "url": "https://docs.example.com/mcp" } } }
 //! ```
 
+use bravebot_sandbox::hosts::HostRule;
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -230,6 +231,9 @@ pub enum Problem {
     Tool(String),
     /// `tools` or `exclude_tools` is not a list of tool names.
     Tools(&'static str),
+    /// `allowed_hosts` is not a list of host names or `*.` domains, and this is the entry that is
+    /// not one, or empty where the value is not a list at all.
+    Hosts(String),
 }
 
 /// How long a server has for its handshake and for each call, where a declaration says.
@@ -323,6 +327,9 @@ pub enum Declaration {
         tools: Vec<String>,
         /// The tools withheld from this server where a filter was given, each once.
         exclude_tools: Vec<String>,
+        /// The hosts it may reach, each once, where the person wrote a list. `None` is no list of
+        /// its own, so it is held to the session's. `Some` of nothing refuses every host.
+        allowed_hosts: Option<Vec<String>>,
     },
     /// A server somewhere else, reached over HTTP.
     Http {
@@ -355,6 +362,7 @@ impl std::fmt::Debug for Declaration {
                 timeouts,
                 tools,
                 exclude_tools,
+                allowed_hosts,
             } => f
                 .debug_struct("Stdio")
                 .field("argv", argv)
@@ -365,6 +373,7 @@ impl std::fmt::Debug for Declaration {
                 .field("timeouts", timeouts)
                 .field("tools", tools)
                 .field("exclude_tools", exclude_tools)
+                .field("allowed_hosts", allowed_hosts)
                 .finish(),
             Self::Http {
                 url,
@@ -403,6 +412,7 @@ pub enum Field {
     Headers(Vec<String>),
     Tools,
     ExcludeTools,
+    AllowedHosts,
 }
 
 impl Field {
@@ -419,6 +429,7 @@ impl Field {
             Self::Headers(_) => "env_http_headers",
             Self::Tools => "tools",
             Self::ExcludeTools => "exclude_tools",
+            Self::AllowedHosts => "allowed_hosts",
         }
     }
 }
@@ -446,6 +457,7 @@ impl Declaration {
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            allowed_hosts: None,
         })
     }
 
@@ -462,6 +474,7 @@ impl Declaration {
             timeouts,
             tools,
             exclude_tools,
+            allowed_hosts,
             ..
         } = self
         else {
@@ -490,6 +503,7 @@ impl Declaration {
             timeouts,
             tools,
             exclude_tools,
+            allowed_hosts,
         })
     }
 
@@ -503,6 +517,7 @@ impl Declaration {
             timeouts,
             tools,
             exclude_tools,
+            allowed_hosts,
             ..
         } = self
         else {
@@ -529,6 +544,7 @@ impl Declaration {
             timeouts,
             tools,
             exclude_tools,
+            allowed_hosts,
         })
     }
 
@@ -543,6 +559,7 @@ impl Declaration {
                 directory,
                 tools,
                 exclude_tools,
+                allowed_hosts,
                 ..
             } => Self::Stdio {
                 argv,
@@ -553,6 +570,7 @@ impl Declaration {
                 timeouts,
                 tools,
                 exclude_tools,
+                allowed_hosts,
             },
             Self::Http {
                 url,
@@ -604,6 +622,7 @@ impl Declaration {
                 reads,
                 directory,
                 timeouts,
+                allowed_hosts,
                 ..
             } => Self::Stdio {
                 argv,
@@ -614,6 +633,7 @@ impl Declaration {
                 timeouts,
                 tools,
                 exclude_tools,
+                allowed_hosts,
             },
             Self::Http {
                 url,
@@ -637,6 +657,64 @@ impl Declaration {
         match self {
             Self::Stdio { timeouts, .. } | Self::Http { timeouts, .. } => *timeouts,
         }
+    }
+
+    /// The hosts this server may reach where the declaration lists them, or `None` where it holds
+    /// no list of its own. Always `None` for a remote one.
+    pub fn allowed_hosts(&self) -> Option<&[String]> {
+        match self {
+            Self::Stdio { allowed_hosts, .. } => allowed_hosts.as_deref(),
+            Self::Http { .. } => None,
+        }
+    }
+
+    /// This declaration with `hosts` as the only hosts it may reach, each a host name or a `*.`
+    /// domain as [`HostRule`] reads one, and each kept once. `None` leaves it with no list of its
+    /// own. A list on a remote declaration is refused, since that server is not started here.
+    pub fn hosting(self, hosts: Option<Vec<String>>) -> Result<Self, Problem> {
+        let Self::Stdio {
+            argv,
+            variables,
+            env,
+            reads,
+            directory,
+            timeouts,
+            tools,
+            exclude_tools,
+            ..
+        } = self
+        else {
+            return match hosts {
+                None => Ok(self),
+                Some(_) => Err(Problem::Remote("allowed_hosts")),
+            };
+        };
+        let allowed_hosts = match hosts {
+            None => None,
+            Some(entries) => {
+                let mut kept: Vec<String> = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    let rule =
+                        HostRule::parse(&entry).ok_or_else(|| Problem::Hosts(entry.clone()))?;
+                    let entry = rule.spelling();
+                    if !kept.contains(&entry) {
+                        kept.push(entry);
+                    }
+                }
+                Some(kept)
+            }
+        };
+        Ok(Self::Stdio {
+            argv,
+            variables,
+            env,
+            reads,
+            directory,
+            timeouts,
+            tools,
+            exclude_tools,
+            allowed_hosts,
+        })
     }
 
     /// An HTTP declaration, checked as a file's entry is.
@@ -779,6 +857,7 @@ impl Declaration {
                 directory,
                 tools,
                 exclude_tools,
+                allowed_hosts,
                 ..
             } => {
                 let variables: BTreeSet<&String> = variables.iter().collect();
@@ -801,6 +880,12 @@ impl Declaration {
                     form.push(
                         serde_json::json!({ "tools": tools, "exclude_tools": exclude_tools }),
                     );
+                }
+                // Only where a list was written, so a declaration without one digests as it did
+                // before there was one. An empty list is a list, and digests apart from none.
+                if let Some(hosts) = allowed_hosts {
+                    let hosts: BTreeSet<&String> = hosts.iter().collect();
+                    form.push(serde_json::json!({ "allowed_hosts": hosts }));
                 }
                 serde_json::Value::Array(form)
             }
@@ -854,6 +939,7 @@ impl Declaration {
                     directory,
                     tools,
                     exclude_tools,
+                    allowed_hosts,
                     ..
                 },
                 Self::Stdio {
@@ -864,18 +950,13 @@ impl Declaration {
                     directory: other_directory,
                     tools: other_tools,
                     exclude_tools: other_exclude_tools,
+                    allowed_hosts: other_allowed_hosts,
                     ..
                 },
             ) => {
                 let set = |names: &[String]| names.iter().cloned().collect::<BTreeSet<_>>();
-                let restored: Vec<String> = env
-                    .keys()
-                    .chain(other_env.keys())
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .filter(|name| env.get(*name) != other_env.get(*name))
-                    .cloned()
-                    .collect();
+                let hosts = |list: &Option<Vec<String>>| list.as_deref().map(set);
+                let restored = changed_values(env, other_env);
                 [
                     (argv != other_argv, Field::Argv),
                     (set(variables) != set(other_variables), Field::Variables),
@@ -886,6 +967,10 @@ impl Declaration {
                     (
                         set(exclude_tools) != set(other_exclude_tools),
                         Field::ExcludeTools,
+                    ),
+                    (
+                        hosts(allowed_hosts) != hosts(other_allowed_hosts),
+                        Field::AllowedHosts,
                     ),
                 ]
                 .into_iter()
@@ -955,6 +1040,7 @@ impl Declaration {
                 env,
                 reads,
                 directory,
+                allowed_hosts,
                 ..
             } => {
                 entry.insert("argv".into(), argv.clone().into());
@@ -973,6 +1059,9 @@ impl Declaration {
                 }
                 if let Some(directory) = directory {
                     entry.insert("directory".into(), directory.clone().into());
+                }
+                if let Some(hosts) = allowed_hosts {
+                    entry.insert("allowed_hosts".into(), hosts.clone().into());
                 }
             }
             Self::Http {
@@ -1010,7 +1099,7 @@ impl Declaration {
     /// The declaration an entry states, or what is wrong with it.
     fn from_value(value: &serde_json::Value) -> Result<Self, Problem> {
         let entry = value.as_object().ok_or(Problem::NotAnObject)?;
-        const LOCAL: [&str; 4] = ["variables", "env", "reads", "directory"];
+        const LOCAL: [&str; 5] = ["variables", "env", "reads", "directory", "allowed_hosts"];
         let allowed: &[&str] = match entry.get("transport").and_then(|word| word.as_str()) {
             Some("stdio") => &[
                 "transport",
@@ -1019,6 +1108,7 @@ impl Declaration {
                 "env",
                 "reads",
                 "directory",
+                "allowed_hosts",
                 "tools",
                 "exclude_tools",
                 Timeouts::STARTUP_KEY,
@@ -1131,11 +1221,41 @@ impl Declaration {
             Some(serde_json::Value::String(directory)) => Some(directory.clone()),
             Some(_) => return Err(Problem::Directory),
         };
+        let allowed_hosts = hosts_in(entry)?;
         Ok(Self::stdio(argv, variables, directory)?
             .storing(env)?
             .reading(reads)?
+            .hosting(allowed_hosts)?
             .filtering(tools, exclude_tools)?
             .timing(timeouts))
+    }
+}
+
+/// The names whose stored value is added, changed or removed between `env` and `other`.
+fn changed_values(env: &BTreeMap<String, String>, other: &BTreeMap<String, String>) -> Vec<String> {
+    env.keys()
+        .chain(other.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|name| env.get(*name) != other.get(*name))
+        .cloned()
+        .collect()
+}
+
+/// The list of hosts an entry writes, where it writes one. Each is checked when it is given to
+/// [`Declaration::hosting`].
+fn hosts_in(
+    entry: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Option<Vec<String>>, Problem> {
+    match entry.get("allowed_hosts") {
+        None => Ok(None),
+        Some(serde_json::Value::Array(entries)) => entries
+            .iter()
+            .map(|entry| entry.as_str().map(str::to_string))
+            .collect::<Option<Vec<_>>>()
+            .map(Some)
+            .ok_or_else(|| Problem::Hosts(String::new())),
+        Some(_) => Err(Problem::Hosts(String::new())),
     }
 }
 
@@ -1810,6 +1930,95 @@ mod tests {
             &Declaration::stdio(words(&["server"]), words(&["HOME", "PATH"]), None).unwrap(),
         );
         assert_eq!(first.digests(), second.digests());
+    }
+
+    fn reaching(hosts: Option<&[&str]>) -> Declaration {
+        weather()
+            .hosting(hosts.map(words))
+            .expect("a declaration with a host list")
+    }
+
+    /// SERVERS-5: a list of hosts is part of what an approval binds to, so adding one, changing it
+    /// or emptying it asks again, an empty list is not no list, and the order written is not read.
+    #[test]
+    fn a_host_list_is_part_of_the_digest_and_an_empty_list_is_not_no_list() {
+        let approved = reaching(Some(&["api.weather.example"])).digest();
+        for changed in [
+            reaching(None),
+            reaching(Some(&[])),
+            reaching(Some(&["api.weather.example", "cdn.weather.example"])),
+            reaching(Some(&["*.weather.example"])),
+        ] {
+            assert_ne!(changed.digest(), approved, "{changed:?}");
+        }
+        assert_ne!(reaching(Some(&[])).digest(), reaching(None).digest());
+        assert_eq!(
+            reaching(Some(&["b.example", "a.example", "B.example"])).digest(),
+            reaching(Some(&["a.example", "b.example"])).digest()
+        );
+        assert_eq!(reaching(None).digest(), weather().digest());
+    }
+
+    #[test]
+    fn a_host_list_names_the_field_that_changed_and_survives_the_file() {
+        let before = reaching(Some(&["a.example"]));
+        let after = reaching(Some(&["a.example", "b.example"]));
+        assert_eq!(before.changes(&after), vec![Field::AllowedHosts]);
+        assert_eq!(before.changes(&reaching(None)), vec![Field::AllowedHosts]);
+        assert!(
+            reaching(Some(&["b.example", "a.example"]))
+                .changes(&reaching(Some(&["a.example", "b.example"])))
+                .is_empty()
+        );
+        for declaration in [after, reaching(Some(&[])), reaching(None)] {
+            let written = declaration.to_value();
+            let read = Declaration::from_value(&written).expect("what was written reads back");
+            assert_eq!(read, declaration);
+            assert_eq!(read.allowed_hosts(), declaration.allowed_hosts());
+        }
+    }
+
+    #[test]
+    fn a_host_list_holds_only_hosts_and_belongs_to_a_local_server() {
+        for entry in [
+            "*",
+            "a.*.example",
+            "*example.com",
+            "https://a.example",
+            "a b",
+            "",
+        ] {
+            assert_eq!(
+                weather().hosting(Some(words(&[entry]))).unwrap_err(),
+                Problem::Hosts(entry.to_string()),
+                "{entry:?}"
+            );
+        }
+        let remote = Declaration::http("https://weather.example.com/mcp".into()).unwrap();
+        assert_eq!(
+            remote.hosting(Some(Vec::new())).unwrap_err(),
+            Problem::Remote("allowed_hosts")
+        );
+        let in_a_file = |hosts: serde_json::Value| {
+            Declaration::from_value(&serde_json::json!({
+                "transport": "stdio", "argv": ["server"], "allowed_hosts": hosts
+            }))
+        };
+        assert_eq!(
+            in_a_file(serde_json::json!("a.example")).unwrap_err(),
+            Problem::Hosts(String::new())
+        );
+        assert_eq!(
+            in_a_file(serde_json::json!([1])).unwrap_err(),
+            Problem::Hosts(String::new())
+        );
+        assert_eq!(
+            Declaration::from_value(&serde_json::json!({
+                "transport": "http", "url": "https://a.example/mcp", "allowed_hosts": []
+            }))
+            .unwrap_err(),
+            Problem::Remote("allowed_hosts")
+        );
     }
 
     fn stored(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {

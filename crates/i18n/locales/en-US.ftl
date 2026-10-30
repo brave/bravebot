@@ -1519,6 +1519,7 @@ mcp-env-word-refused =
 mcp-dir-needs-a-path = --dir needs a directory
 mcp-tools-needs-a-list = --tools needs a tool name or a comma-separated list of tool names
 mcp-exclude-tools-needs-a-list = --exclude-tools needs a tool name or a comma-separated list of tool names
+mcp-allowed-hosts-needs-a-list = --allowed-hosts needs a host name or a comma-separated list of host names
 mcp-dir-not-a-directory = { $path } is not a directory
 mcp-dir-not-a-directory-unshown =
     the word after --dir is not a directory, and is not repeated since it may be a value
@@ -1551,6 +1552,8 @@ mcp-problem-remote = a remote server takes no { $key }
 mcp-problem-timeout = { $key } is not a whole number of seconds from 1 to { $most }
 mcp-problem-tool = { $name } is not a tool name
 mcp-problem-tools = { $key } is not a list of tool names
+mcp-problem-hosts = { $entry } is not a host name or a *. domain
+mcp-problem-hosts-list = allowed_hosts is not a list of host names
 mcp-unreadable = { $path } cannot be read: { $reason }
 mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
 mcp-unreadable-not-read = it could not be read as text
@@ -1572,6 +1575,8 @@ mcp-headers = headers: { $headers }
 mcp-variable-stored = { $name } (stored)
 # A file a stored value or an argument names, which the server is let read.
 mcp-may-read = may read: { $path }
+mcp-allowed-hosts = may reach only: { $hosts }
+mcp-allowed-hosts-none = may reach no host
 mcp-directory = directory, which it may write: { $path }
 # The seconds a server has for its handshake and for each call, where a declaration gives either.
 mcp-timeouts = time allowed: { $startup } seconds to start, { $tool } seconds for each call

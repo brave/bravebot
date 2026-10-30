@@ -536,8 +536,9 @@ that would not take the answer does not unsay it, and a line says which record w
 ### SERVERS-5: an approval binds to a digest of the declaration
 
 The digest covers the transport, the program and every argument, the url and its host, the names of
-the variables passed in, each value the declaration stores, each file it may read, and the
-directory. It does not cover the value of a variable read from the environment, which is not in the
+the variables passed in, each value the declaration stores, each file it may read, the
+directory, and the list of hosts it may reach where it has one ([SERVERS-10](#SERVERS-10)). A list
+of nothing and no list digest apart. It does not cover the value of a variable read from the environment, which is not in the
 declaration.
 
 Changing any of those produces a digest nothing approved, so the server is unapproved until
@@ -594,6 +595,8 @@ digest is kept of what was approved, and a digest names no field.
 `verified-by: bravebot_config::mcp::a_digest_alone_on_its_line_takes_its_alias_when_rewritten`
 `verified-by: bravebot_cli::mcp::replacing_a_declaration_approved_under_no_alias_still_says_it_changed`
 `verified-by: bravebot_agent::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
+`verified-by: bravebot_config::mcp::a_host_list_is_part_of_the_digest_and_an_empty_list_is_not_no_list`
+`verified-by: bravebot_config::mcp::a_host_list_names_the_field_that_changed_and_survives_the_file`
 
 <a id="SERVERS-6"></a>
 ### SERVERS-6: a command that fetches its own code is named as one at the prompt
@@ -984,7 +987,17 @@ The process is confined under [MCP-3](mcp.md#MCP-3), and what it may reach is bu
   session gives it no egress, a runner's fetch included, since a server carries none of the
   reasons a stage keeps the network for, and a session with `allowedHosts` holds it to the proxy
   that applies the list, with the registry hosts of the toolchain its program is. A platform that
-  cannot apply the decision does not start the server, and the note names the setting. Egress
+  cannot apply the decision does not start the server, and the note names the setting. A stdio
+  declaration may carry `allowed_hosts`, a list of host names and `*.` domains
+  ([SANDBOX-24](sandboxing.md#SANDBOX-24)) that is part of its digest
+  ([SERVERS-5](#SERVERS-5)) and is drawn in the question as `may reach only:` (`may reach no host`
+  for an empty list). A server with one is held to the proxy as a session list holds it, with no
+  other egress, and is given the proxy's variables after the declaration's own. The declaration
+  can only narrow what the session allows: where the session has an allowed list, an entry of the
+  server's that list does not cover is dropped, a wildcard being covered only by a wildcard at or
+  above its domain, and the session's denied entries apply as they do to a stage. An entry that is
+  not a host name or a `*.` domain is refused when the declaration is read, and a remote
+  declaration takes no list. `bravebot mcp add` writes one with `--allowed-hosts <list>`. Egress
   otherwise is to IP
   addresses, and a unix socket is reached only under a path the server may write
   ([SANDBOX-3](sandboxing.md#SANDBOX-3)), the temporary directory among them. A server that runs
@@ -1105,6 +1118,14 @@ the server is not started either, and the line says why.
 `verified-by: bravebot_agent::mcp::a_servers_throwaway_home_lasts_as_long_as_the_session_holding_it`
 `verified-by: bravebot_mcp::stdio::a_server_receives_the_variables_it_was_handed_and_no_others`
 `verified-by: bravebot_agent::servers::a_closed_session_takes_the_network_from_a_local_server_or_refuses_it`
+`verified-by: bravebot_agent::servers::a_servers_own_host_list_can_narrow_the_sessions_and_never_widen_it`
+`verified-by: bravebot_agent::servers::a_servers_declared_list_holds_it_to_the_proxy_with_no_session_list`
+`verified-by: bravebot_agent::servers::a_server_with_its_own_host_list_is_started_with_the_proxys_variables_and_no_session_list`
+`verified-by: bravebot_config::mcp::a_host_list_is_part_of_the_digest_and_an_empty_list_is_not_no_list`
+`verified-by: bravebot_config::mcp::a_host_list_names_the_field_that_changed_and_survives_the_file`
+`verified-by: bravebot_config::mcp::a_host_list_holds_only_hosts_and_belongs_to_a_local_server`
+`verified-by: bravebot_cli::mcp::allowed_hosts_is_declared_on_a_local_server_and_shown_in_the_question`
+`verified-by: bravebot_sandbox::hosts::a_list_allows_every_name_of_a_rule_only_when_each_name_is_covered`
 `verified-by: bravebot_agent::servers::a_host_list_holds_a_local_server_to_the_proxy_or_refuses_it`
 `verified-by: bravebot_agent::servers::a_closed_session_starts_no_local_server_where_the_network_cannot_be_denied`
 `verified-by: bravebot_agent::servers::a_declared_directory_holding_a_repository_is_refused`

@@ -1560,6 +1560,7 @@ mod tests {
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            allowed_hosts: None,
         };
         let mut deciding = vec!["/opt/tool/serve".to_string()];
         deciding.extend(reads);

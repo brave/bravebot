@@ -2438,6 +2438,8 @@ widening the pin exists to prevent. A managed value that is not a list of string
 A local MCP server is held to the same list ([SERVERS-10](mcp-servers.md#SERVERS-10)): it is started
 with those variables, its policy reaches the proxy's port alone, the registry hosts of its program's
 toolchain are added to the list, and a platform that cannot hold it to the proxy does not start it.
+A server whose declaration lists `allowed_hosts` is held to that list, narrowed to what the
+session's allowed list covers.
 
 A stage with egress under a set list is started with those variables, and a stage with no egress
 is not, because it reaches nothing. A stage's list is the person's allowed set and the defaults its
