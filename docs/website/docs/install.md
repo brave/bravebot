@@ -43,49 +43,38 @@ your `PATH`.
 
 ## Debian, Ubuntu and Fedora packages
 
-On Debian 12, Ubuntu 22.04, Ubuntu 24.04 and Fedora 42, `bravebot` is a package of its own, in an
-apt repository and a dnf repository. Both are signed with the release key whose fingerprint is
-`13F28F0405C49B0B232DBA1BC1E827646A2DE416`, and the client checks that signature before it
-installs anything. Other releases that provide glibc 2.30 or newer run the package too, and are not
-supported. The package puts the binary at `/usr/bin/bravebot` and depends on nothing else.
+`bravebot` is a package of its own, in an apt repository at
+`https://bravebot-apt-release.s3.brave.com` and a dnf repository at
+`https://bravebot-rpm-release.s3.brave.com`. Both are signed with the release key whose
+fingerprint is `13F28F0405C49B0B232DBA1BC1E827646A2DE416`, and the client checks that signature
+before it installs anything. The package puts the binary at `/usr/bin/bravebot` and requires glibc
+2.30 or newer.
 
-For apt, fetch the key to the place the source names, then add the source:
+For apt, fetch the key to the place the source names, check its fingerprint, then add the source:
 
 ```sh
-sudo curl -fsSL -o /usr/share/keyrings/bravebot-release.asc \
-  https://brave-browser-downloads.s3.brave.com/keys/bravebot-release.asc
-gpg --show-keys --with-fingerprint /usr/share/keyrings/bravebot-release.asc
-sudo tee /etc/apt/sources.list.d/bravebot.sources <<'EOF'
-Types: deb
-URIs: https://brave-browser-downloads.s3.brave.com/bravebot/apt/
-Suites: ./
-Signed-By: /usr/share/keyrings/bravebot-release.asc
-EOF
+sudo curl -fsSL -o /usr/share/keyrings/bravebot-archive-keyring.gpg \
+  https://bravebot-apt-release.s3.brave.com/bravebot-archive-keyring.gpg
+gpg --show-keys --with-fingerprint /usr/share/keyrings/bravebot-archive-keyring.gpg
+sudo curl -fsSL -o /etc/apt/sources.list.d/bravebot.sources \
+  https://bravebot-apt-release.s3.brave.com/bravebot.sources
 sudo apt update
 sudo apt install bravebot
 ```
 
-The fingerprint `gpg` prints has to be the one above. `Signed-By` makes apt accept this
-repository only when that key signed it.
+The fingerprint `gpg` prints has to be the one above.
 
 For dnf:
 
 ```sh
-sudo tee /etc/yum.repos.d/bravebot.repo <<'EOF'
-[bravebot]
-name=Brave Bot
-baseurl=https://brave-browser-downloads.s3.brave.com/bravebot/rpm/
-enabled=1
-gpgcheck=0
-repo_gpgcheck=1
-gpgkey=https://brave-browser-downloads.s3.brave.com/keys/bravebot-release.asc
-EOF
+sudo curl -fsSL -o /etc/yum.repos.d/bravebot.repo \
+  https://bravebot-rpm-release.s3.brave.com/bravebot.repo
 sudo dnf install bravebot
 ```
 
 The first install asks whether to import the key, and shows its fingerprint. Accept only the one
-above. `repo_gpgcheck=1` makes dnf check the signature on the repository's metadata, which holds the
-hash of each package. The `.rpm` files carry no signature of their own, so `gpgcheck` is `0`.
+above. The repository file sets `gpgcheck=1`, so dnf checks the signature on each package against
+that key.
 
 A package installed this way is updated with `sudo apt update && sudo apt upgrade bravebot` or
 `sudo dnf upgrade bravebot`. The startup notice does not recognise a copy in `/usr/bin`, so it

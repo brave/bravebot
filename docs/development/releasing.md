@@ -243,9 +243,9 @@ make cli-packages-linux
 ```
 
 Packages for the CLI, one per architecture under the name `bravebot`, from the same binaries the
-releases page publishes. It reads `dist/bravebot-linux-<arch>` and
-writes `dist/bravebot-linux-<arch>.deb` and `dist/bravebot-linux-<arch>.rpm` for amd64 and arm64,
-on a Linux host and needing no Rust toolchain. The payload is the one binary at `/usr/bin/bravebot`,
+releases page publishes. It reads `dist/bravebot-linux-<arch>` and writes
+`dist/bravebot-linux-<arch>.deb` and `dist/bravebot-linux-<arch>.rpm` for amd64 and arm64, on a
+Linux host and needing no Rust toolchain. The payload is the one binary at `/usr/bin/bravebot`,
 and those four names are the ones the publish job uploads.
 
 A target packs each format where its tool is: `cli-packages-linux-deb` where `dpkg-deb` is, and
@@ -263,55 +263,27 @@ is installed. The repositories that serve them are described next.
 
 #### The apt and dnf repositories
 
-```sh
-make cli-repo-metadata
-```
+This tree builds the packages and gives the install instructions in the README and on
+[the install page](../website/docs/install.md#debian-ubuntu-and-fedora-packages). The publish job
+in devops generates the repositories over them, signs them with the release key of
+[RELEASE-14](../specs/releases.md#RELEASE-14) and uploads them
+([RELEASE-22](../specs/releases.md#RELEASE-22)), as it does for the binaries. Nothing in this tree
+writes, signs or uploads a repository. The job is tracked in
+[#3459](https://github.com/brave/bravebot/issues/3459).
 
-Writes, from the four packages, one apt repository and one dnf repository under `dist/repo/`, each
-flat and holding both architectures, in the same pinned containers: `apt/` with `Packages`,
-`Packages.gz` and `Release`, and `rpm/` with `repodata/`. `cli-repo-metadata-deb` and
-`cli-repo-metadata-rpm` do one format each where `apt-ftparchive` or `createrepo_c` is. A target
-stops, naming the package, when one is missing from `dist/`. Nothing here signs or uploads
-([RELEASE-22](../specs/releases.md#RELEASE-22)).
+The repositories are published at `https://bravebot-apt-release.s3.brave.com` and
+`https://bravebot-rpm-release.s3.brave.com`. The apt repository is `dists/stable` with a signed
+`Release`, served as `InRelease` and `Release.gpg`. The dnf repository is a tree per architecture
+with a signed `repomd.xml`, and its rpms are signed with the release key. The install instructions
+fetch `bravebot-archive-keyring.gpg` and `bravebot.sources` from the first host and `bravebot.repo`
+from the second. A change to the host, the key or those file names changes the README, the install
+page and `crates/cli/tests/release_instructions.rs` with it.
 
-A signature the publish job has already made can be placed beside the metadata it signs, in the
-run that writes that metadata. Each variable is a path to a file, and the file is copied as it is:
-
-| Variable | Copied to | Target |
-| --- | --- | --- |
-| `REPO_APT_INRELEASE` | `dist/repo/apt/InRelease` | `cli-repo-metadata-deb` |
-| `REPO_APT_RELEASE_GPG` | `dist/repo/apt/Release.gpg` | `cli-repo-metadata-deb` |
-| `REPO_RPM_REPOMD_ASC` | `dist/repo/rpm/repodata/repomd.xml.asc` | `cli-repo-metadata-rpm` |
-
-A variable that is set to a path that is not a file stops the target before any tool runs and
-before anything is written. `cli-repo-metadata` checks all three before it starts a container and
-passes each to the container's `make`, so the paths are under the checkout. The Makefile does not
-sign, read a key, or check the signature it copies. Every run rewrites the metadata, so a signature
-made over an earlier run's `Release` or `repomd.xml` verifies only if the new file is byte for byte
-the same.
-
-The supported releases are Debian 12, Ubuntu 22.04, Ubuntu 24.04 and Fedora 42. The packages
-require glibc 2.30, so a release older than those that provides it also works, and is not
-supported. The key is the release signing key of [RELEASE-14](../specs/releases.md#RELEASE-14),
-fingerprint `13F28F0405C49B0B232DBA1BC1E827646A2DE416`, whose public half is at
-`https://brave-browser-downloads.s3.brave.com/keys/bravebot-release.asc`.
-
-The publish job, which is not in this repository, has to do the rest, and the install instructions
-in the README and on the install page are written for these locations:
-
-1. Sign `dist/repo/apt/Release` as `InRelease` (clearsigned) and `Release.gpg` (detached), and
-   `dist/repo/rpm/repodata/repomd.xml` as `repomd.xml.asc` (detached), with the release key.
-2. Upload `dist/repo/apt/` to `https://brave-browser-downloads.s3.brave.com/bravebot/apt/` and
-   `dist/repo/rpm/` to `https://brave-browser-downloads.s3.brave.com/bravebot/rpm/`, replacing each
-   whole, so the metadata always describes the files beside it.
-3. Publish the public key at the URL above.
-
-**What is not checked here.** That the real `apt-ftparchive` and `createrepo_c` output is accepted
-by `apt` and `dnf`, and installing from a published repository on each supported release. The
-tests run the targets with stand-ins for the two tools. By hand, once the job has uploaded: add the
-source from the install page in a container of each release, run `apt update` or `dnf makecache`,
-confirm the key's fingerprint is the one above, and install, run `bravebot --version` and remove
-the package. Until the job exists, the instructions describe a repository that is not there.
+**What is not checked here.** That `apt` and `dnf` install the package from the published
+repositories. By hand, in a container of each supported release: follow the instructions on the
+install page, check that the key's fingerprint is `13F28F0405C49B0B232DBA1BC1E827646A2DE416`,
+install, run `bravebot --version` and remove the package. The supported releases and this check are
+[#3466](https://github.com/brave/bravebot/issues/3466).
 
 ### The Windows installers
 

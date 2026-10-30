@@ -52,36 +52,25 @@ That puts the binary in `/usr/local/bin`, and takes `INSTALL_DIR` for somewhere 
 curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
-Or on Debian 12, Ubuntu 22.04 or Ubuntu 24.04, from the apt repository, which `Signed-By` limits to
-the release key (fingerprint `13F28F0405C49B0B232DBA1BC1E827646A2DE416`):
+Or with apt, on Debian and Ubuntu, from the apt repository. The key it is signed with has the
+fingerprint `13F28F0405C49B0B232DBA1BC1E827646A2DE416`:
 
 ```sh
-sudo curl -fsSL -o /usr/share/keyrings/bravebot-release.asc \
-  https://brave-browser-downloads.s3.brave.com/keys/bravebot-release.asc
-gpg --show-keys --with-fingerprint /usr/share/keyrings/bravebot-release.asc
-sudo tee /etc/apt/sources.list.d/bravebot.sources <<'EOF'
-Types: deb
-URIs: https://brave-browser-downloads.s3.brave.com/bravebot/apt/
-Suites: ./
-Signed-By: /usr/share/keyrings/bravebot-release.asc
-EOF
+sudo curl -fsSL -o /usr/share/keyrings/bravebot-archive-keyring.gpg \
+  https://bravebot-apt-release.s3.brave.com/bravebot-archive-keyring.gpg
+gpg --show-keys --with-fingerprint /usr/share/keyrings/bravebot-archive-keyring.gpg
+sudo curl -fsSL -o /etc/apt/sources.list.d/bravebot.sources \
+  https://bravebot-apt-release.s3.brave.com/bravebot.sources
 sudo apt update && sudo apt install bravebot
 ```
 
 The fingerprint `gpg` prints has to be the one above.
 
-Or on Fedora 42, from the dnf repository, whose metadata dnf checks against the same key:
+Or with dnf, from the dnf repository, whose packages dnf checks against the same key:
 
 ```sh
-sudo tee /etc/yum.repos.d/bravebot.repo <<'EOF'
-[bravebot]
-name=Brave Bot
-baseurl=https://brave-browser-downloads.s3.brave.com/bravebot/rpm/
-enabled=1
-gpgcheck=0
-repo_gpgcheck=1
-gpgkey=https://brave-browser-downloads.s3.brave.com/keys/bravebot-release.asc
-EOF
+sudo curl -fsSL -o /etc/yum.repos.d/bravebot.repo \
+  https://bravebot-rpm-release.s3.brave.com/bravebot.repo
 sudo dnf install bravebot
 ```
 

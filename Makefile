@@ -109,7 +109,6 @@ help:
 	@echo "  make app-release-linux                      Its .deb and .rpm for both Linux architectures, unsigned"
 	@echo "  make app-release-windows                    Its Windows installers for both architectures, unsigned"
 	@echo "  make cli-packages-linux                     The CLI's .deb and .rpm for both Linux architectures, unsigned"
-	@echo "  make cli-repo-metadata                      The apt and dnf repository metadata over those packages, unsigned, in dist/repo (REPO_APT_INRELEASE, REPO_APT_RELEASE_GPG, REPO_RPM_REPOMD_ASC place a signature made elsewhere)"
 	@echo
 	@echo "  make clean          Remove build output"
 
@@ -1076,7 +1075,7 @@ app-installers-windows:
 #
 # The package files carry no signature of their own: what is signed is the checksum each one is
 # published with, as it is for the Linux binaries, and what a repository client checks is the
-# signed metadata over them, which `cli-repo-metadata` below writes unsigned.
+# signed metadata over them, which the publish job writes and signs.
 
 # The assets' two architectures, and the name rpmbuild wants for each: an asset and its .deb
 # name agree, so a pair is the asset and its rpm name.
@@ -1180,103 +1179,6 @@ cli-packages-linux-rpm:
 		mv -f "$$stage/out-$$arch.rpm" dist/bravebot-linux-$$arch.rpm; \
 		echo "wrote dist/bravebot-linux-$$arch.rpm"; \
 	done
-
-# The apt and dnf repository metadata over the four packages above, unsigned:
-#
-#   reads   dist/bravebot-linux-<arch>.deb, dist/bravebot-linux-<arch>.rpm
-#   writes  dist/repo/apt/{bravebot_<version>_<arch>.deb, Packages, Packages.gz, Release}
-#           dist/repo/rpm/{bravebot-<version>-1.<rpmarch>.rpm, repodata/}
-#
-# One repository per package format, each flat, so one tree serves every release of a distribution:
-# the binary depends on libc alone. The target signs nothing and holds no key. What is signed is
-# `dist/repo/apt/Release`, as `InRelease` (clearsigned) and `Release.gpg` (detached), and
-# `dist/repo/rpm/repodata/repomd.xml`, as `repomd.xml.asc` (detached), by the publish job with the
-# release key, and the client checks those signatures and then the hashes the metadata holds.
-# Uploading the result is the publish job's too.
-#
-# A signature the job has already made can be placed beside the metadata it signs. When
-# REPO_APT_INRELEASE or REPO_APT_RELEASE_GPG is set, `cli-repo-metadata-deb` copies that file to
-# `dist/repo/apt/InRelease` or `dist/repo/apt/Release.gpg`, and when REPO_RPM_REPOMD_ASC is set,
-# `cli-repo-metadata-rpm` copies it to `dist/repo/rpm/repodata/repomd.xml.asc`. A variable set to a
-# path that is not a file stops the target before it runs a tool. The file is copied as it is: it
-# is not read, checked or made here, and the metadata a target writes replaces the whole
-# directory, so a signature is placed in the same run that writes what it signs. In
-# `cli-repo-metadata` the paths are read inside the containers, so they are under the checkout.
-REPO_APT_INRELEASE ?=
-REPO_APT_RELEASE_GPG ?=
-REPO_RPM_REPOMD_ASC ?=
-REPO_SIGNATURE_CHECK = test -z "$(2)" || test -f "$(2)" || { echo "$(1) is set to $(2), which is not a file" >&2; exit 1; }
-#
-# Like the packages, one target per format runs where its own tool is, `apt-ftparchive` for
-# `cli-repo-metadata-deb` and `createrepo_c` for `cli-repo-metadata-rpm`, and `cli-repo-metadata`
-# runs each in the digest-pinned container the packages are built in. Each refuses before writing
-# anything when a package it describes is not in dist/.
-.PHONY: cli-repo-metadata
-cli-repo-metadata:
-	@set -e; $(call REPO_SIGNATURE_CHECK,REPO_APT_INRELEASE,$(REPO_APT_INRELEASE)); \
-	$(call REPO_SIGNATURE_CHECK,REPO_APT_RELEASE_GPG,$(REPO_APT_RELEASE_GPG)); \
-	$(call REPO_SIGNATURE_CHECK,REPO_RPM_REPOMD_ASC,$(REPO_RPM_REPOMD_ASC))
-	@docker run --rm -e OWNER="$$(id -u):$$(id -g)" \
-		-v "$(CURDIR):/work:ro" -v "$(CURDIR)/dist:/work/dist:rw" -w /work $(DEB_IMAGE) sh -c '\
-		apt-get update >/dev/null && \
-		apt-get install -y --no-install-recommends make apt-utils >/dev/null && \
-		make cli-repo-metadata-deb REPO_APT_INRELEASE="$(REPO_APT_INRELEASE)" REPO_APT_RELEASE_GPG="$(REPO_APT_RELEASE_GPG)" && \
-		chown -R "$$OWNER" dist/repo'
-	@docker run --rm -e OWNER="$$(id -u):$$(id -g)" \
-		-v "$(CURDIR):/work:ro" -v "$(CURDIR)/dist:/work/dist:rw" -w /work $(RPM_IMAGE) sh -c '\
-		dnf -y --setopt=install_weak_deps=False install make createrepo_c >/dev/null && \
-		make cli-repo-metadata-rpm REPO_RPM_REPOMD_ASC="$(REPO_RPM_REPOMD_ASC)" && \
-		chown -R "$$OWNER" dist/repo'
-
-.PHONY: cli-repo-metadata-deb
-cli-repo-metadata-deb:
-	@set -e; $(call REPO_SIGNATURE_CHECK,REPO_APT_INRELEASE,$(REPO_APT_INRELEASE)); \
-	$(call REPO_SIGNATURE_CHECK,REPO_APT_RELEASE_GPG,$(REPO_APT_RELEASE_GPG))
-	@set -e; missing=; for pair in $(CLI_ARCHES); do \
-		arch=$${pair%%:*}; \
-		test -f dist/bravebot-linux-$$arch.deb || missing="$$missing bravebot-linux-$$arch.deb"; \
-	done; \
-	if [ -n "$$missing" ]; then \
-		echo "missing from dist/:$$missing" >&2; \
-		echo "run \`make cli-packages-linux\` first" >&2; exit 1; \
-	fi
-	@set -e; rm -rf dist/repo/apt; mkdir -p dist/repo/apt; \
-	for pair in $(CLI_ARCHES); do \
-		arch=$${pair%%:*}; \
-		cp dist/bravebot-linux-$$arch.deb dist/repo/apt/bravebot_$(VERSION)_$$arch.deb; \
-	done; \
-	cd dist/repo/apt; \
-	apt-ftparchive packages . > Packages; \
-	gzip -9 -n < Packages > Packages.gz; \
-	apt-ftparchive -o APT::FTPArchive::Release::Origin=Brave -o APT::FTPArchive::Release::Label=bravebot \
-		-o APT::FTPArchive::Release::Architectures="amd64 arm64" \
-		release . > ../Release.new; \
-	mv ../Release.new Release; \
-	echo "wrote dist/repo/apt/Release, to be signed as InRelease and Release.gpg"
-	@set -e; \
-	test -z "$(REPO_APT_INRELEASE)" || { cp "$(REPO_APT_INRELEASE)" dist/repo/apt/InRelease; echo "placed dist/repo/apt/InRelease"; }; \
-	test -z "$(REPO_APT_RELEASE_GPG)" || { cp "$(REPO_APT_RELEASE_GPG)" dist/repo/apt/Release.gpg; echo "placed dist/repo/apt/Release.gpg"; }
-
-.PHONY: cli-repo-metadata-rpm
-cli-repo-metadata-rpm:
-	@set -e; $(call REPO_SIGNATURE_CHECK,REPO_RPM_REPOMD_ASC,$(REPO_RPM_REPOMD_ASC))
-	@set -e; missing=; for pair in $(CLI_ARCHES); do \
-		arch=$${pair%%:*}; \
-		test -f dist/bravebot-linux-$$arch.rpm || missing="$$missing bravebot-linux-$$arch.rpm"; \
-	done; \
-	if [ -n "$$missing" ]; then \
-		echo "missing from dist/:$$missing" >&2; \
-		echo "run \`make cli-packages-linux\` first" >&2; exit 1; \
-	fi
-	@set -e; rm -rf dist/repo/rpm; mkdir -p dist/repo/rpm; \
-	for pair in $(CLI_ARCHES); do \
-		arch=$${pair%%:*}; rpmarch=$${pair#*:}; \
-		cp dist/bravebot-linux-$$arch.rpm dist/repo/rpm/bravebot-$(VERSION)-1.$$rpmarch.rpm; \
-	done; \
-	createrepo_c dist/repo/rpm; \
-	echo "wrote dist/repo/rpm/repodata/repomd.xml, to be signed as repomd.xml.asc"
-	@set -e; \
-	test -z "$(REPO_RPM_REPOMD_ASC)" || { cp "$(REPO_RPM_REPOMD_ASC)" dist/repo/rpm/repodata/repomd.xml.asc; echo "placed dist/repo/rpm/repodata/repomd.xml.asc"; }
 
 # Symbols are kept during the build because Rust's own strip can corrupt some targets
 # under zigbuild, so they are removed here instead.
