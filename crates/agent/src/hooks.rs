@@ -586,6 +586,10 @@ fn run(
     // The vector, never a string. There is no shell between the file and the process, so an
     // argument holding a space or a semicolon is one argument and arrives as one.
     command.args(arguments).current_dir(directory);
+    // A group of its own, so the time limit can end the programs the hook started along with it:
+    // `Child::kill` ends only the one the person named. A run stage does the same.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
     // The directories as the bytes the file system holds, so a name that is not text reaches the
     // hook as it is, and without the `\\?\` Windows puts before a resolved path, which a batch file
     // or `cmd` does not take.
@@ -628,6 +632,15 @@ fn run(
             Ok(None) => {}
         }
         if started.elapsed() >= limit {
+            // The group first. The child has not been waited for, so its number still names its
+            // group and cannot belong to anything else.
+            #[cfg(unix)]
+            if let Some(group) = i32::try_from(child.id())
+                .ok()
+                .and_then(rustix::process::Pid::from_raw)
+            {
+                rustix::process::kill_process_group(group, rustix::process::Signal::KILL).ok();
+            }
             let _ = child.kill();
             // Reaped rather than left. The turn goes on for as long as the session does, and a
             // hook firing every round would otherwise leave one zombie per round behind it.
