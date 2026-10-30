@@ -1089,7 +1089,9 @@ pub(super) fn build_request<R: Reporter>(
     reporter: &mut R,
 ) -> ChatRequest {
     let (messages, marks) = conversation.with_system_marked(system_text);
-    let request = ChatRequest::new(model, messages).with_effort(effort);
+    let request = ChatRequest::new(model, messages)
+        .with_effort(effort)
+        .with_variant(task.variant.clone());
     let request = match &task.output_schema {
         Some(schema) => request.with_response_format(Some(
             bravebot_aichat::protocol::ResponseFormat::json_schema(schema.value().clone()),

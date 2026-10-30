@@ -399,6 +399,45 @@ pub struct Model {
     /// enumerating them is a schema that changes when the gateway adds a field. Trusted exactly as
     /// far as a variable the person exported would be, and no model output can reach it.
     pub options: Option<serde_json::Map<String, serde_json::Value>>,
+    /// The named option sets a person may switch between, in the order the file listed them.
+    ///
+    /// Each is carried as `options` is and merged under it. A variant the file marked
+    /// `"disabled": true` is not here, and neither is one whose body is not an object.
+    pub variants: Vec<Variant>,
+}
+
+/// One named set of options a model may be asked with ([BACKEND-45](../../../docs/specs/backends.md#BACKEND-45)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Variant {
+    /// What a person types to pick it.
+    pub name: String,
+    /// Merged into the request body, never interpreted.
+    pub options: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Model {
+    /// The names a person may pick from, in the file's order.
+    pub fn variant_names(&self) -> Vec<&str> {
+        self.variants.iter().map(|it| it.name.as_str()).collect()
+    }
+
+    /// The options a request carries for this model when `variant` is the one chosen.
+    ///
+    /// The variant's own keys come first, so where it and `options` set one field the variant's
+    /// wins: it is the more specific thing somebody said. A name the model has no variant for adds
+    /// nothing, so a pick made for one model does not reach another. `None` where there is nothing
+    /// to add.
+    pub fn request_options(
+        &self,
+        variant: Option<&str>,
+    ) -> Option<serde_json::Map<String, serde_json::Value>> {
+        let chosen = variant.and_then(|name| self.variants.iter().find(|it| it.name == name));
+        let mut merged = chosen.map(|it| it.options.clone()).unwrap_or_default();
+        for (key, value) in self.options.iter().flatten() {
+            merged.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+        (!merged.is_empty()).then_some(merged)
+    }
 }
 
 /// The most times a request is sent again that a block may state.
@@ -1666,7 +1705,31 @@ fn models(value: Option<&serde_json::Value>) -> Vec<Model> {
                     }
                     _ => None,
                 }),
+                variants: entry
+                    .and_then(|entry| entry.get("variants"))
+                    .map(variants)
+                    .unwrap_or_default(),
             }
+        })
+        .collect()
+}
+
+/// The `variants` block of a model: each name with an object body that is not `"disabled": true`.
+fn variants(value: &serde_json::Value) -> Vec<Variant> {
+    let serde_json::Value::Object(block) = value else {
+        return Vec::new();
+    };
+    block
+        .iter()
+        .filter_map(|(name, body)| {
+            let mut options = body.as_object()?.clone();
+            let disabled = options.remove("disabled");
+            (disabled != Some(serde_json::Value::Bool(true)) && !name.trim().is_empty()).then(
+                || Variant {
+                    name: name.clone(),
+                    options,
+                },
+            )
         })
         .collect()
 }
@@ -2585,6 +2648,59 @@ mod tests {
         assert_eq!(
             options.get("provider").and_then(|it| it.get("order")),
             Some(&serde_json::json!(["amazon-bedrock"]))
+        );
+    }
+
+    /// BACKEND-66: a model's variants are listed in the file's order, one marked disabled is not
+    /// listed, and a body that is not an object is not a variant.
+    #[test]
+    fn a_disabled_variant_is_not_listed() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1"},
+                "models": {"m": {"variants": {
+                    "high": {"reasoningEffort": "high"},
+                    "off": {"disabled": true, "reasoningEffort": "none"},
+                    "terse": {"textVerbosity": "low"},
+                    "broken": "not an object"
+                }}}
+            }}}"#);
+
+        let model = provider.model("m").expect("offered");
+
+        assert_eq!(model.variant_names(), ["high", "terse"]);
+        assert!(
+            model.variants[0].options.get("disabled").is_none(),
+            "the marker was carried into the request options"
+        );
+    }
+
+    /// BACKEND-66: the variant chosen wins over the model's own `options` where both set a field, a
+    /// name the model lacks adds nothing, and with none chosen the options are what they were.
+    #[test]
+    fn a_variant_is_merged_over_the_models_options() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1"},
+                "models": {"m": {
+                    "options": {"textVerbosity": "medium", "route": "a"},
+                    "variants": {"terse": {"textVerbosity": "low"}}
+                }}
+            }}}"#);
+        let model = provider.model("m").expect("offered");
+
+        let chosen = model.request_options(Some("terse")).expect("options");
+        assert_eq!(chosen.get("textVerbosity"), Some(&serde_json::json!("low")));
+        assert_eq!(chosen.get("route"), Some(&serde_json::json!("a")));
+
+        let unchosen = model.request_options(None).expect("options");
+        assert_eq!(
+            unchosen.get("textVerbosity"),
+            Some(&serde_json::json!("medium"))
+        );
+
+        let elsewhere = model.request_options(Some("high")).expect("options");
+        assert_eq!(
+            elsewhere, unchosen,
+            "a name the model lacks changed the request"
         );
     }
 

@@ -769,9 +769,9 @@ impl<'a> AichatClient<'a> {
                 gateway
                     .provider
                     .model(&gateway.model)
-                    .and_then(|model| model.options.as_ref()),
+                    .and_then(|model| model.request_options(request.variant.as_deref())),
             ) {
-                for (key, value) in options {
+                for (key, value) in &options {
                     object.entry(key.clone()).or_insert_with(|| value.clone());
                 }
             }
@@ -2022,6 +2022,62 @@ mod tests {
                 .and_then(|it| it.as_array())
                 .map(Vec::len),
             Some(1)
+        );
+    }
+
+    /// BACKEND-66: the variant a request names reaches the body as `options` do, and a request that
+    /// names none sends the body it sent before the model had variants.
+    #[test]
+    fn a_chosen_variant_reaches_the_body_and_none_chosen_adds_nothing() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = provider(
+            r#"{"m": {"variants": {"high": {"reasoningEffort": "high", "disabled": false}}}}"#,
+        );
+        let client = AichatClient::new(&config, &egress);
+
+        let chosen = client
+            .for_gateway(&provider, "m", Some(Secret::new("a-token")))
+            .prepare(&request("m").with_variant(Some("high".to_string())))
+            .expect("prepared");
+        assert_eq!(
+            body(&chosen).get("reasoningEffort"),
+            Some(&serde_json::json!("high"))
+        );
+
+        let unchosen = AichatClient::new(&config, &egress)
+            .for_gateway(&provider, "m", Some(Secret::new("a-token")))
+            .prepare(&request("m"))
+            .expect("prepared");
+        let body = body(&unchosen);
+        let keys: Vec<&String> = body.as_object().expect("an object").keys().collect();
+        assert_eq!(keys, ["messages", "model"]);
+    }
+
+    /// BACKEND-66: a variant cannot replace what the turn built, the level `/effort` chose
+    /// included.
+    #[test]
+    fn a_variant_cannot_overwrite_what_the_turn_built() {
+        let config = config();
+        let egress = Egress::new();
+        let provider = provider(
+            r#"{"m": {"variants": {"v": {"model": "something/else", "messages": [], "reasoning_effort": "low"}}}}"#,
+        );
+        let http = AichatClient::new(&config, &egress)
+            .for_gateway(&provider, "m", Some(Secret::new("a-token")))
+            .prepare(
+                &request("m")
+                    .with_effort(Some(protocol::Effort::High))
+                    .with_variant(Some("v".to_string())),
+            )
+            .expect("prepared");
+
+        let body = body(&http);
+        assert_eq!(body.get("model"), Some(&serde_json::json!("m")));
+        assert_eq!(body["messages"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            body.get("reasoning_effort"),
+            Some(&serde_json::json!("high"))
         );
     }
 

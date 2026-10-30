@@ -343,9 +343,9 @@ impl<'a> AnthropicClient<'a> {
             body.as_object_mut(),
             self.provider
                 .model(&self.model)
-                .and_then(|model| model.options.as_ref()),
+                .and_then(|model| model.request_options(request.variant.as_deref())),
         ) {
-            for (key, value) in options {
+            for (key, value) in &options {
                 object.entry(key.clone()).or_insert_with(|| value.clone());
             }
         }

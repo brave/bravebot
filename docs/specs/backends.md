@@ -544,6 +544,44 @@ the model or the messages a turn built would be deciding what was asked rather t
 `verified-by: bravebot_aichat::lib::a_model_with_no_options_adds_nothing_to_the_body`
 `verified-by: bravebot_config::provider::model_options_are_carried_without_being_interpreted`
 
+<a id="BACKEND-66"></a>
+### BACKEND-66: a model's variants are named option sets a person picks, merged as its options are
+
+A configured model may carry `variants`, a map of a name to an object. A variant the person picked is
+merged into the request body as the model's `options` are ([BACKEND-15](#BACKEND-15)): carried whole,
+never interpreted, and unable to replace a field the turn itself built, which includes the level
+`/effort` chose ([BACKEND-20](#BACKEND-20)) and the model and the messages. Where a variant and the
+model's `options` set one field the variant's wins, and a request that names no variant carries the
+options alone, so a model with variants sends the body it sent before it had them. A variant with
+`"disabled": true`, or whose body is not an object, is not listed and cannot be picked.
+
+`/variant` lists the names the model in force offers, picks one, or with `off` drops the pick. A name
+the model does not offer changes nothing and says which it does, and a model that offers none says so
+rather than store a name for a later model to take. The pick is a person's own act and the program
+never makes one: nothing derives a variant from the prompt, the conversation or a previous turn, and
+none is in force until somebody typed a name. It is held for the session and is not recorded. A name is
+looked up in whichever model is in force when a request is built, so a pick made under one model adds
+nothing under another that has no variant of that name.
+
+Variants are read from the layers that may name `provider` ([BACKEND-24](#BACKEND-24)), because they
+are part of the block. They are merged into a request to a gateway in each protocol that merges
+`options`, and a Bedrock request, which merges none, carries none.
+
+**Why.** Without a variant, a person who wants a thinking budget or a verbosity for some turns and not
+others edits the settings file between them. Bundling the fields under a name makes the switch one word, and
+carrying them as `options` are keeps the program from learning what any of them mean, which is the
+footing [BACKEND-15](#BACKEND-15) rests on. Letting the pick lose to the turn's own fields is what keeps
+a file from deciding what was asked, and keeping the choice a person's is what keeps
+[BACKEND-20](#BACKEND-20) true of every field a variant can carry.
+
+`verified-by: bravebot_config::provider::a_disabled_variant_is_not_listed`
+`verified-by: bravebot_config::provider::a_variant_is_merged_over_the_models_options`
+`verified-by: bravebot_aichat::lib::a_chosen_variant_reaches_the_body_and_none_chosen_adds_nothing`
+`verified-by: bravebot_aichat::lib::a_variant_cannot_overwrite_what_the_turn_built`
+`verified-by: bravebot_agent::turn::a_chosen_variant_is_merged_into_the_planners_request`
+`verified-by: bravebot_tui::app::a_variant_the_model_offers_is_picked_and_reaches_the_next_turn`
+`verified-by: bravebot_tui::app::a_model_offering_no_variants_takes_no_pick`
+
 <a id="BACKEND-16"></a>
 ### BACKEND-16: a gateway credential is named rather than resolved ahead of time
 

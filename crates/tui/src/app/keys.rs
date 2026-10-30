@@ -63,6 +63,7 @@ pub enum Action {
     ChooseEffort,
     /// Take a level by name without opening the picker.
     SetEffort(String),
+    Variant(String),
     /// Say which model the planner may consult, take one by name, or drop the choice. Empty says.
     /// Needs the configuration to resolve the name against, which the loop owns.
     Advisor(String),
