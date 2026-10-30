@@ -190,9 +190,9 @@ Four more tests read the tree for a way the seam could reach a release, and each
 no more.
 
 - One reads every `Cargo.toml` in the repository, the fuzz package's included, and every `.cargo/config*`
-  file, and walks none of `target`, `node_modules`, `.git`, `.worktrees` and `__pycache__`. It fails if the
-  feature is named anywhere but its declaration in `bravebot-skus` and `bravebot-config` and the
-  `[dev-dependencies]` of the three crates above. It decodes the escapes of a TOML string that write a
+  file, and walks none of `target`, `node_modules`, `.git`, `.worktrees`, `__pycache__` and a link to a
+  directory. It fails if the feature is named anywhere but its declaration in `bravebot-skus` and
+  `bravebot-config` and the `[dev-dependencies]` of the three crates above. It decodes the escapes of a TOML string that write a
   character by its number (`\u002d`) before it looks, so `"test\u002dhosts"` is the feature, because the
   workspace has no TOML parser and the crate of the test depends on none. It fails as
   well if one of these files defines a profile cargo does not have of its own, or spells a way to undo what
@@ -2628,8 +2628,9 @@ These are the places where another spec states something about this service, eac
 - The guards of the `test-hosts` seam read text. They do not read a command kept under `docs/specs`, in a Rust
   source (a `build.rs`, or a test that runs `cargo`), in a file with a NUL byte, in a directory named
   `target`, `node_modules`, `.git`, `.worktrees`, `__pycache__`, `dist`, `out`, `build` or `.docusaurus` (a
-  manifest under `target` is not read either), or outside the repository, such as a person's
-  `~/.cargo/config.toml` or a variable set on a build machine, and they do not see a command that builds a
+  manifest under `target` is not read either), under a link to a directory (`make init` links each skill
+  under `.claude/skills` and others to `agents/skills`, which is read once where it is), or outside the
+  repository, such as a person's `~/.cargo/config.toml` or a variable set on a build machine, and they do not see a command that builds a
   name or a flag when it runs, such as `f=test-; cargo build --features "${f}hosts"`. A release built that way
   carries the seam without a test of this repository failing, if it also turns debug assertions on and makes a
   panic unwind, since the refusal at compile time stops a build with either of them as a release has them.
