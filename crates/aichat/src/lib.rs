@@ -485,7 +485,7 @@ pub struct AichatClient<'a> {
     /// account. Loaded and settled by [`call::drive`].
     refusals: Refusals,
     /// The `prompt_cache_key` a gateway request carries, where its block set `options.setCacheKey`
-    /// ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)). Made for the session by whoever
+    /// ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)). Made for the session by whoever
     /// holds the session and never read from the conversation.
     cache_key: Option<String>,
     /// The stop to watch for and how long to wait between attempts, which is [`BACKOFF`] unless
@@ -2023,7 +2023,7 @@ mod tests {
         );
     }
 
-    /// BACKEND-68: a block that set `options.setCacheKey` has each request carry the key it was
+    /// BACKEND-69: a block that set `options.setCacheKey` has each request carry the key it was
     /// given, and one that did not carries none. The regressions it rejects are a key sent with the
     /// setting off, a key never sent, and a model's own `options` replacing the program's value.
     #[test]

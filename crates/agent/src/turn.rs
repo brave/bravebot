@@ -5836,7 +5836,7 @@ mod tests {
         }
 
         /// A gateway whose block set `options.setCacheKey` is cached by the key its requests carry
-        /// (BACKEND-68), so every round of a turn on it carries the identifier of the turn's session.
+        /// (BACKEND-69), so every round of a turn on it carries the identifier of the turn's session.
         /// The regressions it rejects are a gateway backend that is not given the session, and a
         /// request arm that passes no session where it has one.
         #[test]

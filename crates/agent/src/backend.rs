@@ -1243,7 +1243,7 @@ impl<'a> Backend<'a> {
 
     /// Make the requests this backend sends the ones of `session`, where it is the ChatGPT account
     /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)), or a gateway whose block
-    /// set `options.setCacheKey` ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)).
+    /// set `options.setCacheKey` ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)).
     ///
     /// Ignored by every other backend, which carries no session identifier. A request sent with no
     /// session given carries an identifier of its own, so it shares no cache with another.
@@ -1511,7 +1511,7 @@ fn xai_client<'a>(
 
 /// The `prompt_cache_key` a request to `provider` carries: the identifier of `session` where the
 /// block set `options.setCacheKey`, and nothing otherwise
-/// ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)).
+/// ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)).
 ///
 /// The identifier is made from the operating system's random source when the session begins, so it
 /// holds nothing from the conversation, a path or a reply. A request of no session gets a session of
@@ -1628,7 +1628,7 @@ enum GatewayClient<'a> {
 impl GatewayClient<'_> {
     /// Carry the identifier of `session` as the `prompt_cache_key`, where the block set
     /// `options.setCacheKey` and the service takes chat completions
-    /// ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)).
+    /// ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)).
     ///
     /// A request of no session gets a session of its own, so it shares no key with another.
     fn with_cache_key(
@@ -1755,7 +1755,7 @@ mod tests {
         )
     }
 
-    /// BACKEND-68: a block that set `options.setCacheKey` sends the identifier of the session a
+    /// BACKEND-69: a block that set `options.setCacheKey` sends the identifier of the session a
     /// request is in, so the requests of one session share a key and another session has its own.
     /// The regressions it rejects are a key made for each request, one key for the whole process,
     /// and a key sent with the setting off.

@@ -626,7 +626,7 @@ pub struct Provider {
     /// ([`crate::bedrock::Bedrock::patience`]), so the figures have one home.
     pub patience: Patience,
     /// Whether `options.setCacheKey` is `true`, so a chat-completions request carries a
-    /// `prompt_cache_key` ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)).
+    /// `prompt_cache_key` ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)).
     ///
     /// Off unless the block says so: the value lets the host tie a session's requests together.
     pub set_cache_key: bool,
@@ -2038,7 +2038,7 @@ mod tests {
         assert_eq!(refused, ["bad"]);
     }
 
-    /// BACKEND-68: only `true` turns the key on. The regressions it rejects are any present value
+    /// BACKEND-69: only `true` turns the key on. The regressions it rejects are any present value
     /// turning it on, and a string `"true"` being read as a switch.
     #[test]
     fn only_a_true_set_cache_key_turns_the_key_on() {
