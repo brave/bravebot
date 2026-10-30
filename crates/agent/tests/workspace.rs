@@ -3285,23 +3285,78 @@ fn a_slot_is_never_filled_from_a_decoding_of_another_encoding() {
     }
 }
 
-/// A deferred read reserves the slot above, so it answers the question the slot's fill would: a
-/// UTF-16 file is reported as binary at the moment the planner asks, not as text and then refused
-/// when something needs its bytes.
+/// A deferred read reserves a slot that is filled with the same decoding the planner is shown, so
+/// the survey answers as that fill will: a UTF-16 or UTF-32 file with a mark, and a Latin-1 file,
+/// are text at the moment the planner asks. A file that is not text stays binary whatever it
+/// begins with.
 #[test]
-fn a_deferred_read_of_a_utf16_file_is_reported_as_binary() {
-    let scratch = Scratch::new("survey-utf16");
+fn a_deferred_read_of_a_file_in_another_encoding_is_reported_as_text() {
+    let scratch = Scratch::new("survey-other-encodings");
+    let mut utf32: Vec<u8> = vec![0xFF, 0xFE, 0, 0];
+    utf32.extend("one\ntwo\n".chars().flat_map(|c| (c as u32).to_le_bytes()));
+    for (name, bytes) in [
+        ("wide-le.txt", utf16_file("one\ntwo\n", true)),
+        ("wide-be.txt", utf16_file("one\ntwo\n", false)),
+        ("utf32.txt", utf32),
+        ("latin1.txt", b"caf\xe9 au lait\n".to_vec()),
+    ] {
+        std::fs::write(scratch.path.join(name), &bytes).unwrap();
+    }
+    // A mark does not make binary data text: the decoded text is held to the null-byte test.
+    let mut marked_binary = vec![0xFF, 0xFE];
+    marked_binary.extend(std::iter::repeat_n([0u8, 0], 64).flatten());
+    std::fs::write(scratch.path.join("marked-binary.dat"), marked_binary).unwrap();
+    // No mark: nulls are binary, as they always were.
+    std::fs::write(
+        scratch.path.join("no-mark.txt"),
+        "one\ntwo\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for name in ["wide-le.txt", "wide-be.txt", "utf32.txt", "latin1.txt"] {
+        let size = std::fs::metadata(scratch.path.join(name)).unwrap().len() as usize;
+        assert_eq!(
+            workspace
+                .survey(name)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}")),
+            size,
+            "{name}: the survey reports the file's size in bytes"
+        );
+    }
+    for name in ["marked-binary.dat", "no-mark.txt"] {
+        assert!(
+            matches!(workspace.survey(name), Err(WorkspaceError::Binary { .. })),
+            "{name} is not text"
+        );
+    }
+}
+
+/// What a slot holds comes from the decoding, and the slot's own page keeps the file's bytes out of
+/// the text: no note about the decoding is part of the document.
+#[test]
+fn a_page_for_a_slot_decodes_a_file_in_another_encoding_without_a_note() {
+    let scratch = Scratch::new("page-decoded-for-slot");
     std::fs::write(
         scratch.path.join("wide.txt"),
         utf16_file("one\ntwo\n", true),
     )
     .unwrap();
+    std::fs::write(scratch.path.join("latin1.txt"), b"caf\xe9\n").unwrap();
+    std::fs::write(scratch.path.join("plain.txt"), "plain\n").unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    assert!(matches!(
-        workspace.survey("wide.txt"),
-        Err(WorkspaceError::Binary { .. })
-    ));
+    let wide = workspace.page_decoded("wide.txt").expect("decoded");
+    assert_eq!(wide.lines, ["one", "two"]);
+    assert_eq!(wide.decoding, bravebot_filetype::Decoding::Utf16Le);
+    let latin1 = workspace.page_decoded("latin1.txt").expect("decoded");
+    assert_eq!(latin1.lines, ["caf\u{fffd}"]);
+    assert_eq!(latin1.decoding, bravebot_filetype::Decoding::Utf8Replaced);
+    let plain = workspace.page_decoded("plain.txt").expect("read");
+    assert_eq!(plain.decoding, bravebot_filetype::Decoding::Utf8);
 }
 
 /// The label comes from the path and from nothing a file holds. A decoded UTF-16 page is trusted

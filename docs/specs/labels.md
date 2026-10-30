@@ -29,8 +29,8 @@ guards:
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 124
-      - crates/core/src/slot.rs: 6
+      - crates/core/src/policy.rs: 125
+      - crates/core/src/slot.rs: 7
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 3
       - crates/mcp/src/lib.rs: 1
@@ -79,7 +79,7 @@ guards:
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
       - crates/agent/tests/workspace.rs: 287
-      - crates/core/src/policy.rs: 25
+      - crates/core/src/policy.rs: 26
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
   - symbol: Labelled::relabel
@@ -96,7 +96,7 @@ guards:
       - crates/core/src/slot.rs: 1
   - symbol: SlotStore::verbatim_of
     sites:
-      - crates/core/src/policy.rs: 2
+      - crates/core/src/policy.rs: 3
       - crates/core/src/slot.rs: 1
   - symbol: SlotStore::home_of
     sites:
@@ -873,12 +873,16 @@ arrives at all.
   the map does not vouch for, `read_file` does not open the file to hand back text, it defers a
   slot ([READ-1](tools/read-file.md#READ-1)). It still has to say now whether the file is text, as
   [READ-3](tools/read-file.md#READ-3) requires, so `Workspace::survey` in `bravebot-agent` reads the
-  first 8 KiB and `bravebot_filetype::looks_binary` tests it for a NUL byte or more than 30 percent
-  control characters. A file that fails is refused to the planner in the driver's own words, "is a
-  binary file, so it cannot be read as text", and one that passes becomes a reference with a byte
-  count. The same test runs again over the whole file, followed by a check that it is valid UTF-8,
-  when a slot is filled or a whole read is made (`Workspace::read` and `page`). A page the planner
-  is shown goes through `bravebot_filetype::decode_text` instead, which looks for a UTF-16 or UTF-32
+  first 8 KiB and `bravebot_filetype::decode_text` reads it: a UTF-16 or UTF-32 byte order mark is
+  honoured, and the result is binary where the NUL byte or control character test fails. A file that
+  fails is refused to the planner in the driver's own words, "is a binary file, so it cannot be read
+  as text", and one that passes becomes a reference with a byte count. A slot is filled with the
+  same `decode_text` over the whole file, and the slot records whether its text is a decoding, a
+  second bit about the shape of the file's first bytes. The slot's consumers read that bit: a
+  processor's input and a check take the text, and everything that writes it or hands it to a
+  program refuses it. A whole read an edit works from and a plan's page keep to text that is UTF-8
+  as it stands (`Workspace::read` and `page`). A page the planner
+  is shown goes through `bravebot_filetype::decode_text`, which looks for a UTF-16 or UTF-32
   byte order mark before the NUL test, decodes a file with one, and reads any other file that
   passes the test as UTF-8 with each invalid byte replaced, unless the replacements are more than
   30 percent of it. It then applies the same sniff to the decoded text. A page that is a decoding

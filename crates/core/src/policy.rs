@@ -3428,7 +3428,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// Doing nothing for a slot that already holds its bytes, so a consumer can ask without
     /// knowing whether an earlier one already did.
-    pub fn materialise<F>(
+    pub fn materialise<F, R>(
         &mut self,
         tool: &str,
         slot: &SlotId,
@@ -3436,7 +3436,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         read: F,
     ) -> Gated<()>
     where
-        F: FnOnce(&str) -> Result<String, String>,
+        F: FnOnce(&str) -> Result<R, String>,
+        R: Into<crate::slot::Fill>,
     {
         let Some(deferred) = slots.deferred(slot, &PathAuthority::mint()) else {
             return Ok(());
@@ -3466,13 +3467,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // The path's revision before the bytes are taken, so that a write landing while the file
         // is read leaves the slot older than the file and not the other way round.
         let revision = self.trust.stamp_of(&path);
-        let text = read(&path).map_err(|detail| Denial {
-            principle: Principle::Confinement,
-            message: format!("{tool}: {slot} could not be read: {detail}"),
-        })?;
+        let crate::slot::Fill { text, decoded } =
+            read(&path).map(Into::into).map_err(|detail| Denial {
+                principle: Principle::Confinement,
+                message: format!("{tool}: {slot} could not be read: {detail}"),
+            })?;
 
         let measured = slots
-            .fill(slot, Labelled::new(text, label), revision)
+            .fill(slot, Labelled::new(text, label), revision, decoded)
             .map_err(|e| Denial {
                 principle: Principle::Confinement,
                 message: format!("{tool}: {slot} could not be filled: {e}"),
@@ -4678,7 +4680,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let mut pictures = 0usize;
 
         for slot in spec.reads() {
-            let content = slots.take_for_effect(slot).map_err(|e| Denial {
+            let content = slots.take_for_reading(slot).map_err(|e| Denial {
                 principle: Principle::Confinement,
                 message: format!("{}: {e}", spec.id()),
             })?;
@@ -4843,7 +4845,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let Some(about) = spec.about() else {
             return reply;
         };
-        let Ok(original) = slots.take_for_effect(about) else {
+        let Ok(original) = slots.take_for_reading(about) else {
             return reply;
         };
 
@@ -4923,11 +4925,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         about: Option<&SlotId>,
         slots: &mut crate::slot::SlotStore,
     ) {
-        let home = match about.and_then(|about| {
-            slots
-                .path_of(about, &PathAuthority::mint())
-                .map(|path| (path.to_string(), about.clone()))
-        }) {
+        // An answer replaces the document it is about, so it is written to that file or nowhere. A
+        // document that is a decoding of another encoding is not the file's own text, and writing
+        // an answer over the file would put UTF-8 where the file held UTF-16 or U+FFFD where it
+        // held a byte, so such an answer is for no file.
+        let home = match about
+            .filter(|about| !slots.is_decoded(about))
+            .and_then(|about| {
+                slots
+                    .path_of(about, &PathAuthority::mint())
+                    .map(|path| (path.to_string(), about.clone()))
+            }) {
             Some((path, named_by)) => crate::slot::Home::Only { path, named_by },
             None => crate::slot::Home::Unsaid,
         };
@@ -5090,7 +5098,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             None => None,
         };
 
-        let content = slots.take_for_effect(slot).map_err(|e| Denial {
+        let content = slots.take_for_reading(slot).map_err(|e| Denial {
             principle: Principle::Confinement,
             message: format!("{slot}: {e}"),
         })?;
@@ -8606,6 +8614,7 @@ mod tests {
         policy
             .materialise("write_file", &slot, &mut slots, |_| {
                 panic!("a slot that holds its bytes must not be read again")
+                    as Result<String, String>
             })
             .expect("asking twice is not an error");
     }
@@ -9139,6 +9148,77 @@ five
         assert_eq!(
             produced.note.expect("it said why").declassify(&proof),
             "This is a server, not the game, so I have left it as it is."
+        );
+    }
+
+    /// A file in another encoding is read into a slot as the text it decodes to, and a slot like
+    /// that is for reading. A processor and a check are given it. Resolving it for an effect is
+    /// refused, and so is writing an answer about it over the file, since the answer would be
+    /// UTF-8 where the file held another encoding.
+    #[test]
+    fn a_decoded_slot_is_read_by_a_processor_and_never_written_back() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+        let slot = SlotId::new("ref:1");
+        let entries = Labelled::new(vec!["wide.txt".to_string()], Label::untrusted_private());
+        policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                0,
+                std::slice::from_ref(&slot),
+                &mut slots,
+            )
+            .expect("an entry may be reserved");
+        policy
+            .materialise("process", &slot, &mut slots, |_| {
+                Ok(crate::slot::Fill::decoded("decoded text\n".to_string()))
+            })
+            .expect("the file is read");
+
+        assert!(
+            slots.verbatim_of(&slot, &PathAuthority::mint()).is_none(),
+            "a decoding was recorded as a copy of the file"
+        );
+        let refused = policy
+            .resolve("write_file", &slot, &slots)
+            .expect_err("a decoding must not be written as the file");
+        assert!(
+            refused.message.contains("another encoding"),
+            "unhelpful refusal: {}",
+            refused.message
+        );
+
+        let spec = policy
+            .before_processor(
+                "p",
+                std::slice::from_ref(&slot),
+                &Labelled::trusted("summarise it".to_string()),
+                Some(slot.clone()),
+                &slots,
+            )
+            .expect("a spec");
+        policy
+            .compose_processor_input(&spec, &slots)
+            .expect("a processor may read a decoding");
+        policy
+            .before_vetting(&slot, None, &slots)
+            .expect("a check may read a decoding");
+
+        let answer = SlotId::new("ref:2");
+        slots
+            .writer_for(answer.clone(), Label::untrusted_private())
+            .unwrap()
+            .write("the answer")
+            .unwrap();
+        policy.answers_for(&answer, Some(&slot), &mut slots);
+        assert!(
+            policy
+                .write_belongs_here("wide.txt", &answer, &slots)
+                .is_err(),
+            "an answer about a decoding may be written over the file it was decoded from"
         );
     }
 
