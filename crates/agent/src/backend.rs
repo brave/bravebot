@@ -1340,6 +1340,10 @@ impl<'a> Backend<'a> {
                     session: Some(session),
                     ..
                 } => Some((session.identifier().to_string(), session.effort())),
+                Self::Gateway {
+                    provider, session, ..
+                } => cache_key(provider, session.as_ref())
+                    .map(|key| (key, session.as_ref().and_then(|session| session.effort()))),
                 _ => None,
             },
         ) {
