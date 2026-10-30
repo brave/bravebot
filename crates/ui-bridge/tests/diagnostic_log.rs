@@ -1,4 +1,4 @@
-//! The desktop agent's diagnostic log (DIAG-4, DIAG-7).
+//! The desktop agent's diagnostic log (DIAG-4, DIAG-7, DIAG-10).
 //!
 //! Driven through the binary, because the log is set up by its `main`.
 
@@ -92,13 +92,8 @@ fn send(child: &mut Child, id: u64, method: &str, params: Value) {
     stdin.flush().unwrap();
 }
 
-/// A turn whose model service cannot be reached leaves a private log under the state directory
-/// naming the host, as a terminal run does, so the desktop app's bug report has a log to name.
-#[test]
-fn a_desktop_turn_that_cannot_reach_its_service_leaves_a_log() {
-    let scratch = Scratch::new("bridge-diagnostic-log");
-    let endpoint = format!("http://127.0.0.1:{}", a_closed_port());
-    let mut child = front_end(&scratch, &endpoint);
+/// What the front end says, one parsed line at a time, read on a thread of its own.
+fn listen(child: &mut Child) -> mpsc::Receiver<Value> {
     let stdout = child.stdout.take().unwrap();
     let (sender, said) = mpsc::channel();
     std::thread::spawn(move || {
@@ -110,6 +105,17 @@ fn a_desktop_turn_that_cannot_reach_its_service_leaves_a_log() {
             }
         }
     });
+    said
+}
+
+/// A turn whose model service cannot be reached leaves a private log under the state directory
+/// naming the host, as a terminal run does, so the desktop app's bug report has a log to name.
+#[test]
+fn a_desktop_turn_that_cannot_reach_its_service_leaves_a_log() {
+    let scratch = Scratch::new("bridge-diagnostic-log");
+    let endpoint = format!("http://127.0.0.1:{}", a_closed_port());
+    let mut child = front_end(&scratch, &endpoint);
+    let said = listen(&mut child);
     let ready = until(&said, |message| message["event"] == "agent.ready");
     assert!(
         !ready["data"]["home"].is_null(),
@@ -162,5 +168,70 @@ fn a_desktop_turn_that_cannot_reach_its_service_leaves_a_log() {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&logs[0]).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+    }
+}
+
+/// The window reports a failure of its page, and the log holds the words the agent fixes for it
+/// and nothing the window typed: a name with a line break in it does not start a line, and a path
+/// in a reason is not written (DIAG-1, DIAG-10).
+#[test]
+fn a_window_fault_is_logged_as_fixed_words_and_nothing_the_window_sent() {
+    let scratch = Scratch::new("bridge-window-fault");
+    let endpoint = format!("http://127.0.0.1:{}", a_closed_port());
+    let mut child = front_end(&scratch, &endpoint);
+    let said = listen(&mut child);
+    until(&said, |message| message["event"] == "agent.ready");
+    assert!(scratch.logs().is_empty(), "a log before anything failed");
+
+    send(
+        &mut child,
+        1,
+        "window.fault",
+        json!({
+            "kind": "render",
+            "name": "NotFoundError\n2026-01-01T00:00:00.000Z ERROR forged line",
+            "reason": "/Users/someone/private-notes.txt",
+            "message": "the secret prompt",
+        }),
+    );
+    let first = until(&said, |message| message["id"] == 1);
+    assert!(first.get("error").is_none(), "{first}");
+    send(
+        &mut child,
+        2,
+        "window.fault",
+        json!({"kind": "renderer_gone", "reason": "crashed", "exit": 11}),
+    );
+    let second = until(&said, |message| message["id"] == 2);
+    assert!(second.get("error").is_none(), "{second}");
+    send(
+        &mut child,
+        3,
+        "window.fault",
+        json!({"name": "NotFoundError"}),
+    );
+    let refused = until(&said, |message| message["id"] == 3);
+    assert!(
+        refused.get("error").is_some(),
+        "no kind was accepted: {refused}"
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let logs = scratch.logs();
+    assert_eq!(logs.len(), 1, "expected one log: {logs:?}");
+    let text = std::fs::read_to_string(&logs[0]).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "one line per report and no more: {text}");
+    assert!(
+        lines[0].ends_with(" ERROR window.fault kind=render name=other reason=other"),
+        "{text}"
+    );
+    assert!(
+        lines[1].ends_with(" ERROR window.fault kind=renderer_gone reason=crashed exit=11"),
+        "{text}"
+    );
+    for typed in ["forged", "private-notes", "secret", "someone"] {
+        assert!(!text.contains(typed), "`{typed}` reached the log: {text}");
     }
 }

@@ -10,6 +10,10 @@ governs:
   - crates/ui-bridge/src/bin/bravebot-rpc.rs
   - ui/src/main/bug-report.ts
   - ui/src/renderer/components/BugReport.tsx
+  - crates/ui-bridge/src/window_fault.rs
+  - ui/src/main/window-fault.ts
+  - ui/src/renderer/fault.ts
+  - ui/src/renderer/components/WindowFault.tsx
 documented-by: docs/website/docs/reference/cli.md
 ---
 
@@ -238,3 +242,40 @@ link at the chosen path is replaced rather than written through.
 `verified-by: bravebot_ui_bridge::bug_report::a_log_path_that_is_not_text_is_sent_as_no_log`
 `verified-by: bravebot_ui_bridge::no_state_directory::with_no_state_directory_there_is_no_bug_report_and_no_update_record`
 `verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/bug-report.test.mjs pins the window's half: compose states the app's own version as the interface and holds no rule for a log's name, a save composes again after the sheet closes and writes that text with mode 0600 into a new file renamed over one that was 0644, leaving nothing beside it, and a save that cannot be written fails and leaves no file, a cancelled sheet writes nothing and an unavailable report fails, only the two named pages open and at their literal URLs, the log is shown only where it is still a plain file and never through a link, a directory or a relative path, the modal carries the privacy note and hands the main process no text, URL or path, and bug-report.compose is not on the window's allow-list; make check-ui runs it, and the governs list above holds the files to existing)`
+
+<a id="DIAG-10"></a>
+### DIAG-10: a failure of the desktop window's page, or of a process behind it, is recorded as fixed words
+
+When React meets an error while it draws, when an error or a rejected promise reaches the window
+with nothing to catch it, or when Electron reports that the window's process or another process of
+the app is gone, the main process asks the agent to write one `window.fault` line. The line holds
+the kind of failure and, where the report has them, the name of the error, Electron's reason, which
+process, and an exit code. The agent chooses each word from a list fixed in its source, and a
+string that is on no list is written as `other`. The window sends the error's name and nothing
+else. The main process forwards only the five fields the agent reads, and at most twenty reports in
+a run. The line is written at every level, and not at all in an incognito session or on a machine
+with no home ([DIAG-4](#DIAG-4)).
+
+When React meets the error, the window replaces the page with a screen that shows the error's name
+and message, the components React was drawing, and its stack, with Reload and Copy details. They are
+drawn as text and are sent nowhere. Reload loads the page again through the main process, since the
+window refuses every navigation.
+
+**Why.** A page that fails leaves a black window, and nothing to attach to a bug report. The
+components React was drawing name the one that failed, which no line in this log can say, because a
+message and a stack hold whatever the page was drawing ([DIAG-1](#DIAG-1)). Showing them to the
+person leaves it to the person to read them before posting. Fixed words let the log say that a
+failure happened and what kind, without the text.
+
+**Known costs.** The log does not say which component failed; the screen does. A failure the main
+process never hears of, and a main process with no agent running, leave no line. Past twenty
+reports in a run, further reports are dropped.
+
+`verified-by: bravebot_ui_bridge::window_fault::a_page_error_is_written_as_its_kind_and_the_name_of_the_error`
+`verified-by: bravebot_ui_bridge::window_fault::a_process_that_is_gone_is_written_with_why_and_its_exit_code`
+`verified-by: bravebot_ui_bridge::window_fault::a_process_name_with_a_space_is_written_without_one`
+`verified-by: bravebot_ui_bridge::window_fault::a_string_that_is_on_no_list_is_written_as_other_whatever_it_says`
+`verified-by: bravebot_ui_bridge::window_fault::a_field_that_is_not_text_or_a_count_is_left_out`
+`verified-by: bravebot_ui_bridge::window_fault::a_request_with_no_kind_is_refused`
+`verified-by: bravebot_ui_bridge::diagnostic_log::a_window_fault_is_logged_as_fixed_words_and_nothing_the_window_sent`
+`verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/window-fault.test.mjs pins the window's half: the main process forwards the five fields and drops what else a page adds, cuts a long string, forwards an exit code only where it is a count, and stops at twenty reports; the page names an error by its name and sends the main process that and nothing else; the screen draws the error's message as text so markup in it stays inert; and ui/scripts/drive-window-fault.mjs makes the browser refuse one removeChild in a real window with a real agent and a scratch state directory, and asserts that the screen appears with the components named, that one line holding the kind and the error name and not the message is written, and that Reload brings the app back; make check-ui runs the first, and the governs list above holds the files to existing)`

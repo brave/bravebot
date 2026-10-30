@@ -62,6 +62,7 @@ pub mod store;
 pub mod turn;
 pub mod update_status;
 pub mod view;
+pub mod window_fault;
 pub mod wire;
 pub mod workers;
 
