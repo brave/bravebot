@@ -20511,6 +20511,50 @@ fn a_run_reading_lines_runs_each_prompt_as_a_turn_over_one_conversation() {
     );
 }
 
+/// CLI-36, INCOG-3: an incognito run reading lines carries each turn on from the one before in
+/// memory, since it writes no record to carry on from. A run that gave each turn an empty
+/// conversation would answer the second prompt as though nothing had come before it, and one that
+/// wrote a record to carry on from would leave the session on disk.
+#[test]
+fn an_incognito_run_reading_lines_carries_its_turns_in_memory_and_writes_no_record() {
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-lines-incognito").with_settings(&settings_for(&gateway));
+
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines", "--incognito"]);
+    run.send(&prompt_line("FIRST-WORDS"));
+    let first = run.until(|line| line.get("event").is_none());
+    run.send(&prompt_line("SECOND-WORDS"));
+    run.send(&prompt_line("THIRD-WORDS"));
+    let (rest, status, stderr) = run.finish();
+
+    let first = results(&first)[0].clone();
+    let later = results(&rest);
+    assert_eq!(first["ok"], true, "{stderr}");
+    assert_eq!(later.len(), 2, "{rest:?}");
+    assert_eq!(later[1]["reply"], "reply 3", "{rest:?}");
+    assert!(
+        first["session"].is_null() && later.iter().all(|result| result["session"].is_null()),
+        "an incognito turn named a record: {first} {later:?}"
+    );
+    assert_eq!(status, Some(0), "{stderr}");
+
+    let sent = bodies(&gateway);
+    assert_eq!(sent.len(), 3);
+    assert!(!sent[0].contains("SECOND-WORDS"));
+    assert!(
+        sent[1].contains("FIRST-WORDS") && sent[1].contains("SECOND-WORDS"),
+        "the second request did not carry the conversation: {}",
+        sent[1]
+    );
+    assert!(
+        sent[2].contains("FIRST-WORDS")
+            && sent[2].contains("SECOND-WORDS")
+            && sent[2].contains("THIRD-WORDS"),
+        "the third request did not carry the conversation: {}",
+        sent[2]
+    );
+}
+
 /// The words on the command line are the first turn and are the person's own, and a prompt line
 /// after them is a second turn over the same conversation.
 #[test]
@@ -20857,7 +20901,7 @@ fn a_line_does_not_approve_a_write() {
 #[test]
 fn input_lines_is_refused_beside_what_it_cannot_go_with() {
     let scratch = Scratch::new("cli-lines-refused");
-    let cases: [(&[&str], &str); 6] = [
+    let cases: [(&[&str], &str); 4] = [
         (
             &["--json-stream", "--input-format", "csv"],
             "--input-format takes lines",
@@ -20879,20 +20923,6 @@ fn input_lines_is_refused_beside_what_it_cannot_go_with() {
                 "manifest",
             ],
             "does not go with --mode manifest",
-        ),
-        (
-            &["--incognito", "--json-stream", "--input-format", "lines"],
-            "does not go with --incognito",
-        ),
-        (
-            &[
-                "--json-stream",
-                "--input-format",
-                "lines",
-                "--trust-input-lines",
-                "--incognito",
-            ],
-            "does not go with --incognito",
         ),
     ];
     for (arguments, problem) in cases {

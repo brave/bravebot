@@ -318,7 +318,6 @@ cli-goal-failed = l'objectif n'a pas pu être vérifié : { $problem }
 cli-output-schema-needs-a-path = --output-schema demande le chemin d'un fichier de schéma JSON
 cli-input-format-unknown = --input-format accepte lines
 cli-trust-input-lines-needs-lines = --trust-input-lines demande --input-format lines
-cli-input-lines-not-with-incognito = --input-format lines ne va pas avec --incognito : chaque tour est poursuivi à partir de l'enregistrement de la session, et une exécution incognito n'en écrit aucun
 cli-input-lines-not-with-a-manifest = --input-format lines ne va pas avec --mode manifest : une exécution planifiée a une seule tâche et aucun tour à ajouter
 cli-input-lines-no-prompt = aucune ligne prompt n'est arrivée avant la fin de l'entrée
 cli-input-lines-session-lost = la session que cette exécution poursuit n'est plus lisible, donc le tour n'a pas été exécuté : { $problem }

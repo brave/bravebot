@@ -2195,10 +2195,15 @@ file piped in whole fills no more memory than one piped to `-p` does. A read of 
 ends the input as the end of it does.
 
 Refused with the status for an argument (CLI-6), before stdin is read: `--input-format` with a word
-other than `lines`; `--trust-input-lines` without `--input-format lines`;
-`--input-format lines` with `--mode manifest`, which has one task and no turns to add; and
-`--input-format lines` with `--incognito`, since each turn is carried on from the record the one
-before wrote and an incognito run writes none.
+other than `lines`; `--trust-input-lines` without `--input-format lines`; and
+`--input-format lines` with `--mode manifest`, which has one task and no turns to add.
+
+**Under `--incognito`.** An incognito run writes no record ([INCOG-3](incognito.md#INCOG-3)), so
+each turn after the first is carried on from the conversation, the trust map and the kept facts the
+turn before held in memory, and nothing is written for it to read back. The conversation is restored
+from that copy as a record restores one, so a later turn is in the position of CLI-25's resumed
+session, and the copy is gone when the process ends. A turn that failed leaves the copy as the turn
+before it left it. Every turn's result object names no session.
 
 **Why.** Without this, a program driving bravebot needs one process for each turn (CLI-25) and
 cannot steer, answer or stop a turn that is running. One process that it talks to for as long as it
@@ -2237,9 +2242,9 @@ effect and put no word of the program's into the planner's context. The program 
 launched the run, and its command line already gives the planner words as the person's own
 ([LABEL-8](labels.md#LABEL-8)), which is more than a position among words the planner wrote.
 
-**A known cost.** A later turn is carried on from the record, as a resumed session is
-([SESSION-2](sessions.md#SESSION-2)), so a reference to quarantined content an earlier turn made
-names nothing on it and the planner is told so. On a channel nobody vouched for, whose every line is
+**A known cost.** A later turn is carried on from the record, or from memory under `--incognito`,
+as a resumed session is ([SESSION-2](sessions.md#SESSION-2)), so a reference to quarantined content
+an earlier turn made names nothing on it and the planner is told so. On a channel nobody vouched for, whose every line is
 quarantined, a turn cannot work on the words of the line before it.
 
 **A known cost.** The planner is told that the user chose a position a program picked, since the
@@ -2258,6 +2263,7 @@ one the person chose to run with the flag.
 `verified-by: bravebot_agent::interjections::drain_returns_every_line_oldest_first_and_empties_the_buffer`
 `verified-by: bravebot_agent::interjections::a_line_for_a_turn_that_is_not_reading_is_handed_back`
 `verified-by: bravebot_cli::lines::a_steer_sent_while_no_turn_runs_starts_a_turn_of_its_own`
+`verified-by: bravebot_cli::running::an_incognito_run_reading_lines_carries_its_turns_in_memory_and_writes_no_record`
 `verified-by: bravebot_cli::lines::a_stop_or_a_steer_right_behind_a_prompt_reaches_the_turn_that_prompt_starts`
 `verified-by: bravebot_cli::lines::a_second_answer_to_a_question_does_not_replace_the_first`
 `verified-by: bravebot_cli::lines::a_reader_that_panics_ends_the_input_and_leaves_nothing_waiting`
