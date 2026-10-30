@@ -230,6 +230,36 @@ worse one it silently routes somewhere you did not intend.
 It cannot replace what the turn itself built. The settings file names a destination, not what was
 asked.
 
+### Switching between sets of options with `variants`
+
+A model may carry `variants`: named sets of the same kind of fields `options` holds, which you pick
+between during a session.
+
+```json
+{
+  "provider": {
+    "my-gateway": {
+      "options": { "baseURL": "https://gateway.example/v1" },
+      "models": {
+        "my-model": {
+          "variants": {
+            "deep": { "reasoningEffort": "high", "textVerbosity": "low" },
+            "quick": { "reasoningEffort": "low" },
+            "retired": { "disabled": true }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`/variant` lists the names the model in force offers, `/variant deep` picks one, and `/variant off`
+drops the pick. Nothing is in force until you type a name, and the pick lasts for the session. The
+chosen set is merged into the request as the model's `options` are, over them where both set a field,
+and never over what the turn built, so the level `/effort` chose is the one sent. A variant marked
+`"disabled": true` is not listed. A name the model has no variant for adds nothing.
+
 ### Showing a model's thinking
 
 A model that sends its working in a `reasoning_content` field beside its reply has that working drawn

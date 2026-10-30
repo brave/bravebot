@@ -245,9 +245,9 @@ impl<'a> GenerateContentClient<'a> {
             body.as_object_mut(),
             self.provider
                 .model(&self.model)
-                .and_then(|model| model.options.as_ref()),
+                .and_then(|model| model.request_options(request.variant.as_deref())),
         ) {
-            for (key, value) in options {
+            for (key, value) in &options {
                 match (object.get_mut(key), value) {
                     // The generation settings are one object the turn also writes into, so a
                     // setting the options add to it, such as a temperature, joins what the turn

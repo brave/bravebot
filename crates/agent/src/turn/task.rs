@@ -229,6 +229,12 @@ pub struct Task {
     /// Supplied per turn for the reason `model` is: where the choice is kept is the caller's
     /// business.
     pub effort: Option<Effort>,
+    /// The named option set of the model a person picked, which the model's request carries as its
+    /// `options` are ([BACKEND-45](../../../../docs/specs/backends.md#BACKEND-45)).
+    ///
+    /// `None` is the body a model's `options` alone make. Supplied per turn for the reason `model`
+    /// is, and never chosen here: a name nobody typed is not asked for.
+    pub variant: Option<String>,
     /// The session this turn belongs to, as far as the ChatGPT account is concerned: the identifier
     /// its requests carry and the effort level they are held to
     /// ([CHATGPT-10](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
@@ -562,6 +568,7 @@ impl Task {
             courier: None,
             model: None,
             effort: None,
+            variant: None,
             account: std::sync::Arc::default(),
             output_schema: None,
             tick: None,
@@ -819,6 +826,12 @@ impl Task {
     /// Ask for a particular amount of thinking rather than the service's own default.
     pub fn with_effort(mut self, effort: Option<Effort>) -> Self {
         self.effort = effort;
+        self
+    }
+
+    /// Ask with the named option set of the model, rather than with its `options` alone.
+    pub fn with_variant(mut self, variant: Option<String>) -> Self {
+        self.variant = variant;
         self
     }
 

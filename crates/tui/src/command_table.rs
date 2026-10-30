@@ -13,6 +13,9 @@ pub(crate) const THEME_COMMAND: &str = "/theme";
 
 /// The line that opens the effort picker, or takes a level named after the word.
 pub(crate) const EFFORT_COMMAND: &str = "/effort";
+/// Picks one of the named option sets the model in force carries (BACKEND-45).
+pub(crate) const VARIANT_COMMAND: &str = "/variant";
+pub(crate) const VARIANT_OFF: &str = "off";
 
 /// The line that names the model the planner may consult, says which it may, or drops the choice.
 pub(crate) const ADVISOR_COMMAND: &str = "/advisor";
@@ -498,6 +501,12 @@ pub fn commands() -> Vec<Command> {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: VARIANT_COMMAND,
+            argument: "[name | off]",
+            description: t!(command_variant),
+            mid_turn: MidTurn::Changes,
+        },
+        Command {
             name: HELP_COMMAND,
             argument: "<question>",
             description: t!(command_help),
@@ -970,7 +979,7 @@ enum Acts {
 fn acts_on(command: &str) -> Acts {
     match command {
         ISSUE_COMMAND | PR_COMMAND => Acts::Link,
-        MODEL_COMMAND | EFFORT_COMMAND | ADVISOR_COMMAND => Acts::Choice,
+        MODEL_COMMAND | EFFORT_COMMAND | VARIANT_COMMAND | ADVISOR_COMMAND => Acts::Choice,
         NOTE_COMMAND | RENAME_COMMAND => Acts::NotesAndName,
         STYLE_COMMAND => Acts::Style,
         FORGET_TRUST_COMMAND => Acts::KeptAnswer,
@@ -1054,6 +1063,7 @@ const LEAVES_NOTES_AND_NAME_ALONE: &[&str] = &[
     SANDBOX_COMMAND,
     MODEL_COMMAND,
     EFFORT_COMMAND,
+    VARIANT_COMMAND,
     ADVISOR_COMMAND,
 ];
 
@@ -1104,6 +1114,7 @@ const LEAVES_THE_STYLE_ALONE: &[&str] = &[
     SANDBOX_COMMAND,
     MODEL_COMMAND,
     EFFORT_COMMAND,
+    VARIANT_COMMAND,
     ADVISOR_COMMAND,
 ];
 
@@ -1152,6 +1163,7 @@ const LEAVES_THE_KEPT_ANSWER_ALONE: &[&str] = &[
     SANDBOX_COMMAND,
     MODEL_COMMAND,
     EFFORT_COMMAND,
+    VARIANT_COMMAND,
     ADVISOR_COMMAND,
 ];
 
@@ -1354,6 +1366,7 @@ mod tests {
             (GOAL_COMMAND, false, true, true, true, true),
             (MODEL_COMMAND, false, true, false, false, false),
             (EFFORT_COMMAND, false, true, false, false, false),
+            (VARIANT_COMMAND, false, true, false, false, false),
             (ADVISOR_COMMAND, false, true, false, false, false),
             (RENAME_COMMAND, false, false, false, false, false),
             (NOTE_COMMAND, false, false, false, false, false),

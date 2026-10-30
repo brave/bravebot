@@ -358,6 +358,13 @@ pub struct ChatRequest {
     /// travelling in one.
     #[serde(skip)]
     pub conversation_is_sent_again: bool,
+    /// The named option set a person picked for this model, which the client merges into the body
+    /// as the model's `options` are ([BACKEND-45](../../../docs/specs/backends.md#BACKEND-45)).
+    ///
+    /// Not a field of the protocol: a name is looked up in the model's own `variants` and adds
+    /// nothing where there is none.
+    #[serde(skip)]
+    pub variant: Option<String>,
 }
 
 /// The `response_format` field asking for a reply that matches a schema.
@@ -412,6 +419,7 @@ impl ChatRequest {
             effort: None,
             response_format: None,
             conversation_is_sent_again: true,
+            variant: None,
         }
     }
 
@@ -447,6 +455,12 @@ impl ChatRequest {
     /// Ask for a particular amount of thinking, or leave the service to its own default.
     pub fn with_effort(mut self, effort: Option<Effort>) -> Self {
         self.effort = effort;
+        self
+    }
+
+    /// Ask with the named option set of the model, or with none.
+    pub fn with_variant(mut self, variant: Option<String>) -> Self {
+        self.variant = variant;
         self
     }
 

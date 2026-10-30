@@ -332,6 +332,9 @@ fn carry_out_while_working(
                 session.note(t!(session_sandbox_turn_follows_it).to_string());
             }
         }),
+        Action::Variant(word) => {
+            session.answer_while_working(|session| set_variant(session, beside.config, &word));
+        }
         Action::Advisor(word) => {
             session.answer_while_working(|session| set_advisor(session, beside.config, &word));
         }
@@ -506,6 +509,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         } else {
             Action::SetEffort(level.to_string())
         };
+    }
+    if let Some(word) = argument_to(line, VARIANT_COMMAND) {
+        return Action::Variant(word.to_string());
     }
     if let Some(word) = argument_to(line, ADVISOR_COMMAND) {
         return Action::Advisor(word.to_string());
@@ -2195,6 +2201,7 @@ impl RunSettings {
             .with_cache(bravebot_agent::home::cache())
             .with_model(session.model().map(str::to_string))
             .with_effort(session.effort_in_force())
+            .with_variant(session.variant().map(str::to_string))
             .in_account_session(session.account_session().clone())
             .with_permissions(permissions.clone())
             .with_permission_mode(session.live_permission_mode())
@@ -3016,6 +3023,7 @@ fn event_loop(
             Action::SetTheme(name) => set_theme(held.session, &name),
             Action::ChooseEffort => choose_effort(terminal, held.session),
             Action::SetEffort(level) => set_effort(held.session, &level),
+            Action::Variant(word) => set_variant(held.session, config, &word),
             Action::Advisor(word) => set_advisor(held.session, config, &word),
             Action::Style(word) => set_style(held.session, held.workspace, &word),
             Action::Mode(word) => set_mode(
@@ -21334,6 +21342,87 @@ mod tests {
         );
     }
 
+    /// A configuration whose one model offers two variants and a third that is disabled.
+    fn a_config_with_variants() -> Config {
+        let mut config = a_config_with_a_named_roster();
+        config.providers = bravebot_config::Settings::parse(
+            r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                "models": {"m": {"variants": {
+                    "high": {"reasoningEffort": "high"},
+                    "terse": {"textVerbosity": "low"},
+                    "off": {"disabled": true}
+                }}, "bare": {}}
+            }}}"#,
+        )
+        .providers()
+        .to_vec();
+        config
+    }
+
+    /// BACKEND-66: a variant the model offers is picked by name and reaches the next turn's task, one
+    /// it does not offer changes nothing and names those it does, and `off` drops the pick. The
+    /// regressions it rejects are a pick that never reaches the task, an unchecked name stored as
+    /// typed, and a disabled variant offered.
+    #[test]
+    fn a_variant_the_model_offers_is_picked_and_reaches_the_next_turn() {
+        let config = a_config_with_variants();
+        let run_settings = RunSettings::from_settings(&bravebot_config::Settings::default());
+        let permissions = Permissions::new();
+        let mut session = Session::new("none");
+        session.name_model("gw/m".to_string());
+
+        set_variant(&mut session, &config, "");
+        assert!(
+            last_note(&session).contains("high, terse"),
+            "{}",
+            last_note(&session)
+        );
+        assert!(
+            !last_note(&session).contains("terse, off"),
+            "a disabled variant was listed"
+        );
+
+        set_variant(&mut session, &config, "typo");
+        assert_eq!(session.variant(), None);
+        assert!(last_note(&session).contains("high, terse"));
+
+        set_variant(&mut session, &config, "terse");
+        assert_eq!(session.variant(), Some("terse"));
+        assert_eq!(
+            run_settings
+                .task("hi", &session, &permissions)
+                .variant
+                .as_deref(),
+            Some("terse")
+        );
+
+        set_variant(&mut session, &config, "off");
+        assert_eq!(session.variant(), None);
+        assert_eq!(
+            run_settings.task("hi", &session, &permissions).variant,
+            None
+        );
+    }
+
+    /// BACKEND-66: a model that offers no variant takes no pick, so a name typed for it is not
+    /// stored and waiting to apply to the next model that happens to have one of that name.
+    #[test]
+    fn a_model_offering_no_variants_takes_no_pick() {
+        let config = a_config_with_variants();
+        let mut session = Session::new("none");
+        session.name_model("gw/bare".to_string());
+
+        set_variant(&mut session, &config, "high");
+
+        assert_eq!(session.variant(), None);
+        assert!(
+            last_note(&session).contains("offers no variants"),
+            "{}",
+            last_note(&session)
+        );
+    }
+
     /// ADVISOR-9: a model the session names is the one the next turn offers the planner, resolved
     /// as `--advisor` resolves it, and it reaches the turn's task.
     #[test]
@@ -28325,6 +28414,7 @@ mod tests {
                 THEME_COMMAND,
                 THINKING_COMMAND,
                 TODOS_COMMAND,
+                VARIANT_COMMAND,
                 WATCH_COMMAND,
             ]
         );

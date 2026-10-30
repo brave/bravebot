@@ -205,6 +205,16 @@ impl Session {
         self.model = Some(model);
     }
 
+    /// The variant `/variant` named, or `None` where none is picked.
+    pub fn variant(&self) -> Option<&str> {
+        self.variant.as_deref()
+    }
+
+    /// Keep the variant a person picked, or drop the pick where `None`. Not recorded anywhere.
+    pub fn choose_variant(&mut self, name: Option<String>) {
+        self.variant = name;
+    }
+
     /// The model `/advisor` named, resolved, or `None` where it named none.
     pub fn advisor(&self) -> Option<&str> {
         self.advisor.as_deref()

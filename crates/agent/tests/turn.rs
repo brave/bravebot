@@ -22834,6 +22834,52 @@ fn a_chosen_effort_is_the_one_requested() {
     );
 }
 
+/// BACKEND-66: the variant a task names reaches the planner's request as the model's own `options`
+/// do, and a task naming none sends none of the variants. The regression it rejects is a task field
+/// that is read nowhere between the person's pick and the body.
+#[test]
+fn a_chosen_variant_is_merged_into_the_planners_request() {
+    let scratch = Scratch::new("chosen-variant");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sent = Vec::new();
+    for variant in [Some("verbose".to_string()), None] {
+        let (endpoint, received) = serve(&reply_with("the answer"));
+        let mut config = config_for(&endpoint);
+        let root = serde_json::json!({"provider": {"gw": {
+            "options": {"baseURL": endpoint, "apiKey": "SYNTHETIC_TOKEN"},
+            "models": {"a-model": {"variants": {"verbose": {"textVerbosity": "high"}}}}
+        }}});
+        config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        let task = Task::new("anything")
+            .with_model(Some("gw/a-model".to_string()))
+            .with_variant(variant);
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        )
+        .expect("turn runs");
+        sent.push(received.recv().expect("request body"));
+    }
+
+    assert!(
+        sent[0].contains(r#""textVerbosity":"high""#),
+        "the chosen variant was not requested: {}",
+        sent[0]
+    );
+    assert!(
+        !sent[1].contains("textVerbosity"),
+        "a variant nobody chose was requested: {}",
+        sent[1]
+    );
+}
+
 /// A turn nobody asked a level of must send the request it always sent, so adding the field
 /// changes nothing for an endpoint that has never seen it.
 #[test]

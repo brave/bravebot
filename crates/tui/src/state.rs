@@ -1206,6 +1206,12 @@ pub struct Session {
     /// Kept for the session only: the `advisorModel` setting is the saved route, and a turn that
     /// finds none here leaves it to that.
     advisor: Option<String>,
+    /// The named option set `/variant` picked for the model in force, which each request carries
+    /// as the model's `options` are (BACKEND-45).
+    ///
+    /// Kept for the session only, as `advisor` is: a name is looked up in whichever model is in
+    /// force when a request is built, so one the model lacks adds nothing.
+    variant: Option<String>,
     /// The most tokens this session may spend before a turn asks, shared with the turns it starts so
     /// a figure typed at `/limit` reaches one already running.
     ///
@@ -1497,6 +1503,7 @@ impl Session {
             model_is_account: false,
             account: bravebot_agent::chatgpt::AccountSession::begin(),
             advisor: None,
+            variant: None,
             spend_limit: bravebot_agent::SpendLimit::default(),
             style: None,
             skill_mode: None,
