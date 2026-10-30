@@ -5,7 +5,9 @@
 //! of the Makefile in a scratch directory is the only way a Rust test can hold them to it. The
 //! tools are made here: `node` records the call to the script and, for an image, appends to it as
 //! stapling rewrites it, and `spctl`, `ditto` and `hdiutil` record their arguments, with `ditto`
-//! copying a tree and `hdiutil` writing a file where the real ones write an archive. What the
+//! copying a tree and `hdiutil` writing a file where the real ones write an archive. `node` and
+//! `spctl` fail, as the real ones do, when a path they are handed does not exist from the directory
+//! they run in, so a target that changes directory between two commands is caught. What the
 //! script asks of `codesign` and `notarytool` is held by `ui/scripts/sign-mac.test.mjs`, which runs
 //! the libraries it calls. What the real tools accept, and whether Apple notarises the result, was
 //! not checked: that needs a Developer ID identity and the notary service.
@@ -33,15 +35,25 @@ printf '\n' >> "$FAKE_LOG"
 
 const FAKE_SPCTL: &str = "#!/bin/sh\nTOOL=spctl\n";
 
-/// Stands in for `node scripts/sign-mac.mjs <command> <path>...`. The call is recorded with the
-/// directory it ran in and the two settings it was given. For `image` each path is appended to, as
-/// notarising and stapling rewrite the image.
+/// Fails as `spctl` does when the path it is asked to assess is not there.
+const LAST_ARGUMENT_EXISTS: &str = r#"for last; do :; done
+[ -e "$last" ] || { echo "$TOOL: $last: No such file or directory" >&2; exit 3; }
+"#;
+
+/// Stands in for `node ui/scripts/sign-mac.mjs <command> <path>...`. The call is recorded with the
+/// directory it ran in and the two settings it was given. It fails, as `node` and the script do,
+/// when the script or a path is not there from that directory. For `image` each path is appended
+/// to, as notarising and stapling rewrite the image.
 const FAKE_NODE: &str = r#"#!/bin/sh
 printf 'node\t%s\t%s\t%s\t' "$PWD" "SIGN_IDENTITY=$SIGN_IDENTITY" "NOTARY_PROFILE=$NOTARY_PROFILE" >> "$FAKE_LOG"
 for argument in "$@"; do printf '%s\t' "$argument" >> "$FAKE_LOG"; done
 printf '\n' >> "$FAKE_LOG"
-if [ "$2" = image ]; then
-  shift 2
+script="$1"; command="$2"; shift 2
+[ -e "$script" ] || { echo "node: cannot find $script" >&2; exit 3; }
+for path in "$@"; do
+  [ -e "$path" ] || { echo "$command: no $path" >&2; exit 3; }
+done
+if [ "$command" = image ]; then
   for image in "$@"; do printf 'stapled\n' >> "$image"; done
 fi
 "#;
@@ -96,6 +108,8 @@ impl Tree {
         std::fs::create_dir_all(root.join("dist")).expect("create scratch");
         std::fs::create_dir_all(root.join("bin")).expect("create bin");
         std::fs::copy(workspace().join("Makefile"), root.join("Makefile")).expect("copy Makefile");
+        std::fs::create_dir_all(root.join("ui/scripts")).expect("create scripts");
+        std::fs::write(root.join("ui/scripts/sign-mac.mjs"), "").expect("write script");
         for electron in ["arm64", "x64"] {
             let bundle = root.join(format!("ui/dist/Brave Bot-darwin-{electron}"));
             let executable = bundle.join("Brave Bot.app/Contents/MacOS/Brave Bot");
@@ -106,7 +120,10 @@ impl Tree {
             }
         }
         for (name, body) in [
-            ("spctl", format!("{FAKE_SPCTL}{RECORD}")),
+            (
+                "spctl",
+                format!("{FAKE_SPCTL}{RECORD}{LAST_ARGUMENT_EXISTS}"),
+            ),
             ("ditto", format!("{FAKE_DITTO}{RECORD}")),
             ("hdiutil", format!("{FAKE_HDIUTIL}{RECORD}")),
             ("node", FAKE_NODE.to_owned()),
@@ -204,12 +221,12 @@ fn position(calls: &[Vec<String>], wanted: impl Fn(&[String]) -> bool, what: &st
         .unwrap_or_else(|| panic!("no call for {what} in {calls:?}"))
 }
 
-/// Both bundles go to the script in one call, from `ui/` where the libraries it needs are
-/// installed, with the identity the job gave.
+/// Both bundles go to the script in one call, as paths from the repository root, with the identity
+/// the job gave.
 ///
 /// The regression it rejects: one call per architecture, which signs the first before the second
-/// is found missing, running the script from the repository root, where `@electron/osx-sign`
-/// cannot be found, and not passing the identity on.
+/// is found missing, paths that are not from the directory the target runs the script in, and not
+/// passing the identity on.
 #[test]
 fn the_apps_are_signed_by_the_script_with_the_identity_the_job_gives() {
     if !tools_available() {
@@ -222,14 +239,18 @@ fn the_apps_are_signed_by_the_script_with_the_identity_the_job_gives() {
     let signing = script_calls(&calls, "sign");
     assert_eq!(signing.len(), 1, "{calls:?}");
     let call = signing[0];
-    assert!(call[1].ends_with("/ui"), "{call:?}");
+    assert_eq!(
+        std::fs::canonicalize(&call[1]).expect("the directory it ran in"),
+        std::fs::canonicalize(&tree.root).expect("the scratch root"),
+        "{call:?}"
+    );
     assert_eq!(call[2], format!("SIGN_IDENTITY={IDENTITY}"), "{call:?}");
-    assert_eq!(call[4], "scripts/sign-mac.mjs", "{call:?}");
+    assert_eq!(call[4], "ui/scripts/sign-mac.mjs", "{call:?}");
     assert_eq!(
         call[6..],
         [
-            "dist/Brave Bot-darwin-arm64/Brave Bot.app",
-            "dist/Brave Bot-darwin-x64/Brave Bot.app"
+            "ui/dist/Brave Bot-darwin-arm64/Brave Bot.app",
+            "ui/dist/Brave Bot-darwin-x64/Brave Bot.app"
         ],
         "{call:?}"
     );
@@ -238,8 +259,9 @@ fn the_apps_are_signed_by_the_script_with_the_identity_the_job_gives() {
 /// Each app is notarised with the profile the job gave, then assessed as an executable.
 ///
 /// The regression it rejects: skipping the assessment, which is the only check that Gatekeeper
-/// accepts the stapled app, assessing before the script has stapled, or assessing with the
-/// image's test (`-t open`), which accepts what `-t exec` refuses.
+/// accepts the stapled app, assessing before the script has stapled, assessing with the image's
+/// test (`-t open`), which accepts what `-t exec` refuses, and assessing from a directory the
+/// script's `cd` left behind, which names a bundle that is not there and fails the release.
 #[test]
 fn a_notarised_app_is_assessed_as_an_executable() {
     if !tools_available() {
@@ -273,8 +295,9 @@ fn a_notarised_app_is_assessed_as_an_executable() {
 /// submitted with the profile, then is assessed as an installer image.
 ///
 /// The regression it rejects: assessing an image with the executable test, which refuses a disk
-/// image, and giving the script only the profile, which leaves the image unsigned for the service
-/// to refuse.
+/// image, giving the script only the profile, which leaves the image unsigned for the service to
+/// refuse, and assessing from a directory the script's `cd` left behind, which names an image that
+/// is not there and fails the release.
 #[test]
 fn a_notarised_image_is_assessed_as_an_installer() {
     if !tools_available() {
@@ -298,8 +321,8 @@ fn a_notarised_image_is_assessed_as_an_installer() {
     assert_eq!(
         images[0][6..],
         [
-            "../dist/bravebot-app-darwin-arm64.dmg",
-            "../dist/bravebot-app-darwin-amd64.dmg"
+            "dist/bravebot-app-darwin-arm64.dmg",
+            "dist/bravebot-app-darwin-amd64.dmg"
         ],
         "{calls:?}"
     );

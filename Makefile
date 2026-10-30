@@ -906,9 +906,10 @@ app-dmg:
 #
 # `app-sign`, `app-notarize` and `app-dmg-notarize` run ui/scripts/sign-mac.mjs, which calls
 # @electron/osx-sign and @electron/notarize and stops before it runs a tool when the identity or the
-# profile it needs is unset or a bundle or image it works on is missing. It runs here and not inside
-# the packager because packaging sets the fuses after the packager returns, and that rewrites the
-# Electron binary a signature covers.
+# profile it needs is unset or a bundle or image it works on is missing. Every path is from the
+# repository root, for the script and for the `spctl` that follows it, and the script finds its
+# libraries from its own location. It runs here and not inside the packager because packaging sets
+# the fuses after the packager returns, and that rewrites the Electron binary a signature covers.
 #
 # The libraries sign every binary from the inside out with the hardened runtime and a secure
 # timestamp, none with `--deep`, and the app last. The app and the helper apps carry the entitlements
@@ -918,7 +919,7 @@ app-dmg:
 # installer image. `app-dmg-sha256` writes the digest of each image in the form `checksums` uses, so
 # it runs last: stapling rewrites the image, and a digest taken earlier does not match the bytes
 # uploaded.
-SIGN_MAC = cd ui && node scripts/sign-mac.mjs
+SIGN_MAC = node ui/scripts/sign-mac.mjs
 
 .PHONY: app-release-signed
 app-release-signed:
@@ -931,24 +932,22 @@ app-release-signed:
 .PHONY: app-sign
 app-sign:
 	@set -e; set --; \
-	for pair in $(APP_ARCHES); do set -- "$$@" "dist/Brave Bot-darwin-$${pair#*:}/Brave Bot.app"; done; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "ui/dist/Brave Bot-darwin-$${pair#*:}/Brave Bot.app"; done; \
 	$(SIGN_MAC) sign "$$@"
 
 .PHONY: app-notarize
 app-notarize:
 	@set -e; set --; \
-	for pair in $(APP_ARCHES); do set -- "$$@" "dist/Brave Bot-darwin-$${pair#*:}/Brave Bot.app"; done; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "ui/dist/Brave Bot-darwin-$${pair#*:}/Brave Bot.app"; done; \
 	$(SIGN_MAC) notarize "$$@"; \
-	for app in "$$@"; do spctl -a -t exec -vv "ui/$$app"; done
+	for app in "$$@"; do spctl -a -t exec -vv "$$app"; done
 
 .PHONY: app-dmg-notarize
 app-dmg-notarize:
 	@set -e; set --; \
-	for pair in $(APP_ARCHES); do set -- "$$@" "../dist/bravebot-app-darwin-$${pair%%:*}.dmg"; done; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "dist/bravebot-app-darwin-$${pair%%:*}.dmg"; done; \
 	$(SIGN_MAC) image "$$@"; \
-	for pair in $(APP_ARCHES); do \
-		spctl -a -t open --context context:primary-signature -vv "dist/bravebot-app-darwin-$${pair%%:*}.dmg"; \
-	done
+	for dmg in "$$@"; do spctl -a -t open --context context:primary-signature -vv "$$dmg"; done
 
 .PHONY: app-dmg-sha256
 app-dmg-sha256:

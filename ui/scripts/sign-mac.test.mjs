@@ -12,9 +12,10 @@
 // tests run the same on a Linux host.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
-import { delimiter, dirname, join, sep } from 'node:path'
+import { delimiter, dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const release = os.release
@@ -23,7 +24,9 @@ const { run } = await import('./sign-mac.mjs')
 os.release = release
 
 const skip = process.platform === 'win32' ? 'the stand-in tools are shell scripts' : false
-const BUILD = join(dirname(fileURLToPath(import.meta.url)), '..', 'build')
+const HERE = dirname(fileURLToPath(import.meta.url))
+const SCRIPT = join(HERE, 'sign-mac.mjs')
+const BUILD = join(HERE, '..', 'build')
 const APP_PLIST = join(BUILD, 'entitlements.mac.plist')
 const HELPER_PLIST = join(BUILD, 'entitlements.mac.inherit.plist')
 const NONE_PLIST = join(BUILD, 'entitlements.mac.none.plist')
@@ -268,4 +271,27 @@ test('an accepted image is signed, submitted as it is, and stapled', { skip }, a
     assert.ok(signed >= 0 && signed < submitted && submitted < stapled, `${image}: signed ${signed}, submitted ${submitted}, stapled ${stapled}`)
     assert.deepEqual(made[signed].args, ['--force', '--timestamp', '--sign', IDENTITY, image])
   }
+})
+
+// The Makefile runs the script from the repository root, with paths from there, and the
+// libraries are found from the script's own location, so the working directory is not `ui/`.
+//
+// The regression it rejects: a script that finds its libraries or its inputs from `ui/`, which
+// fails every release run from the root, and one whose command line does not reach `run`.
+test('the script runs from another directory with a path relative to it', { skip }, (t) => {
+  const { apps, calls } = fixture(t)
+  const root = dirname(dirname(apps[0]))
+  const start = (env) => spawnSync(process.execPath, [SCRIPT, 'sign', relative(root, apps[0])], {
+    cwd: root,
+    env: { ...process.env, SIGN_IDENTITY: '', ...env },
+    encoding: 'utf8',
+  })
+  const refused = start({})
+  assert.equal(refused.status, 1)
+  assert.match(refused.stderr, /SIGN_IDENTITY is not set/)
+  assert.deepEqual(calls(), [])
+  const signed = start({ SIGN_IDENTITY: IDENTITY })
+  assert.equal(signed.status, 0, signed.stderr)
+  assert.equal(signatures(calls()).at(-1).path, apps[0])
+  assert.match(signed.stdout, /signed .*Brave Bot\.app/)
 })

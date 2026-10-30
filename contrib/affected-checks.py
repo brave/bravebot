@@ -110,6 +110,8 @@ NAMED_NOT_READ = {
     "agents/AGENTS.md": "a marker doctor checks exists, which its tests write for themselves",
     "agents/setup.py": "a marker doctor checks exists, which its tests write for themselves",
     "docs/development/agent-configuration.md": "a marker doctor checks exists, likewise",
+    "ui/scripts/sign-mac.mjs": "the path the signing targets hand to node, which the app_signing "
+                               "test's stand-in for node receives; it holds an empty file there",
 }
 
 # What a project directory holds for the package manager. The npm names stay so that deleting a
