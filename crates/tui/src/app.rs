@@ -1842,6 +1842,19 @@ struct Switch {
     sandbox: crate::sandbox_command::Sandboxed,
 }
 
+/// What `run` settled for one session before `event_loop` begins it, carried from `run` through
+/// `event_loop` to `begin_session`. A `/resume` begins another session with a new one of these.
+struct Startup {
+    confinement: String,
+    sockets_with_a_path_reachable: bool,
+    sandbox: crate::sandbox_command::Sandboxed,
+    start: Start,
+    named: Option<String>,
+    links: Links,
+    skip_permissions: bool,
+    prompts: bravebot_agent::turn::SystemPrompts,
+}
+
 /// Run the interface until the user leaves.
 #[expect(
     clippy::too_many_arguments,
@@ -1918,15 +1931,17 @@ pub fn run(
                     &mut terminal,
                     config,
                     &workspace,
-                    confinement.clone(),
-                    sockets_with_a_path_reachable,
-                    sandbox.clone(),
                     &mut servers,
-                    start,
-                    named.take(),
-                    std::mem::take(&mut links),
-                    skip_permissions,
-                    prompts.clone(),
+                    Startup {
+                        confinement: confinement.clone(),
+                        sockets_with_a_path_reachable,
+                        sandbox: sandbox.clone(),
+                        start,
+                        named: named.take(),
+                        links: std::mem::take(&mut links),
+                        skip_permissions,
+                        prompts: prompts.clone(),
+                    },
                     moments,
                     &mut switch,
                 );
@@ -2363,24 +2378,23 @@ fn adopt_settings(
 ///
 /// `Err` is a session that ended before it began: the person left at one of the questions, the
 /// definition it was started under was refused, or the record to resume is held by another process.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "`event_loop` forwards the arguments it was given, and `begin_session` has that one caller"
-)]
 fn begin_session(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
     workspace: &Workspace,
-    confinement: String,
-    sockets_with_a_path_reachable: bool,
-    sandbox: crate::sandbox_command::Sandboxed,
     servers: &mut crate::state::Servers,
-    start: Start,
-    named: Option<String>,
-    links: Links,
-    skip_permissions: bool,
-    prompts: bravebot_agent::turn::SystemPrompts,
+    startup: Startup,
 ) -> Result<Begun, Ended> {
+    let Startup {
+        confinement,
+        sockets_with_a_path_reachable,
+        sandbox,
+        start,
+        named,
+        links,
+        skip_permissions,
+        prompts,
+    } = startup;
     // Owned rather than borrowed, because `/add-dir` opens another directory partway through and
     // the turns after it must see one. The primary root never changes, so nothing keyed on it
     // (the session record, where AGENTS.md is looked for) moves underneath.
@@ -2699,26 +2713,16 @@ fn start_the_session(
 /// terminal, and a generic backend's error type carries no bounds to convert from.
 ///
 /// Returns the session left behind, where there is one to pick up again.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "`run` forwards the arguments it was given and the switch, and `event_loop` has that one caller"
-)]
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     config: &mut Config,
     workspace: &Workspace,
-    confinement: String,
-    sockets_with_a_path_reachable: bool,
-    sandbox: crate::sandbox_command::Sandboxed,
     servers: &mut crate::state::Servers,
-    start: Start,
-    named: Option<String>,
-    links: Links,
-    skip_permissions: bool,
-    prompts: bravebot_agent::turn::SystemPrompts,
+    startup: Startup,
     moments: &mut bravebot_agent::hooks::SessionMoments,
     switch: &mut Option<Switch>,
 ) -> io::Result<Ended> {
+    let skip_permissions = startup.skip_permissions;
     let Begun {
         mut workspace,
         settings,
@@ -2728,20 +2732,7 @@ fn event_loop(
         mut stored,
         mut scratch,
         mut answers,
-    } = match begin_session(
-        terminal,
-        config,
-        workspace,
-        confinement,
-        sockets_with_a_path_reachable,
-        sandbox,
-        servers,
-        start,
-        named,
-        links,
-        skip_permissions,
-        prompts,
-    ) {
+    } = match begin_session(terminal, config, workspace, servers, startup) {
         Ok(begun) => begun,
         Err(ended) => return Ok(ended),
     };
@@ -3528,30 +3519,48 @@ fn drive_worker(
     }
 }
 
-/// Hand a question's answer back to the worker that is blocked on it.
-///
-/// In this order: stop the work when the answer asks for it, so the worker sees the stop as soon as
-/// it wakes; run `note`, which says on the transcript or records on the session whatever the answer
-/// leaves behind; then send the decision. A closed channel means the worker is already gone, so
-/// there is nothing to answer and the loop collects its result.
-///
-/// Nothing here reads what a request carried or what the person typed: the answer type decides
-/// whether it stops and what the worker is told ([`Answered`]), and `reply` only chooses the shape
-/// the worker expects for that kind of question.
-fn reply_to<A: crate::confirm::Answered>(
-    session: &mut Session,
-    cancel: &Cancel,
-    answer_tx: &mpsc::Sender<crate::remote_confirm::Reply>,
-    answer: A,
-    note: impl FnOnce(&mut Session, &A),
-    reply: impl FnOnce(A::Decision) -> crate::remote_confirm::Reply,
-) {
-    // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
-    if answer.stops_the_turn() {
-        stop_what_is_running(session, cancel);
+/// The two ends a loop that draws a worker's questions answers them through: the token that stops
+/// the work and the channel the worker is blocked on.
+struct Replying<'a> {
+    cancel: &'a Cancel,
+    answer_tx: &'a mpsc::Sender<crate::remote_confirm::Reply>,
+}
+
+impl Replying<'_> {
+    /// Hand a question's answer back to the worker that is blocked on it.
+    ///
+    /// In this order: stop the work when the answer asks for it, so the worker sees the stop as soon
+    /// as it wakes; run `note`, which says on the transcript or records on the session whatever the
+    /// answer leaves behind; then send the decision. A closed channel means the worker is already
+    /// gone, so there is nothing to answer and the loop collects its result.
+    ///
+    /// Nothing here reads what a request carried or what the person typed: the answer type decides
+    /// whether it stops and what the worker is told ([`Answered`]), and `wrap` only chooses the
+    /// shape the worker expects for that kind of question.
+    fn reply<A: crate::confirm::Answered>(
+        &self,
+        session: &mut Session,
+        answer: A,
+        note: impl FnOnce(&mut Session, &A),
+        wrap: impl FnOnce(A::Decision) -> crate::remote_confirm::Reply,
+    ) {
+        // Ctrl-C at the prompt is the same request it is anywhere else in a turn: stop.
+        if answer.stops_the_turn() {
+            stop_what_is_running(session, self.cancel);
+        }
+        note(session, &answer);
+        let _ = self.answer_tx.send(wrap(answer.decision()));
     }
-    note(session, &answer);
-    let _ = answer_tx.send(reply(answer.decision()));
+
+    /// [`Replying::reply`] for a question whose answer leaves nothing to say on the transcript.
+    fn plainly<A: crate::confirm::Answered>(
+        &self,
+        session: &mut Session,
+        answer: A,
+        wrap: impl FnOnce(A::Decision) -> crate::remote_confirm::Reply,
+    ) {
+        self.reply(session, answer, |_, _| {}, wrap);
+    }
 }
 
 /// The vetting prompts' standing key: turning auto-vetting on is the interface's own decision, so it
@@ -3630,16 +3639,15 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
 fn drain_worker_until_stopped(
     from_worker: &mpsc::Receiver<crate::remote_confirm::ToMain>,
     wait: Duration,
-    cancel: &Cancel,
-    answer_tx: &mpsc::Sender<crate::remote_confirm::Reply>,
+    replying: &Replying<'_>,
     mut handle: impl FnMut(crate::remote_confirm::ToMain),
 ) -> bool {
     drain_worker(from_worker, wait, |message| {
-        if cancel.is_cancelled()
+        if replying.cancel.is_cancelled()
             && let Some(reply) = refusal(&message)
         {
             // A closed channel means the worker is already gone, as at every other reply.
-            let _ = answer_tx.send(reply);
+            let _ = replying.answer_tx.send(reply);
             return;
         }
         handle(message);
@@ -6719,10 +6727,12 @@ mod tests {
         let mut session = Session::new("none");
         let mut seen_by_the_note = None;
 
-        reply_to(
+        Replying {
+            cancel: &cancel,
+            answer_tx: &answer_tx,
+        }
+        .reply(
             &mut session,
-            &cancel,
-            &answer_tx,
             Answer::Interrupt,
             |session, _| {
                 seen_by_the_note = Some((cancel.is_cancelled(), answer_rx.try_recv().is_err()));
@@ -6754,17 +6764,46 @@ mod tests {
         let cancel = Cancel::new();
         let mut session = Session::new("none");
 
-        reply_to(
-            &mut session,
-            &cancel,
-            &answer_tx,
-            Answer::Approve,
-            |_, _| {},
-            Reply::Fetch,
-        );
+        Replying {
+            cancel: &cancel,
+            answer_tx: &answer_tx,
+        }
+        .reply(&mut session, Answer::Approve, |_, _| {}, Reply::Fetch);
 
         assert!(!cancel.is_cancelled(), "an approval stopped the turn");
         assert_eq!(answer_rx.try_recv(), Ok(Reply::Fetch(Decision::Approve)));
+    }
+
+    /// `plainly` is `reply` with nothing to say on the transcript: a stopping answer still stops the
+    /// work before the decision is sent, the session is left without a note, and exactly one reply
+    /// goes back.
+    #[test]
+    fn a_plain_answer_stops_the_work_notes_nothing_and_replies_once() {
+        use crate::confirm::Answer;
+        use crate::remote_confirm::Reply;
+        use bravebot_agent::confirm::Decision;
+
+        let (answer_tx, answer_rx) = std::sync::mpsc::channel();
+        let cancel = Cancel::new();
+        let mut session = Session::new("none");
+        let before = session.transcript.len();
+        let replying = Replying {
+            cancel: &cancel,
+            answer_tx: &answer_tx,
+        };
+
+        replying.plainly(&mut session, Answer::Approve, Reply::Fetch);
+        assert!(!cancel.is_cancelled(), "an approval stopped the turn");
+        assert_eq!(answer_rx.try_recv(), Ok(Reply::Fetch(Decision::Approve)));
+
+        replying.plainly(&mut session, Answer::Interrupt, Reply::Fetch);
+        assert!(cancel.is_cancelled(), "an interrupt did not stop the turn");
+        assert_eq!(answer_rx.try_recv(), Ok(Reply::Fetch(Decision::Reject)));
+        assert!(
+            answer_rx.try_recv().is_err(),
+            "more than one reply per answer"
+        );
+        assert_eq!(session.transcript.len(), before, "a plain answer noted");
     }
 
     /// A worker that has already gone has dropped its end of the channel. The stop and the note are
@@ -6780,10 +6819,12 @@ mod tests {
         let mut session = Session::new("none");
         let mut noted = false;
 
-        reply_to(
+        Replying {
+            cancel: &cancel,
+            answer_tx: &answer_tx,
+        }
+        .reply(
             &mut session,
-            &cancel,
-            &answer_tx,
             Answer::Interrupt,
             |_, _| noted = true,
             Reply::Fetch,
@@ -6811,8 +6852,12 @@ mod tests {
 
         let cancel = Cancel::new();
         let mut reached_the_screen = Vec::new();
+        let replying = Replying {
+            cancel: &cancel,
+            answer_tx: &answer_tx,
+        };
         let carrying_on =
-            drain_worker_until_stopped(&inbound, Duration::ZERO, &cancel, &answer_tx, |message| {
+            drain_worker_until_stopped(&inbound, Duration::ZERO, &replying, |message| {
                 match message {
                     ToMain::Write(request) => {
                         reached_the_screen.push(request.path);
@@ -6850,11 +6895,14 @@ mod tests {
         outbound.send(write_question("notes.md")).expect("queued");
 
         let mut reached_the_screen = Vec::new();
+        let cancel = Cancel::new();
         drain_worker_until_stopped(
             &inbound,
             Duration::ZERO,
-            &Cancel::new(),
-            &answer_tx,
+            &Replying {
+                cancel: &cancel,
+                answer_tx: &answer_tx,
+            },
             |message| {
                 if let crate::remote_confirm::ToMain::Write(request) = message {
                     reached_the_screen.push(request.path);

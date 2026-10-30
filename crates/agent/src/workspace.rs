@@ -6307,4 +6307,57 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    /// Writes `bytes` to a file named `left` in a fresh scratch directory called `name`, and
+    /// returns its path.
+    fn destination_holding(name: &str, bytes: &[u8]) -> PathBuf {
+        let directory = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch");
+        let path = directory.join("left");
+        std::fs::write(&path, bytes).expect("destination");
+        path
+    }
+
+    /// CRED-11: a destination the line removed or never created has nothing to scan, and the scan
+    /// reports that as no text rather than as an empty file.
+    #[test]
+    fn a_destination_that_is_not_there_has_no_text_to_scan() {
+        let directory = crate::testutil::scratch_dir("left-at-missing");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch");
+
+        assert_eq!(left_at(&directory.join("never-created"), 16), None);
+    }
+
+    /// CRED-11: a destination exactly as large as the budget is scanned, so a credential in a file
+    /// of that size is found.
+    #[test]
+    fn a_destination_exactly_the_size_of_the_budget_is_read_in_full() {
+        let path = destination_holding("left-at-exact", b"0123456789abcdef");
+
+        assert_eq!(left_at(&path, 16).as_deref(), Some("0123456789abcdef"));
+    }
+
+    /// CRED-11: a destination one byte past the budget is passed over rather than truncated, so
+    /// the scan never judges half a file.
+    #[test]
+    fn a_destination_one_byte_past_the_budget_is_not_read() {
+        let path = destination_holding("left-at-over", b"0123456789abcdefg");
+
+        assert_eq!(left_at(&path, 16), None);
+    }
+
+    /// CRED-11: a file that is text with a byte that is not UTF-8 after a credential is still
+    /// scanned, with the bad byte replaced and the credential intact.
+    #[test]
+    fn a_destination_with_a_byte_that_is_not_text_is_decoded_with_the_rest_kept() {
+        // The documented AWS example key, split so the source holds no whole key.
+        let declared = format!("AWS_ACCESS_KEY_ID={}{}\n", "AKIA", "IOSFODNN7EXAMPLE");
+        let mut held = declared.clone().into_bytes();
+        held.push(0xff);
+        let path = destination_holding("left-at-lossy", &held);
+
+        assert_eq!(left_at(&path, 1024), Some(format!("{declared}\u{FFFD}")));
+    }
 }

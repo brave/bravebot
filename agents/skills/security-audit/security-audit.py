@@ -2833,6 +2833,7 @@ def settings_fields(sources):
             "contested",
             "unread",
             "misshapen",
+            "not_obeyed",
         ):
             fields.append(named.group(1))
     return fields

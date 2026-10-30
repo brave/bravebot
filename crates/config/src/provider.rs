@@ -11,6 +11,7 @@
 //! three names no credential and is asked without one, which is what a local Ollama wants.
 
 use crate::Secret;
+use crate::settings::positive;
 use std::fmt;
 use std::time::Duration;
 
@@ -1467,13 +1468,6 @@ fn string(value: Option<&serde_json::Value>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-}
-
-/// A whole number above zero, where the value is one.
-fn positive(value: Option<&serde_json::Value>) -> Option<u64> {
-    value
-        .and_then(serde_json::Value::as_u64)
-        .filter(|figure| *figure > 0)
 }
 
 /// The `env` array: variable names that may hold the token.

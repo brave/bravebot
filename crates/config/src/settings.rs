@@ -146,6 +146,91 @@ const RETENTION_KEY: &str = "retentionDays";
 /// reads both spell it here.
 const CRASH_REPORTS_KEY: &str = "crashReports";
 
+/// Which layers may name a key of [`HOME_ONLY`].
+#[derive(Clone, Copy)]
+enum Entitled {
+    /// The home layer alone.
+    Own,
+    /// The home layer, and the file the command line named.
+    OwnOrNamed,
+    /// The layers [`grants`] answers true for: the home layer, and a named file that resolves
+    /// outside the workspace and outside the directory the session began in.
+    Granting,
+}
+
+impl Entitled {
+    /// Whether a layer with these properties may name the key. `own` is the home layer,
+    /// `named_here` is the file the command line named, and `granting` is [`grants`] for the layer.
+    fn admits(self, own: bool, named_here: bool, granting: bool) -> bool {
+        match self {
+            Self::Own => own,
+            Self::OwnOrNamed => own || named_here,
+            Self::Granting => granting,
+        }
+    }
+}
+
+/// The keys a checkout's settings file may not name, and the layers that may.
+///
+/// [`Settings::layered`] removes each key from a layer that is not entitled to it before the merge,
+/// because the merge unions every name a layer set and a removed key cannot reach
+/// [`Settings::from_map`]. The layer is recorded under the key in `Settings::not_obeyed` and
+/// reported by the accessor named in the comment on its row.
+const HOME_ONLY: &[(&str, Entitled)] = &[
+    // The key picking which of the providers answers: [`Settings::model_ignored`].
+    ("model", Entitled::OwnOrNamed),
+    // A provider block decides where a request is sent and which of the person's environment
+    // variables are read as its credential, so a checkout naming one has to be told the block was
+    // dropped rather than left to conclude the gateway it named is in force:
+    // [`Settings::providers_ignored`].
+    (PROVIDER_BLOCK, Entitled::OwnOrNamed),
+    // The model it names is sent the whole conversation, which makes it a destination, and a
+    // checkout cannot choose one: [`Settings::advisor_ignored`].
+    ("advisorModel", Entitled::OwnOrNamed),
+    // The model it names is sent the whole conversation once the primary fails, which makes it a
+    // destination, and a checkout cannot choose one: [`Settings::fallback_ignored`].
+    ("fallbackModel", Entitled::OwnOrNamed),
+    // The model it names is sent the conversation to summarise and the exchange to judge, which
+    // makes it a destination, and a checkout cannot choose one: [`Settings::summary_ignored`].
+    ("summaryModel", Entitled::OwnOrNamed),
+    // The model it names is sent the whole conversation while the session is in plan mode, which
+    // makes it a destination, and a checkout cannot choose one: [`Settings::plan_ignored`].
+    ("planModel", Entitled::OwnOrNamed),
+    // The model it names is sent the files a processor reads, which makes it a destination, and a
+    // checkout cannot choose one: [`Settings::processor_ignored`].
+    ("processorModel", Entitled::OwnOrNamed),
+    // A definition chosen for every turn is a prompt and a narrowing nobody vouched for where a
+    // checkout wrote it, so only a file the person wrote or named can choose one:
+    // [`Settings::agent_ignored`].
+    ("agent", Entitled::OwnOrNamed),
+    // A style's words open the system prompt, so which one a session starts in is the person's to
+    // say and not a checkout's: [`Settings::style_ignored`].
+    ("style", Entitled::OwnOrNamed),
+    // Naming a directory puts every skill in it in front of the planner, so a checkout's file would
+    // be choosing what the person's home contributes to the prompt (INSTR-17):
+    // [`Settings::shared_skill_directories_ignored`].
+    (SHARED_SKILLS_KEY, Entitled::OwnOrNamed),
+    // The interface is in one language for the whole process and is chosen before the command line
+    // is read, so the one file that can say which is the person's own: a checkout's file would be
+    // choosing the language for whoever opened the checkout: [`Settings::language_ignored`].
+    ("language", Entitled::Own),
+    // A checkout's file choosing when the person's own records are deleted is the case this key is
+    // read from the home layer alone to prevent: [`Settings::retention_ignored`].
+    (RETENTION_KEY, Entitled::Own),
+    // Entitled the way an allow rule is rather than the way `model` is: a named file that resolves
+    // inside the workspace is a checkout's file, and an entry makes a directory reachable and puts
+    // its description in front of the planner (REFER-2): [`Settings::references_ignored`].
+    (REFERENCES_BLOCK, Entitled::Granting),
+    // The same entitlement, for the same reason: the block's free text reaches the planner's
+    // standing instructions on every round, so a checkout's file cannot put it there:
+    // [`Settings::attribution_ignored`].
+    ("attribution", Entitled::Granting),
+    // The same entitlement, for the reason `vetting.auto` has it: a question closed on a clock is
+    // one the person was not asked, so a clock that closes the person's questions is theirs to set
+    // and not the checkout's: [`Settings::ask_idle_ignored`].
+    ("askIdleSeconds", Entitled::Granting),
+];
+
 /// The number of days a record is kept when no `retentionDays` is stated.
 ///
 /// Thirty, which is what Claude Code and Gemini CLI keep a transcript for. The floor is one day,
@@ -361,14 +446,8 @@ pub struct Settings {
     ///
     /// `None` is a question that waits for as long as it takes, which is what a session does when
     /// nobody has said otherwise (ASK-9). It is read from the layers entitled to say it only: see
-    /// `ask_idle_ignored`.
+    /// [`HOME_ONLY`].
     ask_idle_seconds: Option<u64>,
-    /// The layers that named `askIdleSeconds` and were not obeyed, weakest first.
-    ///
-    /// Kept because a question closed on a clock is one the person was not asked, which is what
-    /// `vetting.auto` is kept from a checkout for: a file that arrived with a clone does not get to
-    /// answer for the person.
-    ask_idle_ignored: Vec<PathBuf>,
     /// What the top-level `maxRunningDelegates` key said, if it said a whole positive count.
     ///
     /// `None` is the built-in bound, which belongs to the kernel that holds a turn's tree of
@@ -390,11 +469,6 @@ pub struct Settings {
     /// built-in period. Read from the home layer alone, so [`Settings::layered`] removes the key
     /// from every other layer before the merge.
     retention_days: Option<NonZeroU32>,
-    /// The layers that named `retentionDays` and were not obeyed, weakest first.
-    ///
-    /// Kept because a checkout's file choosing when the person's own records are deleted is the
-    /// case this key is read from the home layer alone to prevent.
-    retention_ignored: Vec<PathBuf>,
     /// The home layer's file, when the period it states cannot be determined.
     ///
     /// Either the file is there and could not be read as a settings document, or its
@@ -472,85 +546,27 @@ pub struct Settings {
     /// Kept so that a machine whose only permission rules are pinned reads as having no settings
     /// of its own, which is what `doctor` says about the files it names.
     layers_said_no_permissions: Option<bool>,
-    /// The layers that named a `provider` block and were not obeyed, weakest first, for `doctor`.
+    /// The layers that named a key of [`HOME_ONLY`] and were not obeyed, weakest first, by key, for
+    /// `doctor`.
     ///
-    /// Kept for the reason `vetting_ignored` is kept: a provider block decides where a request is
-    /// sent and which of the person's environment variables are read as its credential, so a
-    /// checkout naming one has to be told the block was dropped rather than left to conclude the
-    /// gateway it named is in force.
-    provider_ignored: Vec<PathBuf>,
-    /// The layers that named the top-level `model` key and were not obeyed, weakest first.
-    ///
-    /// Kept for the same reason, the key picking which of the providers above answers.
-    model_ignored: Vec<PathBuf>,
-    /// The layers that named `advisorModel` and were not obeyed, weakest first.
-    ///
-    /// Kept for the same reason: the model it names is sent the whole conversation, which makes it
-    /// a destination, and a checkout cannot choose one.
-    advisor_ignored: Vec<PathBuf>,
-    /// The layers that named `fallbackModel` and were not obeyed, weakest first.
-    ///
-    /// Kept for the same reason: the model it names is sent the whole conversation once the
-    /// primary fails, which makes it a destination, and a checkout cannot choose one.
-    fallback_ignored: Vec<PathBuf>,
-    /// The layers that named `summaryModel` and were not obeyed, weakest first.
-    ///
-    /// Kept for the same reason: the model it names is sent the conversation to summarise and the
-    /// exchange to judge, which makes it a destination, and a checkout cannot choose one.
-    summary_ignored: Vec<PathBuf>,
-    /// The layers that named `planModel` and were not obeyed, weakest first.
-    ///
-    /// Kept for the same reason: the model it names is sent the whole conversation while the
-    /// session is in plan mode, which makes it a destination, and a checkout cannot choose one.
-    plan_ignored: Vec<PathBuf>,
-    /// The layers that named `processorModel` and were not obeyed, weakest first.
-    ///
-    /// Kept for the same reason: the model it names is sent the files a processor reads, which
-    /// makes it a destination, and a checkout cannot choose one.
-    processor_ignored: Vec<PathBuf>,
-    /// The layers that named `agent` and were not obeyed, weakest first.
-    ///
-    /// Kept because a definition chosen for every turn is a prompt and a narrowing nobody vouched
-    /// for where a checkout wrote it, so only a file the person wrote or named can choose one.
-    agent_ignored: Vec<PathBuf>,
+    /// Kept rather than dropped because a setting that looks like configuration and does nothing
+    /// is the one worth saying out loud: somebody who wrote one into a checkout has to be told it
+    /// was dropped rather than left to wonder why the file they named is not in force. A key is
+    /// present only once a layer was refused it, so no entry holds an empty list.
+    not_obeyed: BTreeMap<&'static str, Vec<PathBuf>>,
     /// What the top-level `style` key named, if it named anything.
     ///
     /// The word as the file spelled it. Whether it names a style is settled where the styles are
     /// looked up (INSTR-12), which is the crate that holds them.
     style: Option<String>,
-    /// The layers that named `style` and were not obeyed, weakest first.
-    ///
-    /// Kept because a style's words open the system prompt, so which one a session starts in is the
-    /// person's to say and not a checkout's.
-    style_ignored: Vec<PathBuf>,
     /// The directories the `sharedSkillDirectories` key named, as the file spelled them.
     ///
     /// Which of them is one this program reads is settled where the skills are found (INSTR-17).
+    /// Read from the layers [`HOME_ONLY`] entitles, since naming a directory puts every skill in it
+    /// in front of the planner.
     shared_skills: Vec<String>,
-    /// The layers that named `sharedSkillDirectories` and were not obeyed, weakest first.
-    ///
-    /// Kept because naming a directory puts every skill in it in front of the planner, so a
-    /// checkout's file would be choosing what the person's home contributes to the prompt.
-    shared_skills_ignored: Vec<PathBuf>,
     /// The catalog the person's own file asked the interface to be read in, as the file spelled it.
     language: Option<String>,
-    /// The layers that named `language` and were not obeyed, weakest first.
-    ///
-    /// Kept because the interface is in one language for the whole process and is chosen before
-    /// the command line is read, so the one file that can say which is the person's own: a
-    /// checkout's file would be choosing the language for whoever opened the checkout.
-    language_ignored: Vec<PathBuf>,
-    /// The layers that named `references` and were not obeyed, weakest first.
-    ///
-    /// Kept because an entry makes a directory reachable and puts its description in front of the
-    /// planner, so a checkout's file would be choosing both for whoever opened the checkout.
-    references_ignored: Vec<PathBuf>,
-    /// The layers that named `attribution` and were not obeyed, weakest first.
-    ///
-    /// Kept because the block's free text is stated to the planner on every round, so a checkout's
-    /// file would be putting words of its own choosing in front of it for whoever opened the
-    /// checkout.
-    attribution_ignored: Vec<PathBuf>,
     /// The entries of the `references` block that name a directory, in alias order (REFER-1).
     references: Vec<Reference>,
     /// The aliases of entries this build could not use, and why (REFER-1).
@@ -981,10 +997,7 @@ impl Settings {
     /// As [`Settings::written_crash_reports`], for a named home, so a test needs no ambient one.
     fn crash_reports_in(home: Option<PathBuf>) -> Option<bool> {
         let document = read(&user_settings_file(&home?))?;
-        match document.root.get(CRASH_REPORTS_KEY) {
-            Some(serde_json::Value::Bool(on)) => Some(*on),
-            _ => None,
-        }
+        flag(&document.root, CRASH_REPORTS_KEY)
     }
 
     /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
@@ -1074,28 +1087,14 @@ impl Settings {
         let mut sandbox_ignored = Vec::new();
         let mut sandbox_unreadable = Vec::new();
         let mut sandbox_hold_back_temporary = false;
-        // Settled per layer for the same reason as `vetting`: a provider block or a `model` key a
-        // checkout wrote picks where a request is sent and which of the person's variables are read
-        // as its credential, so the merge must never see it. `model` and `provider` are removed
-        // from the layer's own root below, before it reaches the merge.
-        let mut provider_ignored = Vec::new();
-        let mut model_ignored = Vec::new();
-        let mut advisor_ignored = Vec::new();
-        let mut fallback_ignored = Vec::new();
-        let mut summary_ignored = Vec::new();
-        let mut plan_ignored = Vec::new();
-        let mut processor_ignored = Vec::new();
-        let mut agent_ignored = Vec::new();
-        let mut style_ignored = Vec::new();
-        let mut shared_skills_ignored = Vec::new();
-        let mut language_ignored = Vec::new();
-        let mut ask_idle_ignored = Vec::new();
+        // Settled per layer for the same reason as `vetting`: a key of [`HOME_ONLY`] a checkout
+        // wrote picks where a request is sent, what the planner is told, or what the person's own
+        // records are kept for, so the merge must never see it. Each is removed from the layer's
+        // own root below, before it reaches the merge, and the file is kept under the key.
+        let mut not_obeyed: BTreeMap<&'static str, Vec<PathBuf>> = BTreeMap::new();
         // Settled per layer for the reason `model` is: how long the person's own records are kept is
         // theirs to state, and the merge keeps whichever file spoke last.
-        let mut retention_ignored = Vec::new();
         let mut retention_unreadable = Vec::new();
-        let mut references_ignored = Vec::new();
-        let mut attribution_ignored = Vec::new();
         let mut misshapen = Vec::new();
         let mut mcp_declared = Vec::new();
         let mut mcp_requested: Vec<(PathBuf, String)> = Vec::new();
@@ -1159,8 +1158,15 @@ impl Settings {
                 continue;
             };
             let named_here = Some(&path) == named_path.as_ref();
-            if !own && root.remove(RETENTION_KEY) {
-                retention_ignored.push(path.clone());
+            // Entitled the way an allow rule is for the keys marked [`Entitled::Granting`]: a named
+            // file that resolves inside the workspace is a checkout's file.
+            let granting = grants(&path, home_layer.as_deref(), named, cwd, started);
+            // Removed here rather than read and dropped later, because the merge unions every name
+            // a layer set and a removed key cannot reach [`Settings::from_map`] at all.
+            for (key, entitled) in HOME_ONLY {
+                if !entitled.admits(own, named_here, granting) && root.remove(key) {
+                    not_obeyed.entry(*key).or_default().push(path.clone());
+                }
             }
             if own
                 && root
@@ -1168,63 +1174,6 @@ impl Settings {
                     .is_some_and(|stated| retention_days(stated).is_none())
             {
                 retention_unreadable.push(path.clone());
-            }
-            if !own && !named_here {
-                // The keys that pick a backend are the person's to pick, not a checkout's: removed
-                // here rather than read and dropped later, because the merge unions every name a
-                // layer set and a removed key cannot reach [`Settings::from_map`] at all.
-                if root.remove("model") {
-                    model_ignored.push(path.clone());
-                }
-                if root.remove(PROVIDER_BLOCK) {
-                    provider_ignored.push(path.clone());
-                }
-                if root.remove("advisorModel") {
-                    advisor_ignored.push(path.clone());
-                }
-                if root.remove("fallbackModel") {
-                    fallback_ignored.push(path.clone());
-                }
-                if root.remove("summaryModel") {
-                    summary_ignored.push(path.clone());
-                }
-                if root.remove("planModel") {
-                    plan_ignored.push(path.clone());
-                }
-                if root.remove("processorModel") {
-                    processor_ignored.push(path.clone());
-                }
-                if root.remove("agent") {
-                    agent_ignored.push(path.clone());
-                }
-                if root.remove("style") {
-                    style_ignored.push(path.clone());
-                }
-                if root.remove(SHARED_SKILLS_KEY) {
-                    shared_skills_ignored.push(path.clone());
-                }
-            }
-            // Read before the command line is, so the file a flag names is not yet known to the
-            // reader that answers for the interface: the home layer alone says which language.
-            if !own && root.remove("language") {
-                language_ignored.push(path.clone());
-            }
-            // Entitled the way an allow rule is rather than the way `model` is: a named file that
-            // resolves inside the workspace is a checkout's file, and a reference makes a
-            // directory reachable and puts its description in front of the planner (REFER-2).
-            let granting = grants(&path, home_layer.as_deref(), named, cwd, started);
-            if !granting && root.remove(REFERENCES_BLOCK) {
-                references_ignored.push(path.clone());
-            }
-            // The same entitlement, for the same reason: the value is free text that reaches the
-            // planner's standing instructions, so a checkout's file cannot put it there.
-            if !granting && root.remove("attribution") {
-                attribution_ignored.push(path.clone());
-            }
-            // The same entitlement, for the reason `vetting.auto` has it: a clock that closes the
-            // person's questions is theirs to set, and not the checkout's.
-            if !granting && root.remove("askIdleSeconds") {
-                ask_idle_ignored.push(path.clone());
             }
             if root.contains_key(VETTING_BLOCK) {
                 match own {
@@ -1468,28 +1417,14 @@ impl Settings {
             settings.env.insert(name, value);
         }
         settings.network_ignored = network_ignored;
-        // Overwritten rather than merged in, for the reason `provider_ignored` is kept: what every
+        // Overwritten rather than merged in, for the reason `not_obeyed` is kept: what every
         // layer but the named one stated has been dropped above, so what stands here is the home
         // layer's own or the file the person named, and a saved pick cannot be outranked by a file
         // it was never told about.
         settings.model_outranks_a_pick = model_above_home && settings.model.is_some();
         settings.effort_outranks_a_pick = effort_above_home && settings.effort.is_some();
-        settings.provider_ignored = provider_ignored;
-        settings.model_ignored = model_ignored;
-        settings.advisor_ignored = advisor_ignored;
-        settings.fallback_ignored = fallback_ignored;
-        settings.summary_ignored = summary_ignored;
-        settings.plan_ignored = plan_ignored;
-        settings.processor_ignored = processor_ignored;
-        settings.agent_ignored = agent_ignored;
-        settings.style_ignored = style_ignored;
-        settings.shared_skills_ignored = shared_skills_ignored;
-        settings.language_ignored = language_ignored;
-        settings.ask_idle_ignored = ask_idle_ignored;
-        settings.retention_ignored = retention_ignored;
+        settings.not_obeyed = not_obeyed;
         settings.retention_unreadable = retention_unreadable;
-        settings.references_ignored = references_ignored;
-        settings.attribution_ignored = attribution_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
         // they keep of it by now, so the rest is a spare copy of a gateway token.
         settings
@@ -1518,16 +1453,17 @@ impl Settings {
     /// afterwards would need this logic twice, once per block, and the second copy is where the two
     /// would drift.
     pub(crate) fn from_map(root: &serde_json::Map<String, serde_json::Value>) -> Self {
-        let env = match root.get("env") {
-            Some(serde_json::Value::Object(block)) => block
-                .iter()
-                .filter_map(|(name, value)| match value {
-                    serde_json::Value::String(value) => Some((name.clone(), value.clone())),
-                    _ => None,
-                })
-                .collect(),
-            _ => BTreeMap::new(),
-        };
+        let env: BTreeMap<String, String> = object(root, "env")
+            .map(|block| {
+                block
+                    .iter()
+                    .filter_map(|(name, value)| match value {
+                        serde_json::Value::String(value) => Some((name.clone(), value.clone())),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let (references, references_unread) = reference_entries(root);
         Self {
             env,
@@ -1543,8 +1479,6 @@ impl Settings {
             processor_model: word(root, "processorModel")
                 .and_then(|name| processor_model_named(&name)),
             agent: word(root, "agent"),
-            references_ignored: Vec::new(),
-            attribution_ignored: Vec::new(),
             references,
             references_unread,
             effort: word(root, "effort"),
@@ -1572,42 +1506,19 @@ impl Settings {
                 Some(serde_json::Value::String(text)) => crate::limit::parse_count(text),
                 _ => None,
             },
-            terminal_title: match root.get("terminalTitle") {
-                Some(serde_json::Value::Bool(on)) => Some(*on),
-                _ => None,
-            },
-            suggestions: match root.get("suggestions") {
-                Some(serde_json::Value::Bool(on)) => Some(*on),
-                _ => None,
-            },
-            update_check: match root.get("updateCheck") {
-                Some(serde_json::Value::Bool(on)) => Some(*on),
-                _ => None,
-            },
-            away_summary_enabled: match root.get("awaySummaryEnabled") {
-                Some(serde_json::Value::Bool(on)) => Some(*on),
-                _ => None,
-            },
-            away_summary_idle_seconds: root
-                .get("awaySummaryIdleSeconds")
-                .and_then(serde_json::Value::as_u64)
-                .filter(|seconds| *seconds > 0),
-            ask_idle_seconds: root
-                .get("askIdleSeconds")
-                .and_then(serde_json::Value::as_u64)
-                .filter(|seconds| *seconds > 0),
-            ask_idle_ignored: Vec::new(),
+            terminal_title: flag(root, "terminalTitle"),
+            suggestions: flag(root, "suggestions"),
+            update_check: flag(root, "updateCheck"),
+            away_summary_enabled: flag(root, "awaySummaryEnabled"),
+            away_summary_idle_seconds: positive(root.get("awaySummaryIdleSeconds")),
+            ask_idle_seconds: positive(root.get("askIdleSeconds")),
             // A count past what a `u32` holds is more delegates than a turn could start, which is
             // no bound at all, so it is read as the largest the kernel counts rather than dropped.
-            max_running_delegates: root
-                .get("maxRunningDelegates")
-                .and_then(serde_json::Value::as_u64)
-                .filter(|count| *count > 0)
+            max_running_delegates: positive(root.get("maxRunningDelegates"))
                 .map(|count| u32::try_from(count).unwrap_or(u32::MAX)),
             notification_method: word(root, "notificationMethod"),
             notification_condition: word(root, "notificationCondition"),
             retention_days: root.get(RETENTION_KEY).and_then(retention_days),
-            retention_ignored: Vec::new(),
             retention_unreadable: Vec::new(),
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
@@ -1649,7 +1560,7 @@ impl Settings {
             wheel_rows: wheel_rows(root),
             tui_mouse: tui_mouse(root),
             tui_context_menu: tui_context_menu(root),
-            deep_links: root.get("deepLinks").and_then(serde_json::Value::as_bool),
+            deep_links: flag(root, "deepLinks"),
             // The word one root states, there being no file to name. [`Settings::layered`]
             // overwrites it with what the layers come to.
             run_network: match network_word(root) {
@@ -1685,20 +1596,10 @@ impl Settings {
             chatgpt_models: crate::provider::account_models(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
-            provider_ignored: Vec::new(),
-            model_ignored: Vec::new(),
-            advisor_ignored: Vec::new(),
-            fallback_ignored: Vec::new(),
-            summary_ignored: Vec::new(),
-            plan_ignored: Vec::new(),
-            processor_ignored: Vec::new(),
-            agent_ignored: Vec::new(),
+            not_obeyed: BTreeMap::new(),
             style: word(root, "style"),
-            style_ignored: Vec::new(),
             shared_skills: strings(root, SHARED_SKILLS_KEY),
-            shared_skills_ignored: Vec::new(),
             language: word(root, "language"),
-            language_ignored: Vec::new(),
         }
     }
 
@@ -1933,7 +1834,7 @@ impl Settings {
 
     /// The files that named `retentionDays` from a layer not entitled to, weakest first.
     pub fn retention_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.retention_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed(RETENTION_KEY)
     }
 
     /// The home layer's file when [`Settings::retention`] is paused for want of a readable period.
@@ -2354,7 +2255,6 @@ impl Settings {
             && self.notification_method.is_none()
             && self.notification_condition.is_none()
             && self.retention_days.is_none()
-            && self.retention_ignored.is_empty()
             && self.retention_unreadable.is_empty()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
@@ -2409,26 +2309,13 @@ impl Settings {
             // And a file whose only key is one nothing here reads: `doctor` names that file, so
             // reporting it as no settings at all would contradict the line under it.
             && self.unread.is_empty()
-            // And a file that named a backend or a model from a layer not entitled to, which
+            // And a file that named a key of [`HOME_ONLY`] from a layer not entitled to, which
             // `doctor` names for the reason it names the two above.
-            && self.provider_ignored.is_empty()
-            && self.model_ignored.is_empty()
-            && self.advisor_ignored.is_empty()
-            && self.fallback_ignored.is_empty()
-            && self.summary_ignored.is_empty()
-            && self.plan_ignored.is_empty()
-            && self.processor_ignored.is_empty()
-            && self.agent_ignored.is_empty()
-            && self.style_ignored.is_empty()
+            && self.not_obeyed.values().all(Vec::is_empty)
             && self.style.is_none()
-            && self.shared_skills_ignored.is_empty()
             && self.shared_skills.is_empty()
-            && self.language_ignored.is_empty()
             && self.language.is_none()
-            && self.ask_idle_ignored.is_empty()
             && self.ask_idle_seconds.is_none()
-            && self.references_ignored.is_empty()
-            && self.attribution_ignored.is_empty()
             // A file that holds only a reference, or only a name `doctor` reports as ignored, is
             // listed as a settings layer a few lines under this answer, so it cannot be absence.
             && self.references.is_empty()
@@ -2440,6 +2327,16 @@ impl Settings {
             && self.plan_model.is_none()
             && self.processor_model.is_none()
             && self.agent.is_none()
+    }
+
+    /// The files that named `key`, a key of [`HOME_ONLY`], from a layer not entitled to it,
+    /// weakest first.
+    fn not_obeyed(&self, key: &str) -> impl Iterator<Item = &Path> {
+        self.not_obeyed
+            .get(key)
+            .into_iter()
+            .flatten()
+            .map(PathBuf::as_path)
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -2472,37 +2369,37 @@ impl Settings {
     /// variables are read as its credential, so a checkout naming one is dropped here and named
     /// rather than obeyed.
     pub fn providers_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.provider_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed(PROVIDER_BLOCK)
     }
 
     /// The files that named the top-level `model` key from a layer not entitled to, weakest first.
     pub fn model_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.model_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed("model")
     }
 
     /// The files that named `advisorModel` from a layer not entitled to, weakest first.
     pub fn advisor_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.advisor_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed("advisorModel")
     }
 
     /// The files that named `fallbackModel` from a layer not entitled to, weakest first.
     pub fn fallback_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.fallback_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed("fallbackModel")
     }
 
     /// The files that named `summaryModel` from a layer not entitled to, weakest first.
     pub fn summary_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.summary_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed("summaryModel")
     }
 
     /// The files that named `planModel` from a layer not entitled to, weakest first.
     pub fn plan_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.plan_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed("planModel")
     }
 
     /// The files that named `processorModel` from a layer not entitled to, weakest first.
     pub fn processor_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.processor_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed("processorModel")
     }
 
     /// The output style the settings in force named, as the file spelled it (INSTR-12).
@@ -2512,7 +2409,7 @@ impl Settings {
 
     /// The files that named `style` from a layer not entitled to, weakest first.
     pub fn style_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.style_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed("style")
     }
 
     /// The directories the settings in force named as ones to read skills from, as the file spelled
@@ -2523,7 +2420,7 @@ impl Settings {
 
     /// The files that named `sharedSkillDirectories` from a layer not entitled to, weakest first.
     pub fn shared_skill_directories_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.shared_skills_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed(SHARED_SKILLS_KEY)
     }
 
     /// The language the person's own file asked the interface to be read in, as the file spelled it
@@ -2537,7 +2434,7 @@ impl Settings {
 
     /// The files that named `language` from a layer other than the person's own, weakest first.
     pub fn language_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.language_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed("language")
     }
 
     /// How many seconds a question the planner puts waits with no key pressed before it is closed
@@ -2553,22 +2450,22 @@ impl Settings {
 
     /// The files that named `askIdleSeconds` from a layer not entitled to, weakest first.
     pub fn ask_idle_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.ask_idle_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed("askIdleSeconds")
     }
 
     /// The files that named `agent` from a layer not entitled to, weakest first.
     pub fn agent_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.agent_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed("agent")
     }
 
     /// The layers that wrote `references` without being entitled to, weakest first.
     pub fn references_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.references_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed(REFERENCES_BLOCK)
     }
 
     /// The layers that wrote `attribution` without being entitled to, weakest first.
     pub fn attribution_ignored(&self) -> impl Iterator<Item = &Path> {
-        self.attribution_ignored.iter().map(PathBuf::as_path)
+        self.not_obeyed("attribution")
     }
 
     /// The directories the `references` block names, by alias (REFER-1).
@@ -2987,6 +2884,35 @@ pub(crate) fn word(root: &serde_json::Map<String, serde_json::Value>, key: &str)
     }
 }
 
+/// The object under `key` in `root`, or `None` where the key is absent or holds anything else: an
+/// array, a string, a number, a boolean or `null`.
+pub(crate) fn object<'a>(
+    root: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    match root.get(key) {
+        Some(serde_json::Value::Object(block)) => Some(block),
+        _ => None,
+    }
+}
+
+/// The boolean under `key` in `root`, or `None` where the key is absent or holds anything else.
+///
+/// A real boolean and nothing else: `"true"`, `1` and `null` are absence, with no coercion.
+pub(crate) fn flag(root: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<bool> {
+    root.get(key).and_then(serde_json::Value::as_bool)
+}
+
+/// A whole number above zero, where the value is one.
+///
+/// Zero is absence, since it is the number somebody writes meaning "no cap". A negative number, a
+/// fractional one, a string and a missing value are absence too.
+pub(crate) fn positive(value: Option<&serde_json::Value>) -> Option<u64> {
+    value
+        .and_then(serde_json::Value::as_u64)
+        .filter(|figure| *figure > 0)
+}
+
 /// The `vetting` block's `auto` key, as a boolean and nothing else.
 ///
 /// A boolean rather than a word, because this is the one value here that is not a name being passed
@@ -2995,13 +2921,7 @@ pub(crate) fn word(root: &serde_json::Map<String, serde_json::Value>, key: &str)
 /// the `env` block gets, and deliberately: a file that meant to turn this on and mistyped the value
 /// leaves the prompt appearing, which is the direction to be wrong in.
 fn auto_vetting(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
-    match root.get(VETTING_BLOCK) {
-        Some(serde_json::Value::Object(block)) => match block.get("auto") {
-            Some(serde_json::Value::Bool(auto)) => Some(*auto),
-            _ => None,
-        },
-        _ => None,
-    }
+    object(root, VETTING_BLOCK).and_then(|block| flag(block, "auto"))
 }
 
 /// The `permissions` keys that only ever refuse, as one layer stated them.
@@ -3108,7 +3028,7 @@ fn strictest(one: Option<bool>, other: Option<bool>) -> Option<bool> {
 pub(crate) fn narrowing_stated(
     root: &serde_json::Map<String, serde_json::Value>,
 ) -> (Narrowing, Vec<&'static str>) {
-    let Some(serde_json::Value::Object(block)) = root.get(PERMISSIONS_BLOCK) else {
+    let Some(block) = object(root, PERMISSIONS_BLOCK) else {
         return (Narrowing::default(), Vec::new());
     };
     let mut unreadable = Vec::new();
@@ -3215,25 +3135,23 @@ fn requested_servers(root: &serde_json::Map<String, serde_json::Value>) -> Vec<S
 
 /// What one layer's `env` block set a name to, when it set it to a string.
 fn env_string(root: &serde_json::Map<String, serde_json::Value>, name: &str) -> Option<String> {
-    match root.get("env") {
-        Some(serde_json::Value::Object(block)) => match block.get(name) {
-            Some(serde_json::Value::String(value)) => Some(value.clone()),
-            _ => None,
-        },
+    match object(root, "env")?.get(name) {
+        Some(serde_json::Value::String(value)) => Some(value.clone()),
         _ => None,
     }
 }
 
 /// The variables one layer's `env` block sets, for working out which layer won a name.
 fn env_names(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
-    match root.get("env") {
-        Some(serde_json::Value::Object(block)) => block
-            .iter()
-            .filter(|(_, value)| value.is_string())
-            .map(|(name, _)| name.clone())
-            .collect(),
-        _ => Vec::new(),
-    }
+    object(root, "env")
+        .map(|block| {
+            block
+                .iter()
+                .filter(|(_, value)| value.is_string())
+                .map(|(name, _)| name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The top-level keys one layer set that nothing here reads (BACKEND-36).
@@ -3420,7 +3338,7 @@ fn merge_run(
 /// dropped rather than refused, on the same footing as everything else here: a half-typed file must
 /// not stop a session, and the built-in set still holds whatever this says.
 fn scrub_list(root: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
-    let Some(serde_json::Value::Object(run)) = root.get("run") else {
+    let Some(run) = object(root, "run") else {
         return Vec::new();
     };
     let Some(serde_json::Value::Array(names)) = run.get("scrubEnv") else {
@@ -3477,7 +3395,7 @@ fn reference_entries(
 ) -> (Vec<Reference>, Vec<(String, ReferenceFault)>) {
     let mut used = Vec::new();
     let mut unread = Vec::new();
-    let Some(serde_json::Value::Object(block)) = root.get(REFERENCES_BLOCK) else {
+    let Some(block) = object(root, REFERENCES_BLOCK) else {
         return (used, unread);
     };
     for (alias, entry) in block {
@@ -3522,7 +3440,7 @@ fn reference_entries(
 /// carry nothing. Anything that is not a string is absence, on the same footing as everything else
 /// here: a half-typed file leaves the layers under it in force rather than refusing to start.
 fn attribution_block(root: &serde_json::Map<String, serde_json::Value>) -> Attribution {
-    let Some(serde_json::Value::Object(block)) = root.get("attribution") else {
+    let Some(block) = object(root, "attribution") else {
         return Attribution::default();
     };
     let text = |name: &str| match block.get(name) {
@@ -3552,7 +3470,7 @@ fn strings_block(
     root: &serde_json::Map<String, serde_json::Value>,
     name: &str,
 ) -> BTreeMap<String, String> {
-    let Some(serde_json::Value::Object(block)) = root.get(name) else {
+    let Some(block) = object(root, name) else {
         return BTreeMap::new();
     };
     block
@@ -3573,18 +3491,12 @@ fn strings_block(
 /// Zero is absence too. It is the number somebody writes meaning "no cap", and read literally it
 /// is a search permitted to open no file at all, which answers every pattern with nothing found.
 fn search_caps(root: &serde_json::Map<String, serde_json::Value>) -> SearchCaps {
-    let Some(serde_json::Value::Object(block)) = root.get("search") else {
+    let Some(block) = object(root, "search") else {
         return SearchCaps::default();
     };
-    let count = |name: &str| {
-        block
-            .get(name)
-            .and_then(serde_json::Value::as_u64)
-            .filter(|cap| *cap > 0)
-    };
     SearchCaps {
-        files: count("maxFiles").and_then(|files| usize::try_from(files).ok()),
-        time: count("maxSeconds").map(Duration::from_secs),
+        files: positive(block.get("maxFiles")).and_then(|files| usize::try_from(files).ok()),
+        time: positive(block.get("maxSeconds")).map(Duration::from_secs),
     }
 }
 
@@ -3596,13 +3508,7 @@ fn search_caps(root: &serde_json::Map<String, serde_json::Value>) -> SearchCaps 
 /// count is absence too, so a half-typed file leaves the built-in cap in force rather than stopping
 /// a session.
 fn run_output_cap(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize> {
-    let serde_json::Value::Object(run) = root.get("run")? else {
-        return None;
-    };
-    run.get("maxOutput")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|cap| *cap > 0)
-        .and_then(|cap| usize::try_from(cap).ok())
+    positive(object(root, "run")?.get("maxOutput")).and_then(|cap| usize::try_from(cap).ok())
 }
 
 /// The `download.maxBytes` value: the most one `download_url` call may write to a file.
@@ -3612,14 +3518,7 @@ fn run_output_cap(root: &serde_json::Map<String, serde_json::Value>) -> Option<u
 /// every one. A value that is not a whole count is absence too, so a half-typed file leaves the
 /// built-in cap in force rather than stopping a session.
 fn download_max_bytes(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize> {
-    let serde_json::Value::Object(download) = root.get("download")? else {
-        return None;
-    };
-    download
-        .get("maxBytes")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|cap| *cap > 0)
-        .and_then(|cap| usize::try_from(cap).ok())
+    positive(object(root, "download")?.get("maxBytes")).and_then(|cap| usize::try_from(cap).ok())
 }
 
 /// The `run.defaultSeconds` and `run.maxSeconds` figures: how long a command may run.
@@ -3633,18 +3532,12 @@ fn download_max_bytes(root: &serde_json::Map<String, serde_json::Value>) -> Opti
 /// Each is read on its own. A file raising the ceiling says nothing about the default, which is what
 /// lets somebody allow one long run without giving up on noticing a program that hangs.
 fn run_deadlines(root: &serde_json::Map<String, serde_json::Value>) -> RunDeadlines {
-    let Some(serde_json::Value::Object(run)) = root.get("run") else {
+    let Some(run) = object(root, "run") else {
         return RunDeadlines::default();
     };
-    let seconds = |name: &str| {
-        run.get(name)
-            .and_then(serde_json::Value::as_u64)
-            .filter(|count| *count > 0)
-            .map(Duration::from_secs)
-    };
     RunDeadlines {
-        default: seconds("defaultSeconds"),
-        ceiling: seconds("maxSeconds"),
+        default: positive(run.get("defaultSeconds")).map(Duration::from_secs),
+        ceiling: positive(run.get("maxSeconds")).map(Duration::from_secs),
     }
 }
 
@@ -3664,7 +3557,7 @@ pub(crate) enum NetworkStated {
 /// something a reader has to know the polarity of. Anything else is reported by `doctor` and is
 /// absence, which leaves the network as open as it was.
 pub(crate) fn network_word(root: &serde_json::Map<String, serde_json::Value>) -> NetworkStated {
-    let Some(serde_json::Value::Object(run)) = root.get("run") else {
+    let Some(run) = object(root, "run") else {
         return NetworkStated::Absent;
     };
     match run.get("network") {
@@ -3706,10 +3599,10 @@ pub(crate) fn filesystem_list(
     root: &serde_json::Map<String, serde_json::Value>,
     list: bravebot_sandbox::rules::List,
 ) -> ListStated {
-    let Some(serde_json::Value::Object(sandbox)) = root.get("sandbox") else {
+    let Some(sandbox) = object(root, "sandbox") else {
         return ListStated::Absent;
     };
-    let Some(serde_json::Value::Object(filesystem)) = sandbox.get("filesystem") else {
+    let Some(filesystem) = object(sandbox, "filesystem") else {
         return ListStated::Absent;
     };
     match filesystem.get(list.key()) {
@@ -3773,29 +3666,17 @@ fn filesystem_target(
 /// interface that moves the view, so the bound is applied there rather than here, which keeps the
 /// range written down once.
 fn wheel_rows(root: &serde_json::Map<String, serde_json::Value>) -> Option<usize> {
-    let serde_json::Value::Object(tui) = root.get("tui")? else {
-        return None;
-    };
-    tui.get("wheelRows")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|rows| *rows > 0)
-        .and_then(|rows| usize::try_from(rows).ok())
+    positive(object(root, "tui")?.get("wheelRows")).and_then(|rows| usize::try_from(rows).ok())
 }
 
 /// The `tui.mouse` switch, read the way the top-level booleans are: only a real boolean counts.
 fn tui_mouse(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
-    let serde_json::Value::Object(tui) = root.get("tui")? else {
-        return None;
-    };
-    tui.get("mouse").and_then(serde_json::Value::as_bool)
+    object(root, "tui").and_then(|tui| flag(tui, "mouse"))
 }
 
 /// The `tui.contextMenu` switch, read as `tui.mouse` is: only a real boolean counts.
 fn tui_context_menu(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
-    let serde_json::Value::Object(tui) = root.get("tui")? else {
-        return None;
-    };
-    tui.get("contextMenu").and_then(serde_json::Value::as_bool)
+    object(root, "tui").and_then(|tui| flag(tui, "contextMenu"))
 }
 
 /// Whether `character` separates one segment of a path from the next on this host.
@@ -3913,7 +3794,7 @@ impl ManagedRules {
 
 pub(crate) fn managed_rules(root: &serde_json::Map<String, serde_json::Value>) -> ManagedRules {
     let misshapen = misshapen_rule_lists(root, &["deny", "ask"]);
-    let Some(serde_json::Value::Object(block)) = root.get(PERMISSIONS_BLOCK) else {
+    let Some(block) = object(root, PERMISSIONS_BLOCK) else {
         return ManagedRules {
             misshapen,
             ..ManagedRules::default()
@@ -3945,7 +3826,7 @@ pub(crate) fn managed_rules(root: &serde_json::Map<String, serde_json::Value>) -
 /// [`narrowing_stated`] instead, and are not rules: neither names a family, a path or a host, so
 /// neither is a line this hands to the rule language. See [`Narrowing`].
 fn permission_lists(root: &serde_json::Map<String, serde_json::Value>) -> PermissionLists {
-    let Some(serde_json::Value::Object(block)) = root.get(PERMISSIONS_BLOCK) else {
+    let Some(block) = object(root, PERMISSIONS_BLOCK) else {
         return PermissionLists::default();
     };
     let mut unreadable = Vec::new();
@@ -4136,6 +4017,76 @@ mod tests {
         match stated {
             serde_json::Value::Object(root) => root,
             _ => panic!("a layer is a document"),
+        }
+    }
+
+    /// `object` returns a block only for a JSON object, so an array, a string, a number, a
+    /// boolean, `null` or a missing key does not read as an empty block.
+    #[test]
+    fn object_reads_only_a_json_object() {
+        let root = layer(serde_json::json!({
+            "block": {"inner": 1},
+            "empty": {},
+            "list": [],
+            "text": "{}",
+            "count": 1,
+            "on": true,
+            "nothing": null,
+        }));
+        assert_eq!(
+            object(&root, "block").map(|block| block.len()),
+            Some(1),
+            "an object is read"
+        );
+        assert!(object(&root, "empty").is_some_and(serde_json::Map::is_empty));
+        for key in ["list", "text", "count", "on", "nothing", "absent"] {
+            assert!(object(&root, key).is_none(), "{key} is not an object");
+        }
+    }
+
+    /// `flag` returns a value only for a real boolean, so a quoted `"true"`, a number and `null`
+    /// are absence, and `false` is kept as a stated answer.
+    #[test]
+    fn flag_reads_only_a_real_boolean() {
+        let root = layer(serde_json::json!({
+            "yes": true,
+            "no": false,
+            "quoted": "true",
+            "one": 1,
+            "nothing": null,
+            "block": {},
+        }));
+        assert_eq!(flag(&root, "yes"), Some(true));
+        assert_eq!(flag(&root, "no"), Some(false));
+        for key in ["quoted", "one", "nothing", "block", "absent"] {
+            assert_eq!(flag(&root, key), None, "{key} is not a boolean");
+        }
+    }
+
+    /// `positive` returns a count only for a whole number above zero, so zero, a negative, a
+    /// fraction, a string and a missing value are absence, and the largest `u64` is kept.
+    #[test]
+    fn positive_reads_only_a_whole_number_above_zero() {
+        let root = layer(serde_json::json!({
+            "one": 1,
+            "largest": u64::MAX,
+            "zero": 0,
+            "negative": -1,
+            "fraction": 1.5,
+            "text": "5",
+            "nothing": null,
+            "on": true,
+        }));
+        assert_eq!(positive(root.get("one")), Some(1));
+        assert_eq!(positive(root.get("largest")), Some(u64::MAX));
+        for key in [
+            "zero", "negative", "fraction", "text", "nothing", "on", "absent",
+        ] {
+            assert_eq!(
+                positive(root.get(key)),
+                None,
+                "{key} is not a positive count"
+            );
         }
     }
 
@@ -8007,6 +7958,155 @@ mod tests {
             .read();
         assert!(settings.attribution().is_empty());
         assert_eq!(settings.attribution_ignored().count(), 1);
+    }
+
+    /// The named key, the value a layer states for it, and whether a file the command line named
+    /// outside the workspace and one inside it are refused the key. Written out here and not read
+    /// from [`HOME_ONLY`], so a row given another rule disagrees with it.
+    const HOME_ONLY_EXPECTED: &[(&str, bool, bool)] = &[
+        ("model", false, false),
+        ("provider", false, false),
+        ("advisorModel", false, false),
+        ("fallbackModel", false, false),
+        ("summaryModel", false, false),
+        ("planModel", false, false),
+        ("processorModel", false, false),
+        ("agent", false, false),
+        ("style", false, false),
+        ("sharedSkillDirectories", false, false),
+        ("language", true, true),
+        ("retentionDays", true, true),
+        ("references", false, true),
+        ("attribution", false, true),
+        ("askIdleSeconds", false, true),
+    ];
+
+    /// What reads the files refused a key, as a list.
+    type Reported = fn(&Settings) -> Vec<PathBuf>;
+
+    /// The accessor each key of [`HOME_ONLY`] is reported by.
+    fn home_only_accessors() -> Vec<(&'static str, Reported)> {
+        fn paths<'a>(found: impl Iterator<Item = &'a Path>) -> Vec<PathBuf> {
+            found.map(Path::to_path_buf).collect()
+        }
+        vec![
+            ("model", |s| paths(s.model_ignored())),
+            ("provider", |s| paths(s.providers_ignored())),
+            ("advisorModel", |s| paths(s.advisor_ignored())),
+            ("fallbackModel", |s| paths(s.fallback_ignored())),
+            ("summaryModel", |s| paths(s.summary_ignored())),
+            ("planModel", |s| paths(s.plan_ignored())),
+            ("processorModel", |s| paths(s.processor_ignored())),
+            ("agent", |s| paths(s.agent_ignored())),
+            ("style", |s| paths(s.style_ignored())),
+            ("sharedSkillDirectories", |s| {
+                paths(s.shared_skill_directories_ignored())
+            }),
+            ("language", |s| paths(s.language_ignored())),
+            ("retentionDays", |s| paths(s.retention_ignored())),
+            ("references", |s| paths(s.references_ignored())),
+            ("attribution", |s| paths(s.attribution_ignored())),
+            ("askIdleSeconds", |s| paths(s.ask_idle_ignored())),
+        ]
+    }
+
+    /// The text of a layer naming only `key`.
+    fn naming_only(key: &str) -> String {
+        format!(r#"{{"{key}": "stated"}}"#)
+    }
+
+    /// Every key of [`HOME_ONLY`] is refused to the project and local layers, admitted to the home
+    /// layer, and refused or admitted to a named file by its own rule (the person's file outside
+    /// the workspace, and a file inside it). A row given the wrong rule reports a layer that
+    /// should be obeyed, or obeys one that should be reported.
+    #[test]
+    fn each_home_only_key_is_refused_to_the_layers_its_rule_names() {
+        assert_eq!(HOME_ONLY.len(), HOME_ONLY_EXPECTED.len());
+        for (key, _) in HOME_ONLY {
+            let (_, outside, inside) = HOME_ONLY_EXPECTED
+                .iter()
+                .find(|(expected, _, _)| expected == key)
+                .unwrap_or_else(|| panic!("{key} has no expectation"));
+            let text = naming_only(key);
+
+            let home = Layers::new(&format!("table-home-{key}"))
+                .global(&text)
+                .read();
+            assert_eq!(home.not_obeyed(key).count(), 0, "{key}: home layer");
+
+            let project = Layers::new(&format!("table-project-{key}"))
+                .project(&text)
+                .read();
+            assert_eq!(project.not_obeyed(key).count(), 1, "{key}: project layer");
+
+            let local = Layers::new(&format!("table-local-{key}"))
+                .local(&text)
+                .read();
+            assert_eq!(local.not_obeyed(key).count(), 1, "{key}: local layer");
+
+            let named = Layers::new(&format!("table-named-{key}"))
+                .named(&text)
+                .read();
+            assert_eq!(
+                named.not_obeyed(key).count(),
+                usize::from(*outside),
+                "{key}: named file outside the workspace"
+            );
+
+            let inside_the_workspace = Layers::new(&format!("table-inside-{key}"))
+                .named_inside_the_workspace(&text)
+                .read();
+            assert_eq!(
+                inside_the_workspace.not_obeyed(key).count(),
+                usize::from(*inside),
+                "{key}: named file inside the workspace"
+            );
+        }
+    }
+
+    /// A file whose only content is a refused key still said something, which `doctor` names, so the
+    /// settings are not empty; and no key is listed twice. A row left out of `is_empty` would print
+    /// "no settings.json" above the path of the file that holds the key.
+    #[test]
+    fn a_refused_key_alone_is_not_an_empty_settings_and_keys_are_unique() {
+        assert!(Layers::new("table-empty").read().is_empty());
+        let mut seen = std::collections::BTreeSet::new();
+        for (key, _) in HOME_ONLY {
+            assert!(seen.insert(*key), "{key} is listed twice");
+            let settings = Layers::new(&format!("table-not-empty-{key}"))
+                .project(&naming_only(key))
+                .read();
+            assert!(!settings.is_empty(), "{key}: refused and reported empty");
+        }
+    }
+
+    /// Each accessor reports the files refused its own key and no other key's, so one reading the
+    /// wrong key of the table answers for another setting.
+    #[test]
+    fn each_not_obeyed_accessor_reports_its_own_key() {
+        let accessors = home_only_accessors();
+        assert_eq!(accessors.len(), HOME_ONLY.len());
+        for (key, _) in HOME_ONLY {
+            let settings = Layers::new(&format!("table-accessor-{key}"))
+                .project(&naming_only(key))
+                .read();
+            for (accessor_key, accessor) in &accessors {
+                let reported = accessor(&settings);
+                match accessor_key == key {
+                    true => {
+                        assert_eq!(reported.len(), 1, "{key}: its own accessor");
+                        assert_eq!(
+                            reported[0].file_name(),
+                            Some(std::ffi::OsStr::new(SETTINGS_FILE))
+                        );
+                    }
+                    false => assert!(
+                        reported.is_empty(),
+                        "{key} reported by the accessor of {accessor_key}"
+                    ),
+                }
+            }
+        }
     }
 
     /// The two caps are unrelated bounds that share a block, so a checkout widening the walk for

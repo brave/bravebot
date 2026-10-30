@@ -7972,37 +7972,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(())
     }
 
-    /// Like [`Policy::before_action`], but the field additionally requires a matching
-    /// single-use grant. Used for irreversible effects.
-    ///
-    /// The grant is consumed on success. A grant for the wrong value does not match,
-    /// so it cannot be redirected.
-    pub fn before_granted_action(
-        &mut self,
-        tool: &str,
-        field: &str,
-        value: &Labelled<String>,
-    ) -> Gated<()> {
-        self.before_action(tool, field, Role::Routing, value)?;
-
-        // Safe to read: before_action just proved this is (T,pub).
-        let concrete = value.clone().into_trusted().map_err(|_| Denial {
-            principle: Principle::IntegrityGate,
-            message: format!("grant check on non-trusted field '{field}'"),
-        })?;
-
-        self.consume_grant(tool, field, &concrete)
-    }
-
     /// Check a destination a person endorsed, and consume the endorsement.
     ///
-    /// The counterpart to [`Policy::before_granted_action`] for the one field whose authority is
-    /// the endorsement rather than its label. A destination arrives as the planner proposed it,
-    /// so it is untrusted, and [`Policy::promote_confined_read`] is not what lets it through:
-    /// promotion exists for a read, and a write routed on a promoted path would have the model's
-    /// own proposal as the reason it landed where it did. What comes back is the exact value a
-    /// person approved, with nothing relabelled, so the effect leaves no trusted path behind for
-    /// another field to route on.
+    /// This is for the one field whose authority is the endorsement rather than its label. A
+    /// destination arrives as the planner proposed it, so it is untrusted, and
+    /// [`Policy::promote_confined_read`] is not what lets it through: promotion exists for a
+    /// read, and a write routed on a promoted path would have the model's own proposal as the
+    /// reason it landed where it did. What comes back is the exact value a person approved, with
+    /// nothing relabelled, so the effect leaves no trusted path behind for another field to
+    /// route on.
     ///
     /// Confidentiality is still the label's to decide. A private destination is refused, because
     /// a name derived from the user's data is that data, and a directory entry is somewhere this
@@ -15120,82 +15098,6 @@ five
                 .read_output(&slot, &slots, Endorsed::ByAPerson)
                 .is_err(),
             "a file's contents were promoted through the output route"
-        );
-    }
-
-    #[test]
-    fn a_granted_action_needs_a_matching_endorsement() {
-        let mut sink = RecordingSink::new();
-        let mut policy = Policy::begin(
-            routing_with("command", "cargo test"),
-            ReleasePlan::new(),
-            all_capabilities(),
-            &mut sink,
-        )
-        .unwrap();
-
-        let command = Labelled::trusted("cargo test".to_string());
-        assert!(
-            policy
-                .before_granted_action("shell", "command", &command)
-                .is_err(),
-            "no endorsement issued yet"
-        );
-
-        policy.issue_grant("shell", "command", "cargo test");
-        assert!(
-            policy
-                .before_granted_action("shell", "command", &command)
-                .is_ok()
-        );
-    }
-
-    /// An endorsement is single-use, so it cannot authorise a second execution.
-    #[test]
-    fn an_endorsement_cannot_be_replayed() {
-        let mut sink = RecordingSink::new();
-        let mut policy = Policy::begin(
-            routing_with("command", "cargo test"),
-            ReleasePlan::new(),
-            all_capabilities(),
-            &mut sink,
-        )
-        .unwrap();
-
-        let command = Labelled::trusted("cargo test".to_string());
-        policy.issue_grant("shell", "command", "cargo test");
-        assert!(
-            policy
-                .before_granted_action("shell", "command", &command)
-                .is_ok()
-        );
-        assert!(
-            policy
-                .before_granted_action("shell", "command", &command)
-                .is_err(),
-            "endorsement must be consumed"
-        );
-    }
-
-    /// An endorsement is bound to an exact value, so it cannot be redirected to a
-    /// different command.
-    #[test]
-    fn an_endorsement_does_not_transfer_to_another_value() {
-        let mut sink = RecordingSink::new();
-        let mut policy = Policy::begin(
-            routing_with("command", "cargo test"),
-            ReleasePlan::new(),
-            all_capabilities(),
-            &mut sink,
-        )
-        .unwrap();
-
-        policy.issue_grant("shell", "command", "cargo test");
-        let other = Labelled::trusted("rm -rf /".to_string());
-        assert!(
-            policy
-                .before_granted_action("shell", "command", &other)
-                .is_err()
         );
     }
 
