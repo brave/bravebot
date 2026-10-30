@@ -1938,7 +1938,7 @@ mod tests {
             .expect("a declaration with a host list")
     }
 
-    /// SERVERS-6: a list of hosts is part of what an approval binds to, so adding one, changing it
+    /// SERVERS-5: a list of hosts is part of what an approval binds to, so adding one, changing it
     /// or emptying it asks again, an empty list is not no list, and the order written is not read.
     #[test]
     fn a_host_list_is_part_of_the_digest_and_an_empty_list_is_not_no_list() {

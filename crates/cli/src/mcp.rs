@@ -2757,7 +2757,7 @@ mod tests {
         );
     }
 
-    /// SERVERS-6: `--allowed-hosts` writes a server's own host list, in either spelling, refuses
+    /// SERVERS-10: `--allowed-hosts` writes a server's own host list, in either spelling, refuses
     /// what is not a host or a list, is not taken by a remote server, and the question names it.
     #[test]
     fn allowed_hosts_is_declared_on_a_local_server_and_shown_in_the_question() {

@@ -595,6 +595,8 @@ digest is kept of what was approved, and a digest names no field.
 `verified-by: bravebot_config::mcp::a_digest_alone_on_its_line_takes_its_alias_when_rewritten`
 `verified-by: bravebot_cli::mcp::replacing_a_declaration_approved_under_no_alias_still_says_it_changed`
 `verified-by: bravebot_agent::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one`
+`verified-by: bravebot_config::mcp::a_host_list_is_part_of_the_digest_and_an_empty_list_is_not_no_list`
+`verified-by: bravebot_config::mcp::a_host_list_names_the_field_that_changed_and_survives_the_file`
 
 <a id="SERVERS-6"></a>
 ### SERVERS-6: a command that fetches its own code is named as one at the prompt

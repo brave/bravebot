@@ -4616,6 +4616,22 @@ mod tests {
             Foreseen::Confined { policy, .. } => assert_eq!(policy.egress, PolicyEgress::Open),
             other => panic!("{other:?}"),
         }
+        // A list the declaration carries holds the server to the proxy with no session list.
+        let listing = declaration
+            .clone()
+            .hosting(Some(vec!["api.example.com".to_string()]))
+            .expect("a declaration with a host list");
+        match foreseen("weather", &listing, &home, Network::Open, None, &|_| None) {
+            Foreseen::Confined { policy, .. } => {
+                assert!(capabilities.egress_limited_to_a_port);
+                assert_eq!(policy.egress, PolicyEgress::Hosts);
+            }
+            Foreseen::Unstarted(sentence) => {
+                assert!(!capabilities.egress_limited_to_a_port, "{sentence}");
+                assert!(sentence.contains("allowedHosts"), "{sentence}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// SERVERS-10: a stored value reaches the server as the declaration holds it, and this
