@@ -39,6 +39,7 @@ was, and the conversation budget stays where it was too.
 | | `contextWindow` | the context window of every model that states none, in prompt tokens (bravebot's own field) |
 | | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated (bravebot's own field) |
 | | `idleTimeoutMs` | how long a reply may go quiet before it is given up on, in milliseconds, 120000 where unstated (bravebot's own field) |
+| | `setCacheKey` | `true` to send a `prompt_cache_key` in each chat-completions request, the same value for every request of a session and another value in the next session, for a service that routes by it to serve a session's prompt cache. Off where unstated, since it lets the host tie a session's requests together (bravebot's own field) |
 | | `apiKey` | a token written into the file directly |
 | | `headers` | extra request headers, keyed by header name |
 | a model | `limit.context` | that model's context window, in prompt tokens |

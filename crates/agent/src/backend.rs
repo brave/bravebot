@@ -570,6 +570,10 @@ pub enum Backend<'a> {
         wire_model: String,
         egress: &'a Egress,
         cancel: Option<Cancel>,
+        /// The session the request belongs to, whose identifier is the `prompt_cache_key` where the
+        /// block set `options.setCacheKey` ([`Backend::in_session`]). `None` is a request of no
+        /// session, which gets a key of its own.
+        session: Option<crate::chatgpt::AccountSession>,
     },
     /// The ChatGPT account of the stored sign-in
     /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
@@ -1001,6 +1005,7 @@ impl<'a> Backend<'a> {
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
+                session: None,
             },
             Serves::Chatgpt(wire_model) => Self::Account {
                 wire_model: wire_model.to_string(),
@@ -1237,13 +1242,17 @@ impl<'a> Backend<'a> {
     }
 
     /// Make the requests this backend sends the ones of `session`, where it is the ChatGPT account
-    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)), or a gateway whose block
+    /// set `options.setCacheKey` ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)).
     ///
     /// Ignored by every other backend, which carries no session identifier. A request sent with no
     /// session given carries an identifier of its own, so it shares no cache with another.
     pub fn in_session(mut self, session: &crate::chatgpt::AccountSession) -> Self {
-        if let Self::Account { session: held, .. } = &mut self {
-            *held = Some(session.clone());
+        match &mut self {
+            Self::Account { session: held, .. } | Self::Gateway { session: held, .. } => {
+                *held = Some(session.clone());
+            }
+            _ => {}
         }
         self
     }
@@ -1279,8 +1288,10 @@ impl<'a> Backend<'a> {
                 wire_model,
                 egress,
                 cancel,
+                session,
             } => {
-                let mut client = gateway_client(config, provider, wire_model, egress)?;
+                let mut client = gateway_client(config, provider, wire_model, egress)?
+                    .with_cache_key(provider, session.as_ref());
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
@@ -1329,6 +1340,10 @@ impl<'a> Backend<'a> {
                     session: Some(session),
                     ..
                 } => Some((session.identifier().to_string(), session.effort())),
+                Self::Gateway {
+                    provider, session, ..
+                } => cache_key(provider, session.as_ref())
+                    .map(|key| (key, session.as_ref().and_then(|session| session.effort()))),
                 _ => None,
             },
         ) {
@@ -1364,8 +1379,10 @@ impl<'a> Backend<'a> {
                 wire_model,
                 egress,
                 cancel,
+                session,
             } => {
-                let mut client = gateway_client(config, provider, wire_model, egress)?;
+                let mut client = gateway_client(config, provider, wire_model, egress)?
+                    .with_cache_key(provider, session.as_ref());
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
@@ -1492,6 +1509,25 @@ fn xai_client<'a>(
     }
 }
 
+/// The `prompt_cache_key` a request to `provider` carries: the identifier of `session` where the
+/// block set `options.setCacheKey`, and nothing otherwise
+/// ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)).
+///
+/// The identifier is made from the operating system's random source when the session begins, so it
+/// holds nothing from the conversation, a path or a reply. A request of no session gets a session of
+/// its own.
+fn cache_key(
+    provider: &bravebot_config::provider::Provider,
+    session: Option<&crate::chatgpt::AccountSession>,
+) -> Option<String> {
+    provider.set_cache_key.then(|| match session {
+        Some(session) => session.identifier().to_string(),
+        None => crate::chatgpt::AccountSession::begin()
+            .identifier()
+            .to_string(),
+    })
+}
+
 /// A client pointed at `provider`, with its token resolved, in the protocol the provider speaks.
 ///
 /// The token is read here rather than held on the variant, because it is read from the process
@@ -1590,6 +1626,22 @@ enum GatewayClient<'a> {
 }
 
 impl GatewayClient<'_> {
+    /// Carry the identifier of `session` as the `prompt_cache_key`, where the block set
+    /// `options.setCacheKey` and the service takes chat completions
+    /// ([BACKEND-69](../../../docs/specs/backends.md#BACKEND-69)).
+    ///
+    /// A request of no session gets a session of its own, so it shares no key with another.
+    fn with_cache_key(
+        self,
+        provider: &bravebot_config::provider::Provider,
+        session: Option<&crate::chatgpt::AccountSession>,
+    ) -> Self {
+        match (self, cache_key(provider, session)) {
+            (Self::Chat(client), Some(key)) => Self::Chat(client.with_cache_key(key)),
+            (other, _) => other,
+        }
+    }
+
     /// Stop reading a streamed reply as soon as `stop` says to.
     fn with_cancel(self, stop: Cancel) -> Self {
         match self {
@@ -1701,6 +1753,34 @@ mod tests {
                 "models": {"z-ai/glm-4.6": {}, "anthropic/claude-sonnet-4.5": {}}
             }}}"#,
         )
+    }
+
+    /// BACKEND-69: a block that set `options.setCacheKey` sends the identifier of the session a
+    /// request is in, so the requests of one session share a key and another session has its own.
+    /// The regressions it rejects are a key made for each request, one key for the whole process,
+    /// and a key sent with the setting off.
+    #[test]
+    fn a_cache_key_is_the_identifier_of_the_session_and_only_where_the_block_set_it() {
+        let set = with_providers(
+            r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://gw.example.invalid/v1", "setCacheKey": true},
+                "models": {"m": {}}
+            }}}"#,
+        );
+        let unset = with_a_gateway();
+        let (set, _) = set.provider_for("m").expect("offered");
+        let (unset, _) = unset.provider_for("z-ai/glm-4.6").expect("offered");
+        let first = crate::chatgpt::AccountSession::begin();
+        let second = crate::chatgpt::AccountSession::begin();
+
+        assert_eq!(
+            cache_key(set, Some(&first)).as_deref(),
+            Some(first.identifier())
+        );
+        assert_eq!(cache_key(set, Some(&first)), cache_key(set, Some(&first)));
+        assert_ne!(cache_key(set, Some(&first)), cache_key(set, Some(&second)));
+        assert_ne!(cache_key(set, None), cache_key(set, None));
+        assert_eq!(cache_key(unset, Some(&first)), None);
     }
 
     /// BACKEND-53: a conversation moves only to a model the same service answers for, so naming a

@@ -5835,6 +5835,43 @@ mod tests {
             assert_eq!(carried, [carried_by(&session), carried_by(&session)]);
         }
 
+        /// A gateway whose block set `options.setCacheKey` is cached by the key its requests carry
+        /// (BACKEND-69), so every round of a turn on it carries the identifier of the turn's session.
+        /// The regressions it rejects are a gateway backend that is not given the session, and a
+        /// request arm that passes no session where it has one.
+        #[test]
+        fn every_round_of_a_turn_on_a_cache_keyed_gateway_carries_the_identifier_of_its_session() {
+            let session = AccountSession::begin();
+            let mut config = configured(None);
+            let root = serde_json::json!({"provider": {"gw": {
+                "options": {
+                    "baseURL": "https://gw.example.invalid/v1",
+                    "apiKey": "x",
+                    "setCacheKey": true
+                },
+                "models": {"m": {}}
+            }}});
+            config.providers = bravebot_config::provider::Provider::all(root.as_object().unwrap());
+
+            let taken = take(
+                "gateway-session-rounds",
+                &config,
+                Task::new("look it up")
+                    .with_model(Some("gw/m".into()))
+                    .in_account_session(session.clone()),
+                vec![
+                    said("", &[("read_file", r#"{"path":"absent.txt"}"#)], None),
+                    said("done", &[], None),
+                ],
+            );
+            taken.outcome.expect("the turn answered");
+
+            assert_eq!(
+                scripted::sessions(),
+                [carried_by(&session), carried_by(&session)]
+            );
+        }
+
         /// Two turns of a session are the requests the service is meant to tie together, and two
         /// sessions of a process are the ones it must not. The regressions it rejects are one
         /// identifier for the whole process and one identifier for each turn.

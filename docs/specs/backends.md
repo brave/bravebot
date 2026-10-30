@@ -4253,6 +4253,35 @@ wrote against the ids the gateway listed, and the result is only which rows a pi
 `verified-by: bravebot_cli::doctor::doctor_counts_the_ids_a_gateways_lists_name`
 `verified-by: bravebot_config::import::only_the_fields_bravebot_reads_are_written`
 
+<a id="BACKEND-69"></a>
+### BACKEND-69: a gateway block may set `options.setCacheKey` so its requests carry a `prompt_cache_key`
+
+A provider entry may carry `options.setCacheKey: true`. A chat-completions request to that entry then
+carries a top-level `prompt_cache_key` whose value is the identifier of the session the request is in:
+the same value on every request of a session, a turn's rounds included, and another value in the next
+session. A request in no session gets a value of its own. A block without the setting, or with any value
+other than `true`, sends no field. The Messages, Generate Content and Responses protocols send none, and
+neither does Bedrock, the aichat endpoint or an account.
+
+The value is the one [CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10) makes for a session: a random
+identifier from the operating system when the session begins, made for this purpose and not the name of
+the session's record. It is not derived from the conversation, a path, a reply or anything a model wrote,
+and it is in no session record. It is carried the way [BACKEND-15](#BACKEND-15) carries a block's
+options, but it is put on the body before a model's `options` are merged, so an `options.prompt_cache_key`
+of a model does not replace it.
+
+**Why.** OpenAI's chat-completions API documents `prompt_cache_key` as the value that groups requests for
+cache routing, and a service that routes by it has nothing else to keep a session's turns on one cache.
+The setting is opt-in because the value lets the host tie a session's requests together, which a
+configuration that sends nothing else of the kind has not agreed to. The identifier is separate from the
+session id because that id names a record on disk and this value is sent to a host.
+
+A cache read the service reports is shown as [BACKEND-31](#BACKEND-31) says; this clause adds no figure.
+
+`verified-by: bravebot_config::provider::only_a_true_set_cache_key_turns_the_key_on`
+`verified-by: bravebot_aichat::lib::a_gateway_that_set_a_cache_key_sends_the_key_and_one_that_did_not_sends_none`
+`verified-by: bravebot_agent::backend::a_cache_key_is_the_identifier_of_the_session_and_only_where_the_block_set_it`
+
 ## Known costs
 
 - **Each change of mode costs a full prefix write.** BACKEND-27 and BACKEND-32 mark a cache prefix
