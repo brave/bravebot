@@ -319,6 +319,13 @@ pub(crate) fn known_variable(id: &str) -> Option<&'static str> {
         .map(|(_, _, variable)| *variable)
 }
 
+/// The id naming Cloudflare Workers AI, reached at a host built from `options.accountId`.
+pub(crate) const CLOUDFLARE_WORKERS_AI_ID: &str = "cloudflare-workers-ai";
+
+/// The id naming Cloudflare AI Gateway, reached at a host built from `options.accountId` and
+/// `options.gatewayId`.
+pub(crate) const CLOUDFLARE_AI_GATEWAY_ID: &str = "cloudflare-ai-gateway";
+
 /// The id naming Google Vertex AI, which is reached through its OpenAI-compatible endpoint.
 ///
 /// Not in [`KNOWN_ENDPOINTS`] for the reason Bedrock is not: the endpoint carries the project and
@@ -821,8 +828,18 @@ impl Provider {
             && id != GOOGLE_VERTEX_ID
             && id != AWS_PROVIDER_ID
             && known_endpoint(id).is_some();
+        let cloudflare_ids = || {
+            (
+                string(options.and_then(|options| options.get("accountId"))),
+                string(options.and_then(|options| options.get("gatewayId"))),
+            )
+        };
         let base_url = match stated {
             Some(url) => url.to_string(),
+            None if id == CLOUDFLARE_WORKERS_AI_ID || id == CLOUDFLARE_AI_GATEWAY_ID => {
+                let (account, gateway) = cloudflare_ids();
+                cloudflare_endpoint(id, account.as_deref(), gateway.as_deref())?
+            }
             None if id == GOOGLE_VERTEX_ID && project.is_none() => {
                 VERTEX_EXPRESS_ENDPOINT.to_string()
             }
@@ -840,7 +857,14 @@ impl Provider {
             id: id.to_string(),
             name: string(entry.get("name")),
             base_url: base_url.trim_end_matches('/').to_string(),
-            env: names(entry.get("env")),
+            env: match (names(entry.get("env")), cloudflare_key_variable(id)) {
+                (named, Some(default))
+                    if named.is_empty() && !names_a_credential && stated.is_none() =>
+                {
+                    vec![default.to_string()]
+                }
+                (named, _) => named,
+            },
             api_key: options
                 .and_then(|options| string(options.get("apiKey")))
                 .map(Secret::new),
@@ -1497,6 +1521,42 @@ pub(crate) fn vertex_endpoint(project: Option<&str>, location: Option<&str>) -> 
     };
     Some(format!(
         "https://{host}/v1/projects/{project}/locations/{location}/endpoints/openapi"
+    ))
+}
+
+/// The variable the key of a Cloudflare entry is read from where the entry names no credential.
+fn cloudflare_key_variable(id: &str) -> Option<&'static str> {
+    match id {
+        CLOUDFLARE_WORKERS_AI_ID => Some("CLOUDFLARE_API_KEY"),
+        CLOUDFLARE_AI_GATEWAY_ID => Some("CLOUDFLARE_API_TOKEN"),
+        _ => None,
+    }
+}
+
+/// The endpoint of a Cloudflare Workers AI or AI Gateway entry, without a trailing slash.
+///
+/// `None` where an id is missing or holds a character that would move the request: both ids are
+/// written into the path of a compiled-in host. An account id is letters and digits, and a gateway
+/// id is letters, digits, `-` and `_`.
+pub(crate) fn cloudflare_endpoint(
+    id: &str,
+    account: Option<&str>,
+    gateway: Option<&str>,
+) -> Option<String> {
+    let account =
+        account.filter(|a| !a.is_empty() && a.chars().all(|c| c.is_ascii_alphanumeric()))?;
+    if id == CLOUDFLARE_WORKERS_AI_ID {
+        return Some(format!(
+            "https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1"
+        ));
+    }
+    let gateway = gateway.filter(|g| {
+        !g.is_empty()
+            && g.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    })?;
+    Some(format!(
+        "https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/compat"
     ))
 }
 
@@ -2238,6 +2298,104 @@ mod tests {
         assert_eq!(other.compiled_roster(), None);
         assert!(all[0].takes_extra_content());
         assert!(!other.takes_extra_content());
+    }
+
+    /// Reads one entry as the `provider` block of a settings file would hold it.
+    fn cloudflare(id: &str, entry: &str) -> Vec<Provider> {
+        let text = format!(r#"{{"provider": {{"{id}": {entry}}}}}"#);
+        Provider::all(
+            serde_json::from_str::<serde_json::Value>(&text)
+                .unwrap()
+                .as_object()
+                .unwrap(),
+        )
+    }
+
+    /// A Cloudflare entry names an account or gateway id instead of a host, so the request has to go to
+    /// the host those ids build: a key sent anywhere else is a key sent to the wrong route.
+    #[test]
+    fn a_cloudflare_entry_is_reached_at_the_host_its_ids_build() {
+        let workers = cloudflare(
+            "cloudflare-workers-ai",
+            r#"{"options": {"accountId": "abc123"}}"#,
+        );
+        assert_eq!(
+            workers[0].base_url,
+            "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1"
+        );
+        assert_eq!(workers[0].env, ["CLOUDFLARE_API_KEY"]);
+        let gateway = cloudflare(
+            "cloudflare-ai-gateway",
+            r#"{"options": {"accountId": "abc123", "gatewayId": "my-gw_1"}}"#,
+        );
+        assert_eq!(
+            gateway[0].base_url,
+            "https://gateway.ai.cloudflare.com/v1/abc123/my-gw_1/compat"
+        );
+        assert_eq!(
+            gateway[0].chat_completions_url(),
+            "https://gateway.ai.cloudflare.com/v1/abc123/my-gw_1/compat/chat/completions"
+        );
+        assert_eq!(gateway[0].env, ["CLOUDFLARE_API_TOKEN"]);
+    }
+
+    /// An id is written into the path of a compiled-in host, so one holding `/`, `@`, `?` or `#` would
+    /// send the key to another route; such an entry must configure nothing rather than a moved request.
+    #[test]
+    fn a_cloudflare_id_that_would_move_the_request_configures_nothing() {
+        for account in ["a/b", "a@evil.invalid", "a?x", "a#x", "", "a.b"] {
+            let options =
+                format!(r#"{{"options": {{"accountId": "{account}", "gatewayId": "g"}}}}"#);
+            for id in ["cloudflare-workers-ai", "cloudflare-ai-gateway"] {
+                assert!(cloudflare(id, &options).is_empty(), "{id} {account}");
+            }
+        }
+        for gateway in ["g/x", "g@evil.invalid", "g?x", "g#x", "", "g.x"] {
+            let options =
+                format!(r#"{{"options": {{"accountId": "a1", "gatewayId": "{gateway}"}}}}"#);
+            assert!(
+                cloudflare("cloudflare-ai-gateway", &options).is_empty(),
+                "{gateway}"
+            );
+        }
+        assert!(cloudflare("cloudflare-workers-ai", "{}").is_empty());
+        assert!(
+            cloudflare(
+                "cloudflare-ai-gateway",
+                r#"{"options": {"accountId": "a1"}}"#
+            )
+            .is_empty()
+        );
+    }
+
+    /// A person who states an endpoint or names a credential has said where the key goes, so neither is
+    /// overridden by the host built from the ids or by the default token variable.
+    #[test]
+    fn a_stated_endpoint_beats_the_cloudflare_host_and_a_named_credential_beats_the_default() {
+        let all = cloudflare(
+            "cloudflare-workers-ai",
+            r#"{"env": ["MY_KEY"], "options": {"baseURL": "https://proxy.example.invalid/v1/"}}"#,
+        );
+        assert_eq!(all[0].base_url, "https://proxy.example.invalid/v1");
+        assert_eq!(all[0].env, ["MY_KEY"]);
+        let keyed = cloudflare(
+            "cloudflare-workers-ai",
+            r#"{"options": {"accountId": "a1", "apiKey": "k"}}"#,
+        );
+        assert!(keyed[0].env.is_empty());
+        let proxied = cloudflare(
+            "cloudflare-workers-ai",
+            r#"{"options": {"baseURL": "https://proxy.example.invalid/v1"}}"#,
+        );
+        assert!(proxied[0].env.is_empty());
+        assert!(
+            cloudflare(
+                "some-other",
+                r#"{"options": {"baseURL": "https://x.invalid/v1"}}"#
+            )[0]
+            .env
+            .is_empty()
+        );
     }
 
     /// The point of the block: a `provider` entry copied out of `opencode.json` configures this
