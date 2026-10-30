@@ -33,6 +33,8 @@ was, and the conversation budget stays where it was too.
 | the entry | `name` | something friendlier to show than the id |
 | | `env` | variable names that may hold the bearer token, tried in order |
 | | `models` | the models to offer, keyed by the name the gateway knows each by |
+| | `whitelist` | model ids; of a fetched roster, only these are offered |
+| | `blacklist` | model ids; of a fetched roster, these are not offered |
 | `options` | `baseURL` | where requests go |
 | | `contextWindow` | the context window of every model that states none, in prompt tokens (bravebot's own field) |
 | | `maxRetries` | how many times a request is sent again after a failure worth another attempt, 2 where unstated (bravebot's own field) |
@@ -193,6 +195,12 @@ left out.
 Nothing is capped. Ordering does that work instead: the model a session would use comes first and the
 rest are sorted by name. A listing that cannot be fetched contributes nothing and takes nothing away
 from the rest of the roster.
+
+**`whitelist` and `blacklist` narrow a fetched roster** without listing every model. Each is an array
+of ids as the gateway names them. The whitelist is applied first and the blacklist then removes from
+what remains, and the window a gateway reported is kept for each model left. An id the gateway does not
+list changes nothing. Neither list applies to a block that lists `models`, which is offered as
+written. `bravebot doctor` says how many ids each list names. Importing an opencode entry copies both.
 
 ### Naming one
 

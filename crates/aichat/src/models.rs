@@ -823,8 +823,9 @@ struct GatewayListing {
 /// with a list of ([`bravebot_config::provider::Provider::responses_only_models`]): a route that
 /// cannot reach a model does not offer it, and, where the provider reads them
 /// ([`bravebot_config::provider::Provider::lists_shutdown_dates`]), a model whose listed
-/// `shutdown_date` is `now` or earlier, which the service no longer serves. The ids are compared
-/// with that list only, and the rows go to a picker, as those the capability filter keeps do.
+/// `shutdown_date` is `now` or earlier, which the service no longer serves. The block's `whitelist`
+/// then `blacklist` narrow what remains ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)).
+/// The ids are compared with those lists only, and the rows go to a picker, as those the capability filter keeps do.
 fn offered_by_gateway(
     provider: &bravebot_config::provider::Provider,
     listed: Vec<ListedByGateway>,
@@ -840,6 +841,13 @@ fn offered_by_gateway(
         })
         .filter(|entry| !entry.id.trim().is_empty())
         .filter(|entry| !left_out.contains(&entry.id.as_str()))
+        .filter(|entry| {
+            provider
+                .whitelist
+                .as_ref()
+                .is_none_or(|kept| kept.contains(&entry.id))
+        })
+        .filter(|entry| !provider.blacklist.contains(&entry.id))
         .filter(|entry| !(reads_shutdown_dates && entry.is_shut_down(now)))
         .map(|entry| Model {
             key: format!("{}/{}", provider.id, entry.id),
@@ -1566,6 +1574,43 @@ mod tests {
     fn a_gateway_that_reports_no_capabilities_still_offers_its_models() {
         let models = from_gateway(&gateway(), r#"{"data": [{"id": "z-ai/glm-4.6"}]}"#);
         assert_eq!(models.len(), 1);
+    }
+
+    /// BACKEND-68: a block's lists narrow the rows a gateway listed, the whitelist first.
+    #[test]
+    fn a_whitelist_and_a_blacklist_narrow_a_fetched_roster_in_that_order() {
+        let listing =
+            r#"{"data": [{"id": "a", "context_length": 5000}, {"id": "b"}, {"id": "c"}]}"#;
+        let keys = |block: &str| -> Vec<String> {
+            let provider = entry(&format!(
+                r#"{{"gw": {{"options": {{"baseURL": "https://gw.example.invalid/v1"}}, {block}}}}}"#
+            ));
+            from_gateway(&provider, listing)
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        assert_eq!(keys(r#""blacklist": ["b"]"#), ["gw/a", "gw/c"]);
+        assert_eq!(keys(r#""whitelist": ["b"]"#), ["gw/b"]);
+        // An id in both lists is not offered.
+        assert_eq!(
+            keys(r#""whitelist": ["a", "b"], "blacklist": ["b", "c"]"#),
+            ["gw/a"]
+        );
+        // An id the gateway does not list changes nothing, in either list.
+        assert_eq!(keys(r#""blacklist": ["nope"]"#), ["gw/a", "gw/b", "gw/c"]);
+        assert_eq!(keys(r#""whitelist": ["nope", "c"]"#), ["gw/c"]);
+        // A whitelist that names nothing offers nothing; no list offers everything.
+        assert!(keys(r#""whitelist": []"#).is_empty());
+        assert_eq!(keys(r#""foo": 1"#), ["gw/a", "gw/b", "gw/c"]);
+
+        // The window the gateway reported is kept for a row that remains.
+        let provider = entry(
+            r#"{"gw": {"options": {"baseURL": "https://gw.example.invalid/v1"}, "blacklist": ["b"]}}"#,
+        );
+        let kept = from_gateway(&provider, listing);
+        assert_eq!(kept[0].conversation_tokens, Some(5000));
     }
 
     /// An entry as a block states it, for the tests of what a listing is left out of.
