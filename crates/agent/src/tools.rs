@@ -3565,11 +3565,17 @@ fn credentials_an_edit_would_show<S: Sink>(
 /// The same shaping an eager read would have applied, from the same two functions, so a
 /// deferred read and an immediate one put the same bytes in the same slot. Deferring changes
 /// when a file is read and nothing else about it.
+///
+/// A file in another encoding is read as the text it decodes to, and the result says so, so that
+/// the slot records it and nothing writes it back as the file (READ-3).
 pub(crate) fn read_into_slot(
     workspace: &Workspace,
     path: &str,
-) -> Result<String, crate::workspace::WorkspaceError> {
-    workspace.page(path, 1, usize::MAX).map(|page| {
+) -> Result<bravebot_core::Fill, crate::workspace::WorkspaceError> {
+    workspace.page_decoded(path).map(|mut page| {
+        // The note about a decoding is for the planner reading a page. It is not part of the file.
+        let decoded = std::mem::replace(&mut page.decoding, bravebot_filetype::Decoding::Utf8)
+            != bravebot_filetype::Decoding::Utf8;
         let mut text = render_page(&page, ChangeToken::Withheld);
         // A file that went through a slot used to come back a byte shorter than it went in,
         // because the lines are joined with newlines between them and none after. Every
@@ -3578,7 +3584,11 @@ pub(crate) fn read_into_slot(
         if page.ends_with_newline && !text.ends_with('\n') {
             text.push('\n');
         }
-        text
+        if decoded {
+            bravebot_core::Fill::decoded(text)
+        } else {
+            text.into()
+        }
     })
 }
 
@@ -3615,7 +3625,9 @@ pub(crate) fn materialise<S: Sink>(
                     match bravebot_filetype::by_name::media_for(path) {
                         Some(media) => {
                             picture = Some(media);
-                            workspace.attachment_text(path, media)
+                            workspace
+                                .attachment_text(path, media)
+                                .map(bravebot_core::Fill::from)
                         }
                         None => read_into_slot(workspace, path),
                     }
@@ -15868,6 +15880,37 @@ mod tests {
                 "{decoding:?}"
             );
         }
+    }
+
+    /// A slot is filled with the text a file in another encoding decodes to, marked as a decoding,
+    /// and the text carries no note about the decoding: the note is for the planner reading a page,
+    /// and a slot's text is the document a processor works on. A UTF-8 file is not marked.
+    #[test]
+    fn a_slot_filled_from_a_file_in_another_encoding_is_marked_and_carries_no_note() {
+        let dir = crate::testutil::scratch_dir(&format!(
+            "bravebot-slot-decoded-fill-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch");
+        let wide: Vec<u8> = [0xFFu8, 0xFE]
+            .into_iter()
+            .chain("alpha\nbeta\n".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        std::fs::write(dir.join("wide.txt"), wide).unwrap();
+        std::fs::write(dir.join("latin1.txt"), b"caf\xe9\n").unwrap();
+        std::fs::write(dir.join("plain.txt"), "plain\n").unwrap();
+        let workspace = Workspace::new(&dir).expect("workspace");
+
+        let wide = read_into_slot(&workspace, "wide.txt").expect("a UTF-16 file reads");
+        assert_eq!((wide.text.as_str(), wide.decoded), ("alpha\nbeta\n", true));
+        let latin1 = read_into_slot(&workspace, "latin1.txt").expect("a Latin-1 file reads");
+        assert_eq!(
+            (latin1.text.as_str(), latin1.decoded),
+            ("caf\u{fffd}\n", true)
+        );
+        let plain = read_into_slot(&workspace, "plain.txt").expect("a UTF-8 file reads");
+        assert_eq!((plain.text.as_str(), plain.decoded), ("plain\n", false));
     }
 
     /// The same ban across every tool rather than only `run`, because the tool a shell arrives in

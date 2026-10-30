@@ -1066,6 +1066,14 @@ impl Workspace {
         self.page_reaching(relative, offset, limit, &[], Decode::Exact, false)
     }
 
+    /// The whole file as a slot holds it: the file's own text where it is UTF-8, and the text a
+    /// UTF-16 or UTF-32 file with a byte order mark, or a file with bytes that are not UTF-8,
+    /// decodes to. The page says which in [`Page::decoding`], and a slot filled from a decoding
+    /// records that it is one, so it is never written or handed to a program as the file.
+    pub fn page_decoded(&self, relative: &str) -> Result<Page, WorkspaceError> {
+        self.page_reaching(relative, 1, usize::MAX, &[], Decode::Allowed, false)
+    }
+
     /// [`Workspace::page`] that may also land in the directory of a skill loaded this turn, and
     /// that reads a file in another encoding decoded where `decode` allows it.
     fn page_reaching(
@@ -1161,9 +1169,10 @@ impl Workspace {
     /// verdict on the same file. A file that turns to rubbish after that prefix is caught when
     /// the bytes are actually read, which is where an eager read would have caught it too.
     ///
-    /// A byte order mark is not honoured here. The slot this answer reserves is filled as
-    /// [`Workspace::page`] reads, which refuses a UTF-16 file, so honouring the mark would report
-    /// the file as text now and refuse it when something needs its bytes.
+    /// A byte order mark is honoured, and bytes that are not UTF-8 are tolerated as they are in
+    /// [`decode_text`], since the slot this answer reserves is filled with the same decoding
+    /// ([`Workspace::page_decoded`]). The slot records that its text is a decoding, so what writes
+    /// or hands on a slot's text refuses it (READ-3).
     pub fn survey(&self, relative: &str) -> Result<usize, WorkspaceError> {
         let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
         let io = |e: std::io::Error| WorkspaceError::Io {
@@ -1176,7 +1185,8 @@ impl Workspace {
         let mut head = vec![0u8; SNIFF_BYTES];
         let mut file = std::fs::File::open(&resolved).map_err(io)?;
         let read = read_up_to(&mut file, &mut head).map_err(io)?;
-        if looks_binary(&head[..read]) {
+        head.truncate(read);
+        if decode_text(head).is_none() {
             return Err(WorkspaceError::Binary {
                 path: relative.to_string(),
             });

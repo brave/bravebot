@@ -11266,9 +11266,8 @@ fn a_file_with_a_stray_invalid_byte_is_read_with_a_replacement_character_and_an_
 /// A file in a directory nobody vouched for is handed to the planner as a reference, and a
 /// reference can become the body of another file. Copying Latin-1 text that way would write the
 /// decoder's U+FFFD over the byte it replaced, and a copy of a UTF-16 file would be a different
-/// file, so neither is read into the slot. The planner is told at the read, in the same words as
-/// for any other file the slot could not hold: UTF-16 is binary, and the refusal of the Latin-1
-/// copy says its encoding.
+/// file. Both are text the planner can be told about, so each is read into its slot, and the slot
+/// records that its text is a decoding. The copy is refused for that reason and nothing is written.
 #[test]
 fn a_copy_through_a_reference_never_carries_a_decoding_of_another_encoding() {
     let scratch = Scratch::new("copy-not-utf8-turn");
@@ -11281,13 +11280,75 @@ fn a_copy_through_a_reference_never_carries_a_decoding_of_another_encoding() {
     std::fs::write(scratch.path.join("vendor/wide.txt"), &wide).unwrap();
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
+    for (name, reference) in [("latin1.txt", "ref:1"), ("wide.txt", "ref:3")] {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request_2("read_file", r#"{"path":"vendor/latin1.txt"}"#),
+            tool_request_2("read_file", r#"{"path":"vendor/wide.txt"}"#),
+            tool_request_2(
+                "write_file",
+                &format!(r#"{{"path":"copy.txt","contents_ref":"{reference}"}}"#),
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let mut trust = bravebot_core::trust::TrustStore::new("/work");
+        trust.trust(".");
+        trust.distrust("vendor");
+        let mut conversation = bravebot_agent::Conversation::new();
+        take_a_turn(
+            &config,
+            &workspace,
+            &mut conversation,
+            trust,
+            Task::new("copy a vendor file to copy.txt"),
+        )
+        .expect("turn runs");
+
+        let last = received.try_iter().last().expect("a final request");
+        let (_, write) = last
+            .split_once("Result of write_file")
+            .expect("the write's result was sent");
+        // The request carries every tool's description after the messages, which say "binary".
+        let write = write.split(r#""tools""#).next().unwrap_or(write);
+        assert!(
+            write.contains("another encoding") && !write.contains("binary"),
+            "{name}: the copy was not refused as a decoding: {write}"
+        );
+        assert!(
+            !scratch.path.join("copy.txt").exists(),
+            "{name}: a decoding was written as the file: {:?}",
+            std::fs::read(scratch.path.join("copy.txt"))
+        );
+    }
+}
+
+/// A processor only reads what it is given, so a file in another encoding in a directory nobody
+/// vouched for is text it can work on. The planner is shown a reference to it and not told it is
+/// binary, and the processor receives the decoded text with no note about the decoding in it.
+#[test]
+fn a_processor_reads_a_file_in_another_encoding_as_its_text() {
+    let scratch = Scratch::new("processor-reads-utf16");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    let wide: Vec<u8> = [0xFFu8, 0xFE]
+        .into_iter()
+        .chain(
+            "alpha wide line\n"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        )
+        .collect();
+    std::fs::write(scratch.path.join("vendor/wide.txt"), &wide).unwrap();
+    std::fs::write(scratch.path.join("vendor/latin1.txt"), b"caf\xe9 au lait\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
     let (endpoint, received) = serve_sequence(vec![
-        tool_request_2("read_file", r#"{"path":"vendor/latin1.txt"}"#),
         tool_request_2("read_file", r#"{"path":"vendor/wide.txt"}"#),
+        tool_request_2("read_file", r#"{"path":"vendor/latin1.txt"}"#),
         tool_request_2(
-            "write_file",
-            r#"{"path":"copy.txt","contents_ref":"ref:1"}"#,
+            "spawn_processor",
+            r#"{"reads":["ref:1","ref:3"],"instruction":"summarise both files"}"#,
         ),
+        processor_reply("A SUMMARY"),
         reply_with("done"),
     ]);
     let config = config_for(&endpoint);
@@ -11300,31 +11361,36 @@ fn a_copy_through_a_reference_never_carries_a_decoding_of_another_encoding() {
         &workspace,
         &mut conversation,
         trust,
-        Task::new("copy vendor/latin1.txt to copy.txt"),
+        Task::new("summarise the vendor files"),
     )
     .expect("turn runs");
 
-    let last = received.try_iter().last().expect("a final request");
-    let (_, wide_read) = last
-        .split_once("Result of read_file")
-        .and_then(|(_, rest)| rest.split_once("Result of read_file"))
-        .expect("both reads' results were sent");
+    let bodies: Vec<String> = received.try_iter().collect();
+    let processor = bodies
+        .iter()
+        .find(|body| body.contains("You are an isolated processor"))
+        .expect("the processor ran");
     assert!(
-        wide_read.contains("binary file"),
-        "the UTF-16 file was not reported as binary: {wide_read}"
-    );
-    let (_, write) = last
-        .split_once("Result of write_file")
-        .expect("the write's result was sent");
-    assert!(
-        write.contains("encoding other than UTF-8"),
-        "the copy was not refused as another encoding: {write}"
+        processor.contains("alpha wide line"),
+        "the processor was not given the UTF-16 file's text: {processor}"
     );
     assert!(
-        !scratch.path.join("copy.txt").exists(),
-        "a decoding was written as the file: {:?}",
-        std::fs::read(scratch.path.join("copy.txt"))
+        processor.contains("caf\\ufffd au lait") || processor.contains("caf\u{fffd} au lait"),
+        "the processor was not given the Latin-1 file's text: {processor}"
     );
+    assert!(
+        !processor.contains("edit_file cannot change"),
+        "a note about the decoding is not part of the file: {processor}"
+    );
+    for body in bodies
+        .iter()
+        .filter(|body| !body.contains("You are an isolated processor"))
+    {
+        assert!(
+            !body.contains("binary file") && !body.contains("alpha wide line"),
+            "the planner was told the file is binary or shown its text: {body}"
+        );
+    }
 }
 
 /// A binary file in the tree must not break search: the file is skipped, not fatal.

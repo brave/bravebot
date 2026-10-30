@@ -56,6 +56,8 @@ pub enum SlotError {
     AlreadyWritten(SlotId),
     /// Read of a slot that has not been written yet.
     NotWritten(SlotId),
+    /// Something that writes or hands on a slot's text asked for a slot whose text is a decoding.
+    Decoded(SlotId),
 }
 
 impl fmt::Display for SlotError {
@@ -67,6 +69,11 @@ impl fmt::Display for SlotError {
             ),
             Self::AlreadyWritten(s) => write!(f, "slot '{s}' has already been written"),
             Self::NotWritten(s) => write!(f, "slot '{s}' has not been written yet"),
+            Self::Decoded(s) => write!(
+                f,
+                "slot '{s}' holds a file in another encoding as the text it decodes to, which is \
+                 not the file's own bytes, so it cannot be written or handed to a program"
+            ),
         }
     }
 }
@@ -196,6 +203,17 @@ enum Entry {
         /// to can show the claim made about it, and it is released for a screen and nowhere
         /// else.
         remark: Option<Labelled<String>>,
+        /// Set when the text is a reading of a file in another encoding rather than the file's own
+        /// bytes: UTF-16 or UTF-32 with a byte order mark, or bytes that are not UTF-8 shown as
+        /// U+FFFD. Chosen by the driver from the shape of the first bytes, the class of decision
+        /// the seventh entry under Known costs in `docs/specs/labels.md` lists, and never from
+        /// anything the planner said.
+        ///
+        /// What a slot holds is written to a file or handed to a program as the file, and a
+        /// decoding would write U+FFFD over the byte it replaced or UTF-8 over a UTF-16 file. So
+        /// [`SlotStore::take_for_effect`] refuses such a slot and only
+        /// [`SlotStore::take_for_reading`] returns it.
+        decoded: bool,
     },
     Unread(Deferred),
 }
@@ -257,11 +275,49 @@ impl Entry {
         }
     }
 
+    fn decoded(&self) -> bool {
+        match self {
+            Self::Read { decoded, .. } => *decoded,
+            // Nothing has been read, so there is no text to be a decoding of anything.
+            Self::Unread(_) => false,
+        }
+    }
+
     fn remark(&self) -> Option<&Labelled<String>> {
         match self {
             Self::Read { remark, .. } => remark.as_ref(),
             // Nothing has produced this yet, so nothing has been said about it.
             Self::Unread(_) => None,
+        }
+    }
+}
+
+/// What a deferred read produced: the text for the slot, and whether that text is a decoding of a
+/// file in another encoding rather than the file's own bytes.
+///
+/// A plain `String` converts to one that is not a decoding, so a read of anything but a file
+/// keeps returning the text alone.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Fill {
+    pub text: String,
+    pub decoded: bool,
+}
+
+impl Fill {
+    /// Text that is a decoding of a file in another encoding.
+    pub fn decoded(text: String) -> Self {
+        Self {
+            text,
+            decoded: true,
+        }
+    }
+}
+
+impl From<String> for Fill {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            decoded: false,
         }
     }
 }
@@ -448,12 +504,36 @@ impl SlotStore {
     /// Nobody sees these bytes; they travel from the slot to the effect, and the label travels
     /// with them. A slot still waiting on its file refuses by name. Returning nothing would read
     /// as an empty document, and an effect would carry out the emptiness.
+    ///
+    /// A slot whose text is a decoding of a file in another encoding is refused by name, since an
+    /// effect writes the text to a file or hands it to a program as the file. A consumer that only
+    /// reads the text asks [`SlotStore::take_for_reading`].
     pub fn take_for_effect(&self, id: &SlotId) -> Result<Labelled<String>, SlotError> {
+        match self.slots.get(id) {
+            Some(Entry::Read { decoded: true, .. }) => Err(SlotError::Decoded(id.clone())),
+            Some(Entry::Read { value, .. }) => Ok(value.clone()),
+            Some(Entry::Unread(_)) => Err(SlotError::Unread(id.clone())),
+            None => Err(SlotError::NotWritten(id.clone())),
+        }
+    }
+
+    /// Hand a slot's content to a consumer that only reads it, still labelled.
+    ///
+    /// The same as [`SlotStore::take_for_effect`], except that a slot whose text is a decoding is
+    /// returned. For a processor's input, which is read and never written back as the file.
+    pub fn take_for_reading(&self, id: &SlotId) -> Result<Labelled<String>, SlotError> {
         match self.slots.get(id) {
             Some(Entry::Read { value, .. }) => Ok(value.clone()),
             Some(Entry::Unread(_)) => Err(SlotError::Unread(id.clone())),
             None => Err(SlotError::NotWritten(id.clone())),
         }
+    }
+
+    /// Whether this slot's text is a decoding of a file in another encoding.
+    ///
+    /// Metadata, and the driver's own: a yes or a no, and no part of the text.
+    pub fn is_decoded(&self, id: &SlotId) -> bool {
+        self.slots.get(id).is_some_and(Entry::decoded)
     }
 
     /// Record that a slot will hold `path`, without reading it.
@@ -524,6 +604,7 @@ impl SlotStore {
         id: &SlotId,
         content: Labelled<String>,
         revision: crate::file_authority::Stamp,
+        decoded: bool,
     ) -> Result<Measured, SlotError> {
         let deferred = match self.slots.get(id) {
             Some(Entry::Unread(deferred)) => deferred.clone(),
@@ -551,13 +632,16 @@ impl SlotStore {
             id.clone(),
             Entry::Read {
                 value: taint(content, label),
-                verbatim: Some(Box::new((deferred.path.clone(), revision))),
+                // A decoding is not a copy of the file, so a write of it back is not a write of
+                // the file as it is.
+                verbatim: (!decoded).then(|| Box::new((deferred.path.clone(), revision))),
                 origin: Some(deferred.path.clone()),
                 path: Some(deferred.path),
                 home: Home::Anywhere,
                 from_command: None,
                 picture: None,
                 remark: None,
+                decoded,
             },
         );
         Ok(measured)
@@ -612,6 +696,7 @@ impl SlotWriter<'_> {
                 picture: None,
                 origin: None,
                 remark: None,
+                decoded: false,
             },
         );
         Ok(())
@@ -647,6 +732,7 @@ impl SlotWriter<'_> {
                 picture: None,
                 origin: None,
                 remark: None,
+                decoded: false,
             },
         );
         Ok(measured)
@@ -747,6 +833,7 @@ mod tests {
                 &sid("ref:0"),
                 Labelled::new("one\ntwo".to_string(), Label::untrusted_private()),
                 Default::default(),
+                false,
             )
             .expect("the first reading fills it");
         assert!(!store.is_unread(&sid("ref:0")));
@@ -767,7 +854,8 @@ mod tests {
             store.fill(
                 &sid("ghost"),
                 Labelled::new("x".to_string(), Label::untrusted_private()),
-                Default::default()
+                Default::default(),
+                false
             ),
             Err(SlotError::NotWritten(sid("ghost")))
         );
@@ -786,6 +874,7 @@ mod tests {
                 &sid("ref:0"),
                 Labelled::new("one\ntwo".to_string(), Label::untrusted_private()),
                 Default::default(),
+                false,
             )
             .expect("the first reading fills it");
         assert_eq!(measured.lines, 2);
@@ -794,10 +883,41 @@ mod tests {
             store.fill(
                 &sid("ref:0"),
                 Labelled::new("something else".to_string(), Label::untrusted_private()),
-                Default::default()
+                Default::default(),
+                false
             ),
             Err(SlotError::AlreadyWritten(sid("ref:0")))
         );
+    }
+
+    /// A slot filled from a decoding of another encoding is text for reading only: handing it to an
+    /// effect would write the decoding as the file, and a write of it back would pass for putting
+    /// the file back as it is.
+    #[test]
+    fn a_slot_holding_a_decoding_is_read_but_never_given_to_an_effect() {
+        let mut store = SlotStore::new();
+        for (id, decoded) in [("ref:0", true), ("ref:1", false)] {
+            store
+                .defer(sid(id), "notes.md", Label::untrusted_private())
+                .unwrap();
+            store
+                .fill(
+                    &sid(id),
+                    Labelled::new("one\ntwo".to_string(), Label::untrusted_private()),
+                    Default::default(),
+                    decoded,
+                )
+                .unwrap();
+        }
+
+        assert!(store.is_decoded(&sid("ref:0")));
+        assert!(!store.is_decoded(&sid("ref:1")));
+        assert_eq!(
+            store.take_for_effect(&sid("ref:0")).unwrap_err(),
+            SlotError::Decoded(sid("ref:0"))
+        );
+        assert!(store.take_for_reading(&sid("ref:0")).is_ok());
+        assert!(store.take_for_effect(&sid("ref:1")).is_ok());
     }
 
     /// The label recorded when the slot was reserved is a ceiling, never a promise: content that
@@ -813,6 +933,7 @@ mod tests {
                 &sid("ref:0"),
                 Labelled::new("payload".to_string(), Label::trusted_public()),
                 Default::default(),
+                false,
             )
             .unwrap();
 
