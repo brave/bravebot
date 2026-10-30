@@ -85,6 +85,25 @@ not approve it is recorded the same way, as a refusal under `approval`. The entr
 says the call was not approved and the server was not called. A call a `deny` rule refuses was never
 put to a person and is recorded under `mcp_call` alone.
 
+Five questions that are not a tool call's own approval are recorded the same way, as a refusal under
+`approval`, when the person does not approve them. Each entry is fixed words and names the question
+only by what the driver called it, never by what it held:
+
+- A read held back for what looks like a credential, in `read_file`, in the lines around an edit
+  and in `read_git`, names the tool and says none of it was shown. It names neither the path nor
+  what was found.
+- Held-back output (`read_output`) and a vetted read (`vet_content`) name the tool and the
+  reference, `ref:N`, and say the bytes were kept back.
+- The tools an MCP server offers name the alias the person gave the server and say none of its
+  tools was offered.
+- Following an MCP server to the address its reply named names the alias and says the server was
+  not reached at the new address. The address is the server's own bytes and is not written.
+- Starting a language server names the language and says no server was started. It names neither
+  the program, its arguments nor the workspace.
+
+A question whose answer is already recorded, such as a path's reach or a host's grant, is not
+among them.
+
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
 
@@ -135,6 +154,11 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_core::policy::an_mcp_call_the_person_did_not_approve_is_a_refusal_under_approval`
 `verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::mcp::a_call_a_rule_refuses_is_not_recorded_as_one_the_person_did_not_approve`
+`verified-by: bravebot_core::policy::a_question_the_person_did_not_approve_is_a_refusal_under_approval`
+`verified-by: bravebot_agent::turn::a_read_the_person_does_not_agree_to_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_credential_in_history_is_held_back_until_the_person_agrees`
+`verified-by: bravebot_agent::mcp::a_tool_list_and_a_move_the_person_does_not_approve_are_recorded_as_refusals`
+`verified-by: bravebot_agent::lsp::a_language_server_the_person_does_not_approve_is_recorded_as_a_refusal`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content

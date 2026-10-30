@@ -7767,7 +7767,51 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
-    /// The one sentence each of the three says, from words of this file's own, so no caller can put
+    /// Record that showing the planner what looks like a credential in a read was put to the person
+    /// and not approved, so none of it was shown (TRACE-1). `call` is the tool, `read_file`,
+    /// `edit_file` or `read_git`. The reasons are those of [`Policy::refuse_unapproved_write`], and
+    /// the sentence names neither the path nor what was found (TRACE-2).
+    pub fn refuse_unapproved_exposure(&mut self, call: &str) {
+        self.refuse_unapproved(call, "display of a credential", "none of it was shown");
+    }
+
+    /// Record that releasing held-back bytes to the planner was put to the person and not
+    /// approved, so they were kept back (TRACE-1). `tool` is `read_output` or `vet_content` and
+    /// `slot` the reference the driver minted for the bytes, never anything they held (TRACE-2).
+    pub fn refuse_unapproved_release(&mut self, tool: &str, slot: &str) {
+        self.refuse_unapproved(
+            &format!("{tool} {slot}"),
+            "read",
+            "the bytes were kept back",
+        );
+    }
+
+    /// Record that the tools an MCP server offers were put to the person and not approved, so none
+    /// was offered (TRACE-1). The server is named by the alias the person gave it, as
+    /// [`Policy::refuse_unapproved_call`] names one, and the list is not named at all (TRACE-2).
+    pub fn refuse_unapproved_tool_list(&mut self, alias: &str) {
+        self.refuse_unapproved(alias, "tool list", "none of its tools was offered");
+    }
+
+    /// Record that following an MCP server to the address its reply named was put to the person
+    /// and not approved, so the server was not reached there (TRACE-1). The address is the server's
+    /// own bytes and is not in the sentence (TRACE-2).
+    pub fn refuse_unapproved_move(&mut self, alias: &str) {
+        self.refuse_unapproved(
+            alias,
+            "move",
+            "the server was not reached at the new address",
+        );
+    }
+
+    /// Record that starting a language server was put to the person and not approved, so none was
+    /// started (TRACE-1). The server is named by the language, the driver's own word for it, and
+    /// not by the program, its arguments or the workspace (TRACE-2).
+    pub fn refuse_unapproved_server(&mut self, language: &str) {
+        self.refuse_unapproved(language, "start", "no language server was started");
+    }
+
+    /// The one sentence each of these says, from words of this file's own, so no caller can put
     /// anything a call carried into the trail (TRACE-2).
     fn refuse_unapproved(&mut self, call: &str, asked: &'static str, undone: &'static str) {
         let _ = self.deny(
@@ -19170,6 +19214,51 @@ five
                         "notes:append: the call was not approved, so the server was not called"
                     ),
                 ]
+            );
+        }
+
+        /// TRACE-1: each question about a read, a tool list, a move or a language server that is put
+        /// to the person and not approved is a refusal under `approval`, in fixed words that carry
+        /// only what the driver named it by (TRACE-2), and the turn does not end as clean. The
+        /// regression it rejects is a no that leaves nothing in the trail. Each case is given a
+        /// distinct name, so a sentence that drops the name, or reuses one case's wording for
+        /// another, fails it.
+        #[test]
+        fn a_question_the_person_did_not_approve_is_a_refusal_under_approval() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_unapproved_exposure("read_git");
+            turn.refuse_unapproved_release("vet_content", "ref:4");
+            turn.refuse_unapproved_tool_list("notes");
+            turn.refuse_unapproved_move("weather");
+            turn.refuse_unapproved_server("Go");
+            assert!(
+                !turn.finish(),
+                "a turn with an unapproved question ended clean"
+            );
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            let said = [
+                "read_git: the display of a credential was not approved, so none of it was shown",
+                "vet_content ref:4: the read was not approved, so the bytes were kept back",
+                "notes: the tool list was not approved, so none of its tools was offered",
+                "weather: the move was not approved, so the server was not reached at the new address",
+                "Go: the start was not approved, so no language server was started",
+            ];
+            assert_eq!(
+                refused,
+                said.map(|reason| ("approval", Principle::Capability, reason))
             );
         }
 

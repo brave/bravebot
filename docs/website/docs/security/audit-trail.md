@@ -171,6 +171,19 @@ was never put to you and has its own `mcp_call` line.
 BLOCK   approval: weather:get_forecast: the call was not approved, so the server was not called
 ```
 
+The other questions you can answer no to get a line of their own, naming the tool, the server's
+alias or the language, and never what the question held: a read held back for what looks like a
+credential, held-back output or a vetted read (named by its `ref:N`), the tools a server offers, a
+server's move to a new address, and the start of a language server.
+
+```
+BLOCK   approval: read_file: the display of a credential was not approved, so none of it was shown
+BLOCK   approval: read_output ref:1: the read was not approved, so the bytes were kept back
+BLOCK   approval: weather: the tool list was not approved, so none of its tools was offered
+BLOCK   approval: weather: the move was not approved, so the server was not reached at the new address
+BLOCK   approval: Rust: the start was not approved, so no language server was started
+```
+
 ## The hosts a run's programs asked for are recorded
 
 When the sandbox holds a run to [a list of hosts](sandbox.md#sandboxnetwork), the

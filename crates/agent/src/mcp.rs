@@ -683,6 +683,7 @@ impl Session {
             return (State::Unasked(listing), usage);
         }
         if answer == Decision::Reject {
+            policy.refuse_unapproved_tool_list(alias);
             said.notice(t!(mcp_tools_declined, alias = alias));
             return (State::Declined, usage);
         }
@@ -835,6 +836,7 @@ impl Session {
             may_record: self.may_stand(),
         };
         if confirmer.confirm_move(&request) == Decision::Reject {
+            policy.refuse_unapproved_move(alias);
             reporter.notice(t!(mcp_move_declined, alias = alias));
             return false;
         }

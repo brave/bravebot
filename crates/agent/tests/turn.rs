@@ -64313,6 +64313,8 @@ fn a_distrusted_file_deep_under_git_keeps_the_repository_closed() {
 /// CRED-15. A commit that added a key puts the key in the diff, so what read_git would show is
 /// scanned as a file read is, and held back until the person agrees. Both directions, since a scan
 /// that held every such answer back would make a repository with a `.env` in its history unreadable.
+/// TRACE-1: the declined read is a refusal under `approval` naming `read_git`, and the approved one
+/// writes none.
 #[test]
 fn a_credential_in_history_is_held_back_until_the_person_agrees() {
     for (name, agrees) in [("declined", false), ("approved", true)] {
@@ -64366,6 +64368,16 @@ fn a_credential_in_history_is_held_back_until_the_person_agrees() {
                  context: {answered}"
             );
         }
+        let expected: &[&str] = if agrees {
+            &[]
+        } else {
+            &["read_git: the display of a credential was not approved, so none of it was shown"]
+        };
+        assert_eq!(
+            refused_under_approval(&sink),
+            expected,
+            "a read_git the person {name} was not recorded as the trail should hold it"
+        );
     }
 }
 
@@ -76666,4 +76678,138 @@ fn a_turn_with_only_home_rules_makes_no_projects_directory() {
         !home.join("projects").exists(),
         "the turn made a projects directory"
     );
+}
+
+/// One turn making each of `calls` in a vouched workspace holding a `.env` with a credential,
+/// put to `person`, with `checks` as the answers to the vetting check. Returns the trail and
+/// whether the turn ended as clean.
+fn a_turn_whose_questions_are_answered_by<C: bravebot_agent::confirm::Confirmer + Send>(
+    name: &str,
+    person: &mut C,
+    calls: Vec<String>,
+    checks: Vec<String>,
+) -> (RecordingSink, bool) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join(".env"), ENV_BESIDE_A_CREDENTIAL).unwrap();
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = calls;
+    replies.push(reply_with("done"));
+    let (endpoint, _received) = serve_sequence_answering_checks_with(checks, replies);
+    let mut sink = RecordingSink::new();
+    let outcome = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("look at the files"),
+        &mut bravebot_agent::Conversation::new(),
+        person,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    (sink, outcome.clean)
+}
+
+/// TRACE-1: a read held back from the planner because the person did not agree to it is a refusal
+/// under `approval`, in fixed words that name the tool and, for held-back bytes, the reference.
+/// The regression it rejects is a no that leaves the question in the trail and nothing about its
+/// answer, so the turn reads as clean and nobody can say why the file or the output was not
+/// shown. The `read_file` and `edit_file` turns refuse the same `.env`, so an entry that does not
+/// name the tool fails, and the approved control writes no refusal, so an entry written for every
+/// question put fails it.
+#[test]
+fn a_read_the_person_does_not_agree_to_is_recorded_as_a_refusal() {
+    let credential =
+        "{call}: the display of a credential was not approved, so none of it was shown";
+    let kept_back = "{call}: the read was not approved, so the bytes were kept back";
+    let said = |template: &str, call: &str| template.replace("{call}", call);
+
+    let (trail, clean) = a_turn_whose_questions_are_answered_by(
+        "trace-read-file",
+        &mut RemembersExposures::default(),
+        vec![tool_request("read_file", r#"{"path":".env"}"#)],
+        Vec::new(),
+    );
+    assert_eq!(
+        refused_under_approval(&trail),
+        [said(credential, "read_file")],
+        "a refused read_file was not recorded once, under the tool"
+    );
+    assert!(!clean, "a turn whose read was refused read as clean");
+
+    let (trail, clean) = a_turn_whose_questions_are_answered_by(
+        "trace-edit-file",
+        &mut RemembersExposures::default(),
+        vec![tool_request(
+            "edit_file",
+            r#"{"path":".env","old_text":"DEBUG=true","new_text":"DEBUG=false"}"#,
+        )],
+        Vec::new(),
+    );
+    assert_eq!(
+        refused_under_approval(&trail)
+            .into_iter()
+            .filter(|reason| reason.contains("display of a credential"))
+            .collect::<Vec<_>>(),
+        [said(credential, "edit_file")],
+        "the lines an edit held back were not recorded under the tool"
+    );
+    assert!(!clean, "a turn whose lines were held back read as clean");
+
+    let (trail, clean) = a_turn_whose_questions_are_answered_by(
+        "trace-read-output",
+        &mut ReadsWhatItRan::new(false),
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+        ],
+        Vec::new(),
+    );
+    assert!(
+        refused_under_approval(&trail).contains(&said(kept_back, "read_output ref:1")),
+        "held-back output was not recorded under its reference: {:?}",
+        refused_under_approval(&trail)
+    );
+    assert!(!clean, "a turn whose output was kept back read as clean");
+
+    let (trail, clean) = a_turn_whose_questions_are_answered_by(
+        "trace-vet-content",
+        &mut ShownAfterAVet::new(false),
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+        ],
+        vec![r#"{"verdict": "safe", "reason": "a single path"}"#.to_string()],
+    );
+    assert!(
+        refused_under_approval(&trail).contains(&said(kept_back, "vet_content ref:1")),
+        "a vetted read the person refused was not recorded: {:?}",
+        refused_under_approval(&trail)
+    );
+    assert!(!clean, "a turn whose vetted read was refused read as clean");
+
+    let (trail, clean) = a_turn_whose_questions_are_answered_by(
+        "trace-read-file-approved",
+        &mut RemembersExposures {
+            allow: true,
+            ..Default::default()
+        },
+        vec![tool_request("read_file", r#"{"path":".env"}"#)],
+        Vec::new(),
+    );
+    assert_eq!(
+        refused_under_approval(&trail),
+        Vec::<String>::new(),
+        "an approved read was recorded as refused"
+    );
+    assert!(clean, "a turn whose read was approved read as unclean");
 }
