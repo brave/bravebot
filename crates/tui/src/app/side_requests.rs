@@ -23,6 +23,9 @@ pub(super) fn one_request_key(session: &mut Session, key: KeyEvent, cancel: &Can
 
     if !stops_the_turn(session, key) {
         let action = handle_key_while_working(session, key);
+        if sessions_screen::say_why_it_waits(session, &action, sessions_screen::Busy::Request) {
+            return Action::None;
+        }
         return act_while_working(session, action, crate::clipboard::paste);
     }
 
@@ -885,6 +888,9 @@ pub(super) fn goal_check_key(session: &mut Session, key: KeyEvent, cancel: &Canc
 
     if !stops_the_turn(session, key) {
         let action = handle_key_while_working(session, key);
+        if sessions_screen::say_why_it_waits(session, &action, sessions_screen::Busy::Request) {
+            return Action::None;
+        }
         return act_while_working(session, action, crate::clipboard::paste);
     }
 
