@@ -503,17 +503,23 @@ impl<'a> Install<'a> {
             .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1");
         match self.profile {
             Profile::Home => {
-                command.env("HOME", self.profile_dir());
+                command
+                    .env("HOME", self.profile_dir())
+                    .env_remove("BRAVEBOT_HOME");
             }
             // The script reads HOME first, so a HOME that names something would win. A shell on
             // Windows that sets none is what an empty one stands for.
             Profile::Windows => {
                 command
                     .env("HOME", "")
+                    .env_remove("BRAVEBOT_HOME")
                     .env("USERPROFILE", self.profile_dir());
             }
             Profile::Neither => {
-                command.env("HOME", "").env("USERPROFILE", "");
+                command
+                    .env("HOME", "")
+                    .env_remove("BRAVEBOT_HOME")
+                    .env("USERPROFILE", "");
             }
         }
         if let Some(directory) = &self.install_dir {

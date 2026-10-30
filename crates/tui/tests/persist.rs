@@ -68,6 +68,7 @@ fn with_temp_home<T>(name: &str, body: impl FnOnce() -> T) -> T {
     let previous = std::env::var_os("HOME");
     // SAFETY: single-threaded within the lock, and restored before returning.
     unsafe { std::env::set_var("HOME", &dir) };
+    unsafe { std::env::remove_var("BRAVEBOT_HOME") };
 
     let result = body();
 

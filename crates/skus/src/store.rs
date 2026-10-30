@@ -735,6 +735,7 @@ mod tests {
             unsafe { std::env::remove_var(variable) };
         }
         if let Some(dir) = &dir {
+            // state-home-kept: the loop above has cleared it
             // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             unsafe { std::env::set_var("HOME", dir) };
         }

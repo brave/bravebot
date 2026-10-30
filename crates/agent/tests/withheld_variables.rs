@@ -88,6 +88,7 @@ fn the_planner_is_told_the_fixed_credentials_and_no_string_a_settings_file_wrote
     // the working directory while they are changed.
     unsafe {
         std::env::set_var("HOME", &home);
+        std::env::remove_var("BRAVEBOT_HOME");
         std::env::remove_var("BRAVEBOT_SUBPROCESS_ENV_SCRUB");
     }
     std::env::set_current_dir(&checkout).expect("enter the checkout");

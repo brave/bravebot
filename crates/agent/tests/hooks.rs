@@ -634,6 +634,7 @@ fn a_hook_is_not_handed_a_gateways_environment_token() {
     // variables are put back before any assertion.
     unsafe {
         std::env::set_var("HOME", &home);
+        std::env::remove_var("BRAVEBOT_HOME");
         std::env::set_var("ACME_GATEWAY_TOKEN", "a-live-gateway-token");
         std::env::remove_var("BRAVEBOT_SUBPROCESS_ENV_SCRUB");
     }

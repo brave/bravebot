@@ -47,6 +47,7 @@ impl Relocated {
         // is reading or writing either variable while this one owns them.
         unsafe {
             std::env::set_var("HOME", &home);
+            std::env::remove_var("BRAVEBOT_HOME");
             std::env::set_var(STATE_VARIABLE, &state);
         }
         Self {
