@@ -200,21 +200,6 @@ nothing about what the person wanted.
 
 `verified-by: none`
 
-## What this changed elsewhere
-
-- [prompting.md](prompting.md#PROMPT-9) names `--auto` beside `--vet` as a standing answer a person
-  gives in advance, and the "permission mode" row of [PROMPT-11](prompting.md#PROMPT-11) names it.
-- [cli.md](cli.md#CLI-1) lists three flags that let a run nobody is watching write, and `--auto` is
-  refused beside the other two.
-- [routing.md](routing.md#ROUTE-5) says an answer a mode gives in a person's place mints the same
-  single-use endorsement, which in auto is a classifier's word.
-- [trace.md](trace.md#TRACE-1) and [trace.md](trace.md#TRACE-7) describe the `auto_mode` entry and
-  the fetch answer.
-- [labels.md](labels.md#LABEL-8) has a row for the classifier's reply.
-- [permission-modes.md](permission-modes.md) counts five modes, puts auto on the ladder in
-  [MODE-5](permission-modes.md#MODE-5), and names it in [MODE-11](permission-modes.md#MODE-11).
-- [mouse.md](mouse.md#MOUSE-14) says a click passes auto by as it does bypassing.
-
 ## Known costs
 
 - The classifier cannot judge the body of a write or the binary a program name resolves to, because
