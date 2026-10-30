@@ -45,6 +45,7 @@ import { useExport } from './use-export'
 import { useRewind } from './use-rewind'
 import { useBots } from './use-bots'
 import { useTurn } from './use-turn'
+import { useEnhance } from './use-enhance'
 import { useAppearance } from './use-appearance'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, setExperience, dropConversation, experienceError } from './experience'
@@ -144,6 +145,7 @@ export function App(): React.JSX.Element {
   const { answerTrust, submit, submitPlan, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
     liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
   })
+  const enhancement = useEnhance({ openedLives, updateSession, setProblem })
   const { chosen, writeAppearance } = useAppearance()
 
   // Read inside `showSession`, which is installed once for the same reason. The list lives in the
@@ -186,7 +188,8 @@ export function App(): React.JSX.Element {
     void readBots()
     void readSummons()
     const stop = window.bravebot.onEvent((message: BridgeEvent) => {
-      if (message.event === 'agent.ready') apply(message, setLive, setBuild, refresh)
+      if (message.event === 'enhance.done' && message.session) enhancement.receive(message.session, message.data)
+      else if (message.event === 'agent.ready') apply(message, setLive, setBuild, refresh)
       else if (message.session) apply(message, (action) => updateSession(message.session!, action), setBuild, refresh)
       // The list holds two things this window did not write — the session behind a bot and how
       // much compaction has taken from it — and a turn is when either can have changed. Read back
@@ -988,6 +991,10 @@ export function App(): React.JSX.Element {
         onResumeQueued={() => setLive((old) => old ? { ...old, queuePaused: false } : old)}
         queued={live?.queued?.map((message) => message.prompt) ?? []}
         onInterject={interjectDraft}
+        onEnhance={() => { const handle = handleRef.current; if (handle) void enhancement.enhance(handle) }}
+        onStopEnhance={() => { const handle = handleRef.current; if (handle) enhancement.stop(handle) }}
+        onRestoreEnhanced={() => { const handle = handleRef.current; return !!handle && enhancement.restore(handle) }}
+        onDismissEnhancement={() => { const handle = handleRef.current; if (handle) enhancement.dismiss(handle) }}
         onQueue={queueDraft}
         interjected={live?.interjected?.map((line) => line.prompt) ?? []}
         onRemoveQueued={(index) => setLive((old) => old ? { ...old, queued: old.queued?.filter((_, at) => at !== index) } : old)}

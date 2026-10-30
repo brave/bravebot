@@ -548,6 +548,8 @@ const ALLOWED = new Set([
   'turn.send',
   'turn.cancel',
   'turn.interject',
+  'session.enhance',
+  'session.enhance.cancel',
   'mentions.offer',
   'mentions.named',
   'confirm.reply',

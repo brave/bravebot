@@ -169,6 +169,10 @@ pub const DENIED: &[&str] = &[
     // Words a person types into a turn already running (INPUT-10). The only client of the host
     // today is not a window with a message box that stays live while a turn runs.
     "turn.interject",
+    // A request to the session's model on the person's draft, for a message box to put in the box
+    // (INPUT-50). The only client of the host today has no box to put it in.
+    "session.enhance",
+    "session.enhance.cancel",
     // Answers that widen what a session may do or read beyond `trust.reply` above, which are not
     // offered to any client yet.
     "output.reply",

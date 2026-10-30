@@ -95,6 +95,10 @@ struct Open {
     /// holds the session's state, which is when the set cannot be resolved again. A name from a
     /// stale set is refused by the turn it is sent in, which resolves the set afresh.
     offered_definitions: Mutex<Vec<bravebot_mentions::Entry>>,
+    /// The stop for the request to rewrite the message in the box, while one may be running
+    /// (INPUT-50). Left in place once it has answered: stopping a request that has ended does
+    /// nothing, and the next one replaces it.
+    enhancing: Option<Cancel>,
 }
 
 impl Open {
@@ -120,6 +124,7 @@ impl Open {
             permission_mode: LiveMode::default(),
             sandbox: None,
             offered_definitions: Mutex::new(Vec::new()),
+            enhancing: None,
         }
     }
 
@@ -282,6 +287,8 @@ impl Bridge {
             "pastes.check" => crate::attached::paste_check(request),
             "turn.cancel" => self.cancel_turn(request),
             "turn.interject" => self.interject_turn(request),
+            "session.enhance" => self.enhance_draft(request),
+            "session.enhance.cancel" => self.cancel_enhancement(request),
             "watches.list" | "watches.add" | "watches.stop" => self.watches(request),
             "watches.poll" => {
                 self.poll_watches();
@@ -1223,6 +1230,9 @@ impl Bridge {
             running.cancel.cancel();
             running.refuse_pending();
         }
+        if let Some(enhancing) = &open.enhancing {
+            enhancing.cancel();
+        }
         let workers = self.workers.remove(&handle).unwrap_or_default();
         // The end of a session that began is one of the workers this returns, so a host that waits for
         // them waits for it, and it follows the turn that was running (HOOK-10).
@@ -1526,6 +1536,95 @@ impl Bridge {
         });
 
         Ok(json!({ "turn": turn_number, "target": target }))
+    }
+
+    /// Ask the session's model to rewrite `draft` to be more specific, and return before it has
+    /// answered (INPUT-50).
+    ///
+    /// The request is [`bravebot_agent::aside::Question::enhance`], the one the terminal's
+    /// Ctrl-P makes, over the exchange as it stands and with no tools. Nothing is sent to a turn
+    /// and the conversation is not changed: the answer comes back as an `enhance.done` event, which
+    /// the window may put in its box, and what the person sends is what they send. Refused while a
+    /// turn runs, since the exchange belongs to the turn then.
+    fn enhance_draft(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let draft = request.string("draft")?;
+        if let Some(why) = crate::enhance::refusal(&draft) {
+            return Err(Failure::bad_request(why));
+        }
+        let requested_model = crate::models::selection(request.params.get("model"))?;
+
+        self.reap(&handle);
+
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        open.ready_for_work()?;
+
+        let model = requested_model.or_else(|| open.model.clone());
+        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
+        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
+            return Err(Failure::bad_request(refused));
+        }
+        let state = Arc::clone(&open.state);
+        // Taken here, on the thread that holds the state, because a conversation is not `Clone`
+        // and what crosses to the worker is the request and not the exchange.
+        let (asking, account, trust) = {
+            let state = state.lock().map_err(|_| {
+                Failure::new(ErrorCode::Internal, "the session's state is unavailable")
+            })?;
+            (
+                bravebot_agent::aside::Question::enhance(&state.conversation, &draft),
+                state.account.clone(),
+                state.answers.trust.clone(),
+            )
+        };
+        let cancel = Cancel::new();
+        let emitter = self.emitter.clone();
+        let session = handle.clone();
+        if let Some(open) = self.open.get_mut(&handle) {
+            open.enhancing = Some(cancel.clone());
+        }
+        self.workers_of(&handle).spawn(move || {
+            let egress = Egress::new();
+            let mut sink = bravebot_session::audit::Trail::new();
+            let done = agent_turn::aside(
+                &config,
+                &egress,
+                &account,
+                asking,
+                model.as_deref(),
+                &mut sink,
+                trust,
+                |_written| {},
+                &cancel,
+            );
+            let (event, tokens) = crate::enhance::settle(done, cancel.is_cancelled());
+            // Charged to the session as an aside is in the terminal: the request was made and
+            // spent what it spent, whether or not it is offered.
+            if tokens > 0
+                && let Ok(mut state) = state.lock()
+            {
+                state.tokens += tokens;
+            }
+            emitter.send(Event::new("enhance.done", &session, event));
+        });
+        Ok(json!({ "started": true }))
+    }
+
+    /// Stop the request to rewrite the message, if one is running. Nothing running is not an
+    /// error: the answer may have arrived first.
+    fn cancel_enhancement(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        if let Some(cancel) = &open.enhancing {
+            cancel.cancel();
+        }
+        Ok(json!({}))
     }
 
     /// Start a manifest run, and return before it finishes (MANIFEST-11).

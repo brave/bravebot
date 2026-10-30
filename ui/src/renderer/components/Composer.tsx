@@ -4,6 +4,7 @@ import { projectLabel } from '../../shared/recents'
 import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
 import type { Staged, SummonedBot } from '../staging'
+import type { Enhancement } from '../enhancing'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
@@ -80,6 +81,14 @@ export interface ComposerProps {
   /** Stage a bot picked from the list, replacing the half-typed `word`. */
   onSummon?: (bot: SummonedBot, word: string | null) => void
   onPreview: (path: string) => void
+  /** The rewrite of the box that is out or standing in it, and what the person was last told of it (INPUT-50). */
+  enhancement?: Enhancement
+  /** Ask for the box to be made more specific, which puts the rewrite in the box and sends nothing. */
+  onEnhance: () => void
+  onStopEnhance: () => void
+  /** Escape over a rewrite: put back what was written. Says whether there was a rewrite to put back. */
+  onRestoreEnhanced: () => boolean
+  onDismissEnhancement: () => void
   /** Lines sent into the running turn that it has not read yet. */
   interjected: string[]
   queued: string[]
@@ -184,6 +193,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
     interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false, summonable = NO_BOTS,
+    enhancement, onEnhance, onStopEnhance, onDismissEnhancement,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
   const latest = useRef(props)
@@ -303,6 +313,11 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   const mention = useRef({ typed, rows, active, dismissed, rowAt, choose, summon, enter })
   mention.current = { typed, rows, active, dismissed, rowAt, choose, summon, enter }
 
+  // A box emptied, by sending or by hand, ends a rewrite: what the person wrote is not waiting to
+  // come back, and Escape in a later message must not bring it.
+  const holdsRewrite = !!enhancement?.rewritten
+  useEffect(() => { if (holdsRewrite && !draft.trim()) onDismissEnhancement() }, [holdsRewrite, draft, onDismissEnhancement])
+
   const blocked = askingTrust || backendReady === false || starting
   const canSend = !blocked && draft.trim().length > 0
 
@@ -356,6 +371,23 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   onClick={() => onRemoveQueued(index)} />
               </div>
             ))}
+          </div>
+        )}
+        {enhancement?.asking && (
+          <div className="composer-tray composer-notice enhancing" role="status" data-test="enhancing">
+            <Icon name="sparkles" />
+            <span className="notice-text">Making the message more specific…</span>
+            <Button size="tiny" kind="plain" onClick={onStopEnhance}>Stop</Button>
+          </div>
+        )}
+        {!enhancement?.asking && enhancement?.note && (
+          <div className="composer-tray composer-notice enhanced" role="status" data-test="enhanced-note">
+            <Icon name="sparkles" />
+            <span className="notice-text">{enhancement.note}</span>
+            {enhancement.rewritten && (
+              <Button size="tiny" kind="plain" data-test="enhance-put-back" onClick={() => { props.onRestoreEnhanced() }}>Put back mine</Button>
+            )}
+            <IconButton icon="close" size="tiny" label="Dismiss" tooltip="Dismiss" onClick={onDismissEnhancement} />
           </div>
         )}
         {refusal && (
@@ -435,6 +467,25 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 })
                 return
               }
+              // Make the message more specific (INPUT-50). It only rewrites the box, so it is free to
+              // use where Enter is not: it never sends anything.
+              if (event.key.toLowerCase() === 'e' && event.shiftKey && (event.metaKey || event.ctrlKey) && !event.altKey && !composing) {
+                event.preventDefault()
+                if (!event.repeat) now.onEnhance()
+                return
+              }
+              // Escape puts back what was written over a rewrite, or stops a request for one.
+              if (event.key === 'Escape' && !composing && !now.running && !openElsewhere()) {
+                if (now.enhancement?.asking) {
+                  event.preventDefault()
+                  now.onStopEnhance()
+                  return
+                }
+                if (now.enhancement?.rewritten && now.onRestoreEnhanced()) {
+                  event.preventDefault()
+                  return
+                }
+              }
               if (event.key === 'Escape' && now.running && !composing && !openElsewhere()) {
                 event.preventDefault()
                 now.onCancel()
@@ -457,6 +508,11 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
           <div className="composer-toolbar">
             <IconButton icon="attachment" label="Attach files" className="attach-files" onClick={onAttach}
               disabled={!canAttach} tooltip={!canAttach ? 'Send a first message, then attach files' : 'Attach files'} />
+            <IconButton icon="sparkles" label="Make the message more specific" className="enhance-message"
+              data-test="enhance-message" shortcut="⌘⇧E"
+              onClick={onEnhance}
+              disabled={blocked || running || !!enhancement?.asking || draft.trim().length === 0}
+              tooltip="Rewrite the message to be more specific, for you to edit before you send it" />
             <span className="toolbar-spacer" />
             {running && (
               <Button kind="plain" size="tiny" className="queue-for-after" data-test="queue-message"

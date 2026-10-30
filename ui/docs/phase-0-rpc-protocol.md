@@ -811,6 +811,22 @@ between rounds. A `false` means nobody will read the line, and the caller makes 
 they were sent. A blank `prompt` is `bad_request`, and a session with a session view is refused with
 `bad_request`.
 
+#### `session.enhance`
+
+```json
+{ "id": 8, "method": "session.enhance", "params": { "session": "s1", "draft": "add retries to the fetch", "model": null } }
+→ { "started": true }
+```
+
+Asks the session's model to rewrite `draft` to be more specific, and returns before it has answered
+(INPUT-50). The request is the one the terminal's Ctrl-P makes: the draft behind the driver's
+instruction, over the exchange as it stands, with no tools. Nothing is sent to a turn and the
+conversation is not changed; what the request cost is charged to the session. The answer arrives as
+an `enhance.done` event. An empty draft, one over 4000 characters, a turn that is running, and a
+session that has not answered the trust question are refused with `bad_request` or `turn_in_flight`.
+`session.enhance.cancel` (`{ "session" }`) stops a request that is out and answers `{}` whether or
+not one was.
+
 #### `mentions.offer`
 
 ```json
@@ -1031,6 +1047,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `agent.ready` | `{ build, version, home, configured, defaultModel }` | startup, no `session` |
 | `turn.started` | `{ turn, mode }` | `turn.send` accepted |
 | `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
+| `enhance.done` | `{ status, text?, removed?, limit?, message? }` | what a `session.enhance` came back with: `ready` (`text`, and `removed` characters that draw as nothing taken out), `untrusted`, `unusable` (empty or past `limit` characters), `stopped`, or `failed` (`message`) |
 | `phase` | `{ phase }` | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
 | `thinking` | `{ text }`, the words that arrived since the last | `Reporter::thinking`, **a delegate's and an empty one dropped** |

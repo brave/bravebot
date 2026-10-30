@@ -46,6 +46,7 @@ pub mod connectors;
 pub mod control_link;
 pub mod definitions;
 pub mod emit;
+pub mod enhance;
 pub mod fork;
 pub mod hooks;
 #[cfg(unix)]
