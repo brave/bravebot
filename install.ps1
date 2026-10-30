@@ -15,6 +15,9 @@
 #
 # Once the binary is in place the directory is added to the end of the user's PATH, and to the PATH of
 # the session this runs in, unless BRAVEBOT_NO_MODIFY_PATH is set. Nothing else in the user's PATH changes.
+#
+# It also registers bravebot:// links for the signed-in user, under HKCU\Software\Classes, unless
+# BRAVEBOT_NO_DEEP_LINKS is set.
 
 param([Parameter(Position = 0)][string]$Version = "")
 
@@ -336,4 +339,32 @@ param([Parameter(Position = 0)][string]$Version = "")
             Write-Host "note: could not add $installDir to your user PATH ($($_.Exception.Message)); add it yourself to run bravebot by name, then open a new terminal."
         }
     }
+    # Registers the handler for bravebot:// links (LINK-6): the URL protocol entry under the person's own
+    # HKCU:\Software\Classes, whose command runs the installed binary with the link as its one argument.
+    # bravebot.exe is a console program, so Windows gives it a terminal of its own. The key is removed and
+    # written again, so a value an earlier entry left, such as a DelegateExecute that names another
+    # handler, does not decide what runs. Nothing is registered where BRAVEBOT_NO_DEEP_LINKS is set or
+    # where the binary's path holds a character a command line would read as something else, and a
+    # registration that fails is a note and not a failed install.
+    function Register-DeepLink([string]$Binary) {
+        if ($env:BRAVEBOT_NO_DEEP_LINKS) {
+            return
+        }
+        if ($Binary.Contains('"') -or $Binary.Contains("%") -or $Binary.Contains("`n") -or $Binary.Contains("`r")) {
+            Write-Host "note: $Binary holds a character a command line would read as something else, so bravebot:// links were not registered."
+            return
+        }
+        $key = "HKCU:\Software\Classes\bravebot"
+        try {
+            Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue
+            $command = "$key\shell\open\command"
+            New-Item -Path $command -Force | Out-Null
+            Set-ItemProperty -LiteralPath $key -Name "(default)" -Value "URL:bravebot" -Type String
+            Set-ItemProperty -LiteralPath $key -Name "URL Protocol" -Value "" -Type String
+            Set-ItemProperty -LiteralPath $command -Name "(default)" -Value ('"' + $Binary + '" --handle-uri "%1"') -Type String
+        } catch {
+            Write-Host "note: could not register bravebot:// links ($($_.Exception.Message)); the install is complete without them."
+        }
+    }
+    Register-DeepLink $destination
 } -Requested $Version -Given ($PSBoundParameters.ContainsKey("Version"))
