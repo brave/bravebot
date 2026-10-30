@@ -484,6 +484,10 @@ pub struct AichatClient<'a> {
     /// Brave's own endpoint is never sent a lifetime, a lifetime being a choice about a gateway's
     /// account. Loaded and settled by [`call::drive`].
     refusals: Refusals,
+    /// The `prompt_cache_key` a gateway request carries, where its block set `options.setCacheKey`
+    /// ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)). Made for the session by whoever
+    /// holds the session and never read from the conversation.
+    cache_key: Option<String>,
     /// The stop to watch for and how long to wait between attempts, which is [`BACKOFF`] unless
     /// overridden by [`Self::with_backoff`].
     pace: Pace,
@@ -546,8 +550,16 @@ impl<'a> AichatClient<'a> {
             subscription: None,
             gateway: None,
             refusals: Refusals::default(),
+            cache_key: None,
             pace: Pace::new(BACKOFF),
         }
+    }
+
+    /// Carry `key` as the `prompt_cache_key` of every request to a gateway whose block set
+    /// `options.setCacheKey`, and of none other.
+    pub fn with_cache_key(mut self, key: impl Into<String>) -> Self {
+        self.cache_key = Some(key.into());
+        self
     }
 
     /// Send this request to a configured gateway instead of to Brave, bearer-authenticated where the
@@ -762,6 +774,17 @@ impl<'a> AichatClient<'a> {
                 object.insert(
                     "model".to_string(),
                     serde_json::Value::String(gateway.model.clone()),
+                );
+            }
+            if let (Some(object), Some(key)) = (
+                body.as_object_mut(),
+                self.cache_key
+                    .as_ref()
+                    .filter(|_| gateway.provider.set_cache_key),
+            ) {
+                object.insert(
+                    "prompt_cache_key".to_string(),
+                    serde_json::Value::String(key.clone()),
                 );
             }
             if let (Some(object), Some(options)) = (
@@ -1997,6 +2020,48 @@ mod tests {
         assert_eq!(
             body.get("model"),
             Some(&serde_json::json!("anthropic/claude-sonnet-4.5"))
+        );
+    }
+
+    /// BACKEND-68: a block that set `options.setCacheKey` has each request carry the key it was
+    /// given, and one that did not carries none. The regressions it rejects are a key sent with the
+    /// setting off, a key never sent, and a model's own `options` replacing the program's value.
+    #[test]
+    fn a_gateway_that_set_a_cache_key_sends_the_key_and_one_that_did_not_sends_none() {
+        let config = config();
+        let egress = Egress::new();
+        let sent = |setting: &str, model_options: &str| {
+            let provider = provider_block(&format!(
+                r#"{{"provider": {{"gw": {{
+                    "options": {{"baseURL": "https://gw.example.invalid/v1"{setting}}},
+                    "models": {{"m": {{"options": {model_options}}}}}
+                }}}}}}"#
+            ));
+            let http = AichatClient::new(&config, &egress)
+                .for_gateway(&provider, "m", Some(Secret::new("a-token")))
+                .with_cache_key("session-key")
+                .prepare(&request("m"))
+                .expect("prepared");
+            body(&http).get("prompt_cache_key").cloned()
+        };
+
+        assert_eq!(
+            sent(r#", "setCacheKey": true"#, "{}"),
+            Some(serde_json::json!("session-key"))
+        );
+        assert_eq!(sent("", "{}"), None, "sent with the setting absent");
+        assert_eq!(
+            sent(r#", "setCacheKey": false"#, "{}"),
+            None,
+            "sent with the setting off"
+        );
+        assert_eq!(
+            sent(
+                r#", "setCacheKey": true"#,
+                r#"{"prompt_cache_key": "from-the-file"}"#
+            ),
+            Some(serde_json::json!("session-key")),
+            "a model's options replaced the key"
         );
     }
 

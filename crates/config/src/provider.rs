@@ -625,6 +625,11 @@ pub struct Provider {
     /// Nothing for an AWS entry: its account is what a client reaches and carries its own
     /// ([`crate::bedrock::Bedrock::patience`]), so the figures have one home.
     pub patience: Patience,
+    /// Whether `options.setCacheKey` is `true`, so a chat-completions request carries a
+    /// `prompt_cache_key` ([BACKEND-68](../../../docs/specs/backends.md#BACKEND-68)).
+    ///
+    /// Off unless the block says so: the value lets the host tie a session's requests together.
+    pub set_cache_key: bool,
     /// A reply ceiling somebody exported, which outranks whatever the models state.
     ///
     /// Set where the account's own copy is, once the environment has been read: a block is parsed
@@ -882,6 +887,10 @@ impl Provider {
             models: models(entry.get("models")),
             context_window: options.and_then(|options| positive(options.get("contextWindow"))),
             patience: Patience::from_options(options),
+            set_cache_key: options
+                .and_then(|options| options.get("setCacheKey"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
             output_budget: None,
             protocol,
             bedrock: None,
@@ -932,6 +941,7 @@ impl Provider {
             models: Vec::new(),
             context_window: None,
             patience: Patience::default(),
+            set_cache_key: false,
             output_budget: None,
             protocol,
             bedrock: None,
@@ -978,6 +988,7 @@ impl Provider {
             models,
             context_window: None,
             patience: Patience::default(),
+            set_cache_key: false,
             output_budget: None,
             protocol: Protocol::ChatCompletions,
             bedrock: Some(bedrock),
@@ -2025,6 +2036,22 @@ mod tests {
             .map(|(id, _)| id)
             .collect();
         assert_eq!(refused, ["bad"]);
+    }
+
+    /// BACKEND-68: only `true` turns the key on. The regressions it rejects are any present value
+    /// turning it on, and a string `"true"` being read as a switch.
+    #[test]
+    fn only_a_true_set_cache_key_turns_the_key_on() {
+        let set = |value: &str| {
+            parsed(&format!(
+                r#"{{"provider": {{"gw": {{"options": {{"baseURL": "https://gw.example.invalid/v1", "setCacheKey": {value}}}}}}}}}"#
+            ))[0]
+                .set_cache_key
+        };
+        assert!(set("true"));
+        for other in ["false", r#""true""#, "1", "null"] {
+            assert!(!set(other), "{other}");
+        }
     }
 
     /// The `google-vertex` entry written as `entry`, which holds the whole block.
