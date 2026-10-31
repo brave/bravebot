@@ -25486,6 +25486,82 @@ mod tests {
         }
     }
 
+    /// VIEW-8: `/checkouts remove` draws a checkout it removed as finished, and a checkout kept
+    /// because the person declined, one it does not keep, and one it could not remove as failed,
+    /// apart from the ink every note shares.
+    #[test]
+    fn checkouts_remove_draws_what_it_removed_apart_from_what_it_refused() {
+        use crate::testutil::inks_on_row_containing;
+        use bravebot_agent::workspace::Unremoved;
+
+        let _held = crate::theme::exclusive();
+        crate::theme::apply_brave();
+
+        let mut session = Session::new("none");
+        remove_checkout(
+            &mut session,
+            vec![kept_checkout(false)],
+            "c2",
+            |_| panic!("asked about a checkout nothing was done in"),
+            |id| {
+                assert_eq!(id, "c2");
+                Ok(())
+            },
+        );
+        let removed = inks_on_row_containing(&session, "is removed");
+
+        let mut session = Session::new("none");
+        remove_checkout(
+            &mut session,
+            vec![kept_checkout(true)],
+            "c2",
+            |_| crate::confirm::Answer::Reject,
+            |_| panic!("removed without a yes"),
+        );
+        let kept = inks_on_row_containing(&session, "is kept");
+
+        let mut session = Session::new("none");
+        remove_checkout(
+            &mut session,
+            vec![kept_checkout(false)],
+            "c3",
+            |_| panic!("asked about a checkout the session does not keep"),
+            |_| panic!("removed a checkout the session does not keep"),
+        );
+        let no_such = inks_on_row_containing(&session, "keeps no checkout");
+
+        let mut session = Session::new("none");
+        remove_checkout(
+            &mut session,
+            vec![kept_checkout(false)],
+            "c2",
+            |_| crate::confirm::Answer::Approve,
+            |_| Err(Unremoved::Stuck),
+        );
+        let not_removed = inks_on_row_containing(&session, "could not be removed");
+
+        assert!(
+            removed.iter().all(|ink| *ink == crate::theme::ok()),
+            "a checkout removed is not drawn as finished: {removed:?}"
+        );
+        assert!(
+            !removed.contains(&crate::theme::note()),
+            "the removal is drawn in the ink every note shares"
+        );
+        for inks in [&kept, &no_such, &not_removed] {
+            assert!(
+                inks.iter().all(|ink| *ink == crate::theme::fail()),
+                "a refusal of /checkouts remove is not drawn as failed: {inks:?}"
+            );
+        }
+        for inks in [&removed, &kept, &no_such, &not_removed] {
+            assert!(
+                !inks.contains(&crate::theme::running()),
+                "a note is drawn in the ink that marks untrusted content: {inks:?}"
+            );
+        }
+    }
+
     /// A sentence mentioning it is a thing to say to the planner.
     #[test]
     fn a_prompt_containing_the_loop_command_is_still_a_prompt() {
@@ -29403,6 +29479,50 @@ mod tests {
         );
     }
 
+    /// VIEW-8: `/export` draws writing the transcript as finished and a name already taken as
+    /// failed, apart from the ink every note shares.
+    #[test]
+    fn export_draws_what_it_wrote_apart_from_what_it_refused() {
+        use crate::testutil::inks_on_row_containing;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let _held = crate::theme::exclusive();
+        crate::theme::apply_brave();
+
+        let (root, stored) = exporting_into("bravebot-app-export-inks-test");
+        let mut session = Session::new("none");
+        answered(&mut session, "first", "the answer");
+
+        export_session(&mut session, &stored, &root, Some("notes/chat.md"));
+        let written = inks_on_row_containing(&session, "exported transcript");
+
+        export_session(&mut session, &stored, &root, Some("notes/chat.md"));
+        let refused = inks_on_row_containing(&session, "could not export");
+
+        assert!(
+            written.iter().all(|ink| *ink == crate::theme::ok()),
+            "the export is not drawn as finished: {written:?}"
+        );
+        assert!(
+            !written.contains(&crate::theme::note()),
+            "the export is drawn in the ink every note shares"
+        );
+        assert!(
+            refused.iter().all(|ink| *ink == crate::theme::fail()),
+            "the refused export is not drawn as failed: {refused:?}"
+        );
+        for inks in [&written, &refused] {
+            assert!(
+                !inks.contains(&crate::theme::running()),
+                "a note is drawn in the ink that marks untrusted content: {inks:?}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// `/issue` and `/pr` as the event loop carries them out, at rest.
     fn linked(
         session: &mut Session,
@@ -29659,6 +29779,52 @@ mod tests {
             1,
             "a rename that renamed nothing gave up the running turn's point"
         );
+    }
+
+    /// VIEW-8: `/rename` draws a name it took as finished, and a name with nothing in it or with
+    /// nothing typed at all as failed, apart from the ink every note shares.
+    #[test]
+    fn rename_draws_the_name_it_took_apart_from_what_it_refused() {
+        use crate::testutil::inks_on_row_containing;
+
+        let _held = crate::theme::exclusive();
+        crate::theme::apply_brave();
+
+        let (root, mut stored) = exporting_into("bravebot-app-rename-inks-test");
+        let mut session = Session::new("none");
+        rename_session(&mut session, &mut stored, "the parser bug");
+        let renamed = inks_on_row_containing(&session, "renamed to");
+
+        let mut session = Session::new("none");
+        rename_session(&mut session, &mut stored, "");
+        let needs_a_name = inks_on_row_containing(&session, "as in /rename the parser bug");
+
+        let mut session = Session::new("none");
+        rename_session(&mut session, &mut stored, "   ");
+        let needs_something = inks_on_row_containing(&session, "with something in it");
+
+        assert!(
+            renamed.iter().all(|ink| *ink == crate::theme::ok()),
+            "the rename is not drawn as finished: {renamed:?}"
+        );
+        assert!(
+            !renamed.contains(&crate::theme::note()),
+            "the rename is drawn in the ink every note shares"
+        );
+        for inks in [&needs_a_name, &needs_something] {
+            assert!(
+                inks.iter().all(|ink| *ink == crate::theme::fail()),
+                "a refused rename is not drawn as failed: {inks:?}"
+            );
+        }
+        for inks in [&renamed, &needs_a_name, &needs_something] {
+            assert!(
+                !inks.contains(&crate::theme::running()),
+                "a note is drawn in the ink that marks untrusted content: {inks:?}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// The note is the point of this one, so it must arrive with the action, spaces and all.
@@ -35661,6 +35827,86 @@ mod tests {
             workspace.added_directories(),
             [root.join("two/notes").canonicalize().expect("canonical")]
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// VIEW-8: `/cd` draws moving to a directory as finished, and a directory with no name typed at
+    /// all, or one that cannot be moved to, as failed, apart from the ink every note shares.
+    #[test]
+    fn cd_draws_the_directory_it_moved_to_apart_from_what_it_refused() {
+        use crate::testutil::inks_on_row_containing;
+
+        let _held = crate::theme::exclusive();
+        crate::theme::apply_brave();
+
+        let root = crate::testutil::scratch_dir("bravebot-app-cd-inks-test");
+        let _ = std::fs::remove_dir_all(&root);
+        for directory in ["one", "two"] {
+            std::fs::create_dir_all(root.join(directory)).expect("scratch");
+        }
+
+        let mut workspace = Workspace::new(root.join("one")).expect("workspace");
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(
+            TrustStore::new(workspace.root()),
+            TrustedPrograms::new(),
+            rules,
+        );
+        let moved = change_directory(
+            &mut session,
+            &mut workspace,
+            &mut answers,
+            "a-session",
+            &root.join("two").display().to_string(),
+            |_, _| Some(true),
+        );
+        assert_eq!(moved, Changed::Moved);
+        let changed = inks_on_row_containing(&session, "now working in");
+
+        let mut session = Session::new("none");
+        change_directory(
+            &mut session,
+            &mut workspace,
+            &mut answers,
+            "a-session",
+            "",
+            |_, _| panic!("asked about a /cd with no path"),
+        );
+        let needs_a_path = inks_on_row_containing(&session, "/cd needs a directory");
+
+        let mut session = Session::new("none");
+        change_directory(
+            &mut session,
+            &mut workspace,
+            &mut answers,
+            "a-session",
+            &root.join("nowhere-here").display().to_string(),
+            |_, _| Some(true),
+        );
+        let not_changed = inks_on_row_containing(&session, "could not move to");
+
+        assert!(
+            changed.iter().all(|ink| *ink == crate::theme::ok()),
+            "the move is not drawn as finished: {changed:?}"
+        );
+        assert!(
+            !changed.contains(&crate::theme::note()),
+            "the move is drawn in the ink every note shares"
+        );
+        for inks in [&needs_a_path, &not_changed] {
+            assert!(
+                inks.iter().all(|ink| *ink == crate::theme::fail()),
+                "a refusal of /cd is not drawn as failed: {inks:?}"
+            );
+        }
+        for inks in [&changed, &needs_a_path, &not_changed] {
+            assert!(
+                !inks.contains(&crate::theme::running()),
+                "a note is drawn in the ink that marks untrusted content: {inks:?}"
+            );
+        }
 
         std::fs::remove_dir_all(&root).ok();
     }

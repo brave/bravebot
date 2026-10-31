@@ -441,14 +441,14 @@ pub(super) fn rename_session(
     name: &str,
 ) {
     if name.is_empty() {
-        session.note(t!(session_rename_needs_a_name));
+        session.note_refused(t!(session_rename_needs_a_name));
     } else if stored.rename(name) {
         // Every point holds the name the session had before it was renamed, the one a turn running
         // now opened among them (SESSION-19). A refused name changes nothing, so it gives up none.
         session.rewind.close();
-        session.note(t!(session_renamed, title = stored.title()));
+        session.note_done(t!(session_renamed, title = stored.title()));
     } else {
-        session.note(t!(session_rename_needs_something));
+        session.note_refused(t!(session_rename_needs_something));
     }
 }
 
@@ -504,8 +504,10 @@ pub(super) fn export_session(
 ) {
     let markdown = crate::render::as_markdown(session, stored.title());
     match bravebot_session::sessions::export(root, stored.id(), path, &markdown) {
-        Ok(written) => session.note(t!(session_exported, path = written.display().to_string())),
-        Err(e) => session.note(t!(session_export_failed, problem = e.to_string())),
+        Ok(written) => {
+            session.note_done(t!(session_exported, path = written.display().to_string()))
+        }
+        Err(e) => session.note_refused(t!(session_export_failed, problem = e.to_string())),
     }
 }
 
