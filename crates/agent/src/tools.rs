@@ -15465,6 +15465,21 @@ mod tests {
         );
     }
 
+    /// A planner that writes `cd sub && cat a.txt` gets a line whose later steps run at the root.
+    /// The description is the only place it can learn before writing the line that `directory` is
+    /// the way to run elsewhere. A description that drops the sentence about `cd`, or keeps it but
+    /// leaves out that the `directory` argument is how a line runs elsewhere, fails this test, and
+    /// the planner goes on writing `cd` lines that are refused.
+    #[test]
+    fn the_run_description_says_cd_moves_nothing_and_directory_is_how_a_line_runs_elsewhere() {
+        let described = run_description();
+        assert!(
+            described.contains("`cd` step is refused")
+                && described.contains("`directory` argument is how a line runs elsewhere"),
+            "the description does not say cd is refused and directory is the route: {described}"
+        );
+    }
+
     /// A session asked to watch a file read it once, said what it held, and left nothing watching.
     /// Both techniques already existed and nothing joined a watch request to either, so the
     /// description has to: which one a bound picks, which one outlives a turn, and that the turn

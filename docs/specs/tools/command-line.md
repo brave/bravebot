@@ -154,6 +154,7 @@ Refused, as a compile error with the offending span named:
 | `&` | backgrounding is a parameter of the call, not a token in the line |
 | `<<`, `<<<` | here-documents are content wearing the shape of syntax |
 | `eval`, `source`, `.`, `exec`, `trap` | reintroduce interpretation by name |
+| `cd`, `pushd`, `popd`, `export` | each stage is spawned fresh, so a stage of these names changes nothing for the stages after it; the refusal says the call's `directory` argument is how a line runs elsewhere and that `NAME=value` in front of a program sets a variable for it |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text the user typed reaching a line the planner wrote |
 | `(` or `)` written onto the end of an argument | grouping is syntax, so an argument holding a parenthesis has to be quoted, and the refusal says so |
@@ -192,6 +193,8 @@ is the same thing as the planner having written them.
 `verified-by: bravebot_agent::cmdline::backgrounding_is_refused`
 `verified-by: bravebot_agent::cmdline::a_here_document_is_refused`
 `verified-by: bravebot_agent::cmdline::a_program_that_reintroduces_interpretation_is_refused`
+`verified-by: bravebot_agent::cmdline::a_word_that_sets_shell_state_is_refused_wherever_it_stands`
+`verified-by: bravebot_agent::cmdline::a_word_that_only_looks_like_shell_state_is_not_refused`
 `verified-by: bravebot_agent::cmdline::a_word_that_opens_control_flow_is_refused`
 `verified-by: bravebot_agent::cmdline::an_unquoted_exclamation_mark_is_refused`
 `verified-by: bravebot_agent::cmdline::an_unquoted_parenthesis_written_onto_an_argument_says_to_quote_the_argument`
@@ -715,6 +718,11 @@ less this agent's own credentials and with the session's own directory named
 ([TRUST-17](../trust-map.md#TRUST-17)). A planner that needs a variable set puts it on the line that
 needs it.
 
+A stage whose program is `cd`, `pushd`, `popd` or `export` is refused when the line is compiled,
+wherever it stands in the line and whether or not the host has a program of that name, because it
+would change nothing for the stages after it. The refusal says that the `directory` argument of the
+call is how a line runs elsewhere. Nothing runs and nobody is asked.
+
 **Why the asymmetry.** A directory is a routing field, shown at every prompt and endorsed with the
 plan, so carrying it is visible. An environment that accumulated invisibly across calls would change
 what a later plan does without appearing in that plan.
@@ -743,6 +751,8 @@ session somewhere to keep one ([RUN-9](run.md#RUN-9)).
 `verified-by: bravebot_agent::turn::what_is_reported_about_a_line_says_which_directory_it_ran_in`
 `verified-by: bravebot_agent::turn::a_refused_run_directory_does_not_persist`
 `verified-by: bravebot_agent::turn::a_carried_directory_that_was_removed_is_refused_before_asking`
+`verified-by: bravebot_agent::turn::a_cd_stage_is_refused_before_asking_and_the_directory_argument_still_works`
+`verified-by: bravebot_agent::cmdline::a_word_that_sets_shell_state_is_refused_wherever_it_stands`
 `verified-by: bravebot_agent::turn::a_directory_removed_during_the_approval_is_reported_as_removed`
 `verified-by: bravebot_agent::turn::a_vouched_line_is_asked_about_again_when_a_directory_is_named`
 
@@ -832,6 +842,9 @@ dozen lines, and the planner following the instruction pays the difference every
 What the description should say instead is the true thing: use whichever returns less, and a command
 that filters usually returns less.
 
+The description must also say that a `cd` step is refused because it moves nothing for the steps
+after it, and that the `directory` argument is how a line runs elsewhere.
+
 **Why a clause about wording.** A tool's description is the only instruction the planner reliably
 reads, and an instruction to reach for the structured tools instead measurably steers a session
 into the expensive path. Wording that changes behaviour is behaviour.
@@ -839,6 +852,7 @@ into the expensive path. Wording that changes behaviour is behaviour.
 `verified-by: bravebot_agent::tools::the_run_description_tells_the_planner_to_filter_at_the_source`
 `verified-by: bravebot_agent::tools::the_run_description_does_not_send_the_planner_to_the_other_tools_instead`
 `verified-by: bravebot_agent::tools::only_run_takes_a_command_line`
+`verified-by: bravebot_agent::tools::the_run_description_says_cd_moves_nothing_and_directory_is_how_a_line_runs_elsewhere`
 
 ## Amendments to existing specs
 
