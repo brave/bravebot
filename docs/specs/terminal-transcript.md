@@ -226,10 +226,11 @@ what tells them apart. Under `brave`, neither ink is the one that marks untruste
 **Why.** That ink is spoken for twice over: a call still running, and the margin down every block
 of content the planner may not read. Drawing a note in it said the trust answer was quarantined.
 An ink of its own rather than merely a different one, because a note sharing with any third meaning
-puts the question back where it started. Under `brave` that ink is Brave orange, which reads as
-red, so a success drawn in it reads as an error beside the refusals around it. A note that says
-something was done or refused takes the ink that already means that, and the ink every other note
-shares is still used by nothing else.
+puts the question back where it started. Under `brave` that ink is a teal, so a note that reports
+nothing wrong does not read as an error. Orange and red are not used for it: a refusal is drawn in
+red, and a note that says something was done or refused takes the ink that already means that. The
+ink every other note shares is still used by nothing else, and has a deeper shade for a light
+background, as the aside does.
 
 This is about which ink, and it is never what makes the marking hold. VIEW-3 stands on the margin
 because a colour can be imitated by the content beside it, and nothing here weakens that: no ink
@@ -238,6 +239,8 @@ outside a block.
 
 `verified-by: bravebot_tui::render::a_system_note_is_not_drawn_in_the_ink_that_marks_untrusted_content`
 `verified-by: bravebot_tui::theme::the_note_ink_is_shared_with_no_other_ink_of_the_brave_palette`
+`verified-by: bravebot_tui::theme::the_brave_note_ink_is_not_orange_or_red_on_either_background`
+`verified-by: bravebot_tui::theme::the_brave_note_ink_has_a_deeper_shade_for_a_light_background`
 `verified-by: bravebot_tui::render::a_note_of_something_done_or_refused_is_not_drawn_in_the_ink_every_note_shares`
 `verified-by: bravebot_tui::app::add_dir_draws_the_directory_it_added_apart_from_the_names_it_refused`
 `verified-by: bravebot_tui::app::add_dir_close_draws_what_it_closed_apart_from_what_it_refused`
@@ -529,8 +532,9 @@ that has observed untrusted content those are untrusted bytes and it may not bra
 ### VIEW-19: a note is the session speaking, not a detail of the line above it
 
 A note is drawn at the column the rest of the transcript's text starts in, without the marker that
-ties a line to the entry above it. Consecutive notes are drawn as one block, and the blank line
-falls after the last of them rather than between each.
+ties a line to the entry above it. A note longer than the window continues on the next row in that
+same column, so every row of it starts where its first does. Consecutive notes are drawn as one
+block, and the blank line falls after the last of them rather than between each.
 
 **Why.** The marker means the line belongs to the entry above it, and a note belongs to no entry:
 the ones startup leaves are drawn before there is anything above them at all, so the marker pointed
@@ -543,6 +547,8 @@ the notes do, so the last of them is still held apart from whatever is said next
 `verified-by: bravebot_tui::render::a_note_is_not_drawn_as_a_detail_of_the_line_above_it`
 `verified-by: bravebot_tui::render::a_run_of_notes_is_not_spaced_apart`
 `verified-by: bravebot_tui::render::a_note_starts_in_the_column_a_replys_text_starts_in`
+`verified-by: bravebot_tui::render::a_note_that_wraps_continues_under_the_column_its_first_row_starts_in`
+`verified-by: bravebot_tui::render::every_row_of_a_wrapped_note_carries_the_ink_of_its_tone`
 
 
 <a id="VIEW-20"></a>

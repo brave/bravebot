@@ -217,6 +217,8 @@ pub enum Reason {
     HereDocument,
     /// A word in command position that would reintroduce interpretation.
     Interpreter(&'static str),
+    /// A word in command position that sets state in a shell, which no step of a plan has.
+    ShellState(&'static str),
     /// A reserved word that opens a control structure.
     ControlFlow(&'static str),
     /// An unquoted `!`.
@@ -283,6 +285,10 @@ impl fmt::Display for Reason {
             Self::Interpreter(word) => write!(
                 f,
                 "`{word}` reintroduces interpretation by name. Run the program you mean instead"
+            ),
+            Self::ShellState(word) => write!(
+                f,
+                "`{word}` sets state in a shell, and no shell holds state between the steps of a line or between calls, so it would change nothing for the steps after it. To run a line in another directory, name it in the `directory` argument of the call. To set a variable, write `NAME=value` in front of the program that needs it"
             ),
             Self::ControlFlow(word) => {
                 write!(f, "`{word}` opens a control structure, and control flow is a program")
@@ -376,6 +382,10 @@ pub const MAX_LINE: usize = 8192;
 
 /// Words that would put an interpreter back in the plan.
 const INTERPRETERS: [&str; 5] = ["eval", "source", ".", "exec", "trap"];
+
+/// Words that set state in a shell. Each step is started on its own, so a program of one of these
+/// names would either not exist or change nothing for the steps after it.
+const SHELL_STATE: [&str; 4] = ["cd", "pushd", "popd", "export"];
 
 /// Reserved words that open a control structure.
 const CONTROL_FLOW: [&str; 5] = ["if", "while", "for", "case", "function"];
@@ -1364,6 +1374,9 @@ impl<'a> Parser<'a> {
         if let Some(name) = program.literal() {
             if let Some(found) = INTERPRETERS.iter().find(|word| **word == name) {
                 return Err(self.refuse(program.span, Reason::Interpreter(found)));
+            }
+            if let Some(found) = SHELL_STATE.iter().find(|word| **word == name) {
+                return Err(self.refuse(program.span, Reason::ShellState(found)));
             }
             if let Some(found) = CONTROL_FLOW.iter().find(|word| **word == name) {
                 return Err(self.refuse(program.span, Reason::ControlFlow(found)));
@@ -2639,6 +2652,55 @@ mod tests {
         }
     }
 
+    /// `cd` is a program on some hosts and absent on others, and where it exists it exits zero and
+    /// moves nothing, so the later steps of the line run where the call ran. Every position a
+    /// command can stand in is refused by name, whether or not the host has such a program, and the
+    /// refusal points at the `directory` argument.
+    #[test]
+    fn a_word_that_sets_shell_state_is_refused_wherever_it_stands() {
+        for line in [
+            "cd sub",
+            "cd sub && cat a.txt",
+            "cd sub || cat a.txt",
+            "cd sub ; cat a.txt",
+            "cat a.txt && cd sub",
+            "cat a.txt | cd sub",
+            "(cd sub && cat a.txt)",
+            "FOO=1 cd sub",
+            "'cd' sub",
+            "pushd sub",
+            "popd",
+            "export FOO=1",
+            "export FOO=1 && cat a.txt",
+        ] {
+            assert!(
+                matches!(refused(line).reason, Reason::ShellState(_)),
+                "`{line}` was not refused as shell state"
+            );
+        }
+        let said = refused("cd sub && cat a.txt").to_string();
+        assert!(
+            said.contains("`cd`") && said.contains("`directory` argument"),
+            "the refusal does not name the cd stage and the directory argument: {said}"
+        );
+        assert!(
+            !said.contains("$PATH"),
+            "the refusal points at the search path rather than the cause: {said}"
+        );
+    }
+
+    /// A program whose name only starts with a shell-state word, or holds it as an operand, is an
+    /// ordinary program. An implementation that refuses any word that starts with `cd` fails on
+    /// `cdrecord`, one that refuses a line holding `cd` anywhere fails on `echo cd sub`, and one
+    /// that compares only the last path component of the program fails on `./cd`, which names a
+    /// file in the directory and not the shell word.
+    #[test]
+    fn a_word_that_only_looks_like_shell_state_is_not_refused() {
+        for line in ["echo cd sub", "cdrecord x", "git -C sub status", "./cd sub"] {
+            parsed(line);
+        }
+    }
+
     #[test]
     fn a_word_that_opens_control_flow_is_refused() {
         for line in ["if true", "while true", "for x", "case x", "function f"] {
@@ -2661,7 +2723,7 @@ mod tests {
     fn an_unquoted_parenthesis_written_onto_an_argument_says_to_quote_the_argument() {
         for (line, character, offset) in [
             ("git log -1 --format=%h(%G?)", '(', 22),
-            ("(cd src && git log --format=%h(%G?))", '(', 30),
+            ("(ls src && git log --format=%h(%G?))", '(', 30),
             ("echo a > out(x)", '(', 12),
             ("echo a)", ')', 6),
             ("echo a > out)", ')', 12),

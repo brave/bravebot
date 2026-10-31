@@ -177,27 +177,72 @@ fn home_on(name: &str, gateway: &Gateway) -> Scratch {
     home
 }
 
+/// The id of the session a start resumes, so that the context has a measured size before any turn.
+const RESUMED: &str = "window-lookup-session";
+
+/// The size the resumed session's last request came to: half of [`WINDOW`], and past the default
+/// budget, which a session that has not adopted the window draws as a full context.
+const MEASURED: u64 = WINDOW / 2;
+
+/// Store a session in the home's working directory whose last request came to [`MEASURED`] tokens.
+fn store_a_measured_session(home: &Scratch) {
+    let work = home.path.join("work");
+    let project = work.to_str().expect("utf-8");
+    let key: String = project
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' => c,
+            _ => '-',
+        })
+        .collect();
+    let directory = home.path.join(".bravebot/sessions").join(key);
+    std::fs::create_dir_all(&directory).expect("the sessions directory");
+    let record = serde_json::json!({
+        "id": RESUMED, "directory": project, "title": "earlier", "started": 1, "updated": 1,
+        "front": "terminal",
+        "conversation": {
+            "messages": [{"role": "user", "content": "earlier"}],
+            "context": "trusted",
+            "measured": MEASURED,
+        },
+    });
+    std::fs::write(
+        directory.join(format!("{RESUMED}.json")),
+        record.to_string(),
+    )
+    .expect("write the record");
+}
+
 /// BACKEND-64: the first frame is drawn while the window is still being asked for, and the window is
 /// adopted on the pass of the loop it arrives, with no key pressed.
+///
+/// The session resumed has a last request of half the window, which the hint line states as a share
+/// of the budget. Until the window arrives the budget is the default one, so the line reads a full
+/// context, and once the window is adopted it reads half. Adoption says nothing else at a start
+/// (the note that the budget moved is left for a model a person picks), so the reading is what shows
+/// it.
 ///
 /// The gateway answers its listing only when the test releases it, which is after the frame is on the
 /// screen. A start that waited for the listing never draws, so the frame is not seen and the test
 /// fails. The regressions it rejects are a start that holds the first frame for the service, and a
-/// window asked for and never adopted.
+/// window asked for and never adopted, which leaves the reading on the default budget.
 #[test]
 fn a_session_draws_while_its_window_is_asked_for_and_takes_it_when_it_comes() {
     let gateway = Gateway::holding_its_listing(Duration::from_secs(60));
     let home = home_on("cli-window-lookup-frame", &gateway);
+    store_a_measured_session(&home);
     let stand_in = StandIn::new(vec![]);
-    let mut command = in_a_sized_terminal(&["--dangerously-skip-permissions"]);
+    let mut command = in_a_sized_terminal(&["--resume", RESUMED, "--dangerously-skip-permissions"]);
     environment(&mut command, &home, &stand_in);
     let terminal = Terminal::start(command);
 
     let drawn = terminal.shows("Brave Bot to do anything", Duration::from_secs(30));
     let asked = gateway.saw("listing asked", Duration::from_secs(5));
     let events_at_the_frame = gateway.events();
+    let on_the_default_budget = terminal.shows("context ~100%", Duration::from_secs(30));
     gateway.release();
-    let adopted = terminal.shows(&format!("above {WINDOW} tokens"), Duration::from_secs(30));
+    // The hint line is redrawn as a diff, so only the changed cell (`50%  ·`) reaches the stream.
+    let adopted = terminal.shows("50%  ·", Duration::from_secs(30));
     let ran = terminal.finish(Duration::from_millis(200));
 
     assert!(
@@ -210,6 +255,11 @@ fn a_session_draws_while_its_window_is_asked_for_and_takes_it_when_it_comes() {
         events_at_the_frame,
         ["listing asked"],
         "the frame was drawn after the listing was answered or given up on"
+    );
+    assert!(
+        on_the_default_budget,
+        "the resumed session did not read against the default budget while the listing was held: {}",
+        ran.shown
     );
     assert!(
         adopted,

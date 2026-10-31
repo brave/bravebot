@@ -62,6 +62,11 @@ directory is a routing field, shown at every prompt and endorsed with the plan, 
 visible; an environment that accumulated invisibly would change what a later plan does without
 appearing in that plan.
 
+**A `cd` step is refused.** `cd`, `pushd`, `popd` and `export` change a shell's state, and each step is
+started on its own, so one of them would change nothing for the steps after it. A line that has one
+is refused wherever it stands, before anything is asked or run, and the refusal says to name the
+`directory` argument of the call to run elsewhere.
+
 A directory that is not the workspace root **is asked about**, and what the line prints is quarantined,
 unless something you answered names that exact tree. A directory that does not exist is an error and
 moves nothing, and a refused directory does not become the one the next line runs in.
@@ -95,6 +100,7 @@ runs nothing**. There is no falling back to a shell and no running the prefix th
 | `&` | backgrounding is a parameter of a call, not a token in a line |
 | `<<`, `<<<` | a here-document is content, not syntax |
 | `eval`, `source`, `.`, `exec`, `trap` | they put an interpreter back in the plan |
+| `cd`, `pushd`, `popd`, `export` | they change a shell's state, which no step has; name the `directory` of the call, or put `NAME=value` in front of the program |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text you typed reaching a line the planner wrote |
 | `(` or `)` written onto the end of an argument | grouping is syntax, so an argument that holds a parenthesis has to be quoted |

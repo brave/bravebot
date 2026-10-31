@@ -983,6 +983,8 @@ fn table(
              is passed to the program as written. The user \
              approves the compiled plan before anything runs, so say what you are running and \
              why first. \
+             A `cd` step is refused because it moves nothing for the steps after it: the \
+             `directory` argument is how a line runs elsewhere. \
              \
              Narrowing the result inside the line is the cheapest thing you can do, and usually \
              the difference between a few lines and a few thousand tokens: pipe to `head -n`, \

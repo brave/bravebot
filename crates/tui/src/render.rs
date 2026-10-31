@@ -8933,7 +8933,7 @@ mod tests {
     /// None of the three is the ink that marks untrusted content.
     ///
     /// The failures this rejects are a renderer that does not read the tone, which draws every
-    /// note in the one orange and so a success as an error, the two inks swapped, and a tone
+    /// note in the one shared ink and so a success as an error, the two inks swapped, and a tone
     /// drawn in yellow, which says the note is quarantined.
     #[test]
     fn a_note_of_something_done_or_refused_is_not_drawn_in_the_ink_every_note_shares() {
@@ -9048,6 +9048,103 @@ mod tests {
             lines[first + 3].trim().is_empty(),
             "the run did not end where the notes did: {lines:?}"
         );
+    }
+
+    /// VIEW-19: a note longer than the window continues under the column its first row starts in,
+    /// so a long trust line or skill list does not leave a ragged left edge. The faults it
+    /// rejects: leaving the break to the paragraph, which continues a row at column 0; wrapping
+    /// to the whole width, so the margin pushes a row past the edge; dropping or reordering
+    /// words at a break; and one of a note's lines taking the margin of the others only when it
+    /// fits. Every tone is covered, since the ink is the tone's and a wrapped row keeps it. A
+    /// note's words are drawn as they are, with no `printable` pass, like a refusal's.
+    #[test]
+    fn a_note_that_wraps_continues_under_the_column_its_first_row_starts_in() {
+        let _held = crate::theme::exclusive();
+        let words = "trusts /Users/someone/projects/a-directory-with-a-rather-long-name/and/more \
+                     then twelve skills are listed here one two three four five six seven";
+        for width in [8u16, 20, 33, 60] {
+            let mut session = Session::new("none");
+            session.note(format!("{words}\nsecond line of the same note"));
+            session.note_done(words);
+            session.note_refused(words);
+
+            let lines = transcript_lines(&session, width, 40);
+            let noted: Vec<&Line<'_>> = lines
+                .iter()
+                .skip_while(|line| !line.to_string().contains("trusts"))
+                .take_while(|line| !line.to_string().trim().is_empty())
+                .collect();
+            let lead = " ".repeat(LEAD);
+            assert!(
+                noted.len() > 3,
+                "the notes did not wrap at {width}: {lines:?}"
+            );
+            for line in &noted {
+                let drawn = line.to_string();
+                assert!(
+                    drawn.starts_with(&lead),
+                    "row at column 0 at {width}: {drawn:?}"
+                );
+                assert!(
+                    !drawn[LEAD..].starts_with(' '),
+                    "a row begins with the break's space at {width}: {drawn:?}"
+                );
+                assert!(
+                    drawn.chars().count() <= usize::from(width).max(LEAD + 8),
+                    "a row is wider than the window at {width}: {drawn:?}"
+                );
+                assert_eq!(line.spans.len(), 1, "{line:?}");
+                assert_eq!(
+                    super::transcript::rows_of(line, width.max(LEAD as u16 + 8)),
+                    1
+                );
+            }
+            let joined: Vec<String> = noted
+                .iter()
+                .map(|line| line.to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+                .split_whitespace()
+                .map(str::to_string)
+                .collect();
+            let expected: Vec<String> =
+                format!("{words} second line of the same note {words} {words}")
+                    .split_whitespace()
+                    .map(str::to_string)
+                    .collect();
+            let long_word = |words: &[String]| words.join("");
+            assert_eq!(long_word(&joined), long_word(&expected), "at {width}");
+        }
+    }
+
+    /// A note that wraps carries the ink of its tone on every row (VIEW-8), one span to a row.
+    #[test]
+    fn every_row_of_a_wrapped_note_carries_the_ink_of_its_tone() {
+        let _held = crate::theme::exclusive();
+        let said = "one two three four five six seven eight nine ten eleven twelve thirteen";
+        for (tone, ink) in [
+            (0, crate::theme::note()),
+            (1, crate::theme::ok()),
+            (2, crate::theme::fail()),
+        ] {
+            let mut session = Session::new("none");
+            match tone {
+                0 => session.note(said),
+                1 => session.note_done(said),
+                _ => session.note_refused(said),
+            }
+            let lines = transcript_lines(&session, 24, 40);
+            let rows: Vec<&Line<'_>> = lines
+                .iter()
+                .skip_while(|line| !line.to_string().starts_with("  one"))
+                .take_while(|line| !line.to_string().trim().is_empty())
+                .collect();
+            assert!(rows.len() > 2, "{lines:?}");
+            for row in rows {
+                assert_eq!(row.spans.len(), 1, "{row:?}");
+                assert_eq!(row.spans[0].style, Style::default().fg(ink), "{row:?}");
+            }
+        }
     }
 
     /// The detail marker says the line belongs to the entry above it, and a note belongs to no

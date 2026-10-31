@@ -336,22 +336,29 @@ fn has_more_to_show(entry: &Entry) -> bool {
             .is_some_and(|activity| activity.changes.len() > MAX_DIFF_LINES)
 }
 
-/// A note, one line to each line of `text`, in the ink its `tone` says.
+/// A note, in the ink its `tone` says, one or more rows to each line of `text`.
 ///
-/// Shared by the notes in the transcript and by what commands typed during a turn answered, which
-/// are the same voice and have to look it. The ink is the tone's and is not worked out from the
-/// words. Under `brave` none of the three is the ink that marks untrusted content, and under the
-/// plain palette every ink is the terminal's own (VIEW-8).
-fn note_lines(text: &str, tone: Tone) -> Vec<Line<'static>> {
+/// A line longer than `width` less the margin continues on the next row under the margin, so every
+/// row of a note starts in the column the first does (VIEW-19), the way a refusal's rows do. The
+/// rows are broken here and not left to the paragraph that draws them, which continues a row at
+/// column 0. The words are drawn as they are, like a refusal's: a note is the session's own voice.
+///
+/// The one caller is the `Speaker::System` entry. What commands typed during a turn answered is
+/// pushed as those entries, so it is drawn by this too, being the same voice. The ink is the tone's
+/// and is not worked out from the words. Under `brave` none of the three is the ink that marks
+/// untrusted content, and under the plain palette every ink is the terminal's own (VIEW-8).
+fn note_lines(text: &str, tone: Tone, width: u16) -> Vec<Line<'static>> {
     let ink = match tone {
         Tone::Note => theme::note(),
         Tone::Done => theme::ok(),
         Tone::Refused => theme::fail(),
     };
+    let room = (width as usize).saturating_sub(LEAD).max(8);
     text.lines()
-        .map(|text| {
+        .flat_map(|text| wrap::wrap(text, room, 0).rows)
+        .map(|row| {
             Line::from(Span::styled(
-                format!("{:LEAD$}{text}", ""),
+                format!("{:LEAD$}{row}", ""),
                 Style::default().fg(ink),
             ))
         })
@@ -411,7 +418,7 @@ fn speaker_laid(
         // The session in its own voice, indented to the column the rest of the transcript's
         // text starts in. Not behind the detail marker: that says the line belongs to the
         // entry above it, and the notes starting up leaves are drawn before there is one.
-        Speaker::System => lines.extend(note_lines(&entry.text, entry.tone)),
+        Speaker::System => lines.extend(note_lines(&entry.text, entry.tone, width)),
         // In the same column as a note and in the colour of a failure, wrapped rather than
         // clipped: a reason is the one line in the transcript somebody reads to the end.
         Speaker::Failure | Speaker::Stopped => {

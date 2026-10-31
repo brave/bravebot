@@ -54793,6 +54793,66 @@ fn a_nonexistent_directory_is_an_error_and_does_not_mutate() {
     );
 }
 
+/// CMDLINE-12: A `cd` stage is refused before any prompt, whether or not the host has a `cd`
+/// program, and nothing runs. The refusal names the `directory` argument, and a call that names it
+/// still runs in that directory.
+#[test]
+fn a_cd_stage_is_refused_before_asking_and_the_directory_argument_still_works() {
+    let scratch = Scratch::new("cmdline-12-cd-stage");
+    std::fs::create_dir_all(scratch.path.join("sub")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cd sub && cargo --version"}"#),
+        tool_request("run", r#"{"command":"cargo --version","directory":"sub"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run a line that starts with cd"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("`cd` sets state in a shell") && second.contains("`directory` argument"),
+        "the refusal did not name cd and the directory argument: {second}"
+    );
+    assert!(
+        !second.contains("$PATH"),
+        "the refusal blamed the search path: {second}"
+    );
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        1,
+        "only the call that named a directory was put to the person"
+    );
+    assert_eq!(
+        asked[0].plan.directory.canonicalize().unwrap(),
+        scratch.path.join("sub").canonicalize().unwrap(),
+        "the call naming a directory runs there"
+    );
+}
+
 /// CMDLINE-12: A carried directory that has been removed is refused before any prompt, and the
 /// next call runs at the workspace root.
 #[test]

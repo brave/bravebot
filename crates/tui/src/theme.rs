@@ -21,9 +21,7 @@ use std::sync::{Mutex, OnceLock};
 /// two of them, and for the inks that change with the terminal's background.
 pub type Rgb = (u8, u8, u8);
 
-/// Brave orange, which opens the wordmark and draws the notes the session makes under `brave`,
-/// except those of `/add-dir`, `/add-dir close` and the opening of a settings file's directories,
-/// which are drawn in the inks for finished and failed (VIEW-8).
+/// Brave orange, which opens the wordmark.
 ///
 /// A literal because the sixteen named colours have nothing near it.
 pub const BRAND: Rgb = (255, 86, 1);
@@ -69,13 +67,17 @@ pub const ACCENT_ON_DARK: Rgb = (0xC9, 0x7B, 0xE0);
 /// dark-background shade washes out against a pale page.
 pub const ACCENT_ON_LIGHT: Rgb = (0x8A, 0x2B, 0xA5);
 
-/// What the session says in its own voice under `brave`: the trust answer, an unavailable
-/// confinement, a status report.
+/// What the session says in its own voice under `brave`, on a dark terminal background: the trust
+/// answer, the auto-vetting and compaction notes, an unavailable confinement, a status report.
 ///
-/// Yellow is the obvious alternative and is spoken for twice over: a call still running, and the
-/// margin down every block of content the planner may not read. A note from the interface itself
-/// is neither of those, and drawing it in the same ink said it was.
-pub const NOTE: Color = Color::Rgb(BRAND.0, BRAND.1, BRAND.2);
+/// A teal, so that a note which reports nothing wrong does not read as an error. Orange and red
+/// are left to the refusals. Yellow is spoken for twice over: a call still running, and the margin
+/// down every block of content the planner may not read. A note from the interface itself is
+/// neither of those, and drawing it in the same ink said it was.
+pub const NOTE_ON_DARK: Rgb = (0x7F, 0xC4, 0xD4);
+
+/// The same ink on a light background, deeper for the reason brand primary is.
+pub const NOTE_ON_LIGHT: Rgb = (0x2E, 0x7D, 0x8C);
 
 /// The name of the default theme: follow the terminal, mix only the inks that have to be a shade.
 pub const BRAVE: &str = "brave";
@@ -386,7 +388,7 @@ pub fn brave_palette(light: bool) -> Palette {
         fail: Color::Red,
         running: Color::Yellow,
         accent: accent_on(light),
-        note: NOTE,
+        note: note_on(light),
         primary: brand_primary_on(light),
         paints_background: false,
     }
@@ -394,6 +396,10 @@ pub fn brave_palette(light: bool) -> Palette {
 
 fn muted_on(light: bool) -> Color {
     rgb(if light { MUTED_ON_LIGHT } else { MUTED_ON_DARK })
+}
+
+fn note_on(light: bool) -> Color {
+    rgb(if light { NOTE_ON_LIGHT } else { NOTE_ON_DARK })
 }
 
 fn brand_primary_on(light: bool) -> Color {
@@ -1220,10 +1226,12 @@ mod tests {
             "a note took a named colour, which the terminal chooses: {:?}",
             note()
         );
-        assert!(
-            matches!(NOTE, Color::Rgb(..)),
-            "a note took a named colour, which the terminal chooses: {NOTE:?}"
-        );
+        for light in [false, true] {
+            assert!(
+                matches!(note_on(light), Color::Rgb(..)),
+                "a note took a named colour, which the terminal chooses (light background: {light})"
+            );
+        }
     }
 
     /// Cyan is the slot that used to carry brand primary, and terminals disagree about what it
@@ -1564,6 +1572,44 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// VIEW-8: a note that reports nothing wrong is not drawn in a warm shade, which reads as an
+    /// error beside the refusals around it. The note ink of `brave` has less red than green and
+    /// blue by a clear margin, on either background, so it is neither Brave orange nor the red
+    /// that fail is drawn in.
+    #[test]
+    fn the_brave_note_ink_is_not_orange_or_red_on_either_background() {
+        for light in [false, true] {
+            let Color::Rgb(red, green, blue) = brave_palette(light).note else {
+                panic!("the note ink is not a shade (light background: {light})");
+            };
+            assert!(
+                u16::from(red) + 32 <= u16::from(green.min(blue)),
+                "the note ink ({red}, {green}, {blue}) is warm (light background: {light})"
+            );
+            assert_ne!(
+                (red, green, blue),
+                BRAND,
+                "the note ink is Brave orange (light background: {light})"
+            );
+        }
+    }
+
+    /// The ink follows the background the terminal was sensed to have, as muted and accent do:
+    /// the shade for a dark page washes out on a light one.
+    #[test]
+    fn the_brave_note_ink_has_a_deeper_shade_for_a_light_background() {
+        let (Color::Rgb(dr, dg, db), Color::Rgb(lr, lg, lb)) =
+            (brave_palette(false).note, brave_palette(true).note)
+        else {
+            panic!("a note ink is not a shade");
+        };
+        assert_ne!(brave_palette(false).note, brave_palette(true).note);
+        assert!(
+            is_light(dr, dg, db) && !is_light(lr, lg, lb),
+            "the light-background note ink is not the deeper of the two"
+        );
     }
 
     /// Guessing the missing arm would paint half a palette from a typo, and the half that is wrong
