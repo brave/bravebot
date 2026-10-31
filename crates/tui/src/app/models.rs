@@ -598,16 +598,18 @@ fn adopt_listing(
 ) {
     // The model in force, not the pick: with no pick the configured default is what a request names
     // (BACKEND-14, COMPACT-9). `automatic` is a roster row that states no window, so it still leaves
-    // the default in place.
-    if config.adopt_window_of_model_in_force(session.model(), |in_force| {
+    // the default in place. The window is taken without a note: it is the roster's own figure for a
+    // model nobody chose in this session, and a start that opens with it reads as a report about
+    // something the person did not do. The hint line carries the context used against it. A pick
+    // says it ([`model_picked`]).
+    config.adopt_window_of_model_in_force(session.model(), |in_force| {
         advertised_window(models, Some(in_force))
-    }) {
-        session.note(t!(session_context_budget, budget = config.context_budget));
-    }
+    });
     let in_force = model_in_force(session.model(), config).to_string();
     config.adopt_inputs(&in_force, advertised_inputs(models, Some(&in_force)));
-    // Outside the note, because a budget that did not move can still have stopped being one the
-    // endpoint advertised: nothing changed for compaction, and what the hint line may claim did.
+    // On every listing, whether or not the window moved, because a budget that did not move can
+    // still have stopped being one the endpoint advertised: nothing changed for compaction, and
+    // what the hint line may claim did.
     session.update_budget(config.context_budget, config.budget_is_guessed());
     // The model in force, not the pick: with no pick the configured default is what a request names,
     // and it is the roster row for that one which says whether a level is read (BACKEND-22).

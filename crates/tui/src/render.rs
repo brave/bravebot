@@ -8933,7 +8933,7 @@ mod tests {
     /// None of the three is the ink that marks untrusted content.
     ///
     /// The failures this rejects are a renderer that does not read the tone, which draws every
-    /// note in the one orange and so a success as an error, the two inks swapped, and a tone
+    /// note in the one shared ink and so a success as an error, the two inks swapped, and a tone
     /// drawn in yellow, which says the note is quarantined.
     #[test]
     fn a_note_of_something_done_or_refused_is_not_drawn_in_the_ink_every_note_shares() {

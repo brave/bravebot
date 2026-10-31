@@ -184,7 +184,9 @@ something more comfortable.
 outlives the session that made it, and nothing on disk remembers the window that came with it, so a
 session starting on a model chosen earlier asks the endpoint again. A listing that cannot be fetched
 leaves the default in place and says nothing: a session that is merely offline should not open with a
-complaint about a request nobody asked for.
+complaint about a request nobody asked for. The window found at a start is taken without a note,
+since nothing was chosen to announce; the window of a model a person picks is said when it changes
+the budget.
 
 **Why.** The default was a single constant standing in for a figure that varies across the roster by
 a factor of thirty. Sessions compacted at 24,000 tokens against a model advertising 102,400, giving
@@ -216,6 +218,7 @@ than necessary, which is a mistake this project made before measuring the endpoi
 `verified-by: bravebot_tui::app::a_model_that_advertises_nothing_has_no_window`
 `verified-by: bravebot_tui::app::a_run_with_no_session_adopts_the_window_of_the_model_in_force`
 `verified-by: bravebot_tui::app::a_run_whose_model_no_roster_describes_keeps_the_default`
+`verified-by: bravebot_tui::app::a_start_adopts_an_advertised_window_without_a_note_and_a_pick_says_it`
 
 <a id="COMPACT-10"></a>
 ### COMPACT-10: every compaction is recorded, with what it gave up and where it happened

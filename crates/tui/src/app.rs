@@ -5409,6 +5409,38 @@ mod tests {
         assert!(!config.budget_is_guessed());
     }
 
+    /// BACKEND-64, COMPACT-9: a session that starts on a model whose roster row advertises a window
+    /// takes the window as its budget and opens with no note about it, since a person who has done
+    /// nothing is told nothing; the same window taken from a model the person picks is said. The
+    /// faults it rejects: the start writing the note, and the pick going quiet with it.
+    #[test]
+    fn a_start_adopts_an_advertised_window_without_a_note_and_a_pick_says_it() {
+        let said_budget = |session: &Session| {
+            session
+                .transcript
+                .iter()
+                .any(|entry| entry.text.contains("compacting above"))
+        };
+        let mut config = a_config_with_a_named_roster();
+        let mut session = Session::new("none");
+
+        adopt_budget_for_current_model(&mut session, &mut config);
+
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::bedrock::CONTEXT_WINDOW
+        );
+        assert!(!config.budget_is_guessed());
+        assert!(!said_budget(&session), "the start said the budget");
+
+        let mut config = a_config_with_a_named_roster();
+        let mut session = Session::new("none");
+        model_picked(&mut session, &mut config, listed("opus-arn", Some(65_536)));
+
+        assert_eq!(config.context_budget, 65_536);
+        assert!(said_budget(&session), "the pick did not say the budget");
+    }
+
     /// BACKEND-7: the model a `/agent` line's definition names answers the turn, so the turn
     /// compacts against that model's window. The session's own budget is not moved, because the
     /// next turn on the session's model has to compare with its own.

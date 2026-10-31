@@ -4120,14 +4120,14 @@ reply is allowed minutes. A service that does not answer in that time is a listi
 read, and is said as [BACKEND-19](#BACKEND-19) says.
 
 **The window of the model a session opened on does not hold the first frame.** It is asked for on a
-thread of its own when the session is begun, and adopted, with the note that says the budget moved,
-on the pass of the loop it arrives. A turn or a manifest run sent before it has arrived waits for it,
-for as long as a request for a roster may take, so that no turn is sized against the default budget
-for want of a lookup that was on its way. A turn waits for a lookup once: one it has waited out stays
-for the loop to take when it arrives, and the next turn does not wait for it again. A lookup about a
-model that is no longer the one in force is dropped before anything waits for it, because the pick
-that replaced that model brought a window of its own ([BACKEND-7](#BACKEND-7)). A one-shot run has no
-frame and takes its one lookup before it begins.
+thread of its own when the session is begun, and adopted, with no note, on the pass of the loop it
+arrives. The note that the budget moved is left for a model a person picks. A turn or a manifest
+run sent before it has arrived waits for it, for as long as a request for a roster may take, so that
+no turn is sized against the default budget for want of a lookup that was on its way. A turn waits
+for a lookup once: one it has waited out stays for the loop to take when it arrives, and the next
+turn does not wait for it again. A lookup about a model that is no longer the one in force is dropped
+before anything waits for it, because the pick that replaced that model brought a window of its own
+([BACKEND-7](#BACKEND-7)). A one-shot run has no frame and takes its one lookup before it begins.
 
 **Built:** `bravebot_config::Config::{serves, roster_scope_for_a_turn}` and `RosterScope`;
 `bravebot_aichat::roster::ask`, which decides which gateways and whether Brave are asked, makes each
@@ -4166,6 +4166,7 @@ others.
 `verified-by: bravebot_cli::window_lookup::a_session_draws_while_its_window_is_asked_for_and_takes_it_when_it_comes`
 `verified-by: bravebot_cli::window_lookup::a_turn_sent_before_the_window_arrives_waits_for_it`
 `verified-by: bravebot_tui::app::asking_for_the_window_at_start_adopts_it_only_when_the_answer_is_taken`
+`verified-by: bravebot_tui::app::a_start_adopts_an_advertised_window_without_a_note_and_a_pick_says_it`
 `verified-by: bravebot_tui::app::a_pass_of_the_loop_takes_an_arrived_window_once_and_does_not_wait_for_one_that_has_not`
 `verified-by: bravebot_tui::app::a_lookup_about_a_model_that_is_no_longer_in_force_is_dropped_and_not_waited_for`
 `verified-by: bravebot_tui::app::a_turn_waits_for_a_lookup_once_and_the_loop_still_takes_its_late_answer`
