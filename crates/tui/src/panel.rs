@@ -4090,11 +4090,28 @@ mod tests {
             .lines()
             .map(str::to_string)
             .collect();
-        let at = drawn
-            .iter()
-            .rposition(|row| row.trim() == heading)
+        // The heading is a note, which wraps to the width (VIEW-19), so it may take several rows
+        // with the breaks anywhere in it. It is the last run of rows whose text, with the spaces
+        // taken out, is the heading's.
+        let squeezed = |text: &str| -> String { text.split_whitespace().collect() };
+        let wanted = squeezed(&heading);
+        let after = (0..drawn.len())
+            .rev()
+            .find_map(|first| {
+                let mut seen = String::new();
+                for (at, row) in drawn.iter().enumerate().skip(first) {
+                    seen.push_str(&squeezed(row));
+                    if seen == wanted {
+                        return Some(at + 1);
+                    }
+                    if !wanted.starts_with(&seen) {
+                        return None;
+                    }
+                }
+                None
+            })
             .unwrap_or_else(|| panic!("no heading {heading:?}: {drawn:#?}"));
-        drawn[at + 1..].to_vec()
+        drawn[after..].to_vec()
     }
 
     /// One task of a printed plan as its rows say it.

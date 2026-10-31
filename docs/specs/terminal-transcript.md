@@ -532,8 +532,9 @@ that has observed untrusted content those are untrusted bytes and it may not bra
 ### VIEW-19: a note is the session speaking, not a detail of the line above it
 
 A note is drawn at the column the rest of the transcript's text starts in, without the marker that
-ties a line to the entry above it. Consecutive notes are drawn as one block, and the blank line
-falls after the last of them rather than between each.
+ties a line to the entry above it. A note longer than the window continues on the next row in that
+same column, so every row of it starts where its first does. Consecutive notes are drawn as one
+block, and the blank line falls after the last of them rather than between each.
 
 **Why.** The marker means the line belongs to the entry above it, and a note belongs to no entry:
 the ones startup leaves are drawn before there is anything above them at all, so the marker pointed
@@ -546,6 +547,8 @@ the notes do, so the last of them is still held apart from whatever is said next
 `verified-by: bravebot_tui::render::a_note_is_not_drawn_as_a_detail_of_the_line_above_it`
 `verified-by: bravebot_tui::render::a_run_of_notes_is_not_spaced_apart`
 `verified-by: bravebot_tui::render::a_note_starts_in_the_column_a_replys_text_starts_in`
+`verified-by: bravebot_tui::render::a_note_that_wraps_continues_under_the_column_its_first_row_starts_in`
+`verified-by: bravebot_tui::render::every_row_of_a_wrapped_note_carries_the_ink_of_its_tone`
 
 
 <a id="VIEW-20"></a>
