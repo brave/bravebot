@@ -1462,8 +1462,19 @@ impl Confinement {
             Prelude::MacOs => macos_git_sentence(self.mode).to_string(),
             Prelude::Linux | Prelude::Windows => String::new(),
         };
+        let launch = match self.prelude {
+            Prelude::MacOs
+                if unconfined_offered
+                    && steps
+                        .iter()
+                        .any(|step| launches_applications(&step.resolved)) =>
+            {
+                MACOS_LAUNCH_UNCONFINED_SENTENCE
+            }
+            _ => "",
+        };
         format!(
-            "{}{source}{refusal}{}{commit}{git}{}",
+            "{}{source}{refusal}{}{commit}{git}{launch}{}",
             self.reach(steps),
             self.identity_sentence(steps, unconfined_offered, environment),
             credential_locations_sentence(self.mode, self.requests_offered),
@@ -2248,6 +2259,23 @@ const MACOS_GIT_SENTENCE: &str = " On macOS a step whose program is not `git` ca
 const MACOS_GIT_UNCONFINED_SENTENCE: &str = " A script that has to run git itself, and was refused \
      that write, can be run again with 'unconfined': true, saying in 'why' what the sandbox \
      refused: the person is asked to approve that one line, which runs with no sandbox.";
+
+/// Said after a failed step on macOS where the session accepts an `unconfined` request
+/// (SANDBOX-29) and a step of the line runs `open` or `osascript`, whose requests to LaunchServices
+/// and Apple Events the profile refuses (SANDBOX-31). Never said where the session would refuse the
+/// request.
+const MACOS_LAUNCH_UNCONFINED_SENTENCE: &str = " On macOS the default profile refuses \
+     LaunchServices and Apple Events, so `open` and `osascript` cannot launch an application, open \
+     a URL in one or script one. The line can be run again with 'unconfined': true, saying in \
+     'why' what the sandbox refused: the person is asked to approve that one line, which runs \
+     with no sandbox.";
+
+/// Whether the file a step resolved to is `open` or `osascript`, the programs that ask
+/// LaunchServices or Apple Events to act for the caller. Decided from the compiled step alone.
+fn launches_applications(resolved: &Path) -> bool {
+    [OsStr::new("open"), OsStr::new("osascript")]
+        .contains(&resolved.file_name().unwrap_or_default())
+}
 
 /// [`MACOS_GIT_SENTENCE`] under `read-only`, where a git step cannot write the session's `.git`
 /// either, so running git on its own helps only in a place the mode writes.
@@ -5415,6 +5443,69 @@ mod tests {
         }
     }
 
+    /// SANDBOX-29, SANDBOX-31: after a failed step on macOS whose program is `open` or `osascript`
+    /// the planner is told the profile refuses LaunchServices and Apple Events and that the line
+    /// can be run again unconfined, only where the session accepts the request. The faults it
+    /// rejects are the sentence said where the request would be refused, said on another platform,
+    /// said for a line with neither program, matched on a name that merely contains `open`, and
+    /// matched on the name the line used instead of the file it resolved to.
+    #[test]
+    fn a_failed_open_or_osascript_step_on_macos_names_the_unconfined_line_only_where_it_is_accepted()
+     {
+        let failed = |prelude, offered, steps: &[&Step]| {
+            reading_confinement(prelude, &["/work/project"])
+                .with_mode(SandboxMode::WorkspaceWrite)
+                .profile_offering(steps, offered)
+        };
+        let open = step("/usr/bin/open", &["-a", "Safari"]);
+        let script = step("/usr/bin/osascript", &["-e", "beep"]);
+        for launcher in [&open, &script] {
+            let accepted = failed(Prelude::MacOs, true, &[launcher]);
+            assert!(
+                accepted.contains(MACOS_LAUNCH_UNCONFINED_SENTENCE),
+                "{accepted}"
+            );
+            assert!(accepted.contains("LaunchServices"), "{accepted}");
+            assert!(accepted.contains("Apple Events"), "{accepted}");
+            let refused = failed(Prelude::MacOs, false, &[launcher]);
+            assert!(
+                !refused.contains(MACOS_LAUNCH_UNCONFINED_SENTENCE),
+                "{refused}"
+            );
+            assert!(!refused.contains("LaunchServices"), "{refused}");
+            for elsewhere in [Prelude::Linux, Prelude::Windows] {
+                let said = failed(elsewhere, true, &[launcher]);
+                assert!(!said.contains("LaunchServices"), "{elsewhere:?}: {said}");
+            }
+        }
+        let after_make = failed(
+            Prelude::MacOs,
+            true,
+            &[&step("/usr/bin/make", &["release"]), &script],
+        );
+        assert!(
+            after_make.contains(MACOS_LAUNCH_UNCONFINED_SENTENCE),
+            "{after_make}"
+        );
+        for other in [
+            step("/usr/bin/make", &["release"]),
+            step("/usr/bin/openssl", &["version"]),
+            step("/usr/bin/xdg-open", &["https://example.com"]),
+            step("/usr/bin/osascript-helper", &[]),
+        ] {
+            let said = failed(Prelude::MacOs, true, &[&other]);
+            assert!(!said.contains("LaunchServices"), "{other:?}: {said}");
+        }
+        let mut renamed = step("/usr/bin/true", &[]);
+        renamed.program = "open".to_string();
+        let said = failed(Prelude::MacOs, true, &[&renamed]);
+        assert!(!said.contains("LaunchServices"), "{said}");
+        let mut aliased = step("/usr/bin/open", &["-a", "Safari"]);
+        aliased.program = "launch".to_string();
+        let said = failed(Prelude::MacOs, true, &[&aliased]);
+        assert!(said.contains(MACOS_LAUNCH_UNCONFINED_SENTENCE), "{said}");
+    }
+
     /// SANDBOX-29: every sentence after a failed step that names `'unconfined': true` presents it as
     /// a second attempt, after a run the sandbox refused, with the refusal given in `why`. The
     /// fault it rejects is a sentence that offers the argument as a first choice or leaves the
@@ -5423,6 +5514,7 @@ mod tests {
     fn each_failed_step_sentence_naming_unconfined_makes_it_the_second_attempt() {
         for (name, said) in [
             ("macos git", MACOS_GIT_UNCONFINED_SENTENCE),
+            ("macos launch", MACOS_LAUNCH_UNCONFINED_SENTENCE),
             ("signing", SIGNING_UNCONFINED_WAY_OUT),
             ("push", IDENTITY_UNCONFINED_WAY_OUT),
         ] {

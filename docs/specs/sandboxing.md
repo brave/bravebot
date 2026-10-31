@@ -1722,6 +1722,14 @@ than retrying. The text names no host, owner, address or key path and reads noth
 program printed, so the same words follow a rejected push and a typo, which is why each part of it
 says the case it is about. A line with no such step says none of it.
 
+On macOS, where the session would accept an `unconfined` request, a failed result for a line with a
+step that runs `open` or `osascript` also says that the default profile refuses LaunchServices and
+Apple Events, so launching an application, opening a URL in one or scripting one needs the line run
+again with `'unconfined': true`, naming the refusal in `why`. The step is chosen by the file its
+program resolved to, so a different program given the name `open` does not earn it and `open`
+reached under another name does. The sentence is not said on Linux or Windows, and not where the
+session would refuse the request.
+
 **Why.** A refused step reports `exited 1` and its standard error is quarantined, so the planner
 cannot see that the sandbox refused it. Without this sentence it cannot tell a sandbox refusal from
 a fault in the machine, so it chases causes that do not apply and sends the person to run
@@ -1762,6 +1770,7 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_failed_job_names_no_request_path`
 `verified-by: bravebot_agent::turn::a_run_under_read_only_reads_the_machine_and_cannot_write_the_session`
 `verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_only_git_writes_a_git_directory`
+`verified-by: bravebot_agent::confine::a_failed_open_or_osascript_step_on_macos_names_the_unconfined_line_only_where_it_is_accepted`
 `verified-by: bravebot_agent::turn::the_failure_sentence_is_the_same_for_exit_1_and_exit_2_and_names_the_menu`
 `verified-by: bravebot_agent::turn::the_failure_sentence_names_the_menu_under_workspace_write`
 `verified-by: bravebot_agent::confine::a_failed_git_remote_step_says_which_key_it_offered_and_that_the_person_chooses_it`
@@ -3157,7 +3166,10 @@ none to add to.
   saying so. Each sentence after a failed step that names the argument says the same: it is the way to
   run the line again, with the refusal given in `why`. On macOS that is the sentence after a failed
   step that says only git writes a `.git`, which adds that a script which runs git itself can be run
-  again with the argument, in the same sessions.
+  again with the argument, in the same sessions. It is also a sentence, said in the same sessions
+  after a failed line with a step that runs `open` or `osascript`, that the default profile refuses
+  LaunchServices and Apple Events, so launching an application, opening a URL in one or scripting
+  one needs the line run again with the argument.
 - **Accepted after a failure.** The driver accepts the request only while a line has run with the
   sandbox in this turn and exited non-zero, and each such failure earns one request: accepting one
   spends it, so a request the person declines, or a plan the policy then refuses, leaves it. The
@@ -3194,6 +3206,8 @@ refuse the path.
 `verified-by: bravebot_agent::tools::only_a_managed_closed_network_refuses_an_unconfined_request`
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::confine::a_failed_step_on_macos_names_the_unconfined_line_for_git_only_where_it_is_accepted`
+`verified-by: bravebot_agent::confine::a_failed_open_or_osascript_step_on_macos_names_the_unconfined_line_only_where_it_is_accepted`
+`verified-by: bravebot_agent::confine::each_failed_step_sentence_naming_unconfined_makes_it_the_second_attempt`
 `verified-by: bravebot_agent::tools::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
@@ -3591,7 +3605,9 @@ list is code. No value, argument vector, printed
 output or configuration file adds to it, and it is not written as a pattern. A lookup of any other
 service is refused, which includes LaunchServices (`com.apple.coreservices.launchservicesd` and
 `com.apple.lsd.*`), the pasteboard (`com.apple.pasteboard.1`) and the other services that open a
-file or URL, read or write the clipboard, or start a program for the caller.
+file or URL, read or write the clipboard, or start a program for the caller. So `open` and
+`osascript` fail under the profile, and the planner is told so after a failed step where the session
+accepts a request to run a line with no sandbox.
 
 **Why.** A Mach service acts with the account's access whatever the filesystem rows say, so a
 profile that allows every lookup lets a confined program read the clipboard, ask LaunchServices to
