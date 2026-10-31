@@ -147,7 +147,7 @@ jobs:
           done
           if [ -n "$missing" ]; then
             echo "error: GitHub release $TAG is missing:$missing"
-            echo "run Jenkins job bravebot-build (UPLOAD and RELEASE) first"
+            echo "run Jenkins job brave-bot-build (UPLOAD and RELEASE) first"
             exit 1
           fi
 

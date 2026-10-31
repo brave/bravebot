@@ -22,6 +22,9 @@ governs:
   - contrib/package-manifests.py
   - contrib/check-pnpm-lockfiles.py
   - crates/cli/tests/release_instructions.rs
+  - crates/cli/tests/app_signing.rs
+  - ui/scripts/sign-mac.mjs
+  - ui/scripts/sign-mac.test.mjs
 documented-by:
   - docs/website/docs/quickstart.md
   - docs/website/docs/install.md
@@ -45,7 +48,7 @@ are not here. All are governed here. Learning from a running copy that a newer r
 [updates.md](updates.md).
 
 GitHub Actions compiles and tests. It does not create a GitHub release. Signed, configured
-binaries are built and published by the Jenkins job `bravebot-build` in the devops repository.
+binaries are built and published by the Jenkins job `brave-bot-build` in the devops repository.
 The npm package is published afterwards, from a manually dispatched GitHub Actions workflow,
 once that release exists.
 
@@ -107,7 +110,7 @@ trunk at the remote.
 
 No branch push, no pull request, no tag push, and no manually dispatched GitHub Actions run
 creates a GitHub release or attaches binaries people install. Publication of those assets
-happens in Jenkins, when `bravebot-build` is run with `UPLOAD` and `RELEASE`. The npm package
+happens in Jenkins, when `brave-bot-build` is run with `UPLOAD` and `RELEASE`. The npm package
 is a later step, specified below, and is not a GitHub release.
 
 **Why.** GitHub Actions cannot codesign Darwin or Authenticode-sign Windows. If it published,
@@ -162,25 +165,34 @@ present but means nothing does not grant it.
 ### RELEASE-7: a release has every supported platform in it, or is not published
 
 Every platform the installer can ask for is present before anything is uploaded. A missing one
-fails the release instead of publishing the rest.
+fails the release instead of publishing the rest. The desktop application is part of that: the
+disk image of each Mac architecture and its `.sha256` are among the assets a release has before it
+is taken out of draft, so a release missing one stays a draft.
 
 **Why.** The installer maps a platform to exactly one asset name, so a partial release is not a
 smaller release. It is a broken install for whoever is on the platform that went missing, and it
-reads to them as the release existing but the tool not working.
+reads to them as the release existing but the tool not working. The same holds for the person
+who downloads the application.
 
-`verified-by: by-construction (the publish job in devops downloads each of the six named assets before it creates the GitHub release; a missing object fails that download. This tree does not contain that job)`
+`verified-by: by-construction (this tree states the names of the six CLI assets, in releasing.md, and the targets that write the two disk images and their checksums. The publish job in devops is expected to download each of the six, and each disk image with its .sha256, before it takes the release out of draft, so that a missing object fails the job. The asset check in publish-npm.yml covers only the six CLI binaries and does not hold a release for a missing image. This tree does not contain the devops job and no test here shows that it does)`
 
 <a id="RELEASE-8"></a>
 ### RELEASE-8: every asset is published with a checksum of the bytes that were uploaded
 
 Each asset has a checksum published beside it, covering the asset in its final form, after every
-step that alters its bytes.
+step that alters its bytes. For a disk image of the desktop application that is after signing,
+notarising and stapling, so the checksum is written by `make app-dmg-sha256`, which runs after
+those, and not by `make checksums`.
 
 **Why.** A checksum taken before a later step rewrites the file is worse than none: it will not
 match, and the mismatch looks exactly like tampering, so the one signal that is supposed to
-distinguish a bad download from a good one now fires on every good one.
+distinguish a bad download from a good one now fires on every good one. Stapling rewrites an
+image, so an image hashed before it is stapled is the case this describes.
 
-`verified-by: by-construction (Jenkins attaches the .sha256 written after signing, covering the bytes that were uploaded)`
+`verified-by: bravebot_cli::app_signing::the_checksum_of_each_image_covers_its_final_bytes`
+`verified-by: bravebot_cli::app_signing::a_missing_image_gets_no_checksum_at_all`
+`verified-by: bravebot_cli::app_signing::the_cli_checksums_leave_a_disk_image_out`
+`verified-by: by-construction (Jenkins attaches the .sha256 written after signing, covering the bytes that were uploaded, and for the disk images attaches the file make app-dmg-sha256 wrote)`
 
 <a id="RELEASE-9"></a>
 ### RELEASE-9: a downloaded binary is checked against its published checksum before it is written
@@ -595,6 +607,41 @@ package's key does not decide what is trusted for this one.
 `verified-by: bravebot_cli::release_instructions::the_install_instructions_name_the_served_repositories`
 `verified-by: by-construction (generating, signing and uploading the repositories are steps of the publish job in devops, which this tree does not contain)`
 
+<a id="RELEASE-23"></a>
+### RELEASE-23: the desktop application is signed from the inside out and stapled only after the notary service accepts it
+
+`make app-release-signed` signs each Mac bundle with the Developer ID identity the job gives it,
+then notarises, staples and assesses the bundle, builds the disk images, and does the same for
+each image. `ui/scripts/sign-mac.mjs` signs and notarises, with `@electron/osx-sign` and
+`@electron/notarize`. Every item is signed before the item that contains it, the main executable
+after the rest of the app and the app last. Each signature has the hardened runtime and a secure
+timestamp, and none is made with `--deep`. The app, its main executable, the helper apps and what
+is in them carry `ui/build/entitlements.mac.plist`, and everything else, including the two
+executables in `Contents/Resources`, carries `ui/build/entitlements.mac.none.plist`, which has no
+keys. A
+submission is stapled only when the status the service returned is `Accepted`, whatever the exit
+status of `notarytool`. The app is assessed with `spctl -a -t exec` and an image with `spctl -a -t
+open --context context:primary-signature`. The script stops before it runs a tool when the
+identity or the profile it needs is unset or a bundle or image it works on is missing, and it
+signs an image before it submits it.
+
+**Why.** A signature seals what it contains, so signing a container first and its contents after
+breaks the seal the container made, and `--deep` signs everything with one set of entitlements, so
+the two Rust executables would carry `allow-jit`. Notarisation refuses an unsigned executable, a
+binary without the hardened runtime, and one without a secure timestamp. `notarytool submit
+--wait` exits 0 for a rejected submission, so the status it prints is what decides. The two
+libraries are the ones the packager runs for its `osxSign` and `osxNotarize` options. They find
+the executables in the bundle by reading the files, so a change to where Electron puts them does
+not leave one unsigned. They run after packaging and not as options of the packager, because
+`ui/scripts/package.mjs` sets the fuses after the packager returns and that rewrites the Electron
+binary a signature covers. An image is hashed after it is stapled ([RELEASE-8](#RELEASE-8)).
+
+`verified-by: bravebot_cli::app_signing::the_apps_are_signed_by_the_script_with_the_identity_the_job_gives`
+`verified-by: bravebot_cli::app_signing::a_notarised_app_is_assessed_as_an_executable`
+`verified-by: bravebot_cli::app_signing::a_notarised_image_is_assessed_as_an_installer`
+`verified-by: bravebot_cli::app_signing::the_sub_targets_run_in_the_order_that_puts_the_ticket_in_the_image`
+`verified-by: by-construction (ui/scripts/sign-mac.test.mjs runs @electron/osx-sign and @electron/notarize against stand-ins for codesign, security, xcrun and ditto, and asserts that every item is signed before the one containing it, that each signature has the hardened runtime, a secure timestamp and the identity and none is deep, which entitlements file each item carries, that a rejected submission is not stapled though notarytool exits 0, that an image is signed and submitted as it is, that nothing runs when the identity, the profile or a path is missing, and that the script runs from another directory with a relative path; ui/scripts/entitlements.test.mjs holds the two entitlements files to their contents; make check-ui-build runs both in the Front end CI job. The identity, the profile and the Apple account are the job's, so whether the real tools accept the result, and whether the notary service accepts the app, is first seen by the job that runs them)`
+
 ## Known costs
 
 - **The apt and dnf repositories are generated, signed and served elsewhere.** Nothing in this
@@ -657,10 +704,13 @@ package's key does not decide what is trusted for this one.
   upgrade, and a later launch is told again. The tap repository this cask belongs in is not named anywhere in
   this tree, so who creates it, and what `brew install` names, is decided where it is published.
 
-- **Publication lives outside this repository.** `bravebot-build` in devops is what signs and
-  attaches assets. A change there can break RELEASE-6 through RELEASE-8 without this tree
-  noticing. RELEASE-9 is `install.sh` and the package script, in this repository: a checksum
-  Jenkins ships in the wrong form is refused here, not accepted.
+- **Publication lives outside this repository.** `brave-bot-build` in devops is what runs the
+  signing targets for the desktop application and signs and attaches every asset. A change there
+  can break RELEASE-6 through RELEASE-8 without this tree noticing, and it can stop running
+  the signing targets of RELEASE-23 or run them in another order. The Apple credentials are the
+  job's, so no test here has run `codesign` or `notarytool` for real. RELEASE-9 is `install.sh` and
+  the package script, in this repository: a checksum Jenkins ships in the wrong form is refused
+  here, not accepted.
 
 - **Only the npm publish refuses a release whose Linux checksums carry no signature that verifies.**
   The publish job in devops checks for each binary but not for a signature. The install script
@@ -679,10 +729,10 @@ package's key does not decide what is trusted for this one.
   the publishes made, after it.
 
 - **The refusals before a tag guard the tag, not the branch.** Tagging checks the branch, the
-  remote, and the agreement among the files that state a version. The publish job builds the tip of a
-  branch it is handed, refuses a `package.json` mismatch, and refuses unless tag `v` plus the
-  version in `Cargo.toml` already names that commit. A commit that is not `origin/main` can
-  still be published if that is what the tag names and BRANCH points there.
+  remote, and the agreement among the files that state a version. The publish job is given a tag,
+  builds the commit it names, refuses a `package.json` mismatch, and refuses unless tag `v` plus
+  the version in `Cargo.toml` names that commit. A commit that is not `origin/main` can still be
+  published if a tag names it.
 
 - **Who published a release is not recoverable from here.** A publish is a parameterised build in
   another system, so who asked for it lives in that system's history. The job requires the tag

@@ -76,7 +76,7 @@ ALSO_READ_BY_RUST = frozenset({
 })
 
 # Outside crates/, and read by a test all the same.
-READ_BY_RUST = ("CHANGELOG.md", "README.md")
+READ_BY_RUST = ("CHANGELOG.md", "README.md", "LICENSE")
 
 # Read by a test, and by the build of the agent crate, which carries each spec's clause headings.
 READ_BY_RUST_UNDER = ("docs/specs/",)
@@ -110,6 +110,8 @@ NAMED_NOT_READ = {
     "agents/AGENTS.md": "a marker doctor checks exists, which its tests write for themselves",
     "agents/setup.py": "a marker doctor checks exists, which its tests write for themselves",
     "docs/development/agent-configuration.md": "a marker doctor checks exists, likewise",
+    "ui/scripts/sign-mac.mjs": "the path the signing targets hand to node, which the app_signing "
+                               "test's stand-in for node receives; it holds an empty file there",
 }
 
 # What a project directory holds for the package manager. The npm names stay so that deleting a
@@ -120,7 +122,7 @@ PACKAGE_FILES = (
 
 # Read by nothing heavier than the checks that always run.
 QUIET = (
-    "LICENSE", ".github/SECURITY.md", ".gitignore",
+    ".github/SECURITY.md", ".gitignore",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
 QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
@@ -432,6 +434,7 @@ CASES = (
     ("docs/specs/credential-protection.md", {"rust"}),
     ("docs/specs/sandboxing.md", {"rust"}),
     ("CHANGELOG.md", {"rust"}),
+    ("LICENSE", {"rust"}),
     ("docs/specs/routing.md", {"rust"}),
     ("docs/specs/tools/read-file.md", {"rust"}),
     ("docs/website/docs/install.md", {"docs", "help", "rust"}),

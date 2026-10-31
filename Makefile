@@ -106,6 +106,7 @@ help:
 	@echo "  make package-manifests TAG=v<version>       Write the Homebrew cask and WinGet manifests into dist/packages"
 	@echo "  make app-bundle                             Package the desktop application, release build"
 	@echo "  make app-release                            Its disk images for both Mac architectures, unsigned"
+	@echo "  make app-release-signed                     Sign, notarise and staple the Mac bundles and images and write their .sha256 (SIGN_IDENTITY, NOTARY_PROFILE)"
 	@echo "  make app-release-linux                      Its .deb and .rpm for both Linux architectures, unsigned"
 	@echo "  make app-release-windows                    Its Windows installers for both architectures, unsigned"
 	@echo "  make cli-packages-linux                     The CLI's .deb and .rpm for both Linux architectures, unsigned"
@@ -822,7 +823,7 @@ all-platforms: darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64 w
 # rather than through `pnpm run build`, which would build the debug pair again on the way past.
 #
 # Nothing here signs or notarises the result, so the bundle is installable and not distributable;
-# the job that signs the binaries is where that belongs, and issue #394 is where it is decided.
+# `make app-release-signed` signs the release bundles, which are a different build.
 # It is fused, as a release is, so it runs no Node program it is handed and Playwright cannot
 # drive it: `pnpm run package` in ui/ is the bundle the drivers attach to.
 .PHONY: app-bundle
@@ -895,6 +896,72 @@ app-dmg:
 		hdiutil create -quiet -volname "Brave Bot" -srcfolder "$$stage/$$arch" -ov -format UDZO \
 			dist/bravebot-app-darwin-$$arch.dmg; \
 		echo "wrote dist/bravebot-app-darwin-$$arch.dmg"; \
+	done
+
+# Signing, notarising and checksumming the Mac application, run by the release job on the Mac node
+# after `app-bundles` and in the order `app-release-signed` gives. The Developer ID identity and the
+# notarytool keychain profile come from the job, as the variables SIGN_IDENTITY and NOTARY_PROFILE
+# in its environment or on the make command line, which make passes on to the script; nothing here
+# holds either.
+#
+# `app-sign`, `app-notarize` and `app-dmg-notarize` run ui/scripts/sign-mac.mjs, which calls
+# @electron/osx-sign and @electron/notarize and stops before it runs a tool when the identity or the
+# profile it needs is unset or a bundle or image it works on is missing. Every path is from the
+# repository root, for the script and for the `spctl` that follows it, and the script finds its
+# libraries from its own location. It runs here and not inside the packager because packaging sets
+# the fuses after the packager returns, and that rewrites the Electron binary a signature covers.
+#
+# The libraries sign every binary from the inside out with the hardened runtime and a secure
+# timestamp, none with `--deep`, and the app last. The app, its main executable and the helper apps
+# carry the entitlements checked in under ui/build/, and the two Rust executables, frameworks and
+# dylibs carry none. They
+# submit, require the status Accepted, which `notarytool` does not make its exit status, and staple.
+# These targets then have Gatekeeper assess each result: an app as an executable and an image as an
+# installer image. `app-dmg-sha256` writes the digest of each image in the form `checksums` uses, so
+# it runs last: stapling rewrites the image, and a digest taken earlier does not match the bytes
+# uploaded.
+SIGN_MAC = node ui/scripts/sign-mac.mjs
+
+.PHONY: app-release-signed
+app-release-signed:
+	$(MAKE) app-sign
+	$(MAKE) app-notarize
+	$(MAKE) app-dmg
+	$(MAKE) app-dmg-notarize
+	$(MAKE) app-dmg-sha256
+
+.PHONY: app-sign
+app-sign:
+	@set -e; set --; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "ui/dist/Brave Bot-darwin-$${pair#*:}/Brave Bot.app"; done; \
+	$(SIGN_MAC) sign "$$@"
+
+.PHONY: app-notarize
+app-notarize:
+	@set -e; set --; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "ui/dist/Brave Bot-darwin-$${pair#*:}/Brave Bot.app"; done; \
+	$(SIGN_MAC) notarize "$$@"; \
+	for app in "$$@"; do spctl -a -t exec -vv "$$app"; done
+
+.PHONY: app-dmg-notarize
+app-dmg-notarize:
+	@set -e; set --; \
+	for pair in $(APP_ARCHES); do set -- "$$@" "dist/bravebot-app-darwin-$${pair%%:*}.dmg"; done; \
+	$(SIGN_MAC) image "$$@"; \
+	for dmg in "$$@"; do spctl -a -t open --context context:primary-signature -vv "$$dmg"; done
+
+.PHONY: app-dmg-sha256
+app-dmg-sha256:
+	@set -e; \
+	for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; \
+		test -f dist/bravebot-app-darwin-$$arch.dmg || { echo "no dist/bravebot-app-darwin-$$arch.dmg: run \`make app-dmg\` first" >&2; exit 1; }; \
+	done; \
+	cd dist; \
+	for pair in $(APP_ARCHES); do \
+		arch=$${pair%%:*}; f=bravebot-app-darwin-$$arch.dmg; \
+		shasum -a 256 "$$f" | awk '{print $$1}' > "$$f.sha256"; \
+		echo "wrote dist/$$f.sha256"; \
 	done
 
 # The desktop application's Linux release assets, built on a Linux host from what the cross-build
@@ -1213,12 +1280,15 @@ strip:
 # It is the statement of the format those files have to be in: the digest alone, with no filename
 # beside it, which is the only thing the npm postinstall accepts. SHA256SUMS is the conventional
 # form of the same hashes, for verifying a download by hand. The desktop application's two
-# executables are left out: they go into its own packages and are not assets of their own.
+# executables are left out: they go into its own packages and are not assets of their own. The
+# disk images are hashed by `app-dmg-sha256` after they are signed and stapled; running this over
+# an image before then would write a digest of bytes that are not uploaded, and this removes every
+# .sha256 in dist/, so it runs before `app-dmg-sha256`, not after.
 .PHONY: checksums
 checksums:
 	@cd dist && rm -f ./*.sha256 SHA256SUMS && \
 	for f in $(BINARY)-*; do \
-		case "$$f" in bravebot-rpc-*|bravebot-ui-files-*) continue;; esac; \
+		case "$$f" in bravebot-rpc-*|bravebot-ui-files-*|bravebot-app-*) continue;; esac; \
 		shasum -a 256 "$$f" | awk '{print $$1}' > "$$f.sha256"; \
 		shasum -a 256 "$$f" >> SHA256SUMS; \
 	done
@@ -1285,7 +1355,7 @@ bump-version:
 
 # Tags the current version and pushes it. GitHub Actions runs CI on the tag.
 # Signed assets and the npm package are published later, each by hand: Jenkins
-# (bravebot-build with UPLOAD and RELEASE), then make publish-npm.
+# (brave-bot-build with UPLOAD and RELEASE), then make publish-npm.
 #
 # A refused push takes the tag with it. A tag left behind locally is one the
 # remote never got, and the next run reports the version as already tagged
@@ -1330,7 +1400,7 @@ github-release:
 		exit 1; \
 	fi; \
 	echo "pushed $(TAG) to $(RELEASE_REMOTE); GitHub Actions will run CI on the tag"; \
-	echo "publish signed assets later with Jenkins job bravebot-build (UPLOAD and RELEASE)"; \
+	echo "publish signed assets later with Jenkins job brave-bot-build (UPLOAD and RELEASE)"; \
 	echo "then publish npm: make publish-npm TAG=$(TAG)"; \
 	echo "watch CI with: gh run watch --repo brave/bravebot"
 
