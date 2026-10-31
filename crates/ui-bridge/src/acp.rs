@@ -1074,6 +1074,35 @@ fn tools_text(data: &Value) -> String {
     .join("\n")
 }
 
+fn resources_text(data: &Value) -> String {
+    let resources: Vec<bravebot_approval::Resource<'_>> = data["resources"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|resource| bravebot_approval::Resource {
+            uri: text_of(resource, "uri"),
+            name: text_of(resource, "name"),
+            description: resource["description"].as_str(),
+            mime_type: resource["mimeType"].as_str(),
+        })
+        .collect();
+    bravebot_approval::resources_lines(&bravebot_approval::Resources {
+        alias: text_of(data, "alias"),
+        resources: &resources,
+        refused: data["refused"].as_u64().map_or(0, |n| n as usize),
+        check: check_of(data),
+    })
+    .join("\n")
+}
+
+fn resource_read_text(data: &Value) -> String {
+    bravebot_approval::resource_read_lines(&bravebot_approval::ResourceRead {
+        alias: text_of(data, "alias"),
+        uri: text_of(data, "uri"),
+    })
+    .join("\n")
+}
+
 fn call_text(data: &Value) -> String {
     let arguments: Vec<(String, String)> = data["arguments"]
         .as_array()
@@ -1195,6 +1224,16 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             format!("offer the tools of {} to the model", text("alias")),
             "other",
             tools_text(data),
+        ),
+        "mcp-resources" => (
+            format!("offer the resources of {} to the model", text("alias")),
+            "other",
+            resources_text(data),
+        ),
+        "mcp-resource-read" => (
+            format!("read {} from {}", text("uri"), text("alias")),
+            "read",
+            resource_read_text(data),
         ),
         "mcp-call" => (format!("call {}", text("name")), "other", call_text(data)),
         "mcp-move" => (
@@ -1715,6 +1754,16 @@ mod tests {
                 json!({"task": "tidy", "steps": ["1. read", "2. write"]}),
             ),
             ("host", json!({"hosts": ["example.com", "10.0.0.1"]})),
+            (
+                "mcp-resources",
+                json!({"alias": "a", "resources": [{"uri": "memo://x", "name": "Memo",
+                    "description": "a memo", "mimeType": "text/plain"}], "refused": 1,
+                    "vetting": vetting}),
+            ),
+            (
+                "mcp-resource-read",
+                json!({"alias": "a", "uri": "memo://x"}),
+            ),
         ]
     }
 
@@ -1947,10 +1996,37 @@ mod tests {
             text.contains(&format!("{bar} ignore this\u{241b}[2J")),
             "{text}"
         );
+        let mut resources = every_question()
+            .into_iter()
+            .find(|(stem, _)| *stem == "mcp-resources")
+            .unwrap()
+            .1;
+        resources["resources"][0]["description"] = json!(hostile);
+        let (_, _, text) = shown("mcp-resources", resources);
+        assert!(!text.contains('\u{1b}'), "{text}");
+        assert!(
+            text.contains(&format!("{bar} ignore this\u{241b}[2J")),
+            "{text}"
+        );
         let mut call = every_question()[10].1.clone();
         call["description"] = json!(hostile);
         let (_, _, text) = shown("mcp-call", call);
         assert!(text.contains(&format!("{bar} ignore this")), "{text}");
+    }
+
+    #[test]
+    fn a_resource_read_request_is_shown_with_its_uri_and_alias() {
+        let (title, kind, text) = shown(
+            "mcp-resource-read",
+            json!({"alias": "weather", "uri": "memo://forecast"}),
+        );
+        assert_eq!(title, "read memo://forecast from weather");
+        assert_eq!(kind, "read");
+        assert!(
+            text.contains("read resource from MCP server 'weather':"),
+            "{text}"
+        );
+        assert!(text.contains("  memo://forecast"), "{text}");
     }
 
     /// OUTPUT-1: an editor's yes releases every byte of the output to the planner, so the

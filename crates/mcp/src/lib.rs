@@ -23,8 +23,9 @@ pub mod stdio;
 
 pub use http::HttpServer;
 pub use protocol::{
-    DrawnArgument, DrawnPrompt, Listing, MAX_WIRE, PromptListing, PromptResult, ToolResult,
-    drawn_prompts, listed_or_none, wire_name,
+    DrawnArgument, DrawnPrompt, Listing, MAX_WIRE, PromptListing, PromptResult, RawResource,
+    ResourceListing, ToolResult, drawn_prompts, listed_or_none, listed_resources_or_none,
+    read_resource_params, wire_name,
 };
 pub use stdio::StdioServer;
 

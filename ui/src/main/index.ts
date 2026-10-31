@@ -570,6 +570,8 @@ const ALLOWED = new Set([
   'exposure.reply',
   'mcp-server.reply',
   'mcp-tools.reply',
+  'mcp-resources.reply',
+  'mcp-resource-read.reply',
   'mcp-call.reply',
   'mcp-move.reply',
   'host.reply',

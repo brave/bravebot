@@ -1423,6 +1423,42 @@ fn table(
                 "required": ["url", "path"]
             }),
         ),
+        Tool::function(
+            "list_mcp_resources",
+            "List the resources an MCP server offers, including their URIs and names. \
+             Use this before reading a resource with read_mcp_resource. The user is asked \
+             to approve the server's resource list on the first turn you list it.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "server": {
+                        "type": "string",
+                        "description": "The alias of the MCP server whose resources to list."
+                    }
+                },
+                "required": ["server"]
+            }),
+        ),
+        Tool::function(
+            "read_mcp_resource",
+            "Read the text content of a resource from an MCP server by URI. \
+             Returns a reference (ref:N) to quarantined content. List the server's \
+             resources with list_mcp_resources first.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "server": {
+                        "type": "string",
+                        "description": "The alias of the MCP server holding the resource."
+                    },
+                    "uri": {
+                        "type": "string",
+                        "description": "The URI of the resource to read."
+                    }
+                },
+                "required": ["server", "uri"]
+            }),
+        ),
     ];
 
     if running.offered() {

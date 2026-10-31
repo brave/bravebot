@@ -63,6 +63,8 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`remember`](remember.md) | `key`, `scope`, `supersedes`, `new` | `text` | confirmation, and the kept facts close to the new one |
 | [`propose_rule`](propose-rule.md) | `scope` | `text`, `reason` | what the person answered, and whether the rule was written |
 | [`recall`](recall.md) | `query`, `key` | none | the kept facts that match, or the one fact read |
+| [`list_mcp_resources`](../mcp-servers.md#SERVERS-21) | `server` | none | the resource URIs, names, descriptions, and MIME types |
+| [`read_mcp_resource`](../mcp-servers.md#SERVERS-21) | `server`, `uri` | none | a reference |
 
 Every tool also takes `why`, which is content on every one of them and is left out of the table for
 that reason. [TOOL-5](#TOOL-5) is where that is settled.

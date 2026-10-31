@@ -24,6 +24,8 @@ import type {
   McpServerRequest,
   McpStarted,
   McpToolsRequest,
+  McpResourcesRequest,
+  McpResourceReadRequest,
   FetchRequest,
   Landing,
   ManifestError,
@@ -171,6 +173,10 @@ export type Entry = (
   | { kind: 'mcp-server'; id: string; request: McpServerRequest; decision: 'approve' | 'reject' | null; remember: boolean }
   /** An MCP server's list of tools, awaiting a decision about offering them to the model. */
   | { kind: 'mcp-tools'; id: string; request: McpToolsRequest; decision: 'approve' | 'reject' | null }
+  /** An MCP server's list of resources, awaiting a decision about offering them to the model. */
+  | { kind: 'mcp-resources'; id: string; request: McpResourcesRequest; decision: 'approve' | 'reject' | null }
+  /** A request to read one resource from an MCP server, awaiting a decision. */
+  | { kind: 'mcp-resource-read'; id: string; request: McpResourceReadRequest; decision: 'approve' | 'reject' | null }
   /**
    * A call to an MCP server's tool, awaiting a decision. `remember` is the third answer: yes,
    * and stop asking about this tool in this project.
@@ -368,6 +374,8 @@ export const refusedPaths = (rules: SettingsRules) => (rules.filesystem ?? []).f
 export const askedExposure = (request: ExposureRequest): Entry => ({ kind: 'exposure', id: nextId(), request, decision: null })
 export const askedMcpServer = (request: McpServerRequest): Entry => ({ kind: 'mcp-server', id: nextId(), request, decision: null, remember: false })
 export const askedMcpTools = (request: McpToolsRequest): Entry => ({ kind: 'mcp-tools', id: nextId(), request, decision: null })
+export const askedMcpResources = (request: McpResourcesRequest): Entry => ({ kind: 'mcp-resources', id: nextId(), request, decision: null })
+export const askedMcpResourceRead = (request: McpResourceReadRequest): Entry => ({ kind: 'mcp-resource-read', id: nextId(), request, decision: null })
 export const askedMcpCall = (request: McpCallRequest): Entry => ({ kind: 'mcp-call', id: nextId(), request, decision: null, remember: false })
 export const askedMcpMove = (request: McpMoveRequest): Entry => ({ kind: 'mcp-move', id: nextId(), request, decision: null })
 export const askedHost = (request: HostRequest): Entry => ({ kind: 'host', id: nextId(), request, decision: null })
@@ -477,6 +485,8 @@ export const REPLY = {
   exposure: 'exposure.reply',
   'mcp-server': 'mcp-server.reply',
   'mcp-tools': 'mcp-tools.reply',
+  'mcp-resources': 'mcp-resources.reply',
+  'mcp-resource-read': 'mcp-resource-read.reply',
   'mcp-call': 'mcp-call.reply',
   'mcp-move': 'mcp-move.reply',
   host: 'host.reply',
@@ -666,6 +676,8 @@ export function searchableText(entry: Entry): string {
     case 'exposure': return [entry.request.path, ...entry.request.credentials].join(' ')
     case 'mcp-server': return [entry.request.alias, ...(entry.request.command ?? []), entry.request.url ?? '', entry.request.requestedBy].join(' ')
     case 'mcp-tools': return [entry.request.alias, ...entry.request.tools.map((tool) => `${tool.name} ${tool.description ?? ''}`)].join(' ')
+    case 'mcp-resources': return [entry.request.alias, ...entry.request.resources.map((res) => `${res.name} ${res.uri} ${res.description ?? ''}`)].join(' ')
+    case 'mcp-resource-read': return [entry.request.alias, entry.request.uri].join(' ')
     case 'mcp-call': return [entry.request.name, ...entry.request.arguments.map((argument) => `${argument.name} ${argument.value}`)].join(' ')
     case 'mcp-move': return [entry.request.alias, entry.request.declared, entry.request.destination].join(' ')
     case 'host': return entry.request.hosts.join(' ')
