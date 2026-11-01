@@ -23,8 +23,8 @@ pub mod stdio;
 
 pub use http::HttpServer;
 pub use protocol::{
-    DrawnArgument, DrawnPrompt, Listing, MAX_WIRE, PromptListing, PromptResult, ToolResult,
-    drawn_prompts, listed_or_none, wire_name,
+    DrawnArgument, DrawnPrompt, Listing, MAX_PICTURE_BYTES, MAX_WIRE, PICTURE_MEDIA, Picture,
+    PromptListing, PromptResult, ToolOutput, ToolResult, drawn_prompts, listed_or_none, wire_name,
 };
 pub use stdio::StdioServer;
 
@@ -51,13 +51,22 @@ pub enum McpError {
     Confinement(String),
     /// The policy refused the call.
     Denied(Denial),
-    /// The transport failed, or the server sent something unusable.
+    /// The transport failed: the server could not be started, reached or written to, or its
+    /// output or connection closed before any reply to the request.
     ///
-    /// The detail is this crate's own words. Where the failure was a reply that would not parse,
-    /// the parser's sentence is not among them: `serde_json` quotes the value it rejected, so a
-    /// server choosing what it replies with chooses part of that sentence. [`malformed`] is how
-    /// such a failure is built.
+    /// No reply arrived, so nothing a server wrote decided this. The detail is this crate's own
+    /// words.
     Transport(String),
+    /// A reply arrived that this client could not take as the result of the request: it did not
+    /// parse, held neither a result nor an error, came with an HTTP status that is not a success,
+    /// or was a line past the bound (MCP-13).
+    ///
+    /// The detail is this crate's own words. Where the reply would not parse, the parser's sentence
+    /// is not among them: `serde_json` quotes the value it rejected, so a server choosing what it
+    /// replies with chooses part of that sentence. [`malformed`] is how such a failure is built.
+    /// A caller that tells a request that was answered from one that was not reads the variant:
+    /// [`McpError::Server`], [`McpError::ToolFailed`] and this one are replies.
+    Unusable(String),
     /// The server returned a JSON-RPC error.
     ///
     /// The `message` the server sent with it is not here, and [`protocol::RpcError`] does not keep
@@ -92,6 +101,7 @@ impl fmt::Display for McpError {
             ),
             Self::Denied(d) => write!(f, "{d}"),
             Self::Transport(detail) => write!(f, "mcp transport failed: {detail}"),
+            Self::Unusable(detail) => write!(f, "mcp reply could not be used: {detail}"),
             Self::Server { code, method } => write!(
                 f,
                 "mcp server error {code} for {method}; what the server said about that is its own \
@@ -128,6 +138,7 @@ pub(crate) fn log_step<T>(step: &'static str, outcome: &McpResult<T>) {
                 McpError::Confinement(_) => "confinement",
                 McpError::Denied(_) => "denied",
                 McpError::Transport(_) => "transport",
+                McpError::Unusable(_) => "unusable",
                 McpError::Server { .. } => "server",
                 McpError::ToolFailed { .. } => "tool_failed",
                 McpError::TimedOut { .. } => "timed_out",
@@ -151,7 +162,7 @@ pub(crate) fn malformed(reading: impl fmt::Display, error: &serde_json::Error) -
         serde_json::error::Category::Data => "it is json of the wrong shape",
         serde_json::error::Category::Eof => "it ends part-way through",
     };
-    McpError::Transport(format!("malformed {reading}: {kind}"))
+    McpError::Unusable(format!("malformed {reading}: {kind}"))
 }
 
 #[cfg(test)]

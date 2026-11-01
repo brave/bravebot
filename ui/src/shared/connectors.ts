@@ -36,6 +36,8 @@ export interface Connector {
   variables?: { name: string; stored: boolean }[]
   reads?: string[]
   directory?: string | null
+  /** The declaration says every call is asked about and no answer to one is remembered. */
+  asks_every_call?: boolean
   digest?: string
   approved?: boolean
   requested: boolean

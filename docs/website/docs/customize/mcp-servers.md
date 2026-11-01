@@ -68,6 +68,8 @@ argument, and a flag of bravebot's own among them, such as `--settings`, is the 
 | `--header-env <header>=<name>...` | with `--http`: send this header with the value of that variable in your environment; repeatable |
 | `--tools <list>` | offer only these tools of the server; names separated by commas, or by spaces up to the next flag. `--tools=a,b` also works |
 | `--exclude-tools <list>` | never offer these tools, written the same way |
+| `--ask-every-call` | put every call to this server to you, whatever a rule, an earlier answer or `--dangerously-skip-permissions` says, and keep no answer to one; see [Servers that ask every call](#servers-that-ask-every-call) |
+| `--choice <tool>:<argument>` | with `--ask-every-call` and a program: name an argument of one of the server's tools that a choice may fill; repeatable, one pair to each flag; see [Arguments that take a choice](#arguments-that-take-a-choice) |
 | `-s <scope>` | which settings file [asks for the server](#asking-for-one-from-a-checkout) once you approve it: `local`, the default, `project` or `user`; it may come before the alias |
 
 ### Choosing which tools are offered
@@ -288,7 +290,8 @@ so a later run without it asks.
 ## Offering its tools to the model
 
 A started server's tools are not offered to the model until you have read them. At the start of the
-first turn you ask for, the session puts each server's list to you, whole:
+first turn you ask for, or of the first plan run in [manifest mode](../using/manifest-mode.md) where
+that comes first, the session puts each server's list to you, whole:
 
 ```
 ╭ offer these tools to the model? ─────────────────────────────────────────────────────╮
@@ -389,12 +392,57 @@ to you whatever you [vouched for](../security/permissions.md#vouching-for-a-comm
 file is. The words a server describes its tools with stay public, since it hands the same list to
 whoever connects.
 
+A picture in a result, such as a screenshot, is held the same way. A part of the result is taken as a
+picture only if it is a PNG, JPEG, GIF or WebP and decodes to at most 8 MiB, and every other part, such
+as audio or a PDF, is left out and counted. The model is told how many parts were left out, and is
+handed a reference for the text and one for each picture, naming its type and size. You are shown a
+row that says what the picture is and how big, and a row saying how to look at it, behind the margin.
+See [A picture that arrives](../security/vetting.md#a-picture-that-arrives).
+
 Once you let something private out of quarantine for the model, such as a server's answer after a
 [check](../security/vetting.md), what the model writes from then on is private too, since it may
 repeat it. Every later call to a server is then put to you with its arguments, whatever answer 2 or
 a rule says, and a resumed session keeps asking. Undoing the turn that let it out stops it. A file
 the model reads in your project does not start it. A session saved by an earlier version is read as
 having let something private out, so every call in it asks.
+
+### Servers that ask every call
+
+A server added with `--ask-every-call` is asked about at every call, for tools whose arguments you
+want to read each time:
+
+```sh
+bravebot mcp add cookies --ask-every-call -- /path/to/program mcp
+```
+
+The question for its calls is the one above without answer 2, which is drawn as not offered, and
+`--plain` says no answer to the call is remembered. An `allow` rule for the server, an answer 2
+given for the tool before the flag was added, and `--dangerously-skip-permissions` do not answer it.
+A `deny` rule still refuses the call. A one-shot run, which has nobody to ask, and a delegate refuse
+the call, and the desktop application refuses it without showing a card, telling the model and you
+that it cannot ask and that the terminal can. The desktop application's connector page says under
+the connector that its calls are asked about, and keeps the setting when you edit the connector.
+Adding the flag to a server you already approved asks the approval question again, with
+`ask_every_call` named as the field that changed. `get`, `list`, `doctor` and the approval question say the server asks every call.
+
+### Arguments that take a choice
+
+A choice is the number a processor picked from a numbered list. `--choice <tool>:<argument>` names
+an argument of one of the server's tools that a choice may fill, once for each pair:
+
+```sh
+bravebot mcp add brave-input --ask-every-call --choice click_element:element_number \
+  -- /path/to/bravebot-browser mcp --group input
+```
+
+Only a program on this machine that is also added with `--ask-every-call` can name one. A server
+reached by `--http`, and a server that is not asked about every call, are refused with a sentence
+that says so, and nothing is written. A tool and an argument are each letters, digits, `-` and `_`, an argument at most 60 characters.
+`get`, `list`, `doctor` and the approval question list the pairs as `tool:argument`. Adding a pair
+to a server you already approved asks the approval question again, with `choice_arguments` named as
+the field that changed. The desktop application's connector page keeps the pairs when you edit the
+connector. `bravebot-browser install --groups input` prints the declaration of the browser's `input`
+group with a pair for each of its tools that takes the number of an element.
 
 ### When a call fails
 
@@ -469,7 +517,8 @@ since that answer was given at the question and names one tool in one project, u
 private was [let out of quarantine](#each-call) earlier in the session, when the call is refused.
 
 `--dangerously-skip-permissions` answers both questions yes without drawing them, makes no check of
-the list, and records nothing: a later run without it asks each question again.
+the list, and records nothing: a later run without it asks each question again. A call to a server
+added with [`--ask-every-call`](#servers-that-ask-every-call) is still drawn and asked.
 
 ## Running a server's prompts
 
@@ -567,21 +616,25 @@ asked whether the server moved:
 
 A redirect met during a turn is asked about there. One met as the session starts the server is
 asked at the terminal before the session opens. A yes makes the handshake at the new address and
-only then rewrites the entry in `~/.bravebot/mcp.json` and approves it. Its list of tools is put to
+only then rewrites the entry in `~/.bravebot/mcp.json` and approves it. The entry changes its
+address and nothing else: its tool filters, its header and bearer variables, its time limits and
+`--ask-every-call` stay as you wrote them. Its list of tools is put to
 you again when a session next starts it, since the list you said yes to was read at the old
 address. A yes does not move it to an address a declaration cannot hold, or to a host your
 organization's settings refuse. A no changes nothing: the call is refused, or the server is not
 started. A one-shot run, a session with nobody at the terminal, and
 `--dangerously-skip-permissions` refuse the redirect without asking.
 
-## Connecting Gmail, Google Calendar and GitHub
+## Connecting Gmail, Google Calendar, GitHub and Brave
 
 Reading Gmail through Google's Workspace server, with sign-in done once outside bravebot and the
 tools that send mail refused, has a page of its own: [Connecting Gmail](mcp/gmail.md). Reading
 Google Calendar through the same server, with the tools that change a calendar refused, is
 [Connecting Google Calendar](mcp/calendar.md). Reading GitHub issues and pull requests through
 GitHub's own server, with every tool that writes refused, is [Connecting GitHub](mcp/github.md).
-Further pages for particular servers will sit beside them if they read naturally.
+Using Brave's tabs, history, bookmarks and more through the BraveBot extension, one group of tools
+at a time and each off until you turn it on, is [Connecting Brave](mcp/brave.md). Further pages for
+particular servers will sit beside them if they read naturally.
 
 ## Seeing what a session started
 
@@ -644,12 +697,13 @@ for a session started in /Users/you/work/app
 An unapproved server is listed as unapproved rather than left out. Under each server are the file
 in this directory that asks for it, whether a session started here would start it unasked, ask you
 first, or not start it (with the reason), and the standing answers recorded for it in this project:
-answer 2 at the server question and the tools answer 2 stopped asking about. The rows are for a
-session at a terminal. Where nobody can be asked, a server that would be asked about is not started.
-A server a file here asks for and nobody declared is a row of its own, ending with the command that
-declares it. An entry that cannot be used, because it was edited by hand into something a
-declaration cannot be, is listed with what is wrong with it, and the list then fails so that a
-script notices.
+answer 2 at the server question and the tools answer 2 stopped asking about. A server added with
+[`--ask-every-call`](#servers-that-ask-every-call) has a line saying so above those. The rows are
+for a session at a terminal. Where nobody can be asked, a server that would be asked about is not
+started. A server a file here asks for and nobody declared is a row of its own, ending with the
+command that declares it. An entry that cannot be used, because it was edited by hand into
+something a declaration cannot be, is listed with what is wrong with it, and the list then fails so
+that a script notices.
 
 `bravebot doctor` prints the same rows and fails where `list` does.
 
@@ -781,8 +835,12 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
   and the directories its program is found in changes the access list of each, so a run that ends
   without cleanup leaves the entries behind. A server there may also start a subprocess, since the
   container has no way to deny one.
-- **The desktop application starts no server yet.** Only the terminal client acts on a checkout's
-  request.
+- **The desktop application starts a session's servers with its first turn or its first plan run,
+  not as the session opens.** That turn or run waits for the question about each server and for every
+  handshake before the model is asked anything, and the window says it is starting servers while it
+  does. A turn or run stopped while they start starts none, and the next one asks again. A reopened
+  or forked session starts its own, since what a session started is not written to its record, and a
+  server's own error output is discarded.
 - **A prompt takes named arguments only.** `/mcp__weather__forecast Paris` is refused, since taking
   the first argument's name from the server's list would make a word it sent decide what your line
   means. Taking the row writes the names of the arguments that are not optional, so you type their

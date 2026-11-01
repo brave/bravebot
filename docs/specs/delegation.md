@@ -515,12 +515,15 @@ whoever proposed them. An approval given inside a delegate cannot be replayed by
 one the parent already holds does not carry in. A rule, and an answer that stops asking for one
 server's tool in one project ([SERVERS-7](mcp-servers.md#SERVERS-7)), decide a delegate's call as
 they decide the turn's, since each is a standing decision about the person's machine rather than an
-approval of one call.
+approval of one call. A call to a server declared to ask every call is refused to a delegate with
+nobody asked, since the person set that server to be asked about at every call and a delegate's task
+came from a planner ([SERVERS-21](mcp-servers.md#SERVERS-21)).
 
 Delegation saves context. It never saves an approval.
 
 `verified-by: bravebot_agent::turn::a_delegates_write_is_approved_on_its_own`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
+`verified-by: bravebot_agent::mcp::a_workers_call_to_a_server_asked_every_call_is_refused_unasked`
 
 <a id="DELEGATE-11"></a>
 ### DELEGATE-11: what a person vouched for outlives the delegate

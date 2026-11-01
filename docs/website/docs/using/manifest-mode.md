@@ -50,9 +50,9 @@ The question is asked **once**, and has no standing form: nothing between the pl
 reshape the plan, and a plan is written afresh for each run, so remembering an answer would be
 approving steps nobody has seen.
 
-**Approving a plan is not approving its writes.** This mode widens the scope of what you commit to in
-advance and does not replace the gates inside it, so each write is still put to you as its step
-reaches it.
+**Approving a plan is not approving its writes, or its calls to a server's tools.** This mode widens
+the scope of what you commit to in advance and does not replace the gates inside it, so each write is
+still put to you as its step reaches it, and each call is decided as it is in a turn.
 
 Where nobody can be asked the answer is no, as it is everywhere else. A command typed at a terminal is
 somebody: the plan goes out beside the progress and the answer is read back, which is the one question
@@ -76,6 +76,34 @@ cost: that prompt is drawn and scrolled.
 - **`run`, and any shell.** A command string is destination and payload at once.
 - **Piped stdin**, which is refused rather than dropped: a pipe is observed context, and this mode
   does not observe before it plans. Name a workspace file with `--file` instead.
+
+## Calling a server's tool
+
+A step can call one tool of an [MCP server](../customize/mcp-servers.md) you vouched for, with
+arguments the plan wrote out. The step names the server by the alias you gave it and the tool by its
+word on the list you read, and the plan you are asked to approve shows the server, the tool and the
+arguments in full, as the server will receive them.
+
+- Before the plan is made, you are asked about the list of each server in the session that nobody
+  has asked you about yet, as the first turn of a session asks. A yes stands for the rest of the
+  session, and a no, or a run with nobody to ask, leaves the plan with no call to that server. In
+  the desktop application a run started before any turn also starts the session's servers first,
+  asking you about each as the first turn would, and a turn after it finds them started.
+- The planner is shown the names on a list you vouched for, each tool's argument names and types, and
+  none of the server's descriptions.
+- A call is an action, so it comes after every read and transform. It has no way to name what an
+  earlier step produced, so every argument is fixed by the plan, and what a tool answers is shown to
+  you in the margin as it comes and goes to no model and to no later step.
+- Each call is decided as a turn's is. A `deny` rule about the tool refuses it, an `allow` rule or a
+  standing answer lets it through, and a server declared with `--ask-every-call` asks at its step in
+  every mode, [bypassing](../security/permission-modes.md) included. Approving the plan answers none
+  of these.
+- A call that is refused, declined, cannot be made or gets no reply ends the run: the steps after
+  it do not run, and the steps before it are not undone. A reply that arrived ends nothing, whatever
+  it holds. A tool that answers that it failed has still answered: its account is shown in the
+  margin and the steps after it run, since a server's reply does not change a plan. A reply bravebot
+  cannot use, such as an error from the server or one it cannot read, is shown as a line saying the
+  call failed, and the steps after it run too.
 
 Everything a step produces is quarantined, whatever its label. There is no planner left to show it
 to. The ways out are a later processor, a write back into the workspace, and a release the plan

@@ -1450,11 +1450,8 @@ impl Bridge {
         // read what the window chose last, including a choice made while the turn runs (MODE-8).
         let permission_mode = open.permission_mode.clone();
         // Each MCP server the settings request, with the file that requested it (SERVERS-2). Read
-        // on every turn and used by the first, which is the one that starts them.
-        let mcp_requested: Vec<(PathBuf, String)> = settings
-            .mcp_requested()
-            .map(|(file, alias)| (file.to_path_buf(), alias.to_string()))
-            .collect();
+        // on every turn and used by the first turn or plan run, which is the one that starts them.
+        let mcp_requested = bravebot_agent::servers::requested_by(&settings);
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
         let watches = Arc::clone(&open.watches);
@@ -1701,6 +1698,8 @@ impl Bridge {
         // The session's own handle, as a turn holds it (MODE-8).
         let permission_mode = open.permission_mode.clone();
         let workspace = session_workspace(open, &settings)?;
+        // Read as a turn reads them, for the first turn or run to start the session's servers.
+        let mcp_requested = bravebot_agent::servers::requested_by(&settings);
 
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
@@ -1758,6 +1757,7 @@ impl Bridge {
                 sandbox,
                 model,
                 permission_mode,
+                mcp_requested,
                 workspace,
                 task,
                 run,
@@ -3126,25 +3126,19 @@ fn work(work: Work) {
     .remembering(Arc::clone(&state.question_answers))
     .taking_interjections(interjections);
 
-    // The session's MCP servers (SERVERS-9), started by its first turn and held until it closes.
-    // Here rather than when the session opened, so that the questions about them come after the
-    // person has said whether the directory is trusted, and reach the window through this turn.
-    if matches!(state.mcp, Mcp::Unstarted)
-        && let Some(started) = start_mcp(
-            &emitter,
-            &session,
-            &project,
-            &mcp_requested,
-            &mut confirmer,
-            &cancel,
-        )
-    {
-        state.mcp = Mcp::Started(started);
-    }
-    let mcp = match &state.mcp {
-        Mcp::Started(started) => started.clone(),
-        Mcp::Unstarted => None,
-    };
+    // The session's MCP servers (SERVERS-9), started by its first turn or first plan run and held
+    // until it closes. Here rather than when the session opened, so that the questions about them
+    // come after the person has said whether the directory is trusted, and reach the window through
+    // this turn.
+    let mcp = session_servers(
+        &mut state,
+        &emitter,
+        &session,
+        &project,
+        &mcp_requested,
+        &mut confirmer,
+        &cancel,
+    );
     let mut task = Task::new(&prompt)
         .already_asked_about(state.answers.asked_about.clone())
         .already_exposed(state.answers.exposed.clone())
@@ -3470,6 +3464,32 @@ fn end_the_session(state: &Mutex<State>) {
     }
 }
 
+/// The MCP servers the session holds, started first if neither a turn nor a plan run has started
+/// them (SERVERS-9, MANIFEST-15).
+///
+/// The one place the desktop starts them, so a turn and a plan run start them the same way and the
+/// second of the two finds them started. A start stopped part way leaves the session unstarted, and
+/// the next turn or run asks again. Returns `None` where no server is held.
+pub(crate) fn session_servers(
+    state: &mut State,
+    emitter: &Emitter,
+    session: &str,
+    project: &Path,
+    requested: &[(PathBuf, String)],
+    confirmer: &mut BridgeConfirmer,
+    cancel: &Cancel,
+) -> Option<bravebot_agent::mcp::Session> {
+    if matches!(state.mcp, Mcp::Unstarted)
+        && let Some(started) = start_mcp(emitter, session, project, requested, confirmer, cancel)
+    {
+        state.mcp = Mcp::Started(started);
+    }
+    match &state.mcp {
+        Mcp::Started(started) => started.clone(),
+        Mcp::Unstarted => None,
+    }
+}
+
 /// Start the MCP servers `requested` names, putting the questions about them to the window.
 ///
 /// The terminal's own road (SERVERS-4, SERVERS-10, SERVERS-11, SERVERS-12): each request resolves
@@ -3479,9 +3499,9 @@ fn end_the_session(state: &Mutex<State>) {
 /// it, because this process has no screen of its own to put it on.
 ///
 /// `mcp.starting` goes out first, since a server has up to a minute to answer its handshake and
-/// the turn says nothing else while it waits, and `mcp.started` after, naming what started and
-/// saying why each other request did not. `None` where the turn was stopped part way, which
-/// starts nothing and leaves the servers to the next turn, so a stop is not read as a no.
+/// the turn or run says nothing else while it waits, and `mcp.started` after, naming what started
+/// and saying why each other request did not. `None` where the turn or run was stopped part way,
+/// which starts nothing and leaves the servers to the next one, so a stop is not read as a no.
 fn start_mcp(
     emitter: &Emitter,
     session: &str,
@@ -3499,18 +3519,9 @@ fn start_mcp(
         session,
         json!({ "servers": aliases }),
     ));
-    let home = bravebot_agent::servers::Home {
-        directory: bravebot_agent::home::directory(),
-        writable: bravebot_agent::home::writable().is_some(),
-    };
-    let project = project
-        .canonicalize()
-        .unwrap_or_else(|_| project.to_path_buf());
-    let reached = bravebot_agent::servers::reach(
-        requested,
-        &project,
-        &home,
-        &bravebot_config::Managed::load(),
+    let reached = bravebot_agent::servers::reach_requested(
+        requested.to_vec(),
+        project,
         bravebot_agent::servers::Asking::Person,
         confirmer,
         bravebot_sandbox::Stream::Null,

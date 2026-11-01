@@ -98,7 +98,12 @@ pub(super) fn manifest_animated(
     // dragged that file onto the window and let the line go, so its path was fixed by their gesture
     // before any request went out (DROP-2). It is read before the planner's policy exists, which is
     // what keeps a planner that cannot read from having read something.
-    let mut worker_task = run.task(task, session, permissions);
+    let mut worker_task = run
+        .task(task, session, permissions)
+        // The servers the session started, so a plan may call a tool of a list that was vouched
+        // for. The run puts the lists nobody has been asked about to the person before it plans
+        // (MANIFEST-15).
+        .with_mcp(session.servers.session.clone());
     // In the order the markers in the task number them, for the reason a turn's are: a planner
     // reading "[Image #2]" has to be able to count to the picture that answers it.
     for image in pasted {

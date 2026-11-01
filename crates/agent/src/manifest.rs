@@ -86,6 +86,7 @@ use crate::confirm::{Confirmer, Decision, Intent, ManifestRequest, Remark, Write
 use crate::conversation::Conversation;
 use crate::processor::Chat;
 use crate::report::{Activity, Phase, Reporter};
+use crate::server_calls::Servers;
 use crate::turn::{Outcome, Task, TurnError};
 use crate::workspace::Workspace;
 
@@ -99,6 +100,13 @@ and nothing to ask for: fetching is a step. Every act is approved by the person,
 text, before it is sent. The connectors listed are installed and usable now: never say that one \
 of them is unavailable. Do not refuse a connector task for a limit the listing does not state: plan \
 it, and the checks refuse what is not allowed and say why.";
+
+/// What the goal call is told where a session has a server tool a plan may call.
+const SERVER_SHAPE: &str = "\n\
+It can also call the tools of servers a person has vouched for, listed below as alias:tool. A step \
+may call one tool with arguments written out in the plan. What a call returns is shown to the \
+person and is not available to later steps, so nothing a call returns can be an argument of \
+another. Every call is put to the person as it comes up. The tools:";
 
 /// What the first planning call is told.
 ///
@@ -285,6 +293,17 @@ const REGISTRY: &[Advertised] = &[
                unless the resource takes no text",
     },
     Advertised {
+        capability: "SERVER_CALL",
+        tool: manifest::MCP_CALL,
+        tier: Tier::Act,
+        // The capability names the server, which only the step says, so the handler asks for it.
+        gate: None,
+        summary: "Call one tool of an MCP server a person has vouched for. The arguments are \
+                  written out in full here and fixed; the call is put to the person as it comes up",
+        args: "server* (an alias from the list below), tool*, arguments (a JSON object; nothing \
+               a step read can be named in it)",
+    },
+    Advertised {
         capability: "ANSWER",
         tool: manifest::ANSWER,
         tier: Tier::Act,
@@ -298,9 +317,17 @@ fn advertised_for(capability: &str) -> Option<&'static Advertised> {
     REGISTRY.iter().find(|entry| entry.capability == capability)
 }
 
-/// Whether the catalogue offers an entry: a connector step only where some connector is usable.
-fn offered(entry: &Advertised, connectors: &crate::connectors::Connectors) -> bool {
-    connectors.any() || !manifest::is_connector(entry.tool)
+/// Whether the catalogue offers an entry: a connector step only where some connector is usable,
+/// and a server call only where a tool is offered.
+fn offered(
+    entry: &Advertised,
+    connectors: &crate::connectors::Connectors,
+    servers: &Servers,
+) -> bool {
+    match entry.tool {
+        manifest::MCP_CALL => servers.any(),
+        tool => connectors.any() || !manifest::is_connector(tool),
+    }
 }
 
 fn registered_tool(tool: &str) -> Option<&'static Advertised> {
@@ -308,10 +335,13 @@ fn registered_tool(tool: &str) -> Option<&'static Advertised> {
 }
 
 /// The catalogue the planner is shown: names, one-line summaries, and argument lists.
-fn catalogue(connectors: &crate::connectors::Connectors) -> String {
+fn catalogue(connectors: &crate::connectors::Connectors, servers: &Servers) -> String {
     let mut lines = String::from("Capabilities. Arguments marked * are required.\n");
     let mut tier = None;
-    for entry in REGISTRY.iter().filter(|entry| offered(entry, connectors)) {
+    for entry in REGISTRY
+        .iter()
+        .filter(|entry| offered(entry, connectors, servers))
+    {
         if tier != Some(entry.tier) {
             tier = Some(entry.tier);
             lines.push_str(&format!("\n{}:\n", tier_heading(entry.tier)));
@@ -324,6 +354,7 @@ fn catalogue(connectors: &crate::connectors::Connectors) -> String {
     if connectors.any() {
         lines.push_str(&connectors.catalogue());
     }
+    lines.push_str(&servers.catalogue());
     lines.push_str(&connectors.refused());
     lines
 }
@@ -396,7 +427,11 @@ fn parse(source: &str) -> Result<Draft, PlanError> {
                 if value.is_null() {
                     continue;
                 }
-                let arg = read_arg(value).ok_or_else(|| {
+                // A call's arguments are a JSON object, which a planner writes as one. The step
+                // carries them as the object's text, so the grammar below stays three shapes.
+                let object_as_text =
+                    (key == "arguments" && value.is_object()).then(|| Arg::Text(value.to_string()));
+                let arg = object_as_text.or_else(|| read_arg(value)).ok_or_else(|| {
                     PlanError::Malformed(format!(
                         "step {index}: '{key}' is not text, a whole number, or a list of names"
                     ))
@@ -526,16 +561,17 @@ fn backticks(line: &str) -> usize {
 /// that will run it. A capability the registry does not have fails here rather than at the
 /// schema, so the message says what went wrong in the planner's own vocabulary.
 ///
-/// A connector step where no connector is usable is a capability the catalogue did not offer, so
-/// it is refused as any other unknown name is.
+/// A connector step where no connector is usable, and a server call where no tool is offered, is
+/// a capability the catalogue did not offer, so it is refused as any other unknown name is.
 fn map_to_concrete(
     draft: Draft,
     connectors: &crate::connectors::Connectors,
+    servers: &Servers,
 ) -> Result<Draft, PlanError> {
     let mut mapped = Vec::with_capacity(draft.steps.len());
     for step in draft.steps {
         let entry = advertised_for(&step.tool)
-            .filter(|entry| offered(entry, connectors))
+            .filter(|entry| offered(entry, connectors, servers))
             .ok_or_else(|| PlanError::UnknownCapability(step.tool.clone()))?;
         mapped.push(DraftStep {
             tool: entry.tool.to_string(),
@@ -716,12 +752,33 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     // The definitions in the person's own state directory, read once for the run. The planner is
     // told about them and the plan is checked against them; nothing from a service is involved.
     let mut connectors = crate::connectors::Connectors::load(task.home.as_deref());
+    // The lists of the servers the session reached are put to the person first, as a turn's start
+    // puts them, so the planner is shown the names of the lists that were vouched for (MANIFEST-15).
+    match Servers::settle(
+        task,
+        config,
+        egress,
+        confirmer,
+        reporter,
+        sink,
+        subscription.as_mut(),
+        cancel,
+    ) {
+        Ok(settling) => {
+            accounting.spent.add_usage(settling.usage);
+            accounting.elapsed.stalled += settling.waited;
+            accounting.publish(reporter);
+        }
+        Err(error) => return Err(stopped(attempt, error)),
+    }
+    let servers = Servers::of(task);
 
     let planned = match plan(
         config,
         egress,
         task,
         &connectors,
+        &servers,
         &dropped,
         reporter,
         sink,
@@ -746,6 +803,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
         },
         planned,
         &mut connectors,
+        &servers,
         confirmer,
         reporter,
         sink,
@@ -755,6 +813,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
         task.model.as_deref(),
         &task.prompt,
         &task.permission_mode,
+        &task.permissions,
         &mut attempt,
         accounting,
     );
@@ -866,6 +925,7 @@ fn plan<S: Sink, R: Reporter>(
     egress: &Egress,
     task: &Task,
     connectors: &crate::connectors::Connectors,
+    servers: &Servers,
     dropped: &[crate::attached::Carried],
     reporter: &mut R,
     sink: &mut S,
@@ -951,9 +1011,14 @@ fn plan<S: Sink, R: Reporter>(
         task.effort,
         "shape",
         &format!(
-            "{SHAPE_PROMPT}{}{}",
+            "{SHAPE_PROMPT}{}{}{}",
             if connectors.any() {
                 format!("\n{CONNECTOR_SHAPE}\n\n{}", connectors.in_plain_words())
+            } else {
+                String::new()
+            },
+            if servers.any() {
+                format!("{SERVER_SHAPE}\n{}", servers.listing())
             } else {
                 String::new()
             },
@@ -977,7 +1042,7 @@ fn plan<S: Sink, R: Reporter>(
     ));
     let system = format!(
         "{FIT_PROMPT}\n\n{MANIFEST_PROMPT}\n\n{}",
-        catalogue(connectors)
+        catalogue(connectors, servers)
     );
     let mut round = "fit";
     let (plan, label) = loop {
@@ -1006,8 +1071,8 @@ fn plan<S: Sink, R: Reporter>(
 
         let label = policy.context_label();
         let draft = parse(&proposal_text).map_err(|e| TurnError::Precommit(e.to_string()))?;
-        let concrete =
-            map_to_concrete(draft, connectors).map_err(|e| TurnError::Precommit(e.to_string()))?;
+        let concrete = map_to_concrete(draft, connectors, servers)
+            .map_err(|e| TurnError::Precommit(e.to_string()))?;
         // A field a connector's definition gives a default for is filled here, before the plan
         // is validated, so the lock and the line a person approves hold the value that will be
         // sent.
@@ -1021,19 +1086,22 @@ fn plan<S: Sink, R: Reporter>(
             .map_err(|d| TurnError::Precommit(d.to_string()))?;
         // Words after each connector act: the text the plan wrote, and what its definition fills
         // in from the item it lands on, so the plan a person reads says both.
-        let notes = connectors.notes(&plan);
+        let mut notes = connectors.notes(&plan);
+        // And the arguments of each server call, in full, since a person approves the call by them.
+        notes.extend(Servers::notes(&plan));
         let plan = plan.with_notes(notes);
 
         attempt.plan = Some(template(&plan));
 
         // Before the plan is put to anybody: a connector step that does not fit its definition's
-        // surface is refused here, with the plan kept for reading, rather than at its step.
+        // surface, or a server call that does not fit the list a person vouched for, is refused
+        // here, with the plan kept for reading, rather than at its step.
         //
         // Once, the fit call is shown the refusal and asked again. Nothing has been read, and what
         // it is shown is its own plan and the check's words about it, so its context still holds
         // the task and the driver's words alone. A plan with no connector step passes the check,
-        // so this never asks again in a run that uses no connector.
-        match connectors.check(&plan) {
+        // so this never asks again in a run that uses no connector and calls no server.
+        match connectors.check(&plan).and_then(|()| servers.check(&plan)) {
             Ok(()) => break (plan, label),
             Err(why) if round == "fit" => {
                 reporter.narration(format!(
@@ -1201,6 +1269,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     recording: crate::findings::Recording<'_>,
     planned: Planned,
     connectors: &mut crate::connectors::Connectors,
+    servers: &Servers,
     confirmer: &mut C,
     reporter: &mut R,
     sink: &mut S,
@@ -1210,6 +1279,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     chosen_model: Option<&str>,
     task: &str,
     permission_mode: &crate::LiveMode,
+    permissions: &bravebot_core::permissions::Permissions,
     attempt: &mut Attempt,
     accounting: &mut Accounting,
 ) -> Result<Outcome, TurnError> {
@@ -1261,10 +1331,14 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         Capability::WebFetch,
     ]
     .into_iter()
-    .chain(connector_grants(&plan));
+    .chain(connector_grants(&plan))
+    .chain(Servers::grants(&plan));
     let policy = Policy::begin(routing, release, CapabilitySet::from_iter(held), sink)
         .map_err(|d| TurnError::Precommit(d.to_string()))?;
+    // The session's rules about a server's tool and no other: a plan's call is decided as a turn's
+    // is, and a `deny` rule refuses it in every mode. The rest of the plan reads no rule, as before.
     let mut policy = policy
+        .with_permissions(permissions.only_mcp())
         .with_file_authority(authority)
         .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
 
@@ -1347,6 +1421,8 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         .and_then(|()| {
             run_step(
                 connectors,
+                servers,
+                egress,
                 releases.iter().find(|release| release.step == index),
                 &mut policy,
                 workspace,
@@ -1539,6 +1615,8 @@ fn slot_to_fill(step: &Step) -> Result<SlotId, String> {
 )]
 fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     connectors: &mut crate::connectors::Connectors,
+    servers: &Servers,
+    egress: &Egress,
     release: Option<&manifest::Release>,
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
@@ -1771,6 +1849,15 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
         ),
         manifest::CONNECTOR_FETCH => connector_fetch(policy, slots, connectors, index, step),
         manifest::CONNECTOR_ACT => connector_act(policy, slots, connectors, release, index, step),
+        // The alias and the tool come out of the lock; the arguments are the plan's own text.
+        manifest::MCP_CALL => {
+            let alias = locked(policy, index, "server")?;
+            let word = locked(policy, index, "tool")?;
+            Ok(Done {
+                note: servers.call(policy, egress, confirmer, reporter, &alias, &word, step)?,
+                ..Done::default()
+            })
+        }
         manifest::ANSWER => {
             let Some(slot) = step.reads().first().cloned() else {
                 return Err("no slot to answer from".to_string());
@@ -2377,8 +2464,12 @@ mod tests {
     #[test]
     fn a_plan_naming_an_unregistered_capability_is_refused() {
         let draft = Draft::new(vec![DraftStep::new("SEND_EMAIL").with_text("to", "a@b.c")]);
-        let failure = map_to_concrete(draft, &crate::connectors::Connectors::default())
-            .expect_err("must refuse");
+        let failure = map_to_concrete(
+            draft,
+            &crate::connectors::Connectors::default(),
+            &Servers::default(),
+        )
+        .expect_err("must refuse");
         assert!(matches!(failure, PlanError::UnknownCapability(_)));
     }
 
@@ -2390,8 +2481,12 @@ mod tests {
             let draft = Draft::new(vec![
                 DraftStep::new(capability).with_text("connector", "github"),
             ]);
-            let failure = map_to_concrete(draft, &crate::connectors::Connectors::default())
-                .expect_err("no connector is usable");
+            let failure = map_to_concrete(
+                draft,
+                &crate::connectors::Connectors::default(),
+                &Servers::default(),
+            )
+            .expect_err("no connector is usable");
             assert!(
                 matches!(&failure, PlanError::UnknownCapability(name) if name == capability),
                 "{failure}"
@@ -2506,6 +2601,27 @@ mod tests {
         assert_eq!(args.get("limit"), Some(&Arg::Count(40)));
     }
 
+    /// A call's arguments are written as the JSON object they are, and the step carries the
+    /// object's text, so a planner that writes the text gets the same step. An object anywhere
+    /// else is outside the grammar.
+    #[test]
+    fn a_calls_arguments_object_is_carried_as_its_text() {
+        let step = |arguments: &str| {
+            format!(
+                r#"{{"steps":[{{"capability":"SERVER_CALL","args":{{"server":"brave","tool":"open_tab","arguments":{arguments}}}}}]}}"#
+            )
+        };
+        let object = parse(&step(r#"{"url":"https://example.com"}"#)).expect("an object");
+        let text = parse(&step(r#""{\"url\":\"https://example.com\"}""#)).expect("its text");
+        assert_eq!(object, text);
+        assert_eq!(
+            object.steps[0].args.get("arguments"),
+            Some(&Arg::Text(r#"{"url":"https://example.com"}"#.to_string()))
+        );
+        let elsewhere = r#"{"steps":[{"capability":"SERVER_CALL","args":{"server":{"a":1}}}]}"#;
+        assert!(matches!(parse(elsewhere), Err(PlanError::Malformed(_))));
+    }
+
     /// Phase 2 is the only route from a capability name to a tool name, and it must not carry
     /// the planner's arguments anywhere but through.
     #[test]
@@ -2514,8 +2630,12 @@ mod tests {
             r#"{"steps":[{"capability":"FILE_READ","args":{"path":"a.md","out_slot":"doc"}}]}"#,
         )
         .unwrap();
-        let mapped =
-            map_to_concrete(draft.clone(), &crate::connectors::Connectors::default()).unwrap();
+        let mapped = map_to_concrete(
+            draft.clone(),
+            &crate::connectors::Connectors::default(),
+            &Servers::default(),
+        )
+        .unwrap();
         assert_eq!(mapped.steps[0].tool, "read_file");
         assert_eq!(mapped.steps[0].args, draft.steps[0].args);
     }
@@ -2524,10 +2644,13 @@ mod tests {
     /// planner could invent variations of, and the mapping to code is the driver's to make.
     #[test]
     fn the_catalogue_names_capabilities_and_never_tools() {
-        let shown = catalogue(&crate::connectors::Connectors::default());
+        let shown = catalogue(
+            &crate::connectors::Connectors::default(),
+            &Servers::default(),
+        );
         for entry in REGISTRY
             .iter()
-            .filter(|entry| !manifest::is_connector(entry.tool))
+            .filter(|entry| !manifest::is_connector(entry.tool) && entry.tool != manifest::MCP_CALL)
         {
             assert!(
                 shown.contains(entry.capability),
@@ -2546,7 +2669,10 @@ mod tests {
     /// is never shown a capability it cannot use.
     #[test]
     fn the_catalogue_offers_no_connector_step_where_none_is_installed() {
-        let shown = catalogue(&crate::connectors::Connectors::default());
+        let shown = catalogue(
+            &crate::connectors::Connectors::default(),
+            &Servers::default(),
+        );
         assert!(!shown.contains("CONNECTOR_FETCH"));
         assert!(!shown.contains("CONNECTOR_ACT"));
     }
@@ -2559,7 +2685,7 @@ mod tests {
             "broken".to_string(),
             Err("bad json".to_string()),
         )]));
-        let shown = catalogue(&refused);
+        let shown = catalogue(&refused, &Servers::default());
         assert!(!shown.contains("CONNECTOR_FETCH"), "{shown}");
         assert!(shown.contains("broken: bad json"), "{shown}");
     }

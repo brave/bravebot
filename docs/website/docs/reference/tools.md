@@ -27,7 +27,7 @@ that is merely carried.
 | [`job_output`](#job_output) | `job`, `kill`, `wait_seconds`, `until_exit` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
 | [`download_url`](#download_url) | `url`, `path` | none | **yes: the host unless a rule names it, and the destination every time** |
-| [`spawn_processor`](#spawn_processor) | `reads`, `about` | `instruction` | no |
+| [`spawn_processor`](#spawn_processor) | `reads`, `about`, `choose_upto` | `instruction` | no |
 | [`spawn_agent`](#spawn_agent) | `kind` | `task`, `each` | not the call, but its writes and runs do |
 | [`load_skill`](#load_skill) | `name` | none | no |
 | [`search_skills`](#search_skills) | `query` | none | no |
@@ -127,6 +127,8 @@ the trust map answers is whether a file's *text* may be read, and a picture has 
 looks at it, and what the processor says back is quarantined like any other processor's answer.
 The planner sees the picture itself only if it asks for that one with `vet_content` and it is let
 through.
+You are shown a row saying what it is and how big, and a row saying how to look at it, and not the
+first lines of its base64. See [A picture that arrives](../security/vetting.md#a-picture-that-arrives).
 
 The reason is that a screenshot carries whatever words are in it, so a picture reaches the planner's
 context only if you put it there (a picture you dropped on the terminal) or a check looked at it and
@@ -400,7 +402,8 @@ text at it are labelled, and where the index is cached are in [the lsp tool](lsp
 
 ## `write_file`
 
-Writes a UTF-8 text file in the workspace. **You approve every write before it happens.**
+Writes a UTF-8 text file in the workspace, or a picture or PDF the agent holds only as a reference.
+**You approve every write before it happens.**
 
 | Parameter | |
 |---|---|
@@ -415,6 +418,13 @@ since you are the only one who sees which file it is. A path outside the working
 directories you opened with [`/add-dir`](commands.md) is refused before you are asked, and the
 refusal says how to open the directory, since no answer to the question would make the write
 possible.
+
+A `contents_ref` that holds a picture or a PDF, such as a screenshot a tool returned or a picture
+file the agent read, is written as the file it encodes and not as text. The destination is a `path`
+the agent names, ending in the extension of the picture's type: `.png`, `.jpg` or `.jpeg`, `.gif`,
+`.webp` or `.pdf`. Any other name is refused before you are asked. The question names the
+reference, its type, the size of the file and the path, and shows no body. The file is untrusted
+unless the picture came from a file you vouched for.
 
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
@@ -792,7 +802,9 @@ which the planner does not see either.
 |---|---|
 | `reads` | the references to give it, e.g. `["ref:0", "ref:1"]`; at least one |
 | `about` | which of those references this call is about; required when `reads` names more than one |
+| `choose_upto` | a whole number from 2 to 99; asks the processor to choose one entry of a numbered list in what it reads, and is refused together with `about` |
 | `instruction` | what to do with them and what to produce |
+
 
 An answer is for **one** document and may be written **only** to the file the call was about. Where the
 planner said nothing and there was more than one input, the answer belongs nowhere and may be written
@@ -821,6 +833,13 @@ private content, such as a summary of a run's output.
 
 The planner's last message says what was sent and to whom, and calls the text a summary only if a
 processor wrote one.
+
+With `choose_upto` the processor answers with one whole number from 1 to the limit, or 0 where no entry
+fits, and the result is a reference to that choice instead of a document. The model is told the same
+sentence whatever the number was and is never shown it. The only place the number can go is the one
+argument of a tool that a server was declared to take it
+(`bravebot mcp add --choice <tool>:<argument>`), and you are shown the number and the reference it
+came from when you are asked about that call.
 
 **Refused once the model has been shown private content.** After [`read_output`](#read_output) or
 [`vet_content`](#vet_content) has shown it something private, or a delegate has reported something

@@ -5,14 +5,40 @@
 
 use crate::lines::{self, Line};
 use crate::paths::{SECRET, SOCKET};
+use crate::tools;
 use serde_json::{Value, json};
 use std::io::{BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-/// How long a call waits for the extension's reply before it fails.
+/// How long a call waits for the extension's reply before it fails, except where the extension
+/// asks the person in the browser first ([`IN_BROWSER_REPLY_TIMEOUT`]).
 pub const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a call to a group whose actions the person answers in a window of the browser waits
+/// for the extension's reply (BROWSER-34, BROWSER-42). The person has 60 seconds to answer or to
+/// choose in the browser's picker, and the 30 more are for finding the element, bringing the tab
+/// forward, acting or taking the picture, and sending the reply. A wait of no more than 60 would
+/// fail a call while its window still waited, and an action allowed late would then be done after
+/// the session had been told it failed.
+pub const IN_BROWSER_REPLY_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// The bound on one call that the declaration of such a group's server carries as
+/// `--tool-timeout`. The agent stops a local server whose call runs past its bound, so the bound
+/// is above [`IN_BROWSER_REPLY_TIMEOUT`], and a call that gets no reply fails with the relay's
+/// own sentence and leaves the server running.
+pub const IN_BROWSER_TOOL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long a call made by the server started for `group`, or for none, waits for the extension's
+/// reply.
+pub fn reply_timeout(group: Option<&str>) -> Duration {
+    if tools::asks_in_browser(group) {
+        IN_BROWSER_REPLY_TIMEOUT
+    } else {
+        REPLY_TIMEOUT
+    }
+}
 
 /// The longest reply line read from the host: the extension's own limit, and room for the id the
 /// host puts back.
@@ -35,19 +61,9 @@ pub const NOT_CONNECTED: &str = "No Brave extension is connected. Brave is not r
 /// What to say where the host went away with the call unanswered.
 pub const DISCONNECTED: &str = "The Brave extension disconnected before it replied.";
 
-/// Calls one extension method through the host whose socket is in `directory`.
-pub fn call(directory: &Path, method: &str, params: Value) -> Outcome {
-    call_with_timeout(directory, method, params, REPLY_TIMEOUT)
-}
-
-/// [`call`] with the reply timeout supplied, so its failure can be tested without waiting 30
-/// seconds.
-fn call_with_timeout(
-    directory: &Path,
-    method: &str,
-    params: Value,
-    reply_timeout: Duration,
-) -> Outcome {
+/// Calls one extension method through the host whose socket is in `directory`, and waits
+/// `reply_timeout` for the reply, which [`reply_timeout`] gives for a server's group.
+pub fn call(directory: &Path, method: &str, params: Value, reply_timeout: Duration) -> Outcome {
     let Ok(secret) = std::fs::read_to_string(directory.join(SECRET)) else {
         return Outcome::Failed(NOT_CONNECTED.into());
     };
@@ -111,6 +127,50 @@ mod tests {
         assert_eq!(REPLY_TIMEOUT, Duration::from_secs(30));
     }
 
+    /// The wait for a call the extension asks the person about is 90 seconds: the 60 the person
+    /// has and 30 for the rest. The bound declared for that server is 30 above it. Every other
+    /// call keeps the 30 seconds. The groups whose actions the person answers in a window have
+    /// the longer wait.
+    #[test]
+    fn the_wait_for_a_person_is_ninety_seconds_and_the_declared_bound_is_thirty_more() {
+        assert_eq!(IN_BROWSER_REPLY_TIMEOUT, Duration::from_secs(90));
+        assert_eq!(IN_BROWSER_TOOL_TIMEOUT, Duration::from_secs(120));
+        assert_eq!(reply_timeout(Some("scripts")), IN_BROWSER_REPLY_TIMEOUT);
+        assert_eq!(reply_timeout(Some("input")), IN_BROWSER_REPLY_TIMEOUT);
+        assert_eq!(
+            reply_timeout(Some("input-trusted")),
+            IN_BROWSER_REPLY_TIMEOUT
+        );
+        assert_eq!(
+            reply_timeout(Some("capture-trusted")),
+            IN_BROWSER_REPLY_TIMEOUT
+        );
+        assert_eq!(
+            reply_timeout(Some("console-trusted")),
+            IN_BROWSER_REPLY_TIMEOUT
+        );
+        assert_eq!(
+            reply_timeout(Some("upload-trusted")),
+            IN_BROWSER_REPLY_TIMEOUT
+        );
+        assert_eq!(reply_timeout(Some("screen")), IN_BROWSER_REPLY_TIMEOUT);
+        for other in tools::ids().filter(|id| {
+            ![
+                "scripts",
+                "input",
+                "input-trusted",
+                "capture-trusted",
+                "console-trusted",
+                "upload-trusted",
+                "screen",
+            ]
+            .contains(id)
+        }) {
+            assert_eq!(reply_timeout(Some(other)), REPLY_TIMEOUT, "{other}");
+        }
+        assert_eq!(reply_timeout(None), REPLY_TIMEOUT);
+    }
+
     /// An extension that accepts the call and never answers cannot hold the turn forever.
     #[test]
     fn a_call_the_extension_does_not_answer_times_out_and_says_so() {
@@ -132,7 +192,7 @@ mod tests {
         let directory = directory.path().to_path_buf();
         let (answered, answer) = mpsc::channel();
         std::thread::spawn(move || {
-            let outcome = call_with_timeout(
+            let outcome = call(
                 &directory,
                 "list_tabs",
                 json!({}),

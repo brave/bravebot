@@ -128,6 +128,275 @@ pub(super) fn checkouts_share_refs(running: Running) -> String {
     )
 }
 
+/// The description of `spawn_processor`, naming only the tools `beside` says are on the list.
+///
+/// The table writes it for a list that holds every tool, and [`state_what_is_beside`] writes it
+/// again for the one a turn settled on, since a delegate is never offered `vet_content` and a
+/// reader holds no `write_file`. A sentence that sends a run to a tool it has not got costs it a
+/// round on a refusal it cannot act on.
+fn spawn_processor_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let changing = if beside("write_file") {
+        "This is how to change a file you cannot see: name the file's reference, say what has to \
+         be true of it afterwards, then pass the reference that comes back to write_file as \
+         contents_ref. You are not shown its output either, and nobody reads it before it is \
+         written, so be exact about the shape of the answer: the complete document and nothing \
+         else."
+    } else {
+        "You are not shown its output."
+    };
+
+    // What puts private content into the context, and so ends every later call. A tool is named
+    // only where the run has it, and the last two are true of every run.
+    let shows = match (beside("read_output"), beside("vet_content")) {
+        (true, true) => "after read_output or vet_content shows you some, ",
+        (true, false) => "after read_output shows you some, ",
+        (false, true) => "after vet_content shows you some, ",
+        (false, false) => "",
+    };
+    // The tools that keep working, which always include the file tools.
+    let working = match (beside("run"), beside("read_output")) {
+        (true, true) => "run, read_output and the file tools",
+        (true, false) => "run and the file tools",
+        (false, true) => "read_output and the file tools",
+        (false, false) => "The file tools",
+    };
+
+    // What it says about a summary, a translation or other text made from content the planner was
+    // not shown, which a processor writes (SPAWN-6). The route to the program that sends it names
+    // `run`, so it is said only where the list holds one. A list without `run` is told who writes
+    // such text and what to call it, and is not sent to a program it cannot start. Saving the
+    // original to a file first needs `write_file` to write the answer over it and `read_file` to
+    // give the reference that names it, so a list without either is sent to `stdin_ref` alone.
+    let derived_text = if beside("run") {
+        let answer_reaches_it = if beside("write_file") && beside("read_file") {
+            "A processor's answer about a reference that is no file, such as a fetched page or a \
+             run's output, is for no document and cannot be written anywhere, so save the \
+             original to a file first, in the scratch directory if you were given one: end the \
+             run line that made it with `> path`, or write a fetched page with write_file and \
+             contents_ref, and call read_file on the file for a reference to name in reads. Do \
+             not save it with a script that opens the file itself. Then write the answer over the \
+             same file with write_file, and run the program that sends it with the file's path as \
+             an argument, so it reads the body from the file. Or give the answer's reference to \
+             run as stdin_ref, which needs no file."
+        } else {
+            "A processor's answer about a reference that is no file, such as a fetched page or a \
+             run's output, is for no document and cannot be written anywhere. Give the answer's \
+             reference to run as stdin_ref, which needs no file, in the line of the program that \
+             sends it."
+        };
+        format!(
+            "A summary, a translation, a rewrite, an explanation or a list of the points made of \
+             content you were not shown is written by this tool, because you cannot write it from \
+             what you have not read. Ask for the form wanted, for example a plain-text summary of \
+             each of six stories, two sentences each, with each link kept. Do not leave it to a \
+             script you write, which can only cut the original down. {answer_reaches_it} The \
+             recipient and the subject are yours and only the body comes from the processor. Your \
+             final message says what was sent and to whom. Call the text a summary in your final \
+             message only if a processor wrote one."
+        )
+    } else {
+        "A summary, a translation, a rewrite, an explanation or a list of the points made of \
+         content you were not shown is written by this tool, because you cannot write it from \
+         what you have not read. Ask for the form wanted, for example a plain-text summary of \
+         each of six stories, two sentences each, with each link kept. Call the text a summary \
+         in your final message only if a processor wrote one."
+            .to_string()
+    };
+
+    format!(
+        "Transform quarantined content you were not shown. Spawns an isolated model with no \
+         tools, no memory and nothing to read but the references you name; it follows your \
+         instruction and its output is quarantined as a new reference. {changing} What the change \
+         should be is its decision, not yours. It reads the whole document, so it can work out \
+         what is wrong and where the fix goes, and leave a file alone if it turns out not to be \
+         the one you are after. {derived_text} Once your context holds private content, as it does {shows}after \
+         a delegate reports some, and in a conversation resumed with some, every later \
+         spawn_processor call is refused for the rest of the conversation: what you write is \
+         private from then on, and a processor takes no private instruction. {working} keep \
+         working."
+    )
+}
+
+/// The description of `read_output`, naming only the tools `beside` says are on the list. See
+/// [`spawn_processor_description`].
+fn read_output_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let anything_else = if beside("vet_content") {
+        "For anything else you are holding a reference to, vet_content is the question to ask. "
+    } else {
+        ""
+    };
+    format!(
+        "Ask to be shown what a command printed. Give the reference a run handed back. Use it \
+         whenever you ran something to find something out, which is most of the time: a run's \
+         output is quarantined by default, so `which`, `find`, `uname` and the like tell you \
+         nothing until you ask for the result. Ask for the errors too when a run fails, or you \
+         will not know why it failed and must not claim it succeeded. Only for output from run; \
+         a quarantined file is not readable this way. {anything_else}Output you were shown the \
+         beginning and end of, because the whole was too long for one result, is the exception: \
+         you may read all of it, so nobody is asked, and it comes back a page at a time from the \
+         offset you give. A pattern searches that output instead of paging it: you get the \
+         matching lines, each numbered with the byte it starts at, so a second call with that \
+         byte as the offset reads on from the match you wanted. A pattern on output you may not \
+         read is refused rather than asked about."
+    )
+}
+
+/// The description of `fetch_url`, naming only the tools `beside` says are on the list. See
+/// [`spawn_processor_description`].
+fn fetch_url_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let moves = match (beside("spawn_processor"), beside("write_file")) {
+        (true, true) => {
+            " Hand the reference to spawn_processor to have a question answered about it, or to \
+             write_file as contents_ref to save it."
+        }
+        (true, false) => {
+            " Hand the reference to spawn_processor to have a question answered about it."
+        }
+        (false, true) => " Hand the reference to write_file as contents_ref to save it.",
+        (false, false) => "",
+    };
+    let reading = if beside("vet_content") {
+        " Where you have to read the page yourself, vet_content has it checked and asks the user \
+         to show it to you."
+    } else {
+        ""
+    };
+    format!(
+        "Fetch an http or https URL. Not the way to read a github.com pull request or issue \
+         where the prompt says the GitHub CLI is on PATH, which names the commands that are. \
+         What comes back is quarantined, like a file nobody vouched for: you get a reference \
+         rather than the text, and you cannot read it or be told what it says.{moves}{reading} \
+         The user is asked before anything leaves the machine."
+    )
+}
+
+/// The description of `job_output`, naming only the tools `beside` says are on the list. See
+/// [`spawn_processor_description`].
+fn job_output_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let passed_to: Vec<&str> = ["read_output", "spawn_processor", "write_file"]
+        .into_iter()
+        .filter(|name| beside(name))
+        .collect();
+    let reference = match passed_to.as_slice() {
+        [] => "a reference".to_string(),
+        [one] => format!("a reference to pass to {one}"),
+        [init @ .., last] => format!("a reference to pass to {} or {last}", init.join(", ")),
+    };
+    format!(
+        "See what a background job has printed, and whether it has ended. Give the job name run \
+         handed back. Each call reports what is new since the last one, so calling it again \
+         after doing something else shows what happened in between rather than repeating what \
+         you have seen. Output is quarantined exactly as a run's is: it comes back as text where \
+         the user vouched for every command in the line, and otherwise as {reference}. Use \
+         wait_seconds to wait for the job rather than asking it again and again. Without it a \
+         wait costs a whole turn per look: you call, are told nothing has happened, and answer \
+         only to be asked the same question. A wait ends at the job's next output, so a job that \
+         prints a line every second ends it every second. When what you need is the end of the \
+         job and not its output as it arrives, add until_exit: true, which waits for the job to \
+         end or for wait_seconds to run out and returns what it printed since your last look in \
+         one answer. It is still a wait inside this turn, so it cannot tell you about anything \
+         that happens after the turn ends, and the account of the job's start says whether it is \
+         killed then or kept."
+    )
+}
+
+/// What the description of `run` says to do with output that comes back as a reference, led by a
+/// colon, naming only the tools `beside` says are on the list. Nothing where none is.
+///
+/// The rest of the description depends on the deadlines and on what the turn may say about a later
+/// look, so the table joins this into it and [`state_what_is_beside`] replaces it there.
+fn run_reference_moves(beside: &dyn Fn(&str) -> bool) -> String {
+    let moves: Vec<&str> = [
+        beside("read_output").then_some("pass it to read_output to see it"),
+        beside("spawn_processor").then_some("hand it to spawn_processor"),
+        beside("write_file").then_some("write it to a file with write_file"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    match moves.as_slice() {
+        [] => String::new(),
+        [one] => format!(": {one}"),
+        [init @ .., last] => format!(": {}, or {last}", init.join(", ")),
+    }
+}
+
+/// What the description of `run` says about text made from output that comes back as a reference:
+/// a processor writes it, and its description says how that text reaches a program (SPAWN-6). The
+/// sentence, with its leading full stop, where `beside` says `spawn_processor` is on the list, else
+/// nothing. The table joins it in after [`run_reference_moves`] and [`state_what_is_beside`]
+/// replaces it.
+fn run_text_made_from_it(beside: &dyn Fn(&str) -> bool) -> String {
+    if beside("spawn_processor") {
+        ". A summary, a translation or other text made from it is written by spawn_processor, \
+         whose description says how that text reaches a program"
+            .to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// The description of `run`'s `background` argument, naming `job_output` only where `beside` says
+/// it is on the list.
+fn run_background_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let look = if beside("job_output") {
+        " Call job_output with the name to see what it has printed before then."
+    } else {
+        ""
+    };
+    format!(
+        "Leave it running instead of waiting for it, and hand back a job name. For a program \
+         meant to keep going: a server, a watcher, a log follower. Use it when you need the \
+         program still up while you do something else, such as starting a server and then \
+         fetching a page from it. While this turn is still going you are told when it ends, with \
+         how it ended and what it printed, so nothing has to poll for that.{look} Must be one \
+         pipeline with no redirection, and it is killed when this turn ends. Defaults to false, \
+         which waits and hands back the output."
+    )
+}
+
+/// Write the descriptions that name other tools again for the list a turn settled on, so a run is
+/// not sent to a tool it is not offered.
+///
+/// Called once, on the turn's list after its narrowing and its additions. It replaces the whole
+/// description of `spawn_processor`, `read_output`, `fetch_url` and `job_output`, so it runs before
+/// anything is appended to them, as [`state_read_output_answer`] appends to `read_output` on each
+/// request's copy. `run` is rewritten in place at the sentence about its output and at its
+/// `background` argument, since the rest of its text was written from the deadlines and from what
+/// the turn may say about a later look, and what [`state_confinement`] and
+/// [`state_withheld_variables`] appended to it stays. A tool the list does not hold is skipped, and
+/// a list that holds every tool gets the descriptions the table wrote.
+pub fn state_what_is_beside(tools: &mut [Tool]) {
+    let names: Vec<String> = tools
+        .iter()
+        .map(|tool| tool.function.name.clone())
+        .collect();
+    let beside = |name: &str| names.iter().any(|offered| offered == name);
+    for tool in tools.iter_mut() {
+        match tool.function.name.as_str() {
+            "spawn_processor" => tool.function.description = spawn_processor_description(&beside),
+            "read_output" => tool.function.description = read_output_description(&beside),
+            "fetch_url" => tool.function.description = fetch_url_description(&beside),
+            "job_output" => tool.function.description = job_output_description(&beside),
+            "run" => {
+                tool.function.description = tool.function.description.replacen(
+                    &(run_reference_moves(&|_| true) + &run_text_made_from_it(&|_| true)),
+                    &(run_reference_moves(&beside) + &run_text_made_from_it(&beside)),
+                    1,
+                );
+                if let Some(background) = tool
+                    .function
+                    .parameters
+                    .pointer_mut("/properties/background/description")
+                {
+                    *background = json!(run_background_description(&beside));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn table(
     scheduling: Scheduling,
     arming: crate::watch::Arming,
@@ -205,34 +474,6 @@ fn table(
         "list_files, search, read_file or run"
     } else {
         "list_files, search or read_file"
-    };
-    // What spawn_processor says about a summary, a translation or other text made from content the
-    // planner was not shown, which a processor writes (SPAWN-6). The route to the program that
-    // sends it names `run`, so it is said only where this turn holds one. A turn without `run` is
-    // told who writes such text and what to call it, and is not sent to a program it cannot start.
-    let derived_text = if running.offered() {
-        "A summary, a translation, a rewrite, an explanation or a list of the points made of \
-         content you were not shown is written by this tool, because you cannot write it from \
-         what you have not read. Ask for the form wanted, for example a plain-text summary of \
-         each of six stories, two sentences each, with each link kept. Do not leave it to a \
-         script you write, which can only cut the original down. A processor's answer about a \
-         reference that is no file, such as a fetched page or a run's output, is for no document \
-         and cannot be written anywhere, so save the original to a file first, in the scratch \
-         directory if you were given one: end the run line that made it with `> path`, or \
-         write a fetched page with write_file and contents_ref, and call read_file on the file \
-         for a reference to name in reads. Do not save it with a script that opens the file \
-         itself. Then write the answer over the same file with write_file, and run the \
-         program that sends it with the file's path as an argument, so it reads the body from \
-         the file. Or give the answer's reference to run as stdin_ref, which needs no file. The \
-         recipient and the subject are yours and only the body comes from the processor. Your \
-         final message says what was sent and to whom. Call the text a summary in your final \
-         message only if a processor wrote one."
-    } else {
-        "A summary, a translation, a rewrite, an explanation or a list of the points made of \
-         content you were not shown is written by this tool, because you cannot write it from \
-         what you have not read. Ask for the form wanted, for example a plain-text summary of \
-         each of six stories, two sentences each, with each link kept. Call the text a summary \
-         in your final message only if a processor wrote one."
     };
     // What write_file says about where a processor's answer may be written. The route for saving a
     // page to a file first is in the processor's description and is said there only where this
@@ -413,7 +654,9 @@ fn table(
                         "description": format!(
                             "A reference whose quarantined content becomes the whole file, \
                              e.g. \"ref:2\". This is how to write out something you were never \
-                             shown, such as a fetched page. {processor_answer_lands}"
+                             shown, such as a fetched page. {processor_answer_lands} A picture \
+                             or PDF reference is written as the file it encodes, to a path you \
+                             name ending in its extension, such as .png."
                         )
                     }
                 },
@@ -828,24 +1071,7 @@ fn table(
         ),
         Tool::function(
             "spawn_processor",
-            format!(
-                "Transform quarantined content you were not shown. Spawns an isolated model with \
-                 no tools, no memory and nothing to read but the references you name; it follows \
-                 your instruction and its output is quarantined as a new reference. This is how \
-                 to change a file you cannot see: name the file's reference, say what has to be \
-                 true of it afterwards, then pass the reference that comes back to write_file as \
-                 contents_ref. You are not shown its output either, and nobody reads it before \
-                 it is written, so be exact about the shape of the answer: the complete document \
-                 and nothing else. What the change should be is its decision, not yours. It \
-                 reads the whole document, so it can work out what is wrong and where the fix \
-                 goes, and leave a file alone if it turns out not to be the one you are after. \
-                 {derived_text} Once your context holds private content, as it does after \
-                 read_output or vet_content shows you some, after a delegate reports some, and \
-                 in a conversation resumed with some, every later spawn_processor call is \
-                 refused for the rest of the conversation: what you write is private from then \
-                 on, and a processor takes no private instruction. run, read_output and the file \
-                 tools keep working."
-            ),
+            spawn_processor_description(&|name| name != "run" || running.offered()),
             json!({
                 "type": "object",
                 "properties": {
@@ -867,6 +1093,19 @@ fn table(
                                         nothing to change says so. Required when reads names \
                                         more than one file: one answer has one destination, and \
                                         nothing else can say which."
+                    },
+                    "choose_upto": {
+                        "type": "integer",
+                        "minimum": 2,
+                        "maximum": 99,
+                        "description": "Ask the processor to choose one entry of a numbered \
+                                        list in the references, in place of producing a \
+                                        document. It answers with a whole number from 1 to this \
+                                        limit, or 0 where no entry fits. What comes back is a \
+                                        reference to the choice, which holds no text and names \
+                                        no file, and you are not shown the number. Name it only \
+                                        where a tool offers an argument ending in _ref beside \
+                                        one that takes a number. Not with about."
                     },
                     "instruction": {
                         "type": "string",
@@ -1048,10 +1287,12 @@ fn table(
              \
              Output comes back as text you can read where the user has vouched for every \
              command in the line; otherwise it comes back as a reference, like a file you may \
-             not read: pass it to read_output to see it, hand it to \
-             spawn_processor, or write it to a file with write_file. A summary, a translation \
-             or other text made from it is written by spawn_processor, whose description says \
-             how that text reaches a program. Do use it to compile and test what you changed. \
+             not read"
+            .to_string()
+                + &run_reference_moves(&|_| true)
+                + &run_text_made_from_it(&|_| true)
+                + ". Do use it to compile and \
+             test what you changed. \
              \
              Before asking whether a browser is running, or whether to quit or relaunch it, look \
              for its debugging port. A browser started with --remote-debugging-port=9222 answers \
@@ -1061,7 +1302,6 @@ fn table(
              A program meant to keep running, such as a server or a watcher, needs \
              background: true. Without it the line is waited on and stopped at its deadline \
              ("
-            .to_string()
                 + &format!(
                     "{deadline_default} seconds by default; set deadline_seconds to allow up to \
                      {deadline_ceiling}"
@@ -1175,18 +1415,7 @@ fn table(
                     },
                     "background": {
                         "type": "boolean",
-                        "description": "Leave it running instead of waiting for it, and hand \
-                                        back a job name. For a program meant to keep going: a \
-                                        server, a watcher, a log follower. Use it when you need \
-                                        the program still up while you do something else, such \
-                                        as starting a server and then fetching a page from it. \
-                                        While this turn is still going you are told when it \
-                                        ends, with how it ended and what it printed, so nothing \
-                                        has to poll for that. Call job_output with the name to \
-                                        see what it has printed before then. \
-                                        Must be one pipeline with no redirection, and \
-                                        it is killed when this turn ends. Defaults to false, \
-                                        which waits and hands back the output."
+                        "description": run_background_description(&|_| true)
                     },
                     "read": {
                         "type": "boolean",
@@ -1208,22 +1437,7 @@ fn table(
         ),
         Tool::function(
             "job_output",
-            "See what a background job has printed, and whether it has ended. Give the job name \
-             run handed back. Each call reports what is new since the last one, so calling it \
-             again after doing something else shows what happened in between rather than \
-             repeating what you have seen. Output is quarantined exactly as a run's is: it comes \
-             back as text where the user vouched for every command in the line, and otherwise as \
-             a reference to pass to read_output, spawn_processor or write_file. \
-             \
-             Use wait_seconds to wait for the job rather than asking it again and again. Without \
-             it a wait costs a whole turn per look: you call, are told nothing has happened, and \
-             answer only to be asked the same question. A wait ends at the job's next output, so a \
-             job that prints a line every second ends it every second. When what you need is the \
-             end of the job and not its output as it arrives, add until_exit: true, which waits for \
-             the job to end or for wait_seconds to run out and returns what it printed since \
-             your last look in one answer. It is still a wait inside this turn, so it \
-             cannot tell you about anything that happens after the turn ends, and the account of the \
-             job's start says whether it is killed then or kept.",
+            job_output_description(&|_| true),
             json!({
                 "type": "object",
                 "properties": {
@@ -1268,19 +1482,7 @@ fn table(
         ),
         Tool::function(
             "read_output",
-            "Ask to be shown what a command printed. Give the reference a run handed back. Use it whenever you ran something to find something out, which is most of \
-             the time: a run's output is quarantined by default, so `which`, `find`, `uname` and \
-             the like tell you nothing until you ask for the result. Ask for the errors too when \
-             a run fails, or you will not know why it failed and must not claim it succeeded. \
-             Only for output from run; a quarantined file is not readable this way. For \
-             anything else you are holding a reference to, vet_content is the question to ask. \
-             \
-             Output you were shown the beginning and end of, because the whole was too long for \
-             one result, is the exception: you may read all of it, so nobody is asked, and it \
-             comes back a page at a time from the offset you give. A pattern searches that output \
-             instead of paging it: you get the matching lines, each numbered with the byte it \
-             starts at, so a second call with that byte as the offset reads on from the match you \
-             wanted. A pattern on output you may not read is refused rather than asked about.",
+            read_output_description(&|_| true),
             json!({
                 "type": "object",
                 "properties": {
@@ -1448,14 +1650,7 @@ fn table(
         ),
         Tool::function(
             "fetch_url",
-            "Fetch an http or https URL. Not the way to read a github.com pull request or issue \
-             where the prompt says the GitHub CLI is on PATH, which names the commands that are. \
-             What comes back is quarantined, like a file nobody \
-             vouched for: you get a reference rather than the text, and you cannot read it or be \
-             told what it says. Hand the reference to spawn_processor to have a question answered \
-             about it, or to write_file as contents_ref to save it. Where you have to read the \
-             page yourself, vet_content has it checked and asks the user to show it to you. The \
-             user is asked before anything leaves the machine.",
+            fetch_url_description(&|_| true),
             json!({
                 "type": "object",
                 "properties": {

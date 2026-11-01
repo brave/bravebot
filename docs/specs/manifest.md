@@ -7,6 +7,7 @@ governs:
   - crates/core/src/policy.rs
   - crates/agent/src/manifest.rs
   - crates/agent/src/connectors.rs
+  - crates/agent/src/server_calls.rs
   - crates/agent/src/mode.rs
   - crates/cli/src/main.rs
   - crates/cli/src/invocation.rs
@@ -49,7 +50,8 @@ what changes is the scope of the precommitment, from one turn to a whole run.
 ### MANIFEST-1: planning is gated, not counted
 
 A plan may be asked for only from a planner whose context holds the task string, the pictures a
-person pasted into it or dropped onto it, and the driver's own words, and has been shown nothing
+person pasted into it or dropped onto it, the driver's own words, and the names on a list of a
+server's tools that a person vouched for ([MANIFEST-15](#MANIFEST-15)), and has been shown nothing
 else. A paste is a keystroke of the person's own and says nothing about content anybody else wrote
 ([pasting.md](pasting.md#PASTE-5)), which is why a screenshot of the thing to be built goes in with
 the words it was pasted beside while a pipe is still refused (MANIFEST-9). A drop is the same
@@ -62,11 +64,13 @@ shown to the planner. The gate is that invariant written where a change has to p
 Two calls happen: the goal in plain words, then the same work fitted to the tool set. What is
 forbidden is a re-plan: a plan that fails validation fails the run, and nothing plans again once
 a step has read something. The one exception comes before anything is read or put to anybody: a
-plan whose connector steps fail the check against their definitions is asked for once more, the
+plan whose connector steps fail the check against their definitions, or whose server calls fail
+the check against a vouched list ([MANIFEST-15](#MANIFEST-15)), is asked for once more, the
 fit call being shown the plan it gave and the check's own words about it, and a second plan that
 fails anything fails the run with its own refusal. What that call is shown is the planner's own
 plan and the driver's words, so its context is still the one this clause admits, and a plan with
-no connector step never fails that check, so a run that uses no connector is never asked again.
+no connector step and no server call never fails that check, so a run that uses neither is never
+asked again.
 Where no connector is usable, a connector step names a capability the catalogue did not offer, and
 the plan is refused as one naming any other unknown capability is, without that check.
 
@@ -80,6 +84,7 @@ the plan is refused as one naming any other unknown capability is, without that 
 `verified-by: bravebot_agent::manifest::a_plan_that_fails_validation_is_not_asked_for_again_where_a_connector_is_installed`
 `verified-by: bravebot_agent::manifest::a_picture_pasted_into_the_task_reaches_the_planner`
 `verified-by: bravebot_agent::manifest::a_picture_dropped_onto_the_task_reaches_the_planner`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_the_list_refuses_is_asked_for_once_more`
 
 <a id="MANIFEST-2"></a>
 ### MANIFEST-2: a plan that is not trusted is refused
@@ -135,12 +140,17 @@ program this mode starts is a connector's authority, at the absolute path in the
 definition, with one fixed argument and the request on its standard input
 ([connectors.md](connectors.md)).
 
+A tool of an MCP server is not a tool of this schema. It is the `tool` field of the one `mcp_call`
+step, whose handler calls only a tool on a list a person vouched for, so the schema still names
+every handler ([MANIFEST-15](#MANIFEST-15)).
+
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_slot_that_no_planner_reads`
 `verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_unread_slot_and_the_act_sends_the_released_text`
 `verified-by: bravebot_agent::manifest::injected_text_in_a_file_cannot_add_a_step`
 `verified-by: bravebot_agent::manifest::the_planner_is_shown_capabilities_and_no_tool_names`
 `verified-by: bravebot_agent::manifest::the_registry_and_the_kernel_schema_describe_the_same_tools`
 `verified-by: bravebot_core::manifest::no_action_in_the_schema_fills_a_slot`
+`verified-by: bravebot_agent::manifest_server_calls::a_call_the_schema_or_the_list_cannot_hold_runs_nothing`
 
 <a id="MANIFEST-6"></a>
 ### MANIFEST-6: routing is locked from the manifest before the first step
@@ -247,7 +257,8 @@ step fixed. The routing is part of what is being answered for, so the line a per
 directory a search runs in and the glob it filters by, not the pattern alone. A connector act's line
 also names where the content it carries came from and where it goes (MANIFEST-14), since approving
 the plan is what releases it, and the text and title the plan wrote for it, the first 200 characters
-of each on one line with control characters escaped. A file write that carries a slot names where
+of each on one line with control characters escaped. A server call's line names the server, the
+tool and the arguments in full. A file write that carries a slot names where
 that slot's content came from, in the same words, wherever that is anything but the workspace.
 Declining stops the run, and what was declined comes back with the
 error under MANIFEST-3, so the plan can still be read.
@@ -257,8 +268,10 @@ The question is asked once, and there is no standing form of it. Nothing between
 run can reshape the plan, so there is nothing to ask a second time; and a plan is written afresh for
 each run, so remembering an answer would be approving steps nobody has seen.
 
-Approving a plan is not approving its writes. This mode widens the scope of the precommitment and
-does not replace the gates inside it, so each write is still put to the person as its step reaches it.
+Approving a plan is not approving its writes, and it is not approving its calls to a server's
+tools. This mode widens the scope of the precommitment and does not replace the gates inside it, so
+each write is still put to the person as its step reaches it, and each call is decided as a turn's
+is ([MANIFEST-15](#MANIFEST-15)).
 A connector act is sent to the authority in every mode that runs the plan, bypass included, and its
 request carries no answer: the driver asks nothing about the act, and the person is asked in the
 authority's popup. Plan mode runs no such plan ([permission-modes.md](permission-modes.md)).
@@ -282,6 +295,7 @@ what makes one question about the whole of it worth more than a question per ste
 `verified-by: bravebot_agent::manifest::the_plan_prompt_names_where_a_connector_act_sends_its_content`
 `verified-by: bravebot_agent::connectors::the_plan_line_shows_the_text_and_title_the_plan_wrote_on_one_line`
 `verified-by: bravebot_agent::manifest::approving_a_plan_is_not_approving_its_writes`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_calls_a_vouched_tool_with_the_arguments_it_fixed`
 `verified-by: bravebot_agent::permission_mode::a_plan_is_put_to_a_person_in_every_mode_but_bypass`
 `verified-by: bravebot_tui::confirm::grants::the_plan_prompt_shows_the_task_and_every_step`
 `verified-by: bravebot_tui::confirm::grants::the_plan_prompt_says_what_approving_it_does_and_does_not_do`
@@ -338,7 +352,9 @@ progress. A successful outcome replaces retained progress, so neither records no
 terminal sessions charge both. Failed run records keep measured wall, inference, tool and approval
 time separately. Unknown timing stays absent; the required token total stays zero where nothing
 was measured. A stopped run keeps measured usage in the continuing terminal session while leaving
-no separate manifest record. Manifest runs do not compact, delegate or vet content.
+no separate manifest record. Manifest runs do not compact, delegate or vet content. The one check a
+run makes is the one over a server's list before the person is asked to vouch for it
+([MANIFEST-15](#MANIFEST-15)).
 
 Approval reaches the session prompt rather than the terminal one, since the session is the place a
 plan can be drawn and scrolled. Everything else about the question is MANIFEST-10's, unchanged: it
@@ -438,6 +454,136 @@ lets fetched content change what a slot says and never where it goes.
 `verified-by: bravebot_agent::manifest::an_act_takes_a_recorded_field_as_the_fetch_s_receipt`
 `verified-by: bravebot_core::manifest::a_release_names_what_an_act_carries_and_what_it_takes`
 
+<a id="MANIFEST-15"></a>
+### MANIFEST-15: a step may call one tool of a server a person vouched for, with arguments the plan fixed
+
+The step `mcp_call` names a server by the alias a person typed, a tool by its word on a list the
+person vouched for ([SERVERS-8](mcp-servers.md#SERVERS-8)), and carries the arguments of the call as
+a JSON object the plan wrote. The alias and the tool are routing, locked before the first step as
+every routing field is ([MANIFEST-6](#MANIFEST-6)), and are what a person approves a call by
+([SERVERS-7](mcp-servers.md#SERVERS-7)). The arguments are the plan's own text and are not routing
+([ROUTE-1](routing.md#ROUTE-1)). They are written out in the plan and fixed with it.
+
+The step is an action. It comes after every read and every transform, and it has no field that names
+a slot, so no argument of a call can be taken from what an earlier step produced, and a call fills no
+slot for a later step to use. No argument can be taken from a choice a processor made either
+([ROUTE-10](routing.md#ROUTE-10)): the planner is offered `<argument>_ref` in a turn and not in a
+plan, and a step that writes one is refused as naming an argument the tool does not list. What a tool
+answers is untrusted and private ([MCP-1](mcp.md#MCP-1)). It is drawn in the margin every untrusted
+byte is drawn in and goes to no model and to no step. Pictures and other parts of the answer are not
+shown and are counted.
+
+The planner is offered the step only where the session holds a list a person vouched for and a grant
+for its server, and is shown the names on that list: each `alias:tool` and each argument by name, its
+type and whether it is required, and no description. Those names are trusted and public
+([LABEL-8](labels.md#LABEL-8)), so the planner's context is still the one
+[MANIFEST-1](#MANIFEST-1) admits. A list that was declined, a server the run holds no grant for, and
+`--tools` offer the planner no call.
+
+A session whose servers nothing has started has them started first, by the function that starts
+them for a turn ([SERVERS-4](mcp-servers.md#SERVERS-4), [SERVERS-9](mcp-servers.md#SERVERS-9)). The
+terminal and a one-shot run start them as they open. The desktop application starts them at the
+session's first turn or first plan run, whichever comes first, and keeps them until the session
+closes, so the second of the two starts none. The question about each server, the bound on its
+handshake ([SERVERS-15](mcp-servers.md#SERVERS-15)) and a stop at the question are the turn's. A
+server the person did not approve is not started. A run stopped at the question starts none and
+leaves the session to ask again at its next turn or run. Every server the settings request is
+started, whether or not the plan calls one, as a turn's start does. The planner is shown a server's
+tools only after its list is vouched for, so the start cannot wait for the plan.
+
+Before the planner is asked for anything, the run puts to the person the list of each server it
+holds a grant for that nobody has been asked about in this session, as the start of a turn does
+([SERVERS-8](mcp-servers.md#SERVERS-8)). One function decides the check over the list, the answer the
+permission mode gives and a stop at the question, so they are the turn's. A yes stands for the rest of
+the session and a later run is not asked about the list again. A stop at the question leaves the list
+unasked and plans nothing. The question is put under a policy of its own that ends before planning
+begins, so what the check read is not in the planner's context. Settling starts no further server and
+calls none, and it changes nothing a plan's other steps are shown or hold. A local server that announced a
+change to its tools is read again ([MCP-12](mcp.md#MCP-12)) within the bound its declaration gives a
+request ([SERVERS-15](mcp-servers.md#SERVERS-15)). A list not given within the bound is not offered,
+nobody is asked about it, and a plan naming one of its tools is refused as naming a capability that
+was not offered.
+
+Before the plan is put to anybody, every call is held to the list. The tool is on it, the arguments
+are a JSON object, every name in the object is an argument the tool lists, and every argument it
+requires is there. A plan that fails is asked for once more ([MANIFEST-1](#MANIFEST-1)). The line a
+person approves names each call as `alias:tool` and gives its arguments as the server will receive
+them, in full.
+
+The call itself is made by the function a turn's call goes through
+([SERVERS-7](mcp-servers.md#SERVERS-7)), so everything that decides a turn's call decides this one.
+A `deny` rule about the tool refuses it before anybody is asked, in every mode. Of the session's
+rules a plan run reads these and no others. An `allow` rule, a standing answer, a call carrying
+private data, the mode and the egress gate decide it as they do there. Approving the plan answers
+none of it.
+
+A server declared to ask every call ([SERVERS-21](mcp-servers.md#SERVERS-21)) is asked at the step,
+in every mode, bypassing included, and no answer to it lasts. The plan is not refused for holding
+such a call. Refusing it at plan time would not make any call safer, since each is asked at its step
+either way, and it would decide [SERVERS-21](mcp-servers.md#SERVERS-21) in a second place that has to
+be kept equal to the first. Where nobody can be asked the call is refused at the step. Plan mode does
+not refuse the plan for a call. It asks at the step as it does in a turn, which is what
+[MODE-3](permission-modes.md#MODE-3) does not change.
+
+A call ends the run when it is refused (by a rule, the permission mode, the egress gate or a
+context that has met untrusted content), declined or not asked about by the person, not offered to
+the run, not made (no server was reached, or it could not be started or written to), or not
+answered (its connection closed before any reply, or no reply came within the bound the server's
+declaration gives, [SERVERS-15](mcp-servers.md#SERVERS-15)). No step after it runs, and the steps
+before it are not undone. The step is recorded as failed and no later step is recorded.
+
+A reply that arrived ends nothing, whatever it holds. That covers a result, a tool that answers
+that it failed, a JSON-RPC error, a reply this client cannot read, an HTTP status that is not a
+success, and a line past the bound ([MCP-5](mcp.md#MCP-5), [MCP-13](mcp.md#MCP-13)). The steps
+after it run, because the steps were fixed before the server was reached and what a server returns
+does not change them. A tool's account of its own failure is drawn in the margin
+([MANIFEST-13](#MANIFEST-13)). A reply this client could not use is drawn as nothing, since the
+client holds none of it, and the step's line says that the call failed and its reply could not be
+used. No word of the reply is in the line or in the record of the run.
+
+**Why.** A call to a server is an effect decided by a program the plan does not name, so it is an
+action and it is approved by what a person can decide alone, the alias and the tool, with the
+arguments shown beside them. A plan has read nothing, so every argument is the planner's literal,
+and giving the step no slot is what makes that structural and not a promise. Sending the call
+through the one function that decides a turn's call keeps a `deny` rule and a declaration asking
+every call in force in a plan without a copy of either here.
+
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_calls_a_vouched_tool_with_the_arguments_it_fixed`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_started_in_a_fresh_session_puts_the_lists_to_the_person_before_it_plans`
+`verified-by: bravebot_agent::manifest_server_calls::bypassing_answers_a_list_at_the_start_of_a_plan_and_makes_no_check`
+`verified-by: bravebot_agent::manifest_server_calls::a_list_the_person_declines_at_the_start_of_a_plan_offers_no_call`
+`verified-by: bravebot_agent::manifest_server_calls::only_the_lists_of_the_servers_a_run_holds_are_put_to_the_person`
+`verified-by: bravebot_agent::manifest_server_calls::settling_a_list_leaves_a_plan_that_calls_nothing_as_it_was`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_stopped_at_a_lists_question_plans_nothing_and_leaves_the_list_unasked`
+`verified-by: bravebot_agent::manifest_server_calls::a_server_that_does_not_give_its_changed_list_in_time_does_not_hold_up_a_plan`
+`verified-by: bravebot_agent::manifest_server_calls::the_planner_is_shown_a_vouched_lists_names_and_none_of_its_words`
+`verified-by: bravebot_agent::manifest_server_calls::a_call_the_schema_or_the_list_cannot_hold_runs_nothing`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_the_list_refuses_is_asked_for_once_more`
+`verified-by: bravebot_agent::manifest_server_calls::a_planned_call_to_a_server_asked_every_call_asks_at_its_step`
+`verified-by: bravebot_agent::manifest_server_calls::bypassing_does_not_answer_a_planned_call_to_a_server_asked_every_call`
+`verified-by: bravebot_agent::manifest_server_calls::plan_mode_runs_a_plan_that_calls_a_server_and_asks_at_the_step`
+`verified-by: bravebot_agent::manifest_server_calls::a_refused_call_does_not_run_the_next_step`
+`verified-by: bravebot_agent::manifest_server_calls::a_tool_that_reports_a_failure_is_drawn_in_the_margin_and_decides_nothing`
+`verified-by: bravebot_agent::manifest_server_calls::a_reply_this_client_cannot_use_does_not_end_a_plan_run`
+`verified-by: bravebot_agent::manifest_server_calls::a_line_past_the_bound_and_the_calls_after_it_do_not_end_a_plan_run`
+`verified-by: bravebot_agent::manifest_server_calls::a_call_that_gets_no_reply_ends_a_plan_run`
+`verified-by: bravebot_agent::manifest_server_calls::a_deny_rule_refuses_a_planned_call_in_every_mode_and_asks_nobody`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_cannot_name_a_choice`
+`verified-by: bravebot_agent::manifest::a_calls_arguments_object_is_carried_as_its_text`
+`verified-by: bravebot_core::manifest::a_server_call_locks_its_alias_and_tool_and_not_its_arguments`
+`verified-by: bravebot_core::manifest::a_server_call_names_no_slot_so_no_argument_comes_from_a_result`
+`verified-by: bravebot_core::manifest::a_server_call_with_an_extra_field_or_a_missing_name_is_refused`
+`verified-by: bravebot_core::manifest::a_server_calls_arguments_must_be_text`
+`verified-by: bravebot_core::manifest::a_read_after_a_server_call_is_refused`
+`verified-by: bravebot_core::policy::a_plan_calling_a_server_from_a_tainted_context_is_refused`
+`verified-by: bravebot_core::permissions::only_mcp_keeps_the_rules_about_a_servers_tool_and_nothing_else`
+`verified-by: bravebot_ui_bridge::manifest::a_plan_run_before_any_turn_starts_the_sessions_servers_and_calls_a_tool`
+`verified-by: bravebot_ui_bridge::manifest::a_plan_run_does_not_start_a_server_the_window_refuses`
+`verified-by: bravebot_ui_bridge::manifest::a_turn_after_a_plan_run_finds_the_servers_the_run_started`
+`verified-by: bravebot_ui_bridge::manifest::a_plan_run_after_a_turn_finds_the_servers_the_turn_started`
+`verified-by: bravebot_ui_bridge::manifest::a_plan_run_stopped_at_a_servers_question_starts_nothing_and_the_next_run_asks_again`
+`verified-by: bravebot_ui_bridge::manifest::a_server_that_never_answers_its_handshake_does_not_hold_up_a_plan_run`
+
 ## Known costs
 
 - **A plan answered at a terminal is answered on one line, with no way back to the steps above it.**
@@ -466,3 +612,28 @@ lets fetched content change what a slot says and never where it goes.
   sent, which is the person's check; nothing earlier refuses it. Requiring such an act's fetch to
   narrow, as an act on every match must, would close it, at the cost of definitions that list
   narrowing terms for every act that takes a value from its item (MANIFEST-14).
+- **A call's answer cannot be used by a later step.** A call fills no slot, so nothing a tool
+  returned can be transformed, written or answered with, and no argument can depend on it. The
+  person reads it in the margin as the run goes (MANIFEST-15). A plan that needs a page summarised
+  is two runs, with the person's own words between them.
+- **A plan run starts servers and asks about lists whether or not the plan calls a server.** The
+  questions come before the plan is made, so a person who runs a plan that calls nothing is asked
+  once about each server that nothing has started, in the desktop application, and about each list
+  in the session that nobody has been asked about. A run with nobody to ask answers no, and its
+  servers offer no call unless permissions are skipped (MANIFEST-15).
+- **A reply that arrived does not stop the plan.** The steps after a call whose reply was a tool's
+  report of failure, a JSON-RPC error, a reply this client could not read, an HTTP status that is
+  not a success or a line past the bound run, since stopping on any of them would let the server's
+  reply decide which steps happen. A plan whose later steps depend on an earlier call having worked
+  runs them anyway. The person sees a tool's account of its failure in the margin as it goes, and
+  for a reply this client could not use only a line saying so (MANIFEST-15).
+- **A server that sends no reply can end a plan run.** A call whose connection closes before any
+  reply, or that is not answered within its bound, ends the run at that step, so a server decides
+  by not answering whether the later steps run. No byte it wrote takes part, a server that is not
+  there ends the run the same way, and what it can do is keep approved steps from running, never
+  add one (MANIFEST-15).
+- **A plan holding a call to a server asked every call stops at that step where nobody can be
+  asked.** A one-shot run and the desktop application refuse the call, and the steps before it have
+  run (MANIFEST-15, [SERVERS-21](mcp-servers.md#SERVERS-21)).
+- **Approving a plan once does not ask once.** Each call is decided as a turn's is, so a call with no
+  `allow` rule and no standing answer is put to the person at its step.

@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "BraveBot Trusted Input",
+  "version": "0.1.0",
+  "description": "Sends real mouse and keyboard input, a picture of a whole page, its console or a chosen file, when BraveBot asks and you allow it.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuOFiyOloN8/sBzVzC6aekau1n8uneOdALR/SUeMC3ImEvA8jagVlLqCAnoj3gv0KYJNsPpX8491RqEbug54uYHVF6U8pJKxew5DIrXA/qEHlePPHHBBSrRBnOerV/fcOrnzvxQUJhe1Lmvy7q8nmcbCEYWLnKtnnv6APDpIupWVyIDvbakxuQxfpzjhMSEwwXMdkBhiVc4YDdB8rKDwToINu6ZdQPgBJ6CpfSuocIz4goTPBw2Ad+raha4JlNdBZ1DmnLc4v4EAbuH3Jsitwy2ZXx9Uk1Yqdx4BP71KkTelgALQwLwFls2mmu1/It9yz3pAlJjNGf7t3IQscOIPejwIDAQAB",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "debugger"
+  ],
+  "externally_connectable": {
+    "ids": [
+      "fcjamhpiedeihbbbpndcjngkjaogfgep"
+    ]
+  },
+  "content_security_policy": {
+    "extension_pages": "default-src 'none'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "BraveBot Trusted Input",
+    "default_popup": "popup.html"
+  }
+}

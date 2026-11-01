@@ -87,3 +87,17 @@ test('a declared connector turns back into the form it came from, keeping what i
   assert.deepEqual(c.formOf({ alias: 'gh', transport: 'stdio', command: ['gh-mcp', 'stdio'], variables: [{ name: 'TOKEN', stored: true }, { name: 'PATH', stored: false }], directory: null, requested: false, connected: false, problem: null }),
     { alias: 'gh', transport: 'stdio', command: ['gh-mcp', 'stdio'], variables: [{ name: 'TOKEN', keep: true }, { name: 'PATH' }], directory: undefined })
 })
+
+test('a connector declared to ask about every call says so, and says this window cannot ask', () => {
+  const React = require('react')
+  const { renderToStaticMarkup } = require('react-dom/server')
+  const source = buildSync({ entryPoints: ['src/renderer/components/Connectors.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const draw = (connector) => renderToStaticMarkup(React.createElement(module.exports.Declared, { connector }))
+  const base = { alias: 'brave-cookies', transport: 'stdio', command: ['bravebot-browser', 'mcp', '--group', 'cookies'], requested: true, connected: true, problem: null }
+  const asking = draw({ ...base, asks_every_call: true })
+  assert.match(asking, /Each is asked about, and no answer to one is remembered\./)
+  assert.match(asking, /This window cannot ask/)
+  for (const connector of [base, { ...base, asks_every_call: false }]) assert.ok(!draw(connector).includes('asked about'), JSON.stringify(connector))
+})

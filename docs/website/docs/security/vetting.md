@@ -87,12 +87,68 @@ message, and comes once: the next read of the same file is quarantined again. It
 check where the gateway lists the model in use as not taking pictures (or PDFs), and where the machine
 names no cache directory to put a copy in.
 
+### A picture that arrives
+
+A picture is held out of the model's reach from the moment it arrives, whether the model read it from a
+file or a tool of an [MCP server](../customize/mcp-servers.md) returned it, such as a screenshot of a
+page. The model is handed a reference that names its type and size, and nothing the picture holds. You
+are shown two rows behind the margin, under the label, and not the first lines of its base64:
+
+```
+  ┃ untrusted · what weather:get_forecast returned · (U,priv)
+  ┃ a picture, image/png, 20480 bytes, held as ref:2 and kept from the model
+  ┃ Ask the model to write it to a file you can open, or to use vet_content on it, which asks you
+  ┃ about a copy of it before the model sees it.
+```
+
+The rows do not show you the picture. There are two ways to look at it, and both go through the
+model, which holds only the reference:
+
+- Ask the model to write it to a file. Unless a mode answers for you, it asks you before it writes,
+  showing you the name and the size, and writes the picture as the file it encodes, to a name ending
+  in the picture's type. Open that file in your own viewer. A file written from a tool's picture is
+  not trusted afterwards.
+- Ask the model to call `vet_content` on it. Unless a mode answers for you, the question described
+  above puts a copy of it to you before the model sees it. Answer no and the copy is deleted and the
+  model never sees the picture. Answer yes and the model sees it once.
+
+The second row names the ways the turn has. A turn addressed to an [agent definition](../customize/agents.md)
+that leaves out `write_file` or `vet_content`, or one started with `--tools` that does, is shown the
+way that is left, and where neither is left the row says there is no way to open the picture from
+here.
+
+A picture can also be handed to a [processor](../reference/tools.md#spawn_processor), which looks at
+it and reports back. What it says is quarantined, and you are not shown the picture by it.
+
 A yes about a picture is weaker than a yes about text. A file can hold bytes no viewer draws, such as
 metadata, or a PDF's text layer, and a model may be handed them. Opening it also hands attacker-owned bytes
 to your viewer, outside every confinement Brave Bot has.
 
 A delegate is not offered it because the prompt would belong to you, about content you never asked to
-see, in the middle of work you are not reading.
+see, in the middle of work you are not reading. The rows you are shown for a picture a delegate holds
+do not suggest it either. The second row says instead that the delegate cannot ask you to look at the
+picture, and whether it can write it to a file for you to open, which it can where it has the
+`write_file` tool.
+
+### A page in a browser
+
+The tools of the [Brave extension](../customize/mcp/brave.md) return a page's text, the list of its
+elements, a picture of it or its console as a result, and the model holds a reference to each. The
+model looks at a page only after the result is vetted: you answer yes at `vet_content`, after
+opening the copy of a picture or reading the text, or, with auto-vetting on, a check that found
+nothing answers in your place. The model sees it once.
+
+The model can then act on the page, in a loop. It **looks** at a vetted screenshot, **names** an
+element in words (a role and an accessible name, or a number from a list you looked at), you
+**confirm** in the window the browser opens, which shows the element the words led to, and the
+extension **acts** on that element. The cost is one vetting step for each look and one confirmation
+for each action on an element, and a second look is a second vetting step. With auto-vetting on, a
+model's word replaces your yes at the look, and the confirmation is still yours.
+
+The model does not read a page, a picture or a list of elements before that. It is given no selector,
+node id or coordinate from a page, so what it chooses is the words, the page decides which element they
+lead to, and you are shown that element before anything is done to it.
+[Looking at a page](../customize/mcp/brave.md#looking-at-a-page) lists the steps.
 
 ## Every promoting prompt runs a check first
 

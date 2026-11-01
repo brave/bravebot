@@ -29,6 +29,76 @@ pub fn summary_model_refusal(refusal: &crate::compact::SideModelRefusal) -> Stri
     }
 }
 
+/// The source half of the line a person approves when a write puts the file a picture slot holds
+/// into the workspace ([WRITE-9](../../../docs/specs/tools/write-file.md#WRITE-9)): the slot, the
+/// media type the driver recorded for it and how many bytes the file will hold.
+///
+/// Here rather than beside `write_file` because every string in [`crate::tools`] is read by the
+/// planner and nothing in it may be looked up in a catalog, and this line is read by a person.
+/// `crates/agent/tests/audience.rs` is the rule.
+pub(crate) fn write_picture_source(slot: &str, media: &str, bytes: usize) -> String {
+    bravebot_i18n::t!(
+        write_picture_source,
+        slot = slot,
+        media = media,
+        bytes = bytes
+    )
+}
+
+/// Who holds a picture or a PDF the person is shown rows about, which decides what the rows can say
+/// about looking at it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Holder {
+    /// The planner of a turn the person is watching, whom the person can ask to use the tools it
+    /// was offered. `vets` is whether those hold `vet_content` and `writes` whether they hold
+    /// `write_file`. Both are offered unless a definition the turn was addressed to, or the command
+    /// line, left one out.
+    Session { vets: bool, writes: bool },
+    /// A delegate, which is never offered `vet_content`
+    /// ([VET-2](../../../docs/specs/tools/vet-content.md#VET-2)) and which nobody can ask for
+    /// anything. `writes` is whether its tools hold `write_file`, the one way left for the picture
+    /// to reach a file the person opens.
+    Delegate { writes: bool },
+}
+
+/// The rows a person is shown for a picture or a PDF the driver holds in `slot` and the model has
+/// not seen ([VIEW-3](../../../docs/specs/terminal-transcript.md#VIEW-3)): what it is, how big, the
+/// name it is held under, and how to look at it.
+///
+/// Built from the media type the driver recorded (an entry of a closed table), the number of bytes
+/// the picture or PDF holds, the slot's name and who holds it. Nothing the file holds is in them and
+/// none of them is chosen by its bytes, so a client draws them as it draws any quarantined row and
+/// no client words them again. Here and not in [`crate::tools`] for the reason
+/// `write_picture_source` is: a person reads them, and every string in that module is read by the
+/// planner.
+pub fn picture_rows(media: &str, bytes: usize, slot: &str, holder: Holder) -> Vec<String> {
+    let held = match media == bravebot_core::vetting::PDF {
+        true => bravebot_i18n::t!(tool_pdf, bytes = bytes, slot = slot),
+        false => bravebot_i18n::t!(tool_picture, media = media, bytes = bytes, slot = slot),
+    };
+    let look = match holder {
+        Holder::Session {
+            vets: true,
+            writes: true,
+        } => bravebot_i18n::t!(tool_picture_look),
+        Holder::Session {
+            vets: true,
+            writes: false,
+        } => bravebot_i18n::t!(tool_picture_look_vets),
+        Holder::Session {
+            vets: false,
+            writes: true,
+        } => bravebot_i18n::t!(tool_picture_look_writes),
+        Holder::Session {
+            vets: false,
+            writes: false,
+        } => bravebot_i18n::t!(tool_picture_look_neither),
+        Holder::Delegate { writes: true } => bravebot_i18n::t!(tool_picture_look_delegate_writes),
+        Holder::Delegate { writes: false } => bravebot_i18n::t!(tool_picture_look_delegate),
+    };
+    vec![held, look.to_string()]
+}
+
 /// Why a request a turn made on its way failed, as a closed value a front end words in its own
 /// way ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
 ///

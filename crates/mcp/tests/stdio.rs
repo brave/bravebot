@@ -98,6 +98,47 @@ while IFS= read -r line; do
 done
 "#;
 
+/// A server whose tool answers with a caption, a PNG, and an audio part nothing here reads.
+const PICTURE_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/call"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"caption"},{"type":"image","data":"iVBORw0KGgo=","mimeType":"image/png"},{"type":"audio","data":"AAAA","mimeType":"audio/wav"}]}}\n' "$id"
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#;
+
+/// A server whose tool answers with one line of more than 16 MiB, which no reply of a tool this
+/// client takes comes to: a picture at the cap is a little over 11 MB of base64.
+const LONG_LINE_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/call"'*)
+      chunk=aaaaaaaaaaaaaaaa
+      i=0
+      while [ "$i" -lt 20 ]; do chunk="$chunk$chunk"; i=$((i+1)); done
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"' "$id"
+      printf '%s' "$chunk"
+      printf '%s' "$chunk"
+      printf '"}]}}\n'
+      ;;
+    *'"notifications/initialized"'*)
+      ;;
+  esac
+done
+"#;
+
 /// A server whose tool reports failure of its own, with something to say about it.
 const FAILING_SERVER: &str = r#"#!/bin/sh
 while IFS= read -r line; do
@@ -311,8 +352,167 @@ fn a_tool_result_is_labelled_untrusted_and_private() {
         .call_tool(&mut policy, "echo", serde_json::json!({"text": "hi"}))
         .expect("tool call succeeds");
 
-    assert_eq!(result.label(), Label::untrusted_private());
+    assert_eq!(result.text.label(), Label::untrusted_private());
     assert!(policy.finish());
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// A picture a tool returns is untrusted and private as its text is, and is held as a `data:` URI
+/// this client wrote, under the type from its own list. The audio part beside it is left out and
+/// counted, and the text is still taken.
+#[test]
+fn a_tool_result_picture_is_labelled_untrusted_and_private() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let script = fake_server("picture", PICTURE_SERVER);
+
+    let mut server = StdioServer::launch(
+        "fake",
+        script.to_str().expect("path"),
+        &[],
+        Variables::new(),
+        sandbox.as_ref(),
+        &sandbox_policy(),
+        Stream::Inherited,
+    )
+    .expect("server launches");
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("fake"))]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let output = server
+        .call_tool(&mut policy, "echo", serde_json::json!({}))
+        .expect("tool call succeeds");
+
+    assert_eq!(output.left_out, 1);
+    let [picture] = <[_; 1]>::try_from(output.pictures).expect("one picture");
+    assert_eq!(output.text.label(), Label::untrusted_private());
+    assert_eq!(picture.uri.label(), Label::untrusted_private());
+    assert_eq!(picture.media, "image/png");
+
+    let proof = policy.authorise_display_release("test reads what the server returned");
+    assert_eq!(output.text.declassify(&proof), "caption");
+    assert_eq!(
+        picture.uri.declassify(&proof),
+        "data:image/png;base64,iVBORw0KGgo="
+    );
+    assert!(policy.finish());
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// A reply line past the bound is a failure in this client's own words, and the reader stops there
+/// rather than holding what a server chooses to write. The failure quotes nothing of the line, and
+/// it is told as a reply that could not be used, as is a request after it, which finds nothing
+/// more is read from this server.
+#[test]
+fn a_reply_line_past_the_bound_is_a_failure_and_is_not_held() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let script = fake_server("long-line", LONG_LINE_SERVER);
+
+    let mut server = StdioServer::launch(
+        "fake",
+        script.to_str().expect("path"),
+        &[],
+        Variables::new(),
+        sandbox.as_ref(),
+        &sandbox_policy(),
+        Stream::Inherited,
+    )
+    .expect("server launches");
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("fake"))]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let error = server
+        .call_tool(&mut policy, "echo", serde_json::json!({}))
+        .expect_err("a line past the bound is a failure");
+
+    let McpError::Unusable(detail) = &error else {
+        panic!("got: {error}");
+    };
+    assert!(
+        detail.contains("a line longer than 16777216 bytes"),
+        "{detail}"
+    );
+    assert!(!detail.contains("aaaa"), "{detail}");
+
+    let after = server
+        .call_tool(&mut policy, "echo", serde_json::json!({}))
+        .expect_err("nothing more is read from a server whose line was not");
+    assert!(matches!(after, McpError::Unusable(_)), "got: {after}");
+
+    let _ = std::fs::remove_file(&script);
+}
+
+/// A result of the wrong shape is a reply this client could not use, which a caller tells from a
+/// request that no reply arrived to (the server went away), and from a JSON-RPC error.
+#[test]
+fn a_result_of_the_wrong_shape_is_a_reply_and_not_a_transport_failure() {
+    let _spawning = one_at_a_time();
+    let Some(sandbox) = sandbox_or_skip() else {
+        return;
+    };
+    let script = fake_server(
+        "wrong-shape",
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/call"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":5}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"boom"}}\n' "$((id + 1))"
+      printf '{"jsonrpc":"2.0","id":%s}\n' "$((id + 2))"
+      ;;
+  esac
+done
+"#,
+    );
+    let mut server = launched(sandbox.as_ref(), &script);
+    server.initialize("bravebot", "0.1.0").expect("handshake");
+    let mut sink = RecordingSink::new();
+    let mut policy = policy_for_fake(&mut sink);
+
+    let wrong = server
+        .call_tool(&mut policy, "echo", serde_json::json!({}))
+        .expect_err("a result that is not a result is a failure");
+    assert!(matches!(wrong, McpError::Unusable(_)), "got: {wrong}");
+
+    let rejected = server
+        .call_tool(&mut policy, "echo", serde_json::json!({}))
+        .expect_err("an error reply is a failure");
+    assert!(
+        matches!(rejected, McpError::Server { code: -32000, .. }),
+        "got: {rejected}"
+    );
+
+    let neither = server
+        .call_tool(&mut policy, "echo", serde_json::json!({}))
+        .expect_err("a reply with neither a result nor an error is a failure");
+    assert!(matches!(neither, McpError::Unusable(_)), "got: {neither}");
 
     let _ = std::fs::remove_file(&script);
 }
@@ -795,7 +995,7 @@ fn a_server_does_not_receive_this_processes_environment() {
 
     let proof = policy.authorise_display_release("test reads what the server was given");
     assert_eq!(
-        reported.declassify(&proof),
+        reported.text.declassify(&proof),
         "[]",
         "the server was handed a variable this process holds"
     );
@@ -845,7 +1045,7 @@ fn a_server_receives_the_variables_it_was_handed_and_no_others() {
         .expect("tool call succeeds");
 
     let proof = policy.authorise_display_release("test reads what the server was given");
-    assert_eq!(reported.declassify(&proof), "[a value|]");
+    assert_eq!(reported.text.declassify(&proof), "[a value|]");
 
     let _ = std::fs::remove_file(&script);
 }
@@ -962,7 +1162,7 @@ fn a_longer_bound_lets_a_slow_reply_through() {
         .call_tool(&mut policy, "echo", serde_json::json!({}))
         .expect("a reply within the bound is read");
 
-    assert_eq!(result.label(), Label::untrusted_private());
+    assert_eq!(result.text.label(), Label::untrusted_private());
     assert!(policy.finish());
 
     let _ = std::fs::remove_file(&script);
@@ -1231,7 +1431,7 @@ fn a_server_that_declares_no_prompts_is_not_asked_for_any() {
     let called = server
         .call_tool(&mut policy, "echo", serde_json::json!({}))
         .expect("the server still answers a tool call");
-    assert_eq!(called.label(), Label::untrusted_private());
+    assert_eq!(called.text.label(), Label::untrusted_private());
 
     let _ = std::fs::remove_file(&script);
 }

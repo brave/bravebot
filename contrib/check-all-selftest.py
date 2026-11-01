@@ -34,6 +34,8 @@ class CheckTargets(unittest.TestCase):
         (self.root / "ui/scripts/fixture.test.mjs").touch()
         (self.root / "extension/tests").mkdir(parents=True)
         (self.root / "extension/tests/fixture.test.mjs").touch()
+        (self.root / "extension-trusted/tests").mkdir(parents=True)
+        (self.root / "extension-trusted/tests/fixture.test.mjs").touch()
         (self.root / "packages/agent-client/test-fixtures/scenarios").mkdir(parents=True)
         (self.root / "packages/agent-client/test-fixtures/scenarios/fixture.json").touch()
         (self.root / "npm/tests").mkdir(parents=True)
@@ -167,7 +169,8 @@ class CheckTargets(unittest.TestCase):
     def test_ui_stops_at_each_failed_build_stage_and_reports_walkthrough_failures(self):
         """An app that cannot build or complete its walkthrough must fail the UI gate, and so must
         the extension's tests, which the UI gate runs first."""
-        commands = ["node --test extension/tests/fixture.test.mjs",
+        commands = ["node --test --test-timeout=120000 extension/tests/fixture.test.mjs "
+                    "extension-trusted/tests/fixture.test.mjs",
                     "pnpm --dir ui install --frozen-lockfile", "pnpm --dir ui run typecheck",
                     "pnpm --dir ui run build", "node --test scripts/fixture.test.mjs",
                     "node scripts/drive-manual-walkthrough.mjs"]
@@ -213,11 +216,15 @@ class CheckTargets(unittest.TestCase):
         self.assertEqual(self.log.read_text().splitlines(), [])
 
     def test_extension_tests_that_are_no_longer_there_fail_the_gate(self):
-        """`node --test` given a pattern matching nothing passes having run nothing."""
-        (self.root / "extension/tests/fixture.test.mjs").unlink()
-        result = self.run_make("check-extension")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.log.read_text().splitlines(), [])
+        """`node --test` given a pattern matching nothing passes having run nothing, for either
+        extension's directory."""
+        for directory in ("extension", "extension-trusted"):
+            with self.subTest(directory=directory):
+                (self.root / directory / "tests/fixture.test.mjs").unlink()
+                result = self.run_make("check-extension")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.log.read_text().splitlines(), [])
+                (self.root / directory / "tests/fixture.test.mjs").touch()
 
     def test_linux_walkthrough_uses_a_virtual_display_and_preserves_its_failure(self):
         """The headless CI route must not hide an Electron failure."""

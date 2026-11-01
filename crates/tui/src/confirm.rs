@@ -988,6 +988,7 @@ mod tests {
             ],
             description: description.map(str::to_string),
             may_stand,
+            asked_every_call: false,
         }
     }
 
@@ -1561,6 +1562,8 @@ mod tests {
             tools: Vec::new(),
             exclude_tools: Vec::new(),
             allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: Default::default(),
         };
         let mut deciding = vec!["/opt/tool/serve".to_string()];
         deciding.extend(reads);
@@ -1592,6 +1595,105 @@ mod tests {
         for size in [(80, 24), (60, 15)] {
             scroll_through("server start", &case, size, |_| 1);
             scroll_through("server start", &case, size, Looked::page);
+        }
+    }
+
+    /// PROMPT-4, SERVERS-21, ROUTE-9: the question about a call to a tool of the browser's `input`
+    /// group draws the page, the role, the name and the whole of the text the call would type, which
+    /// the tool takes up to 2,000 characters, and takes neither `1` nor `y` before every one of
+    /// them has been drawn, a row or a page at a time, at both sizes. The text is the last of four
+    /// arguments, so a question that counted the rows of the first alone would take a yes with it
+    /// undrawn.
+    #[test]
+    fn the_arguments_of_an_input_call_take_no_yes_before_all_of_them_are_drawn() {
+        let text = numbered('t', 330);
+        let request = McpCallRequest {
+            alias: "brave-input".into(),
+            tool: "type_text".into(),
+            arguments: vec![
+                ("url".into(), "\"https://shop.example/cart\"".into()),
+                ("role".into(), "\"textbox\"".into()),
+                ("name".into(), "\"Search\"".into()),
+                ("text".into(), format!("\"{}\"", text.join(" "))),
+            ],
+            description: Some("Replace what the one text field holds with this text.".into()),
+            may_stand: false,
+            asked_every_call: true,
+        };
+        let mut deciding = vec![
+            "https://shop.example/cart".to_string(),
+            "textbox".to_string(),
+            "Search".to_string(),
+        ];
+        deciding.extend(text);
+        let drawn = request.clone();
+        let case = Case {
+            draw: pinned(move |frame, scroll, memory| {
+                draw_mcp_call(frame, &drawn, false, scroll, &mut memory.seen)
+            }),
+            answer: Box::new(move |key, looked| {
+                approves(call_answer_for(key, &request, looked.pinned()))
+            }),
+            approving: vec!['1', 'y'],
+            refusing: '3',
+            grants: Vec::new(),
+            deciding,
+        };
+        for size in [(80, 24), (60, 15)] {
+            scroll_through("input call", &case, size, |_| 1);
+            scroll_through("input call", &case, size, Looked::page);
+        }
+    }
+
+    /// PROMPT-4, ROUTE-10, MCP-14: the question about a call a choice fills draws the number and
+    /// which reference it came from, and takes neither `1` nor `y` before the whole of that has
+    /// been drawn, wherever it falls among the arguments and whether the number is 0 or 99, a row
+    /// or a page at a time, at both sizes. The text typed is long enough to need scrolling, so a
+    /// question that counted its rows and left the pair out would take a yes with the sentence
+    /// saying a processor chose the number undrawn.
+    #[test]
+    fn a_call_filled_from_a_choice_takes_no_yes_before_the_number_and_its_source_are_drawn() {
+        let text = numbered('t', 330);
+        for number in ["0", "99"] {
+            let pair = t!(mcp_call_choice_drawn, number = number, reference = "ref:3");
+            // Each word of the sentence that no other argument holds, since a piece has to fit a
+            // row to count as drawn whole.
+            let pieces: Vec<String> = ["(chosen", "processor", "ref:3;", "alone", "for)"]
+                .map(str::to_string)
+                .into();
+            for pair_last in [true, false] {
+                let mut arguments = vec![("text".to_string(), format!("\"{}\"", text.join(" ")))];
+                let at = if pair_last { arguments.len() } else { 0 };
+                arguments.insert(at, ("element_number".to_string(), pair.clone()));
+                let request = McpCallRequest {
+                    alias: "brave-input".into(),
+                    tool: "type_text".into(),
+                    arguments,
+                    description: None,
+                    may_stand: false,
+                    asked_every_call: true,
+                };
+                let mut deciding = pieces.clone();
+                deciding.extend(text.clone());
+                let drawn = request.clone();
+                let case = Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_mcp_call(frame, &drawn, false, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(move |key, looked| {
+                        approves(call_answer_for(key, &request, looked.pinned()))
+                    }),
+                    approving: vec!['1', 'y'],
+                    refusing: '3',
+                    grants: Vec::new(),
+                    deciding,
+                };
+                for size in [(80, 24), (60, 15)] {
+                    let kind = format!("choice call, {number}, pair last {pair_last}");
+                    scroll_through(&kind, &case, size, |_| 1);
+                    scroll_through(&kind, &case, size, Looked::page);
+                }
+            }
         }
     }
 

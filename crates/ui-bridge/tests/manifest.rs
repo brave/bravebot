@@ -5,6 +5,10 @@
 //!
 //! Driven through the binary against a model service of the test's own. The plan writes one file
 //! with a body the plan fixed, so whether the plan ran is read off the disk.
+//!
+//! The tests of a plan that calls a server's tool (MANIFEST-15) also stand up an MCP server of the
+//! test's own and read what it was sent. A remote server is used, because it is reached through the
+//! egress gate and needs no confinement.
 
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
 #![allow(
@@ -53,6 +57,27 @@ impl Scratch {
 
     fn home(&self) -> PathBuf {
         self.path.join("home")
+    }
+
+    /// The project requests the server `weather`, and the home declares it as the remote server at
+    /// `url`, as `bravebot mcp add --http` writes it. `startup` is the handshake bound in seconds,
+    /// where the test sets one.
+    fn request_weather(&self, url: &str, startup: Option<u64>) {
+        std::fs::create_dir_all(self.project().join(".bravebot")).expect("a settings directory");
+        std::fs::write(
+            self.project().join(".bravebot/settings.json"),
+            r#"{"mcp": {"request": ["weather"]}}"#,
+        )
+        .expect("a settings file");
+        let mut declaration = json!({"transport": "http", "url": url});
+        if let Some(seconds) = startup {
+            declaration["startup_timeout_secs"] = json!(seconds);
+        }
+        std::fs::write(
+            self.home().join(".bravebot/mcp.json"),
+            json!({"servers": {"weather": declaration}}).to_string(),
+        )
+        .expect("the declarations");
     }
 
     /// What the plan's step wrote, or `None` where it wrote nothing.
@@ -327,6 +352,38 @@ impl FrontEnd {
             method,
             json!({"directory": scratch.project().display().to_string(), "id": id}),
         )
+    }
+
+    /// Answer each question the work puts with the decision listed for its event, and return every
+    /// event up to the one that ended the work, that one included. A question with no answer listed
+    /// fails the test, since an answer nobody meant to give would be a yes or a no the test did not
+    /// choose.
+    fn answering(&mut self, session: &str, answers: &[(&str, &str)]) -> Vec<Value> {
+        let mut events = Vec::new();
+        loop {
+            let event = self.until(|message| message.get("event").is_some());
+            let name = event["event"].as_str().unwrap_or_default().to_string();
+            events.push(event.clone());
+            if ["turn.done", "turn.error", "manifest.done", "manifest.error"]
+                .contains(&name.as_str())
+            {
+                return events;
+            }
+            if let Some(kind) = name
+                .strip_suffix(".request")
+                .filter(|_| asks_about_the_work(&name))
+            {
+                let (_, decision) = answers
+                    .iter()
+                    .find(|(asked, _)| *asked == name)
+                    .unwrap_or_else(|| panic!("nothing to answer {name} with: {event}"));
+                self.call(
+                    &format!("{kind}.reply"),
+                    json!({"session": session, "request": event["data"]["request"],
+                        "decision": decision, "remember": false}),
+                );
+            }
+        }
     }
 
     /// Run the plan to its end with `decision`, and return the event that ended it.
@@ -1188,4 +1245,477 @@ fn a_downgrade_a_run_records_survives_close_and_resume_without_another_turn() {
             "the resumed session lost the downgrade the {ending} run recorded: {opened}"
         );
     }
+}
+
+/// The events named `name` among `events`.
+fn named<'a>(events: &'a [Value], name: &str) -> Vec<&'a Value> {
+    events
+        .iter()
+        .filter(|event| event["event"] == name)
+        .collect()
+}
+
+/// The names of the events in `events` that begin with one of `prefixes`, in the order they came.
+fn names_starting<'a>(events: &'a [Value], prefixes: &[&str]) -> Vec<&'a str> {
+    events
+        .iter()
+        .filter_map(|event| event["event"].as_str())
+        .filter(|name| prefixes.iter().any(|prefix| name.starts_with(prefix)))
+        .collect()
+}
+
+/// The method of every request an MCP server of the test's was sent since this was last called.
+fn methods(received: &mpsc::Receiver<String>) -> Vec<String> {
+    received.try_iter().collect()
+}
+
+/// A remote MCP server with one tool, `get_forecast`, which takes a required `city`. Returns its
+/// address and the method of every request it was sent, in order.
+fn weather_server() -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+    let url = format!(
+        "http://127.0.0.1:{}/mcp",
+        listener.local_addr().unwrap().port()
+    );
+    let (sender, methods) = mpsc::channel();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
+            let mut start = String::new();
+            if reader.read_line(&mut start).unwrap_or(0) == 0 {
+                continue;
+            }
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let method = request["method"].as_str().unwrap_or_default().to_string();
+            let _ = sender.send(method.clone());
+            let result = match method.as_str() {
+                "initialize" => json!({"protocolVersion": "2025-06-18", "capabilities": {},
+                    "serverInfo": {"name": "weather", "version": "1"}}),
+                "tools/list" => json!({"tools": [{"name": "get_forecast",
+                    "description": FORECAST_DESCRIPTION,
+                    "inputSchema": {"type": "object",
+                        "properties": {"city": {"type": "string"}}, "required": ["city"]}}]}),
+                "tools/call" => json!({"content": [{"type": "text", "text": FORECAST}]}),
+                _ => json!({}),
+            };
+            let reply =
+                json!({"jsonrpc": "2.0", "id": request["id"], "result": result}).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (url, methods)
+}
+
+/// What the weather server answers a call with. Looked for in what a model is sent.
+const FORECAST: &str = "FORECAST-SUNNY-NOT-FOR-A-MODEL";
+
+/// The tool's own description, which the planner of a plan is never shown.
+const FORECAST_DESCRIPTION: &str = "DESCRIPTION-OF-THE-FORECAST-NOT-FOR-THE-PLANNER";
+
+/// An address that takes a connection and never answers it.
+fn stalled_server() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+    let url = format!(
+        "http://127.0.0.1:{}/mcp",
+        listener.local_addr().unwrap().port()
+    );
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming().flatten() {
+            held.push(stream);
+        }
+    });
+    url
+}
+
+/// What a person answers while a plan that calls the forecast is made and walked: yes to the
+/// server, to its list, to the plan and to the call.
+const APPROVING_EVERYTHING: [(&str, &str); 4] = [
+    ("mcp-server.request", "approve"),
+    ("mcp-tools.request", "approve"),
+    ("manifest.request", "approve"),
+    ("mcp-call.request", "approve"),
+];
+
+/// A model service for a plan that calls the forecast. Its first answer is the check over the
+/// weather server's list, which every session whose list nobody was asked about is put through.
+fn a_planner_calling_the_forecast() -> (String, mpsc::Receiver<String>) {
+    scripted_planner(vec![
+        json!({"content": r#"{"verdict": "safe", "reason": "names and types"}"#}),
+        json!({"content": "1. Ask for the forecast."}),
+        json!({"content": json!({"steps": [{"capability": "SERVER_CALL",
+            "args": {"server": "weather", "tool": "get_forecast",
+                "arguments": {"city": "Paris"}}}]}).to_string()}),
+    ])
+}
+
+/// MANIFEST-15, SERVERS-9: a plan run in a window before any turn has run starts the session's
+/// servers, putting the question about each to the window, then puts the list of each and plans from
+/// it. A step may then call a tool, and the call is put to the window and reaches the server only
+/// after its yes.
+///
+/// Rejects a plan run that starts nothing, which leaves the planner no call to offer and the plan
+/// refused as naming a capability that was not offered, one that starts a server without asking, one
+/// that starts them after the plan is made, and one that sends the call without asking about it.
+#[test]
+fn a_plan_run_before_any_turn_starts_the_sessions_servers_and_calls_a_tool() {
+    let scratch = Scratch::new("bridge-manifest-server-first");
+    let (url, received) = weather_server();
+    scratch.request_weather(&url, None);
+    let (endpoint, rounds) = a_planner_calling_the_forecast();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    front.call("manifest.run", json!({"session": session, "task": TASK}));
+    let events = front.answering(&session, &APPROVING_EVERYTHING);
+
+    assert_eq!(
+        events.last().unwrap()["event"],
+        "manifest.done",
+        "{events:?}"
+    );
+    assert_eq!(
+        names_starting(&events, &["mcp", "manifest.request", "manifest.done"]),
+        [
+            "mcp.starting",
+            "mcp-server.request",
+            "mcp.started",
+            "mcp-tools.request",
+            "manifest.request",
+            "mcp-call.request",
+            "manifest.done",
+        ]
+    );
+    let asked = &named(&events, "mcp-server.request")[0]["data"];
+    assert_eq!(asked["alias"], "weather");
+    assert_eq!(asked["requestedBy"], ".bravebot/settings.json");
+    let started = &named(&events, "mcp.started")[0]["data"];
+    assert_eq!(started["servers"], json!(["weather"]));
+
+    let plan = named(&events, "manifest.request")[0]["data"]["steps"].to_string();
+    assert!(
+        plan.contains("weather:get_forecast") && plan.contains(r#"{\"city\":\"Paris\"}"#),
+        "the plan does not show the call whole: {plan}"
+    );
+    let call = &named(&events, "mcp-call.request")[0]["data"];
+    assert_eq!(call["name"], "weather:get_forecast");
+
+    let reached = methods(&received);
+    assert_eq!(
+        reached
+            .iter()
+            .filter(|method| *method == "tools/call")
+            .count(),
+        1,
+        "{reached:?}"
+    );
+    assert!(
+        reached.iter().position(|method| method == "initialize")
+            < reached.iter().position(|method| method == "tools/call"),
+        "{reached:?}"
+    );
+
+    // The check reads the list whole, and the planner is shown the names on it and none of its
+    // words. What the tool answered reached no model.
+    let sent: Vec<String> = rounds.try_iter().collect();
+    assert_eq!(sent.len(), 3, "{sent:?}");
+    assert!(sent[0].contains(FORECAST_DESCRIPTION), "{}", sent[0]);
+    assert!(sent[1].contains("weather:get_forecast"), "{}", sent[1]);
+    assert!(sent[2].contains("SERVER_CALL"), "{}", sent[2]);
+    for planning in &sent[1..] {
+        assert!(!planning.contains(FORECAST_DESCRIPTION), "{planning}");
+    }
+    for request in &sent {
+        assert!(!request.contains(FORECAST), "{request}");
+    }
+}
+
+/// SERVERS-4 in a plan run: a server the window refuses is not started. Nothing is sent to it, the
+/// window is told why, no list is put and the planner is offered no call, and the plan runs.
+///
+/// Rejects a plan run that starts a server without the window's yes, and one that reads a no as a
+/// yes and puts the list.
+#[test]
+fn a_plan_run_does_not_start_a_server_the_window_refuses() {
+    let scratch = Scratch::new("bridge-manifest-server-refused");
+    let (url, received) = weather_server();
+    scratch.request_weather(&url, None);
+    let (endpoint, rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    front.call("manifest.run", json!({"session": session, "task": TASK}));
+    let events = front.answering(
+        &session,
+        &[
+            ("mcp-server.request", "reject"),
+            ("manifest.request", "approve"),
+        ],
+    );
+
+    assert_eq!(
+        events.last().unwrap()["event"],
+        "manifest.done",
+        "{events:?}"
+    );
+    assert_eq!(scratch.written().as_deref(), Some(WRITTEN));
+    assert_eq!(
+        names_starting(&events, &["mcp", "manifest.request"]),
+        [
+            "mcp.starting",
+            "mcp-server.request",
+            "mcp.started",
+            "manifest.request"
+        ]
+    );
+    let started = &named(&events, "mcp.started")[0]["data"];
+    assert_eq!(started["servers"], json!([]));
+    assert!(
+        started["notes"]
+            .as_array()
+            .is_some_and(|notes| notes.iter().any(|note| note
+                .as_str()
+                .is_some_and(|note| note.contains("weather") && note.contains("not used")))),
+        "{started}"
+    );
+    assert_eq!(methods(&received), Vec::<String>::new());
+    let sent: Vec<String> = rounds.try_iter().collect();
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    for planning in &sent {
+        assert!(
+            !planning.contains("weather:get_forecast") && !planning.contains("SERVER_CALL"),
+            "{planning}"
+        );
+    }
+}
+
+/// A session keeps the servers its plan run started: the next turn starts none, puts no list and
+/// reaches the server by the handshake once in all.
+///
+/// Rejects a plan run that starts servers and does not keep them, which leaves the turn to start
+/// them again and ask again.
+#[test]
+fn a_turn_after_a_plan_run_finds_the_servers_the_run_started() {
+    let scratch = Scratch::new("bridge-manifest-server-then-turn");
+    let (url, received) = weather_server();
+    scratch.request_weather(&url, None);
+    let (endpoint, _rounds) = a_planner_calling_the_forecast();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    front.call("manifest.run", json!({"session": session, "task": TASK}));
+    let run = front.answering(&session, &APPROVING_EVERYTHING);
+    assert_eq!(run.last().unwrap()["event"], "manifest.done", "{run:?}");
+
+    front.call(
+        "turn.send",
+        json!({"session": session, "prompt": "say done"}),
+    );
+    let turn = front.answering(&session, &[]);
+
+    assert_eq!(turn.last().unwrap()["event"], "turn.done", "{turn:?}");
+    assert_eq!(
+        names_starting(&turn, &["mcp"]),
+        Vec::<&str>::new(),
+        "the turn started servers or asked about them again"
+    );
+    let reached = methods(&received);
+    assert_eq!(
+        reached
+            .iter()
+            .filter(|method| *method == "initialize")
+            .count(),
+        1,
+        "{reached:?}"
+    );
+}
+
+/// A plan run in a session a turn has started the servers of starts none and puts no list: the
+/// turn's answers stand, and the call is the only question.
+///
+/// Rejects a plan run that starts servers whether or not the session holds them, which asks about
+/// the server again and reaches it a second time.
+#[test]
+fn a_plan_run_after_a_turn_finds_the_servers_the_turn_started() {
+    let scratch = Scratch::new("bridge-manifest-turn-then-server");
+    let (url, received) = weather_server();
+    scratch.request_weather(&url, None);
+    let (endpoint, _rounds) = scripted_planner(vec![
+        json!({"content": r#"{"verdict": "safe", "reason": "names and types"}"#}),
+        json!({"content": "done"}),
+        json!({"content": "1. Ask for the forecast."}),
+        json!({"content": json!({"steps": [{"capability": "SERVER_CALL",
+            "args": {"server": "weather", "tool": "get_forecast",
+                "arguments": {"city": "Paris"}}}]}).to_string()}),
+    ]);
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    front.call(
+        "turn.send",
+        json!({"session": session, "prompt": "say done"}),
+    );
+    let turn = front.answering(
+        &session,
+        &[
+            ("mcp-server.request", "approve"),
+            ("mcp-tools.request", "approve"),
+        ],
+    );
+    assert_eq!(turn.last().unwrap()["event"], "turn.done", "{turn:?}");
+    assert_eq!(
+        names_starting(&turn, &["mcp"]),
+        [
+            "mcp.starting",
+            "mcp-server.request",
+            "mcp.started",
+            "mcp-tools.request"
+        ]
+    );
+
+    front.call("manifest.run", json!({"session": session, "task": TASK}));
+    let run = front.answering(
+        &session,
+        &[
+            ("manifest.request", "approve"),
+            ("mcp-call.request", "approve"),
+        ],
+    );
+
+    assert_eq!(run.last().unwrap()["event"], "manifest.done", "{run:?}");
+    assert_eq!(
+        names_starting(&run, &["mcp"]),
+        ["mcp-call.request"],
+        "the run started servers or asked about the list again"
+    );
+    let reached = methods(&received);
+    assert_eq!(
+        reached
+            .iter()
+            .filter(|method| *method == "initialize")
+            .count(),
+        1,
+        "{reached:?}"
+    );
+    assert_eq!(
+        reached
+            .iter()
+            .filter(|method| *method == "tools/call")
+            .count(),
+        1,
+        "{reached:?}"
+    );
+}
+
+/// A plan run stopped while the question about a server waits has not answered it. It starts
+/// nothing and plans nothing, and the next run asks again.
+///
+/// Rejects a stop read as a no, which would leave the session without the server and not ask
+/// again, and a run that goes on to plan after the stop.
+#[test]
+fn a_plan_run_stopped_at_a_servers_question_starts_nothing_and_the_next_run_asks_again() {
+    let scratch = Scratch::new("bridge-manifest-server-stopped");
+    let (url, received) = weather_server();
+    scratch.request_weather(&url, None);
+    let (endpoint, rounds) = a_planner_calling_the_forecast();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    front.call("manifest.run", json!({"session": session, "task": TASK}));
+    front.until(|message| message["event"] == "mcp-server.request");
+    front.call("turn.cancel", json!({"session": session}));
+    let ended = front.question_or_the_end();
+
+    assert_eq!(ended["event"], "manifest.error", "{ended}");
+    assert_eq!(ended["data"]["stopped"], true, "{ended}");
+    assert_eq!(methods(&received), Vec::<String>::new());
+    assert_eq!(
+        rounds.try_iter().count(),
+        0,
+        "a stopped run went on to plan"
+    );
+
+    front.call("manifest.run", json!({"session": session, "task": TASK}));
+    let again = front.answering(&session, &APPROVING_EVERYTHING);
+
+    assert_eq!(again.last().unwrap()["event"], "manifest.done", "{again:?}");
+    assert_eq!(named(&again, "mcp-server.request").len(), 1, "{again:?}");
+    let reached = methods(&received);
+    assert_eq!(
+        reached
+            .iter()
+            .filter(|method| *method == "tools/call")
+            .count(),
+        1,
+        "{reached:?}"
+    );
+}
+
+/// SERVERS-15 in a plan run: a server that takes the connection and never answers its handshake is
+/// given up on at the bound its declaration gives, the window is told, and the plan goes on without
+/// a call to it.
+///
+/// Rejects a plan run that starts a server with no bound or with another than the declaration's,
+/// which holds the run until the default bound passes.
+#[test]
+fn a_server_that_never_answers_its_handshake_does_not_hold_up_a_plan_run() {
+    let scratch = Scratch::new("bridge-manifest-server-stalled");
+    scratch.request_weather(&stalled_server(), Some(1));
+    let (endpoint, rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    let begun = Instant::now();
+    front.call("manifest.run", json!({"session": session, "task": TASK}));
+    let events = front.answering(
+        &session,
+        &[
+            ("mcp-server.request", "approve"),
+            ("manifest.request", "approve"),
+        ],
+    );
+
+    assert!(
+        begun.elapsed() < Duration::from_secs(30),
+        "the run waited {:?} for a server declared with a bound of one second",
+        begun.elapsed()
+    );
+    assert_eq!(
+        events.last().unwrap()["event"],
+        "manifest.done",
+        "{events:?}"
+    );
+    assert_eq!(scratch.written().as_deref(), Some(WRITTEN));
+    let started = &named(&events, "mcp.started")[0]["data"];
+    assert_eq!(started["servers"], json!([]));
+    assert!(
+        started["notes"].to_string().contains("weather"),
+        "the window was not told why: {started}"
+    );
+    assert_eq!(names_starting(&events, &["mcp-tools"]), Vec::<&str>::new());
+    let sent: Vec<String> = rounds.try_iter().collect();
+    assert!(
+        sent.iter()
+            .all(|planning| !planning.contains("SERVER_CALL")),
+        "{sent:?}"
+    );
 }

@@ -20773,6 +20773,379 @@ fn the_planner_is_told_the_shape_of_what_a_processor_produced() {
     assert!(!last.contains("translated notes"));
 }
 
+/// A turn in which a processor was asked to choose one entry of a list and answered `answer`: every
+/// request the mock server received, in order, and what the person watching was told. `test` names
+/// the scratch directory, which tests running together must not share.
+fn a_choice_made_from(
+    test: &str,
+    answer: &str,
+) -> (Vec<String>, bravebot_agent::report::RecordingReporter) {
+    let scratch = Scratch::new(&format!("choice-asked-for-{test}"));
+    std::fs::write(scratch.path.join("page.txt"), "1. Buy\n2. Cancel\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"choose the entry that buys","choose_upto":40}"#,
+        ),
+        reply_with(answer),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("buy it"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    (received.try_iter().collect(), reporter)
+}
+
+/// The last request of a turn, which holds every result the planner was told.
+fn last_of(bodies: &[String]) -> &String {
+    bodies.last().expect("a final planner round")
+}
+
+/// The text of the last message in a request body the mock server received.
+fn last_told_in(body: &str) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(body).expect("a request body");
+    let last = parsed["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .expect("a message");
+    match &last["content"] {
+        serde_json::Value::String(text) => text.clone(),
+        parts => parts
+            .as_array()
+            .expect("content that is a string or parts")
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join(""),
+    }
+}
+
+/// A processor asked to choose is answered with a reference to a choice, and the planner is told
+/// nothing else of the call: the limit it wrote, the label, a name to give a tool that takes one.
+/// A result made the way a document's is would show a trusted empty text to the planner, so the
+/// reference would never reach it. The person watching is told that a choice was made and not
+/// which, and no preview of the number is drawn.
+#[test]
+fn a_choice_reaches_the_planner_as_a_reference_to_a_choice_and_nothing_else() {
+    let (bodies, reporter) = a_choice_made_from("reference", "7");
+
+    let told = last_told_in(last_of(&bodies));
+    assert!(
+        told.starts_with("Result of spawn_processor could not be shown to you."),
+        "{told}"
+    );
+    assert!(
+        told.contains("[ref:3] an isolated processor over ref:1"),
+        "{told}"
+    );
+    assert!(
+        told.contains("a choice of one entry from 1 to 40, or none"),
+        "{told}"
+    );
+    assert!(told.contains("holds no text"), "{told}");
+    assert!(
+        !told.contains('7'),
+        "the number reached the planner: {told}"
+    );
+    for move_on_text in ["Give ref:3", "write_file", "vet_content", "read_output"] {
+        assert!(
+            !told.contains(move_on_text),
+            "a choice was offered a move that works on text: {told}"
+        );
+    }
+
+    let processed = reporter
+        .finished
+        .iter()
+        .find(|activity| activity.tool == "spawn_processor")
+        .expect("the processor call was reported");
+    assert!(!processed.failed);
+    assert_eq!(
+        processed.note.as_deref(),
+        Some("an isolated processor chose one entry of ref:1")
+    );
+    assert!(
+        reporter
+            .shown
+            .iter()
+            .all(|shown| !shown.origin.starts_with("an isolated processor")),
+        "a choice was previewed for the person: {:?}",
+        reporter.shown
+    );
+}
+
+/// A processor asked to choose is sent a request that asks for one number and no document: the
+/// limit the planner wrote is in the instructions it is given, the line that marks a document is
+/// not, and the request carries no tool list, as for every processor. Sent the document prompt, a
+/// model would write a remark and a marker and the reader would find 0 in every answer.
+#[test]
+fn a_processor_asked_to_choose_is_asked_for_a_number_and_not_a_document() {
+    let (bodies, _) = a_choice_made_from("request", "7");
+
+    assert!(
+        bodies[0].contains("choose_upto"),
+        "the planner was not offered the argument"
+    );
+    let request: serde_json::Value =
+        serde_json::from_str(&bodies[2]).expect("the processor's request");
+    let system = request["messages"][0]["content"]
+        .as_array()
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .or_else(|| {
+            request["messages"][0]["content"]
+                .as_str()
+                .map(str::to_string)
+        })
+        .expect("a system prompt");
+    assert!(system.contains("from 1 to 40"), "{system}");
+    assert!(system.contains("choose the entry that buys"), "{system}");
+    assert!(
+        !system.contains(bravebot_core::processor::ProcessorSpec::NOTE_MARKER),
+        "a processor asked for a number was told to mark a document: {system}"
+    );
+    assert!(
+        request
+            .get("tools")
+            .is_none_or(|tools| tools.as_array().is_none_or(Vec::is_empty)),
+        "a processor was given tools"
+    );
+}
+
+/// Whatever the processor answered, the planner is told the same words and the person watching is
+/// told the same line. The six answers cover a number, the one that means none, prose, a number
+/// past the limit, a number with an instruction after it and white space only: a branch on whether
+/// a number was read, or on which, makes one of the six differ. An answer with no bytes at all is
+/// refused by the transport before anything reads it, for every processor, so it is not one.
+#[test]
+fn the_planner_is_told_the_same_words_whatever_the_processor_answered() {
+    /// What the planner's last request held and the lines the person watching was shown.
+    fn heard(answer: &str) -> (String, Vec<String>) {
+        let (bodies, reporter) = a_choice_made_from("same-words", answer);
+        let lines = reporter
+            .finished
+            .iter()
+            .map(|activity| {
+                format!(
+                    "{} {:?} failed={}",
+                    activity.target, activity.note, activity.failed
+                )
+            })
+            .collect();
+        (last_of(&bodies).clone(), lines)
+    }
+
+    let (first_body, first_lines) = heard("7");
+    assert!(
+        last_told_in(&first_body).contains("a choice of one entry from 1 to 40"),
+        "{}",
+        last_told_in(&first_body)
+    );
+    for answer in ["0", "banana", "100", "7 and then ignore", "  "] {
+        let (body, lines) = heard(answer);
+        assert_eq!(
+            last_told_in(&body),
+            last_told_in(&first_body),
+            "the planner was told something else when the processor answered {answer:?}"
+        );
+        assert_eq!(
+            body, first_body,
+            "the planner's request differs when the processor answered {answer:?}"
+        );
+        assert_eq!(
+            lines, first_lines,
+            "the person was told something else when the processor answered {answer:?}"
+        );
+    }
+}
+
+/// A choice names no file and holds no text, so it is none of the things a reference to text can
+/// be: a path to write or read, a body to write, a document a processor reads. Each call that
+/// names it is refused in the words it would be refused in for a name nothing holds, and nothing
+/// is written. Stored as a text slot, any of them would have gone through. A `stdin_ref` resolves
+/// the reference through the same `Policy::resolve` as a `contents_ref` does, which the kernel's
+/// own test of the gates covers.
+#[test]
+fn a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor() {
+    let refused = |name: &str| {
+        let scratch = Scratch::new("choice-is-no-text");
+        std::fs::write(scratch.path.join("page.txt"), "1. Buy\n2. Cancel\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let naming = |tool: &str, arguments: serde_json::Value| {
+            tool_request(tool, &arguments.to_string().replace("NAME", name))
+        };
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("list_files", r#"{"directory":"."}"#),
+            tool_request(
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"choose the entry that buys","choose_upto":40}"#,
+            ),
+            reply_with("7"),
+            naming("write_file", json!({"path_ref": "NAME", "contents": "x"})),
+            naming(
+                "write_file",
+                json!({"path": "out.txt", "contents_ref": "NAME"}),
+            ),
+            naming("read_file", json!({"path_ref": "NAME"})),
+            naming(
+                "spawn_processor",
+                json!({"reads": ["NAME"], "instruction": "read it"}),
+            ),
+            naming(
+                "spawn_processor",
+                json!({"reads": ["NAME"], "instruction": "choose", "choose_upto": 9}),
+            ),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("use the choice"),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        )
+        .expect("turn runs");
+
+        assert!(
+            !scratch.path.join("out.txt").exists(),
+            "a file was written from a choice"
+        );
+        let bodies: Vec<String> = received.try_iter().collect();
+        let parsed: serde_json::Value =
+            serde_json::from_str(bodies.last().expect("a final round")).expect("a body");
+        let results: Vec<String> = parsed["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .filter(|message| message["role"] == "tool")
+            .map(|message| message["content"].as_str().unwrap_or_default().to_string())
+            .collect();
+        // The listing, the choice, then the five calls that name `name`.
+        assert_eq!(results.len(), 7, "{results:#?}");
+        results[2..]
+            .iter()
+            .map(|result| result.replace(name, "NAME"))
+            .collect::<Vec<_>>()
+    };
+
+    let for_the_choice = refused("ref:3");
+    let for_nothing = refused("ref:99");
+    assert_eq!(for_the_choice, for_nothing);
+    for result in &for_the_choice {
+        assert!(
+            result.contains("refused:") && result.contains("NAME"),
+            "a call that named a choice was not refused: {result}"
+        );
+    }
+}
+
+/// `choose_upto` is a number the planner writes and the call names no document: a limit outside 2
+/// to 99, one that is not a whole number, and a call that also says which document the answer is
+/// about are each refused before a reference is opened or anything is sent.
+#[test]
+fn a_call_asking_for_a_number_is_refused_unless_it_asks_in_the_planners_own_terms() {
+    let scratch = Scratch::new("choice-arguments");
+    std::fs::write(scratch.path.join("page.txt"), "1. Buy\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let asking = |extra: &str| {
+        tool_request(
+            "spawn_processor",
+            &format!(r#"{{"reads":["ref:1"],"instruction":"choose",{extra}}}"#),
+        )
+    };
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        asking(r#""choose_upto":1"#),
+        asking(r#""choose_upto":100"#),
+        asking(r#""choose_upto":300"#),
+        asking(r#""choose_upto":"7""#),
+        asking(r#""choose_upto":2.5"#),
+        asking(r#""choose_upto":9,"about":"ref:1""#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("choose"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let parsed: serde_json::Value =
+        serde_json::from_str(bodies.last().expect("a final round")).expect("a body");
+    let results: Vec<&str> = parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .filter_map(|message| message["content"].as_str())
+        .collect();
+    assert_eq!(results.len(), 7, "{results:#?}");
+    for refused in &results[1..=5] {
+        assert!(
+            refused.contains("'choose_upto' must be a whole number from 2 to 99"),
+            "{refused}"
+        );
+    }
+    assert!(
+        results[6].contains("'about' and 'choose_upto' cannot be given together"),
+        "{}",
+        results[6]
+    );
+    assert!(
+        results[1..]
+            .iter()
+            .all(|result| !result.contains("a choice of one entry")),
+        "a refused call made a choice: {results:#?}"
+    );
+    assert!(
+        !sink
+            .events()
+            .iter()
+            .any(|event| matches!(event, Event::SlotWritten { .. })),
+        "a refused call opened a file"
+    );
+}
+
 /// A name the driver never handed out resolves to nothing. The refusal goes back to the model
 /// as an ordinary tool result, so the turn carries on rather than failing.
 #[test]
@@ -55561,6 +55934,1435 @@ fn a_processor_is_given_a_picture_as_a_picture() {
         "the request carrying the picture was offered tools, so it was not a processor"
     );
     assert_no_paste_was_recorded(&sink);
+}
+
+/// The blocks the person is shown, and the second request the planner got, for a turn whose planner
+/// reads `name` (holding `bytes`) in a workspace that is vouched for. `test` names the calling test,
+/// so that two tests reading the same file name do not share a directory.
+fn blocks_shown_for_a_read_of(
+    test: &str,
+    name: &str,
+    bytes: Vec<u8>,
+) -> (Vec<bravebot_agent::report::Shown>, String) {
+    let (reporter, second) = a_vouched_read_of(test, name, bytes);
+    (reporter.shown, second)
+}
+
+/// What the person was shown, and the second request the planner got, for a turn whose planner
+/// reads `name` (holding `bytes`) in a workspace that is vouched for. `test` names the calling test.
+fn a_vouched_read_of(
+    test: &str,
+    name: &str,
+    bytes: Vec<u8>,
+) -> (bravebot_agent::report::RecordingReporter, String) {
+    let scratch = Scratch::new(&format!("picture-rows-{test}-{}", name.replace('.', "-")));
+    std::fs::write(scratch.path.join(name), bytes).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", &format!(r#"{{"path":"{name}"}}"#)),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("look at the file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    (reporter, received.recv().expect("second request"))
+}
+
+/// VIEW-3 for a picture. The person watching is shown a sentence about a picture read from a file:
+/// what it is, how big, the name it is held under, that the model has not seen it and how to look at
+/// it. The first lines of the data URI the slot holds are base64, which tells a person nothing and
+/// reads as the file's own bytes in a block that exists to mark them as such. The size is the
+/// file's, which is what `ls` says, and the planner is told the larger count of the data URI.
+#[test]
+fn a_picture_read_from_a_file_is_described_to_the_person_and_not_drawn_as_base64() {
+    let (shown, second) = blocks_shown_for_a_read_of("picture", "shot.png", a_png());
+
+    let [block] = shown.as_slice() else {
+        panic!("the person was shown {} blocks: {shown:?}", shown.len());
+    };
+    let file_len = a_png().len();
+    let uri_len = "data:image/png;base64,".len()
+        + "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==".len();
+    assert_ne!(
+        file_len, uri_len,
+        "the fixture cannot tell the two sizes apart"
+    );
+    assert_eq!(
+        block.preview.first().map(String::as_str),
+        Some(
+            format!(
+                "a picture, image/png, {file_len} bytes, held as ref:1 and kept from the model"
+            )
+            .as_str()
+        ),
+        "the size the person is shown is not the size of the picture: {block:?}"
+    );
+    assert_eq!(
+        block.preview,
+        bravebot_agent::report::picture_rows(
+            "image/png",
+            file_len,
+            "ref:1",
+            bravebot_agent::report::Holder::Session {
+                vets: true,
+                writes: true
+            }
+        ),
+        "the person was not given the driver's rows for a picture: {block:?}"
+    );
+    assert!(
+        block.preview.get(1).is_some_and(|row| {
+            row.contains("write it to a file") && row.contains("vet_content")
+        }),
+        "the person was not told how to look at the picture: {block:?}"
+    );
+    assert_eq!(block.lines, block.preview.len(), "{block:?}");
+    assert!(
+        block.origin.contains("shot.png"),
+        "the block does not say which file it is: {block:?}"
+    );
+    assert!(
+        second.contains(&format!("(image/png, {uri_len} bytes, {})", block.label)),
+        "the label the person sees is not the one the planner is told: {second}"
+    );
+    assert!(
+        !format!("{shown:?}").contains("iVBOR") && !format!("{shown:?}").contains("base64"),
+        "the person's rows carry the picture as text: {shown:?}"
+    );
+}
+
+/// A PDF read from a file is described as one. It is held the way a picture is, and a row that called
+/// it a picture or named a media type as if it were drawn would misdescribe what the person has. Its
+/// size is the file's.
+#[test]
+fn a_pdf_read_from_a_file_is_described_to_the_person_as_a_pdf() {
+    let (shown, _second) = blocks_shown_for_a_read_of("pdf", "notes.pdf", a_pdf());
+
+    let [block] = shown.as_slice() else {
+        panic!("the person was shown {} blocks: {shown:?}", shown.len());
+    };
+    let first = block.preview.first().expect("a first row");
+    assert_eq!(
+        first,
+        &format!(
+            "a PDF, {} bytes, held as ref:1 and kept from the model",
+            a_pdf().len()
+        ),
+        "the first row does not describe the PDF and its size: {first:?}"
+    );
+    assert!(
+        !first.contains("picture") && !first.contains("application/pdf"),
+        "a PDF is described as a picture: {first:?}"
+    );
+    assert_eq!(block.preview.len(), 2, "{block:?}");
+    assert!(
+        !format!("{shown:?}").contains("JVBERi"),
+        "the person's rows carry the PDF as text: {shown:?}"
+    );
+}
+
+/// The line under the read of a picture or a PDF says how big it is, as the number of bytes the file
+/// holds at any size. The number is the length of what was read and not a survey of the file, which
+/// answers for text and fails for a binary one. The driver compares it with nothing, so it picks no
+/// unit: a count turned into kibibytes from 1024 up is a decision taken from the length of what was
+/// read.
+#[test]
+fn the_line_under_a_read_of_a_picture_gives_the_count_of_bytes_it_was_read_as_at_any_size() {
+    let padded = |size: usize| {
+        let mut bytes = a_png();
+        bytes.resize(size, 0);
+        bytes
+    };
+    for (name, bytes, said) in [
+        (
+            "tiny.png",
+            a_png(),
+            format!("image/png, {} bytes", a_png().len()),
+        ),
+        (
+            "notes.pdf",
+            a_pdf(),
+            format!("application/pdf, {} bytes", a_pdf().len()),
+        ),
+        (
+            "short.png",
+            padded(1023),
+            "image/png, 1023 bytes".to_string(),
+        ),
+        ("kib.png", padded(1024), "image/png, 1024 bytes".to_string()),
+        (
+            "over.png",
+            padded(2500),
+            "image/png, 2500 bytes".to_string(),
+        ),
+        (
+            "mib.png",
+            padded(1024 * 1024 + 5),
+            "image/png, 1048581 bytes".to_string(),
+        ),
+    ] {
+        let (reporter, _second) = a_vouched_read_of("byte-count", name, bytes);
+        let notes: Vec<_> = reporter
+            .finished
+            .iter()
+            .filter(|activity| activity.tool == "read_file")
+            .map(|activity| activity.note.as_deref())
+            .collect();
+        assert_eq!(
+            notes,
+            [Some(said.as_str())],
+            "{name}: the line under the read does not give the number of bytes of the file"
+        );
+    }
+}
+
+/// VIEW-3 for a picture a delegate reads. The delegate is not offered `vet_content` and nobody can
+/// ask it for anything, so the person is told what it can do with the picture and not a way to look
+/// at it that is not there: a worker has `write_file`, which can put the picture in a file the person
+/// opens, and a reader has no tool that writes one.
+#[test]
+fn a_picture_a_delegate_reads_is_described_by_what_the_delegate_can_do_with_it() {
+    let held = format!(
+        "a picture, image/png, {} bytes, held as ref:1 and kept from the model",
+        a_png().len()
+    );
+    for (kind, look) in [
+        (
+            "worker",
+            "The delegate cannot ask you to look at it. It can write it to a file you can open.",
+        ),
+        (
+            "reader",
+            "The delegate cannot ask you to look at it and has no tool that writes a file, so there \
+             is no way to open it from here.",
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("delegate-picture-{kind}"));
+        std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let spawn = format!(r#"{{"kind":"{kind}","task":"READ-THE-SHOT"}}"#);
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "LOOK-AT-THE-SHOT",
+                vec![
+                    tool_request("spawn_agent", &spawn),
+                    reply_with("waiting"),
+                    reply_with("noted"),
+                ],
+            ),
+            (
+                "READ-THE-SHOT",
+                vec![
+                    tool_request("read_file", r#"{"path":"shot.png"}"#),
+                    reply_with("it is held"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("LOOK-AT-THE-SHOT"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+
+        let rows: Vec<&Vec<String>> = reporter
+            .shown
+            .iter()
+            .map(|block| &block.preview)
+            .filter(|rows| {
+                rows.first()
+                    .is_some_and(|row| row.starts_with("a picture, "))
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [&vec![held.clone(), look.to_string()]],
+            "{kind}: the person was not told what the delegate can do with the picture"
+        );
+        assert!(
+            !every_request(&received)
+                .iter()
+                .any(|body| body.contains("iVBORw0KGgo")),
+            "{kind}: the picture reached a planner"
+        );
+    }
+}
+
+/// A delegate is not offered `vet_content`, so the reference it is handed for content it may not
+/// read does not send it there, whether the content is a file nobody vouched for or a picture. The
+/// moves it does have stay named. The reference the session is handed in the same turn, for the same
+/// file, still names `vet_content`.
+#[test]
+fn a_reference_a_delegate_is_handed_does_not_send_it_to_vet_content() {
+    let scratch = Scratch::new("delegate-reference-vet");
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    std::fs::write(scratch.path.join("notes.txt"), "plain words").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let spawn = r#"{"kind":"worker","task":"READ-THE-FILES"}"#;
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "LOOK-AT-THE-FILES",
+            vec![
+                tool_request("read_file", r#"{"path":"notes.txt"}"#),
+                tool_request("spawn_agent", spawn),
+                reply_with("waiting"),
+                reply_with("noted"),
+            ],
+        ),
+        (
+            "READ-THE-FILES",
+            vec![
+                tool_request("read_file", r#"{"path":"notes.txt"}"#),
+                tool_request("read_file", r#"{"path":"shot.png"}"#),
+                reply_with("they are held"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+
+    turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("LOOK-AT-THE-FILES"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let (session, delegate): (Vec<String>, Vec<String>) = every_request(&received)
+        .into_iter()
+        .partition(|body| body.contains("LOOK-AT-THE-FILES"));
+    let told_to_the_session = session
+        .iter()
+        .map(|body| tool_results(body))
+        .find(|results| results.contains("ref:1"))
+        .expect("the session was handed a reference");
+    assert!(
+        told_to_the_session.contains("vet_content"),
+        "the session was not told it can ask for the file to be vetted, so this says nothing: \
+         {told_to_the_session}"
+    );
+    let told_to_the_delegate = delegate
+        .iter()
+        .map(|body| tool_results(body))
+        .max_by_key(|results| results.len())
+        .expect("the delegate made requests");
+    assert_eq!(
+        told_to_the_delegate.matches("[ref:").count(),
+        2,
+        "the delegate was not handed a reference for each file: {told_to_the_delegate}"
+    );
+    assert!(
+        !told_to_the_delegate.contains("vet_content"),
+        "a delegate was sent to a tool it is not offered: {told_to_the_delegate}"
+    );
+    assert!(
+        told_to_the_delegate.matches("spawn_processor").count() == 2,
+        "the moves the delegate does have were dropped with the one it does not: \
+         {told_to_the_delegate}"
+    );
+}
+
+/// What a turn addressed to `definition` (written into a home directory as `fields`), or to none,
+/// shows the person and tells the planner when the planner reads a file nobody vouched for and a
+/// picture: the rows shown for the picture, and the last request the planner was sent.
+fn what_an_addressed_turn_makes_of_a_file_and_a_picture(
+    tag: &str,
+    definition: Option<&str>,
+) -> (Vec<String>, String) {
+    let scratch = Scratch::new(&format!("addressed-reference-{tag}"));
+    let home = Scratch::new(&format!("addressed-reference-{tag}-home"));
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    std::fs::write(scratch.path.join("notes.txt"), "plain words").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut task = Task::new("ADDRESSED-LOOK").with_home(Some(home.path.clone()));
+    if let Some(fields) = definition {
+        define(&home, "looker", fields, "LOOK-BY-DEFINITION");
+        task = task.addressing(Some("looker".to_string()));
+    }
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"shot.png"}"#),
+        tool_request("read_file", r#"{"path":"notes.txt"}"#),
+        reply_with("they are held"),
+    ]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    let rows = reporter
+        .shown
+        .into_iter()
+        .map(|block| block.preview)
+        .find(|rows| {
+            rows.first()
+                .is_some_and(|row| row.starts_with("a picture, "))
+        })
+        .expect("the person was shown rows about the picture");
+    let last = every_request(&received)
+        .pop()
+        .expect("the turn made requests");
+    (rows, last)
+}
+
+/// VIEW-3 and the tools a turn is offered. A turn the person addressed to a definition is offered
+/// the tools the definition names, so the rows about a picture say how to look at it with the ones it
+/// has: `write_file` and `vet_content` both, either alone, or neither, and the reference the planner
+/// is handed names `vet_content` only where it is offered. A reader holds no write, and a worker
+/// whose `tools:` line leaves a tool out is not offered it.
+#[test]
+fn the_rows_about_a_picture_follow_the_tools_an_addressed_turn_is_offered() {
+    let held_with_the_look = |look: &str| {
+        vec![
+            format!(
+                "a picture, image/png, {} bytes, held as ref:1 and kept from the model",
+                a_png().len()
+            ),
+            look.to_string(),
+        ]
+    };
+    for (tag, definition, look, names_vet_content) in [
+        (
+            "none",
+            None,
+            "Ask the model to write it to a file you can open, or to use vet_content on it, which \
+             asks you about a copy of it before the model sees it.",
+            true,
+        ),
+        (
+            "reader",
+            Some("kind: reader\n"),
+            "Ask the model to use vet_content on it, which asks you about a copy of it before the \
+             model sees it.",
+            true,
+        ),
+        (
+            "writes",
+            Some("kind: worker\ntools: read_file, spawn_processor, write_file\n"),
+            "Ask the model to write it to a file you can open.",
+            false,
+        ),
+        (
+            "vets",
+            Some("kind: worker\ntools: read_file, spawn_processor, vet_content\n"),
+            "Ask the model to use vet_content on it, which asks you about a copy of it before the \
+             model sees it.",
+            true,
+        ),
+        (
+            "neither",
+            Some("kind: worker\ntools: read_file, spawn_processor\n"),
+            "The model has no tool that writes it to a file or puts a copy of it to you, so there \
+             is no way to open it from here.",
+            false,
+        ),
+    ] {
+        let (rows, last) = what_an_addressed_turn_makes_of_a_file_and_a_picture(tag, definition);
+        let told = tool_results(&last);
+        assert_eq!(
+            rows,
+            held_with_the_look(look),
+            "{tag}: the person was not told how to look at the picture with the tools the turn \
+             was offered"
+        );
+        assert_eq!(
+            told.contains("vet_content"),
+            names_vet_content,
+            "{tag}: the planner's references and the tools it was offered disagree about \
+             vet_content: {told}"
+        );
+    }
+}
+
+/// The description a request offers for the tool `name`.
+fn description_in(request: &str, name: &str) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(request).expect("a request");
+    parsed["tools"]
+        .as_array()
+        .expect("tools offered")
+        .iter()
+        .find(|tool| tool["function"]["name"] == name)
+        .unwrap_or_else(|| panic!("{name} was not offered"))["function"]["description"]
+        .as_str()
+        .expect("a description")
+        .to_string()
+}
+
+/// Whether the text names the tool as a word of its own.
+fn names(text: &str, tool: &str) -> bool {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(|word| word == tool)
+}
+
+/// The tools a turn addressed to a definition is offered are the definition's, and a reference
+/// handed to the planner for a file nobody vouched for or a picture names the processor and the
+/// write only where the turn has them. A `path_ref` puts a processor's result back, so it needs both.
+#[test]
+fn a_reference_an_addressed_turn_is_handed_names_spawn_processor_and_write_file_only_if_offered() {
+    for (tag, definition, spawns, writes) in [
+        ("none", None, true, true),
+        (
+            "both",
+            Some("kind: worker\ntools: read_file, spawn_processor, write_file\n"),
+            true,
+            true,
+        ),
+        (
+            "spawns",
+            Some("kind: worker\ntools: read_file, spawn_processor\n"),
+            true,
+            false,
+        ),
+        (
+            "writes",
+            Some("kind: worker\ntools: read_file, write_file\n"),
+            false,
+            true,
+        ),
+        (
+            "neither",
+            Some("kind: worker\ntools: read_file\n"),
+            false,
+            false,
+        ),
+    ] {
+        let (_rows, last) = what_an_addressed_turn_makes_of_a_file_and_a_picture(
+            &format!("{tag}-names"),
+            definition,
+        );
+        let told = tool_results(&last);
+        assert_eq!(
+            told.matches("[ref:").count(),
+            2,
+            "{tag}: the planner was not handed a reference for each file: {told}"
+        );
+        assert_eq!(
+            names(&told, "spawn_processor"),
+            spawns,
+            "{tag}: the references and the tools the turn was offered disagree about \
+             spawn_processor: {told}"
+        );
+        assert_eq!(
+            names(&told, "contents_ref") || names(&told, "write_file") || names(&told, "path_ref"),
+            writes,
+            "{tag}: the references and the tools the turn was offered disagree about write_file: \
+             {told}"
+        );
+    }
+}
+
+/// The descriptions of the tools that name others follow the list a turn was offered. A turn
+/// addressed to a definition that leaves out `vet_content`, `write_file`, `run` or `read_output` is
+/// not told by `spawn_processor` or `read_output` to use it, and the one it is offered is still
+/// named. The processor's route to a program that sends text it wrote is `stdin_ref` and is said
+/// where the turn holds `run`, with or without `write_file`.
+#[test]
+fn the_descriptions_of_the_processor_and_read_output_follow_the_tools_a_turn_is_offered() {
+    let all = ["vet_content", "write_file", "read_output", "run"];
+    for (tag, definition, offered) in [
+        ("none", None, all.to_vec()),
+        (
+            "no-vetting",
+            Some("kind: worker\ntools: read_file, spawn_processor, write_file, run, read_output\n"),
+            vec!["write_file", "read_output", "run"],
+        ),
+        (
+            "no-writing",
+            Some(
+                "kind: worker\ntools: read_file, spawn_processor, vet_content, run, read_output\n",
+            ),
+            vec!["vet_content", "read_output", "run"],
+        ),
+        (
+            "no-shell",
+            Some("kind: worker\ntools: read_file, spawn_processor, write_file, vet_content\n"),
+            vec!["write_file", "vet_content"],
+        ),
+        (
+            "processor-only",
+            Some("kind: worker\ntools: read_file, spawn_processor\n"),
+            vec![],
+        ),
+    ] {
+        let (_rows, last) = what_an_addressed_turn_makes_of_a_file_and_a_picture(
+            &format!("{tag}-described"),
+            definition,
+        );
+        let processor = description_in(&last, "spawn_processor");
+        for tool in all {
+            assert_eq!(
+                names(&processor, tool),
+                offered.contains(&tool),
+                "{tag}: the description of spawn_processor and the tools the turn was offered \
+                 disagree about {tool}: {processor}"
+            );
+        }
+        // The answer is handed to a program as `stdin_ref` only where there is a `run`, and that
+        // route needs no `write_file`.
+        assert_eq!(
+            names(&processor, "stdin_ref"),
+            offered.contains(&"run"),
+            "{tag}: the description of spawn_processor and the tools the turn was offered \
+             disagree about the route to a program: {processor}"
+        );
+        // `read_output` is on the list only where the shell is, and names `vet_content` only
+        // where that is.
+        if offered.contains(&"read_output") {
+            let read_output = description_in(&last, "read_output");
+            assert_eq!(
+                names(&read_output, "vet_content"),
+                offered.contains(&"vet_content"),
+                "{tag}: the description of read_output and the tools the turn was offered \
+                 disagree about vet_content: {read_output}"
+            );
+        }
+    }
+}
+
+/// A delegate is never offered `vet_content`, a reader holds no `write_file`, `run` or
+/// `read_output`, and a worker holds all of the rest. What each is sent names what it has: the
+/// descriptions of `spawn_processor` and `read_output` and the reference it is handed.
+#[test]
+fn a_delegate_is_not_told_to_use_a_tool_it_is_not_offered() {
+    for (kind, writes, shell) in [("reader", false, false), ("worker", true, true)] {
+        let scratch = Scratch::new(&format!("delegate-names-{kind}"));
+        std::fs::write(scratch.path.join("notes.txt"), "plain words").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let spawn = format!(r#"{{"kind":"{kind}","task":"READ-THE-NOTES"}}"#);
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "LOOK-AT-THE-NOTES",
+                vec![
+                    tool_request("spawn_agent", &spawn),
+                    reply_with("waiting"),
+                    reply_with("noted"),
+                ],
+            ),
+            (
+                "READ-THE-NOTES",
+                vec![
+                    tool_request("read_file", r#"{"path":"notes.txt"}"#),
+                    reply_with("it is held"),
+                ],
+            ),
+        ]);
+
+        turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("LOOK-AT-THE-NOTES"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+
+        let (session, delegate): (Vec<String>, Vec<String>) = every_request(&received)
+            .into_iter()
+            .partition(|body| body.contains("LOOK-AT-THE-NOTES"));
+        let last = delegate.last().expect("the delegate made requests");
+        let told = tool_results(last);
+        assert!(told.contains("[ref:1]"), "{kind}: no reference: {told}");
+        assert!(names(&told, "spawn_processor"), "{kind}: {told}");
+        assert!(!names(&told, "vet_content"), "{kind}: {told}");
+        assert_eq!(
+            names(&told, "contents_ref") || names(&told, "path_ref"),
+            writes,
+            "{kind}: the reference and the tools the delegate was offered disagree about \
+             write_file: {told}"
+        );
+
+        let processor = description_in(last, "spawn_processor");
+        assert!(!names(&processor, "vet_content"), "{kind}: {processor}");
+        assert_eq!(
+            names(&processor, "write_file"),
+            writes,
+            "{kind}: {processor}"
+        );
+        assert_eq!(names(&processor, "run"), shell, "{kind}: {processor}");
+        assert_eq!(
+            names(&processor, "read_output"),
+            shell,
+            "{kind}: {processor}"
+        );
+        if shell {
+            let read_output = description_in(last, "read_output");
+            assert!(!names(&read_output, "vet_content"), "{kind}: {read_output}");
+        }
+
+        // The session in the same turn is offered everything, and is told so.
+        let first = session.first().expect("the session made requests");
+        assert!(names(
+            &description_in(first, "spawn_processor"),
+            "vet_content"
+        ));
+        assert!(names(&description_in(first, "read_output"), "vet_content"));
+    }
+}
+
+/// The description of the argument `parameter` of the tool `name`, in a request.
+fn parameter_description_in(request: &str, name: &str, parameter: &str) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(request).expect("a request");
+    parsed["tools"]
+        .as_array()
+        .expect("tools offered")
+        .iter()
+        .find(|tool| tool["function"]["name"] == name)
+        .unwrap_or_else(|| panic!("{name} was not offered"))["function"]["parameters"]["properties"]
+        [parameter]["description"]
+        .as_str()
+        .expect("a description")
+        .to_string()
+}
+
+/// The text of the newest tool result in a request, without the quoting a JSON string carries.
+fn newest_tool_result_text(request: &str) -> String {
+    let parsed: serde_json::Value = serde_json::from_str(request).expect("a request");
+    parsed["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "tool")
+        .and_then(|message| message["content"].as_str())
+        .expect("a tool result")
+        .to_string()
+}
+
+/// What the description of `run` says to do with output that comes back as a reference.
+fn what_run_says_of_a_reference(request: &str) -> String {
+    let run = description_in(request, "run");
+    let from = "otherwise it comes back as a reference, like a file you may not read";
+    let start = run.find(from).expect("the sentence about the output");
+    let end = run[start..]
+        .find(" Do use it to compile")
+        .expect("the end of the sentence")
+        + start;
+    run[start..end].to_string()
+}
+
+/// The descriptions of `fetch_url`, `job_output` and `run` follow the list a turn was offered. A
+/// turn addressed to a definition that leaves out `spawn_processor`, `write_file`, `vet_content`,
+/// `read_output` or `job_output` is not told by any of the three to use it, and the ones it is
+/// offered are still named.
+#[test]
+fn the_descriptions_of_fetch_job_output_and_run_follow_the_tools_a_turn_is_offered() {
+    let moves = [
+        "spawn_processor",
+        "write_file",
+        "vet_content",
+        "read_output",
+    ];
+    for (tag, definition, offered) in [
+        ("none", None, moves.to_vec()),
+        (
+            "all",
+            Some(
+                "kind: worker\ntools: read_file, fetch_url, run, job_output, read_output, \
+                 spawn_processor, write_file, vet_content\n",
+            ),
+            moves.to_vec(),
+        ),
+        (
+            "no-processor",
+            Some(
+                "kind: worker\ntools: read_file, fetch_url, run, job_output, read_output, \
+                 write_file, vet_content\n",
+            ),
+            vec!["write_file", "vet_content", "read_output"],
+        ),
+        (
+            "no-writing",
+            Some(
+                "kind: worker\ntools: read_file, fetch_url, run, job_output, read_output, \
+                 spawn_processor, vet_content\n",
+            ),
+            vec!["spawn_processor", "vet_content", "read_output"],
+        ),
+        (
+            "no-vetting",
+            Some(
+                "kind: worker\ntools: read_file, fetch_url, run, job_output, read_output, \
+                 spawn_processor, write_file\n",
+            ),
+            vec!["spawn_processor", "write_file", "read_output"],
+        ),
+        (
+            "no-reading",
+            Some(
+                "kind: worker\ntools: read_file, fetch_url, run, job_output, spawn_processor, \
+                 write_file, vet_content\n",
+            ),
+            vec!["spawn_processor", "write_file", "vet_content"],
+        ),
+        (
+            "bare",
+            Some("kind: worker\ntools: read_file, fetch_url, run, job_output\n"),
+            vec![],
+        ),
+    ] {
+        let (_rows, last) = what_an_addressed_turn_makes_of_a_file_and_a_picture(
+            &format!("{tag}-fetch"),
+            definition,
+        );
+        let fetch = description_in(&last, "fetch_url");
+        for tool in ["spawn_processor", "write_file", "vet_content"] {
+            assert_eq!(
+                names(&fetch, tool),
+                offered.contains(&tool),
+                "{tag}: the description of fetch_url and the tools the turn was offered disagree \
+                 about {tool}: {fetch}"
+            );
+        }
+        let job = description_in(&last, "job_output");
+        for tool in ["spawn_processor", "write_file", "read_output"] {
+            assert_eq!(
+                names(&job, tool),
+                offered.contains(&tool),
+                "{tag}: the description of job_output and the tools the turn was offered disagree \
+                 about {tool}: {job}"
+            );
+        }
+        let output = what_run_says_of_a_reference(&last);
+        for tool in ["spawn_processor", "write_file", "read_output"] {
+            assert_eq!(
+                names(&output, tool),
+                offered.contains(&tool),
+                "{tag}: what run says of its output and the tools the turn was offered disagree \
+                 about {tool}: {output}"
+            );
+        }
+        // Every definition here keeps `job_output`, and the session has it.
+        let background = parameter_description_in(&last, "run", "background");
+        assert!(names(&background, "job_output"), "{tag}: {background}");
+    }
+
+    // A turn offered `run` and no `job_output` is not told to ask it what a job has printed.
+    let (_rows, last) = what_an_addressed_turn_makes_of_a_file_and_a_picture(
+        "no-job-fetch",
+        Some("kind: worker\ntools: read_file, run\n"),
+    );
+    let background = parameter_description_in(&last, "run", "background");
+    assert!(
+        !names(&background, "job_output"),
+        "a turn without job_output was sent to it: {background}"
+    );
+}
+
+/// The answer to a read of a reference to a file the planner may not read says what to do with the
+/// file instead, and names the processor and the write only where the turn is offered them. A
+/// `path_ref` puts a processor's result back, so the second half needs both.
+#[test]
+fn reading_a_reference_to_a_file_names_spawn_processor_and_write_file_only_if_offered() {
+    let both = " Give ref:1 to spawn_processor to work on, and name ref:1 as path_ref to write what \
+                comes back to the same file.";
+    let spawns_only = " Give ref:1 to spawn_processor to work on.";
+    for (tag, definition, work_on_it) in [
+        ("none", None, both),
+        (
+            "both",
+            Some("kind: worker\ntools: list_files, read_file, spawn_processor, write_file\n"),
+            both,
+        ),
+        (
+            "spawns",
+            Some("kind: worker\ntools: list_files, read_file, spawn_processor\n"),
+            spawns_only,
+        ),
+        (
+            "writes",
+            Some("kind: worker\ntools: list_files, read_file, write_file\n"),
+            "",
+        ),
+        (
+            "neither",
+            Some("kind: worker\ntools: list_files, read_file\n"),
+            "",
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("read-by-reference-{tag}"));
+        let home = Scratch::new(&format!("read-by-reference-{tag}-home"));
+        std::fs::write(scratch.path.join("notes.txt"), "plain words").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut task = Task::new("REFER-TO-THE-NOTES").with_home(Some(home.path.clone()));
+        if let Some(fields) = definition {
+            define(&home, "referrer", fields, "REFER-BY-DEFINITION");
+            task = task.addressing(Some("referrer".to_string()));
+        }
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("list_files", r#"{"directory":"."}"#),
+            tool_request("read_file", r#"{"path_ref":"ref:1"}"#),
+            reply_with("it is held"),
+        ]);
+
+        turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut bravebot_agent::Conversation::new(),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+
+        let told = newest_tool_result_text(&every_request(&received).pop().expect("requests"));
+        assert_eq!(
+            told,
+            format!(
+                "Result of read_file:\n\nref:1 already names that file, and nothing will show \
+                 you what is in it.{work_on_it} If the work would go better with you reading it \
+                 yourself, say so in your reply: the user can vouch for the file, and then you \
+                 will be shown it. They know which file ref:1 is even though you do not."
+            ),
+            "{tag}: the answer and the tools the turn was offered disagree"
+        );
+    }
+}
+
+/// The same answer given to a delegate: a reader holds `spawn_processor` and no `write_file`, so it
+/// is told to give the file to a processor and nothing about putting the result back, and a worker
+/// is told both.
+#[test]
+fn a_delegate_reading_a_reference_to_a_file_is_told_only_what_it_can_do() {
+    for (kind, work_on_it) in [
+        ("reader", " Give ref:1 to spawn_processor to work on."),
+        (
+            "worker",
+            " Give ref:1 to spawn_processor to work on, and name ref:1 as path_ref to write what \
+             comes back to the same file.",
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("delegate-read-by-reference-{kind}"));
+        std::fs::write(scratch.path.join("notes.txt"), "plain words").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let spawn = format!(r#"{{"kind":"{kind}","task":"REFER-THE-NOTES"}}"#);
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "SEND-TO-THE-NOTES",
+                vec![
+                    tool_request("spawn_agent", &spawn),
+                    reply_with("waiting"),
+                    reply_with("noted"),
+                ],
+            ),
+            (
+                "REFER-THE-NOTES",
+                vec![
+                    tool_request("list_files", r#"{"directory":"."}"#),
+                    tool_request("read_file", r#"{"path_ref":"ref:1"}"#),
+                    reply_with("it is held"),
+                ],
+            ),
+        ]);
+
+        turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("SEND-TO-THE-NOTES"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+
+        let delegate: Vec<String> = every_request(&received)
+            .into_iter()
+            .filter(|body| body.contains("REFER-THE-NOTES") && !body.contains("SEND-TO-THE-NOTES"))
+            .collect();
+        let told = newest_tool_result_text(delegate.last().expect("the delegate made requests"));
+        assert!(
+            told.contains(&format!(
+                "ref:1 already names that file, and nothing will show you what is in it.\
+                 {work_on_it} If the work would go better"
+            )),
+            "{kind}: {told}"
+        );
+    }
+}
+
+/// A run's output past its cap is kept whole behind a reference, which says how to read the rest.
+/// It names `read_output` only where the turn is offered it, and the moves the turn does have.
+#[test]
+fn a_reference_to_the_whole_of_a_long_output_names_read_output_only_if_offered() {
+    let read = "You may read all of it: only its length kept it out of the result. Call \
+                read_output with ref:1 and an offset in bytes to be shown the part from there, as \
+                much as one result holds, without the user being asked.";
+    let moves = " Give it to spawn_processor to work on, or write it into a file as contents_ref.";
+    for (tag, definition, expected) in [
+        ("none", None, format!("{read}{moves}")),
+        (
+            "reads",
+            Some("kind: worker\ntools: run, read_output, spawn_processor, write_file\n"),
+            format!("{read}{moves}"),
+        ),
+        (
+            "no-reading",
+            Some("kind: worker\ntools: run, spawn_processor, write_file\n"),
+            format!("Only its length kept it out of the result.{moves}"),
+        ),
+        (
+            "only-run",
+            Some("kind: worker\ntools: run\n"),
+            "Only its length kept it out of the result.".to_string(),
+        ),
+    ] {
+        let scratch = Scratch::new(&format!("long-output-{tag}"));
+        let home = Scratch::new(&format!("long-output-{tag}-home"));
+        let log: String = (0..2000)
+            .map(|line| format!("line {line} of a long build log\n"))
+            .collect();
+        std::fs::write(scratch.path.join("build.log"), &log).unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut task = Task::new("BUILD-IT")
+            .with_output_cap(Some(4096))
+            .with_home(Some(home.path.clone()));
+        if let Some(fields) = definition {
+            define(&home, "builder", fields, "BUILD-BY-DEFINITION");
+            task = task.addressing(Some("builder".to_string()));
+        }
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("run", r#"{"command":"sed -n p build.log"}"#),
+            reply_with("built"),
+        ]);
+        let mut confirmer =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+
+        turn::resume(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+
+        let told = newest_tool_result_text(&every_request(&received).pop().expect("requests"));
+        assert!(
+            told.contains("The whole of this output") || told.contains("[ref:1]"),
+            "{tag}: the output was not kept whole behind a reference, so nothing here was \
+             tested: {told}"
+        );
+        assert!(
+            told.trim_end().ends_with(&expected),
+            "{tag}: the reference to the whole and the tools the turn was offered disagree: {told}"
+        );
+    }
+}
+
+/// A turn whose planner reads the picture `source` in the scratch directory, which gives it `ref:1`,
+/// then makes the calls in `then` with `confirmer` answering the writes, in a workspace nobody
+/// vouched for. What the planner was sent each round, and the trail.
+fn a_turn_that_reads_a_picture_then(
+    scratch: &Scratch,
+    source: &str,
+    then: Vec<String>,
+    confirmer: &mut RecordingConfirmer,
+) -> (Vec<String>, RecordingSink) {
+    a_turn_that_reads_a_picture_in(
+        scratch,
+        bravebot_core::trust::TrustStore::new("/work"),
+        source,
+        then,
+        confirmer,
+    )
+}
+
+/// As [`a_turn_that_reads_a_picture_then`], under `trust`.
+fn a_turn_that_reads_a_picture_in(
+    scratch: &Scratch,
+    trust: bravebot_core::trust::TrustStore,
+    source: &str,
+    then: Vec<String>,
+    confirmer: &mut RecordingConfirmer,
+) -> (Vec<String>, RecordingSink) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = vec![tool_request(
+        "read_file",
+        &format!(r#"{{"path":"{source}"}}"#),
+    )];
+    replies.extend(then);
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("keep a copy of the screenshot"),
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+
+    (received.try_iter().collect(), sink)
+}
+
+/// WRITE-9: a picture the planner holds only as a reference is written as the file it encodes, to
+/// the path the planner named, after the person approves it. The person is shown the reference,
+/// its media type, the size of the file and the path, and no body; the file holds the bytes the
+/// picture had; and no request to the planner carries them. The write is recorded at the label the
+/// picture had, so the file is not trusted afterwards.
+#[test]
+fn a_picture_slot_is_written_as_the_file_it_encodes_after_the_person_approves() {
+    let scratch = Scratch::new("picture-write");
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let (bodies, sink) = a_turn_that_reads_a_picture_then(
+        &scratch,
+        "shot.png",
+        vec![tool_request(
+            "write_file",
+            r#"{"path":"copy.png","contents_ref":"ref:1"}"#,
+        )],
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        std::fs::read(scratch.path.join("copy.png")).expect("the file was written"),
+        a_png(),
+        "the file does not hold the bytes the picture had"
+    );
+    let [asked] = confirmer.seen.as_slice() else {
+        panic!(
+            "the write was put to the person {} times",
+            confirmer.seen.len()
+        );
+    };
+    assert_eq!(
+        asked.path,
+        format!("ref:1 (image/png, {} bytes) -> copy.png", a_png().len()),
+        "the person was not told which picture, of what size, goes where"
+    );
+    assert!(asked.contents.is_empty(), "a body was shown: {asked:?}");
+    assert!(
+        asked.untrusted,
+        "the picture was shown as the planner's own"
+    );
+    assert_eq!(asked.intent, bravebot_agent::confirm::Intent::Create);
+    for body in &bodies {
+        assert!(
+            !body.contains("iVBORw0KGgo") && !body.contains("data:image"),
+            "the picture reached the planner: {body}"
+        );
+    }
+    let told = bodies.last().expect("the planner was told how it went");
+    assert!(
+        told.contains("created copy.png from ref:1"),
+        "the planner was not told what landed: {told}"
+    );
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            bravebot_core::event::Event::ActionField {
+                tool, field, label, ..
+            } if tool == "file_write"
+                && field == "contents"
+                && *label == bravebot_core::label::Label::untrusted_public()
+        )),
+        "the write was not made at the label the picture had"
+    );
+}
+
+/// WRITE-9: the write is made at the label the picture had. A picture read from a file the person
+/// vouched for is written as trusted content, as the text of such a file is when it is written by
+/// reference, and the person is not told it is untrusted.
+#[test]
+fn a_picture_from_a_vouched_for_file_is_written_at_the_label_its_file_had() {
+    let scratch = Scratch::new("picture-write-vouched");
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let (_, sink) = a_turn_that_reads_a_picture_in(
+        &scratch,
+        trusting_the_workspace(),
+        "shot.png",
+        vec![tool_request(
+            "write_file",
+            r#"{"path":"copy.png","contents_ref":"ref:1"}"#,
+        )],
+        &mut confirmer,
+    );
+
+    let [asked] = confirmer.seen.as_slice() else {
+        panic!("{:?}", confirmer.seen);
+    };
+    assert!(!asked.untrusted, "{asked:?}");
+    assert_eq!(
+        std::fs::read(scratch.path.join("copy.png")).unwrap(),
+        a_png()
+    );
+    assert!(
+        sink.events().iter().any(|event| matches!(
+            event,
+            bravebot_core::event::Event::ActionField {
+                tool, field, label, ..
+            } if tool == "file_write"
+                && field == "contents"
+                && *label == bravebot_core::label::Label::trusted_public()
+        )),
+        "the write was not made at the label the file had"
+    );
+}
+
+/// WRITE-9: a no writes nothing, and the file a picture would have replaced is left as it was.
+#[test]
+fn a_picture_write_the_person_refuses_writes_nothing() {
+    let scratch = Scratch::new("picture-write-refused");
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    std::fs::write(scratch.path.join("old.png"), b"the file already here").unwrap();
+    let mut confirmer = RecordingConfirmer::rejecting();
+
+    let (bodies, _) = a_turn_that_reads_a_picture_then(
+        &scratch,
+        "shot.png",
+        vec![
+            tool_request(
+                "write_file",
+                r#"{"path":"copy.png","contents_ref":"ref:1"}"#,
+            ),
+            tool_request("write_file", r#"{"path":"old.png","contents_ref":"ref:1"}"#),
+        ],
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        confirmer.seen.len(),
+        2,
+        "both writes were put to the person"
+    );
+    assert_eq!(
+        confirmer.seen[1].intent,
+        bravebot_agent::confirm::Intent::Overwrite,
+        "the person was not told the second write replaces a file"
+    );
+    assert!(!scratch.path.join("copy.png").exists());
+    assert_eq!(
+        std::fs::read(scratch.path.join("old.png")).unwrap(),
+        b"the file already here"
+    );
+    let told = bodies.last().expect("the planner was told how it went");
+    assert!(told.contains("did not approve writing old.png"), "{told}");
+}
+
+/// WRITE-9: a picture is written under the extension its media type has, from the table a read
+/// decides a file is a picture by, and any other name is refused before anybody is asked. The
+/// extension is compared without regard to case, and a type with two extensions has both.
+#[test]
+fn a_picture_is_written_only_to_a_path_with_the_extension_its_type_has() {
+    let scratch = Scratch::new("picture-write-extension");
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    std::fs::write(scratch.path.join("photo.jpg"), b"jpeg bytes").unwrap();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let (bodies, _) = a_turn_that_reads_a_picture_then(
+        &scratch,
+        "shot.png",
+        vec![
+            tool_request(
+                "write_file",
+                r#"{"path":"copy.jpg","contents_ref":"ref:1"}"#,
+            ),
+            tool_request(
+                "write_file",
+                r#"{"path":"copy.txt","contents_ref":"ref:1"}"#,
+            ),
+            tool_request("write_file", r#"{"path":"copy","contents_ref":"ref:1"}"#),
+            tool_request("write_file", r#"{"path":"png","contents_ref":"ref:1"}"#),
+            tool_request(
+                "write_file",
+                r#"{"path":"SHOUT.PNG","contents_ref":"ref:1"}"#,
+            ),
+        ],
+        &mut confirmer,
+    );
+
+    let [asked] = confirmer.seen.as_slice() else {
+        panic!(
+            "{} writes were put to the person: {:?}",
+            confirmer.seen.len(),
+            confirmer.seen
+        );
+    };
+    assert!(asked.path.ends_with("-> SHOUT.PNG"), "{}", asked.path);
+    for refused in ["copy.jpg", "copy.txt", "copy", "png"] {
+        assert!(
+            !scratch.path.join(refused).exists(),
+            "{refused} was written with a type that is not its extension"
+        );
+    }
+    assert_eq!(
+        std::fs::read(scratch.path.join("SHOUT.PNG")).unwrap(),
+        a_png()
+    );
+    let told = bodies.last().expect("the planner was told how it went");
+    assert!(
+        told.contains(
+            "image/png file, which is written to a path ending in .png, and png does not"
+        ),
+        "{told}"
+    );
+
+    // The two extensions of the other type are both its own.
+    let mut confirmer = RecordingConfirmer::approving();
+    let (bodies, _) = a_turn_that_reads_a_picture_then(
+        &scratch,
+        "photo.jpg",
+        vec![
+            tool_request(
+                "write_file",
+                r#"{"path":"copy.jpeg","contents_ref":"ref:1"}"#,
+            ),
+            tool_request(
+                "write_file",
+                r#"{"path":"copy.png","contents_ref":"ref:1"}"#,
+            ),
+        ],
+        &mut confirmer,
+    );
+    assert_eq!(confirmer.seen.len(), 1);
+    assert_eq!(
+        std::fs::read(scratch.path.join("copy.jpeg")).unwrap(),
+        b"jpeg bytes"
+    );
+    assert!(!scratch.path.join("copy.png").exists());
+    let told = bodies.last().expect("the planner was told how it went");
+    assert!(told.contains("ending in .jpg or .jpeg"), "{told}");
+}
+
+/// WRITE-9: a name the planner was never shown is not a destination for a picture. Its extension
+/// is part of a name out of a listing nobody vouched for, so it is refused and nobody is asked,
+/// though the name here ends as the picture's type does.
+#[test]
+fn a_picture_is_not_written_to_a_name_the_planner_was_never_shown() {
+    let scratch = Scratch::new("picture-write-path-ref");
+    std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+    let before = std::fs::read(scratch.path.join("shot.png")).unwrap();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    let (bodies, _) = a_turn_that_reads_a_picture_then(
+        &scratch,
+        "shot.png",
+        vec![
+            tool_request("list_files", r#"{"directory":"."}"#),
+            tool_request(
+                "write_file",
+                r#"{"path_ref":"ref:3","contents_ref":"ref:1"}"#,
+            ),
+        ],
+        &mut confirmer,
+    );
+
+    assert!(
+        confirmer.seen.is_empty(),
+        "a destination whose extension nothing may read was put to the person: {:?}",
+        confirmer.seen
+    );
+    assert_eq!(
+        std::fs::read(scratch.path.join("shot.png")).unwrap(),
+        before
+    );
+    let told = bodies.last().expect("the planner was told how it went");
+    assert!(
+        told.contains("written to a path you name with 'path'"),
+        "{told}"
+    );
 }
 
 /// Runs one `run` call and hands back how the command ended. A deadline is only observable in the

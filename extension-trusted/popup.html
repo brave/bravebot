@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>BraveBot Trusted Input</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <h1>BraveBot Trusted Input</h1>
+    <p>
+      This extension sends real mouse clicks, typing and key presses to a page,
+      takes a picture of all of a page, reads what a page wrote to its
+      console, and chooses a file of yours on a page's file input, when the
+      BraveBot extension asks and you allow each action in a window of its own.
+      It takes requests from the BraveBot extension (<code id="first"></code>)
+      and from nothing else, and it does nothing on its own.
+    </p>
+    <p>
+      While it is turned on, Brave lets it use the debugger on every site,
+      which is why Brave lists it as reading and changing your data on all
+      websites. Turn it off whenever you do not want BraveBot to use real input,
+      take a picture of a whole page, read a console or give a file to a page.
+    </p>
+    <p>
+      To turn it off, open <strong>brave://extensions</strong> and turn
+      BraveBot Trusted Input off. To remove it, choose Remove there.
+    </p>
+    <p class="note" id="version"></p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

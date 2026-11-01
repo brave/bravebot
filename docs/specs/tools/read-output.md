@@ -148,7 +148,9 @@ is checked. The page the planner expects is not what `read_output` would hand it
 question put to a person on its behalf would be one it did not mean to ask.
 
 The reference to the whole says the planner may read it and how, not that it is quarantined. The
-sample says where its middle begins, so the first page can start there.
+sample says where its middle begins, so the first page can start there. A turn that is not offered
+`read_output` is told only that the length kept the rest out of the result, and the moves it does
+have ([TOOL-6](tool-surface.md#TOOL-6)).
 
 **Why nobody is asked.** The cap is a budget and not an authority ([RUN-21](run.md#RUN-21)). The
 label on these bytes already let the planner read them, and the only thing that kept them out of the
@@ -164,6 +166,8 @@ it, and paging hands over the part it names without running anything again.
 `awk`, and each was cut and called quarantined again. None of it was out of the planner's reach.
 
 `verified-by: bravebot_core::reference::kept_output_is_offered_page_by_page_and_not_called_quarantined`
+`verified-by: bravebot_core::reference::kept_output_made_for_a_run_without_read_output_names_no_read_output_and_keeps_the_other_moves`
+`verified-by: bravebot_agent::turn::a_reference_to_the_whole_of_a_long_output_names_read_output_only_if_offered`
 `verified-by: bravebot_core::policy::content_the_planner_saw_a_sample_of_is_kept_whole`
 `verified-by: bravebot_agent::tools::a_page_starts_and_stops_on_a_character_and_names_the_next`
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked`

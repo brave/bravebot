@@ -73,6 +73,10 @@ const DIGEST_FORM: &str = "bravebot-mcp-declaration-1";
 /// The longest word a server's tool may be offered under.
 pub const MAX_TOOL: usize = 64;
 
+/// The longest name of an argument that takes a choice, so that the name the planner is offered
+/// beside it, with `_ref` after it, is within [`MAX_TOOL`] and a name every backend takes.
+pub const MAX_CHOICE_ARGUMENT: usize = MAX_TOOL - "_ref".len();
+
 /// How long a server has to answer its handshake, where its declaration says nothing.
 ///
 /// Long enough for a runner fetching a package on its first launch.
@@ -234,7 +238,18 @@ pub enum Problem {
     /// `allowed_hosts` is not a list of host names or `*.` domains, and this is the entry that is
     /// not one, or empty where the value is not a list at all.
     Hosts(String),
+    /// `ask_every_call` is not `true` or `false`.
+    AskEveryCall,
+    /// `choice_arguments` is not an object of tool words, each with a non-empty list of argument
+    /// words.
+    Choice,
+    /// `choice_arguments` names an argument to a server that does not ask about every call.
+    ChoiceWithoutAsking,
 }
+
+/// The arguments of a server's tools a declaration says take a choice, by tool (SERVERS-22). Each
+/// is a tool word with the argument words it names, in an order that carries no meaning.
+pub type ChoiceArguments = BTreeMap<String, BTreeSet<String>>;
 
 /// How long a server has for its handshake and for each call, where a declaration says.
 ///
@@ -330,6 +345,11 @@ pub enum Declaration {
         /// The hosts it may reach, each once, where the person wrote a list. `None` is no list of
         /// its own, so it is held to the session's. `Some` of nothing refuses every host.
         allowed_hosts: Option<Vec<String>>,
+        /// Whether every call to it is put to the person and no answer to one lasts (SERVERS-21).
+        ask_every_call: bool,
+        /// The arguments of its tools that take a choice. Empty unless `ask_every_call` is set,
+        /// since the person is shown the element the choice leads to at each call (SERVERS-22).
+        choice_arguments: ChoiceArguments,
     },
     /// A server somewhere else, reached over HTTP.
     Http {
@@ -347,6 +367,8 @@ pub enum Declaration {
         tools: Vec<String>,
         /// The tools withheld from this server where a filter was given, each once.
         exclude_tools: Vec<String>,
+        /// Whether every call to it is put to the person and no answer to one lasts (SERVERS-21).
+        ask_every_call: bool,
     },
 }
 
@@ -363,6 +385,8 @@ impl std::fmt::Debug for Declaration {
                 tools,
                 exclude_tools,
                 allowed_hosts,
+                ask_every_call,
+                choice_arguments,
             } => f
                 .debug_struct("Stdio")
                 .field("argv", argv)
@@ -374,6 +398,8 @@ impl std::fmt::Debug for Declaration {
                 .field("tools", tools)
                 .field("exclude_tools", exclude_tools)
                 .field("allowed_hosts", allowed_hosts)
+                .field("ask_every_call", ask_every_call)
+                .field("choice_arguments", choice_arguments)
                 .finish(),
             Self::Http {
                 url,
@@ -382,6 +408,7 @@ impl std::fmt::Debug for Declaration {
                 timeouts,
                 tools,
                 exclude_tools,
+                ask_every_call,
             } => f
                 .debug_struct("Http")
                 .field("url", url)
@@ -390,6 +417,7 @@ impl std::fmt::Debug for Declaration {
                 .field("timeouts", timeouts)
                 .field("tools", tools)
                 .field("exclude_tools", exclude_tools)
+                .field("ask_every_call", ask_every_call)
                 .finish(),
         }
     }
@@ -413,6 +441,8 @@ pub enum Field {
     Tools,
     ExcludeTools,
     AllowedHosts,
+    AskEveryCall,
+    ChoiceArguments,
 }
 
 impl Field {
@@ -430,6 +460,8 @@ impl Field {
             Self::Tools => "tools",
             Self::ExcludeTools => "exclude_tools",
             Self::AllowedHosts => "allowed_hosts",
+            Self::AskEveryCall => "ask_every_call",
+            Self::ChoiceArguments => "choice_arguments",
         }
     }
 }
@@ -458,6 +490,8 @@ impl Declaration {
             tools: Vec::new(),
             exclude_tools: Vec::new(),
             allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         })
     }
 
@@ -475,6 +509,8 @@ impl Declaration {
             tools,
             exclude_tools,
             allowed_hosts,
+            ask_every_call,
+            choice_arguments,
             ..
         } = self
         else {
@@ -504,6 +540,8 @@ impl Declaration {
             tools,
             exclude_tools,
             allowed_hosts,
+            ask_every_call,
+            choice_arguments,
         })
     }
 
@@ -518,6 +556,8 @@ impl Declaration {
             tools,
             exclude_tools,
             allowed_hosts,
+            ask_every_call,
+            choice_arguments,
             ..
         } = self
         else {
@@ -545,6 +585,8 @@ impl Declaration {
             tools,
             exclude_tools,
             allowed_hosts,
+            ask_every_call,
+            choice_arguments,
         })
     }
 
@@ -560,6 +602,8 @@ impl Declaration {
                 tools,
                 exclude_tools,
                 allowed_hosts,
+                ask_every_call,
+                choice_arguments,
                 ..
             } => Self::Stdio {
                 argv,
@@ -571,6 +615,8 @@ impl Declaration {
                 tools,
                 exclude_tools,
                 allowed_hosts,
+                ask_every_call,
+                choice_arguments,
             },
             Self::Http {
                 url,
@@ -578,6 +624,7 @@ impl Declaration {
                 bearer_env,
                 tools,
                 exclude_tools,
+                ask_every_call,
                 ..
             } => Self::Http {
                 url,
@@ -586,6 +633,7 @@ impl Declaration {
                 timeouts,
                 tools,
                 exclude_tools,
+                ask_every_call,
             },
         }
     }
@@ -623,6 +671,8 @@ impl Declaration {
                 directory,
                 timeouts,
                 allowed_hosts,
+                ask_every_call,
+                choice_arguments,
                 ..
             } => Self::Stdio {
                 argv,
@@ -634,12 +684,15 @@ impl Declaration {
                 tools,
                 exclude_tools,
                 allowed_hosts,
+                ask_every_call,
+                choice_arguments,
             },
             Self::Http {
                 url,
                 env_http_headers,
                 bearer_env,
                 timeouts,
+                ask_every_call,
                 ..
             } => Self::Http {
                 url,
@@ -648,6 +701,7 @@ impl Declaration {
                 timeouts,
                 tools,
                 exclude_tools,
+                ask_every_call,
             },
         })
     }
@@ -681,6 +735,8 @@ impl Declaration {
             timeouts,
             tools,
             exclude_tools,
+            ask_every_call,
+            choice_arguments,
             ..
         } = self
         else {
@@ -714,6 +770,137 @@ impl Declaration {
             tools,
             exclude_tools,
             allowed_hosts,
+            ask_every_call,
+            choice_arguments,
+        })
+    }
+
+    /// Whether every call to this server is put to the person, whatever a rule or an earlier
+    /// answer says, and no answer to one lasts (SERVERS-21).
+    pub fn asks_every_call(&self) -> bool {
+        match self {
+            Self::Stdio { ask_every_call, .. } | Self::Http { ask_every_call, .. } => {
+                *ask_every_call
+            }
+        }
+    }
+
+    /// This declaration with `ask` as whether every call to it is asked about. A local server
+    /// that is no longer asked about every call names no argument that takes a choice
+    /// (SERVERS-22).
+    pub fn asking_every_call(self, ask: bool) -> Self {
+        match self {
+            Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                timeouts,
+                tools,
+                exclude_tools,
+                allowed_hosts,
+                choice_arguments,
+                ..
+            } => Self::Stdio {
+                argv,
+                variables,
+                env,
+                reads,
+                directory,
+                timeouts,
+                tools,
+                exclude_tools,
+                allowed_hosts,
+                ask_every_call: ask,
+                // The choices need the asking (SERVERS-22), so they do not outlast it.
+                choice_arguments: match ask {
+                    true => choice_arguments,
+                    false => ChoiceArguments::new(),
+                },
+            },
+            Self::Http {
+                url,
+                env_http_headers,
+                bearer_env,
+                timeouts,
+                tools,
+                exclude_tools,
+                ..
+            } => Self::Http {
+                url,
+                env_http_headers,
+                bearer_env,
+                timeouts,
+                tools,
+                exclude_tools,
+                ask_every_call: ask,
+            },
+        }
+    }
+
+    /// The arguments of this server's tools that take a choice, by tool. Empty for a remote
+    /// server and for one that does not ask about every call (SERVERS-22).
+    pub fn choice_arguments(&self) -> &ChoiceArguments {
+        static NONE: ChoiceArguments = BTreeMap::new();
+        match self {
+            Self::Stdio {
+                choice_arguments, ..
+            } => choice_arguments,
+            Self::Http { .. } => &NONE,
+        }
+    }
+
+    /// This declaration with `choices` as the arguments of its tools that take a choice, checked
+    /// as a file's entry is.
+    ///
+    /// Each tool and each argument is a word a tool may be offered under, an argument at most
+    /// [`MAX_CHOICE_ARGUMENT`] long, and a tool names at least one argument. A remote server takes none, and a local one takes them only where it asks
+    /// about every call, so the declaration is built with [`Declaration::asking_every_call`]
+    /// before this (SERVERS-22).
+    pub fn choosing(self, choices: ChoiceArguments) -> Result<Self, Problem> {
+        let Self::Stdio {
+            argv,
+            variables,
+            env,
+            reads,
+            directory,
+            timeouts,
+            tools,
+            exclude_tools,
+            allowed_hosts,
+            ask_every_call,
+            ..
+        } = self
+        else {
+            return match choices.is_empty() {
+                true => Ok(self),
+                false => Err(Problem::Remote("choice_arguments")),
+            };
+        };
+        for (tool, arguments) in &choices {
+            let words = arguments
+                .iter()
+                .all(|argument| is_tool_word(argument) && argument.len() <= MAX_CHOICE_ARGUMENT);
+            if !is_tool_word(tool) || arguments.is_empty() || !words {
+                return Err(Problem::Choice);
+            }
+        }
+        if !choices.is_empty() && !ask_every_call {
+            return Err(Problem::ChoiceWithoutAsking);
+        }
+        Ok(Self::Stdio {
+            argv,
+            variables,
+            env,
+            reads,
+            directory,
+            timeouts,
+            tools,
+            exclude_tools,
+            allowed_hosts,
+            ask_every_call,
+            choice_arguments: choices,
         })
     }
 
@@ -727,6 +914,38 @@ impl Declaration {
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            ask_every_call: false,
+        })
+    }
+
+    /// This remote declaration at `url` and nothing else changed: the variables that name its
+    /// headers and its bearer token, its tool filters, its bounds and whether every call to it is
+    /// asked about stay as they were (SERVERS-11).
+    ///
+    /// The url is checked as a file's entry is. A stdio declaration has no address to move, so it
+    /// is refused as the wrong transport.
+    pub fn moved_to(self, url: String) -> Result<Self, Problem> {
+        let Self::Http {
+            env_http_headers,
+            bearer_env,
+            timeouts,
+            tools,
+            exclude_tools,
+            ask_every_call,
+            ..
+        } = self
+        else {
+            return Err(Problem::Transport);
+        };
+        remote(&url)?;
+        Ok(Self::Http {
+            url,
+            env_http_headers,
+            bearer_env,
+            timeouts,
+            tools,
+            exclude_tools,
+            ask_every_call,
         })
     }
 
@@ -744,6 +963,7 @@ impl Declaration {
             timeouts,
             tools,
             exclude_tools,
+            ask_every_call,
             ..
         } = self
         else {
@@ -779,6 +999,7 @@ impl Declaration {
             timeouts,
             tools,
             exclude_tools,
+            ask_every_call,
         })
     }
 
@@ -843,10 +1064,11 @@ impl Declaration {
     /// What an approval of this declaration binds to.
     ///
     /// The transport, the program and every argument or the url, the set of variable names, the
-    /// directory, and every stored value and the set of files it may read. Not the alias: an alias
-    /// is a label a person chose, and an approval keyed on it would let an edit to the argv inherit
-    /// an answer given about a different program. Not the order the names were written in either,
-    /// since the set is what the server receives.
+    /// directory, and every stored value and the set of files it may read, and whether every call
+    /// is asked about and the arguments that take a choice, which a declaration that does not say
+    /// so leaves out. Not the alias: an alias is a label a person chose, and an approval keyed on
+    /// it would let an edit to the argv inherit an answer given about a different program. Not the
+    /// order the names were written in either, since the set is what the server receives.
     pub fn digest(&self) -> Digest {
         let form = match self {
             Self::Stdio {
@@ -858,6 +1080,8 @@ impl Declaration {
                 tools,
                 exclude_tools,
                 allowed_hosts,
+                ask_every_call,
+                choice_arguments,
                 ..
             } => {
                 let variables: BTreeSet<&String> = variables.iter().collect();
@@ -887,6 +1111,12 @@ impl Declaration {
                     let hosts: BTreeSet<&String> = hosts.iter().collect();
                     form.push(serde_json::json!({ "allowed_hosts": hosts }));
                 }
+                if *ask_every_call {
+                    form.push(serde_json::json!({ "ask_every_call": true }));
+                }
+                if !choice_arguments.is_empty() {
+                    form.push(serde_json::json!({ "choice_arguments": choice_arguments }));
+                }
                 serde_json::Value::Array(form)
             }
             Self::Http {
@@ -895,6 +1125,7 @@ impl Declaration {
                 bearer_env,
                 tools,
                 exclude_tools,
+                ask_every_call,
                 ..
             } => {
                 let mut form = vec![DIGEST_FORM.into(), "http".into(), serde_json::json!(url)];
@@ -918,6 +1149,9 @@ impl Declaration {
                         serde_json::json!({ "tools": tools, "exclude_tools": exclude_tools }),
                     );
                 }
+                if *ask_every_call {
+                    form.push(serde_json::json!({ "ask_every_call": true }));
+                }
                 serde_json::Value::Array(form)
             }
         };
@@ -928,6 +1162,10 @@ impl Declaration {
     ///
     /// A change of transport is that one field, since nothing else of one transport compares with
     /// the other.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one comparison for each field of each transport"
+    )]
     pub fn changes(&self, other: &Self) -> Vec<Field> {
         match (self, other) {
             (
@@ -940,6 +1178,8 @@ impl Declaration {
                     tools,
                     exclude_tools,
                     allowed_hosts,
+                    ask_every_call,
+                    choice_arguments,
                     ..
                 },
                 Self::Stdio {
@@ -951,6 +1191,8 @@ impl Declaration {
                     tools: other_tools,
                     exclude_tools: other_exclude_tools,
                     allowed_hosts: other_allowed_hosts,
+                    ask_every_call: other_ask_every_call,
+                    choice_arguments: other_choice_arguments,
                     ..
                 },
             ) => {
@@ -972,6 +1214,11 @@ impl Declaration {
                         hosts(allowed_hosts) != hosts(other_allowed_hosts),
                         Field::AllowedHosts,
                     ),
+                    (ask_every_call != other_ask_every_call, Field::AskEveryCall),
+                    (
+                        choice_arguments != other_choice_arguments,
+                        Field::ChoiceArguments,
+                    ),
                 ]
                 .into_iter()
                 .filter_map(|(changed, field)| changed.then_some(field))
@@ -984,6 +1231,7 @@ impl Declaration {
                     bearer_env,
                     tools,
                     exclude_tools,
+                    ask_every_call,
                     ..
                 },
                 Self::Http {
@@ -992,6 +1240,7 @@ impl Declaration {
                     bearer_env: other_bearer_env,
                     tools: other_tools,
                     exclude_tools: other_exclude_tools,
+                    ask_every_call: other_ask_every_call,
                     ..
                 },
             ) => {
@@ -1023,6 +1272,9 @@ impl Declaration {
                 if set(exclude_tools) != set(other_exclude_tools) {
                     changed.push(Field::ExcludeTools);
                 }
+                if ask_every_call != other_ask_every_call {
+                    changed.push(Field::AskEveryCall);
+                }
                 changed
             }
             _ => vec![Field::Transport],
@@ -1041,6 +1293,7 @@ impl Declaration {
                 reads,
                 directory,
                 allowed_hosts,
+                choice_arguments,
                 ..
             } => {
                 entry.insert("argv".into(), argv.clone().into());
@@ -1062,6 +1315,12 @@ impl Declaration {
                 }
                 if let Some(hosts) = allowed_hosts {
                     entry.insert("allowed_hosts".into(), hosts.clone().into());
+                }
+                if !choice_arguments.is_empty() {
+                    entry.insert(
+                        "choice_arguments".into(),
+                        serde_json::json!(choice_arguments),
+                    );
                 }
             }
             Self::Http {
@@ -1092,6 +1351,9 @@ impl Declaration {
         if !self.exclude_tools().is_empty() {
             entry.insert("exclude_tools".into(), self.exclude_tools().to_vec().into());
         }
+        if self.asks_every_call() {
+            entry.insert("ask_every_call".into(), true.into());
+        }
         self.timeouts().write_into(&mut entry);
         serde_json::Value::Object(entry)
     }
@@ -1099,7 +1361,14 @@ impl Declaration {
     /// The declaration an entry states, or what is wrong with it.
     fn from_value(value: &serde_json::Value) -> Result<Self, Problem> {
         let entry = value.as_object().ok_or(Problem::NotAnObject)?;
-        const LOCAL: [&str; 5] = ["variables", "env", "reads", "directory", "allowed_hosts"];
+        const LOCAL: [&str; 6] = [
+            "variables",
+            "env",
+            "reads",
+            "directory",
+            "allowed_hosts",
+            "choice_arguments",
+        ];
         let allowed: &[&str] = match entry.get("transport").and_then(|word| word.as_str()) {
             Some("stdio") => &[
                 "transport",
@@ -1111,6 +1380,8 @@ impl Declaration {
                 "allowed_hosts",
                 "tools",
                 "exclude_tools",
+                "ask_every_call",
+                "choice_arguments",
                 Timeouts::STARTUP_KEY,
                 Timeouts::TOOL_KEY,
             ],
@@ -1121,6 +1392,7 @@ impl Declaration {
                 "bearer_env",
                 "tools",
                 "exclude_tools",
+                "ask_every_call",
                 Timeouts::STARTUP_KEY,
                 Timeouts::TOOL_KEY,
             ],
@@ -1152,6 +1424,11 @@ impl Declaration {
         };
         let tools = parse_tools("tools")?;
         let exclude_tools = parse_tools("exclude_tools")?;
+        let ask_every_call = match entry.get("ask_every_call") {
+            None => false,
+            Some(serde_json::Value::Bool(ask)) => *ask,
+            Some(_) => return Err(Problem::AskEveryCall),
+        };
         if allowed.contains(&"url") {
             let url = entry.get("url").and_then(|url| url.as_str());
             let env_http_headers = match entry.get("env_http_headers") {
@@ -1174,6 +1451,7 @@ impl Declaration {
             return Ok(Self::http(url.ok_or(Problem::Url)?.to_string())?
                 .heading(env_http_headers, bearer_env)?
                 .filtering(tools, exclude_tools)?
+                .asking_every_call(ask_every_call)
                 .timing(timeouts));
         }
         let argv = match entry.get("argv") {
@@ -1222,11 +1500,29 @@ impl Declaration {
             Some(_) => return Err(Problem::Directory),
         };
         let allowed_hosts = hosts_in(entry)?;
+        let choices = match entry.get("choice_arguments") {
+            None => ChoiceArguments::new(),
+            Some(serde_json::Value::Object(by_tool)) => by_tool
+                .iter()
+                .map(|(tool, arguments)| {
+                    let names = arguments.as_array().ok_or(Problem::Choice)?;
+                    let names = names
+                        .iter()
+                        .map(|name| name.as_str().map(str::to_string))
+                        .collect::<Option<BTreeSet<_>>>()
+                        .ok_or(Problem::Choice)?;
+                    Ok((tool.clone(), names))
+                })
+                .collect::<Result<_, Problem>>()?,
+            Some(_) => return Err(Problem::Choice),
+        };
         Ok(Self::stdio(argv, variables, directory)?
             .storing(env)?
             .reading(reads)?
             .hosting(allowed_hosts)?
             .filtering(tools, exclude_tools)?
+            .asking_every_call(ask_every_call)
+            .choosing(choices)?
             .timing(timeouts))
     }
 }
@@ -3035,5 +3331,456 @@ mod tests {
             let entry = declarations.get("srv").unwrap();
             assert_eq!(entry.declaration, expected, "testing json: {json}");
         }
+    }
+
+    /// SERVERS-21. A declaration that says `ask_every_call` keeps it through the file, on either
+    /// transport, and one that does not say it does not ask and writes no key. The regression it
+    /// rejects is a key the reader accepts and the writer drops, which would turn the property off
+    /// the next time the file is written.
+    #[test]
+    fn asking_every_call_is_read_written_and_roundtripped_on_either_transport() {
+        let text = r#"{"servers": {
+            "asks": {"transport": "stdio", "argv": ["browser", "mcp"], "ask_every_call": true},
+            "asks-remote": {"transport": "http", "url": "https://example.com/mcp", "ask_every_call": true},
+            "says-no": {"transport": "stdio", "argv": ["browser", "mcp"], "ask_every_call": false},
+            "silent": {"transport": "http", "url": "https://example.com/mcp"}
+        }}"#;
+        let read = Declarations::parse(text).unwrap();
+        let asks = |declarations: &Declarations, alias: &str| {
+            declarations
+                .get(alias)
+                .unwrap()
+                .declaration
+                .unwrap()
+                .asks_every_call()
+        };
+        assert!(asks(&read, "asks"));
+        assert!(asks(&read, "asks-remote"));
+        assert!(!asks(&read, "says-no"));
+        assert!(!asks(&read, "silent"));
+
+        let mut rewritten = Declarations::default();
+        for alias in ["asks", "asks-remote", "says-no", "silent"] {
+            rewritten.insert(alias, &read.get(alias).unwrap().declaration.unwrap());
+        }
+        let written = rewritten.to_text();
+        assert_eq!(written.matches("ask_every_call").count(), 2, "{written}");
+        let back = Declarations::parse(&written).unwrap();
+        for alias in ["asks", "asks-remote"] {
+            assert!(asks(&back, alias), "{alias}");
+        }
+        for alias in ["says-no", "silent"] {
+            assert!(!asks(&back, alias), "{alias}");
+        }
+    }
+
+    /// SERVERS-21. Only a boolean is read, so a word that is not one cannot be taken for a yes or
+    /// a no. The regression it rejects is a reader that treats any present value as true.
+    #[test]
+    fn ask_every_call_that_is_not_a_boolean_is_a_problem_of_that_entry() {
+        for value in ["\"true\"", "1", "null", "[]"] {
+            let text = format!(
+                r#"{{"servers": {{"srv": {{"transport": "stdio", "argv": ["tool"], "ask_every_call": {value}}}}}}}"#
+            );
+            let declarations = Declarations::parse(&text).unwrap();
+            assert_eq!(
+                declarations.get("srv").unwrap().declaration,
+                Err(Problem::AskEveryCall),
+                "{value}"
+            );
+        }
+    }
+
+    /// SERVERS-21. The property is part of what an approval binds to, so adding it to an approved
+    /// declaration asks again, and a declaration that does not ask digests exactly as it did
+    /// before the property existed. The pinned digests are the ones the earlier form produced,
+    /// so a form that always wrote the property would move them.
+    #[test]
+    fn asking_every_call_is_in_the_digest_and_a_declaration_that_does_not_ask_digests_as_before() {
+        let stdio = weather();
+        assert_eq!(
+            stdio.digest().to_string(),
+            "25edc5e806956f3254b5ff2b116f1c07ae5ad8d4a5df00f6d15c0f8aadfec43f"
+        );
+        assert_eq!(
+            stdio.clone().asking_every_call(false).digest(),
+            stdio.digest()
+        );
+        assert_ne!(
+            stdio.clone().asking_every_call(true).digest(),
+            stdio.digest()
+        );
+
+        let http = Declaration::http("https://example.com/mcp".into()).unwrap();
+        assert_eq!(
+            http.digest().to_string(),
+            "41f9016c26f4e52b7d388ee241fc2d53cfb6933d92777d5055b0b3bd5357224c"
+        );
+        assert_ne!(http.clone().asking_every_call(true).digest(), http.digest());
+
+        let filtered = stdio
+            .clone()
+            .filtering(words(&["get_forecast"]), Vec::new())
+            .unwrap();
+        assert_ne!(
+            filtered.clone().asking_every_call(true).digest(),
+            filtered.digest()
+        );
+    }
+
+    /// SERVERS-21. The question that asks again after an edit names the property when it is the
+    /// field that differs, on either transport, and the other builders keep it.
+    #[test]
+    fn a_change_to_asking_every_call_is_named_and_the_other_builders_keep_it() {
+        let base = weather();
+        let asking = base.clone().asking_every_call(true);
+        assert_eq!(base.changes(&asking), vec![Field::AskEveryCall]);
+        assert_eq!(asking.changes(&base), vec![Field::AskEveryCall]);
+        assert_eq!(asking.changes(&asking.clone()), Vec::<Field>::new());
+
+        let remote = Declaration::http("https://example.com/mcp".into()).unwrap();
+        let remote_asking = remote.clone().asking_every_call(true);
+        assert_eq!(remote.changes(&remote_asking), vec![Field::AskEveryCall]);
+
+        let built = asking
+            .storing(stored(&[("TOKEN", "x")]))
+            .and_then(|declaration| declaration.reading(vec![somewhere()]))
+            .and_then(|declaration| declaration.filtering(words(&["a"]), Vec::new()))
+            .map(|declaration| declaration.timing(Timeouts::default()))
+            .unwrap();
+        assert!(built.asks_every_call());
+        let remote_built = remote_asking
+            .heading(BTreeMap::new(), Some("TOKEN".into()))
+            .and_then(|declaration| declaration.filtering(words(&["a"]), Vec::new()))
+            .map(|declaration| declaration.timing(Timeouts::default()))
+            .unwrap();
+        assert!(remote_built.asks_every_call());
+    }
+
+    /// The pairs of the browser's `input` group, as a declaration spells them.
+    fn element_choices() -> ChoiceArguments {
+        ["click_element", "type_text", "select_option"]
+            .into_iter()
+            .map(|tool| {
+                (
+                    tool.to_string(),
+                    BTreeSet::from(["element_number".to_string()]),
+                )
+            })
+            .collect()
+    }
+
+    fn choosing_element_numbers() -> Declaration {
+        weather()
+            .asking_every_call(true)
+            .choosing(element_choices())
+            .expect("a declaration")
+    }
+
+    /// SERVERS-22. The arguments that take a choice are kept through the file, each tool once with
+    /// its arguments in an order that carries no meaning, and a declaration that names none writes
+    /// no key. The regression it rejects is a key the reader accepts and the writer drops, which
+    /// would take the choices off the next time the file is written, and a writer that keeps the
+    /// order or a repeat the person wrote.
+    #[test]
+    fn choice_arguments_are_read_written_and_roundtripped_on_a_server_that_asks_every_call() {
+        let text = r#"{"servers": {
+            "input": {"transport": "stdio", "argv": ["browser", "mcp"], "ask_every_call": true,
+                "choice_arguments": {"type_text": ["text", "element_number", "text"],
+                    "click_element": ["element_number"]}},
+            "plain": {"transport": "stdio", "argv": ["browser", "mcp"], "ask_every_call": true},
+            "empty": {"transport": "stdio", "argv": ["browser", "mcp"], "ask_every_call": true,
+                "choice_arguments": {}}
+        }}"#;
+        let read = Declarations::parse(text).unwrap();
+        let declared = |declarations: &Declarations, alias: &str| {
+            declarations.get(alias).unwrap().declaration.unwrap()
+        };
+        let expected: ChoiceArguments = BTreeMap::from([
+            (
+                "click_element".to_string(),
+                BTreeSet::from(["element_number".to_string()]),
+            ),
+            (
+                "type_text".to_string(),
+                BTreeSet::from(["element_number".to_string(), "text".to_string()]),
+            ),
+        ]);
+        assert_eq!(declared(&read, "input").choice_arguments(), &expected);
+        assert!(declared(&read, "plain").choice_arguments().is_empty());
+        assert!(declared(&read, "empty").choice_arguments().is_empty());
+
+        let mut rewritten = Declarations::default();
+        for alias in ["input", "plain", "empty"] {
+            rewritten.insert(alias, &declared(&read, alias));
+        }
+        let written = rewritten.to_text();
+        assert_eq!(written.matches("choice_arguments").count(), 1, "{written}");
+        let file: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(
+            file["servers"]["input"]["choice_arguments"],
+            serde_json::json!({
+                "click_element": ["element_number"],
+                "type_text": ["element_number", "text"]
+            }),
+            "{written}"
+        );
+        let back = Declarations::parse(&written).unwrap();
+        assert_eq!(declared(&back, "input"), declared(&read, "input"));
+        assert_eq!(declared(&back, "input").choice_arguments(), &expected);
+        assert!(declared(&back, "plain").choice_arguments().is_empty());
+    }
+
+    /// SERVERS-22. The shape is an object of tool words, each with a non-empty list of argument
+    /// words of at most 60 characters, and anything else is a problem of that entry. The
+    /// regression it rejects is a reader that takes any value, or a name the planner could not be
+    /// offered under on every backend, which is an argument whose name with `_ref` after it is
+    /// longer than a tool's.
+    #[test]
+    fn choice_arguments_that_are_not_tools_with_argument_words_are_a_problem_of_that_entry() {
+        let long = "a".repeat(MAX_TOOL + 1);
+        let too_long_to_offer_beside = "a".repeat(MAX_CHOICE_ARGUMENT + 1);
+        for value in [
+            r#""click_element:element_number""#.to_string(),
+            "null".to_string(),
+            "[]".to_string(),
+            r#"["click_element"]"#.to_string(),
+            r#"{"click_element": "element_number"}"#.to_string(),
+            r#"{"click_element": []}"#.to_string(),
+            r#"{"click_element": [1]}"#.to_string(),
+            r#"{"click_element": [null]}"#.to_string(),
+            r#"{"click_element": [""]}"#.to_string(),
+            r#"{"click_element": ["element number"]}"#.to_string(),
+            r#"{"click_element": ["element:number"]}"#.to_string(),
+            r#"{"": ["element_number"]}"#.to_string(),
+            r#"{"click element": ["element_number"]}"#.to_string(),
+            r#"{"alias:click_element": ["element_number"]}"#.to_string(),
+            format!(r#"{{"click_element": ["{long}"]}}"#),
+            format!(r#"{{"click_element": ["{too_long_to_offer_beside}"]}}"#),
+            format!(r#"{{"{long}": ["element_number"]}}"#),
+        ] {
+            let text = format!(
+                r#"{{"servers": {{"srv": {{"transport": "stdio", "argv": ["tool"],
+                    "ask_every_call": true, "choice_arguments": {value}}}}}}}"#
+            );
+            let declarations = Declarations::parse(&text).unwrap();
+            assert_eq!(
+                declarations.get("srv").unwrap().declaration,
+                Err(Problem::Choice),
+                "{value}"
+            );
+        }
+
+        let longest = "a".repeat(MAX_CHOICE_ARGUMENT);
+        let choices = BTreeMap::from([("click_element".to_string(), BTreeSet::from([longest]))]);
+        assert!(weather().asking_every_call(true).choosing(choices).is_ok());
+    }
+
+    /// SERVERS-22. A remote server cannot declare an argument that takes a choice, and neither can
+    /// a local one that does not ask about every call, since the person is shown the element a
+    /// choice leads to at each call and not before. The regressions it rejects are a remote server
+    /// that takes the key, a local one that takes it with the property false or missing, and a
+    /// builder that checks neither.
+    #[test]
+    fn a_choice_on_a_remote_server_or_one_that_does_not_ask_every_call_is_a_problem_of_that_entry()
+    {
+        let named = r#""choice_arguments": {"click_element": ["element_number"]}"#;
+        for (entry, expected) in [
+            (
+                format!(
+                    r#"{{"transport": "http", "url": "https://example.com/mcp", "ask_every_call": true, {named}}}"#
+                ),
+                Problem::Remote("choice_arguments"),
+            ),
+            (
+                format!(r#"{{"transport": "http", "url": "https://example.com/mcp", {named}}}"#),
+                Problem::Remote("choice_arguments"),
+            ),
+            (
+                format!(r#"{{"transport": "stdio", "argv": ["tool"], {named}}}"#),
+                Problem::ChoiceWithoutAsking,
+            ),
+            (
+                format!(
+                    r#"{{"transport": "stdio", "argv": ["tool"], "ask_every_call": false, {named}}}"#
+                ),
+                Problem::ChoiceWithoutAsking,
+            ),
+        ] {
+            let text = format!(r#"{{"servers": {{"srv": {entry}}}}}"#);
+            let declarations = Declarations::parse(&text).unwrap();
+            assert_eq!(
+                declarations.get("srv").unwrap().declaration,
+                Err(expected),
+                "{entry}"
+            );
+        }
+
+        assert_eq!(
+            weather().choosing(element_choices()),
+            Err(Problem::ChoiceWithoutAsking)
+        );
+        let remote = Declaration::http("https://example.com/mcp".into())
+            .unwrap()
+            .asking_every_call(true);
+        assert_eq!(
+            remote.clone().choosing(element_choices()),
+            Err(Problem::Remote("choice_arguments"))
+        );
+        assert_eq!(remote.clone().choosing(ChoiceArguments::new()), Ok(remote));
+        assert!(weather().choosing(ChoiceArguments::new()).is_ok());
+    }
+
+    /// SERVERS-22. The arguments are part of what an approval binds to only where there are any, so
+    /// a declaration that asks every call and names none digests as it did before, and the order
+    /// they were written in is not part of it while the pairing of a tool with an argument is. The
+    /// pinned digests were computed apart from this code, from the form the digest hashes. The
+    /// regressions it rejects are a digest that leaves the pairs out, which would let an edit add a
+    /// choice and keep the approval, one that always writes the key, one that hashes an order, and
+    /// one that cannot tell a tool from an argument.
+    #[test]
+    fn choice_arguments_are_in_the_digest_only_where_there_are_any() {
+        let asking = weather().asking_every_call(true);
+        assert_eq!(
+            asking.digest().to_string(),
+            "b6a12e67ef664f519f4b78954e1964affeaddc5d7b78e3110b4bea214167f95a"
+        );
+        assert_eq!(
+            asking
+                .clone()
+                .choosing(ChoiceArguments::new())
+                .unwrap()
+                .digest(),
+            asking.digest()
+        );
+        assert_eq!(
+            choosing_element_numbers().digest().to_string(),
+            "21b292bb2e565f3b286e9b76e59ba770e2601347e00421ad77b3952b500bcb16"
+        );
+
+        let pairs = |pairs: &[(&str, &[&str])]| -> ChoiceArguments {
+            pairs
+                .iter()
+                .map(|(tool, arguments)| {
+                    (
+                        tool.to_string(),
+                        arguments.iter().map(|word| word.to_string()).collect(),
+                    )
+                })
+                .collect()
+        };
+        let digest = |choices: ChoiceArguments| asking.clone().choosing(choices).unwrap().digest();
+        assert_eq!(
+            digest(pairs(&[("a", &["x", "y"]), ("b", &["x"])])),
+            digest(pairs(&[("b", &["x"]), ("a", &["y", "x", "y"])])),
+        );
+        let digests = [
+            digest(pairs(&[("a", &["x"])])),
+            digest(pairs(&[("x", &["a"])])),
+            digest(pairs(&[("a", &["y"])])),
+            digest(pairs(&[("a", &["x", "y"])])),
+            digest(pairs(&[("a", &["x"]), ("y", &["x"])])),
+            asking.digest(),
+        ];
+        let distinct: BTreeSet<_> = digests.iter().collect();
+        assert_eq!(distinct.len(), digests.len(), "{digests:?}");
+    }
+
+    /// SERVERS-22. Adding the arguments to an approved declaration asks again and names
+    /// `choice_arguments` among the fields that changed, as any key of the declaration does, and the
+    /// other builders keep them. The regressions it rejects are a change the question does not
+    /// name, an approval the added arguments inherit, and a builder that rebuilds the declaration
+    /// without them. Turning asking off takes them off, since they need it.
+    #[test]
+    fn a_change_to_choice_arguments_is_named_asks_again_and_the_other_builders_keep_them() {
+        let asking = weather().asking_every_call(true);
+        let choosing = choosing_element_numbers();
+        assert_eq!(asking.changes(&choosing), vec![Field::ChoiceArguments]);
+        assert_eq!(choosing.changes(&asking), vec![Field::ChoiceArguments]);
+        assert_eq!(choosing.changes(&choosing.clone()), Vec::<Field>::new());
+        assert_eq!(Field::ChoiceArguments.key(), "choice_arguments");
+        let one = asking
+            .clone()
+            .choosing(BTreeMap::from([(
+                "click_element".to_string(),
+                BTreeSet::from(["element_number".to_string()]),
+            )]))
+            .unwrap();
+        assert_eq!(one.changes(&choosing), vec![Field::ChoiceArguments]);
+
+        let mut approvals = Approvals::default();
+        approvals.approve("input", asking.digest());
+        let mut declarations = Declarations::default();
+        declarations.insert("input", &choosing);
+        assert!(!approvals.approves(&choosing.digest()));
+        assert!(approvals.changed("input", &choosing.digest()));
+        approvals.keep_only(&declarations);
+        assert_eq!(approvals.to_text(), "changed input\n");
+
+        let built = choosing
+            .clone()
+            .storing(stored(&[("TOKEN", "x")]))
+            .and_then(|declaration| declaration.reading(vec![somewhere()]))
+            .and_then(|declaration| declaration.filtering(words(&["a"]), Vec::new()))
+            .map(|declaration| declaration.timing(Timeouts::default()))
+            .map(|declaration| declaration.asking_every_call(true))
+            .unwrap();
+        assert_eq!(built.choice_arguments(), &element_choices());
+        let off = choosing.asking_every_call(false);
+        assert!(off.choice_arguments().is_empty());
+        assert_eq!(off.digest(), weather().digest());
+    }
+
+    /// SERVERS-11. A move changes the address and nothing else, and what it moves to is held to
+    /// what a declared address is. The regressions it rejects are a move that builds the
+    /// declaration anew, which drops the filters, the variable names and the bounds, one that
+    /// accepts an address a file's entry would refuse, and one that gives a stdio declaration an
+    /// address.
+    #[test]
+    fn a_move_changes_the_address_of_a_remote_declaration_and_nothing_else() {
+        let was = Declaration::http("https://a.example.com/mcp".into())
+            .unwrap()
+            .heading(
+                BTreeMap::from([("X-Team".to_string(), "TEAM_HEADER".to_string())]),
+                Some("TOKEN".into()),
+            )
+            .and_then(|declaration| {
+                declaration.filtering(words(&["get_forecast"]), words(&["delete_city"]))
+            })
+            .map(|declaration| declaration.timing(Timeouts::new(Some(7), Some(300)).unwrap()))
+            .map(|declaration| declaration.asking_every_call(true))
+            .unwrap();
+
+        let moved = was
+            .clone()
+            .moved_to("https://b.example.com/mcp".into())
+            .unwrap();
+
+        let expected = Declaration::http("https://b.example.com/mcp".into())
+            .unwrap()
+            .heading(
+                BTreeMap::from([("X-Team".to_string(), "TEAM_HEADER".to_string())]),
+                Some("TOKEN".into()),
+            )
+            .and_then(|declaration| {
+                declaration.filtering(words(&["get_forecast"]), words(&["delete_city"]))
+            })
+            .map(|declaration| declaration.timing(Timeouts::new(Some(7), Some(300)).unwrap()))
+            .map(|declaration| declaration.asking_every_call(true))
+            .unwrap();
+        assert_eq!(moved, expected);
+        assert_eq!(moved.changes(&was), vec![Field::Url]);
+        assert_eq!(
+            was.clone().moved_to("ftp://b.example.com".into()),
+            Err(Problem::Url)
+        );
+        assert_eq!(
+            was.moved_to("https://user:pass@b.example.com".into()),
+            Err(Problem::Credentials)
+        );
+        assert_eq!(
+            weather().moved_to("https://b.example.com".into()),
+            Err(Problem::Transport)
+        );
     }
 }

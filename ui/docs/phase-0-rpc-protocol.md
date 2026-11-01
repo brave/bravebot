@@ -1075,7 +1075,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
 | `manifest.error` | `{ run, kind, message, category, attempts, status, account, accountMessage, accountCommand, stopped, declined, problem, attempt, record, notices }` | a run stopped |
 | `exposure.request` | `{ request, path, shownPath, credentials, summary }` | let the planner read a file holding a credential |
-| `mcp.starting` | `{ servers }` | a session's first turn is starting the MCP servers its settings request |
+| `mcp.starting` | `{ servers }` | a session's first turn or first plan run is starting the MCP servers its settings request |
 | `mcp-server.request` | `{ request, alias, transport, command, url, program, variables, reads, directory, digest, requestedBy, changed, fetching }` | use an MCP server (SERVERS-4) |
 | `mcp.started` | `{ servers, confined, notes }` | what started, and a line for each request that did not |
 | `mcp-tools.request` | `{ request, alias, tools, refused, changed, vetting }` | offer a server's tools to the model (SERVERS-8) |
@@ -1397,7 +1397,7 @@ responses of `session.new`, `session.open` and `session.fork` carry `shownDirect
 ## 11. Current limits
 
 - Command, output, vouch, fetch, language-server, plan, credential-exposure, MCP and question
-  approvals are implemented. A plan-first run is offered no MCP server's tools.
+  approvals are implemented.
 - A manifest run's audit events carry `run` and no `turn`. The window does not show them yet.
 - What a manifest run released for a screen is not saved, so a run read back does not show it.
 - Replies arrive whole in `turn.done`; output-token events report counts, not text.
@@ -1680,12 +1680,13 @@ Still open:
   bypass mode, as in the terminal.
 - An approval covers the file for the session, as the agent keeps it. It is not written to the
   record, so a reopened or new session asks again.
-- A session's first turn starts the MCP servers its settings request, after the trust question,
-  and sends `mcp.starting` and then `mcp.started`. The questions it puts while it does are
-  `mcp-server.request` and `mcp-move.request`, through the turn like any other. The servers are
-  held until the session closes and are not written to the record, so a reopened or forked
-  session starts its own. A turn stopped while they start starts none, and the next turn asks
-  again. `session.new`, `session.open` and `session.fork` no longer carry `serversNote`.
+- A session's first turn or first plan run, whichever comes first, starts the MCP servers its
+  settings request, after the trust question, and sends `mcp.starting` and then `mcp.started`.
+  The questions it puts while it does are `mcp-server.request` and `mcp-move.request`, through
+  the turn or run like any other. The servers are held until the session closes and are not
+  written to the record, so a reopened or forked session starts its own, and the second of the
+  first turn and the first run starts none. A turn or run stopped while they start starts none,
+  and the next asks again. `session.new`, `session.open` and `session.fork` no longer carry `serversNote`.
 - `mcp-server.request` carries the declaration as fields. `command` is the argv of a local
   server and `url` the address of a remote one; `program` is where a local server's program
   resolved, sent only where that is not its first word. `variables` holds `{ name, stored }`,
@@ -1712,7 +1713,10 @@ Still open:
   each entry of `filesystemIgnored` carries `shownFile`, spelled the same way.
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.
-- A manifest run is passed the session's rules, and the agent's runner does not read them.
+- A manifest run is passed the session's rules. The agent's runner reads the `Mcp` rules and no
+  others, so a `deny` rule about a server's tool refuses a plan's call to it in every mode, and an
+  `allow` rule or a standing answer decides it as it does a turn's call (MANIFEST-15). A `deny` or
+  `ask` rule about anything else does not apply to a plan run.
 - `session.mode` takes `session` and `mode`, one of `ask`, `acceptEdits` or `plan`, and answers
   `{ permissionMode }`. Any other word, `bypass` included, is `bad_request`: bypassing is reached
   only through the command-line flag (MODE-5). It is accepted while a turn runs and applies to the rest

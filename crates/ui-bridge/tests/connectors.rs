@@ -6,6 +6,7 @@
 
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
+use bravebot_config::mcp::Declarations;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -421,6 +422,319 @@ fn editing_a_connector_keeps_the_bounds_its_declaration_gave() {
         declared.contains("\"tool_timeout_secs\": 300"),
         "{declared}"
     );
+}
+
+/// SERVERS-21: the settings page has no field for asking about every call, so editing a connector
+/// declared to ask keeps the property, on either transport. The fingerprint the page shows and
+/// approves is the digest of the declaration with the property, so the approval binds to it and a
+/// declaration without it is a change.
+#[test]
+fn editing_a_connector_declared_to_ask_every_call_keeps_that_and_approves_it() {
+    let scratch = Scratch::new("bridge-connectors-asks");
+    std::fs::write(
+        scratch.home().join(".bravebot/mcp.json"),
+        r#"{"servers": {
+            "cookies": {"transport": "stdio", "argv": ["bravebot-browser", "mcp", "--group", "cookies"],
+                "variables": ["PATH"], "ask_every_call": true},
+            "calc": {"transport": "http", "url": "http://localhost/mcp", "ask_every_call": true}}}"#,
+    )
+    .expect("declarations");
+    let mut front = FrontEnd::start(&scratch.home());
+
+    let same_stdio = json!({"alias": "cookies", "transport": "stdio",
+        "command": ["bravebot-browser", "mcp", "--group", "cookies"],
+        "variables": [{"name": "PATH"}]});
+    let edited_stdio = json!({"alias": "cookies", "transport": "stdio",
+        "command": ["bravebot-browser", "mcp", "--group", "cookies"],
+        "variables": [{"name": "PATH"}, {"name": "LANG"}]});
+    let same_http = remote("calc", "http://localhost/mcp");
+    let edited_http = remote("calc", "http://localhost/moved");
+
+    // Submitting what the listing shows is the declaration it already has.
+    for form in [&same_stdio, &same_http] {
+        let shown = front.call("connectors.preview", form.clone());
+        assert_eq!(shown["same"], true, "{shown}");
+        assert_eq!(shown["asks_every_call"], true, "{shown}");
+    }
+
+    for (alias, form) in [("cookies", edited_stdio), ("calc", edited_http)] {
+        let shown = front.call("connectors.preview", form.clone());
+        assert_eq!(shown["exists"], true, "{alias}: {shown}");
+        assert_eq!(shown["same"], false, "{alias}: {shown}");
+        assert_eq!(shown["asks_every_call"], true, "{alias}: {shown}");
+        let fingerprint = shown["fingerprint"].as_str().expect("a fingerprint");
+        front.call(
+            "connectors.connect",
+            with(
+                with(form, "fingerprint", json!(fingerprint)),
+                "replace",
+                json!(true),
+            ),
+        );
+
+        let declared = Declarations::parse(&scratch.file("mcp.json")).expect("declarations");
+        let written = declared
+            .get(alias)
+            .expect("still declared")
+            .declaration
+            .expect("a declaration");
+        assert!(
+            written.asks_every_call(),
+            "{alias}: {}",
+            scratch.file("mcp.json")
+        );
+        // What was approved is the declaration that asks, not the one without the property.
+        assert_eq!(written.digest().to_string(), fingerprint, "{alias}");
+        assert_ne!(
+            written
+                .clone()
+                .asking_every_call(false)
+                .digest()
+                .to_string(),
+            fingerprint,
+            "{alias}"
+        );
+        assert!(
+            scratch.file("mcp-approved").contains(fingerprint),
+            "{alias}"
+        );
+    }
+
+    let listed = front.call("connectors.list", json!({}));
+    for alias in ["cookies", "calc"] {
+        let connector = named(&listed, alias).expect("listed");
+        assert_eq!(connector["asks_every_call"], true, "{alias}: {connector}");
+        assert_eq!(connector["approved"], true, "{alias}: {connector}");
+    }
+}
+
+/// SERVERS-22: the settings page has no field for the arguments that take a choice, so editing a
+/// connector that names some keeps them. The fingerprint the page shows and approves is the digest
+/// of the declaration with them, so submitting what the listing shows is the declaration it already
+/// has, the approval binds to the pairs, and a declaration without them is a change. A connector
+/// edited to be reached by URL keeps none, since a remote server declares none, and keeps asking
+/// every call.
+#[test]
+fn editing_a_connector_that_names_choice_arguments_keeps_them_and_approves_them() {
+    let scratch = Scratch::new("bridge-connectors-choices");
+    std::fs::write(
+        scratch.home().join(".bravebot/mcp.json"),
+        r#"{"servers": {
+            "input": {"transport": "stdio", "argv": ["bravebot-browser", "mcp", "--group", "input"],
+                "variables": ["PATH"], "ask_every_call": true,
+                "choice_arguments": {"click_element": ["element_number"],
+                    "type_text": ["element_number"]}},
+            "moved": {"transport": "stdio", "argv": ["bravebot-browser", "mcp", "--group", "input"],
+                "variables": ["PATH"], "ask_every_call": true,
+                "choice_arguments": {"click_element": ["element_number"]}}}}"#,
+    )
+    .expect("declarations");
+    let mut front = FrontEnd::start(&scratch.home());
+
+    let command = |alias: &str, variables: Value| {
+        json!({"alias": alias, "transport": "stdio",
+            "command": ["bravebot-browser", "mcp", "--group", "input"],
+            "variables": variables})
+    };
+    let same = command("input", json!([{"name": "PATH"}]));
+    let shown = front.call("connectors.preview", same.clone());
+    assert_eq!(shown["same"], true, "{shown}");
+
+    let edited = command("input", json!([{"name": "PATH"}, {"name": "LANG"}]));
+    let shown = front.call("connectors.preview", edited.clone());
+    assert_eq!(shown["exists"], true, "{shown}");
+    assert_eq!(shown["same"], false, "{shown}");
+    let fingerprint = shown["fingerprint"].as_str().expect("a fingerprint");
+    front.call(
+        "connectors.connect",
+        with(
+            with(edited, "fingerprint", json!(fingerprint)),
+            "replace",
+            json!(true),
+        ),
+    );
+
+    let declared = Declarations::parse(&scratch.file("mcp.json")).expect("declarations");
+    let written = declared
+        .get("input")
+        .expect("still declared")
+        .declaration
+        .expect("a declaration");
+    let kept: bravebot_config::mcp::ChoiceArguments = [
+        (
+            "click_element".to_string(),
+            ["element_number".to_string()].into(),
+        ),
+        (
+            "type_text".to_string(),
+            ["element_number".to_string()].into(),
+        ),
+    ]
+    .into();
+    assert_eq!(
+        written.choice_arguments(),
+        &kept,
+        "{}",
+        scratch.file("mcp.json")
+    );
+    assert!(written.asks_every_call());
+    // What was approved is the declaration with the pairs, not the one without them.
+    assert_eq!(written.digest().to_string(), fingerprint);
+    assert_ne!(
+        written
+            .clone()
+            .choosing(Default::default())
+            .expect("the same declaration without them")
+            .digest()
+            .to_string(),
+        fingerprint
+    );
+    assert!(scratch.file("mcp-approved").contains(fingerprint));
+
+    let remote = with(
+        remote("moved", "http://localhost/mcp"),
+        "variables",
+        json!([]),
+    );
+    let shown = front.call("connectors.preview", remote.clone());
+    assert_eq!(shown["exists"], true, "{shown}");
+    assert_eq!(shown["asks_every_call"], true, "{shown}");
+    let fingerprint = shown["fingerprint"].as_str().expect("a fingerprint");
+    front.call(
+        "connectors.connect",
+        with(
+            with(remote, "fingerprint", json!(fingerprint)),
+            "replace",
+            json!(true),
+        ),
+    );
+    let declared = Declarations::parse(&scratch.file("mcp.json")).expect("declarations");
+    let written = declared
+        .get("moved")
+        .expect("still declared")
+        .declaration
+        .expect("a declaration");
+    assert!(written.asks_every_call());
+    assert!(written.choice_arguments().is_empty());
+    assert_eq!(written.digest().to_string(), fingerprint);
+    assert_eq!(
+        scratch.file("mcp.json").matches("choice_arguments").count(),
+        1,
+        "{}",
+        scratch.file("mcp.json")
+    );
+}
+
+/// SERVERS-3: the settings page has no field for a connector's tool filters, the headers a remote
+/// one sends, or the hosts a local one may reach, so editing a connector keeps them. The
+/// fingerprint the page shows and approves is the digest of the declaration with them, so
+/// submitting what the listing shows is the declaration it already has. A connector edited to the
+/// other transport keeps its filters, and keeps the headers or the hosts only where the new
+/// transport can hold them.
+#[test]
+fn editing_a_connector_keeps_its_tool_filters_headers_and_hosts() {
+    let scratch = Scratch::new("bridge-connectors-filters");
+    std::fs::write(
+        scratch.home().join(".bravebot/mcp.json"),
+        r#"{"servers": {
+            "api": {"transport": "http", "url": "http://localhost/mcp",
+                "tools": ["search"], "exclude_tools": ["delete"],
+                "env_http_headers": {"X-Team": "TEAM_ID"}, "bearer_env": "API_TOKEN"},
+            "local": {"transport": "stdio", "argv": ["bravebot-browser", "mcp", "--group", "tabs-read"],
+                "variables": ["PATH"], "tools": ["list_tabs"], "exclude_tools": ["open_tab"],
+                "allowed_hosts": ["example.com", "*.example.org"]},
+            "moved": {"transport": "stdio", "argv": ["bravebot-browser", "mcp"],
+                "variables": ["PATH"], "tools": ["list_tabs"], "exclude_tools": ["open_tab"],
+                "allowed_hosts": ["example.com"]},
+            "back": {"transport": "http", "url": "http://localhost/mcp",
+                "tools": ["search"], "exclude_tools": ["delete"],
+                "env_http_headers": {"X-Team": "TEAM_ID"}, "bearer_env": "API_TOKEN"}}}"#,
+    )
+    .expect("declarations");
+    let mut front = FrontEnd::start(&scratch.home());
+
+    let local = |alias: &str, variables: Value| {
+        json!({"alias": alias, "transport": "stdio",
+            "command": ["bravebot-browser", "mcp", "--group", "tabs-read"],
+            "variables": variables})
+    };
+    let written = |alias: &str| {
+        Declarations::parse(&scratch.file("mcp.json"))
+            .expect("declarations")
+            .get(alias)
+            .expect("still declared")
+            .declaration
+            .expect("a declaration")
+    };
+
+    // Submitting what the listing shows is the declaration it already has.
+    for form in [
+        remote("api", "http://localhost/mcp"),
+        local("local", json!([{"name": "PATH"}])),
+    ] {
+        let shown = front.call("connectors.preview", form.clone());
+        assert_eq!(shown["same"], true, "{form}: {shown}");
+    }
+
+    let edits = [
+        ("api", remote("api", "http://localhost/moved")),
+        (
+            "local",
+            local("local", json!([{"name": "PATH"}, {"name": "LANG"}])),
+        ),
+        ("moved", remote("moved", "http://localhost/mcp")),
+        ("back", local("back", json!([{"name": "PATH"}]))),
+    ];
+    for (alias, form) in edits {
+        let shown = front.call("connectors.preview", form.clone());
+        assert_eq!(shown["exists"], true, "{alias}: {shown}");
+        assert_eq!(shown["same"], false, "{alias}: {shown}");
+        let fingerprint = shown["fingerprint"].as_str().expect("a fingerprint");
+        front.call(
+            "connectors.connect",
+            with(
+                with(form, "fingerprint", json!(fingerprint)),
+                "replace",
+                json!(true),
+            ),
+        );
+        let declared = written(alias);
+        assert_eq!(declared.digest().to_string(), fingerprint, "{alias}");
+        assert!(
+            scratch.file("mcp-approved").contains(fingerprint),
+            "{alias}"
+        );
+    }
+
+    let api = written("api");
+    assert_eq!(api.tools(), ["search"]);
+    assert_eq!(api.exclude_tools(), ["delete"]);
+    assert_eq!(
+        api.env_http_headers().collect::<Vec<_>>(),
+        [("X-Team", "TEAM_ID")]
+    );
+    assert_eq!(api.bearer_env(), Some("API_TOKEN"));
+
+    let local = written("local");
+    assert_eq!(local.tools(), ["list_tabs"]);
+    assert_eq!(local.exclude_tools(), ["open_tab"]);
+    assert_eq!(
+        local.allowed_hosts(),
+        Some(&["example.com".to_string(), "*.example.org".to_string()][..])
+    );
+
+    let moved = written("moved");
+    assert_eq!(moved.transport(), "http");
+    assert_eq!(moved.tools(), ["list_tabs"]);
+    assert_eq!(moved.exclude_tools(), ["open_tab"]);
+    assert_eq!(moved.allowed_hosts(), None);
+
+    let back = written("back");
+    assert_eq!(back.transport(), "stdio");
+    assert_eq!(back.tools(), ["search"]);
+    assert_eq!(back.exclude_tools(), ["delete"]);
+    assert_eq!(back.env_http_headers().count(), 0);
+    assert_eq!(back.bearer_env(), None);
 }
 
 /// A name or a form the declarations cannot hold is refused before anything is written.

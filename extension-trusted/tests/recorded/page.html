@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Resolve</title>
+<style>
+  body { margin: 8px; font: 14px sans-serif; }
+  .row { margin: 4px 0; }
+  .stack { position: relative; height: 30px; }
+  .stack > * { position: absolute; left: 0; top: 0; width: 120px; height: 30px; }
+  .glass { background: rgba(255, 0, 0, 0.2); }
+  .through { background: rgba(0, 0, 255, 0.2); pointer-events: none; }
+  .fixed-away { position: fixed; left: 3000px; top: 10px; }
+</style>
+</head>
+<body>
+<h1>Resolve</h1>
+<div class="row"><input type="search" aria-label="Find in page"> <input type="text" aria-label="Full name"> <input type="number" aria-label="Quantity"></div>
+<div class="row"><label for="country">Country</label> <select id="country"><option>Norway</option><option>Peru</option></select> <select multiple aria-label="Many"><option>A</option><option>B</option></select></div>
+<div class="row" role="menu" aria-label="Actions"><div role="menuitem" tabindex="0">Rename</div></div>
+<div class="row" role="tablist"><div role="tab" aria-selected="true" tabindex="0">Overview</div><div role="tab" tabindex="-1">Details</div></div>
+<div class="row"><div role="switch" aria-checked="false" tabindex="0">Dark mode</div> <label><input type="checkbox" role="switch"> Notifications</label></div>
+<div class="row"><label><input type="checkbox"> Accept</label> <label><input type="radio" name="r"> Option one</label> <div role="listbox" aria-label="Choices"><div role="option">Choice A</div></div></div>
+<div class="row"><a href="/next?x=1">Next page</a> <a href="https://elsewhere.example/docs">Docs</a> <a href="#top">Docs</a></div>
+<form action="/post" method="post" class="row"><input type="text" aria-label="Query"> <button formaction="/other">Send it</button> <button>Submit</button></form>
+<div class="row"><button>Save</button> <button>Save</button> <button>Archive</button></div>
+<div class="row"><button>Twin</button> <button style="opacity:0">Twin</button></div>
+<div class="row" style="opacity:0"><button>Faded child</button></div>
+<div class="row"><button style="opacity:0">Ghost</button> <button style="width:1px;height:1px;padding:0;border:0;overflow:hidden">Tiny</button></div>
+<div class="row"><button aria-hidden="true">Secret agent</button> <button style="display:none">Gone</button> <button hidden>Nowhere</button> <button style="visibility:hidden">Invisible</button></div>
+<div class="row" aria-hidden="true"><button>Behind aria-hidden</button></div>
+<div class="stack"><button>Covered</button><div class="glass"></div></div>
+<div class="stack"><button>Click through</button><div class="through"></div></div>
+<div class="stack"><button>Under frame</button><iframe srcdoc="<body style='margin:0'><p>over</p></body>"></iframe></div>
+<div class="row"><input type="password" aria-label="Password"> <input type="text" autocomplete="current-password" aria-label="Account secret"> <input type="text" autocomplete="cc-number" aria-label="Card number"></div>
+<div class="row"><input type="file" aria-label="Attachment"> <button>Choose file</button></div>
+<div class="row"><button disabled>Disabled one</button> <button aria-disabled="true">Aria disabled</button> <input type="text" readonly aria-label="Read only field"></div>
+<fieldset disabled class="row"><legend>Group</legend><button>In fieldset</button></fieldset>
+<div id="closed-host"></div>
+<div id="open-host"></div>
+<iframe srcdoc="<body style='margin:0'><button>In a frame</button></body>" width="300" height="40"></iframe>
+<button class="fixed-away">Beyond the edge</button>
+<div style="height:1200px"></div>
+<button>Far below</button>
+<script>
+document.getElementById("closed-host").attachShadow({ mode: "closed" }).innerHTML = "<button>In closed root</button>";
+document.getElementById("open-host").attachShadow({ mode: "open" }).innerHTML = "<button>In open root</button>";
+</script>
+</body>
+</html>

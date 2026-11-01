@@ -148,8 +148,8 @@ An allowed-hosts approval is asked when a confined program asked the session pro
 which is checked to be a host name or an IP address before it is sent. A yes lets every later
 command in the conversation reach those hosts unless `deniedHosts` names them. It is not saved.
 
-MCP servers a project requests are started on a session's first turn, after the trust
-question, and only on a yes to a card that shows the whole declaration: what it runs or
+MCP servers a project requests are started on a session's first turn or first plan run, after
+the trust question, and only on a yes to a card that shows the whole declaration: what it runs or
 reaches, the variables it receives (a stored value by name only), the files it may read, the
 directory it may write, its digest, and a warning where its program fetches what it runs. A
 second card shows the server's list of tools before any of it reaches the model. The tool

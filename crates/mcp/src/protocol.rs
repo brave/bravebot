@@ -5,6 +5,8 @@
 //! supported, which keeps the trust direction one-way.
 
 use bravebot_core::invisible::draws_as_nothing;
+use bravebot_core::label::Label;
+use bravebot_core::policy::Carried;
 use bravebot_core::value::Labelled;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -765,16 +767,90 @@ impl PromptResult {
     }
 }
 
+/// The media types a picture in a tool result may be taken under, spelled as this client spells
+/// them. A picture's `mimeType` selects one of these or the picture is left out; the server's own
+/// string is never kept.
+pub const PICTURE_MEDIA: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// The most a picture in a tool result may hold, as the bytes its base64 decodes to.
+pub const MAX_PICTURE_BYTES: usize = 8 * 1024 * 1024;
+
 /// One piece of a tool result.
 ///
-/// Only text is extracted. Other content types are ignored rather than rejected, so an
-/// unfamiliar block does not fail the call.
+/// Text is extracted, and an `image` block is extracted as a picture where [`ContentBlock::picture`]
+/// accepts it. Other content types are ignored rather than rejected, so an unfamiliar block does not
+/// fail the call, and neither does what its `data` or `mimeType` holds, whatever the type of the
+/// value. A block whose `type` or `text` is not a string fails the whole result.
 #[derive(Debug, Deserialize)]
 pub struct ContentBlock {
     #[serde(rename = "type")]
     pub kind: String,
     #[serde(default)]
     pub text: Option<String>,
+    /// The base64 of an `image` block's bytes. Kept as the value the server sent, so that a block of
+    /// a kind this client does not read is not rejected for what its `data` happens to be.
+    #[serde(default)]
+    data: Option<Value>,
+    #[serde(default, rename = "mimeType")]
+    mime_type: Option<Value>,
+}
+
+impl ContentBlock {
+    /// The picture this block is, as its media type from [`PICTURE_MEDIA`], its base64 and how many
+    /// bytes that decodes to.
+    ///
+    /// Only an `image` block with a `mimeType` on the list and `data` that is base64 in its
+    /// canonical form and decodes to between one byte and [`MAX_PICTURE_BYTES`]. The canonical form
+    /// is the one a decode followed by an encode gives back, so what is taken holds nothing but the
+    /// base64 alphabet and its padding, and a decode of it cannot fail. The block's `text` is not
+    /// read, whatever the type says.
+    fn picture(&self) -> Option<(&'static str, &str, usize)> {
+        if self.kind != "image" {
+            return None;
+        }
+        let media = PICTURE_MEDIA
+            .iter()
+            .copied()
+            .find(|media| Some(*media) == self.mime_type.as_ref().and_then(Value::as_str))?;
+        let data = self.data.as_ref().and_then(Value::as_str)?;
+        let decoded = canonical_base64_len(data)?;
+        (1..=MAX_PICTURE_BYTES)
+            .contains(&decoded)
+            .then_some((media, data, decoded))
+    }
+}
+
+/// How many bytes `encoded` decodes to, where it is the standard alphabet in its canonical form:
+/// a multiple of four characters, `=` only as one or two final characters, and zero in the bits a
+/// final character does not use. None for anything else, the empty string included.
+fn canonical_base64_len(encoded: &str) -> Option<usize> {
+    let bytes = encoded.as_bytes();
+    if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
+        return None;
+    }
+    let padding = bytes.iter().rev().take_while(|byte| **byte == b'=').count();
+    if padding > 2 {
+        return None;
+    }
+    let (body, _) = bytes.split_at(bytes.len() - padding);
+    let mut last = 0;
+    for byte in body {
+        last = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+    }
+    // The bits of the final character that no byte uses: four of them behind two `=`, two behind one.
+    let unused = match padding {
+        2 => 0b1111,
+        1 => 0b11,
+        _ => 0,
+    };
+    (last & unused == 0).then_some(bytes.len() / 4 * 3 - padding)
 }
 
 #[derive(Debug, Deserialize)]
@@ -796,6 +872,59 @@ impl ToolResult {
             .collect::<Vec<_>>()
             .join("\n")
     }
+
+    /// What this client takes of the result, every part labelled `label`.
+    ///
+    /// The text parts joined, each picture as a `data:` URI of this client's own writing, and how
+    /// many parts were left out: a block of any type but `text` and `image`, and an image that
+    /// [`ContentBlock::picture`] does not accept. A text block that holds no text is not counted.
+    /// MCP-6.
+    pub fn output(&self, label: Label) -> ToolOutput {
+        let mut pictures = Vec::new();
+        let mut left_out = 0;
+        for block in &self.content {
+            match block.kind.as_str() {
+                "text" => {}
+                "image" => match block.picture() {
+                    Some((media, data, bytes)) => pictures.push(Picture {
+                        media,
+                        uri: Labelled::new(format!("data:{media};base64,{data}"), label),
+                        bytes,
+                    }),
+                    None => left_out += 1,
+                },
+                _ => left_out += 1,
+            }
+        }
+        ToolOutput {
+            text: Labelled::new(self.text(), label),
+            pictures,
+            left_out,
+        }
+    }
+}
+
+/// A picture a tool result carried, held as the `data:` URI a slot holds.
+///
+/// Labelled as the result's text is.
+#[derive(Debug)]
+pub struct Picture {
+    /// An entry of [`PICTURE_MEDIA`], never the string the server wrote.
+    pub media: &'static str,
+    pub uri: Labelled<String>,
+    /// How many bytes `uri` encodes, counted where the transport checked the base64.
+    pub bytes: usize,
+}
+
+/// What a successful tool call returned that this client takes.
+#[derive(Debug)]
+pub struct ToolOutput {
+    /// The text parts joined, empty where there were none.
+    pub text: Labelled<String>,
+    /// The pictures, in the order the server sent them.
+    pub pictures: Vec<Picture>,
+    /// How many parts were left out.
+    pub left_out: usize,
 }
 
 /// Params for `initialize`.
@@ -807,6 +936,29 @@ pub fn initialize_params(client_name: &str, client_version: &str) -> Value {
         "capabilities": {},
         "clientInfo": { "name": client_name, "version": client_version },
     })
+}
+
+/// What a planner names a choice by in a call: the argument it fills and this suffix (MCP-14).
+pub const CHOICE_SUFFIX: &str = "_ref";
+
+/// The name of the argument a planner writes to fill `argument` from a choice.
+pub fn choice_key(argument: &str) -> String {
+    format!("{argument}{CHOICE_SUFFIX}")
+}
+
+/// `arguments` with the number of a choice written into `argument` as a JSON integer, and the
+/// reference to the choice taken out (MCP-14).
+///
+/// The one place a [`Carried`] is opened, so the number goes into the call at the name a person's
+/// declaration gave and at no other, and the server is sent the integer and never the reference.
+/// It compares nothing: the same two edits are made for every number, 0 included. `arguments` is
+/// the object the caller checked it to be, and anything else is returned as it was.
+pub fn with_choice(mut arguments: Value, argument: &str, carried: Carried) -> Value {
+    if let Value::Object(pairs) = &mut arguments {
+        pairs.remove(&choice_key(argument));
+        pairs.insert(argument.to_string(), Value::from(carried.into_wire()));
+    }
+    arguments
 }
 
 /// Params for `tools/call`.
@@ -1224,6 +1376,215 @@ mod tests {
         assert_eq!(result.text(), "caption");
     }
 
+    /// Canonical base64 of `n` zero bytes, which is as long as the picture it stands for.
+    fn zeros(n: usize) -> String {
+        let mut text = "AAAA".repeat(n / 3);
+        text.push_str(match n % 3 {
+            1 => "AA==",
+            2 => "AAA=",
+            _ => "",
+        });
+        text
+    }
+
+    fn image(media: &str, data: &str) -> String {
+        format!(r#"{{"type":"image","mimeType":"{media}","data":"{data}"}}"#)
+    }
+
+    /// What this client takes of a result made of `blocks`, labelled as a server's result is.
+    fn taken(blocks: &[String]) -> ToolOutput {
+        let raw = format!(r#"{{"content":[{}]}}"#, blocks.join(","));
+        serde_json::from_str::<ToolResult>(&raw)
+            .expect("a tool result")
+            .output(Label::untrusted_private())
+    }
+
+    /// The first eight bytes of a PNG, which is the shortest picture worth a test of its own.
+    const A_PNG_SIGNATURE: &str = "iVBORw0KGgo=";
+
+    /// An image of each type on the list is a picture, under this client's spelling of the type and
+    /// in the order the server sent them, with the text joined as it was. Each carries the label the
+    /// caller gave the result, which is the result's own, and the number of bytes its data decodes
+    /// to, which is not the length of the data or of the URI.
+    #[test]
+    fn an_image_part_of_a_listed_type_is_taken_as_a_picture() {
+        let output = taken(&[
+            image("image/png", A_PNG_SIGNATURE),
+            r#"{"type":"text","text":"first"}"#.to_string(),
+            image("image/jpeg", "/9j/4A=="),
+            r#"{"type":"text","text":"second"}"#.to_string(),
+            image("image/gif", "R0lGODlh"),
+            image("image/webp", "UklGRg=="),
+        ]);
+
+        assert_eq!(output.left_out, 0);
+        assert_eq!(output.text.label(), Label::untrusted_private());
+        let media: Vec<_> = output
+            .pictures
+            .iter()
+            .map(|picture| picture.media)
+            .collect();
+        assert_eq!(media, PICTURE_MEDIA);
+        for picture in &output.pictures {
+            assert_eq!(picture.uri.label(), Label::untrusted_private());
+        }
+        let decoded: Vec<_> = output
+            .pictures
+            .iter()
+            .map(|picture| picture.bytes)
+            .collect();
+        assert_eq!(decoded, [8, 4, 6, 4]);
+    }
+
+    /// The type is looked up in a closed list, so a type that is merely image-like is not a picture.
+    /// An SVG is the one that matters: it is a document that can carry a script.
+    #[test]
+    fn an_image_of_a_type_not_on_the_list_is_left_out_and_counted() {
+        for media in [
+            "image/svg+xml",
+            "image/bmp",
+            "image/tiff",
+            "application/pdf",
+            "text/html",
+            "image/PNG",
+            "image/png; charset=binary",
+            " image/png",
+            "image/",
+            "",
+        ] {
+            let output = taken(&[image(media, A_PNG_SIGNATURE)]);
+            assert_eq!(
+                (output.pictures.len(), output.left_out),
+                (0, 1),
+                "{media:?} was taken"
+            );
+        }
+        let without_a_type = taken(&[format!(r#"{{"type":"image","data":"{A_PNG_SIGNATURE}"}}"#)]);
+        assert_eq!(
+            (without_a_type.pictures.len(), without_a_type.left_out),
+            (0, 1)
+        );
+        let control = taken(&[image("image/png", A_PNG_SIGNATURE)]);
+        assert_eq!((control.pictures.len(), control.left_out), (1, 0));
+    }
+
+    /// Only text and an `image` are read. A PDF is neither: it arrives as an embedded resource, or
+    /// as an image that names its type, and either way it is left out and counted. A text block
+    /// that holds no text is not a part that was left out.
+    #[test]
+    fn a_part_that_is_neither_text_nor_a_picture_is_left_out_and_counted() {
+        let output = taken(&[
+            r#"{"type":"resource","resource":{"uri":"file:///a.pdf","mimeType":"application/pdf","blob":"JVBERi0="}}"#
+                .to_string(),
+            image("application/pdf", "JVBERi0="),
+            r#"{"type":"audio","data":"AAAA","mimeType":"audio/wav"}"#.to_string(),
+            r#"{"type":"resource_link","uri":"https://example.com/a"}"#.to_string(),
+            r#"{"type":"text"}"#.to_string(),
+            r#"{"type":"text","text":"caption"}"#.to_string(),
+        ]);
+
+        assert_eq!((output.pictures.len(), output.left_out), (0, 4));
+        assert_eq!(output.text.label(), Label::untrusted_private());
+    }
+
+    /// Data that is not base64 in its canonical form is left out. What is taken holds nothing but the
+    /// alphabet and its padding, so a decode of it cannot fail and nothing written in the field can
+    /// end up in the URI built around it.
+    #[test]
+    fn data_that_is_not_canonical_base64_is_left_out_and_counted() {
+        for data in [
+            "",
+            "iVBORw0KGgo",
+            "AAA",
+            "AB==",
+            "AAB=",
+            "A===",
+            "AA=A",
+            "====",
+            "AAAA AAAA",
+            "AAAA\\nAAAA",
+            "AA-_",
+            "data:image/png;base64,AAAA",
+            "AAA\u{00e9}",
+            "AAAA\\\"onerror=\\\"x",
+        ] {
+            let output = taken(&[image("image/png", data)]);
+            assert_eq!(
+                (output.pictures.len(), output.left_out),
+                (0, 1),
+                "{data:?} was taken"
+            );
+        }
+        let not_a_string = taken(&[
+            r#"{"type":"image","mimeType":"image/png","data":5}"#.to_string(),
+            r#"{"type":"image","mimeType":"image/png","data":null}"#.to_string(),
+            r#"{"type":"image","mimeType":"image/png"}"#.to_string(),
+        ]);
+        assert_eq!((not_a_string.pictures.len(), not_a_string.left_out), (0, 3));
+        for data in ["AA==", "AAA=", "AAAA", "AQ==", "AAE=", A_PNG_SIGNATURE] {
+            let output = taken(&[image("image/png", data)]);
+            assert_eq!(output.pictures.len(), 1, "{data:?} was refused");
+        }
+    }
+
+    /// The size is what the base64 decodes to, so a picture at the cap is taken and one a byte over
+    /// is not, whichever way its padding falls.
+    #[test]
+    fn a_picture_past_the_cap_is_left_out_and_one_at_it_is_taken() {
+        let at = taken(&[image("image/png", &zeros(MAX_PICTURE_BYTES))]);
+        assert_eq!((at.pictures.len(), at.left_out), (1, 0));
+        for over in [MAX_PICTURE_BYTES + 1, MAX_PICTURE_BYTES + 2] {
+            let output = taken(&[image("image/png", &zeros(over))]);
+            assert_eq!(
+                (output.pictures.len(), output.left_out),
+                (0, 1),
+                "{over} bytes were taken"
+            );
+        }
+    }
+
+    /// The size a string is held to is read from its length and padding, so these are the lengths a
+    /// decode gives.
+    #[test]
+    fn the_size_of_canonical_base64_is_the_size_it_decodes_to() {
+        assert_eq!(canonical_base64_len("AA=="), Some(1));
+        assert_eq!(canonical_base64_len("AAA="), Some(2));
+        assert_eq!(canonical_base64_len("AAAA"), Some(3));
+        assert_eq!(canonical_base64_len("AAAAAA=="), Some(4));
+        assert_eq!(canonical_base64_len(A_PNG_SIGNATURE), Some(8));
+        assert_eq!(canonical_base64_len(&zeros(1000)), Some(1000));
+    }
+
+    /// What a block's `data` and `mimeType` hold is not an error whatever the type of the value, so
+    /// an unfamiliar block, or a familiar one with a field of another shape, does not fail the call.
+    #[test]
+    fn what_a_blocks_data_or_media_type_holds_is_never_an_error() {
+        let output = taken(&[
+            r#"{"type":"audio","data":5,"mimeType":["audio/wav"]}"#.to_string(),
+            r#"{"type":"text","text":"kept","data":{"x":1},"mimeType":false}"#.to_string(),
+            r#"{"type":"image","data":{"x":1},"mimeType":7}"#.to_string(),
+        ]);
+        assert_eq!((output.pictures.len(), output.left_out), (0, 2));
+    }
+
+    /// A block's `type` and `text` are read as strings, so a block where either is another type fails
+    /// the whole result, and the call with it. Left out and counted is for what a block holds beside
+    /// them.
+    #[test]
+    fn a_block_whose_type_or_text_is_not_a_string_fails_the_result() {
+        for block in [
+            r#"{"type":"audio","text":5}"#,
+            r#"{"type":5}"#,
+            r#"{"text":"no type"}"#,
+        ] {
+            let raw = format!(r#"{{"content":[{block}]}}"#);
+            assert!(
+                serde_json::from_str::<ToolResult>(&raw).is_err(),
+                "{block} was read"
+            );
+        }
+    }
+
     #[test]
     fn a_tool_level_error_is_visible() {
         let raw = r#"{"content":[{"type":"text","text":"it failed"}],"isError":true}"#;
@@ -1246,6 +1607,93 @@ mod tests {
         let params = call_params("search", serde_json::json!({"query": "rust"}));
         assert_eq!(params["name"], "search");
         assert_eq!(params["arguments"]["query"], "rust");
+    }
+
+    /// The number of a choice, as the one gate that makes one hands it over: stored, endorsed and
+    /// carried, since nothing else can build a `Carried`.
+    fn carried(number: u8) -> Carried {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::NullSink;
+        use bravebot_core::policy::{Policy, ReleasePlan, Routing};
+        use bravebot_core::slot::{SlotId, SlotStore};
+
+        let mut sink = NullSink;
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "click the checkout button");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([]),
+            &mut sink,
+        )
+        .expect("a policy");
+        let mut slots = SlotStore::new();
+        let choice = SlotId::new("ref:3");
+        // The number stands for the call's arguments too, which only need to be public words.
+        let number = Labelled::new(number, Label::trusted_public());
+        policy
+            .store_a_choice(
+                "spawn_processor",
+                choice.clone(),
+                "an isolated processor over ref:1",
+                number.clone(),
+                40,
+                &mut slots,
+            )
+            .expect("stored");
+        policy.endorse_mcp_call("brave-input", "click_element");
+        policy
+            .carry_a_choice("brave-input", "click_element", number, &choice, &mut slots)
+            .expect("carried")
+            .1
+    }
+
+    /// The server is sent the number as a JSON integer at the argument's own name and is never
+    /// sent the reference the planner wrote, and every other argument is as the planner wrote it.
+    /// A reference left in the call would be an argument the server did not ask for; a number
+    /// written as text would be refused by the tool; an argument touched besides the two would be
+    /// words the person was not shown. The same edits are made for 0 and for 99, since nothing
+    /// here compares the number.
+    #[test]
+    fn a_choice_replaces_the_ref_with_the_integer_and_nothing_else() {
+        let written = serde_json::json!({
+            "url": "https://shop.example/cart",
+            "element_number_ref": "ref:3",
+            "text": "element_number_ref",
+            "other_ref": "ref:4",
+        });
+        for number in [0u8, 7, 99] {
+            let sent = with_choice(written.clone(), "element_number", carried(number));
+            assert_eq!(
+                sent,
+                serde_json::json!({
+                    "url": "https://shop.example/cart",
+                    "element_number": number,
+                    "text": "element_number_ref",
+                    "other_ref": "ref:4",
+                }),
+                "the call sent for {number}"
+            );
+            assert!(sent["element_number"].is_u64(), "{sent}");
+        }
+
+        // The reference of another argument is not this one's, and an argument that names no
+        // reference gets the number all the same.
+        let sent = with_choice(
+            serde_json::json!({"url": "u", "other_ref": "ref:4"}),
+            "element_number",
+            carried(5),
+        );
+        assert_eq!(
+            sent,
+            serde_json::json!({"url": "u", "other_ref": "ref:4", "element_number": 5})
+        );
+    }
+
+    /// The name a planner writes is the argument and `_ref`.
+    #[test]
+    fn a_choice_is_named_by_its_argument_and_ref() {
+        assert_eq!(choice_key("element_number"), "element_number_ref");
     }
 
     #[test]

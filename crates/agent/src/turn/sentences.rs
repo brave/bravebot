@@ -58,6 +58,19 @@ pub(super) fn links_note(tool: &str, links: usize) -> String {
     }
 }
 
+/// What a result says about the parts of a server's answer its transport left out, beside the
+/// reference for the reason `capped_note` is. A number and never a word of what was left out.
+pub(super) fn left_out_note(left_out: usize) -> String {
+    if left_out == 0 {
+        return String::new();
+    }
+    format!(
+        "\n\n{} left out of what the server returned: only its text and a picture of a type and a \
+         size this client takes are kept.",
+        crate::tools::tally(left_out, "part was", "parts were")
+    )
+}
+
 /// How to see this one and how to stop being asked, for a run and
 /// only for a run.
 /// Without it the quarantine reads as a fact about running programs,

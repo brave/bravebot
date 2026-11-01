@@ -1,0 +1,17 @@
+{
+  "copied": [
+    "approval.js",
+    "confirm.css",
+    "confirm.html",
+    "confirm.js",
+    "confirmation.js",
+    "errors.js",
+    "files.js",
+    "shown.js",
+    "words.js"
+  ],
+  "own": [
+    "actions.js"
+  ],
+  "pending": []
+}

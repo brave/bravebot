@@ -65,7 +65,11 @@ ordinary way for the planner to ask about a file it may not read.
 **Why a delegate is not offered it.** The prompt belongs to the person who set the sub-task going,
 about content they never asked to see, in the middle of work they are not reading. What crosses
 back from a delegate is [delegation.md](../delegation.md)'s question, and this would put bytes
-into a context nobody at the keyboard is watching.
+into a context nobody at the keyboard is watching. The rows a person is shown for a picture a
+delegate holds do not suggest it either: they say what the delegate's tools can do with the
+picture ([VIEW-3](../terminal-transcript.md#VIEW-3)). Nor does the reference the delegate is handed:
+a reference names `vet_content` only to a run whose list of tools holds it, so a turn whose
+definition or command line left it out is not sent to it either.
 
 `verified-by: bravebot_core::policy::a_check_over_nothing_is_refused`
 `verified-by: bravebot_core::policy::a_picture_is_never_promoted_as_text_whoever_endorsed_it`
@@ -74,6 +78,9 @@ into a context nobody at the keyboard is watching.
 `verified-by: bravebot_agent::turn::a_picture_with_nowhere_to_copy_it_is_kept_back`
 `verified-by: bravebot_agent::tools::a_delegate_is_never_offered_a_way_to_promote_a_slot`
 `verified-by: bravebot_agent::turn::a_delegate_naming_vet_content_is_told_there_is_no_such_tool`
+`verified-by: bravebot_agent::turn::a_reference_a_delegate_is_handed_does_not_send_it_to_vet_content`
+`verified-by: bravebot_core::policy::a_reference_names_vet_content_exactly_when_the_run_is_offered_it`
+`verified-by: bravebot_core::reference::a_reference_made_for_a_run_without_vetting_names_no_vet_content_and_keeps_the_other_moves`
 `verified-by: bravebot_agent::turn::an_unread_reference_to_a_picture_is_opened_as_a_picture`
 
 <a id="VET-3"></a>
@@ -110,7 +117,11 @@ The check half of it is [CHECK-15](../vetting.md#CHECK-15).
 
 **What it covers.** Every file [READ-5](read-file.md#READ-5) reads as bytes, which is the whole of
 the closed table: PNG, JPEG, GIF, WebP and PDF. This clause says picture for all five, as that
-clause does, and says where a PDF goes differently. What a person is asked about is what their
+clause does, and says where a PDF goes differently. It also covers a picture a server's tool result
+carried ([MCP-6](../mcp.md#MCP-6)), which is a PNG, JPEG, GIF or WebP and never a PDF. Such a slot is
+the same kind of slot, so the check, the copy, the prompt, the attaching and every refusal below are
+the same for it, and where it came from is worded in the driver's words as the server's alias and the
+tool that returned it. What a person is asked about is what their
 viewer draws, the pixels of a raster picture and the pages of a PDF, and those are what a model
 reads words off, so somebody who looks closely enough sees what is drawn. What no viewer puts
 plainly in front of them is the first cost below, and a PDF holds more of it than a raster picture
@@ -150,7 +161,8 @@ shown holds.
 **What the person is shown.** A path to a file holding the picture, which they open in their own
 viewer before pressing `y` to let the planner see it. The file is a copy of the picture the slot
 holds, the bytes its data URI encodes. Turning that URI back into bytes cannot fail on anything the
-picture holds, because the driver made the encoding itself at the read. The copy is written as the
+picture holds, because this client made the encoding itself, at the read or, for a server's picture,
+in the transport, which takes only base64 in its canonical form. The copy is written as the
 prompt is drawn, into `bravebot/vetting` under the person's cache directory, a directory only their
 account can read and that no program the session confines may write: `~/Library/Caches` on macOS,
 `%LOCALAPPDATA%` on Windows, and `$XDG_CACHE_HOME` or `~/.cache` elsewhere. It is never the system
@@ -264,6 +276,8 @@ refusal is VET-3's, word for word.
 
 `verified-by: bravebot_agent::turn::a_picture_a_person_opens_and_lets_through_is_attached_after_the_results`
 `verified-by: bravebot_agent::turn::a_picture_a_person_keeps_out_is_never_attached`
+`verified-by: bravebot_agent::mcp::vet_content_attaches_a_servers_picture_after_a_person_says_yes`
+`verified-by: bravebot_agent::mcp::a_servers_picture_a_person_keeps_out_is_never_attached`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_attaches_a_picture_unasked`
 `verified-by: bravebot_agent::turn::bypassing_with_no_screening_attaches_a_picture_unshown`
 `verified-by: bravebot_agent::turn::a_model_listed_as_taking_no_pictures_is_never_asked_about_one`

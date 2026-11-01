@@ -32,8 +32,12 @@ that needs its parts labelled separately stays native rather than moving behind 
 A tool result is content from outside, so it is labelled untrusted and quarantined like anything
 else nobody vouched for. It is labelled private too, so a line fed one is put to the person as a
 line fed a file is ([PERM-9](permissions.md#PERM-9)). Nothing a server says about itself changes
-either label, a result it marks as its own failure included. The words a server describes its tools
-with stay public ([SERVERS-8](mcp-servers.md#SERVERS-8)).
+either label, a result it marks as its own failure included. A picture the result carries takes
+the label its text takes ([MCP-6](#MCP-6)). What a session fetched with a tool of what a person
+held out in a browser is a tool's result, and holding it out gives its bytes no label
+([BROWSER-39](browser.md#BROWSER-39)). The words a server describes its tools with stay public
+([SERVERS-8](mcp-servers.md#SERVERS-8)). A number carried into an argument from a choice
+([MCP-14](#MCP-14)) is sent to the server, and what the server returns is labelled as before.
 
 **Why private.** A server may hold the person's own data, a mailbox or a calendar, and this client
 cannot tell what a given call read. Labelling a search server's answer private costs one question
@@ -42,9 +46,12 @@ that program unasked.
 
 `verified-by: bravebot_mcp::stdio::a_tool_result_is_labelled_untrusted_and_private`
 `verified-by: bravebot_mcp::http::a_tool_result_is_labelled_untrusted_and_private`
+`verified-by: bravebot_mcp::stdio::a_tool_result_picture_is_labelled_untrusted_and_private`
+`verified-by: bravebot_mcp::http::a_tool_result_picture_is_labelled_untrusted_and_private`
 `verified-by: bravebot_mcp::stdio::a_tool_level_error_is_reported_as_a_failure`
 `verified-by: bravebot_mcp::http::a_tool_level_error_is_reported_as_a_failure`
 `verified-by: bravebot_agent::mcp::a_servers_answer_fed_to_a_vouched_line_is_still_put_to_a_person`
+`verified-by: bravebot_agent::browser_group_servers::what_a_person_held_out_in_the_browser_is_a_reference_and_the_planner_never_holds_it`
 
 <a id="MCP-2"></a>
 ### MCP-2: a call needs the capability, like any other effect
@@ -80,6 +87,14 @@ A server error, a tool-level error, a server that exits early, and a request not
 its bound ([SERVERS-15](mcp-servers.md#SERVERS-15)) are all reported as failures. A reply carrying no
 JSON is nothing rather than an empty success.
 
+A failure says whether a reply arrived, so that a caller can treat every reply alike whatever it
+holds. A tool-level error, a JSON-RPC error and a reply this client cannot use are replies. A reply
+cannot be used when it does not parse, holds neither a result nor an error, comes with an HTTP
+status that is not a success or a redirect this client cannot follow, or is a line past the bound
+([MCP-13](#MCP-13)). A server that could not be started or written to, a connection closed before
+any reply, and a request not answered within its bound are not replies. A plan run goes on after a
+reply and ends at a call that got none ([MANIFEST-15](manifest.md#MANIFEST-15)).
+
 **Why.** An error read as "no results" would have the planner conclude a thing does not exist when
 the truth is that nobody asked successfully.
 
@@ -91,15 +106,59 @@ the truth is that nobody asked successfully.
 `verified-by: bravebot_mcp::protocol::an_error_response_parses`
 `verified-by: bravebot_mcp::http::a_reply_with_no_json_is_none`
 `verified-by: bravebot_mcp::stdio::a_call_not_answered_within_its_bound_is_a_timeout_naming_the_tool_and_the_bound`
+`verified-by: bravebot_mcp::http::a_call_that_was_answered_is_told_from_one_that_was_not`
+`verified-by: bravebot_mcp::stdio::a_result_of_the_wrong_shape_is_a_reply_and_not_a_transport_failure`
 
 <a id="MCP-6"></a>
-### MCP-6: only text content is taken from a result
+### MCP-6: a tool result's text and pictures are taken, and every other part is left out and counted
 
-Non-text content is ignored rather than guessed at, and several text parts are joined.
+Several text parts are joined. An `image` part is taken as a picture only where its `mimeType` is
+one of `image/png`, `image/jpeg`, `image/gif` and `image/webp`, its `data` is base64 in its
+canonical form, and it decodes to between one byte and 8 MiB, the size a picture read from a file
+is held to. The picture is held as a `data:` URI this client writes under its own spelling of the
+type, so it holds the base64 alphabet and its padding and nothing else the server wrote.
+
+Every other part is left out and counted: an image that fails any of those, audio, an embedded
+resource, a link, and a PDF however it arrives. The planner is told how many parts were left out as
+a number, and is told nothing of what they were. What a part's `data` and `mimeType` hold is not an
+error whatever the type of the value. A part whose `type` or `text` is not a string fails the whole
+result. A result that failed carries its text only, and the messages of a prompt are text only
+([MCP-11](#MCP-11)).
+
+A picture is held in a slot of its own beside the text's, and takes the label the text takes
+([MCP-1](#MCP-1)). It is quarantined whatever that label is, so the planner is given a reference
+that names its type and size, which is the byte count of the `data:` URI it is held as. A processor
+is given it as a picture, the planner is shown it only after `vet_content`
+([VET-4](tools/vet-content.md#VET-4)), and `write_file` writes it as the file it encodes
+([WRITE-9](tools/write-file.md#WRITE-9)). The person watching is shown rows saying what it is, how
+many bytes it decodes to, the name it is held under and how to look at it, and none of its bytes
+([VIEW-3](terminal-transcript.md#VIEW-3)). Which of the four types a server names,
+whether it sends a text part, how many pictures it sends and how many parts are left out are the
+choices of a server this clause leaves to it, and are recorded as the eighth of the Known costs in
+[labels.md](labels.md).
+
+**Why.** A page's screenshot is the result a browser tool exists to return, and it is a tool result
+like any other: untrusted, and private because what the server read may be the person's own.
+Dropping every part but text meant such a tool could not be offered at all. Taking a picture under
+a closed list of types, a size cap and an encoding this client writes itself leaves a server no
+string of its own anywhere in what is held, and leaves what a picture is allowed to reach to the
+clauses that already say it.
 
 `verified-by: bravebot_mcp::protocol::tool_result_text_is_joined`
 `verified-by: bravebot_mcp::protocol::non_text_content_is_ignored`
 `verified-by: bravebot_mcp::protocol::a_block_of_another_type_is_ignored_even_when_it_carries_text`
+`verified-by: bravebot_mcp::protocol::an_image_part_of_a_listed_type_is_taken_as_a_picture`
+`verified-by: bravebot_mcp::protocol::an_image_of_a_type_not_on_the_list_is_left_out_and_counted`
+`verified-by: bravebot_mcp::protocol::a_part_that_is_neither_text_nor_a_picture_is_left_out_and_counted`
+`verified-by: bravebot_mcp::protocol::data_that_is_not_canonical_base64_is_left_out_and_counted`
+`verified-by: bravebot_mcp::protocol::a_picture_past_the_cap_is_left_out_and_one_at_it_is_taken`
+`verified-by: bravebot_mcp::protocol::the_size_of_canonical_base64_is_the_size_it_decodes_to`
+`verified-by: bravebot_mcp::protocol::what_a_blocks_data_or_media_type_holds_is_never_an_error`
+`verified-by: bravebot_mcp::protocol::a_block_whose_type_or_text_is_not_a_string_fails_the_result`
+`verified-by: bravebot_agent::mcp::a_picture_a_server_returns_is_never_shown_to_the_planner`
+`verified-by: bravebot_agent::mcp::a_part_left_out_of_a_text_only_result_is_told_to_the_planner_as_a_count`
+`verified-by: bravebot_agent::mcp::a_servers_picture_is_held_to_the_size_and_types_a_picture_from_a_file_is`
+`verified-by: bravebot_agent::mcp::a_picture_a_server_returns_can_be_written_to_a_file_the_person_approves`
 
 <a id="MCP-7"></a>
 ### MCP-7: the transport is parsed strictly
@@ -244,7 +303,8 @@ anything is sent, as it refuses a tool call.
 The text of the messages is labelled as a tool's result is (MCP-1): untrusted, and private, because
 what a server read to compose it may be the person's own. The role a message says it was written
 as is not read, so a message a server dresses as the assistant's is the same text. Only text
-content is taken and the messages are joined in order (MCP-6). A result with no text content, one
+content is taken, joined in order as a tool result's text is (MCP-6), and a picture in a prompt is
+not taken. A result with no text content, one
 of pictures and embedded resources alone, is a failure and not an empty prompt (MCP-5). A rejection
 is reported as the method and the code, and a reply this client will not parse as what was being
 read (MCP-8).
@@ -295,7 +355,9 @@ taken from the server's bytes ([LABEL-8](labels.md#LABEL-8)).
 
 **A known cost.** A remote server is not read this way. Its requests are one POST each and no
 stream is held open between them, so a notice has nowhere to arrive. A prompt a server adds after it
-starts is not offered until it starts again, whether or not it announces the change.
+starts is not offered until it starts again, whether or not it announces the change. It is started
+holding the declaration's filters as a local one is, so a list read again for it would be held to
+them.
 
 `verified-by: bravebot_mcp::stdio::a_tool_list_change_the_server_announced_is_found_once_and_the_list_read_again`
 `verified-by: bravebot_agent::mcp::a_tool_list_that_cannot_be_read_again_offers_none_of_the_servers_tools`
@@ -304,3 +366,78 @@ starts is not offered until it starts again, whether or not it announces the cha
 `verified-by: bravebot_mcp::protocol::only_a_message_with_the_method_and_no_id_is_the_notice`
 `verified-by: bravebot_agent::mcp::a_tool_list_the_server_announced_a_change_to_is_put_to_the_person_again_before_it_is_offered`
 `verified-by: bravebot_agent::mcp::a_tool_list_read_again_after_a_change_is_held_to_the_declarations_filters`
+`verified-by: bravebot_agent::servers::a_remote_server_is_started_holding_the_filters_its_declaration_gave`
+
+<a id="MCP-13"></a>
+### MCP-13: a line a stdio server writes is read up to a bound, and a longer one is a failure
+
+A reply is one line, and the reader holds a line no longer than 16 MiB, newline not counted. A longer
+line is a failure in this client's words, which quote nothing of it, and the reader stops there: the
+rest of that line and every line after it are not read. A request made after it fails the same way,
+since nothing more is read from that server, and both are told as a reply this client could not use
+([MCP-5](#MCP-5)).
+
+**Why.** A server chooses how long its line is, and a reader that holds a whole line holds whatever
+it is sent. The bound is above the largest reply a tool can return that this client takes: a picture
+at the cap ([MCP-6](#MCP-6)) is a little over 11 MB of base64.
+
+`verified-by: bravebot_mcp::stdio::a_line_up_to_the_limit_is_read_whole`
+`verified-by: bravebot_mcp::stdio::a_line_past_the_limit_is_a_failure_and_the_reader_stops_there`
+`verified-by: bravebot_mcp::stdio::a_reply_line_past_the_bound_is_a_failure_and_is_not_held`
+
+<a id="MCP-14"></a>
+### MCP-14: an argument a person declared as taking a choice is filled from a choice by one gate, after the person answers the call
+
+A server's declaration may name a tool and one of its arguments as taking a choice
+([SERVERS-22](mcp-servers.md#SERVERS-22)). A turn is offered `<argument>_ref`, a string naming a
+reference, beside that argument, and the argument is not required of it. Where the server lists the
+tool with an argument of that name itself, the argument is not offered as a choice for that tool, the
+server's own argument is offered as it listed it, and a call that gives it is sent as written
+([SERVERS-22](mcp-servers.md#SERVERS-22)). A plan is offered the
+tool's own arguments and no `<argument>_ref` ([MANIFEST-15](manifest.md#MANIFEST-15)). A call that
+names the reference is accepted only from a context that has met nothing untrusted and only for a
+choice nobody has spent ([LABEL-5](labels.md#LABEL-5), [PROC-16](processors.md#PROC-16)). It is
+refused, with nobody asked, where the argument is also written out and where more than one choice is
+named.
+
+The call is put to the person before the number is carried, whatever a rule, a standing answer or a
+mode says ([SERVERS-21](mcp-servers.md#SERVERS-21)). The question draws the argument as the number
+and which reference it came from. Where the person answers yes, one gate of the policy layer
+consumes the endorsement that answer minted for the tool, refuses arguments that were written in a
+context that has met untrusted content or that are private, spends the choice, and hands the number
+on as a value that one function of the transport crate can open. That function writes it into the
+call as a JSON integer at the declared name and removes `<argument>_ref`. A call whose other
+arguments are private is asked about and refused after the answer, and sends nothing. Where the
+person answers no, or nobody can be asked, nothing is carried and the choice is not spent. A call
+refused for any reason before the gate spends the choice leaves it as it was.
+
+**Why.** The arguments of a call are the planner's own words ([SERVERS-7](mcp-servers.md#SERVERS-7)),
+and this process reads none of a processor's answer. The number is a labelled byte in the slot
+store, an opaque value in the gate that carries it, and digits on the screen of the person asked,
+and nothing compares it. The gates that release it are counted in [labels.md](labels.md), and the
+function that writes it into a call is in the transport crate, which is not the driver, so a second
+place that fills an argument from a choice is a moved count or a line in a diff.
+
+`verified-by: bravebot_core::policy::carry_a_choice_consumes_the_endorsement_spends_the_choice_and_refuses_before_spending`
+`verified-by: bravebot_core::policy::the_trail_of_carrying_a_choice_is_the_same_for_every_number_and_holds_no_digit`
+`verified-by: bravebot_core::policy::a_choice_is_drawn_as_digits_to_the_person_and_only_while_it_can_fill_a_call`
+`verified-by: bravebot_core::slot::a_choice_is_read_without_being_used_and_used_once`
+`verified-by: bravebot_mcp::protocol::a_choice_replaces_the_ref_with_the_integer_and_nothing_else`
+`verified-by: bravebot_mcp::protocol::a_choice_is_named_by_its_argument_and_ref`
+`verified-by: bravebot_agent::browser_group_servers::a_choice_fills_only_the_argument_the_declaration_named`
+`verified-by: bravebot_agent::browser_group_servers::an_undeclared_tool_sends_a_ref_argument_as_written`
+`verified-by: bravebot_agent::browser_group_servers::a_server_that_lists_the_second_name_of_a_choice_itself_keeps_that_argument`
+`verified-by: bravebot_agent::browser_group_servers::a_choice_call_is_refused_and_sends_nothing_where_the_argument_is_also_written_out`
+`verified-by: bravebot_agent::browser_group_servers::a_choice_call_is_refused_and_sends_nothing_where_another_argument_is_private`
+`verified-by: bravebot_agent::browser_group_servers::a_choice_call_is_refused_and_sends_nothing_where_the_context_has_met_untrusted_content`
+`verified-by: bravebot_agent::browser_group_servers::a_spent_choice_cannot_fill_a_second_call`
+`verified-by: bravebot_agent::browser_group_servers::a_refused_call_does_not_spend_the_choice`
+`verified-by: bravebot_agent::browser_group_servers::a_no_to_the_question_does_not_spend_the_choice`
+`verified-by: bravebot_agent::browser_group_servers::the_question_draws_the_number_and_where_it_came_from`
+`verified-by: bravebot_agent::browser_group_servers::no_denial_or_sentence_to_the_planner_holds_a_digit`
+`verified-by: bravebot_agent::browser_group_servers::whatever_the_processor_answered_the_driver_makes_the_same_calls`
+`verified-by: bravebot_agent::browser_group_servers::neither_a_rule_nor_bypassing_answers_a_call_with_a_choice`
+`verified-by: bravebot_agent::browser_group_servers::a_run_with_nobody_to_ask_refuses_a_call_with_a_choice`
+`verified-by: bravebot_agent::browser_group_servers::a_delegate_is_refused_a_call_with_a_choice_with_nobody_asked`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_cannot_name_a_choice`
+`verified-by: by-construction (Carried implements no comparison, Hash, Display, conversion to an integer, Deref or AsRef and shows only that a number is there in Debug, so the one thing a caller can do with it is move it into bravebot_mcp::protocol::with_choice; the compile_fail doctests on Carried in crates/core/src/policy.rs pin each of them, and labels.md pins the uses of Carried::into_wire, one of them outside the policy layer, in with_choice)`

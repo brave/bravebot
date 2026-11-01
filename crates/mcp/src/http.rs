@@ -15,8 +15,8 @@
 //! and a new [`HttpServer`] rather than this one following the header.
 
 use crate::protocol::{
-    Listing, PromptListing, PromptResult, RpcRequest, RpcResponse, ToolResult, call_params,
-    declares_prompts, get_prompt_params, initialize_params, paged, paged_prompts,
+    Listing, PromptListing, PromptResult, RpcRequest, RpcResponse, ToolOutput, ToolResult,
+    call_params, declares_prompts, get_prompt_params, initialize_params, paged, paged_prompts,
 };
 use crate::{McpError, McpResult, log_step, malformed, named};
 use bravebot_core::capability::{Capability, ServerAlias};
@@ -158,6 +158,12 @@ impl HttpServer {
                 what: method.to_string(),
                 after: self.bound,
             },
+            // A status other than a success and a redirect that cannot be followed are things
+            // the server answered with.
+            replied @ (EgressError::Status { .. }
+            | EgressError::TooManyRedirects { .. }
+            | EgressError::MissingLocation { .. }
+            | EgressError::InsecureRedirect { .. }) => McpError::Unusable(replied.to_string()),
             other => McpError::Transport(other.to_string()),
         })?;
 
@@ -169,7 +175,7 @@ impl HttpServer {
         // A server may frame its reply as SSE even when JSON was requested.
         let text = String::from_utf8_lossy(&bytes);
         let payload = extract_json(&text).ok_or_else(|| {
-            McpError::Transport(format!(
+            McpError::Unusable(format!(
                 "{method} returned no json payload ({} bytes)",
                 bytes.len()
             ))
@@ -189,7 +195,7 @@ impl HttpServer {
         }
 
         parsed.result.ok_or_else(|| {
-            McpError::Transport(format!("{method} returned neither a result nor an error"))
+            McpError::Unusable(format!("{method} returned neither a result nor an error"))
         })
     }
 
@@ -275,14 +281,14 @@ impl HttpServer {
         Ok(Labelled::new(parsed.text(), label))
     }
 
-    /// Call a tool.
+    /// Call a tool. The result is labelled untrusted-private, text and pictures alike (MCP-1, MCP-6).
     pub fn call_tool<S: Sink>(
         &mut self,
         policy: &mut Policy<'_, S>,
         egress: &Egress,
         tool: &str,
         arguments: Value,
-    ) -> McpResult<Labelled<String>> {
+    ) -> McpResult<ToolOutput> {
         policy
             .before_capability(self.capability())
             .map_err(McpError::Denied)?;
@@ -310,7 +316,7 @@ impl HttpServer {
             });
         }
 
-        Ok(Labelled::new(parsed.text(), label))
+        Ok(parsed.output(label))
     }
 }
 

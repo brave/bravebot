@@ -105,7 +105,7 @@ in-tree under [docs/website](docs/website).
 Before data is processed it is labelled as trusted or untrusted and as public or private.
 An example of untrusted content is text from a web page. An example of private data is a project's secrets.
 Brave Bot can work with untrusted and private content, but it never lets that content into its planner's context.
-Processors are used to work on immutable untrusted content. A processor is a sub-agent with no tools, no memory and no conversation. It can read untrusted content and rewrite it, but nothing it produces can direct what happens next.
+Processors are used to work on immutable untrusted content. A processor is a sub-agent with no tools, no memory and no conversation. It can read untrusted content and rewrite it. Its answer can be read for one number, which fills one argument that a server's declaration names, in a call you are asked about and allow. Nothing else it produces directs anything.
 One or more labelled data slots are passed into a processor, and it outputs at most one new immutable data slot.
 The planner is never influenced by untrusted context.
 

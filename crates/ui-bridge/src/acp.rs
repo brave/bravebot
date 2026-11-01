@@ -1091,6 +1091,8 @@ fn call_text(data: &Value) -> String {
         arguments: &arguments,
         description: data["description"].as_str(),
         offers_remember: data["mayStand"].as_bool() == Some(true),
+        // The bridge refuses such a call before a question is sent (SERVERS-21).
+        asked_every_call: false,
     })
     .join("\n")
 }
@@ -1544,6 +1546,7 @@ mod tests {
             arguments: vec![("q".into(), "\"v\"".into())],
             description: Some("does it".into()),
             may_stand: false,
+            asked_every_call: false,
         };
         let (_, _, text) = shown("mcp-call", crate::wire::mcp_call_request(4, &call));
         assert_eq!(
@@ -1553,6 +1556,7 @@ mod tests {
                 arguments: &call.arguments,
                 description: call.description.as_deref(),
                 offers_remember: false,
+                asked_every_call: false,
             })
             .join("\n")
         );
@@ -1576,6 +1580,62 @@ mod tests {
             })
             .join("\n")
         );
+    }
+
+    /// ROUTE-10, MCP-14: the number a processor chose and the reference it came from reach an
+    /// editor as the lines the terminal draws for them, 0 and 99 included, on the argument's own
+    /// row. The bridge puts no call a choice fills to an editor, since the window refuses a call
+    /// asked every time with nobody asked, so this holds what an editor would be shown to what the
+    /// terminal shows if that were to change. A wire that dropped a value it read as empty, or an
+    /// editor's lines that came from another builder than the terminal's, would show a person no
+    /// number to answer about.
+    #[test]
+    fn an_editor_reads_the_number_of_a_choice_and_where_it_came_from_as_the_terminal_draws_them() {
+        use bravebot_agent::confirm::McpCallRequest;
+
+        for number in ["0", "7", "99"] {
+            let call = McpCallRequest {
+                alias: "brave-input".into(),
+                tool: "click_element".into(),
+                arguments: vec![
+                    (
+                        "element_number".into(),
+                        bravebot_i18n::t!(
+                            mcp_call_choice_drawn,
+                            number = number,
+                            reference = "ref:3"
+                        )
+                        .to_string(),
+                    ),
+                    ("url".into(), "\"https://shop.example/cart\"".into()),
+                ],
+                description: None,
+                may_stand: false,
+                asked_every_call: false,
+            };
+            let (title, _, text) = shown("mcp-call", crate::wire::mcp_call_request(1, &call));
+            assert_eq!(title, "call brave-input:click_element");
+            let pair = format!(
+                "  element_number: {number} (chosen by a processor from ref:3; the number alone \
+                 does not say what it stands for)"
+            );
+            assert!(
+                text.lines().any(|line| line == pair),
+                "{number}: `{pair}` is not a row of: {text}"
+            );
+            assert_eq!(
+                text,
+                bravebot_approval::call_lines(&bravebot_approval::Call {
+                    name: &call.name(),
+                    arguments: &call.arguments,
+                    description: None,
+                    offers_remember: false,
+                    asked_every_call: false,
+                })
+                .join("\n"),
+                "{number}"
+            );
+        }
     }
 
     /// Issue #3045, TS-004: `call_text` reads `mayStand` and `run_text` reads `canBeRemembered`
@@ -1619,6 +1679,7 @@ mod tests {
             arguments: Vec::new(),
             description: None,
             may_stand: true,
+            asked_every_call: false,
         };
         let standing_text = call_text(&crate::wire::mcp_call_request(3, &standing));
         assert!(
@@ -1636,6 +1697,66 @@ mod tests {
             !once_text.contains("Allow and remember"),
             "a call that offers no standing answer got a sentence about one anyway: {once_text}"
         );
+    }
+
+    /// SERVERS-7, PROMPT-13: a call that carries code reads to the editor with each line of the
+    /// code on a numbered row and what cannot be seen written out, as it reads in the terminal,
+    /// from the arguments the wire carries as JSON. The bridge asks nothing about a call to a
+    /// server declared to ask every call (SERVERS-21), so this is the text of the question for any
+    /// other server that is sent code. The regression it rejects is the editor being shown the
+    /// JSON string the wire carries.
+    #[test]
+    fn a_call_carrying_code_reads_to_the_editor_line_by_line() {
+        use bravebot_agent::confirm::McpCallRequest;
+        let call = McpCallRequest {
+            alias: "scripts".into(),
+            tool: "run".into(),
+            arguments: vec![(
+                "code".into(),
+                json!("let a = 1;\nreturn a\u{200b}").to_string(),
+            )],
+            description: None,
+            may_stand: false,
+            asked_every_call: false,
+        };
+        let text = call_text(&crate::wire::mcp_call_request(5, &call));
+        assert!(
+            text.contains("  code: 2 lines\n")
+                && text.contains("\n    1 | let a = 1;\n    2 | return a\u{2039}U+200B\u{203a}"),
+            "{text}"
+        );
+        assert!(!text.contains("\\n"), "{text}");
+    }
+
+    /// ROUTE-11, PROMPT-13: the code an editor reads has the characters the confirmation window
+    /// marks written out as the terminal writes them, a space that is not the plain one, a mark
+    /// past the third on a character and a typed `‹`, and not the characters themselves. The
+    /// regression it rejects is a bridge that drew an argument through a shorter list of
+    /// characters than the other front ends.
+    #[test]
+    fn code_reads_to_the_editor_with_a_no_break_space_and_stacked_marks_written_out() {
+        use bravebot_agent::confirm::McpCallRequest;
+        let call = McpCallRequest {
+            alias: "scripts".into(),
+            tool: "run".into(),
+            arguments: vec![(
+                "code".into(),
+                json!("x\u{a0}= 1\ne\u{301}\u{302}\u{303}\u{304}\n\u{2039}U+200B\u{203a}")
+                    .to_string(),
+            )],
+            description: None,
+            may_stand: false,
+            asked_every_call: false,
+        };
+        let text = call_text(&crate::wire::mcp_call_request(6, &call));
+        assert!(
+            text.contains("  code: 3 lines\n")
+                && text.contains("\n    1 | x\u{2039}U+00A0\u{203a}= 1\n")
+                && text.contains("\n    2 | e\u{301}\u{302}\u{303}\u{2039}U+0304\u{203a}\n")
+                && text.contains("\n    3 | \u{2039}U+2039\u{203a}U+200B\u{203a}"),
+            "{text}"
+        );
+        assert!(!text.contains('\u{a0}'), "{text}");
     }
 
     fn shown(stem: &str, data: Value) -> (String, &'static str, String) {

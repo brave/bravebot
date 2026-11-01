@@ -1303,6 +1303,7 @@ mcp-dir-needs-a-path = --dir a besoin d'un répertoire
 mcp-tools-needs-a-list = --tools a besoin d'un nom d'outil ou d'une liste de noms d'outils séparés par des virgules
 mcp-exclude-tools-needs-a-list = --exclude-tools a besoin d'un nom d'outil ou d'une liste de noms d'outils séparés par des virgules
 mcp-allowed-hosts-needs-a-list = --allowed-hosts a besoin d'un nom d'hôte ou d'une liste de noms d'hôtes séparés par des virgules
+mcp-choice-needs-a-pair = --choice a besoin d'un outil et d'un argument, écrits <OUTIL>:<ARGUMENT>
 mcp-dir-not-a-directory = { $path } n'est pas un répertoire
 mcp-dir-not-a-directory-unshown =
     le mot après --dir n'est pas un répertoire, et n'est pas répété car il peut être une valeur
@@ -1338,6 +1339,10 @@ mcp-problem-tool = { $name } n'est pas un nom d'outil
 mcp-problem-tools = { $key } n'est pas une liste de noms d'outils
 mcp-problem-hosts = { $entry } n'est ni un nom d'hôte ni un domaine *.
 mcp-problem-hosts-list = allowed_hosts n'est pas une liste de noms d'hôtes
+mcp-problem-ask-every-call = ask_every_call n'est ni true ni false
+mcp-problem-choice =
+    choice_arguments n'est pas un objet de noms d'outils, chacun avec une liste de noms d'arguments
+mcp-problem-choice-without-asking = choice_arguments a besoin que ask_every_call soit true
 mcp-unreadable = { $path } ne peut pas être lu : { $reason }
 mcp-unreadable-too-large = il est plus gros qu'un fichier de déclarations n'a de raison de l'être
 mcp-unreadable-not-read = il n'a pas pu être lu comme du texte
@@ -1363,6 +1368,8 @@ mcp-directory = répertoire, où il peut écrire : { $path }
 mcp-timeouts = temps accordé : { $startup } secondes pour démarrer, { $tool } secondes par appel
 mcp-declaration-tools = outils : { $names }
 mcp-declaration-exclude-tools = outils exclus : { $names }
+mcp-declaration-asks-every-call = chaque appel est demandé, et aucune réponse n'est conservée
+mcp-declaration-choice-arguments = arguments qui acceptent un choix : { $pairs }
 mcp-digest = empreinte : { $digest }
 mcp-changed = champs modifiés : { $fields }
 mcp-question = Utiliser ce serveur MCP ?
@@ -1557,6 +1564,7 @@ mcp-tools-declined = { $alias } ne propose aucun outil dans cette session : sa l
 mcp-tools-refused = { $alias } ne propose aucun outil dans cette session : { $reason }
 mcp-tools-changed = { $alias } a modifié ses outils : il n'en propose aucun tant que la liste qu'il donne maintenant n'est pas approuvée
 mcp-tools-reread-failed = { $alias } ne propose aucun outil dans cette session : sa liste modifiée n'a pas pu être lue ({ $reason })
+mcp-tools-choice-shadowed = { $alias } liste { $tool } avec un argument { $argument }_ref qui lui est propre : { $argument } n'est donc pas proposé comme choix d'un processeur
 
 ## One call to a tool of an MCP server
 
@@ -1567,7 +1575,19 @@ mcp-call-question = Continuer ?
 mcp-call-yes = Oui
 mcp-call-stand = Oui, et ne plus demander pour { $tool } dans ce projet
 mcp-call-cannot-stand = non proposé : rien de ce qui est répondu dans cette session ne peut être enregistré
+mcp-call-cannot-stand-asked-every-time = non proposé : chaque appel à ce serveur est demandé
+mcp-call-asked-every-time = Chaque appel à ce serveur est demandé, et aucune réponse n'est conservée.
+mcp-call-cannot-be-asked-here = { $tool } n'a pas été appelé : chaque appel à son serveur est demandé, et ce client ne peut pas demander. Lancez-le depuis le terminal, qui le peut.
+mcp-call-choice-drawn = { $number } (choisi par un processeur à partir de { $reference } ; le numéro seul ne dit pas ce qu'il désigne)
 mcp-call-no = Non
+mcp-call-text-lines = { $count ->
+    [one] { $count } ligne
+   *[other] { $count } lignes
+    }
+mcp-call-text-written-out = { $count ->
+    [one] { $count } caractère invisible est écrit ci-dessous sous la forme ‹U+XXXX›, et un caractère d'étiquette aussi avec la lettre qu'il représente.
+   *[other] { $count } caractères invisibles sont écrits ci-dessous sous la forme ‹U+XXXX›, et un caractère d'étiquette aussi avec la lettre qu'il représente.
+    }
 mcp-call-expand = (e pour déplier)
 mcp-call-collapse = (e pour replier)
 mcp-call-not-recorded =
@@ -2210,8 +2230,8 @@ plan-explained =
     une étape, en retirer une, ni envoyer quoi que ce soit ailleurs que là où ce plan le dit
     déjà.
 plan-not-its-writes =
-    approuver le plan n'approuve pas ses écritures. chacune vous sera encore soumise le
-    moment venu.
+    approuver le plan n'approuve ni ses écritures ni ses appels aux outils d'un serveur.
+    chacun vous sera encore soumis le moment venu.
 plan-nothing-yet =
     rien n'a encore été lu ni écrit, donc refuser laisse tout en l'état.
 plan-yes = l'exécuter
@@ -3727,6 +3747,25 @@ processor-model-not-served =
 processor-model-substituted = Un processeur a demandé { $model } et un autre modèle a répondu
 set-link-recorded-issue = lien de ticket enregistré : { $url }
 set-link-recorded-pull-request = lien de demande de fusion enregistré : { $url }
+
+tool-picture = { $bytes ->
+    [one] une image, { $media }, { $bytes } octet, gardée sous { $slot } et tenue hors de portée du modèle
+   *[other] une image, { $media }, { $bytes } octets, gardée sous { $slot } et tenue hors de portée du modèle
+    }
+tool-pdf = { $bytes ->
+    [one] un PDF, { $bytes } octet, gardé sous { $slot } et tenu hors de portée du modèle
+   *[other] un PDF, { $bytes } octets, gardé sous { $slot } et tenu hors de portée du modèle
+    }
+tool-picture-look = Demandez au modèle de l'écrire dans un fichier que vous pouvez ouvrir, ou d'utiliser vet_content dessus, ce qui vous interroge sur une copie avant que le modèle la voie.
+tool-picture-look-vets = Demandez au modèle d'utiliser vet_content dessus, ce qui vous interroge sur une copie avant que le modèle la voie.
+tool-picture-look-writes = Demandez au modèle de l'écrire dans un fichier que vous pouvez ouvrir.
+tool-picture-look-neither = Le modèle n'a aucun outil qui l'écrive dans un fichier ou qui vous en présente une copie : il n'y a donc aucun moyen de l'ouvrir d'ici.
+tool-picture-look-delegate-writes = Le délégué ne peut pas vous demander de l'examiner. Il peut l'écrire dans un fichier que vous pouvez ouvrir.
+tool-picture-look-delegate = Le délégué ne peut pas vous demander de l'examiner et n'a aucun outil qui écrive un fichier : il n'y a donc aucun moyen de l'ouvrir d'ici.
+write-picture-source = { $bytes ->
+    [one] { $slot } ({ $media }, { $bytes } octet)
+   *[other] { $slot } ({ $media }, { $bytes } octets)
+    }
 delegate-skills-not-found =
     { $count ->
         [one] { $definition } nomme une compétence que cette session n'a pas trouvée, si bien qu'elle n'est pas proposée à son délégué : { $skills }

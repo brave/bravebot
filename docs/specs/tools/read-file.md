@@ -190,10 +190,15 @@ may be read, and a picture has none. Nothing offers to vouch for one either, bec
 grant the reading of text there is none of.
 
 The reference says what kind of thing it is rather than how many lines it has, because a line count
-over base64 describes nothing a reader can act on. Given to `spawn_processor`, it reaches the
-processor as a picture in its own part of the request, so the model looks at it rather than reading
-base64 as words. The answer is quarantined like any other processor's, per
-[PROC-5](../processors.md#PROC-5).
+over base64 describes nothing a reader can act on. The person watching is shown rows saying the same
+and how to look at it, and not the first lines of the base64
+([VIEW-3](../terminal-transcript.md#VIEW-3)). The line under the read gives the picture's size in
+bytes: the number counted when the file was read, written as it is, with no unit or wording chosen
+from its size. Given to `spawn_processor`, it reaches the processor as a picture in its own part of
+the request, so the model looks at it rather than reading base64 as words. The answer is quarantined
+like any other processor's, per [PROC-5](../processors.md#PROC-5). Given to `write_file` as
+`contents_ref`, it is written as the file it encodes, to a path the planner names and a person
+approves ([WRITE-9](write-file.md#WRITE-9)).
 
 **Why the trust map does not decide this.** A screenshot carries whatever words are in it, so a
 picture reaches a planner's context in two ways and no others: a person put it there, pasted or
@@ -219,6 +224,8 @@ either way the extension is what was decided from, and it is part of a path a pe
 `verified-by: bravebot_agent::turn::a_picture_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::a_processor_is_given_a_picture_as_a_picture`
 `verified-by: bravebot_agent::turn::a_picture_a_person_opens_and_lets_through_is_attached_after_the_results`
+`verified-by: bravebot_agent::turn::a_picture_read_from_a_file_is_described_to_the_person_and_not_drawn_as_base64`
+`verified-by: bravebot_agent::turn::the_line_under_a_read_of_a_picture_gives_the_count_of_bytes_it_was_read_as_at_any_size`
 `verified-by: bravebot_agent::workspace::the_media_type_comes_from_the_extension`
 `verified-by: bravebot_agent::workspace::a_file_that_names_no_picture_is_not_one`
 

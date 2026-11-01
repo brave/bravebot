@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'"
+    />
+    <title>BraveBot asks before it acts</title>
+    <link rel="stylesheet" href="confirm.css" />
+  </head>
+  <body>
+    <h1 id="heading">Allow BraveBot to do this in the page?</h1>
+    <p id="action" class="action"></p>
+
+    <h2>The page</h2>
+    <dl>
+      <dt>Site</dt>
+      <dd id="origin" class="words"></dd>
+      <dt>Address</dt>
+      <dd id="url" class="words"></dd>
+    </dl>
+
+    <section id="element-section">
+      <h2>The element, in the page's own words</h2>
+      <dl>
+        <dt id="number-term" hidden>Number</dt>
+        <dd id="number" hidden></dd>
+        <dt>Goes to</dt>
+        <dd id="goes" class="words"></dd>
+        <dt>Role</dt>
+        <dd id="role" class="words"></dd>
+        <dt>Tag</dt>
+        <dd id="tag" class="words"></dd>
+        <dt>Name</dt>
+        <dd id="name" class="words"></dd>
+        <dt>Text</dt>
+        <dd id="excerpt" class="words"></dd>
+      </dl>
+      <p class="note">
+        The page chose the words above. An outline around the element in the page is a hint,
+        and a page can hide it or draw one of its own, so go by what this window says.
+      </p>
+    </section>
+
+    <section id="typed-section" hidden>
+      <h2 id="typed-heading"></h2>
+      <pre id="typed-box" class="boxed"><span class="quote">&ldquo;</span><span id="typed" class="words"></span><span class="quote">&rdquo;</span></pre>
+      <p id="typed-count" class="note"></p>
+    </section>
+
+    <div class="bar">
+      <p id="wait" class="note" role="status"></p>
+      <p id="status" class="status" role="status"></p>
+      <div class="buttons">
+        <button type="button" id="deny" autofocus>Deny</button>
+        <button type="button" id="allow" disabled>Allow once</button>
+      </div>
+    </div>
+    <script type="module" src="confirm.js"></script>
+  </body>
+</html>

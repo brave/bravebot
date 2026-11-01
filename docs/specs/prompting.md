@@ -89,7 +89,8 @@ check said about them rather than the word alone; the prompt about a directory a
 asked for shows the path it would open. A person cannot endorse a routing field they were not shown.
 
 A vetting prompt about a picture ([VET-4](tools/vet-content.md#VET-4)) names a path for the person
-to open the picture at rather than drawing it, because neither front end draws a picture. What is at
+to open the picture at, because the desktop window draws no picture and a terminal draws one only
+if it speaks a graphics protocol, and a drawing is scaled down. What is at
 stake is still shown rather than summarised: the file at that path is a copy of the slot's bytes,
 one step away, and [VET-4](tools/vet-content.md#VET-4) says why it is not the path they were read
 from.
@@ -636,7 +637,7 @@ desktop bridge opens, resumes or forks starts with none. An undo leaves them
 | MCP servers approved | answer 1 at the question about starting an MCP server | the alias, the settings file that requested it, the declaration with its program, arguments, directory, variable names, stored values and files it may read, where a local program resolved to, and a warning where the alias was approved as something else | the digest of the declaration, with the alias it was approved as. Not the path the program resolved to, not the checkout that requested it, and not the value of `PATH` or of any variable read from the environment | a file every later session reads, until the declaration changes; the session alone where the session writes nothing | `verified-by: bravebot_agent::servers::answer_one_approves_the_digest_answer_two_the_project_and_three_nothing` `verified-by: bravebot_agent::servers::the_question_names_the_checkout_that_requested_it_and_where_the_program_resolved` `verified-by: bravebot_agent::servers::an_asker_that_records_nothing_keeps_neither_a_yes_to_a_server_nor_to_a_move` |
 | MCP projects answered for | answer 2 at the same question | as above | the project's path with its links followed, compared exactly. Not the server, so it answers for every later server a checkout of that path requests, unless its declaration was approved as something else since; not the directory's identity, so a directory removed and made again at that path is the same key; not a list or a call, which it leaves to [SERVERS-8](mcp-servers.md#SERVERS-8) and [SERVERS-7](mcp-servers.md#SERVERS-7) | a file every later session reads, until `mcp forget` | `verified-by: bravebot_agent::servers::answer_one_approves_the_digest_answer_two_the_project_and_three_nothing` `verified-by: bravebot_agent::servers::an_approved_digest_starts_unasked_and_a_recorded_project_answers_only_an_unchanged_one` `verified-by: bravebot_config::mcp::forgetting_a_project_drops_it_and_no_other` |
 | MCP tool lists approved | the question about the tools a server offers | every tool, with its description | the server, for the session. A later session asks again, since nothing here may decide from the list's bytes that it is one already seen | the terminal's MCP session, for a yes and for a no, and so for the process: `/clear`, `/branch` and `/resume` keep it, and a new process asks again; it is written nowhere | `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing` `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again` `verified-by: bravebot_tui::app::clearing_keeps_the_answer_to_an_mcp_servers_list_for_the_process` `verified-by: bravebot_tui::app::a_branch_keeps_the_answer_to_an_mcp_servers_list_for_the_process` `verified-by: bravebot_tui::app::resuming_carries_the_answer_to_an_mcp_servers_list_for_the_process` |
-| standing answers to an MCP tool | answer 2 at a call to a server's tool | the tool and every argument | the server's alias, the tool, and the project. Not the arguments, which the answer leaves free, and not what the alias is declared as | a file every later session reads, until it is forgotten | `verified-by: bravebot_config::mcp::a_standing_answer_reaches_one_tool_of_one_server_in_one_project` |
+| standing answers to an MCP tool | answer 2 at a call to a server's tool. A call to a server declared to ask every call is not offered it, and an answer 2 that arrives for one is a yes to that call and is not recorded ([SERVERS-21](mcp-servers.md#SERVERS-21)) | the tool and every argument | the server's alias, the tool, and the project. Not the arguments, which the answer leaves free, and not what the alias is declared as. Not read for a server declared to ask every call | a file every later session reads, until it is forgotten | `verified-by: bravebot_config::mcp::a_standing_answer_reaches_one_tool_of_one_server_in_one_project` `verified-by: bravebot_agent::mcp::an_answer_that_would_stand_is_not_recorded_for_a_server_asked_every_call` `verified-by: bravebot_tui::confirm::mcp::a_call_asked_every_time_is_drawn_with_its_own_reason_for_offering_no_lasting_answer` |
 | MCP server moves | `y` at the question about a remote server whose request was redirected | where the server was declared, where the reply points, the host it reaches, and the warning | the server's declaration, rewritten to the new destination only while it is still the declaration that was asked about | the settings file, for every later session; the session alone where the session writes nothing | `verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else` `verified-by: bravebot_agent::mcp::a_move_in_a_session_that_writes_nothing_lasts_for_the_session` |
 | paths reached | `y` at the question about letting programs reach one more path | the path | the path it resolved to. A later request for a path already held is asked about like the first | the session; it is written nowhere | `verified-by: bravebot_agent::workspace::path_reach_is_numbered_shared_upgraded_and_ended` |
 | hosts answered | the question about hosts programs asked for and were refused | the hosts | each host's name, for a yes and for a no | the session; it is written nowhere | `verified-by: bravebot_agent::tools::hosts_put_to_the_person_are_asked_once_and_the_answer_is_kept` `verified-by: bravebot_agent::workspace::host_answers_are_shared_remembered_and_lifted_by_a_yes` |
@@ -888,8 +889,21 @@ The planner receives the bytes the slot holds, without the spelling. The spellin
 made where the text is released for the screen, in the reshape that counts its lines
 ([labels.md](labels.md)), so the driver reads the text for neither and no front end has to.
 
+The question about a call to a server's tool does the same for a string argument that holds a line
+feed, another control character or such a character, which it draws one numbered row to a line with a
+sentence over the rows that counts the characters written out ([SERVERS-7](mcp-servers.md#SERVERS-7)).
+The text is the planner's own words, so the sentence does not say the model reads them. In code a
+program reads, a space that is not the plain one, a format character, the blank braille pattern and a
+private use character change what it does while they read as a blank or as nothing, so that drawing
+writes those out too, and each combining mark past the third on a character or with no character
+before it. That is the list of the confirmation window of the browser extension
+([ROUTE-11](routing.md#ROUTE-11)). A `‹` in the text is written out as `‹U+2039›` and is not counted,
+so each `‹` on a row opens a character that was written out and a typed `‹U+200B›` cannot pass for one.
+The object replacement character U+FFFC is left as it is in text and in code, since it draws as a
+visible box. `crates/core/tests/draws-as-nothing.json` lists it as left unmarked.
+
 One list names the characters. An MCP server's tool descriptions, a vouch prompt's file name and
-pasted text use it too. A paste removes fewer of them than a prompt writes out, because scripts and
+pasted text use it too, and the drawing of a call's argument adds what is said above. A paste removes fewer of them than a prompt writes out, because scripts and
 emoji sequences are written with some of them. A file name is also written out for the blank braille
 pattern, which draws as an empty cell, and a text is not, since braille drawings are written with it.
 
@@ -900,7 +914,7 @@ see is part of that text. Writing it out puts it among the rows the answer waits
 zero-width joiner, is written out and counted too, which makes it harder to read, and a file name
 holding one, such as an emoji with its variation selector, is quoted in a vouch prompt. Text that
 holds the written-out form itself draws like a character that was written out, and the count says
-how many were. A vouch prompt's preview is not written out: it is the head of a file and a yes
+how many were, except in the question about a call, which writes out the `‹`. A vouch prompt's preview is not written out: it is the head of a file and a yes
 covers everything beneath the path, so a character in the preview hides nothing that text after the
 cut does not already hide.
 
@@ -917,6 +931,16 @@ cut does not already hide.
 `verified-by: bravebot_approval::lib::a_write_says_how_many_characters_draw_as_nothing_above_the_rows`
 `verified-by: bravebot_tui::confirm::write::the_write_prompt_says_how_many_characters_draw_as_nothing_above_the_rows`
 `verified-by: bravebot_tui::confirm::vet::the_output_prompt_says_how_many_characters_draw_as_nothing_and_shows_each`
+`verified-by: bravebot_agent::confirm::a_string_argument_writes_out_what_cannot_be_seen_and_counts_it`
+`verified-by: bravebot_approval::lib::a_call_draws_the_code_it_carries_line_by_line_and_other_arguments_on_one_row`
+`verified-by: bravebot_agent::confirm::a_string_argument_marks_what_the_confirmation_window_marks`
+`verified-by: bravebot_agent::confirm::a_written_out_form_typed_in_a_string_argument_is_not_taken_for_one_the_question_wrote`
+`verified-by: bravebot_core::invisible::code_has_every_character_it_cannot_be_read_by_written_out`
+`verified-by: bravebot_core::invisible::code_spells_what_text_spells_the_same_way`
+`verified-by: bravebot_core::invisible::marks_past_the_third_on_a_letter_and_marks_on_nothing_are_written_out`
+`verified-by: bravebot_core::invisible::a_written_out_form_in_the_text_cannot_pass_for_a_character_that_was_written_out`
+`verified-by: bravebot_core::invisible::the_table_of_marks_is_the_nonspacing_and_enclosing_marks`
+`verified-by: bravebot_core::invisible::the_extra_lists_hold_their_categories_and_no_neighbour`
 `verified-by: bravebot_tui::confirm::vet::the_vet_prompt_says_how_many_characters_draw_as_nothing_and_shows_each`
 `verified-by: bravebot_tui::confirm::no_question_takes_a_yes_before_every_row_deciding_it_has_been_drawn`
 `verified-by: bravebot_cli::plain::the_plain_prompts_say_how_many_characters_of_the_text_draw_as_nothing`

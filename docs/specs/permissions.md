@@ -1181,9 +1181,10 @@ vouch for the same reason. The decision reads the argv and nothing else.
   named as the session opens, with the file that wrote the rule, so a prompt the rule was written
   to answer does not read as a second fault. `deny` and `ask` rules from every layer, and `allow`
   rules from the person's own file, hold there as they do in the terminal.
-- **A manifest run reads no rule.** The runner builds its policy without the rules the session
-  holds, so a `deny` rule does not refuse a step of a plan and an `ask` rule puts no question
-  about one. What stands in a run is the plan question and the write question
+- **A manifest run reads no rule but the ones about a server's tool.** The runner builds its policy
+  without the rules the session holds, so a `deny` rule does not refuse a step of a plan and an
+  `ask` rule puts no question about one. The `Mcp` rules are kept, since a plan's call to a
+  server's tool is decided as a turn's is ([MANIFEST-15](manifest.md#MANIFEST-15)). What stands in a run is the plan question and the write question
   ([manifest.md](manifest.md#MANIFEST-10)). The desktop application says so on the plan it puts
   to the person, where the session holds a `deny` or an `ask` rule.
 - **Declining to trust the workspace still leads to the question.** The two are separate claims, so

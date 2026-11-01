@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'"
+    />
+    <title>BraveBot Trusted Input asks how to answer a dialog</title>
+    <link rel="stylesheet" href="confirm.css" />
+    <link rel="stylesheet" href="dialog.css" />
+  </head>
+  <body>
+    <h1 id="heading">How should BraveBot Trusted Input answer this dialog?</h1>
+    <p id="kind" class="action"></p>
+
+    <h2>The page</h2>
+    <dl>
+      <dt>Site</dt>
+      <dd id="origin" class="words"></dd>
+      <dt>Address</dt>
+      <dd id="url" class="words"></dd>
+    </dl>
+
+    <h2>What the dialog says, in the page's own words</h2>
+    <pre class="boxed"><span id="message" class="words"></span></pre>
+
+    <section id="prompt-section" hidden>
+      <h2>The page's suggested answer</h2>
+      <p id="suggested" class="words"></p>
+      <label for="answer">Your answer</label>
+      <input id="answer" type="text" maxlength="2000" autocomplete="off" spellcheck="false" />
+    </section>
+    <p class="note">
+      The page chose the words above. Dismiss answers no, cancel or stay on the page, and Accept
+      answers yes, OK or leave. Nothing is sent to the page until you choose.
+    </p>
+
+    <div class="bar">
+      <p id="wait" class="note" role="status"></p>
+      <p id="status" class="status" role="status"></p>
+      <div class="buttons">
+        <button type="button" id="dismiss" autofocus>Dismiss</button>
+        <button type="button" id="accept" disabled>Accept</button>
+      </div>
+    </div>
+    <script type="module" src="dialog.js"></script>
+  </body>
+</html>

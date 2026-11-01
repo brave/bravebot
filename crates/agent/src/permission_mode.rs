@@ -654,13 +654,20 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// Accepting edits does not accept a call: what the server does with it happens off this tree,
     /// where no diff shows it. Bypassing approves this one call and stands nothing, since no prompt
     /// was drawn for the answer that stops asking to be given on.
+    ///
+    /// A call to a server declared to ask every call is asked in bypass too: the person chose that
+    /// for the server when they declared it, and the mode that answers the other questions does not
+    /// take that choice back (SERVERS-21).
     fn confirm_mcp_call(
         &mut self,
         request: &crate::confirm::McpCallRequest,
     ) -> crate::confirm::CallDecision {
         match self.mode.get() {
-            PermissionMode::Bypass => crate::confirm::CallDecision::approve(),
-            PermissionMode::Ask
+            PermissionMode::Bypass if !request.asked_every_call => {
+                crate::confirm::CallDecision::approve()
+            }
+            PermissionMode::Bypass
+            | PermissionMode::Ask
             | PermissionMode::AcceptEdits
             | PermissionMode::Plan
             | PermissionMode::Auto => self.asking().confirm_mcp_call(request),
@@ -1344,6 +1351,47 @@ mod tests {
             "a mode that draws no prompt recorded an answer past the session"
         );
         assert_eq!(confining.confirm_manifest(&a_plan()), Decision::Approve);
+    }
+
+    /// MODE-4, SERVERS-21: bypassing approves a call to a server's tool, and a call to a server
+    /// declared to ask every call goes to the confirmer the mode wraps, here one that refuses. In
+    /// every mode that answers nothing about calls the two requests get the confirmer's answer, so
+    /// the declaration is the only thing that separates them under bypass. The regression it
+    /// rejects is the mode that answers every call, which approves the second request.
+    #[test]
+    fn bypassing_answers_a_call_to_a_server_unless_it_is_declared_to_ask_every_call() {
+        let call = |asked_every_call| crate::confirm::McpCallRequest {
+            alias: "cookies".to_string(),
+            tool: "get_cookies".to_string(),
+            arguments: Vec::new(),
+            description: None,
+            may_stand: false,
+            asked_every_call,
+        };
+        for mode in [
+            PermissionMode::Bypass,
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Auto,
+        ] {
+            let mut refusing = Unattended;
+            let mut confining = Confining::new(&mut refusing, mode, false);
+            let answered = match mode {
+                PermissionMode::Bypass => crate::confirm::CallDecision::approve(),
+                _ => crate::confirm::CallDecision::reject(),
+            };
+            assert_eq!(
+                confining.confirm_mcp_call(&call(false)),
+                answered,
+                "{mode:?}"
+            );
+            assert_eq!(
+                confining.confirm_mcp_call(&call(true)),
+                crate::confirm::CallDecision::reject(),
+                "{mode:?} answered a call to a server declared to ask every call"
+            );
+        }
     }
 
     /// MODE-2, CRED-13: accepting edits does not answer a write the policy layer found a
@@ -2201,6 +2249,7 @@ mod tests {
             arguments: Vec::new(),
             description: None,
             may_stand: false,
+            asked_every_call: false,
         };
         let an_exposure = crate::confirm::ExposureRequest {
             path: ".env".to_string(),

@@ -12,6 +12,7 @@
 
 #![forbid(unsafe_code)]
 
+use bravebot_agent::confirm::shown_argument;
 use bravebot_agent::diff::Change;
 use bravebot_i18n::t;
 
@@ -622,6 +623,9 @@ pub struct Call<'a> {
     /// question, so `call_lines` can say what it would grant. `false` where a front end has no
     /// such answer to offer (the plain CLI's call question is only ever approve or reject).
     pub offers_remember: bool,
+    /// Whether the server's declaration says every call to it is asked about, so `call_lines`
+    /// says no answer to this one lasts (SERVERS-21).
+    pub asked_every_call: bool,
 }
 
 /// The lines a call to an MCP server's tool is read before approving.
@@ -629,17 +633,22 @@ pub fn call_lines(call: &Call<'_>) -> Vec<String> {
     let mut lines = vec![format!("{} {}", printable(call.name), t!(mcp_call_kind))];
     match call.arguments.is_empty() {
         true => lines.push(format!("  {}", t!(mcp_call_no_arguments))),
-        false => lines.extend(
-            call.arguments
-                .iter()
-                .map(|(name, value)| format!("  {}: {}", printable(name), printable(value))),
-        ),
+        false => {
+            for (name, value) in call.arguments {
+                let shown = shown_argument(value);
+                lines.push(format!("  {}: {}", printable(name), printable(&shown.head)));
+                lines.extend(shown.rows.iter().map(|row| format!("    {row}")));
+            }
+        }
     }
     if let Some(description) = call.description {
         lines.extend(quarantined(description));
     }
     if call.offers_remember {
         lines.push(t!(mcp_call_allow_and_remember_explained, tool = call.name).to_string());
+    }
+    if call.asked_every_call {
+        lines.push(t!(mcp_call_asked_every_time).to_string());
     }
     lines
 }
@@ -700,6 +709,18 @@ pub fn manifest_lines(task: &str, steps: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A call to a server is approved by its alias, its tool and its arguments, so the plain prompt
+    /// carries the step as it was given, a long argument included (MANIFEST-15).
+    #[test]
+    fn a_plan_line_calling_a_server_is_carried_whole() {
+        let step = format!(
+            "1. [act] call brave:open_tab; arguments {{\"url\":\"https://example.com/{}TAILMARK\"}}",
+            "p".repeat(2000)
+        );
+        let lines = manifest_lines("open the page", std::slice::from_ref(&step));
+        assert_eq!(lines[1], format!("  {step}"));
+    }
 
     /// FETCH-4: the plain prompt for a host a redirect led to says it was one, right after the host,
     /// and the prompt for a fetch that was not redirected has no such row.
@@ -932,6 +953,7 @@ mod tests {
                 arguments: &[],
                 description: None,
                 offers_remember,
+                asked_every_call: false,
             })
             .join("\n")
         };
@@ -944,6 +966,74 @@ mod tests {
         assert!(
             !not_offered.contains("Allow and remember"),
             "a front end with no such answer should get no sentence about it: {not_offered}"
+        );
+    }
+
+    /// SERVERS-7, PROMPT-13: a call that carries code is read as the lines the code is, each on
+    /// a numbered row under the argument's name, with what cannot be seen written out and counted,
+    /// and the arguments that are one line stay on one row as before. The regression it rejects
+    /// is the code drawn as one escaped string, which a person cannot read as lines and in which
+    /// a character that draws as nothing is not shown.
+    #[test]
+    fn a_call_draws_the_code_it_carries_line_by_line_and_other_arguments_on_one_row() {
+        // The JSON a call carries for the planner's code: a line feed, a tab and a zero-width space
+        // written as escapes.
+        let code = "\"const a = 1;\\n\\tdocument.title\\u200b\\n\"";
+        let arguments = [
+            ("url".to_string(), "\"https://shop.example/\"".to_string()),
+            ("code".to_string(), code.to_string()),
+            ("count".to_string(), "3".to_string()),
+        ];
+        let drawn = call_lines(&Call {
+            name: "brave-scripts:run_script",
+            arguments: &arguments,
+            description: None,
+            offers_remember: false,
+            asked_every_call: true,
+        });
+        assert_eq!(
+            &drawn[..8],
+            [
+                "brave-scripts:run_script (MCP)",
+                "  url: \"https://shop.example/\"",
+                "  code: 3 lines",
+                "    2 characters you cannot see are written out below as \u{2039}U+XXXX\u{203a}, and a tag \
+                 character also as the letter it stands for.",
+                "    1 | const a = 1;",
+                "    2 | \u{2039}U+0009\u{203a}document.title\u{2039}U+200B\u{203a}",
+                "    3 | ",
+                "  count: 3",
+            ]
+        );
+        assert!(drawn[8].contains("asked about"), "{drawn:?}");
+    }
+
+    /// ROUTE-11, PROMPT-13: the lines of a call write out the characters the confirmation window
+    /// marks that the list of characters that draw as nothing does not hold, so an editor and
+    /// every front end that draws these lines show a no-break space, a private use character and a
+    /// stack of marks as what they are. The regression it rejects is a lines builder that drew an
+    /// argument through the shorter list.
+    #[test]
+    fn a_call_writes_out_a_space_that_is_not_the_plain_one_and_the_marks_past_the_third() {
+        let code = "\"a\u{a0}b\\n\u{e000}\\ne\u{301}\u{302}\u{303}\u{304}\"";
+        let arguments = [("code".to_string(), code.to_string())];
+        let drawn = call_lines(&Call {
+            name: "brave-scripts:run_script",
+            arguments: &arguments,
+            description: None,
+            offers_remember: false,
+            asked_every_call: true,
+        });
+        assert_eq!(
+            &drawn[1..6],
+            [
+                "  code: 3 lines",
+                "    3 characters you cannot see are written out below as \u{2039}U+XXXX\u{203a}, and a tag \
+                 character also as the letter it stands for.",
+                "    1 | a\u{2039}U+00A0\u{203a}b",
+                "    2 | \u{2039}U+E000\u{203a}",
+                "    3 | e\u{301}\u{302}\u{303}\u{2039}U+0304\u{203a}",
+            ]
         );
     }
 

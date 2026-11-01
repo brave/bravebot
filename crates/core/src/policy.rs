@@ -112,6 +112,97 @@ impl TransportDecoding<'_> {
     }
 }
 
+/// A number a processor chose, on its way into the argument of a call that takes it (ROUTE-10).
+///
+/// Only [`Policy::carry_a_choice`] makes one, and it makes one for a choice that fills a call the
+/// person has just answered. The driver can move it and hand it to the function that writes it
+/// into the call, and cannot ask it anything: it has no accessor but [`Carried::into_wire`], and it
+/// implements no comparison, no hash, no formatting that shows the number, no conversion to an
+/// integer and no `Deref`. Its `Debug` shows that there is a number and not which. The checks below
+/// hold the type to that, one for each, so a derive added to it fails here.
+///
+/// A control first, so the bounds below are known to compile for a type that has them and the path
+/// they name resolves to this type, which does have `Debug`:
+///
+/// ```
+/// fn needs<T: PartialEq + PartialOrd + std::hash::Hash + std::fmt::Display + Clone>() {}
+/// needs::<u8>();
+/// fn shown<T: std::fmt::Debug>() {}
+/// shown::<bravebot_core::policy::Carried>();
+/// ```
+///
+/// It cannot be compared for equality, which is how a driver would ask whether the number is 0:
+///
+/// ```compile_fail
+/// fn needs<T: PartialEq>() {}
+/// needs::<bravebot_core::policy::Carried>();
+/// ```
+///
+/// Nor ordered, which is how it would ask whether the number is past a limit:
+///
+/// ```compile_fail
+/// fn needs<T: PartialOrd>() {}
+/// needs::<bravebot_core::policy::Carried>();
+/// ```
+///
+/// Nor hashed, which would answer the same question through a table lookup:
+///
+/// ```compile_fail
+/// fn needs<T: std::hash::Hash>() {}
+/// needs::<bravebot_core::policy::Carried>();
+/// ```
+///
+/// Nor formatted for a reader with `Display`:
+///
+/// ```compile_fail
+/// fn needs<T: std::fmt::Display>() {}
+/// needs::<bravebot_core::policy::Carried>();
+/// ```
+///
+/// Nor turned into an integer:
+///
+/// ```compile_fail
+/// fn needs<T>() where u8: From<T> {}
+/// needs::<bravebot_core::policy::Carried>();
+/// ```
+///
+/// Nor dereferenced or borrowed as one:
+///
+/// ```compile_fail
+/// fn needs<T: std::ops::Deref<Target = u8>>() {}
+/// needs::<bravebot_core::policy::Carried>();
+/// ```
+///
+/// ```compile_fail
+/// fn needs<T: AsRef<u8>>() {}
+/// needs::<bravebot_core::policy::Carried>();
+/// ```
+///
+/// Nor copied or cloned, so a number a call used is not left in a second place:
+///
+/// ```compile_fail
+/// fn needs<T: Clone>() {}
+/// needs::<bravebot_core::policy::Carried>();
+/// ```
+pub struct Carried(u8);
+
+impl Carried {
+    /// The number, for the one function that writes it into a call's arguments.
+    ///
+    /// Public so that function can live in the transport crate. The uses of it are pinned in
+    /// `docs/specs/labels.md` the way a declassification is, and a second one is a moved count.
+    pub fn into_wire(self) -> u8 {
+        self.0
+    }
+}
+
+/// Shows that there is a number and not which, as [`Labelled`] shows a label and not the value.
+impl fmt::Debug for Carried {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Carried(<number>)")
+    }
+}
+
 /// A refusal. Carries the principle upheld so a caller can explain the block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Denial {
@@ -323,6 +414,19 @@ pub enum AfterSpendLimit {
     Unanswered,
 }
 
+/// What a person said ahead of time about whether a call to a server's tool is asked about, apart
+/// from a rule (SERVERS-7, SERVERS-21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpStanding {
+    /// Nothing, so the default question is asked.
+    Nothing,
+    /// The person said at an earlier call to stop asking for this tool in this project.
+    StoppedAsking,
+    /// The server's declaration says every call is asked about, so no rule and no earlier answer
+    /// is read.
+    AskedEveryCall,
+}
+
 /// What a turn did about a call the planner made for the third time running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AfterRepeatedCall {
@@ -369,6 +473,10 @@ pub enum Containment {
 ///
 /// Not `Clone`. [`Policy::finish`] takes `self`, so a policy cannot outlive its turn. The one copy
 /// there is, [`Policy::branch`], records into a buffer of its own and is not a second turn.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate answer about the run or its host, and each is read on its own"
+)]
 pub struct Policy<'sink, S: Sink> {
     routing: Routing,
     release: ReleasePlan,
@@ -453,6 +561,14 @@ pub struct Policy<'sink, S: Sink> {
     /// Whether this run's definition named its tools and left `spawn_agent` out, which refuses
     /// every delegate it asks for wherever it sits.
     named_out_delegating: bool,
+    /// Whether the run is offered `vet_content`, which a reference it is handed says to use.
+    vetting_offered: bool,
+    /// Whether the run is offered `spawn_processor`, which a reference it is handed says to use.
+    spawning_offered: bool,
+    /// Whether the run is offered `write_file`, which a reference it is handed says to use.
+    writing_offered: bool,
+    /// Whether the run is offered `read_output`, which a reference to output kept whole says to use.
+    reading_offered: bool,
     /// The names this run's definition, and every one above it, allowed it to start, where any
     /// named some (DELEGATE-30). The set a turn resolves is narrowed to these wherever it is
     /// installed, and a delegate it starts carries them on, so a child cannot start what the file
@@ -626,6 +742,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // tree from its spec with `within`.
             at: None,
             named_out_delegating: false,
+            vetting_offered: true,
+            spawning_offered: true,
+            writing_offered: true,
+            reading_offered: true,
             spawns: None,
             write_limits: Vec::new(),
             spawned: 0,
@@ -1093,7 +1213,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Whether a person has to approve calling `tool` of the server declared as `alias`.
     ///
-    /// Private arguments ask first and whatever else is said: a rule or a standing answer about
+    /// A server whose declaration says every call is asked about asks before anything else is
+    /// read, a rule and a standing answer included: the person chose that for the server when they
+    /// declared it, and neither a rule about the tool nor an earlier answer is that choice undone
+    /// (SERVERS-21). A `deny` rule has already refused the call by then.
+    ///
+    /// Private arguments ask next and whatever else is said: a rule or a standing answer about
     /// which tool may be called is not consent to hand a server the person's data, which is
     /// PERM-9's reason, and a server is further from the person than a local program is. Then a
     /// rule decides, and only where none matched does `standing` answer, which is the person
@@ -1108,8 +1233,18 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         alias: &str,
         tool: &str,
         arguments: Label,
-        standing: bool,
+        standing: McpStanding,
     ) -> bool {
+        if standing == McpStanding::AskedEveryCall {
+            self.allow(
+                "approval",
+                format!(
+                    "the declaration of {alias} says every call is asked about, so {alias}:{tool} \
+                     asks whatever a rule or an earlier answer says"
+                ),
+            );
+            return true;
+        }
         if !arguments.is_public() {
             self.allow(
                 "approval",
@@ -1132,7 +1267,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 );
                 needed
             }
-            crate::permissions::Decision::Unmatched if standing => {
+            crate::permissions::Decision::Unmatched if standing == McpStanding::StoppedAsking => {
                 self.allow(
                     "approval",
                     format!(
@@ -1191,6 +1326,114 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             format!("arguments labelled {label} sent to {alias}:{tool}"),
         );
         Ok(arguments.declassify(&proof))
+    }
+
+    /// The gate a call passes in place of [`Policy::before_mcp_call`] when one of its arguments is
+    /// filled from a number a processor chose (ROUTE-10, MCP-14). Returns the arguments, which still
+    /// hold the planner's reference to the choice, and the number.
+    ///
+    /// What `before_mcp_call` does comes first: the endorsement the person's answer minted for
+    /// this tool is consumed, and arguments written in a context that has met untrusted content
+    /// are refused. Then the arguments must also be public. They are asked about, and a choice
+    /// filled into a call beside private words would send both to a server on one answer that was
+    /// about a number and where it came from. Then the choice is spent, which is the last step that
+    /// can fail, so a call refused for any reason before it leaves the choice unspent.
+    ///
+    /// The number reaches the caller as a [`Carried`], which can be moved and cannot be read. The
+    /// choice is held at the label it was read at and is not checked here: what authorises it is
+    /// the person's answer, which drew it ([`Policy::choice_for_display`]). Nothing here compares
+    /// the number, and the trail line holds the alias, the tool, the label and the name of the
+    /// choice and no digit.
+    pub fn carry_a_choice<T>(
+        &mut self,
+        alias: &str,
+        tool: &str,
+        arguments: Labelled<T>,
+        choice: &SlotId,
+        slots: &mut crate::slot::SlotStore,
+    ) -> Gated<(T, Carried)> {
+        self.consume_grant("mcp_call", "tool", &format!("{alias}:{tool}"))?;
+        let label = arguments.label();
+        if !label.is_trusted() {
+            return Err(self.deny(
+                "mcp_call",
+                Principle::IntegrityGate,
+                format!(
+                    "the arguments to {alias}:{tool} were written in a context that has met \
+                     untrusted content, so they must not reach a server"
+                ),
+            ));
+        }
+        if !label.is_public() {
+            return Err(self.deny(
+                "mcp_call",
+                Principle::Confinement,
+                format!(
+                    "the arguments to {alias}:{tool} are private, so {choice} cannot fill one of \
+                     them: the answer to this call was about a number and not about them"
+                ),
+            ));
+        }
+        let chosen = match slots.spend_choice(choice) {
+            Ok(chosen) => chosen,
+            Err(refused) => {
+                return Err(self.deny(
+                    "mcp_call",
+                    Principle::Confinement,
+                    format!("{alias}:{tool} cannot be filled from {choice}: {refused}"),
+                ));
+            }
+        };
+        let was = chosen.label();
+        let proof =
+            Declassification::authorise("a choice a person was shown, carried into its call");
+        self.allow(
+            "mcp_call",
+            format!(
+                "arguments labelled {label} sent to {alias}:{tool}, one argument filled from \
+                 {choice}, a choice labelled {was} that a person was shown and answered"
+            ),
+        );
+        Ok((
+            arguments.declassify(&proof),
+            Carried(chosen.declassify(&proof)),
+        ))
+    }
+
+    /// The number a processor chose, as digits for the person who is asked about the call it will
+    /// fill (ROUTE-10).
+    ///
+    /// A display release, as [`Policy::names_for_display`] is for the files references name: the
+    /// string goes onto a line a person reads and nowhere else, and no gate takes it back to
+    /// anything an effect uses. It is the only way a digit leaves the store as text. Refused for a
+    /// name that holds no choice or one a call used already, so a person is never asked about a
+    /// number that cannot fill the call. The choice stays unspent. The trail line holds the name
+    /// and no digit, and is the same line for every number, 0 included.
+    pub fn choice_for_display(
+        &mut self,
+        choice: &SlotId,
+        slots: &crate::slot::SlotStore,
+    ) -> Gated<String> {
+        let chosen = match slots.take_choice(choice) {
+            Ok(chosen) => chosen,
+            Err(refused) => {
+                return Err(self.deny(
+                    "display",
+                    Principle::Confinement,
+                    format!("{choice} cannot fill a call: {refused}"),
+                ));
+            }
+        };
+        self.allow(
+            "display",
+            format!(
+                "{choice}, a choice a processor made, drawn on a line a person reads, and nowhere \
+                 else"
+            ),
+        );
+        let proof =
+            Declassification::authorise("a choice, drawn for the person asked about its call");
+        Ok(chosen.declassify(&proof).to_string())
     }
 
     /// Fix a check over the tools a server offers, before a person is asked to vouch for them.
@@ -1365,6 +1608,10 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             delegates: self.delegates.clone(),
             at: self.at,
             named_out_delegating: self.named_out_delegating,
+            vetting_offered: self.vetting_offered,
+            spawning_offered: self.spawning_offered,
+            writing_offered: self.writing_offered,
+            reading_offered: self.reading_offered,
             spawns: self.spawns.clone(),
             write_limits: self.write_limits.clone(),
             spawned: self.spawned,
@@ -1980,8 +2227,75 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         !self.context_label().is_public()
     }
 
-    /// A reference made now, marked as closed to processors where none can be started.
+    /// Say that the run is not offered `vet_content`, so a reference made from here on does not
+    /// send it there.
+    ///
+    /// Told once, by the turn, when its list of tools is settled: a delegate is never offered the
+    /// tool, and a definition's tools line or the command line can leave it out of a turn's list.
+    /// One way, like every other move on this value, and the policy of a turn is built for that
+    /// turn.
+    pub fn without_vetting(&mut self) {
+        self.vetting_offered = false;
+    }
+
+    /// Say that the run is not offered `spawn_processor`, so a reference made from here on does not
+    /// tell it to give the content to one. Told by the turn when its list is settled, as
+    /// [`Policy::without_vetting`] is.
+    pub fn without_spawning(&mut self) {
+        self.spawning_offered = false;
+    }
+
+    /// Say that the run is not offered `write_file`, so a reference made from here on does not
+    /// tell it to write the content into a file. Told by the turn when its list is settled, as
+    /// [`Policy::without_vetting`] is.
+    pub fn without_writing(&mut self) {
+        self.writing_offered = false;
+    }
+
+    /// Say that the run is not offered `read_output`, so a reference made from here on to output
+    /// kept whole does not tell it to call that. Told by the turn when its list is settled, as
+    /// [`Policy::without_vetting`] is.
+    pub fn without_reading(&mut self) {
+        self.reading_offered = false;
+    }
+
+    /// Whether a reference the run holds can be given to a processor: the run is offered
+    /// `spawn_processor` and its context holds nothing private (PROC-4). Text that tells the
+    /// planner what to do with a reference reads this where it is written by hand.
+    pub fn processors_offered(&self) -> bool {
+        self.spawning_offered && !self.processors_closed()
+    }
+
+    /// Whether the run is offered `write_file`, where a reference goes as `contents_ref` or
+    /// `path_ref`.
+    pub fn writing_is_offered(&self) -> bool {
+        self.writing_offered
+    }
+
+    /// A reference made now, marked as closed to processors where none can be started and as
+    /// sending nobody to a tool the run is not offered: `vet_content`, `spawn_processor`,
+    /// `write_file` or `read_output`.
     fn made_here(&self, reference: crate::reference::Reference) -> crate::reference::Reference {
+        let reference = if self.vetting_offered {
+            reference
+        } else {
+            reference.without_vetting()
+        };
+        let reference = if self.spawning_offered {
+            reference
+        } else {
+            reference.without_spawning()
+        };
+        let reference = if self.writing_offered {
+            reference
+        } else {
+            reference.without_writing()
+        };
+        let reference = if self.reading_offered {
+            reference
+        } else {
+            reference.without_reading()
+        };
         if self.processors_closed() {
             reference.closed_to_processors()
         } else {
@@ -3624,6 +3938,49 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Ok(reference)
     }
 
+    /// Quarantine the number a processor chose, and hand back the reference the planner is told.
+    ///
+    /// A number is not run through [`Policy::present`], which shows trusted content visibly: a
+    /// choice is held back whatever label it has, as a picture is, and the planner learns its limit
+    /// and its label and nothing else. The reference states neither a line count nor a byte count
+    /// (PROC-16), and the trail line holds the origin and the label and no digit, so both are the
+    /// same for every number, 0 included. This stores what it is given and compares nothing.
+    ///
+    /// `upto` is the limit the planner wrote. The number is kept apart from text
+    /// ([`crate::slot::SlotStore::store_choice`]), so no gate that resolves a reference to text
+    /// finds it.
+    pub fn store_a_choice(
+        &mut self,
+        tool: &str,
+        slot: SlotId,
+        origin: &str,
+        chosen: Labelled<u8>,
+        upto: u8,
+        slots: &mut crate::slot::SlotStore,
+    ) -> Gated<crate::reference::Reference> {
+        let label = chosen.label();
+        slots
+            .store_choice(slot.clone(), chosen)
+            .map_err(|e| Denial {
+                principle: Principle::Confinement,
+                message: format!("{tool}: could not quarantine {origin}: {e}"),
+            })?;
+        self.sink.emit(Event::SlotWritten {
+            slot: slot.clone(),
+            label,
+        });
+        self.allow(
+            "quarantine",
+            format!(
+                "{tool}: {origin} is {label}, a choice quarantined as {slot}; the planner sees a \
+                 reference only"
+            ),
+        );
+        Ok(self.made_here(
+            crate::reference::Reference::unread(slot, origin, None, label).of_a_choice(upto),
+        ))
+    }
+
     /// Resolve a reference the planner supplied back into content, for an effect.
     ///
     /// The planner names a slot; the kernel produces the bytes. This is what lets an agent move
@@ -3803,6 +4160,124 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         about: Option<SlotId>,
         slots: &crate::slot::SlotStore,
     ) -> Gated<crate::processor::ProcessorSpec> {
+        let (out_label, instruction) =
+            self.what_a_processor_is_given(id, reads, instruction, slots)?;
+        // The fallback has to be one of the inputs. Anything else would let the answer stand for
+        // a document the processor was never given, and the planner chooses it before the
+        // processor exists either way.
+        if let Some(slot) = &about
+            && !reads.contains(slot)
+        {
+            return Err(self.deny(
+                "processor",
+                Principle::Confinement,
+                format!("{id}: '{slot}' is not one of the references it was given to read"),
+            ));
+        }
+
+        // Where the planner named none and the whole of what the processor is given is one file,
+        // that file is what "leave it alone" can only mean, so the way to say it is offered
+        // whether or not the planner thought to. One that had no way to say it said it in prose
+        // instead, several sentences of reasoning about the instruction, and the sentences
+        // became the file. There is nothing for the planner to opt into here: an answer that
+        // stands for the one document it was given is the document it was given.
+        //
+        // One input, not one file among several. Counting only the files let a call over a file
+        // and anything else at all, a page fetched or an earlier answer, take that file as its
+        // document, and a write of the answer then landed there however little of it the file
+        // had to do with. Two calls were enough: one to turn a game into a page, a second over
+        // that page and a script, and the page went into the script with every gate passing.
+        let about = about.or_else(|| match reads {
+            [only] if slots.verbatim_of(only, &PathAuthority::mint()).is_some() => {
+                Some(only.clone())
+            }
+            _ => None,
+        });
+
+        let spec = crate::processor::ProcessorSpec::new(
+            id,
+            reads.to_vec(),
+            instruction,
+            out_label,
+            about,
+            None,
+            &SpecAuthority::mint(),
+        );
+
+        self.allow(
+            "processor",
+            format!(
+                "{}, with no tools, no memory and nothing to write but that one slot",
+                spec.describe()
+            ),
+        );
+        Ok(spec)
+    }
+
+    /// Fix what a processor asked to choose one entry of a list may do, before it exists.
+    ///
+    /// The same checks as [`Policy::before_processor`] on what it reads and what it is told, and
+    /// the same label by taint over the inputs. It takes no `about`, because its answer is a number
+    /// and no document, and it carries the limit the planner wrote. The limit is the planner's own
+    /// argument, so refusing one outside 2 to [`crate::processor::ProcessorSpec::LARGEST_CHOICE`]
+    /// is a decision on its own words and not on anything the processor read.
+    ///
+    /// The answer is read for the number by [`Policy::read_a_number`], which refuses a spec built
+    /// by any other gate.
+    pub fn before_chooser(
+        &mut self,
+        id: &str,
+        reads: &[SlotId],
+        instruction: &Labelled<String>,
+        choose_upto: u8,
+        slots: &crate::slot::SlotStore,
+    ) -> Gated<crate::processor::ProcessorSpec> {
+        if !(2..=crate::processor::ProcessorSpec::LARGEST_CHOICE).contains(&choose_upto) {
+            return Err(self.deny(
+                "processor",
+                Principle::Confinement,
+                format!(
+                    "{id}: choose_upto must be a whole number from 2 to {}, and {choose_upto} is \
+                     not",
+                    crate::processor::ProcessorSpec::LARGEST_CHOICE
+                ),
+            ));
+        }
+        let (out_label, instruction) =
+            self.what_a_processor_is_given(id, reads, instruction, slots)?;
+        let spec = crate::processor::ProcessorSpec::new(
+            id,
+            reads.to_vec(),
+            instruction,
+            out_label,
+            None,
+            Some(choose_upto),
+            &SpecAuthority::mint(),
+        );
+
+        self.allow(
+            "processor",
+            format!(
+                "{}, asked for one whole number from 1 to {choose_upto}, with no tools, no \
+                 memory and nothing to write but that one slot",
+                spec.describe()
+            ),
+        );
+        Ok(spec)
+    }
+
+    /// The label a processor's output will carry and the instruction it will be sent, once the
+    /// slots it reads and the instruction pass the checks every processor passes.
+    ///
+    /// Shared by [`Policy::before_processor`] and [`Policy::before_chooser`], so a processor of
+    /// either kind is refused for the same reasons and the instruction is released in one place.
+    fn what_a_processor_is_given(
+        &mut self,
+        id: &str,
+        reads: &[SlotId],
+        instruction: &Labelled<String>,
+        slots: &crate::slot::SlotStore,
+    ) -> Gated<(Label, String)> {
         // Not named by `id`: that is made from the references it reads, and here there are none.
         if reads.is_empty() {
             return Err(self.deny(
@@ -3863,55 +4338,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         // was checked before this point, so nothing private is being opened.
         let proof = Declassification::authorise("a processor instruction the planner wrote");
         let instruction = instruction.clone().declassify(&proof);
-        // The fallback has to be one of the inputs. Anything else would let the answer stand for
-        // a document the processor was never given, and the planner chooses it before the
-        // processor exists either way.
-        if let Some(slot) = &about
-            && !reads.contains(slot)
-        {
-            return Err(self.deny(
-                "processor",
-                Principle::Confinement,
-                format!("{id}: '{slot}' is not one of the references it was given to read"),
-            ));
-        }
-
-        // Where the planner named none and the whole of what the processor is given is one file,
-        // that file is what "leave it alone" can only mean, so the way to say it is offered
-        // whether or not the planner thought to. One that had no way to say it said it in prose
-        // instead, several sentences of reasoning about the instruction, and the sentences
-        // became the file. There is nothing for the planner to opt into here: an answer that
-        // stands for the one document it was given is the document it was given.
-        //
-        // One input, not one file among several. Counting only the files let a call over a file
-        // and anything else at all, a page fetched or an earlier answer, take that file as its
-        // document, and a write of the answer then landed there however little of it the file
-        // had to do with. Two calls were enough: one to turn a game into a page, a second over
-        // that page and a script, and the page went into the script with every gate passing.
-        let about = about.or_else(|| match reads {
-            [only] if slots.verbatim_of(only, &PathAuthority::mint()).is_some() => {
-                Some(only.clone())
-            }
-            _ => None,
-        });
-
-        let spec = crate::processor::ProcessorSpec::new(
-            id,
-            reads.to_vec(),
-            instruction,
-            out_label,
-            about,
-            &SpecAuthority::mint(),
-        );
-
-        self.allow(
-            "processor",
-            format!(
-                "{}, with no tools, no memory and nothing to write but that one slot",
-                spec.describe()
-            ),
-        );
-        Ok(spec)
+        Ok((out_label, instruction))
     }
 
     /// Fix what a delegate is before it exists.
@@ -4825,6 +5252,57 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Processed { document, note }
     }
 
+    /// Read a processor's answer for the one whole number it was asked for (PROC-16).
+    ///
+    /// Which number an answer names is a decision taken from untrusted bytes, so it is not taken
+    /// here, and not anywhere in the driver. `reader` is a function pointer from a crate that is
+    /// not the driver. It captures nothing of the caller's, is handed the text for the width of one
+    /// call and the limit the planner wrote, and gives back one byte. This gate compares neither
+    /// the text nor the byte, and nothing else of the answer is kept. The ninth entry of the Known
+    /// costs in `docs/specs/labels.md` is that reader, and the uses of this gate are pinned there,
+    /// so a second reader of an answer is a moved count.
+    ///
+    /// **Not a relabel.** The byte is labelled as [`Policy::label_processor_output`] labels a
+    /// document: the spec's label met with the label the transport put on the reply, so a number
+    /// read after a page is untrusted and private whatever number it is.
+    ///
+    /// Refused for a spec that was not built to choose, so this release to another crate's reader
+    /// cannot be pointed at a document. The trail line holds the processor's name and the label and
+    /// no digit, and is the same line for every answer.
+    pub fn read_a_number(
+        &mut self,
+        spec: &crate::processor::ProcessorSpec,
+        answer: Labelled<String>,
+        reader: fn(&str, u8) -> u8,
+    ) -> Gated<Labelled<u8>> {
+        let Some(upto) = spec.choose_upto() else {
+            return Err(self.deny(
+                "processor",
+                Principle::Confinement,
+                format!(
+                    "{}: this processor was not asked to choose, so no number is read from its \
+                     answer",
+                    spec.id()
+                ),
+            ));
+        };
+        let label = crate::label::taint_all([spec.out_label(), answer.label()]);
+        self.allow(
+            "processor",
+            format!(
+                "{}: the answer was read for the one number it was asked for, labelled {label}",
+                spec.id()
+            ),
+        );
+        let proof = Declassification::authorise(
+            "a processor's answer, read for one number outside the driver",
+        );
+        Ok(Labelled::new(
+            reader(&answer.declassify(&proof), upto),
+            label,
+        ))
+    }
+
     /// Give back the last newline where the document had one and the answer does not.
     ///
     /// A model handing back a file it was asked to return unchanged returns it without the final
@@ -5019,9 +5497,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
     /// Record that a slot holds a picture, and the media type it is to be sent as.
     ///
-    /// The media type is the driver's, from a closed table of extensions. Nothing read decides it,
-    /// so a slot cannot become a picture by holding something that looks like one, and the label is
-    /// untouched: a picture is quarantined exactly as the file it came from was.
+    /// The media type is from a closed table: of extensions for a file, and of four media types
+    /// for a picture a server's tool result carried, which the transport selected by comparing the
+    /// `mimeType` the server wrote. A slot cannot become a picture by holding something that looks
+    /// like one, and the label is untouched: a picture is quarantined exactly as the file or the
+    /// result it came from was.
     pub fn holds_a_picture(
         &mut self,
         slot: &SlotId,
@@ -7805,6 +8285,21 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a delegate's call to `tool` of the server declared as `alias` was refused
+    /// without being put to anybody, because that declaration says every call is asked about and a
+    /// delegate's task came from a planner and not from the person (SERVERS-21, TRACE-1). The
+    /// sentence is fixed text and names the call as the gates name it (TRACE-2).
+    pub fn refuse_asked_every_call_in_a_delegate(&mut self, alias: &str, tool: &str) {
+        let _ = self.deny(
+            "approval",
+            Principle::Capability,
+            format!(
+                "{alias}:{tool}: every call to {alias} is asked about and a delegate is not \
+                 asked, so the server was not called"
+            ),
+        );
+    }
+
     /// Record that showing the planner what looks like a credential in a read was put to the person
     /// and not approved, so none of it was shown (TRACE-1). `call` is the tool, `read_file`,
     /// `edit_file` or `read_git`. The reasons are those of [`Policy::refuse_unapproved_write`], and
@@ -8725,6 +9220,71 @@ mod tests {
         }
     }
 
+    /// One reference from each way the policy makes one: presented, kept whole, a file deferred and
+    /// an entry of a listing.
+    fn a_reference_of_each_kind(
+        policy: &mut Policy<'_, RecordingSink>,
+        slots: &mut SlotStore,
+    ) -> Vec<(&'static str, crate::reference::Reference)> {
+        let printed = Labelled::new("a long log\n".to_string(), Label::untrusted_private());
+        let ids = [
+            SlotId::new("ref:1"),
+            SlotId::new("ref:2"),
+            SlotId::new("ref:3"),
+            SlotId::new("ref:4"),
+        ];
+
+        let presented = policy
+            .present(
+                "run",
+                ids[0].clone(),
+                "what `make` printed",
+                &printed,
+                slots,
+            )
+            .expect("presents")
+            .reference()
+            .cloned()
+            .expect("a reference");
+        let kept = policy
+            .keep_whole(
+                "run",
+                ids[1].clone(),
+                "what `make` printed",
+                &printed,
+                slots,
+            )
+            .expect("keeps the whole of it");
+        let file = policy
+            .defer(
+                "read_file",
+                ids[2].clone(),
+                "notes.md",
+                &Labelled::trusted("notes.md".to_string()),
+                42,
+                slots,
+            )
+            .expect("a file may be reserved");
+        let entries = Labelled::new(vec!["notes.md".to_string()], Label::untrusted_private());
+        let entry = policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                0,
+                &ids[3..],
+                slots,
+            )
+            .expect("entries may be reserved")
+            .remove(0);
+        vec![
+            ("present", presented),
+            ("keep_whole", kept),
+            ("defer", file),
+            ("defer_entries", entry),
+        ]
+    }
+
     /// PROC-4 refuses every processor call once the context holds private content, and a reference
     /// is where the planner is told what to do with quarantined content. Each way the policy makes
     /// one is asked, and the context is varied on both axes: one that has met untrusted data and
@@ -8740,65 +9300,9 @@ mod tests {
             let mut sink = RecordingSink::new();
             let mut slots = SlotStore::new();
             let mut policy = open_policy(&mut sink).resuming(integrity).holding(held);
-            let printed = Labelled::new("a long log\n".to_string(), Label::untrusted_private());
-            let ids = [
-                SlotId::new("ref:1"),
-                SlotId::new("ref:2"),
-                SlotId::new("ref:3"),
-                SlotId::new("ref:4"),
-            ];
-
-            let presented = policy
-                .present(
-                    "run",
-                    ids[0].clone(),
-                    "what `make` printed",
-                    &printed,
-                    &mut slots,
-                )
-                .expect("presents")
-                .reference()
-                .cloned()
-                .expect("a reference");
-            let kept = policy
-                .keep_whole(
-                    "run",
-                    ids[1].clone(),
-                    "what `make` printed",
-                    &printed,
-                    &mut slots,
-                )
-                .expect("keeps the whole of it");
-            let file = policy
-                .defer(
-                    "read_file",
-                    ids[2].clone(),
-                    "notes.md",
-                    &Labelled::trusted("notes.md".to_string()),
-                    42,
-                    &mut slots,
-                )
-                .expect("a file may be reserved");
-            let entries = Labelled::new(vec!["notes.md".to_string()], Label::untrusted_private());
-            let entry = policy
-                .defer_entries(
-                    "list_files",
-                    "an entry in \".\"",
-                    &entries,
-                    0,
-                    &ids[3..],
-                    &mut slots,
-                )
-                .expect("entries may be reserved")
-                .remove(0);
 
             let closed = held == Confidentiality::Private;
-            for (made, reference) in [
-                ("present", &presented),
-                ("keep_whole", &kept),
-                ("defer", &file),
-                ("defer_entries", &entry),
-            ] {
+            for (made, reference) in a_reference_of_each_kind(&mut policy, &mut slots) {
                 assert_eq!(
                     reference.describe().contains("spawn_processor"),
                     !closed,
@@ -8806,6 +9310,168 @@ mod tests {
                     reference.describe()
                 );
             }
+        }
+    }
+
+    /// A reference names `vet_content` exactly when the run it is made for is offered the tool, in
+    /// whichever way the policy makes one. A delegate is never offered it, and a turn's definition
+    /// or the command line can leave it out of the list, so the policy is told once and every
+    /// reference made after carries it. Output kept whole is read page by page and never names it.
+    #[test]
+    fn a_reference_names_vet_content_exactly_when_the_run_is_offered_it() {
+        for offered in [true, false] {
+            let mut sink = RecordingSink::new();
+            let mut slots = SlotStore::new();
+            let mut policy = open_policy(&mut sink);
+            if !offered {
+                policy.without_vetting();
+            }
+
+            for (made, reference) in a_reference_of_each_kind(&mut policy, &mut slots) {
+                let kept_whole = reference.kind == crate::reference::Kind::Kept;
+                assert_eq!(
+                    reference.describe().contains("vet_content"),
+                    offered && !kept_whole,
+                    "{made} for a run {} vet_content: {}",
+                    if offered { "offered" } else { "not offered" },
+                    reference.describe()
+                );
+            }
+        }
+    }
+
+    /// A reference names `spawn_processor` and `write_file` exactly when the run it is made for is
+    /// offered them, in whichever way the policy makes one. The policy is told once, as it is for
+    /// `vet_content`, and every reference made after carries it. A file is written back through the
+    /// processor's answer, so a reference to one names `write_file` only where both are offered.
+    #[test]
+    fn a_reference_names_spawn_processor_and_write_file_exactly_when_the_run_is_offered_them() {
+        for (spawning, writing) in [(true, true), (true, false), (false, true), (false, false)] {
+            let mut sink = RecordingSink::new();
+            let mut slots = SlotStore::new();
+            let mut policy = open_policy(&mut sink);
+            if !spawning {
+                policy.without_spawning();
+            }
+            if !writing {
+                policy.without_writing();
+            }
+
+            for (made, reference) in a_reference_of_each_kind(&mut policy, &mut slots) {
+                let described = reference.describe();
+                let file = reference.kind == crate::reference::Kind::File;
+                assert_eq!(
+                    described.contains("spawn_processor"),
+                    spawning,
+                    "{made} for a run offered spawn_processor {spawning}: {described}"
+                );
+                assert_eq!(
+                    described.contains("write_file") || described.contains("contents_ref"),
+                    writing && (spawning || !file),
+                    "{made} for a run offered write_file {writing}: {described}"
+                );
+            }
+        }
+    }
+
+    /// A reference to output kept whole names `read_output` exactly when the run it is made for is
+    /// offered the tool, and no other reference names it. The policy is told once, as it is for
+    /// `vet_content`, and every reference made after carries it.
+    #[test]
+    fn a_reference_to_kept_output_names_read_output_exactly_when_the_run_is_offered_it() {
+        for offered in [true, false] {
+            let mut sink = RecordingSink::new();
+            let mut slots = SlotStore::new();
+            let mut policy = open_policy(&mut sink);
+            if !offered {
+                policy.without_reading();
+            }
+
+            for (made, reference) in a_reference_of_each_kind(&mut policy, &mut slots) {
+                let kept_whole = reference.kind == crate::reference::Kind::Kept;
+                assert_eq!(
+                    reference.describe().contains("read_output"),
+                    offered && kept_whole,
+                    "{made} for a run {} read_output: {}",
+                    if offered { "offered" } else { "not offered" },
+                    reference.describe()
+                );
+            }
+        }
+    }
+
+    /// Work that runs beside other work reads through a branch, and what a branch makes is told to
+    /// the same run: a reference made through it names no tool the policy it was taken from was
+    /// told the run is not offered, and names every tool when it was told none.
+    #[test]
+    fn a_branch_makes_references_for_the_run_the_policy_was_told_about() {
+        for cut in [true, false] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            if cut {
+                policy.without_vetting();
+                policy.without_spawning();
+                policy.without_writing();
+                policy.without_reading();
+            }
+            let mut record = RecordingSink::new();
+            let mut branch = policy.branch(&mut record);
+            assert_eq!(branch.processors_offered(), !cut);
+            assert_eq!(branch.writing_is_offered(), !cut);
+
+            let mut slots = SlotStore::new();
+            let described: Vec<String> = a_reference_of_each_kind(&mut branch, &mut slots)
+                .into_iter()
+                .map(|(_, reference)| reference.describe())
+                .collect();
+            for tool in [
+                "vet_content",
+                "spawn_processor",
+                "contents_ref",
+                "path_ref",
+                "read_output",
+            ] {
+                assert_eq!(
+                    described.iter().any(|text| text.contains(tool)),
+                    !cut,
+                    "a branch of a policy {} {tool} made: {described:?}",
+                    if cut { "not offered" } else { "offered" }
+                );
+            }
+        }
+    }
+
+    /// Text written by hand about a reference asks the policy what the reference may be given to:
+    /// a processor only where the run is offered one and its context holds nothing private, and a
+    /// file only where it is offered `write_file`.
+    #[test]
+    fn the_policy_says_what_a_reference_may_be_given_to() {
+        for (spawning, writing, held) in [
+            (true, true, Confidentiality::Public),
+            (true, false, Confidentiality::Public),
+            (false, true, Confidentiality::Public),
+            (false, false, Confidentiality::Public),
+            (true, true, Confidentiality::Private),
+            (true, false, Confidentiality::Private),
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink).holding(held);
+            if !spawning {
+                policy.without_spawning();
+            }
+            if !writing {
+                policy.without_writing();
+            }
+            assert_eq!(
+                policy.processors_offered(),
+                spawning && held == Confidentiality::Public,
+                "spawn_processor {spawning}, holding {held:?}"
+            );
+            assert_eq!(
+                policy.writing_is_offered(),
+                writing,
+                "write_file {writing}, holding {held:?}"
+            );
         }
     }
 
@@ -10153,6 +10819,45 @@ five
         assert!(!policy.finish());
     }
 
+    /// A plan that calls a server's tool is a plan, and is refused as one is when the planner that
+    /// wrote it had met something untrusted: the server, the tool and the arguments are then an
+    /// attacker's choice. The same plan from a clean context is adopted, with its call locked.
+    #[test]
+    fn a_plan_calling_a_server_from_a_tainted_context_is_refused() {
+        use crate::manifest::{DraftStep, MCP_CALL};
+        // Labelled by the context it was written in, as a planning call's reply is.
+        let written = |policy: &mut Policy<'_, RecordingSink>| {
+            policy.label_model_output(
+                "manifest",
+                crate::manifest::Draft::new(vec![
+                    DraftStep::new(MCP_CALL)
+                        .with_text("server", "brave")
+                        .with_text("tool", "open_tab")
+                        .with_text("arguments", r#"{"url":"https://example.com"}"#),
+                ]),
+            )
+        };
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink).resuming(Integrity::Untrusted);
+        let plan = written(&mut policy);
+        let err = policy
+            .adopt_manifest(&plan)
+            .expect_err("an untrusted plan must never be adopted");
+        assert_eq!(err.principle, Principle::IntegrityGate);
+        assert!(!policy.finish());
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let plan = written(&mut policy);
+        let plan = policy
+            .adopt_manifest(&plan)
+            .expect("a trusted plan is adopted");
+        assert!(
+            plan.routing()
+                .contains(&("step_0_server".to_string(), "brave".to_string()))
+        );
+    }
+
     /// A malformed plan fails the run rather than being repaired. Half a program is worse than
     /// none: the steps that did run had consequences nobody approved as a whole.
     #[test]
@@ -11223,13 +11928,101 @@ five
         ));
         let public = Label::trusted_public();
 
-        assert!(policy.mcp_call_needs_approval("weather", "get_forecast", public, false));
-        assert!(!policy.mcp_call_needs_approval("weather", "get_forecast", public, true));
-        assert!(!policy.mcp_call_needs_approval("news", "lookup", public, false));
+        assert!(policy.mcp_call_needs_approval(
+            "weather",
+            "get_forecast",
+            public,
+            McpStanding::Nothing
+        ));
+        assert!(!policy.mcp_call_needs_approval(
+            "weather",
+            "get_forecast",
+            public,
+            McpStanding::StoppedAsking
+        ));
+        assert!(!policy.mcp_call_needs_approval("news", "lookup", public, McpStanding::Nothing));
         assert!(
-            policy.mcp_call_needs_approval("weather", "get_alerts", public, true),
+            policy.mcp_call_needs_approval(
+                "weather",
+                "get_alerts",
+                public,
+                McpStanding::StoppedAsking
+            ),
             "a standing answer overruled an ask rule somebody wrote"
         );
+    }
+
+    /// SERVERS-21. A call to a server declared to ask every call asks though a rule allows the tool,
+    /// and the same rule and an earlier answer let the call through when the server is not declared
+    /// so. The control rows are what make the declaration the thing under test.
+    #[test]
+    fn a_server_declared_to_ask_every_call_asks_though_a_rule_allows_it() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &[], &["Mcp(cookies)"]));
+        let public = Label::trusted_public();
+
+        for standing in [McpStanding::Nothing, McpStanding::StoppedAsking] {
+            assert!(
+                !policy.mcp_call_needs_approval("cookies", "get_cookies", public, standing),
+                "the allow rule did not answer for a server not declared to ask: {standing:?}"
+            );
+        }
+        assert!(
+            policy.mcp_call_needs_approval(
+                "cookies",
+                "get_cookies",
+                public,
+                McpStanding::AskedEveryCall
+            ),
+            "an allow rule answered a call to a server declared to ask every call"
+        );
+    }
+
+    /// SERVERS-21. The trail records why a call to a server declared to ask every call was put to
+    /// the person, in one sentence that names the declaration and the call and has single spaces
+    /// throughout. The regression it rejects is a sentence cut across lines with the gap left in
+    /// it, which read as a run of spaces in the middle. The same rule in the control row draws a
+    /// different sentence, so the text is the declaration's and not any approval's.
+    #[test]
+    fn the_trail_says_why_a_call_to_a_server_asked_every_call_was_asked() {
+        let mut sink = RecordingSink::new();
+        let mut policy =
+            open_policy(&mut sink).with_permissions(permissions(&[], &[], &["Mcp(cookies)"]));
+        let public = Label::trusted_public();
+
+        assert!(policy.mcp_call_needs_approval(
+            "cookies",
+            "get_cookies",
+            public,
+            McpStanding::AskedEveryCall
+        ));
+        assert!(!policy.mcp_call_needs_approval(
+            "cookies",
+            "get_cookies",
+            public,
+            McpStanding::Nothing
+        ));
+        let said: Vec<&str> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "approval",
+                    detail,
+                } => Some(detail.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            said,
+            [
+                "the declaration of cookies says every call is asked about, so \
+                 cookies:get_cookies asks whatever a rule or an earlier answer says",
+                "a rule in the settings file says allow for cookies:get_cookies, no prompt",
+            ]
+        );
+        assert!(!said[0].contains("  "), "{:?}", said[0]);
     }
 
     /// PERM-9's fourth prompt. Neither a rule nor a standing answer about which tool may be called
@@ -11245,14 +12038,14 @@ five
             "weather",
             "get_forecast",
             Label::trusted_public(),
-            true
+            McpStanding::StoppedAsking
         ));
         assert!(
             policy.mcp_call_needs_approval(
                 "weather",
                 "get_forecast",
                 Label::trusted_private(),
-                true
+                McpStanding::StoppedAsking
             ),
             "a rule and a standing answer released private data to a server with no prompt"
         );
@@ -11329,6 +12122,266 @@ five
                 .before_mcp_call("weather", "get_forecast", fallen)
                 .is_err()
         );
+    }
+
+    /// A policy that holds a choice of `number` under `ref:3`, a text slot under `ref:5`, and the
+    /// slot store they are kept in.
+    fn a_choice_is_stored(
+        sink: &mut RecordingSink,
+        number: u8,
+    ) -> (Policy<'_, RecordingSink>, SlotStore) {
+        let mut slots = SlotStore::new();
+        let mut policy = open_policy(sink);
+        policy
+            .store_a_choice(
+                "spawn_processor",
+                SlotId::new("ref:3"),
+                "an isolated processor over ref:1",
+                Labelled::new(number, Label::untrusted_private()),
+                40,
+                &mut slots,
+            )
+            .expect("a choice is stored");
+        slots
+            .writer_for(SlotId::new("ref:5"), Label::untrusted_public())
+            .expect("a writer")
+            .write("text")
+            .expect("written");
+        (policy, slots)
+    }
+
+    /// A choice fills a call only after the person's answer to that call, and only once. Each way
+    /// the gate can be asked wrongly is refused, and none of them uses the choice up: the choice is
+    /// marked only at the last step, after the checks that can fail. Used up on a refusal, a choice
+    /// would be lost to a call the person never saw; used twice, it would fill a second call on an
+    /// answer that was about the first. The number comes out as a value that can only be passed on.
+    #[test]
+    fn carry_a_choice_consumes_the_endorsement_spends_the_choice_and_refuses_before_spending() {
+        let unspent = |slots: &SlotStore| slots.take_choice(&SlotId::new("ref:3")).is_ok();
+        let arguments = |label: Label| Labelled::new("{\"url\":\"https://shop.example\"}", label);
+        let choice = SlotId::new("ref:3");
+
+        let mut sink = RecordingSink::new();
+        let (mut policy, mut slots) = a_choice_is_stored(&mut sink, 7);
+
+        // No answer from the person for this call.
+        let err = policy
+            .carry_a_choice(
+                "brave-input",
+                "click_element",
+                arguments(Label::trusted_public()),
+                &choice,
+                &mut slots,
+            )
+            .expect_err("a choice was carried with no endorsement");
+        assert_eq!(err.principle, Principle::IntegrityGate);
+        assert!(unspent(&slots));
+
+        // An answer for another tool is not spent on this one, and stays for the tool it was for.
+        policy.endorse_mcp_call("brave-input", "type_text");
+        assert!(
+            policy
+                .carry_a_choice(
+                    "brave-input",
+                    "click_element",
+                    arguments(Label::trusted_public()),
+                    &choice,
+                    &mut slots,
+                )
+                .is_err()
+        );
+        assert!(unspent(&slots));
+
+        // Words written in a context that has met untrusted content, or private words: refused,
+        // with the answer consumed by the attempt as `before_mcp_call` consumes it.
+        for (label, principle) in [
+            (Label::untrusted_public(), Principle::IntegrityGate),
+            (Label::untrusted_private(), Principle::IntegrityGate),
+            (Label::trusted_private(), Principle::Confinement),
+        ] {
+            policy.endorse_mcp_call("brave-input", "click_element");
+            let err = policy
+                .carry_a_choice(
+                    "brave-input",
+                    "click_element",
+                    arguments(label),
+                    &choice,
+                    &mut slots,
+                )
+                .expect_err("arguments that must not reach a server filled a call");
+            assert_eq!(err.principle, principle, "{label}: {}", err.message);
+            assert!(unspent(&slots), "{label}: the choice was used up");
+        }
+
+        // A name that holds text and one that holds nothing are no choice.
+        for named in ["ref:5", "ref:99"] {
+            policy.endorse_mcp_call("brave-input", "click_element");
+            let err = policy
+                .carry_a_choice(
+                    "brave-input",
+                    "click_element",
+                    arguments(Label::trusted_public()),
+                    &SlotId::new(named),
+                    &mut slots,
+                )
+                .expect_err("a name that is no choice filled a call");
+            assert_eq!(err.principle, Principle::Confinement);
+            assert!(err.message.contains(named), "{}", err.message);
+            assert!(unspent(&slots), "{named}: the choice was used up");
+        }
+
+        // The answer, the right tool, public words from a trusted context: the number comes out
+        // beside the words, shown as nothing, and the choice is used.
+        policy.endorse_mcp_call("brave-input", "click_element");
+        let (words, carried) = policy
+            .carry_a_choice(
+                "brave-input",
+                "click_element",
+                arguments(Label::trusted_public()),
+                &choice,
+                &mut slots,
+            )
+            .expect("an answered call, public words, an unspent choice");
+        assert_eq!(words, "{\"url\":\"https://shop.example\"}");
+        assert!(
+            !format!("{carried:?}").contains('7'),
+            "the number showed in {carried:?}"
+        );
+        assert_eq!(carried.into_wire(), 7);
+        assert!(!unspent(&slots), "the choice was not used by the call");
+
+        // And it fills no second call, even with an answer for that call.
+        policy.endorse_mcp_call("brave-input", "click_element");
+        let err = policy
+            .carry_a_choice(
+                "brave-input",
+                "click_element",
+                arguments(Label::trusted_public()),
+                &choice,
+                &mut slots,
+            )
+            .expect_err("a choice filled two calls");
+        assert!(
+            err.message.contains("filled a call already"),
+            "{}",
+            err.message
+        );
+        // The answer was consumed with the attempt, so a third try with none is refused as well.
+        assert!(
+            policy
+                .carry_a_choice(
+                    "brave-input",
+                    "click_element",
+                    arguments(Label::trusted_public()),
+                    &choice,
+                    &mut slots,
+                )
+                .is_err()
+        );
+    }
+
+    /// The trail of a carried choice is the same line whatever the number was, 0 included, and
+    /// holds no digit of it. A line that held the number would tell whoever reads the trail what
+    /// the planner is not told.
+    #[test]
+    fn the_trail_of_carrying_a_choice_is_the_same_for_every_number_and_holds_no_digit() {
+        let carried = |number: u8| {
+            let mut sink = RecordingSink::new();
+            let wire = {
+                let (mut policy, mut slots) = a_choice_is_stored(&mut sink, number);
+                policy.endorse_mcp_call("brave-input", "click_element");
+                let (_, carried) = policy
+                    .carry_a_choice(
+                        "brave-input",
+                        "click_element",
+                        Labelled::trusted(()),
+                        &SlotId::new("ref:3"),
+                        &mut slots,
+                    )
+                    .expect("carried");
+                let shown = policy
+                    .choice_for_display(&SlotId::new("ref:3"), &slots)
+                    .expect_err("a spent choice was drawn");
+                assert!(!shown.message.contains(&number.to_string()), "{shown}");
+                carried.into_wire()
+            };
+            let trail: Vec<String> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GatePassed { detail, .. } => Some(detail.clone()),
+                    Event::GateBlocked { reason, .. } => Some(reason.clone()),
+                    _ => None,
+                })
+                .collect();
+            (wire, trail)
+        };
+
+        let (first, trail) = carried(0);
+        assert_eq!(first, 0);
+        for number in [7, 12, 99] {
+            let (wire, other) = carried(number);
+            assert_eq!(wire, number);
+            assert_eq!(other, trail, "the trail follows the number {number}");
+        }
+        assert!(trail.iter().all(|line| !line.contains('7')), "{trail:?}");
+    }
+
+    /// The person is shown the number as digits, before they answer. Only a choice a call has not
+    /// used can be drawn, so nobody is asked about a number that cannot fill the call, and drawing
+    /// it uses nothing: the same choice fills the call that follows the answer. The trail holds no
+    /// digit, whatever the number.
+    #[test]
+    fn a_choice_is_drawn_as_digits_to_the_person_and_only_while_it_can_fill_a_call() {
+        for number in [0u8, 7, 99] {
+            let mut sink = RecordingSink::new();
+            let (mut policy, mut slots) = a_choice_is_stored(&mut sink, number);
+            let choice = SlotId::new("ref:3");
+            assert_eq!(
+                policy.choice_for_display(&choice, &slots).expect("drawn"),
+                number.to_string()
+            );
+            // Drawn twice the same, and still unspent.
+            assert_eq!(
+                policy.choice_for_display(&choice, &slots).expect("drawn"),
+                number.to_string()
+            );
+            policy.endorse_mcp_call("brave-input", "click_element");
+            let (_, carried) = policy
+                .carry_a_choice(
+                    "brave-input",
+                    "click_element",
+                    Labelled::trusted(()),
+                    &choice,
+                    &mut slots,
+                )
+                .expect("drawing a choice used it up");
+            assert_eq!(carried.into_wire(), number);
+            // Used by a call, it is not drawn again.
+            assert!(policy.choice_for_display(&choice, &slots).is_err());
+        }
+
+        let mut sink = RecordingSink::new();
+        let (mut policy, slots) = a_choice_is_stored(&mut sink, 7);
+        for named in ["ref:5", "ref:99"] {
+            let err = policy
+                .choice_for_display(&SlotId::new(named), &slots)
+                .expect_err("a name that is no choice was drawn as a number");
+            assert_eq!(err.principle, Principle::Confinement);
+            assert!(err.message.contains(named), "{}", err.message);
+        }
+        let drawn: Vec<String> = sink
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "display",
+                    detail,
+                } => Some(detail.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(drawn.iter().all(|line| !line.contains('7')), "{drawn:?}");
     }
 
     /// A server's list reaches the planner through an endorsement for that server and no other,
@@ -17423,6 +18476,471 @@ five
             assert!(!labelled.document.expect("a document").label().is_trusted());
         }
 
+        /// A reader for a test: the byte it gives back is the number of bytes it was handed, so
+        /// each answer below gives a byte that says how much of it reached the reader.
+        fn the_length_of(text: &str, _upto: u8) -> u8 {
+            u8::try_from(text.len()).unwrap_or(u8::MAX)
+        }
+
+        /// A reader for a test: the byte it gives back is the limit it was handed.
+        fn the_limit(_text: &str, upto: u8) -> u8 {
+            upto
+        }
+
+        /// A reader that must never run, for the spec the gate refuses.
+        fn a_reader_that_must_not_run(_text: &str, _upto: u8) -> u8 {
+            panic!("the answer of a processor that was not asked to choose reached a reader");
+        }
+
+        /// What `read_a_number` takes: a policy, and a spec for a processor asked to choose one
+        /// entry of a list the quarantine holds, labelled `(U,priv)` by what it reads.
+        fn a_chooser(
+            policy: &mut Policy<'_, RecordingSink>,
+            upto: u8,
+        ) -> crate::processor::ProcessorSpec {
+            let (store, public, private) = quarantine();
+            policy
+                .before_chooser("p", &[public, private], &instruction(), upto, &store)
+                .expect("a processor over two written slots")
+        }
+
+        /// The byte a reader gave back, read the way a test may.
+        fn byte_of(number: Labelled<u8>) -> u8 {
+            number.declassify(&Declassification::authorise("test"))
+        }
+
+        /// A document processor's answer is a document, and nothing may read a number out of it.
+        /// A gate any spec could use would release the answer of any processor to a reader.
+        #[test]
+        fn reading_a_number_is_refused_for_a_spec_that_asked_for_a_document() {
+            let (store, public, _) = quarantine();
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let document = policy
+                .before_processor("p", &[public], &instruction(), None, &store)
+                .expect("a processor that writes a document");
+
+            let answer = Labelled::new("7".to_string(), Label::untrusted_public());
+            let err = policy
+                .read_a_number(&document, answer, a_reader_that_must_not_run)
+                .expect_err("a number was read out of a document processor's answer");
+            assert_eq!(err.principle, Principle::Confinement);
+            assert!(
+                err.message.contains("not asked to choose") && !err.message.contains('7'),
+                "{}",
+                err.message
+            );
+            assert!(!policy.finish(), "the refusal was not recorded");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let chooser = a_chooser(&mut policy, 9);
+            let answer = Labelled::new("7".to_string(), Label::untrusted_public());
+            policy
+                .read_a_number(&chooser, answer, the_length_of)
+                .expect("the same answer is read for a processor that was asked to choose");
+        }
+
+        /// The reader is handed the answer exactly as it arrived and the limit the planner wrote,
+        /// and what comes back is its byte. A gate that trimmed the text first would decide
+        /// something about it, and one that passed the largest limit would ignore the planner's.
+        #[test]
+        fn the_reader_is_handed_the_answers_text_and_the_planners_limit() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let spec = a_chooser(&mut policy, 40);
+
+            let answer = Labelled::new("  7 \n".to_string(), Label::untrusted_public());
+            let number = policy.read_a_number(&spec, answer, the_length_of).unwrap();
+            assert_eq!(
+                byte_of(number),
+                5,
+                "the text was changed on its way to the reader"
+            );
+
+            let answer = Labelled::new("anything".to_string(), Label::untrusted_public());
+            let number = policy.read_a_number(&spec, answer, the_limit).unwrap();
+            assert_eq!(
+                byte_of(number),
+                40,
+                "the reader was not given the planner's limit"
+            );
+        }
+
+        /// The number is labelled as the answer is: the spec's label, set before the processor
+        /// ran, met with the label the transport put on the reply. A constructor that labelled it
+        /// trusted, or by the reply alone or the spec alone, gives a number nothing downstream may
+        /// distrust or one that forgets what the processor read.
+        #[test]
+        fn a_number_read_from_an_answer_keeps_the_label_of_the_answer() {
+            let mut slots = SlotStore::new();
+            let trusted = SlotId::new("ref:0");
+            slots
+                .writer_for(trusted.clone(), Label::trusted_public())
+                .unwrap()
+                .write("the planner's own page")
+                .unwrap();
+            let (store, public, private) = quarantine();
+
+            // (what the processor read, what the transport called the reply, the number's label)
+            let cases = [
+                (
+                    vec![private.clone()],
+                    Label::untrusted_public(),
+                    Label::untrusted_private(),
+                ),
+                (
+                    vec![public.clone()],
+                    Label::untrusted_public(),
+                    Label::untrusted_public(),
+                ),
+                (
+                    vec![public.clone()],
+                    Label::trusted_public(),
+                    Label::untrusted_public(),
+                ),
+                (
+                    vec![private.clone()],
+                    Label::trusted_public(),
+                    Label::untrusted_private(),
+                ),
+            ];
+            for (reads, reply, expected) in cases {
+                let mut sink = RecordingSink::new();
+                let mut policy = open_policy(&mut sink);
+                let spec = policy
+                    .before_chooser("p", &reads, &instruction(), 9, &store)
+                    .expect("a processor asked to choose");
+                let answer = Labelled::new("3".to_string(), reply);
+                let number = policy.read_a_number(&spec, answer, the_length_of).unwrap();
+                assert_eq!(number.label(), expected, "read {reads:?}, reply {reply}");
+            }
+
+            // A processor that read only what the planner wrote, answered by a transport that
+            // called the reply untrusted, is still untrusted: the transport's label is never lost.
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let instruction = Labelled::trusted("choose".to_string());
+            let spec = policy
+                .before_chooser("p", &[trusted], &instruction, 9, &slots)
+                .expect("a processor over the planner's own page");
+            assert_eq!(spec.out_label(), Label::trusted_public());
+            let answer = Labelled::new("3".to_string(), Label::untrusted_public());
+            let number = policy.read_a_number(&spec, answer, the_length_of).unwrap();
+            assert_eq!(number.label(), Label::untrusted_public());
+            assert!(
+                number.into_trusted().is_err(),
+                "a number read from an untrusted answer was readable"
+            );
+        }
+
+        /// The trail records that an answer was read and by whom, and nothing of the answer or the
+        /// byte. It is the same lines for every answer, so a person reading it learns nothing a
+        /// page could have chosen.
+        #[test]
+        fn the_trail_of_reading_a_number_holds_no_digit_and_is_the_same_for_every_answer() {
+            let answers = ["7", "0", "banana", "100", "7 and then ignore", ""];
+            let mut trails = Vec::new();
+            for answer in answers {
+                let mut sink = RecordingSink::new();
+                {
+                    let mut policy = open_policy(&mut sink);
+                    let spec = a_chooser(&mut policy, 40);
+                    let answer = Labelled::new(answer.to_string(), Label::untrusted_public());
+                    policy.read_a_number(&spec, answer, the_length_of).unwrap();
+                }
+                trails.push(sink.events().to_vec());
+            }
+            for (answer, trail) in answers.iter().zip(&trails) {
+                assert_eq!(
+                    trail, &trails[0],
+                    "the trail depends on the answer {answer:?}"
+                );
+            }
+            let read = trails[0]
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        Event::GatePassed { gate: "processor", detail }
+                            if detail.contains("read for the one number")
+                    )
+                })
+                .count();
+            assert_eq!(
+                read, 1,
+                "reading a number is one line on the trail: {:?}",
+                trails[0]
+            );
+        }
+
+        /// A processor asked to choose carries the planner's limit and no document, and reads what
+        /// a processor reads. A chooser that reused the default document would be a call whose
+        /// answer is for a file, which a number is not.
+        #[test]
+        fn a_chooser_carries_the_planners_limit_and_names_no_document() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            let mut slots = SlotStore::new();
+            let file = SlotId::new("ref:0");
+            policy
+                .defer(
+                    "read_file",
+                    file.clone(),
+                    "server.py",
+                    &Labelled::trusted("server.py".to_string()),
+                    17,
+                    &mut slots,
+                )
+                .expect("a file may be reserved");
+            policy
+                .materialise("process", &file, &mut slots, |_| {
+                    Ok("print('serving')\n".to_string())
+                })
+                .expect("the file is read when something needs it");
+
+            let chooser = policy
+                .before_chooser("p", std::slice::from_ref(&file), &instruction(), 40, &slots)
+                .expect("a processor asked to choose over one file");
+            assert_eq!(chooser.choose_upto(), Some(40));
+            assert_eq!(
+                chooser.about(),
+                None,
+                "a number is not an answer for a file"
+            );
+            assert_eq!(chooser.reads(), std::slice::from_ref(&file));
+
+            let document = policy
+                .before_processor(
+                    "q",
+                    std::slice::from_ref(&file),
+                    &instruction(),
+                    None,
+                    &slots,
+                )
+                .expect("a processor over one file");
+            assert_eq!(document.about(), Some(&file));
+            assert_eq!(
+                document.choose_upto(),
+                None,
+                "a document processor chooses nothing"
+            );
+        }
+
+        /// The planner's limit is 2 to the largest two-digit number. A limit of 1 asks nothing, and
+        /// one past 99 names an entry no answer can reach, so each is refused where the planner
+        /// wrote it, before a processor exists.
+        #[test]
+        fn a_chooser_is_refused_a_limit_outside_two_to_the_largest() {
+            let (store, public, _) = quarantine();
+            for upto in [0, 1, 100, 255] {
+                let mut sink = RecordingSink::new();
+                let mut policy = open_policy(&mut sink);
+                let err = policy
+                    .before_chooser(
+                        "p",
+                        std::slice::from_ref(&public),
+                        &instruction(),
+                        upto,
+                        &store,
+                    )
+                    .expect_err("a limit outside the range was accepted");
+                assert_eq!(err.principle, Principle::Confinement);
+                assert!(err.message.contains(&upto.to_string()), "{}", err.message);
+            }
+            for upto in [2, 40, 99] {
+                let mut sink = RecordingSink::new();
+                let mut policy = open_policy(&mut sink);
+                let spec = policy
+                    .before_chooser(
+                        "p",
+                        std::slice::from_ref(&public),
+                        &instruction(),
+                        upto,
+                        &store,
+                    )
+                    .expect("a limit in the range");
+                assert_eq!(spec.choose_upto(), Some(upto));
+            }
+        }
+
+        /// A processor asked to choose is held to what every processor is: it reads something that
+        /// exists, once each, and is told only words that are public.
+        #[test]
+        fn a_chooser_is_refused_for_the_reasons_a_processor_is() {
+            let (store, public, _) = quarantine();
+            let secret = Labelled::new("hunter2".to_string(), Label::untrusted_private());
+
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            assert!(
+                policy
+                    .before_chooser("p", &[], &instruction(), 9, &store)
+                    .is_err(),
+                "a chooser that reads nothing was built"
+            );
+            assert!(
+                policy
+                    .before_chooser("p", &[SlotId::new("ref:9")], &instruction(), 9, &store)
+                    .is_err(),
+                "a chooser over a reference to nothing was built"
+            );
+            assert!(
+                policy
+                    .before_chooser(
+                        "p",
+                        &[public.clone(), public.clone()],
+                        &instruction(),
+                        9,
+                        &store
+                    )
+                    .is_err(),
+                "a chooser that names a reference twice was built"
+            );
+            let err = policy
+                .before_chooser("p", &[public], &secret, 9, &store)
+                .expect_err("a private instruction directed a chooser");
+            assert_eq!(err.principle, Principle::Confinement);
+        }
+
+        /// A number a processor chose is quarantined whatever label it carries, as a picture is,
+        /// and what the planner is told is the same for every number: the reference states the
+        /// limit and the label, and the trail names the origin and the label and no digit. A choice
+        /// shown by `present` would be visible text where the label is trusted, and a trail that
+        /// held the digit would tell a person watching what the planner is not shown.
+        #[test]
+        fn a_stored_choice_is_a_reference_whatever_its_label_and_the_trail_holds_no_digit() {
+            let stored = |number: u8, label: Label| {
+                let mut sink = RecordingSink::new();
+                let mut slots = SlotStore::new();
+                let reference = {
+                    let mut policy = open_policy(&mut sink);
+                    policy
+                        .store_a_choice(
+                            "spawn_processor",
+                            SlotId::new("ref:4"),
+                            "an isolated processor over ref:2",
+                            Labelled::new(number, label),
+                            40,
+                            &mut slots,
+                        )
+                        .expect("a choice is stored")
+                };
+                // The number is held, and held as no text.
+                assert!(slots.is_written(&SlotId::new("ref:4")));
+                assert_eq!(slots.label_of(&SlotId::new("ref:4")), None);
+                let trail: Vec<String> = sink
+                    .events()
+                    .iter()
+                    .filter_map(|event| match event {
+                        Event::GatePassed { detail, .. } => Some(detail.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                (reference, trail)
+            };
+
+            let (first, first_trail) = stored(0, Label::trusted_public());
+            assert_eq!(first.kind, crate::reference::Kind::Choice(40));
+            assert_eq!(first.label, Label::trusted_public());
+            assert_eq!((first.lines, first.bytes), (None, None));
+            assert!(!first_trail.is_empty(), "the store was not recorded");
+            for number in [7, 12, 99] {
+                let (other, trail) = stored(number, Label::trusted_public());
+                assert_eq!(other, first, "the reference follows the number {number}");
+                assert_eq!(trail, first_trail, "the trail follows the number {number}");
+            }
+
+            // Only the label moves what is said, and it moves it as it would for any content.
+            let (untrusted, trail) = stored(7, Label::untrusted_private());
+            assert_eq!(untrusted.label, Label::untrusted_private());
+            assert!(
+                untrusted.describe().contains("U,priv"),
+                "{}",
+                untrusted.describe()
+            );
+            assert_ne!(trail, first_trail);
+        }
+
+        /// A choice is no reference to any gate that takes a reference to text: none resolves it to
+        /// bytes, hands it to a processor to read, or reads a path out of it. Each refuses it in the
+        /// words it uses for a name nothing holds, and accepts a text slot beside it, so the refusal
+        /// is about the kind and not about the gate.
+        #[test]
+        fn a_choice_is_no_reference_to_any_gate_that_takes_text() {
+            let mut sink = RecordingSink::new();
+            let mut slots = SlotStore::new();
+            let text = SlotId::new("ref:0");
+            slots
+                .writer_for(text.clone(), Label::untrusted_public())
+                .unwrap()
+                .write("a page")
+                .unwrap();
+            let mut policy = open_policy(&mut sink);
+            let choice = SlotId::new("ref:4");
+            policy
+                .store_a_choice(
+                    "spawn_processor",
+                    choice.clone(),
+                    "an isolated processor over ref:0",
+                    Labelled::new(7u8, Label::untrusted_public()),
+                    9,
+                    &mut slots,
+                )
+                .expect("a choice is stored");
+            let nothing = SlotId::new("ref:99");
+
+            policy
+                .resolve("write_file", &text, &slots)
+                .expect("a text slot resolves");
+            policy
+                .before_processor(
+                    "p",
+                    std::slice::from_ref(&text),
+                    &instruction(),
+                    None,
+                    &slots,
+                )
+                .expect("a processor may read a text slot");
+            policy
+                .before_chooser("p", &[text], &instruction(), 9, &slots)
+                .expect("a chooser may read a text slot");
+
+            let refusals = |policy: &mut Policy<'_, RecordingSink>, name: &SlotId| {
+                [
+                    policy.resolve("write_file", name, &slots).map(drop),
+                    policy
+                        .before_processor(
+                            "p",
+                            std::slice::from_ref(name),
+                            &instruction(),
+                            None,
+                            &slots,
+                        )
+                        .map(drop),
+                    policy
+                        .before_chooser("p", std::slice::from_ref(name), &instruction(), 9, &slots)
+                        .map(drop),
+                    policy
+                        .destination_from_reference("write_file", "path_ref", name, &slots)
+                        .map(drop),
+                    policy
+                        .promote_reference_for_read("read_file", "path_ref", name, &slots)
+                        .map(drop),
+                ]
+                .map(|result| {
+                    result
+                        .expect_err("a choice was taken for text")
+                        .message
+                        .replace(name.as_str(), "NAME")
+                })
+            };
+            assert_eq!(
+                refusals(&mut policy, &choice),
+                refusals(&mut policy, &nothing)
+            );
+        }
+
         /// A file beside any other input is not the document an answer is for. Counting only
         /// the files among the inputs meant a call over a file and one earlier answer took that
         /// file as its document, so a write of the answer landed there: two calls, one turning a
@@ -19363,6 +20881,49 @@ five
                         "approval",
                         Principle::Capability,
                         "notes:append: the call was not approved, so the server was not called"
+                    ),
+                ]
+            );
+        }
+
+        /// TRACE-1, SERVERS-21: a delegate's call to a server declared to ask every call is a
+        /// refusal under `approval`, naming the call as the alias and the tool and saying the
+        /// server was not called, and the turn does not end as clean. The two calls name different
+        /// servers and tools, so an entry that leaves the alias or the tool out fails it.
+        #[test]
+        fn a_delegates_call_to_a_server_asked_every_call_is_a_refusal_under_approval() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.refuse_asked_every_call_in_a_delegate("cookies", "get_cookies");
+            turn.refuse_asked_every_call_in_a_delegate("data", "remove_data");
+            assert!(!turn.finish(), "a turn with a refused call ended clean");
+            let refused: Vec<(&str, Principle, &str)> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GateBlocked {
+                        gate,
+                        reason,
+                        principle,
+                        ..
+                    } => Some((*gate, *principle, reason.as_str())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                refused,
+                [
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "cookies:get_cookies: every call to cookies is asked about and a delegate \
+                         is not asked, so the server was not called"
+                    ),
+                    (
+                        "approval",
+                        Principle::Capability,
+                        "data:remove_data: every call to data is asked about and a delegate is \
+                         not asked, so the server was not called"
                     ),
                 ]
             );

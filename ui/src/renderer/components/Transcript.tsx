@@ -2546,15 +2546,15 @@ function Card({
           <p className="permission-scope" data-deciding="all">
             These steps run in this order, decided before anything was read. Nothing the run reads
             can add a step, drop one, or send anything anywhere this plan does not already name.
-            Approving the plan does not approve its writes: each write is still put to you when its
-            step is reached. Nothing has been read or written yet, so declining leaves everything
-            as it is. This answer covers this plan only.
+            Approving the plan does not approve its writes or its calls to a server’s tools: each is
+            still put to you when its step is reached. Nothing has been read or written yet, so
+            declining leaves everything as it is. This answer covers this plan only.
           </p>
 
           {!!entry.unheld?.length && (
             <div className="warn" data-deciding="all">
-              Permission rules are not applied to a plan run. Check the steps against the
-              rules this conversation refuses or asks about:
+              Permission rules other than those about a server’s tools are not applied to a plan
+              run. Check the steps against the rules this conversation refuses or asks about:
               <ul>
                 {entry.unheld.map((rule, index) => (
                   <li key={index}>

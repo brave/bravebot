@@ -85,7 +85,10 @@ A call to a server's tool ([SERVERS-7](mcp-servers.md#SERVERS-7)) that is put to
 not approve it is recorded the same way, as a refusal under `approval`. The entry names the call as
 `alias:tool`, the alias the person gave the server and the word on the list they vouched for, and
 says the call was not approved and the server was not called. A call a `deny` rule refuses was never
-put to a person and is recorded under `mcp_call` alone.
+put to a person and is recorded under `mcp_call` alone. A delegate's call to a server declared to ask every call
+([SERVERS-21](mcp-servers.md#SERVERS-21)) is refused without being put to anyone and is recorded
+under `approval` as well, naming the call the same way and saying the delegate is not asked and the
+server was not called.
 
 Five questions that are not a tool call's own approval are recorded the same way, as a refusal under
 `approval`, when the person does not approve them. Each entry is fixed words and names the question
@@ -154,6 +157,7 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::a_file_of_an_apply_the_person_does_not_approve_is_recorded_under_the_apply`
 `verified-by: bravebot_agent::manifest::a_planned_write_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_core::policy::an_mcp_call_the_person_did_not_approve_is_a_refusal_under_approval`
+`verified-by: bravebot_core::policy::a_delegates_call_to_a_server_asked_every_call_is_a_refusal_under_approval`
 `verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::mcp::a_call_a_rule_refuses_is_not_recorded_as_one_the_person_did_not_approve`
 `verified-by: bravebot_core::policy::a_question_the_person_did_not_approve_is_a_refusal_under_approval`

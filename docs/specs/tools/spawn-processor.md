@@ -21,10 +21,21 @@ is the call surface.
 A processor is given exactly the references named in `reads`. A reference naming nothing is
 refused, a call with nothing to read is refused, and naming the same reference twice is refused.
 
+A call may also give `choose_upto`, a whole number from 2 to 99, which asks the processor to choose
+one entry of a numbered list in what it reads in place of producing a document
+([PROC-16](../processors.md#PROC-16)). A call that gives it with `about` is refused, since the
+answer is about no document, and so is a limit outside that range or one that is not a whole
+number. Each is refused before any reference is opened. A reference to a choice names no file and
+holds no text, so it is no path, body or document to read: named in `reads`, in `write_file`'s
+`path_ref` or `contents_ref` or in `read_file`'s `path_ref`, it is refused in the words used for a
+name nothing holds.
+
 `verified-by: bravebot_core::policy::only_the_slots_it_was_given_reach_a_processor`
 `verified-by: bravebot_core::policy::a_reference_to_nothing_is_refused`
 `verified-by: bravebot_core::policy::a_processor_with_nothing_to_read_is_refused`
 `verified-by: bravebot_core::policy::naming_the_same_reference_twice_is_refused`
+`verified-by: bravebot_agent::turn::a_call_asking_for_a_number_is_refused_unless_it_asks_in_the_planners_own_terms`
+`verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
 
 <a id="SPAWN-2"></a>
 ### SPAWN-2: the instruction comes from the planner and may not be private
@@ -41,8 +52,14 @@ wrote.
 The planner is told the shape of what was produced and no more, so an instruction can ask the
 processor to decide as well as to rewrite without any of that judgement reaching the planner.
 
+For a call with `choose_upto` the result is a reference to a choice. The planner is told the limit it
+wrote and the label, in the same words for every number the processor chose, 0 included, and is
+shown no number.
+
 `verified-by: bravebot_agent::turn::the_planner_is_told_the_shape_of_what_a_processor_produced`
 `verified-by: bravebot_agent::turn::a_quarantined_file_is_rewritten_by_a_processor`
+`verified-by: bravebot_agent::turn::a_choice_reaches_the_planner_as_a_reference_to_a_choice_and_nothing_else`
+`verified-by: bravebot_agent::turn::the_planner_is_told_the_same_words_whatever_the_processor_answered`
 
 <a id="SPAWN-4"></a>
 ### SPAWN-4: the call asks for no cache of the content it hands over
@@ -107,7 +124,9 @@ reaches a program that uses it:
   prohibition alone.
 - The answer is written over the same file with `write_file`, and the program that sends it is run
   with the file's path as an argument. Or the answer's reference is given to `run` as `stdin_ref`,
-  which needs no file.
+  which needs no file. A list that holds `run` and lacks `write_file` or `read_file` has no way to
+  save the original and write the answer over it, so the description gives it `stdin_ref` alone and
+  names neither tool ([TOOL-6](tool-surface.md#TOOL-6)).
 - The `contents_ref` parameter of `write_file` says the same from its side. It names a fetched page
   as something it writes out and says that what a processor produced may be written only over the
   file the call was about. On a turn that holds `run` it also points at this description for saving
@@ -172,6 +191,7 @@ file is refused and has no way on.
 
 `verified-by: bravebot_agent::tools::a_processor_is_described_as_the_writer_of_text_made_from_content_not_shown`
 `verified-by: bravebot_agent::tools::the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::the_route_through_a_file_is_described_only_where_the_list_holds_the_file_tools`
 `verified-by: bravebot_agent::tools::the_processor_instruction_does_not_forbid_asking_for_a_summary`
 `verified-by: bravebot_agent::tools::the_write_file_reference_text_does_not_offer_a_processors_answer_as_a_free_write`
 `verified-by: bravebot_agent::turn::a_summary_of_a_scraped_page_reaches_the_sending_program_in_the_file_the_page_was_saved_to`

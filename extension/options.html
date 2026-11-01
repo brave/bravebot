@@ -20,6 +20,44 @@
         color: #555;
         margin-left: 1.6rem;
       }
+      .blocked {
+        color: #8a2d00;
+        margin-left: 1.6rem;
+      }
+      .group {
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 0.25rem 1rem;
+        margin: 1rem 0;
+      }
+      .group-title {
+        font-weight: 600;
+      }
+      .confirm {
+        background: #f4f4f4;
+        border-radius: 4px;
+        margin: 0.75rem 0 0.75rem 1.6rem;
+        padding: 0.5rem 0.75rem;
+      }
+      .confirm div {
+        margin-bottom: 0.4rem;
+      }
+      button {
+        font: inherit;
+        margin-right: 0.5rem;
+      }
+      .preset {
+        margin: 0.5rem 0;
+      }
+      .preset .note {
+        margin-left: 0.25rem;
+      }
+      details {
+        margin: 0.5rem 0 0.5rem 1.6rem;
+      }
+      summary {
+        cursor: pointer;
+      }
       h2 {
         font-size: 1.1rem;
         margin-top: 2rem;
@@ -29,8 +67,51 @@
         width: 100%;
         font: 13px ui-monospace, monospace;
       }
+      #allowed-note,
       #blocked-note {
         color: #555;
+      }
+      .scope {
+        border: 0;
+        margin: 0.5rem 0 0.5rem 1.6rem;
+        padding: 0;
+      }
+      .scope legend {
+        padding: 0;
+      }
+      .scope label {
+        margin: 0.25rem 0;
+      }
+      .scope .note {
+        margin-left: 1.6rem;
+      }
+      .lifetime {
+        border: 0;
+        margin: 0.5rem 0;
+        padding: 0;
+      }
+      .lifetime legend {
+        padding: 0;
+      }
+      .lifetime label {
+        margin: 0.25rem 0;
+      }
+      #save-allowed {
+        margin-top: 0.5rem;
+      }
+      #activity {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      #activity th,
+      #activity td {
+        border-bottom: 1px solid #ccc;
+        padding: 0.25rem 0.5rem 0.25rem 0;
+        text-align: left;
+        vertical-align: top;
+      }
+      #activity td {
+        overflow-wrap: anywhere;
       }
     </style>
   </head>
@@ -40,7 +121,57 @@
       What a BraveBot session may ask this browser for. BraveBot also asks you
       before each call.
     </p>
-    <form id="tools"></form>
+    <h2 id="presets-heading">Presets</h2>
+    <p id="presets-note">
+      A preset turns on the groups it names and turns off every other group. It
+      asks Brave for everything those groups need in one prompt, after you
+      confirm. The groups it turns on stay on until you turn them off.
+    </p>
+    <div
+      id="presets"
+      role="group"
+      aria-labelledby="presets-heading"
+      aria-describedby="presets-note"
+    ></div>
+    <div id="preset-confirm" class="confirm" hidden></div>
+    <div id="presets-status" class="note" role="status"></div>
+    <h2 id="groups-heading">Groups</h2>
+    <p id="groups-note">
+      Each group is off until you turn it on here and Brave grants what it
+      needs, for as long as you choose: until you turn it off, until Brave
+      restarts, or one hour. Turning a group off takes back what no other group
+      still on uses, and a permission you take back in Brave's extension
+      settings turns its group off. Open a group to switch single tools.
+    </p>
+    <form
+      id="groups"
+      aria-labelledby="groups-heading"
+      aria-describedby="groups-note"
+    ></form>
+    <div id="groups-status" class="note" role="status"></div>
+    <h2 id="allowed-heading">Allowed sites</h2>
+    <p id="allowed-note">
+      A group that reads pages reaches only the sites written here, unless you
+      choose all sites for it above. Nothing is allowed at first, so turning
+      such a group on reaches no page until a site is added. Saving asks Brave
+      for access to the sites, which it accepts only from this click, and gives
+      back the access to a site you take off the list. A site that is also under
+      Blocked sites is blocked. Write one site to a line, such as
+      <code>https://news.example.com</code>. A site is matched as written:
+      <code>https://example.com</code> does not cover
+      <code>https://www.example.com</code> or <code>http://example.com</code>.
+      Brave's own site access setting for the extension can still withhold a
+      site that is listed here.
+    </p>
+    <textarea
+      id="allowed-sites"
+      rows="6"
+      spellcheck="false"
+      aria-labelledby="allowed-heading"
+      aria-describedby="allowed-note allowed-status"
+    ></textarea>
+    <div><button type="button" id="save-allowed">Save allowed sites</button></div>
+    <div id="allowed-status" class="note" role="status"></div>
     <h2 id="blocked-heading">Blocked sites</h2>
     <p id="blocked-note">
       No tool lists, searches, reads or opens a site written here, whatever is
@@ -59,6 +190,28 @@
       aria-describedby="blocked-note blocked-status"
     ></textarea>
     <div id="blocked-status" class="note" role="status"></div>
+    <h2 id="activity-heading">Activity</h2>
+    <p id="activity-note">
+      The last 200 calls that reached this extension, newest first, whichever
+      session made them and whether or not you are watching it. Each shows when
+      it arrived, the group and tool it named, and whether it ran, was refused
+      or failed. A call that names a page shows the site of its address, and
+      nothing else of it. No page text, search text or title is kept. A call to
+      a group that is off is listed too, as refused.
+    </p>
+    <table id="activity" aria-labelledby="activity-heading" aria-describedby="activity-note">
+      <thead>
+        <tr>
+          <th scope="col">Time</th>
+          <th scope="col">Group</th>
+          <th scope="col">Tool</th>
+          <th scope="col">Result</th>
+          <th scope="col">Site</th>
+        </tr>
+      </thead>
+      <tbody id="activity-rows"></tbody>
+    </table>
+    <div id="activity-status" class="note" role="status"></div>
     <script type="module" src="options.js"></script>
   </body>
 </html>

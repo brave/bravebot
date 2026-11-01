@@ -1,0 +1,723 @@
+{
+ "about": "unseen_ranges is every range of code points of the general categories Cc, Cf, Zl, Zp and Co in Unicode 17, first and last: uploads.rs is_unseen is held to it for every character in a test of that file, and the engine is held to it in extension/tests/upload-trusted.test.mjs. files holds file names with the result both halves of choose_file give each: crates/browser/src/uploads.rs choose() in a test of that file, and extension/files.js problemWithFile() in extension/tests/upload-trusted.test.mjs. above is the directories above the uploads directory, file the path below it. chosen: the file is given; refused: the one sentence of a path that is not a regular file inside uploads; credential: the sentence of a credential name.",
+ "unseen_ranges": [
+  [0,31],
+  [127,159],
+  [173,173],
+  [1536,1541],
+  [1564,1564],
+  [1757,1757],
+  [1807,1807],
+  [2192,2193],
+  [2274,2274],
+  [6158,6158],
+  [8203,8207],
+  [8232,8238],
+  [8288,8292],
+  [8294,8303],
+  [57344,63743],
+  [65279,65279],
+  [65529,65531],
+  [69821,69821],
+  [69837,69837],
+  [78896,78911],
+  [113824,113827],
+  [119155,119162],
+  [917505,917505],
+  [917536,917631],
+  [983040,1048573],
+  [1048576,1114109]
+ ],
+ "files": [
+  {
+   "above": "",
+   "file": "report.txt",
+   "result": "chosen",
+   "note": "an ordinary name"
+  },
+  {
+   "above": "",
+   "file": "my report 2.txt",
+   "result": "chosen",
+   "note": "spaces"
+  },
+  {
+   "above": "",
+   "file": ".hidden",
+   "result": "chosen",
+   "note": "a dot file that is no credential"
+  },
+  {
+   "above": "",
+   "file": "r\u00e9sum\u00e9.pdf",
+   "result": "chosen",
+   "note": "accented letters"
+  },
+  {
+   "above": "",
+   "file": "\u65e5\u672c\u8a9e.txt",
+   "result": "chosen",
+   "note": "a name in another script"
+  },
+  {
+   "above": "",
+   "file": "face \ud83d\ude00.png",
+   "result": "chosen",
+   "note": "a character outside the basic plane"
+  },
+  {
+   "above": "",
+   "file": "sub/inner.txt",
+   "result": "chosen",
+   "note": "a file in a directory of uploads"
+  },
+  {
+   "above": "",
+   "file": "uploads",
+   "result": "chosen",
+   "note": "a file called uploads inside uploads"
+  },
+  {
+   "above": "",
+   "file": "a\u00a0b.txt",
+   "result": "chosen",
+   "note": "U+00A0 no-break space (Zs) is no unseen character in either language"
+  },
+  {
+   "above": "",
+   "file": "a\u2000b.txt",
+   "result": "chosen",
+   "note": "U+2000 en quad (Zs) is no unseen character in either language"
+  },
+  {
+   "above": "",
+   "file": "a\u3000b.txt",
+   "result": "chosen",
+   "note": "U+3000 ideographic space (Zs) is no unseen character in either language"
+  },
+  {
+   "above": "",
+   "file": "a\u2800b.txt",
+   "result": "chosen",
+   "note": "U+2800 blank braille pattern (So) is no unseen character in either language"
+  },
+  {
+   "above": "",
+   "file": "a b.txt",
+   "result": "chosen",
+   "note": "U+0020 space is no unseen character in either language"
+  },
+  {
+   "above": "",
+   "file": "a\u001fb.txt",
+   "result": "refused",
+   "note": "U+001F is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u007fb.txt",
+   "result": "refused",
+   "note": "U+007F is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u009fb.txt",
+   "result": "refused",
+   "note": "U+009F is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a~b.txt",
+   "result": "chosen",
+   "note": "U+007E is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u00adb.txt",
+   "result": "refused",
+   "note": "U+00AD is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u00acb.txt",
+   "result": "chosen",
+   "note": "U+00AC is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u00aeb.txt",
+   "result": "chosen",
+   "note": "U+00AE is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u0600b.txt",
+   "result": "refused",
+   "note": "U+0600 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u0605b.txt",
+   "result": "refused",
+   "note": "U+0605 is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u0606b.txt",
+   "result": "chosen",
+   "note": "U+0606 is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u061cb.txt",
+   "result": "refused",
+   "note": "U+061C is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u061bb.txt",
+   "result": "chosen",
+   "note": "U+061B is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u061db.txt",
+   "result": "chosen",
+   "note": "U+061D is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u06ddb.txt",
+   "result": "refused",
+   "note": "U+06DD is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u06dcb.txt",
+   "result": "chosen",
+   "note": "U+06DC is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u06deb.txt",
+   "result": "chosen",
+   "note": "U+06DE is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u070fb.txt",
+   "result": "refused",
+   "note": "U+070F is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u0710b.txt",
+   "result": "chosen",
+   "note": "U+0710 is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u0890b.txt",
+   "result": "refused",
+   "note": "U+0890 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u0891b.txt",
+   "result": "refused",
+   "note": "U+0891 is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u088fb.txt",
+   "result": "chosen",
+   "note": "U+088F is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u08e2b.txt",
+   "result": "refused",
+   "note": "U+08E2 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u08e1b.txt",
+   "result": "chosen",
+   "note": "U+08E1 is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u08e3b.txt",
+   "result": "chosen",
+   "note": "U+08E3 is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u180eb.txt",
+   "result": "refused",
+   "note": "U+180E is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u180db.txt",
+   "result": "chosen",
+   "note": "U+180D is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u180fb.txt",
+   "result": "chosen",
+   "note": "U+180F is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u200bb.txt",
+   "result": "refused",
+   "note": "U+200B is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u200fb.txt",
+   "result": "refused",
+   "note": "U+200F is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u200ab.txt",
+   "result": "chosen",
+   "note": "U+200A is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u2010b.txt",
+   "result": "chosen",
+   "note": "U+2010 is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u2028b.txt",
+   "result": "refused",
+   "note": "U+2028 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u202eb.txt",
+   "result": "refused",
+   "note": "U+202E is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u2027b.txt",
+   "result": "chosen",
+   "note": "U+2027 is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u202fb.txt",
+   "result": "chosen",
+   "note": "U+202F is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u2060b.txt",
+   "result": "refused",
+   "note": "U+2060 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u2064b.txt",
+   "result": "refused",
+   "note": "U+2064 is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u205fb.txt",
+   "result": "chosen",
+   "note": "U+205F is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\u2066b.txt",
+   "result": "refused",
+   "note": "U+2066 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u206fb.txt",
+   "result": "refused",
+   "note": "U+206F is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u2070b.txt",
+   "result": "chosen",
+   "note": "U+2070 is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\ue000b.txt",
+   "result": "refused",
+   "note": "U+E000 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\uf8ffb.txt",
+   "result": "refused",
+   "note": "U+F8FF is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\uf900b.txt",
+   "result": "chosen",
+   "note": "U+F900 is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\ufeffb.txt",
+   "result": "refused",
+   "note": "U+FEFF is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\ufff9b.txt",
+   "result": "refused",
+   "note": "U+FFF9 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\ufffbb.txt",
+   "result": "refused",
+   "note": "U+FFFB is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\ufffcb.txt",
+   "result": "chosen",
+   "note": "U+FFFC is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\ud804\udcbdb.txt",
+   "result": "refused",
+   "note": "U+110BD is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\ud804\udcbcb.txt",
+   "result": "chosen",
+   "note": "U+110BC is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\ud804\udcbeb.txt",
+   "result": "chosen",
+   "note": "U+110BE is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\ud804\udccdb.txt",
+   "result": "refused",
+   "note": "U+110CD is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\ud80d\udc30b.txt",
+   "result": "refused",
+   "note": "U+13430 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\ud80d\udc3fb.txt",
+   "result": "refused",
+   "note": "U+1343F is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\ud80d\udc2fb.txt",
+   "result": "chosen",
+   "note": "U+1342F is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\ud80d\udc40b.txt",
+   "result": "chosen",
+   "note": "U+13440 is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\ud82f\udca0b.txt",
+   "result": "refused",
+   "note": "U+1BCA0 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\ud82f\udca3b.txt",
+   "result": "refused",
+   "note": "U+1BCA3 is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\ud82f\udc9fb.txt",
+   "result": "chosen",
+   "note": "U+1BC9F is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\ud834\udd73b.txt",
+   "result": "refused",
+   "note": "U+1D173 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\ud834\udd7ab.txt",
+   "result": "refused",
+   "note": "U+1D17A is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\ud834\udd72b.txt",
+   "result": "chosen",
+   "note": "U+1D172 is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\ud834\udd7bb.txt",
+   "result": "chosen",
+   "note": "U+1D17B is next to a range of unseen characters and is not in it"
+  },
+  {
+   "above": "",
+   "file": "a\udb40\udc01b.txt",
+   "result": "refused",
+   "note": "U+E0001 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\udb40\udc20b.txt",
+   "result": "refused",
+   "note": "U+E0020 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\udb40\udc7fb.txt",
+   "result": "refused",
+   "note": "U+E007F is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\udb80\udc00b.txt",
+   "result": "refused",
+   "note": "U+F0000 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\udbbf\udffdb.txt",
+   "result": "refused",
+   "note": "U+FFFFD is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\udbc0\udc00b.txt",
+   "result": "refused",
+   "note": "U+100000 is first of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\udbff\udffdb.txt",
+   "result": "refused",
+   "note": "U+10FFFD is last of a range of unseen characters"
+  },
+  {
+   "above": "",
+   "file": "a\u0001b.txt",
+   "result": "refused",
+   "note": "U+0001 is the first control character a name can hold"
+  },
+  {
+   "above": "",
+   "file": "a\u202eb/c.txt",
+   "result": "refused",
+   "note": "an unseen character in a directory of the path"
+  },
+  {
+   "above": "",
+   "file": "sub/a\u200bb/c.txt",
+   "result": "refused",
+   "note": "an unseen character in a directory of the path"
+  },
+  {
+   "above": "",
+   "file": ".env",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": ".ENV",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": ".env.local",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": "id_rsa",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": "ID_RSA.pub",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": "id_ed25519",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": "server.pem",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": "API.KEY",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": "credentials.json",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": "vault.kdbx",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": ".git-credentials",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": ".ssh/config",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": "sub/.aws/config",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": ".gnupg/pubring.kbx",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": "keys/id_dsa",
+   "result": "credential",
+   "note": "a name that looks like a credential"
+  },
+  {
+   "above": "",
+   "file": "sub/uploads/.env",
+   "result": "credential",
+   "note": "a credential below a second directory called uploads"
+  },
+  {
+   "above": "",
+   "file": "environment.txt",
+   "result": "chosen",
+   "note": "a name that only shares letters with a credential name"
+  },
+  {
+   "above": "",
+   "file": "keyboard.txt",
+   "result": "chosen",
+   "note": "a name that only shares letters with a credential name"
+  },
+  {
+   "above": "",
+   "file": "monkey.txt",
+   "result": "chosen",
+   "note": "a name that only shares letters with a credential name"
+  },
+  {
+   "above": "",
+   "file": "pem.txt",
+   "result": "chosen",
+   "note": "a name that only shares letters with a credential name"
+  },
+  {
+   "above": "",
+   "file": "id.txt",
+   "result": "chosen",
+   "note": "a name that only shares letters with a credential name"
+  },
+  {
+   "above": ".aws/relay",
+   "file": "a.txt",
+   "result": "chosen",
+   "note": "a directory above uploads called .aws is no credential of the file"
+  },
+  {
+   "above": "credentials-old/relay",
+   "file": "a.txt",
+   "result": "chosen",
+   "note": "a directory above uploads that starts with credentials is no credential of the file"
+  },
+  {
+   "above": "my.key/relay",
+   "file": "a.txt",
+   "result": "chosen",
+   "note": "a directory above uploads that ends in .key is no credential of the file"
+  },
+  {
+   "above": ".ssh/relay",
+   "file": "a.txt",
+   "result": "chosen",
+   "note": "a directory above uploads called .ssh is no credential of the file"
+  },
+  {
+   "above": "uploads/x/relay",
+   "file": "a.txt",
+   "result": "chosen",
+   "note": "a directory called uploads above the uploads directory"
+  },
+  {
+   "above": ".ssh/relay",
+   "file": ".ssh/a.txt",
+   "result": "credential",
+   "note": "a directory below uploads called .ssh is"
+  },
+  {
+   "above": "credentials-old/relay",
+   "file": ".env",
+   "result": "credential",
+   "note": "a credential name below uploads with a credential directory above"
+  },
+  {
+   "above": "d\u00e9p\u00f4t/relay",
+   "file": "r\u00e9sum\u00e9.pdf",
+   "result": "chosen",
+   "note": "accented letters below a directory with an accent above"
+  }
+ ]
+}

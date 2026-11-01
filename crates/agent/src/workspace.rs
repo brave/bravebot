@@ -113,9 +113,11 @@ fn scales_down(media: &str) -> bool {
     matches!(media, "image/png" | "image/jpeg")
 }
 
-/// An attachment as a data URI, and the lengths it went from and to where it was scaled down.
+/// An attachment as a data URI, how many bytes it encodes, and the lengths it went from and to
+/// where it was scaled down.
 struct Encoded {
     uri: String,
+    bytes: usize,
     reduced: Option<(usize, usize)>,
 }
 
@@ -782,6 +784,20 @@ impl Workspace {
         path: &Labelled<String>,
         media: &str,
     ) -> Result<Labelled<String>, WorkspaceError> {
+        self.read_attachment_counted(policy, path, media)
+            .map(|(uri, _)| uri)
+    }
+
+    /// [`Workspace::read_attachment`], with how many bytes the file the URI encodes holds.
+    ///
+    /// The length of what was read, which is a fact about the file and not a reading of it, so the
+    /// person can be told how big the picture is without the URI being opened.
+    pub fn read_attachment_counted<S: Sink>(
+        &self,
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+        media: &str,
+    ) -> Result<(Labelled<String>, usize), WorkspaceError> {
         self.read_attachment_with(policy, path, media, Reach::Confined)
     }
 
@@ -807,6 +823,7 @@ impl Workspace {
         media: &str,
     ) -> Result<Labelled<String>, WorkspaceError> {
         self.read_attachment_with(policy, path, media, Reach::Dropped)
+            .map(|(uri, _)| uri)
     }
 
     fn read_attachment_with<S: Sink>(
@@ -815,7 +832,7 @@ impl Workspace {
         path: &Labelled<String>,
         media: &str,
         reach: Reach,
-    ) -> Result<Labelled<String>, WorkspaceError> {
+    ) -> Result<(Labelled<String>, usize), WorkspaceError> {
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("file_read", "path", Role::Routing, path)?;
@@ -844,7 +861,7 @@ impl Workspace {
             if let Some((from, to)) = encoded.reduced {
                 policy.record_reduced_picture(&relative, from, to);
             }
-            Ok(Labelled::new(encoded.uri, label))
+            Ok((Labelled::new(encoded.uri, label), encoded.bytes))
         })
     }
 
@@ -919,6 +936,7 @@ impl Workspace {
                     let encoded = base64::engine::general_purpose::STANDARD.encode(&smaller);
                     return Ok(Encoded {
                         uri: format!("data:image/png;base64,{encoded}"),
+                        bytes: smaller.len(),
                         reduced: Some((raw.len(), smaller.len())),
                     });
                 }
@@ -931,6 +949,7 @@ impl Workspace {
         let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
         Ok(Encoded {
             uri: format!("data:{media};base64,{encoded}"),
+            bytes: raw.len(),
             reduced: None,
         })
     }

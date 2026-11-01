@@ -15,13 +15,13 @@ use crate::progress::printable;
 pub(crate) use bravebot_agent::mcp::{shown, unreadable};
 use bravebot_agent::servers::{Foreseen, OwnHome};
 pub(crate) use bravebot_agent::servers::{
-    Home, Person, drawn, indent, no_state_directory, problem, say,
+    Home, Person, choices_line, drawn, indent, no_state_directory, problem, say,
 };
 use bravebot_config::Managed;
 use bravebot_config::import::{Destination, Unwritable};
 use bravebot_config::mcp::{
-    self, Approvals, Declaration, Declarations, Entry, Field, Problem, Projects, Standing,
-    Timeouts, Unreadable,
+    self, Approvals, ChoiceArguments, Declaration, Declarations, Entry, Field, Problem, Projects,
+    Standing, Timeouts, Unreadable,
 };
 use bravebot_i18n::t;
 use std::collections::BTreeMap;
@@ -125,8 +125,8 @@ fn refused_with_the_forms(message: String) -> Stopped {
     said.push('\n');
     said.push_str(t!(mcp_forms_heading));
     for form in [
-        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--tools <list>] [--exclude-tools <list>] [--stdio] -- <program> [args...]",
-        "bravebot mcp add <alias> [-s <scope>] [--tools <list>] [--exclude-tools <list>] --http <url> [--bearer-env <name>] [--header-env <header>=<name>...]",
+        "bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--stdio] -- <program> [args...]",
+        "bravebot mcp add <alias> [-s <scope>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] --http <url> [--bearer-env <name>] [--header-env <header>=<name>...]",
         "bravebot mcp enable <alias> [-s <scope>]",
         "bravebot mcp disable <alias> [-s <scope>]",
         "bravebot mcp get <alias>",
@@ -315,6 +315,8 @@ fn declared(
     let mut tools = Vec::new();
     let mut exclude_tools = Vec::new();
     let mut allowed_hosts: Option<Vec<String>> = None;
+    let mut ask_every_call = false;
+    let mut choices = ChoiceArguments::new();
     let mut index = 0;
     while index < flags.len() {
         let flag = flags[index].as_str();
@@ -433,6 +435,19 @@ fn declared(
                 allowed_hosts = Some(hosts_in(word)?);
                 taken = 1;
             }
+            "--ask-every-call" => {
+                ask_every_call = true;
+                taken = 1;
+            }
+            "--choice" => {
+                let pair = value.ok_or_else(|| argument(t!(mcp_choice_needs_a_pair)))?;
+                choose(pair, &mut choices)?;
+            }
+            joined if joined.starts_with("--choice=") => {
+                let pair = joined.strip_prefix("--choice=").unwrap_or_default();
+                choose(pair, &mut choices)?;
+                taken = 1;
+            }
             "--startup-timeout" => {
                 startup = Some(seconds(value, Timeouts::STARTUP_KEY)?);
             }
@@ -535,6 +550,8 @@ fn declared(
                 .and_then(|declaration| declaration.storing(env))
                 .and_then(|declaration| declaration.hosting(allowed_hosts))
                 .and_then(|declaration| declaration.filtering(tools, exclude_tools))
+                .map(|declaration| declaration.asking_every_call(ask_every_call))
+                .and_then(|declaration| declaration.choosing(choices))
                 .map(|declaration| declaration.timing(timeouts))
                 .map_err(Refusal::Problem)
         }
@@ -547,10 +564,14 @@ fn declared(
         Some(Transport::Http(_)) if directory.is_some() => {
             Err(Refusal::Problem(Problem::Remote("directory")))
         }
+        Some(Transport::Http(_)) if !choices.is_empty() => {
+            Err(Refusal::Problem(Problem::Remote("choice_arguments")))
+        }
         Some(Transport::Http(url)) => Declaration::http(url)
             .and_then(|declaration| declaration.heading(env_http_headers, bearer_env))
             .and_then(|declaration| declaration.hosting(allowed_hosts))
             .and_then(|declaration| declaration.filtering(tools, exclude_tools))
+            .map(|declaration| declaration.asking_every_call(ask_every_call))
             .map(|declaration| declaration.timing(timeouts))
             .map_err(Refusal::Problem),
     }
@@ -569,6 +590,20 @@ fn hosts_in(word: &str) -> Result<Vec<String>, Refusal> {
         true => Err(argument(t!(mcp_allowed_hosts_needs_a_list)).into()),
         false => Ok(entries),
     }
+}
+
+/// One `--choice` word, `<tool>:<argument>`, kept with the others. Whether the two are words a tool
+/// may be offered under is the declaration's to check.
+fn choose(pair: &str, choices: &mut ChoiceArguments) -> Result<(), Refusal> {
+    let (tool, name) = pair
+        .split_once(':')
+        .filter(|(tool, name)| !tool.is_empty() && !name.is_empty())
+        .ok_or_else(|| argument(t!(mcp_choice_needs_a_pair)))?;
+    choices
+        .entry(tool.to_string())
+        .or_default()
+        .insert(name.to_string());
+    Ok(())
 }
 
 /// The whole number of seconds a timeout flag was given, which is a problem named by the key the
@@ -878,7 +913,8 @@ pub(crate) fn examined(
 /// declared nowhere, and how many declarations cannot be used.
 ///
 /// A declaration's row is its transport, its approval, its digest, and where the managed layer
-/// refuses it, why. Under it, which checkout requested it and whether a session started `here`
+/// refuses it, why. Under it, that every call to it is asked about where its declaration says so
+/// (SERVERS-21), which checkout requested it and whether a session started `here`
 /// holds the grant to call it, read from the one place a session decides that
 /// ([`bravebot_agent::servers::grant`]), and then what was answered about it here. An entry that cannot be
 /// used is listed with its problem rather than left out, since a list that dropped it would make a
@@ -938,6 +974,10 @@ pub(crate) fn report(
                     Some(refusal) => format!("{line}  {refusal}"),
                     None => line,
                 });
+                if declaration.asks_every_call() {
+                    rows.push(format!("{under}{}", t!(mcp_declaration_asks_every_call)));
+                }
+                rows.extend(choices_line(declaration).map(|line| format!("{under}{line}")));
                 let request = file.map(|file| {
                     match grant(
                         alias,
@@ -2836,6 +2876,423 @@ mod tests {
                 .any(|line| line.trim() == "may reach only: api.mine.example, *.cdn.example"),
             "{screen}"
         );
+    }
+
+    /// SERVERS-21: `--ask-every-call` sets the property on either transport and takes no value,
+    /// so the word after it is read as the next flag, and after `--` it is the server's own
+    /// argument. The regressions it rejects are a flag that swallows the next word, one that is
+    /// honoured past `--`, and one the remote transport drops.
+    #[test]
+    fn the_ask_every_call_flag_sets_the_property_on_either_transport_and_takes_no_value() {
+        let declared_by = |flags: &[&str]| declared(&words(flags), 1, &mut None).ok();
+
+        let local = declared_by(&["--ask-every-call", "--", "/opt/srv"]).unwrap();
+        assert!(local.asks_every_call());
+        let remote =
+            declared_by(&["--http", "https://mcp.example.com/mcp", "--ask-every-call"]).unwrap();
+        assert!(remote.asks_every_call());
+
+        let followed =
+            declared_by(&["--ask-every-call", "--tools", "get", "--", "/opt/srv"]).unwrap();
+        assert!(followed.asks_every_call());
+        assert_eq!(followed.tools(), &["get"]);
+
+        let silent = declared_by(&["--", "/opt/srv"]).unwrap();
+        assert!(!silent.asks_every_call());
+        let servers = declared_by(&["--", "/opt/srv", "--ask-every-call"]).unwrap();
+        assert!(!servers.asks_every_call(), "a word after `--` was read");
+        let Declaration::Stdio { argv, .. } = &servers else {
+            panic!("{servers:?} is not a local server");
+        };
+        assert_eq!(argv, &["/opt/srv", "--ask-every-call"]);
+
+        let refused = declared_by(&["--ask-every-call=false", "--", "/opt/srv"]);
+        assert!(refused.is_none(), "a value was taken");
+    }
+
+    /// SERVERS-21: `add` writes the property, the question says every call is asked about, and
+    /// `get` says it again, in the same words. A declaration that does not ask draws no such line.
+    /// The regression it rejects is a flag that is read and not written, which would leave a
+    /// server asking no more than any other.
+    #[test]
+    fn add_writes_the_ask_every_call_property_and_the_question_and_get_say_it() {
+        let directory = scratch("cli-mcp-ask-every-call");
+        let said = "every call is asked about, and no answer to one is remembered";
+        let (outcome, screen) = typing(
+            &directory,
+            &["add", "cookies", "--ask-every-call", "--", "/opt/srv"],
+            "n\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            screen.lines().any(|line| line.trim() == said),
+            "the question did not say it: {screen}"
+        );
+        let written = std::fs::read_to_string(mcp::declarations_file(&directory)).unwrap();
+        assert!(
+            Declarations::parse(&written)
+                .unwrap()
+                .get("cookies")
+                .unwrap()
+                .declaration
+                .unwrap()
+                .asks_every_call(),
+            "{written}"
+        );
+
+        let (outcome, shown) = typing(&directory, &["get", "cookies"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(shown.lines().any(|line| line.trim() == said), "{shown}");
+
+        let (_, plain) = typing(&directory, &["add", "plain", "--", "/opt/srv"], "n\n");
+        assert!(
+            !plain.contains(said),
+            "a server not asked about said it: {plain}"
+        );
+    }
+
+    /// SERVERS-21: `list` and `doctor` say, under the row of a server whose declaration asks about
+    /// every call, that every call is asked about, in the words `get` and the question use, and
+    /// say it under no other server's row. The regression it rejects is a report that draws two
+    /// servers alike, so a person reading the list cannot tell which one asks.
+    #[test]
+    fn list_and_doctor_say_which_server_is_asked_about_every_call() {
+        let directory = scratch("cli-mcp-list-ask-every-call");
+        let here = requesting(&directory, &[]);
+        let said = t!(mcp_declaration_asks_every_call);
+        for args in [
+            &["add", "cookies", "--ask-every-call", "--", "/opt/srv"][..],
+            &["add", "plain", "--", "/opt/srv"],
+        ] {
+            let (outcome, _) = typing_in(&directory, &here, args, "n\n");
+            assert!(outcome.is_ok(), "{outcome:?}");
+        }
+
+        let (outcome, listed) = typing_in(&directory, &here, &["list"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: false,
+        };
+        let (examined, failed) = examined(
+            &home,
+            &Managed::default(),
+            Ok(Here {
+                project: here.project.clone(),
+                requested: here.requested.clone(),
+            }),
+        );
+        assert!(!failed, "{examined:?}");
+
+        // The rows under a server's own start under the longest alias.
+        let under = " ".repeat(2 + "cookies".len() + 2);
+        let listed: Vec<&str> = listed.lines().collect();
+        let examined: Vec<&str> = examined.iter().map(String::as_str).collect();
+        for (report, lines) in [("list", listed), ("doctor", examined)] {
+            let said_under = |alias: &str| {
+                let row = lines
+                    .iter()
+                    .position(|line| line.trim_start().starts_with(alias))
+                    .unwrap_or_else(|| panic!("{report} has no row for {alias}: {lines:?}"));
+                lines[row + 1..]
+                    .iter()
+                    .take_while(|line| line.starts_with(&under))
+                    .any(|line| line.trim() == said)
+            };
+            assert!(said_under("cookies"), "{report}: {lines:?}");
+            assert!(!said_under("plain"), "{report}: {lines:?}");
+            assert_eq!(
+                lines.iter().filter(|line| line.trim() == said).count(),
+                1,
+                "{report}: {lines:?}"
+            );
+        }
+    }
+
+    fn chosen(pairs: &[(&str, &[&str])]) -> ChoiceArguments {
+        pairs
+            .iter()
+            .map(|(tool, arguments)| {
+                (
+                    tool.to_string(),
+                    arguments.iter().map(|word| word.to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// SERVERS-22: `--choice <tool>:<argument>` names one argument of one tool, is given once for
+    /// each pair and may be written with `=`, takes a local server that asks every call, and after
+    /// `--` is the server's own argument. A word with no tool or no argument is refused as the
+    /// flag's own mistake, and the rest is the declaration's to check. The regressions it rejects
+    /// are a flag that replaces the pairs it was given before, one that is read past `--`, one that
+    /// needs the property to come first, and a remote or unasked declaration that takes a pair.
+    #[test]
+    fn the_choice_flag_names_the_arguments_of_tools_on_a_local_server_that_asks_every_call() {
+        let declared_by = |flags: &[&str]| declared(&words(flags), 1, &mut None);
+        let pairs = chosen(&[
+            ("click_element", &["element_number", "text"]),
+            ("type_text", &["element_number"]),
+        ]);
+        for flags in [
+            &[
+                "--ask-every-call",
+                "--choice",
+                "click_element:element_number",
+                "--choice",
+                "click_element:text",
+                "--choice=type_text:element_number",
+                "--",
+                "/opt/srv",
+            ][..],
+            &[
+                "--choice=type_text:element_number",
+                "--choice",
+                "click_element:text",
+                "--choice",
+                "click_element:element_number",
+                "--choice",
+                "click_element:text",
+                "--ask-every-call",
+                "--",
+                "/opt/srv",
+            ],
+        ] {
+            let built = declared_by(flags).unwrap_or_else(|_| panic!("{flags:?} was refused"));
+            assert_eq!(built.choice_arguments(), &pairs, "{flags:?}");
+            assert!(built.asks_every_call(), "{flags:?}");
+        }
+
+        let servers = declared_by(&[
+            "--ask-every-call",
+            "--",
+            "/opt/srv",
+            "--choice",
+            "click_element:element_number",
+        ])
+        .ok()
+        .unwrap();
+        assert!(servers.choice_arguments().is_empty(), "read past `--`");
+
+        let said = |flags: &[&str]| match declared_by(flags) {
+            Err(Refusal::Said((Ending::Argument, said))) => said,
+            _ => panic!("{flags:?} was not refused as an argument"),
+        };
+        for flags in [
+            &["--choice"][..],
+            &["--choice", "--", "/opt/srv"],
+            &["--choice", "click_element", "--", "/opt/srv"],
+            &["--choice", ":element_number", "--", "/opt/srv"],
+            &["--choice", "click_element:", "--", "/opt/srv"],
+            &["--choice="],
+            &["--choice=click_element"],
+        ] {
+            assert_eq!(
+                said(flags),
+                t!(mcp_choice_needs_a_pair).to_string(),
+                "{flags:?}"
+            );
+        }
+
+        let found = |flags: &[&str]| match declared_by(flags) {
+            Err(Refusal::Problem(found)) => found,
+            _ => panic!("{flags:?} spelled no problem"),
+        };
+        assert_eq!(
+            found(&["--choice", "click_element:element_number", "--", "/opt/srv"]),
+            Problem::ChoiceWithoutAsking
+        );
+        assert_eq!(
+            found(&[
+                "--ask-every-call",
+                "--choice",
+                "click element:element_number",
+                "--",
+                "/opt/srv"
+            ]),
+            Problem::Choice
+        );
+        assert_eq!(
+            found(&[
+                "--http",
+                "https://mcp.example.com/mcp",
+                "--ask-every-call",
+                "--choice",
+                "click_element:element_number",
+            ]),
+            Problem::Remote("choice_arguments")
+        );
+    }
+
+    /// SERVERS-22: `add` writes the pairs, the question that approves the server says which
+    /// arguments take a choice and `get` says it again in the same words, and a server that names
+    /// none draws no such line. Naming a pair on a server that is not asked every call, and on a
+    /// remote one, is refused in one sentence and writes nothing. Adding a pair to an approved
+    /// declaration asks again and names `choice_arguments`. The regressions it rejects are a flag
+    /// that is read and not written, a question that leaves the pairs out, and an edit that keeps
+    /// the approval.
+    #[test]
+    fn add_writes_the_choice_arguments_and_the_question_and_get_say_them() {
+        let directory = scratch("cli-mcp-choice-arguments");
+        let said = t!(
+            mcp_declaration_choice_arguments,
+            pairs = "click_element:element_number, type_text:element_number"
+        )
+        .to_string();
+        let with = |pairs: &[&'static str]| -> Vec<&'static str> {
+            let mut args = vec!["add", "input", "--ask-every-call"];
+            for pair in pairs {
+                args.extend(["--choice", pair]);
+            }
+            args.extend(["--", "/opt/srv"]);
+            args
+        };
+        let both = ["click_element:element_number", "type_text:element_number"];
+        let (outcome, screen) = typing(&directory, &with(&both), "y\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            screen.lines().any(|line| line.trim() == said),
+            "the question did not say it: {screen}"
+        );
+        let written = std::fs::read_to_string(mcp::declarations_file(&directory)).unwrap();
+        let input = Declarations::parse(&written)
+            .unwrap()
+            .get("input")
+            .unwrap()
+            .declaration
+            .unwrap();
+        assert_eq!(
+            input.choice_arguments(),
+            &chosen(&[
+                ("click_element", &["element_number"]),
+                ("type_text", &["element_number"])
+            ]),
+            "{written}"
+        );
+        assert!(approved(&directory, &input));
+
+        let (outcome, got) = typing(&directory, &["get", "input"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(got.lines().any(|line| line.trim() == said), "{got}");
+
+        let (_, plain) = typing(
+            &directory,
+            &["add", "plain", "--ask-every-call", "--", "/opt/srv"],
+            "n\n",
+        );
+        assert!(!plain.contains("take a choice"), "{plain}");
+
+        let (outcome, asked) = typing(&directory, &with(&both[..1]), "n\n");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let named = t!(mcp_changed, fields = "choice_arguments").to_string();
+        assert!(asked.lines().any(|line| line.trim() == named), "{asked}");
+        assert!(!approved(&directory, &input), "the old approval stood");
+
+        let refused = scratch("cli-mcp-choice-arguments-refused");
+        for (args, expected) in [
+            (
+                &[
+                    "add",
+                    "input",
+                    "--choice",
+                    "click_element:element_number",
+                    "--",
+                    "/opt/srv",
+                ][..],
+                problem(&Problem::ChoiceWithoutAsking),
+            ),
+            (
+                &[
+                    "add",
+                    "input",
+                    "--ask-every-call",
+                    "--choice",
+                    "click_element:element_number",
+                    "--http",
+                    "https://mcp.example.com/mcp",
+                ],
+                problem(&Problem::Remote("choice_arguments")),
+            ),
+        ] {
+            let (outcome, screen) = typing(&refused, args, "y\n");
+            let (_, said) = outcome.expect_err("a pair was taken");
+            assert!(said.contains(&expected), "{args:?}: {said}");
+            assert_eq!(said.lines().count(), 1, "{args:?}: {said}");
+            assert!(
+                !screen.contains("Use this MCP server"),
+                "{args:?}: {screen}"
+            );
+            assert!(!mcp::declarations_file(&refused).exists(), "{args:?}");
+        }
+    }
+
+    /// SERVERS-22: `list` and `doctor` say which arguments take a choice under the row of the server
+    /// that declares them, in the words `get` and the question use, and under no other server's
+    /// row. The regression it rejects is a report that draws two servers alike, so a person reading
+    /// the list cannot tell which one hands a processor's choice to a call.
+    #[test]
+    fn list_and_doctor_say_which_arguments_of_which_server_take_a_choice() {
+        let directory = scratch("cli-mcp-list-choice-arguments");
+        let here = requesting(&directory, &[]);
+        let said = t!(
+            mcp_declaration_choice_arguments,
+            pairs = "click_element:element_number"
+        )
+        .to_string();
+        for args in [
+            &[
+                "add",
+                "input",
+                "--ask-every-call",
+                "--choice",
+                "click_element:element_number",
+                "--",
+                "/opt/srv",
+            ][..],
+            &["add", "plain", "--ask-every-call", "--", "/opt/srv"],
+        ] {
+            let (outcome, _) = typing_in(&directory, &here, args, "n\n");
+            assert!(outcome.is_ok(), "{outcome:?}");
+        }
+
+        let (outcome, listed) = typing_in(&directory, &here, &["list"], "");
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let home = Home {
+            directory: Some(directory.clone()),
+            writable: false,
+        };
+        let (examined, failed) = examined(
+            &home,
+            &Managed::default(),
+            Ok(Here {
+                project: here.project.clone(),
+                requested: here.requested.clone(),
+            }),
+        );
+        assert!(!failed, "{examined:?}");
+
+        let under = " ".repeat(2 + "plain".len() + 2);
+        let listed: Vec<&str> = listed.lines().collect();
+        let examined: Vec<&str> = examined.iter().map(String::as_str).collect();
+        for (report, lines) in [("list", listed), ("doctor", examined)] {
+            let said_under = |alias: &str| {
+                let row = lines
+                    .iter()
+                    .position(|line| line.trim_start().starts_with(alias))
+                    .unwrap_or_else(|| panic!("{report} has no row for {alias}: {lines:?}"));
+                lines[row + 1..]
+                    .iter()
+                    .take_while(|line| line.starts_with(&under))
+                    .any(|line| line.trim() == said)
+            };
+            assert!(said_under("input"), "{report}: {lines:?}");
+            assert!(!said_under("plain"), "{report}: {lines:?}");
+            assert_eq!(
+                lines.iter().filter(|line| line.trim() == said).count(),
+                1,
+                "{report}: {lines:?}"
+            );
+        }
     }
 
     /// SERVERS-10: `-e` before the alias is refused as `claude mcp add` refuses it, where its run

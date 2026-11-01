@@ -8,7 +8,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 251
+      - crates/agent/src/tools.rs: 255
       - crates/agent/src/tools/message.rs: 14
       - crates/agent/src/tools/link.rs: 6
       - crates/agent/src/tools/recall.rs: 25
@@ -42,7 +42,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`write_file`](write-file.md) | `path`, `path_ref`, `contents_ref` | `contents` | confirmation |
 | [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | confirmation |
 | [`apply_checkout`](../checkouts.md#CHECKOUT-14) | `checkout`, `paths` | none | the files brought back, one confirmation each |
-| [`spawn_processor`](spawn-processor.md) | `reads`, `about` | `instruction` | a reference |
+| [`spawn_processor`](spawn-processor.md) | `reads`, `about`, `choose_upto` | `instruction` | a reference |
 | [`spawn_agent`](spawn-agent.md) | `kind`, `mcp_servers` | `task`, `each` | one report per delegate |
 | [`run`](run.md) | every stage's program and arguments, `directory`, `background`, `deadline_seconds`, `stdin_ref` | standard input | a reference |
 | [`read_output`](read-output.md) | the reference naming the result, `offset`, `pattern` | none | the bytes, if a person allows it |
@@ -185,15 +185,34 @@ the same list. A delegate that may read files and not run programs is offered `r
 a sentence that sends the planner to another tool is written against this turn's own list, and where
 that tool is not on it the sentence says what can be done without it instead.
 
+The same holds for what the planner is told about content it may not read. A reference names
+`vet_content`, `spawn_processor`, `write_file` and, for output kept whole past a cap, `read_output`
+only where the turn's list holds them. So does the answer to a read of a reference to a file the
+planner may not read, which names `spawn_processor` and `write_file`. The processor's description
+names `write_file`, `vet_content`, `run` and `read_output` only where it does, and the output's names
+`vet_content` only where it does. What the processor's description says about text made from
+content the planner was not shown names `run` only where the list holds one, and sends the answer
+to a program through a file, which names `write_file` and `read_file`, only where the list holds both
+([SPAWN-6](spawn-processor.md#SPAWN-6)). `fetch_url` names `spawn_processor`, `write_file` and
+`vet_content` only where it does, `job_output` names `read_output`, `spawn_processor` and
+`write_file`, and `run` names those three in what it says to do with output that comes back as a
+reference, and `job_output` in its `background` argument. The sentence in the output of `run` that
+sends text made from it to the processor names `spawn_processor` only where the list holds it. The
+turn settles its list once and writes these from it ([VET-2](vet-content.md#VET-2)), so a delegate,
+a definition's tools line and the command line's `--tools` all give the same result. A run offered
+every tool is told every one of these names, in each of these texts.
+
 **Why.** A turn told to use a tool nobody offered it spends a round calling a name that is not there
 and is refused for a reason it cannot act on, and then has a question to report back on unanswered.
 It was also told in its own prompt what it cannot do, so it holds both answers at once and the one in
 the tool list is the one that is true.
 
 Not every description is written this way yet. The read's and the run's advice to arrange a later
-look, the processor's, the run's and the job's mention of writing a file, the processor's mention of
-reading one, the run's pointer at the processor, and the output's mention of checking a reference
-each name a tool some delegate is not offered.
+look, the run's advice on watching a program (which names `read_file` and `job_output`), the words
+of its `read` argument (which name `read_output`), and the sentences in the answers to a run and to
+a job that send a run to `read_output` or `job_output` each name a tool some delegate or definition
+is not offered. So does the pointer in `contents_ref` at the processor's description for saving a
+page to a file first, on a list that holds `run` and `write_file` and no `read_file`.
 
 `verified-by: bravebot_agent::tools::read_git_names_run_only_where_the_delegate_holds_one`
 `verified-by: bravebot_agent::tools::a_declined_repository_names_run_only_where_the_turn_holds_one`
@@ -202,3 +221,24 @@ each name a tool some delegate is not offered.
 `verified-by: bravebot_agent::tools::the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::an_addressed_reader_reads_a_read_git_that_names_no_run`
 `verified-by: bravebot_agent::turn::an_addressed_turn_without_run_reads_an_ask_user_that_names_no_run`
+`verified-by: bravebot_core::reference::a_reference_made_for_a_run_without_spawning_or_writing_names_only_the_tools_it_has`
+`verified-by: bravebot_core::policy::a_reference_names_spawn_processor_and_write_file_exactly_when_the_run_is_offered_them`
+`verified-by: bravebot_agent::turn::a_reference_an_addressed_turn_is_handed_names_spawn_processor_and_write_file_only_if_offered`
+`verified-by: bravebot_agent::tools::a_list_holding_every_tool_gets_the_processor_and_read_output_descriptions_it_always_had`
+`verified-by: bravebot_agent::tools::the_processor_description_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::the_route_through_a_file_is_described_only_where_the_list_holds_the_file_tools`
+`verified-by: bravebot_agent::tools::the_read_output_description_names_vet_content_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::turn::the_descriptions_of_the_processor_and_read_output_follow_the_tools_a_turn_is_offered`
+`verified-by: bravebot_agent::turn::a_delegate_is_not_told_to_use_a_tool_it_is_not_offered`
+`verified-by: bravebot_agent::tools::a_list_holding_every_tool_gets_the_fetch_job_and_run_texts_it_always_had`
+`verified-by: bravebot_agent::tools::the_fetch_description_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::the_job_output_description_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::the_run_description_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::turn::the_descriptions_of_fetch_job_output_and_run_follow_the_tools_a_turn_is_offered`
+`verified-by: bravebot_agent::turn::reading_a_reference_to_a_file_names_spawn_processor_and_write_file_only_if_offered`
+`verified-by: bravebot_agent::turn::a_delegate_reading_a_reference_to_a_file_is_told_only_what_it_can_do`
+`verified-by: bravebot_agent::turn::a_reference_to_the_whole_of_a_long_output_names_read_output_only_if_offered`
+`verified-by: bravebot_core::reference::kept_output_made_for_a_run_without_read_output_names_no_read_output_and_keeps_the_other_moves`
+`verified-by: bravebot_core::policy::a_reference_to_kept_output_names_read_output_exactly_when_the_run_is_offered_it`
+`verified-by: bravebot_core::policy::the_policy_says_what_a_reference_may_be_given_to`
+`verified-by: bravebot_core::policy::a_branch_makes_references_for_the_run_the_policy_was_told_about`

@@ -158,11 +158,13 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
-## Seven deliberate exceptions
+## Nine deliberate exceptions
 
-Brave Bot looks at untrusted bytes to decide something in seven places, three in the policy layer
-and four in the agent, the search, the diagnostics sentence, reading a repository's history and
-telling a text file from a binary one, all written down rather than left to be found.
+Brave Bot looks at untrusted bytes to decide something in nine places, three in the policy layer,
+four in the agent, the search, the diagnostics sentence, reading a repository's history and telling
+a text file from a binary one, one in the MCP client, the choice of which parts of a tool
+result are taken, and one in the crate that reads a processor's answer for the number it chose, all
+written down rather than left to be found.
 
 **Splitting a processor's answer.** A processor returns one piece of text holding two things: a remark
 for the person watching, and the document to be written. It marks where the document begins, and the
@@ -224,6 +226,27 @@ reference with the file's size. An attacker who owns the file chooses which of t
 model sees, and can put the file out of reach of the component that reads it later. That is one bit
 beside a size they already set. They cannot choose how the result is labelled, any destination, or
 put a word of their own in front of the model.
+
+**Choosing which parts of a tool result are taken.** An MCP server's result is a list of parts. The
+MCP client compares each part's declared type with `text` and `image`, looks an image's media type
+up in a list of four (PNG, JPEG, GIF and WebP), and checks that its data is base64 in its canonical
+form and decodes to at most 8 MiB. Every other part is left out and counted. The client also sorts
+how a call ended: a tool that reported a failure, an error reply, a reply it cannot use and a line
+longer than 16 MiB are replies, and a connection closed with no reply is not. The model is given a
+reference to each part and told how many were left out, and it never receives a part. A hostile
+server, or a page steering a tool the server relays, can choose whether a result has text, how many
+pictures it has, which of the four media types a picture is held under, how many parts are left out,
+a picture's size within the cap, and, by not replying, whether a plan run goes on past a call. They
+cannot choose the label of any part, put a byte of a part in front of the model or into a decision,
+choose a destination or an argument of a later call, or make a step run that you did not approve.
+
+**Reading the number a processor chose.** A processor can be asked to pick one entry from a numbered
+list of what a page shows, and to answer with a number. A small crate that holds no other power reads
+that answer for one whole number from 1 to a limit the model that planned the work set, or for none.
+A hostile page that talks the processor round can make the number any of those values and nothing
+else. The model is never shown the number, and the action happens only if you allow it, in a window
+of your browser that shows you the element the number leads to. The page cannot choose the tab, the
+action, what is typed, or whether it happens.
 
 ## What leaves the process
 

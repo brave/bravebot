@@ -1524,6 +1524,7 @@ mcp-dir-needs-a-path = --dir needs a directory
 mcp-tools-needs-a-list = --tools needs a tool name or a comma-separated list of tool names
 mcp-exclude-tools-needs-a-list = --exclude-tools needs a tool name or a comma-separated list of tool names
 mcp-allowed-hosts-needs-a-list = --allowed-hosts needs a host name or a comma-separated list of host names
+mcp-choice-needs-a-pair = --choice needs a tool and an argument, written <TOOL>:<ARGUMENT>
 mcp-dir-not-a-directory = { $path } is not a directory
 mcp-dir-not-a-directory-unshown =
     the word after --dir is not a directory, and is not repeated since it may be a value
@@ -1558,6 +1559,10 @@ mcp-problem-tool = { $name } is not a tool name
 mcp-problem-tools = { $key } is not a list of tool names
 mcp-problem-hosts = { $entry } is not a host name or a *. domain
 mcp-problem-hosts-list = allowed_hosts is not a list of host names
+mcp-problem-ask-every-call = ask_every_call is not true or false
+mcp-problem-choice =
+    choice_arguments is not an object of tool names, each with a list of argument names
+mcp-problem-choice-without-asking = choice_arguments needs ask_every_call to be true
 mcp-unreadable = { $path } cannot be read: { $reason }
 mcp-unreadable-too-large = it is larger than a declarations file has any reason to be
 mcp-unreadable-not-read = it could not be read as text
@@ -1586,6 +1591,9 @@ mcp-directory = directory, which it may write: { $path }
 mcp-timeouts = time allowed: { $startup } seconds to start, { $tool } seconds for each call
 mcp-declaration-tools = tools: { $names }
 mcp-declaration-exclude-tools = exclude tools: { $names }
+mcp-declaration-asks-every-call = every call is asked about, and no answer to one is remembered
+# The arguments a declaration says a choice may fill, each as tool:argument.
+mcp-declaration-choice-arguments = arguments that take a choice: { $pairs }
 mcp-digest = digest: { $digest }
 # Where a declaration replaced one that was approved, which of its fields differ.
 mcp-changed = changed: { $fields }
@@ -1792,6 +1800,7 @@ mcp-tools-declined = { $alias } offers no tool in this session: its list was not
 mcp-tools-refused = { $alias } offers no tool in this session: { $reason }
 mcp-tools-changed = { $alias } changed its tools: it offers none until the list it gives now is approved
 mcp-tools-reread-failed = { $alias } offers no tool in this session: its changed list could not be read ({ $reason })
+mcp-tools-choice-shadowed = { $alias } lists { $tool } with an argument { $argument }_ref of its own, so { $argument } is not offered as a choice of a processor
 
 ## One call to a tool of an MCP server
 
@@ -1802,8 +1811,24 @@ mcp-call-question = Proceed?
 mcp-call-yes = Yes
 mcp-call-stand = Yes, and stop asking for { $tool } in this project
 mcp-call-cannot-stand = not offered: nothing answered in this session can be recorded
+mcp-call-cannot-stand-asked-every-time = not offered: every call to this server is asked about
+mcp-call-asked-every-time = Every call to this server is asked about, and no answer to one is remembered.
+mcp-call-cannot-be-asked-here = { $tool } was not called: every call to its server is asked about, and this client cannot ask. Run it from the terminal, which can.
 mcp-call-allow-and-remember-explained = Allow and remember records { $tool } in this project: every later call to it, with any arguments, is allowed without asking again.
+# The value of an argument of a call that a processor's choice will fill, as the question draws it.
+mcp-call-choice-drawn = { $number } (chosen by a processor from { $reference }; the number alone does not say what it stands for)
 mcp-call-no = No
+# After the name of a text argument that is drawn one numbered row to a line, because it holds a line
+# feed or a character that cannot be seen.
+mcp-call-text-lines = { $count ->
+    [one] 1 line
+   *[other] { $count } lines
+    }
+# Said above the lines of such a text where some of its characters draw as nothing or move the cursor.
+mcp-call-text-written-out = { $count ->
+    [one] 1 character you cannot see is written out below as ‹U+XXXX›, and a tag character also as the letter it stands for.
+   *[other] { $count } characters you cannot see are written out below as ‹U+XXXX›, and a tag character also as the letter it stands for.
+    }
 mcp-call-expand = (e to expand)
 mcp-call-collapse = (e to collapse)
 mcp-call-not-recorded =
@@ -2498,8 +2523,8 @@ plan-explained =
     the whole program, decided before anything was read. nothing it reads can add a step,
     drop one, or send anything anywhere this plan does not already name.
 plan-not-its-writes =
-    approving the plan is not approving its writes. each one is still put to you as it
-    comes up.
+    approving the plan is not approving its writes or its calls to a server's tools. each
+    one is still put to you as it comes up.
 plan-nothing-yet =
     nothing has been read or written yet, so declining leaves everything as it is.
 plan-yes = run it
@@ -4534,6 +4559,42 @@ processor-model-substituted = A processor asked for { $model } and was answered 
 # the person typed, so it is shown in full.
 set-link-recorded-issue = issue link recorded: { $url }
 set-link-recorded-pull-request = pull request link recorded: { $url }
+
+# The row for a picture the driver holds in a slot, whether a file was read as one or a server's
+# tool result carried it, drawn inside the margin that marks content nobody vouched for. The media
+# type is one the driver chose from a closed list, the number is how many bytes the picture holds
+# (not the longer data URI the slot holds and the model is told the size of), and nothing the
+# picture holds is in it.
+tool-picture = { $bytes ->
+    [one] a picture, { $media }, { $bytes } byte, held as { $slot } and kept from the model
+   *[other] a picture, { $media }, { $bytes } bytes, held as { $slot } and kept from the model
+    }
+# The same row for a PDF, which has no picture to name a media type for.
+tool-pdf = { $bytes ->
+    [one] a PDF, { $bytes } byte, held as { $slot } and kept from the model
+   *[other] a PDF, { $bytes } bytes, held as { $slot } and kept from the model
+    }
+# The row after either of those: how a person looks at what the model has not seen. A copy to open
+# comes from a write the person approves or from a vetting question. A mode can answer either
+# without drawing anything, so the row says what the vetting question does and not that it is asked.
+tool-picture-look = Ask the model to write it to a file you can open, or to use vet_content on it, which asks you about a copy of it before the model sees it.
+# The same row for a turn offered one of the two ways, or neither: a definition the turn was
+# addressed to names its tools, and the command line can leave some out.
+tool-picture-look-vets = Ask the model to use vet_content on it, which asks you about a copy of it before the model sees it.
+tool-picture-look-writes = Ask the model to write it to a file you can open.
+tool-picture-look-neither = The model has no tool that writes it to a file or puts a copy of it to you, so there is no way to open it from here.
+# The same row for a picture a delegate holds. A delegate is not offered vet_content and nobody can
+# ask it for anything, so the row says what its tools can do: write the picture to a file, which
+# a delegate offered write_file can do, or nothing.
+tool-picture-look-delegate-writes = The delegate cannot ask you to look at it. It can write it to a file you can open.
+tool-picture-look-delegate = The delegate cannot ask you to look at it and has no tool that writes a file, so there is no way to open it from here.
+# The source half of the line a person approves when a write puts the file a slot holds into the
+# workspace: the slot, the media type the driver recorded for it and how many bytes the file will
+# hold. Nothing the file holds is in it, and the destination follows after an arrow.
+write-picture-source = { $bytes ->
+    [one] { $slot } ({ $media }, { $bytes } byte)
+   *[other] { $slot } ({ $media }, { $bytes } bytes)
+    }
 # A definition's skills line named skills this session did not find. The definition is its file's
 # path and the skills are that file's own words, joined with a comma, both from a vouched-for file.
 delegate-skills-not-found =

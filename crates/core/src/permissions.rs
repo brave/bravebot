@@ -755,6 +755,28 @@ impl Permissions {
         self.for_path(Subject::Edit, path) == Decision::Ruled(Ruling::Allow)
     }
 
+    /// These rules less every one that is not about a server's tool.
+    ///
+    /// A manifest run reads no rule of the session's, except for a call to a server's tool, which a
+    /// plan makes through the function a turn's call goes through (MANIFEST-15). A rule about a file,
+    /// a command or a fetch is dropped here, so a plan's other steps are decided as they were.
+    #[must_use]
+    pub fn only_mcp(&self) -> Self {
+        let kept = |rules: &[Rule]| -> Vec<Rule> {
+            rules
+                .iter()
+                .filter(|rule| rule.subject() == Subject::Mcp)
+                .cloned()
+                .collect()
+        };
+        Self {
+            deny: kept(&self.deny),
+            ask: kept(&self.ask),
+            allow: kept(&self.allow),
+            ..self.clone()
+        }
+    }
+
     /// Whether any rule was written at all.
     pub fn is_empty(&self) -> bool {
         self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
@@ -2957,6 +2979,37 @@ mod tests {
                 "{alias}:{tool} was matched"
             );
         }
+    }
+
+    /// A plan's call is decided by the rules about a server's tool, and a plan's other steps by none
+    /// of the session's: what is kept is every `Mcp` rule of the three lists and nothing else.
+    #[test]
+    fn only_mcp_keeps_the_rules_about_a_servers_tool_and_nothing_else() {
+        let permissions = rules(
+            &["Mcp(weather:get_alerts)", "Edit(*.md)", "Bash(rm *)"],
+            &["Mcp(news)", "Read(.env)"],
+            &["Mcp(weather:*)", "WebFetch(domain:example.com)"],
+        );
+        let kept = permissions.only_mcp();
+        assert_eq!(kept.len(), 3, "{kept:?}");
+        assert_eq!(
+            kept.for_mcp("weather", "get_alerts"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            kept.for_mcp("weather", "get_forecast"),
+            Decision::Ruled(Ruling::Allow)
+        );
+        assert_eq!(kept.for_mcp("news", "lookup"), Decision::Ruled(Ruling::Ask));
+        assert_eq!(
+            kept.for_path(Subject::Edit, "notes.md"),
+            Decision::Unmatched
+        );
+        assert_eq!(kept.for_path(Subject::Read, ".env"), Decision::Unmatched);
+        assert_eq!(kept.for_command(&["rm", "-rf", "x"]), Decision::Unmatched);
+        assert_eq!(kept.for_host("example.com"), Decision::Unmatched);
+        assert!(!kept.denies_any_path());
+        assert!(Permissions::new().only_mcp().is_empty());
     }
 
     /// A bare `Mcp` covers every tool of every server, as a bare name does for every family, and

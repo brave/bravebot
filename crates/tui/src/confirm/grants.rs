@@ -1058,6 +1058,23 @@ mod tests {
         }
     }
 
+    /// A call to a server is approved by its alias, its tool and its arguments, so the prompt draws
+    /// the line as it was given, a long argument included, and cuts none of it (MANIFEST-15).
+    #[test]
+    fn the_plan_prompt_shows_a_calls_arguments_whole() {
+        let line = format!(
+            "1. [act] call brave:open_tab; arguments {{\"url\":\"https://example.com/{} TAILMARK\"}}",
+            "path ".repeat(60)
+        );
+        let drawn = rendered_manifest(&a_plan(&[line.as_str()]));
+
+        assert!(drawn.contains("call brave:open_tab"), "{drawn}");
+        assert!(
+            drawn.contains("TAILMARK"),
+            "the arguments were cut: {drawn}"
+        );
+    }
+
     /// Both halves a reader would otherwise guess at, and they pull in opposite directions: a yes
     /// here does not carry the writes inside the plan, and a no costs nothing because the run has
     /// touched nothing yet.
@@ -1066,6 +1083,7 @@ mod tests {
         let drawn = rendered_manifest(&a_plan(&["1. [act] write summary to summary.md"]));
 
         assert!(drawn.contains("not approving its writes"), "{drawn}");
+        assert!(drawn.contains("server's"), "{drawn}");
         assert!(
             drawn.contains("nothing has been read or written yet"),
             "{drawn}"

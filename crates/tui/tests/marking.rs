@@ -315,3 +315,79 @@ fn a_remark_is_drawn_inside_the_margin_it_cannot_forge() {
         "the escape in the remark was not neutralised:\n{screen}"
     );
 }
+
+/// A picture the model has not seen is drawn as the driver's rows about it (what it is, how big,
+/// the name it is held under and how to look at it), behind the bar on every row they reach at a
+/// width that wraps the second, under the heading that carries the label. The rows are the agent's
+/// own, and the terminal words nothing again: what is drawn is what `picture_rows` returns, with no
+/// byte of the picture and no thumbnail in it.
+#[test]
+fn the_rows_for_a_picture_are_drawn_behind_the_bar_under_the_label() {
+    let said = bravebot_agent::report::picture_rows(
+        "image/png",
+        118,
+        "ref:2",
+        bravebot_agent::report::Holder::Session {
+            vets: true,
+            writes: true,
+        },
+    );
+    let session = quarantining(said.clone());
+    let drawn = rows(&session, 50, 24);
+
+    let heading = drawn
+        .iter()
+        .position(|row| row.contains("notes.md") && row.contains("(U,priv)"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the heading does not carry the label:\n{}",
+                drawn.join("\n")
+            )
+        });
+    let block: Vec<&String> = drawn[heading + 1..]
+        .iter()
+        .take_while(|row| !row.trim().is_empty())
+        .collect();
+    assert!(
+        block.len() > said.len(),
+        "the second row does not wrap at this width, so the case is not exercised:\n{}",
+        drawn.join("\n")
+    );
+    let margin = drawn[heading]
+        .chars()
+        .position(|c| c == BAR)
+        .expect("the heading is not marked");
+    for row in &block {
+        assert_eq!(
+            row.chars().nth(margin),
+            Some(BAR),
+            "a row about the picture is outside the margin: {row:?}"
+        );
+        assert_eq!(
+            row.chars().position(|c| !c.is_whitespace()),
+            Some(margin),
+            "a row about the picture begins with content: {row:?}"
+        );
+    }
+
+    let squeeze = |text: &str| {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let drawn_words: String = block
+        .iter()
+        .map(|row| squeeze(&row.replace(BAR, "")))
+        .collect();
+    assert_eq!(
+        drawn_words,
+        squeeze(&said.join(" ")),
+        "the terminal drew other words than the agent's:\n{}",
+        drawn.join("\n")
+    );
+    assert!(
+        !drawn.join("\n").contains("base64"),
+        "the picture was drawn as text:\n{}",
+        drawn.join("\n")
+    );
+}
