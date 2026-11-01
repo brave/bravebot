@@ -5,6 +5,7 @@
 //! read, label or declassify content stay in `tools.rs`.
 
 use super::{WHY, offer_runs};
+use crate::confine::LOOPBACK_CONNECT_RULE;
 use bravebot_aichat::protocol::Tool;
 use bravebot_core::todo::Status;
 use serde_json::json;
@@ -205,6 +206,43 @@ fn table(
     } else {
         "list_files, search or read_file"
     };
+    // What spawn_processor says about a summary, a translation or other text made from content the
+    // planner was not shown, which a processor writes (SPAWN-6). The route to the program that
+    // sends it names `run`, so it is said only where this turn holds one. A turn without `run` is
+    // told who writes such text and what to call it, and is not sent to a program it cannot start.
+    let derived_text = if running.offered() {
+        "A summary, a translation, a rewrite, an explanation or a list of the points made of \
+         content you were not shown is written by this tool, because you cannot write it from \
+         what you have not read. Ask for the form wanted, for example a plain-text summary of \
+         each of six stories, two sentences each, with each link kept. Do not leave it to a \
+         script you write, which can only cut the original down. A processor's answer about a \
+         reference that is no file, such as a fetched page or a run's output, is for no document \
+         and cannot be written anywhere, so save the original to a file first, in the scratch \
+         directory if you were given one: end the run line that made it with `> path`, or \
+         write a fetched page with write_file and contents_ref, and call read_file on the file \
+         for a reference to name in reads. Do not save it with a script that opens the file \
+         itself. Then write the answer over the same file with write_file, and run the \
+         program that sends it with the file's path as an argument, so it reads the body from \
+         the file. Or give the answer's reference to run as stdin_ref, which needs no file. The \
+         recipient and the subject are yours and only the body comes from the processor. Your \
+         final message says what was sent and to whom. Call the text a summary in your final \
+         message only if a processor wrote one."
+    } else {
+        "A summary, a translation, a rewrite, an explanation or a list of the points made of \
+         content you were not shown is written by this tool, because you cannot write it from \
+         what you have not read. Ask for the form wanted, for example a plain-text summary of \
+         each of six stories, two sentences each, with each link kept. Call the text a summary \
+         in your final message only if a processor wrote one."
+    };
+    // What write_file says about where a processor's answer may be written. The route for saving a
+    // page to a file first is in the processor's description and is said there only where this
+    // turn holds `run` (SPAWN-6), so a turn without it is not sent there for a route it lacks.
+    let processor_answer_lands = if running.offered() {
+        "What spawn_processor produced may be written only over the file that call was about; \
+         the spawn_processor description says how to save a page to a file first."
+    } else {
+        "What spawn_processor produced may be written only over the file that call was about."
+    };
     let mut tools = vec![
         Tool::function(
             "read_file",
@@ -372,10 +410,11 @@ fn table(
                     },
                     "contents_ref": {
                         "type": "string",
-                        "description": "A reference whose quarantined content becomes the whole \
-                                        file, e.g. \"ref:2\". This is how to write out something \
-                                        you were never shown, such as what spawn_processor \
-                                        produced."
+                        "description": format!(
+                            "A reference whose quarantined content becomes the whole file, \
+                             e.g. \"ref:2\". This is how to write out something you were never \
+                             shown, such as a fetched page. {processor_answer_lands}"
+                        )
                     }
                 },
                 "required": []
@@ -789,21 +828,24 @@ fn table(
         ),
         Tool::function(
             "spawn_processor",
-            "Transform quarantined content you were not shown. Spawns an isolated model with no \
-             tools, no memory and nothing to read but the references you name; it follows your \
-             instruction and its output is quarantined as a new reference. This is how to \
-             change a file you cannot see: name the file's reference, say what has to be true \
-             of it afterwards, then pass the reference that comes back to write_file as \
-             contents_ref. You are not shown its output either, and nobody reads it before it \
-             is written, so be exact about the shape of the answer: the complete document and \
-             nothing else. What the change should be is its decision, not yours. It reads the \
-             whole document, so it can work out what is wrong and where the fix goes, and leave \
-             a file alone if it turns out not to be the one you are after. Once your context holds \
-             private content, as it does after read_output or vet_content shows you some, after \
-             a delegate reports some, and in a conversation resumed with some, every later \
-             spawn_processor call is refused for the rest of the conversation: what you write \
-             is private from then on, and a processor takes no private instruction. run, \
-             read_output and the file tools keep working.",
+            format!(
+                "Transform quarantined content you were not shown. Spawns an isolated model with \
+                 no tools, no memory and nothing to read but the references you name; it follows \
+                 your instruction and its output is quarantined as a new reference. This is how \
+                 to change a file you cannot see: name the file's reference, say what has to be \
+                 true of it afterwards, then pass the reference that comes back to write_file as \
+                 contents_ref. You are not shown its output either, and nobody reads it before \
+                 it is written, so be exact about the shape of the answer: the complete document \
+                 and nothing else. What the change should be is its decision, not yours. It \
+                 reads the whole document, so it can work out what is wrong and where the fix \
+                 goes, and leave a file alone if it turns out not to be the one you are after. \
+                 {derived_text} Once your context holds private content, as it does after \
+                 read_output or vet_content shows you some, after a delegate reports some, and \
+                 in a conversation resumed with some, every later spawn_processor call is \
+                 refused for the rest of the conversation: what you write is private from then \
+                 on, and a processor takes no private instruction. run, read_output and the file \
+                 tools keep working."
+            ),
             json!({
                 "type": "object",
                 "properties": {
@@ -830,8 +872,10 @@ fn table(
                         "type": "string",
                         "description": "What to do with them and what to produce. Where the \
                                         result is going into a file, ask for the whole document \
-                                        and nothing else: no explanation, no summary, no code \
-                                        fence. Whatever comes back is what gets written. Give \
+                                        and nothing else: no remarks about what it did, no code \
+                                        fence. Where the document is itself a summary, a \
+                                        translation or an explanation, name that form and its \
+                                        length. Whatever comes back is what gets written. Give \
                                         the symptom the user reported and ask for the cause to \
                                         be found; naming a remedy you have not verified makes \
                                         it apply your guess rather than diagnose. Include the \
@@ -884,6 +928,11 @@ fn table(
                 "required": ["query"]
             }),
         ),
+        // ASK-12. The text does not depend on the mode. The four sentences it adds say that a
+        // question costs the user's attention, and name no mode and no place a question goes,
+        // because the planner is told of no mode but plan mode (MODE-3, MODE-8) and nothing about
+        // what decides (AUTO-7). The older clause that the questions are put to the user one at a
+        // time is unchanged.
         Tool::function(
             "ask_user",
             format!(
@@ -892,11 +941,16 @@ fn table(
              scope, which of two plausible files they meant. Never for a fact about this machine. \
              A path, a filename, whether a program is installed, what something is called: go and \
              look with {looking_tools} instead, and note that a quarantined \
-             result does not stop you asking afterwards, so looking first costs you nothing. Ask \
-             everything the plan turns on in one call rather than a question per turn; they are \
-             put to the user one at a time. Offer concrete options where you can; the user may \
-             also answer in their own words or skip a question, and a skipped question is an \
-             answer to work with rather than a reason to ask again."
+             result does not stop you asking afterwards, so looking first costs you nothing. Do \
+             not ask a question whose answer the request states. Do not ask whether to do what \
+             the user asked, or whether to do it automatically, because they asked for it. What \
+             is left to ask is a choice that the request leaves open and that differs in \
+             consequence, such as which of two accounts to send from. Each question you ask \
+             costs the user's attention. Ask everything the plan turns on in one call rather \
+             than a question per turn; they are put to the user one at a time. Offer concrete \
+             options where you can; the user may also answer in their own words or skip a \
+             question, and a skipped question is an answer to work with rather than a reason to \
+             ask again."
             ),
             json!({
                 "type": "object",
@@ -995,8 +1049,14 @@ fn table(
              Output comes back as text you can read where the user has vouched for every \
              command in the line; otherwise it comes back as a reference, like a file you may \
              not read: pass it to read_output to see it, hand it to \
-             spawn_processor, or write it to a file with write_file. Do use it to compile and \
-             test what you changed. \
+             spawn_processor, or write it to a file with write_file. A summary, a translation \
+             or other text made from it is written by spawn_processor, whose description says \
+             how that text reaches a program. Do use it to compile and test what you changed. \
+             \
+             Before asking whether a browser is running, or whether to quit or relaunch it, look \
+             for its debugging port. A browser started with --remote-debugging-port=9222 answers \
+             `curl http://127.0.0.1:9222/json/version`. Ask about quitting or relaunching a \
+             browser only after that probe is refused. \
              \
              A program meant to keep running, such as a server or a watcher, needs \
              background: true. Without it the line is waited on and stopped at its deadline \
@@ -1044,23 +1104,29 @@ fn table(
                                         program reads them as if they had been typed at it, so \
                                         do not also add a '<' redirection to the line, and do \
                                         not use it with background: true. What comes back is \
-                                        quarantined the same way any other run's output is."
+                                        quarantined the same way any other run's output is. A \
+                                        program that sends text, such as a summary a processor \
+                                        wrote, takes its body this way: name the processor's \
+                                        answer here."
                     },
                     "scopes": {
                         "type": "array",
                         "items": { "type": "string", "enum": bravebot_sandbox::scope::Requested::MENU },
-                        "description": "Credential scopes, toolchain lists and `loopback` to add to \
-                                        every stage of this one line, by name from the list \
-                                        given, for a script that runs `gh`, `aws`, `git commit` \
-                                        or a build inside it and so shows no operation of its \
-                                        own. `loopback` lets the line listen on and connect to \
-                                        ports of this machine, which `cargo test` and `sccache` \
-                                        need on macOS. `ssh-key` has the user choose again \
-                                        which ssh key a `git push` offers its owner, after a \
-                                        push was refused for permission. Only where the session \
-                                        is told it accepts them. The user is asked about the line \
-                                        every time with the names shown, and no answer to it is \
-                                        remembered. A name outside the list is an error."
+                        "description": format!(
+                            "Credential scopes, toolchain lists and `loopback` to add to \
+                             every stage of this one line, by name from the list \
+                             given, for a script that runs `gh`, `aws`, `git commit` \
+                             or a build inside it and so shows no operation of its \
+                             own. On macOS `loopback` is for listening on a port of \
+                             this machine, which `cargo test` and `sccache` need. \
+                             {LOOPBACK_CONNECT_RULE} On Linux and Windows `loopback` \
+                             changes nothing. `ssh-key` has the user choose again \
+                             which ssh key a `git push` offers its owner, after a \
+                             push was refused for permission. Only where the session \
+                             is told it accepts them. The user is asked about the line \
+                             every time with the names shown, and no answer to it is \
+                             remembered. A name outside the list is an error."
+                        )
                     },
                     "unconfined": {
                         "type": "boolean",

@@ -857,6 +857,32 @@ mod tests {
         assert_eq!(capability_names(&policy), vec!["internetClient"]);
     }
 
+    /// SANDBOX-3: a container holds the internet capability or does not, and no part of a policy
+    /// reaches the token, the grants or the refusal through `loopback`, so a policy that names it
+    /// is applied or refused exactly as the same policy without it. This pins what the code reads
+    /// and shows nothing about which ports a container can reach. The regression it rejects: a
+    /// backend that gives a request for `loopback` a capability or a grant of its own while the
+    /// record says it changes nothing here.
+    #[test]
+    fn a_policy_granted_loopback_asks_for_what_the_same_policy_without_it_asks_for() {
+        let policies = [
+            a_policy_this_backend_applies(),
+            a_policy_this_backend_applies().allow_network_egress(),
+            a_policy_this_backend_applies().allow_network_egress_only_to(8123),
+        ];
+
+        for plain in policies {
+            let lent = plain.clone().allow_loopback();
+            assert!(lent.allow_loopback && !plain.allow_loopback);
+            assert_eq!(capability_names(&lent), capability_names(&plain));
+            assert_eq!(grants_for(&lent), grants_for(&plain));
+            assert_eq!(
+                refusal_for(&lent).map(|refusal| refusal.to_string()),
+                refusal_for(&plain).map(|refusal| refusal.to_string()),
+            );
+        }
+    }
+
     /// `FILE_WRITE_DATA`, `FILE_APPEND_DATA` and `FILE_WRITE_EA`: the rights that change
     /// what is at a path, as against the ones every grant carries.
     const CHANGES_WHAT_IS_THERE: u32 = 0x0000_0002 | 0x0000_0004 | 0x0000_0010;

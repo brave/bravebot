@@ -30,9 +30,11 @@ size = 42949672960   # 40 GiB
 sccache serves builds from a process listening on `127.0.0.1:4226`. When bravebot runs `cargo`
 under its macOS sandbox, the sandbox refuses that listener and the build fails with
 `sccache: error: Operation not permitted`. The `run` call asks for `scopes: ["loopback"]`, which
-the person approves each time; that lets the line listen on and connect to ports of this machine and
-opens nothing else ([SANDBOX-3](../specs/sandboxing.md#SANDBOX-3)). A `cargo test` whose tests
-bind `127.0.0.1:0` needs the same.
+the person approves each time; that lets the line listen on a port of this machine, and connect to
+one when the line has no network access, and opens nothing else
+([SANDBOX-3](../specs/sandboxing.md#SANDBOX-3)). A line that has network access needs `loopback`
+only to listen, since the request gives it no connect. A `cargo test` whose tests bind
+`127.0.0.1:0` needs the same.
 
 `sccache --show-stats` prints the hit counts and the cap. Leave incremental compilation on: cargo
 applies it only to workspace crates, which this cache does not serve (see below).

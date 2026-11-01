@@ -42,8 +42,11 @@ pub enum Scope {
 pub enum Requested {
     Scope(Scope),
     Toolchain(Toolchain),
-    /// Listening on, and connecting to, a port of this machine's own loopback interface. It
-    /// reaches no other host and no file.
+    /// On macOS, listening on a port of this machine's own loopback interface, and connecting to
+    /// one from a stage that has no network access. A stage that has network access gains no
+    /// connect from it, since it connects without it or is held to a host list's proxy port with
+    /// or without it, so for that stage it adds listening. It reaches no other host and no file.
+    /// Linux and Windows read no such request, so it changes nothing there (SANDBOX-3).
     Loopback,
     /// The person choosing again which ssh key a push offers its owner. It lends nothing and adds
     /// no row: the run prompt numbers the keys ssh could offer even for an owner already chosen

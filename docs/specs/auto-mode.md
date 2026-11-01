@@ -82,6 +82,8 @@ a file, nor for the host a redirect led to ([FETCH-4](tools/fetch-url.md#FETCH-4
 only in auto, only in a turn of a session the person has typed to, and not for a delegate, whose task
 is a sentence the driver composed. Where it is not consulted the question goes to the confirmer
 behind the mode.
+Any name in `scopes` also keeps a run from it, whether a toolchain list, `loopback` or `ssh-key`,
+including one that lends the line nothing it needs ([SANDBOX-26](sandboxing.md#SANDBOX-26)).
 
 **Why.** The classifier is shown the words of the line and not the binary they resolve to, which can
 be a file in the tree. The sandbox is what holds the line to those words. The prompts it may answer
@@ -93,6 +95,7 @@ person could approve the field alone ([RUN-2](tools/run.md#RUN-2), [FETCH-2](too
 `verified-by: bravebot_agent::turn::a_run_with_nothing_to_hold_it_is_not_put_to_the_classifier`
 `verified-by: bravebot_agent::turn::no_mode_but_auto_consults_the_classifier`
 `verified-by: bravebot_agent::turn::a_run_with_a_scope_a_reference_or_a_private_release_is_not_put_to_the_classifier`
+`verified-by: bravebot_agent::turn::in_auto_a_line_that_only_connects_to_a_local_port_needs_no_loopback_and_one_that_asks_goes_to_the_person`
 
 <a id="AUTO-4"></a>
 ### AUTO-4: the classifier answers no question that a mode may not answer, and none whose bytes can derive from untrusted content

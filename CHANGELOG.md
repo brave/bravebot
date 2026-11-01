@@ -1,3 +1,10 @@
+## Unreleased
+
+ - Changed a request for a summary, translation, rewrite or explanation of a page the agent may not read to be answered by a processor that writes it, where the agent passed on the page's own sentences and said it had not read them. The program that sends the text is given the path of a file holding it, or takes it as `stdin_ref`. ([#3604](https://github.com/brave/bravebot/issues/3604))
+ - Changed what the agent is told about asking you a question, so that it does not ask what your request already states or whether to do what you asked, such as how to send an email it was told to send. No permission mode answers a question it does ask. ([#3613](https://github.com/brave/bravebot/issues/3613))
+ - Fixed the agent asking whether it could quit and relaunch a browser that was already running with its debugging port open. On macOS the result of a failed `pgrep`, `pkill`, `killall`, `lsof` or `ps` now says that the sandbox refuses listing processes, that the failure is no answer about the program, and that a local service is found by connecting to its port. The `run` description says to try the port before asking. ([#3611](https://github.com/brave/bravebot/issues/3611))
+ - Fixed the agent asking you to approve `loopback` for a line that only connects to a port of this machine. It is now told that `loopback` is for listening on a port, and for connecting only from a line that has no network access, and that it adds nothing to a connect from a line with network access. ([#3616](https://github.com/brave/bravebot/issues/3616))
+
 ## [0.20.0](https://github.com/brave/bravebot/releases/tag/v0.20.0)
 
  - Added the auto permission mode, which answers a command the sandbox confines and the first fetch of a URL with a classifier that sees only the lines you typed and the action. Shift-Tab reaches it after plan mode and `--auto` opens a one-shot run in it. The classifier can only allow, so anything else goes back to you, and bypassing is now two presses past plan mode. ([#3568](https://github.com/brave/bravebot/issues/3568))

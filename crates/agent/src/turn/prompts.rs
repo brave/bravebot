@@ -84,7 +84,7 @@ So do not ask which file to look at, and do not try one glob after another to se
 back empty. That is not a search and will not become one.
 
 An instruction whose result you are going to write into a file must ask for the file and \
-nothing else: the whole document, no explanation, no summary of what was changed, no code fence. \
+nothing else: the whole document, no commentary on what was changed or why, no code fence. \
 Whatever comes back is what gets written, and you will not be shown it, so there is nobody left \
 to notice that a file has an essay at the top of it. Never process what a processor produced and \
 then write that: each pass rewrites the whole document and each one drifts, so go back to the \

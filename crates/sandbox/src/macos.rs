@@ -991,6 +991,68 @@ int main(void) {
         let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
     }
 
+    /// `curl` confined by `policy`, fetching from `port` on this machine.
+    ///
+    /// An address, so no resolver is involved, and stdout is discarded, so curl needs no file to
+    /// write the body to. The proxy is refused in the argument vector because the environment here
+    /// is this process's own: a machine whose shell exports `http_proxy` would otherwise have a
+    /// test measure a connection to somewhere else.
+    fn curl_a_local_port(
+        sandbox: &SeatbeltSandbox,
+        port: u16,
+        policy: &SandboxPolicy,
+    ) -> ConfinedChild {
+        let args: Vec<OsString> = [
+            "-s",
+            "--noproxy",
+            "*",
+            "-m",
+            "5",
+            &format!("http://127.0.0.1:{port}/"),
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+        sandbox
+            .spawn(
+                OsStr::new("/usr/bin/curl"),
+                &args,
+                policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn")
+    }
+
+    /// Whether a process confined by `policy` listens on a port of this machine: `nc` is started
+    /// on a free port and this process is the client, so a connection arrives only where `nc` is
+    /// bound.
+    fn listens_under(sandbox: &SeatbeltSandbox, policy: &SandboxPolicy) -> bool {
+        let port = {
+            let probe = TcpListener::bind("127.0.0.1:0").expect("a free loopback port");
+            probe.local_addr().expect("the bound address").port()
+        };
+        let args: Vec<OsString> = ["-l", "-w", "4", "127.0.0.1", &port.to_string()]
+            .iter()
+            .map(OsString::from)
+            .collect();
+        let mut child = sandbox
+            .spawn(
+                OsStr::new("/usr/bin/nc"),
+                &args,
+                policy,
+                nothing_attached(),
+                Environment::Inherited,
+            )
+            .expect("should spawn");
+        let reached = (0..30).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
+        });
+        let _ = child.wait();
+        reached
+    }
+
     #[test]
     fn a_strict_profile_denies_by_default() {
         let profile = SeatbeltSandbox::profile(&SandboxPolicy::strict());
@@ -1930,34 +1992,7 @@ int main(int argc, char **argv) {
             .allow_read("/Library");
         let permitted = denied.clone().allow_network_egress();
 
-        // An address, so no resolver is involved, and stdout is discarded, so curl needs no file
-        // to write the body to. The proxy is refused in the argument vector because the
-        // environment here is this process's own: a machine whose shell exports `http_proxy`
-        // would otherwise have both halves of this test measure a connection to somewhere else.
-        let curl = |policy: &SandboxPolicy| {
-            let args: Vec<OsString> = [
-                "-s",
-                "--noproxy",
-                "*",
-                "-m",
-                "5",
-                &format!("http://127.0.0.1:{port}/"),
-            ]
-            .iter()
-            .map(OsString::from)
-            .collect();
-            sandbox
-                .spawn(
-                    OsStr::new("/usr/bin/curl"),
-                    &args,
-                    policy,
-                    nothing_attached(),
-                    Environment::Inherited,
-                )
-                .expect("should spawn")
-        };
-
-        let mut reaching = curl(&permitted);
+        let mut reaching = curl_a_local_port(&sandbox, port, &permitted);
         answer_one(&listener);
         assert_eq!(
             reaching.wait().expect("should wait").code(),
@@ -1965,7 +2000,7 @@ int main(int argc, char **argv) {
             "a permitted process could not reach the listener, so nothing below means anything"
         );
 
-        let mut refused = curl(&denied);
+        let mut refused = curl_a_local_port(&sandbox, port, &denied);
         assert_eq!(
             refused.wait().expect("should wait").code(),
             Some(CURL_COULDNT_CONNECT),
@@ -1991,30 +2026,8 @@ int main(int argc, char **argv) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port to connect to");
         let port = listener.local_addr().expect("the bound address").port();
         let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
-        let curl = |policy: &SandboxPolicy| {
-            let args: Vec<OsString> = [
-                "-s",
-                "--noproxy",
-                "*",
-                "-m",
-                "5",
-                &format!("http://127.0.0.1:{port}/"),
-            ]
-            .iter()
-            .map(OsString::from)
-            .collect();
-            sandbox
-                .spawn(
-                    OsStr::new("/usr/bin/curl"),
-                    &args,
-                    policy,
-                    nothing_attached(),
-                    Environment::Inherited,
-                )
-                .expect("should spawn")
-        };
-
-        let mut reaching = curl(&reads_the_system_only().allow_loopback());
+        let mut reaching =
+            curl_a_local_port(&sandbox, port, &reads_the_system_only().allow_loopback());
         answer_one(&listener);
         assert_eq!(
             reaching.wait().expect("should wait").code(),
@@ -2022,7 +2035,7 @@ int main(int argc, char **argv) {
             "a process granted loopback could not reach the listener"
         );
 
-        let mut refused = curl(&reads_the_system_only());
+        let mut refused = curl_a_local_port(&sandbox, port, &reads_the_system_only());
         assert_eq!(
             refused.wait().expect("should wait").code(),
             Some(CURL_COULDNT_CONNECT),
@@ -2036,39 +2049,99 @@ int main(int argc, char **argv) {
     #[test]
     fn a_process_granted_loopback_can_listen_and_one_without_it_cannot() {
         let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
-        let listens_on = |policy: &SandboxPolicy| -> bool {
-            let port = {
-                let probe = TcpListener::bind("127.0.0.1:0").expect("a free loopback port");
-                probe.local_addr().expect("the bound address").port()
-            };
-            let args: Vec<OsString> = ["-l", "-w", "4", "127.0.0.1", &port.to_string()]
-                .iter()
-                .map(OsString::from)
-                .collect();
-            let mut child = sandbox
-                .spawn(
-                    OsStr::new("/usr/bin/nc"),
-                    &args,
-                    policy,
-                    nothing_attached(),
-                    Environment::Inherited,
-                )
-                .expect("should spawn");
-            let reached = (0..30).any(|_| {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
-            });
-            let _ = child.wait();
-            reached
-        };
 
         assert!(
-            listens_on(&reads_the_system_only().allow_loopback()),
+            listens_under(&sandbox, &reads_the_system_only().allow_loopback()),
             "nothing listened, so the refusal below says nothing"
         );
         assert!(
-            !listens_on(&reads_the_system_only()),
+            !listens_under(&sandbox, &reads_the_system_only()),
             "a process without the grant bound a port"
+        );
+    }
+
+    /// SANDBOX-3: with the network open a connect to a port of this machine needs no `loopback`,
+    /// because the egress row matches the loopback address, and with the network closed it needs
+    /// `loopback`. Each row differs from a neighbour by one grant: the network separates the open
+    /// row from the closed one without `loopback`, and `loopback` separates the closed rows. The
+    /// open row granted `loopback` shows the grant adds nothing to a connect that already works.
+    ///
+    /// Every row has a listener this test holds. A row that connects is answered, so curl exits 0
+    /// only by connecting; the row that cannot is held to the exit curl gives a connection it was
+    /// refused and to a listener that saw nothing. The port has a listener, so the sandbox is what
+    /// stopped the connection.
+    #[test]
+    fn an_open_network_connects_to_a_local_port_without_loopback_and_a_closed_one_needs_it() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let rows = [
+            (
+                "an open network and no loopback",
+                reads_the_system_only().allow_network_egress(),
+                true,
+            ),
+            (
+                "an open network and loopback",
+                reads_the_system_only()
+                    .allow_network_egress()
+                    .allow_loopback(),
+                true,
+            ),
+            (
+                "a closed network and loopback",
+                reads_the_system_only().allow_loopback(),
+                true,
+            ),
+            (
+                "a closed network and no loopback",
+                reads_the_system_only(),
+                false,
+            ),
+        ];
+
+        for (grants, policy, connects) in rows {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port to connect to");
+            let port = listener.local_addr().expect("the bound address").port();
+            let mut curl = curl_a_local_port(&sandbox, port, &policy);
+            if connects {
+                answer_one(&listener);
+                assert_eq!(
+                    curl.wait().expect("should wait").code(),
+                    Some(0),
+                    "a process with {grants} could not connect to a local port"
+                );
+            } else {
+                assert_eq!(
+                    curl.wait().expect("should wait").code(),
+                    Some(CURL_COULDNT_CONNECT),
+                    "the connection was not what failed, so this says nothing about {grants}"
+                );
+                listener
+                    .set_nonblocking(true)
+                    .expect("the listener can be polled");
+                assert!(
+                    listener.accept().is_err(),
+                    "a process with {grants} reached the listener"
+                );
+            }
+        }
+    }
+
+    /// SANDBOX-3: an open network does not let a process listen on a port of this machine, and
+    /// `loopback` does. Egress is `network-outbound` and listening is `network-inbound`. The two
+    /// policies differ by `loopback` alone, so the control that listens shows `nc` runs and binds
+    /// under the open network, and the refusal is the missing grant.
+    #[test]
+    fn a_process_with_an_open_network_listens_only_when_granted_loopback() {
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        let open = reads_the_system_only().allow_network_egress();
+
+        assert!(
+            listens_under(&sandbox, &open.clone().allow_loopback()),
+            "nothing listened, so the refusal below says nothing"
+        );
+        assert!(
+            !listens_under(&sandbox, &open),
+            "a process with an open network and no loopback bound a port"
         );
     }
 
@@ -2825,6 +2898,161 @@ int main(int argc, char **argv) {
             );
         }
 
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// SANDBOX-8: a program confined by either base cannot list the other processes of the machine,
+    /// so `pgrep`, `pkill`, `killall`, `lsof` and `ps` each fail with a live process to find, and
+    /// the failure says nothing about whether the program it looked for is running. The two bases
+    /// are `base`, which reads only the rows the platform names, and `run_base`, which reads the
+    /// whole machine and is what a `run` stage is given, so a line is run under each.
+    ///
+    /// They fail for different reasons, so loosening one rule frees one of the five:
+    /// `pgrep` and `pkill` look up the `com.apple.sysmond` service, which neither base names;
+    /// `killall` reads the process table through a sysctl neither base names; `lsof` needs the
+    /// process-info refusal lifted; and `ps` is not started at all, because `sandbox-exec` cannot
+    /// start a setuid platform program under any profile (it exits 71). Each line is first run
+    /// outside any sandbox, where it exits as the table says and, when it prints, names the live
+    /// process, so a failure under a base is the base's and a line that never found anything is
+    /// ruled out. A program looking for a name nothing runs under exits 1 outside and 3 under each
+    /// base, which is the refusal.
+    ///
+    /// The faults it rejects are a rule that lets one of the five list processes under
+    /// `run_base` alone, which is the policy a `run` gets and the one the sentence after a failed
+    /// step is about, and a line that exits as expected under one base and is never run under the
+    /// other.
+    #[test]
+    fn process_listing_programs_fail_under_both_bases_whether_or_not_what_they_seek_runs() {
+        let (scratch, home, temporary) =
+            a_home_and_a_temporary_directory("bravebot-sandbox-base-lists-processes");
+        let prelude = crate::base::Prelude::MacOs;
+        let policies = [
+            (
+                "the base",
+                crate::base::base(prelude, &temporary, None, Some(&home)),
+            ),
+            (
+                "the run base",
+                crate::base::run_base(prelude, &temporary, Some(&home)),
+            ),
+        ];
+        let mut live = Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("a process to look for starts");
+        let pid = live.id().to_string();
+        let absent = "bravebot-no-such-program";
+
+        /// One line to run, and what it does outside any sandbox and under the base.
+        struct Listing<'a> {
+            program: &'a str,
+            arguments: Vec<&'a str>,
+            /// The exit outside any sandbox.
+            outside: i32,
+            /// The exit under the base, where it is a particular one. `None` is any failure.
+            under_the_base: Option<i32>,
+            /// Whether the program prints the live process when it lists.
+            names_the_process: bool,
+        }
+        let listing = |program, arguments, outside, under_the_base, names_the_process| Listing {
+            program,
+            arguments,
+            outside,
+            under_the_base,
+            names_the_process,
+        };
+        let pid = pid.as_str();
+        let lines = [
+            listing("/usr/bin/pgrep", vec!["-x", "sleep"], 0, Some(3), true),
+            listing("/usr/bin/pgrep", vec!["-x", absent], 1, Some(3), false),
+            listing(
+                "/usr/bin/pkill",
+                vec!["-0", "-x", "sleep"],
+                0,
+                Some(3),
+                false,
+            ),
+            listing(
+                "/usr/bin/pkill",
+                vec!["-0", "-x", absent],
+                1,
+                Some(3),
+                false,
+            ),
+            listing("/usr/bin/killall", vec!["-s", "sleep"], 0, None, true),
+            listing(
+                "/usr/sbin/lsof",
+                vec!["-a", "-nP", "-p", pid, "-d", "cwd"],
+                0,
+                None,
+                true,
+            ),
+            listing("/bin/ps", vec!["-p", pid], 0, None, true),
+        ];
+
+        let sandbox = SeatbeltSandbox::new().expect("sandbox-exec is present on macOS");
+        for Listing {
+            program,
+            arguments,
+            outside,
+            under_the_base,
+            names_the_process,
+        } in lines
+        {
+            let line = format!("{program} {}", arguments.join(" "));
+            let free = Command::new(program)
+                .args(&arguments)
+                .output()
+                .expect("the program starts outside any sandbox");
+            assert_eq!(
+                free.status.code(),
+                Some(outside),
+                "`{line}` did not exit as expected outside the sandbox, so nothing below means anything"
+            );
+            assert!(
+                !names_the_process || String::from_utf8_lossy(&free.stdout).contains(pid),
+                "`{line}` did not name the live process outside the sandbox"
+            );
+
+            let arguments: Vec<OsString> = arguments.iter().map(OsString::from).collect();
+            for (base, policy) in &policies {
+                let mut confined = sandbox
+                    .spawn(
+                        OsStr::new(program),
+                        &arguments,
+                        policy,
+                        crate::process::Streams {
+                            stdin: crate::process::Stream::Null,
+                            stdout: crate::process::Stream::Piped,
+                            stderr: crate::process::Stream::Null,
+                        },
+                        Environment::Only(a_stage_for(&home)),
+                    )
+                    .expect("should spawn");
+                let mut printed = Vec::new();
+                confined
+                    .take_stdout()
+                    .expect("the stdout of a process started with a pipe for it")
+                    .read_to_end(&mut printed)
+                    .expect("the confined process's stdout is readable");
+                let code = confined.wait().expect("should wait").code();
+
+                match under_the_base {
+                    Some(refused) => assert_eq!(code, Some(refused), "`{line}` under {base}"),
+                    None => assert!(
+                        code.is_some_and(|code| code != 0),
+                        "`{line}` listed processes under {base}"
+                    ),
+                }
+                assert!(
+                    !String::from_utf8_lossy(&printed).contains(pid),
+                    "`{line}` named a process under {base}"
+                );
+            }
+        }
+
+        let _ = live.kill();
+        let _ = live.wait();
         let _ = std::fs::remove_dir_all(&scratch);
     }
 

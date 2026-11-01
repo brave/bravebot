@@ -1473,8 +1473,17 @@ impl Confinement {
             }
             _ => "",
         };
+        let listing = match self.prelude {
+            Prelude::MacOs if steps.iter().any(|step| lists_processes(&step.resolved)) => {
+                match self.names_requests() {
+                    true => format!("{MACOS_PROCESS_LISTING_SENTENCE} {LOOPBACK_CONNECT_RULE}"),
+                    false => MACOS_PROCESS_LISTING_SENTENCE.to_string(),
+                }
+            }
+            _ => String::new(),
+        };
         format!(
-            "{}{source}{refusal}{}{commit}{git}{launch}{}",
+            "{}{source}{refusal}{}{commit}{git}{launch}{listing}{}",
             self.reach(steps),
             self.identity_sentence(steps, unconfined_offered, environment),
             credential_locations_sentence(self.mode, self.requests_offered),
@@ -1708,12 +1717,12 @@ impl Confinement {
             ),
             None => network,
         };
-        let network = match loopback {
-            true => format!(
-                "{network}; a step that asked for `loopback` could listen on and connect to this \
-                 machine's own ports"
-            ),
-            false => network,
+        let network = match loopback
+            .then(|| loopback_reach(self.prelude, self.network(), self.hosts.is_some()))
+            .flatten()
+        {
+            Some(reach) => format!("{network}; {reach}"),
+            None => network,
         };
         // The count of each list and never an entry: a path a person wrote is not text this line
         // has any use for repeating to the planner, and a glob's matches are the machine's.
@@ -1797,10 +1806,16 @@ impl Confinement {
     ///
     /// The same words follow every failure of the line, the exit code not among its inputs.
     fn menu_sentence(&self) -> String {
-        match self.requests_offered && self.accepts_requests() {
+        match self.names_requests() {
             true => format!(" {}", requests_menu_sentence(self.mode)),
             false => String::new(),
         }
+    }
+
+    /// Whether a sentence may name a `scopes` argument or a `request_path` call: the session would
+    /// accept one and names a home to apply it under.
+    fn names_requests(&self) -> bool {
+        self.requests_offered && self.accepts_requests()
     }
 
     /// The first session directory that is or lies inside a credential location, or on Windows
@@ -2107,8 +2122,8 @@ impl Container {
 /// The `off` mode says nothing either, for the same reason: the programs have no boundary to state.
 ///
 /// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
-/// Where it would not, the description names neither and says which routes the person has instead
-/// (SANDBOX-19).
+/// Where it would not, the description names neither, does not tell the planner on macOS to ask for
+/// `loopback`, and says which routes the person has instead (SANDBOX-19).
 pub fn stated_to_the_planner(
     confine_runs: bool,
     mode: SandboxMode,
@@ -2241,7 +2256,8 @@ fn credential_locations_sentence(mode: SandboxMode, requests_offered: bool) -> C
     }
 }
 
-/// Said to the planner on macOS, whose profile refuses a listening socket that no line asked for.
+/// Said to the planner on macOS, whose profile refuses a listening socket that no line asked for,
+/// in the description where the session accepts a `scopes` argument.
 const MACOS_LISTENING_SENTENCE: &str = " On macOS a program cannot listen on a port of this \
      machine unless its line asks for `loopback`, so `cargo test` on a crate whose tests bind \
      `127.0.0.1:0`, and any build through `sccache`, fail with `Operation not permitted` without \
@@ -2274,6 +2290,23 @@ const MACOS_LAUNCH_UNCONFINED_SENTENCE: &str = " On macOS the default profile re
 /// LaunchServices or Apple Events to act for the caller. Decided from the compiled step alone.
 fn launches_applications(resolved: &Path) -> bool {
     [OsStr::new("open"), OsStr::new("osascript")]
+        .contains(&resolved.file_name().unwrap_or_default())
+}
+
+/// Said after a failed step on macOS when a step runs a program that lists processes, which the
+/// profile refuses (SANDBOX-8). The programs fail for different reasons, so it says that the
+/// sandbox refuses listing processes and does not name the rule that does it.
+const MACOS_PROCESS_LISTING_SENTENCE: &str = " On macOS the sandbox refuses listing processes, so \
+     `pgrep`, `pkill`, `killall`, `lsof` and `ps` fail whether or not the program they look for \
+     is running, and that failure is not an answer about the program. A local service is found by \
+     connecting to its port instead, such as `curl http://127.0.0.1:9222/json/version` for a \
+     browser started with --remote-debugging-port=9222.";
+
+/// Whether the file a step resolved to is one of the programs [`MACOS_PROCESS_LISTING_SENTENCE`]
+/// names. Decided from the compiled step alone, as [`launches_applications`] is.
+fn lists_processes(resolved: &Path) -> bool {
+    ["pgrep", "pkill", "killall", "lsof", "ps"]
+        .map(OsStr::new)
         .contains(&resolved.file_name().unwrap_or_default())
 }
 
@@ -2317,9 +2350,49 @@ const TRUSTED_DIRECTORY_LINE_SENTENCE: &str = " In a directory the person truste
      put to the person when it runs with no sandbox.";
 
 /// Said after the closed network on macOS, where loopback is also how a line connects to a port of
-/// this machine.
+/// this machine, in the description where the session accepts a `scopes` argument.
 const MACOS_CLOSED_LOOPBACK_SENTENCE: &str =
     " A line that asks for `loopback` may still connect to a port of this machine.";
+
+/// When a macOS line needs `loopback` to connect to a port of this machine, in the `run`
+/// description's `scopes` entry and in the confinement paragraph of the description. Every other
+/// text that says when it is needed to connect uses these words, so the planner reads one rule.
+///
+/// True under every network setting and host list, which the description does not know: the
+/// profile's egress already reaches a local port, and a stage held to a host list's proxy gets
+/// listening from `loopback` and no port to connect to.
+pub(crate) const LOOPBACK_CONNECT_RULE: &str = "Ask for `loopback` to connect to a port of this \
+     machine only from a line that has no network access: it adds nothing to a connect from a \
+     line that has network access, so do not ask for it there.";
+
+/// What a step that asked for `loopback` could do, said in the paragraph after a failed step, or
+/// `None` where the platform does nothing with the request, as Linux and Windows do.
+///
+/// Chosen from the platform, the network in force and whether a host list holds the stages that
+/// have network access, which the paragraph knows and the description does not. It names listening
+/// wherever the platform acts on the request. It names connecting where the request is how a step
+/// connects, which is a step with no network access. With a closed network and no host list
+/// every step connects. With a closed network and a host list a step that has network access is
+/// held to the proxy's port and a step that has none is not held to a proxy, so the connecting is
+/// said of a step with no network access. With an open network no step has none: without a host
+/// list every step connects without the request, and with one every step is held to the proxy's
+/// port, so it says listening alone ([`LOOPBACK_CONNECT_RULE`]).
+fn loopback_reach(prelude: Prelude, network: Network, hosts_set: bool) -> Option<&'static str> {
+    match (prelude, network, hosts_set) {
+        (Prelude::MacOs, Network::Closed, false) => Some(
+            "a step that asked for `loopback` could listen on and connect to this machine's own \
+             ports",
+        ),
+        (Prelude::MacOs, Network::Closed, true) => Some(
+            "a step that asked for `loopback` could listen on this machine's own ports, and \
+             connect to them if it has no network access",
+        ),
+        (Prelude::MacOs, Network::Open, _) => {
+            Some("a step that asked for `loopback` could listen on this machine's own ports")
+        }
+        (Prelude::Linux | Prelude::Windows, _, _) => None,
+    }
+}
 
 /// Said to the planner whenever a step carries the signing scope, so that a signature that fails
 /// for want of a key can be told from one the scope never reached. Fixed text: it does not depend
@@ -2587,8 +2660,14 @@ fn stated(
             false => said.push_str(&requests_refused_sentence(mode)),
         }
     }
+    // The three sentences that ask for `loopback` are said where `run` accepts a `scopes`
+    // argument, and nowhere the description says it accepts none.
     if prelude == Some(Prelude::MacOs) {
-        said.push_str(MACOS_LISTENING_SENTENCE);
+        if requests_offered {
+            said.push_str(MACOS_LISTENING_SENTENCE);
+            said.push(' ');
+            said.push_str(LOOPBACK_CONNECT_RULE);
+        }
         said.push_str(macos_git_sentence(mode));
     }
     if prelude.is_some() && mode == SandboxMode::ReadOnly {
@@ -2599,7 +2678,7 @@ fn stated(
              or a host that does not resolve was stopped by the sandbox, so do not retry it; \
              choosing another sandbox mode lets a program reach a remote.",
         );
-        if prelude == Some(Prelude::MacOs) {
+        if prelude == Some(Prelude::MacOs) && requests_offered {
             said.push_str(MACOS_CLOSED_LOOPBACK_SENTENCE);
         }
     } else if prelude.is_some() && network.is_closed() {
@@ -2609,7 +2688,7 @@ fn stated(
              command that names a remote credential scope. A connection refused or a host that \
              does not resolve for any other program was stopped by the sandbox.",
         );
-        if prelude == Some(Prelude::MacOs) {
+        if prelude == Some(Prelude::MacOs) && requests_offered {
             said.push_str(MACOS_CLOSED_LOOPBACK_SENTENCE);
         }
     } else if prelude == Some(Prelude::MacOs) {
@@ -5276,7 +5355,10 @@ mod tests {
     /// SANDBOX-3, SANDBOX-26: a requested `loopback` lends loopback to a stage and nothing else:
     /// not the network, which a closed session keeps from it, and not to a stage with a
     /// `NAME=value` in front of it. The controls are the same stage with no request, which has
-    /// none of it.
+    /// none of it. Under a host list the stage is still held to no proxy, since the list holds the
+    /// stages that have network access, so the grant is what lets it connect to a port of this
+    /// machine on macOS (SANDBOX-3). The fault it rejects is a host list that gives that stage a
+    /// proxy and so leaves it the proxy's port alone.
     #[test]
     fn a_requested_loopback_lends_loopback_and_no_network() {
         let plain = step("/bin/sh", &["-c", "cargo test"]);
@@ -5287,6 +5369,8 @@ mod tests {
             .with_network(Network::Closed);
         let work = Path::new("/work/project");
 
+        // Only macOS acts on the request, so only its failure paragraph says what a step that
+        // asked could do; this confinement is Windows and says nothing of it.
         let told = "a step that asked for `loopback` could listen on and connect to this machine's \
                     own ports";
         let none = closed.policy(&plain, work, &[]);
@@ -5298,9 +5382,21 @@ mod tests {
         assert!(lent.allow_loopback);
         assert!(!lent.allow_network, "loopback opened the network");
         assert!(!asked.egress(&plain), "loopback is not a reason for egress");
+        let listed = asked
+            .clone()
+            .with_hosts(Some(&hosts_listing(Some(&["a.example"]))));
+        assert!(listed.host_proxy(&plain).unwrap().is_none());
+        assert!(listed.policy(&plain, work, &[]).allow_loopback);
         assert!(!asked.policy(&assigned, work, &[]).allow_loopback);
-        assert!(asked.profile(&[&plain]).contains(told));
-        assert!(!asked.profile(&[&assigned]).contains(told));
+        assert!(!asked.profile(&[&plain]).contains("a step that asked for"));
+
+        let macos = reading_confinement(Prelude::MacOs, &["/work/project"])
+            .with_mode(SandboxMode::Strict)
+            .with_network(Network::Closed);
+        assert!(!macos.profile(&[&plain]).contains(told));
+        let macos = macos.with_requested(&[Requested::Loopback]);
+        assert!(macos.profile(&[&plain]).contains(told));
+        assert!(!macos.profile(&[&assigned]).contains(told));
         assert_eq!(
             asked.network_for_the_trail(&[&plain]),
             Some("the network was closed for every stage of this run".to_string())
@@ -5350,7 +5446,10 @@ mod tests {
 
     /// SANDBOX-3: the planner is told on macOS, where the profile refuses a listening socket, that
     /// a line needs `loopback` for one, and is not told it elsewhere, where nothing is refused.
-    /// Only a closed network adds that `loopback` also reaches a port of this machine.
+    /// Only a closed network adds that `loopback` also reaches a port of this machine. An open one
+    /// is told the rule that a line with network access does not ask for it to connect, so a
+    /// planner that only connects to a local port does not ask for a scope it is put a question
+    /// for every time. A session that accepts no request is told none of it.
     #[test]
     fn the_planner_is_told_on_macos_that_listening_needs_loopback() {
         let on = |prelude| {
@@ -5365,6 +5464,9 @@ mod tests {
         };
         assert!(on(Prelude::MacOs).contains("unless its line asks for `loopback`"));
         assert!(!on(Prelude::Linux).contains("unless its line asks for `loopback`"));
+        assert!(on(Prelude::MacOs).contains(LOOPBACK_CONNECT_RULE));
+        assert!(!on(Prelude::Linux).contains(LOOPBACK_CONNECT_RULE));
+        assert!(!on(Prelude::Windows).contains(LOOPBACK_CONNECT_RULE));
 
         let closed = |prelude| {
             stated(
@@ -5377,8 +5479,238 @@ mod tests {
             .expect("says something")
         };
         assert!(closed(Prelude::MacOs).ends_with(MACOS_CLOSED_LOOPBACK_SENTENCE));
+        assert!(closed(Prelude::MacOs).contains(LOOPBACK_CONNECT_RULE));
         assert!(!on(Prelude::MacOs).contains(MACOS_CLOSED_LOOPBACK_SENTENCE));
         assert!(!closed(Prelude::Linux).contains(MACOS_CLOSED_LOOPBACK_SENTENCE));
+
+        // Where the session accepts no `scopes` argument there is no scope to ask for, so the
+        // description does not tell the planner to.
+        for network in [Network::Open, Network::Closed] {
+            let refused = stated(
+                true,
+                Some(Prelude::MacOs),
+                network,
+                SandboxMode::WorkspaceWrite,
+                false,
+            )
+            .expect("says something");
+            assert!(!refused.contains("loopback"), "{network:?}: {refused}");
+        }
+    }
+
+    /// What a request for `loopback` is the reason a step can do, as `(listens, connects)`, from
+    /// the tests of the sandbox (SANDBOX-3), for the combinations where the text can say it of
+    /// some step it covers. On macOS it is the reason a step listens
+    /// (`a_process_with_an_open_network_listens_only_when_granted_loopback`), and the reason a
+    /// step with no network access connects
+    /// (`an_open_network_connects_to_a_local_port_without_loopback_and_a_closed_one_needs_it`).
+    /// A closed network leaves steps with no network access, with or without a host list, because
+    /// a host list holds only the steps that have network access to the proxy
+    /// (`only_a_stage_with_egress_is_pointed_at_the_proxy_and_only_under_a_list`). An open network
+    /// leaves none: every step connects without the request, or is held to the proxy's port and
+    /// listens and reaches no other local port
+    /// (`a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port`). Linux and
+    /// Windows do nothing with it
+    /// (`a_requested_loopback_reaches_a_listener_from_a_closed_network_on_macos_only`,
+    /// `a_policy_granted_loopback_asks_for_what_the_same_policy_without_it_asks_for`).
+    ///
+    /// Written from the platform and the network in force, which with the host list are the inputs
+    /// the planner's text is chosen from, and read off the sandbox tests, never off that text. The
+    /// host list is not an input here because it changes which steps are held to the proxy, and
+    /// leaves a step with no network access able to connect.
+    fn loopback_is_the_reason_a_step(prelude: Prelude, closed: bool) -> (bool, bool) {
+        match prelude {
+            Prelude::MacOs => (true, closed),
+            Prelude::Linux | Prelude::Windows => (false, false),
+        }
+    }
+
+    /// What `after` holds that `before` does not, where `after` is `before` with one piece
+    /// inserted.
+    fn inserted<'a>(before: &str, after: &'a str) -> &'a str {
+        let prefix = before
+            .bytes()
+            .zip(after.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let suffix = before
+            .bytes()
+            .rev()
+            .zip(after.bytes().rev())
+            .take(before.len() - prefix)
+            .take_while(|(a, b)| a == b)
+            .count();
+        &after[prefix..after.len() - suffix]
+    }
+
+    /// SANDBOX-3, SANDBOX-19, SANDBOX-26: whatever the platform, the network and the host list, no
+    /// text the planner reads about `loopback` names an ability the backend does not give. That
+    /// is the `scopes` entry of the `run` description, the confinement paragraph of that
+    /// description, and the paragraph after a failed step that asked for `loopback`.
+    ///
+    /// The regressions it rejects: the old claim that `loopback` lets a line "listen on and
+    /// connect to" this machine, said on every platform and for an open network, which sends a
+    /// planner that only connects to ask for it, put the person a question every time and keeps
+    /// the line from the auto-mode classifier; the failure paragraph saying it where a host list
+    /// or Linux or Windows gives no connect; and the connect saying nothing where a closed network
+    /// needs `loopback` for it.
+    ///
+    /// The description is also read where the session accepts no request, and names `loopback`
+    /// nowhere there, since it says in the same text that `run` accepts no `scopes` argument. It
+    /// differs from the description of a session that accepts requests only by the menu sentence
+    /// becoming the refusal and by the three sentences that ask for `loopback`. The fault it
+    /// rejects is a macOS description that tells a planner to ask for a scope the session refuses.
+    #[test]
+    fn the_planner_is_told_of_loopback_only_what_the_sandbox_does_on_its_platform() {
+        let scopes = crate::tools::available(
+            crate::tools::Scheduling::ArrangingALook,
+            crate::watch::Arming::Allowed { free: 1 },
+            crate::exec::Deadlines::BUILT_IN,
+            crate::tools::Running::Offered,
+        )
+        .into_iter()
+        .find(|tool| tool.function.name == "run")
+        .and_then(|run| {
+            // Only the `scopes` entry names `loopback`, as the menu word. The probe sentence in
+            // the base text says nothing of a scope.
+            assert!(!run.function.description.contains("loopback"));
+            run.function.parameters["properties"]["scopes"]["description"]
+                .as_str()
+                .map(str::to_string)
+        })
+        .expect("run has a scopes entry that says what it is for");
+
+        // The entry is read on every platform, so what it says of an ability is said of macOS.
+        let macos_at = scopes
+            .find("On macOS")
+            .expect("names the platform it acts on");
+        assert!(
+            scopes.find("listen").is_some_and(|at| at > macos_at),
+            "{scopes}"
+        );
+        assert!(
+            scopes.find("connect to").is_some_and(|at| at > macos_at),
+            "{scopes}"
+        );
+        assert!(scopes.contains(LOOPBACK_CONNECT_RULE), "{scopes}");
+        // Every text that says when a connect needs the scope is this rule, so the condition and
+        // the instruction not to ask on a line with network access are pinned in its own words:
+        // a rule that dropped them would pass each check that compares a text with the rule.
+        for said in [
+            "to connect to a port of this machine only from a line that has no network access",
+            "adds nothing to a connect from a line that has network access",
+            "do not ask for it there",
+        ] {
+            assert!(LOOPBACK_CONNECT_RULE.contains(said), "{said:?}");
+        }
+        assert!(!scopes.contains("listen on and connect to"), "{scopes}");
+        let elsewhere = scopes
+            .split("On Linux and Windows")
+            .nth(1)
+            .and_then(|rest| rest.split(". ").next())
+            .expect("says what Linux and Windows do");
+        assert!(elsewhere.contains("changes nothing"), "{elsewhere}");
+        assert!(
+            !elsewhere.contains("listen") && !elsewhere.contains("connect"),
+            "{elsewhere}"
+        );
+
+        let script = step("/bin/sh", &["-c", "cargo test"]);
+        let listing = step("/usr/bin/pgrep", &["-lf", "Brave"]);
+        for prelude in [Prelude::MacOs, Prelude::Linux, Prelude::Windows] {
+            for mode in [SandboxMode::WorkspaceWrite, SandboxMode::ReadOnly] {
+                for network in [Network::Open, Network::Closed] {
+                    // `read-only` closes the network whatever the setting says.
+                    let closed = network.is_closed() || mode == SandboxMode::ReadOnly;
+                    let said = stated(true, Some(prelude), network, mode, true)
+                        .expect("says something")
+                        .replace(&requests_menu_sentence(mode), "");
+                    let at = format!("{prelude:?} {mode:?} {network:?}");
+                    assert!(!said.contains("listen on and connect to"), "{at}: {said}");
+                    match prelude {
+                        Prelude::MacOs => {
+                            assert!(said.contains(MACOS_LISTENING_SENTENCE), "{at}: {said}");
+                            assert!(said.contains(LOOPBACK_CONNECT_RULE), "{at}: {said}");
+                            assert_eq!(
+                                said.contains(MACOS_CLOSED_LOOPBACK_SENTENCE),
+                                closed,
+                                "{at}: {said}"
+                            );
+                        }
+                        Prelude::Linux | Prelude::Windows => {
+                            assert!(!said.contains("loopback"), "{at}: {said}");
+                        }
+                    }
+
+                    // Where the session accepts no request, no platform names `loopback`, and
+                    // nothing else of the description changes.
+                    let accepted =
+                        stated(true, Some(prelude), network, mode, true).expect("says something");
+                    let refused =
+                        stated(true, Some(prelude), network, mode, false).expect("says something");
+                    assert!(!refused.contains("loopback"), "{at}: {refused}");
+                    assert!(
+                        refused.contains(&requests_refused_sentence(mode)),
+                        "{at}: {refused}"
+                    );
+                    let without_the_asks = accepted
+                        .replacen(
+                            &format!(" {}", requests_menu_sentence(mode)),
+                            &requests_refused_sentence(mode),
+                            1,
+                        )
+                        .replace(
+                            &format!("{MACOS_LISTENING_SENTENCE} {LOOPBACK_CONNECT_RULE}"),
+                            "",
+                        )
+                        .replace(MACOS_CLOSED_LOOPBACK_SENTENCE, "");
+                    assert_eq!(refused, without_the_asks, "{at}");
+
+                    for hosts_set in [false, true] {
+                        let (listens, connects) = loopback_is_the_reason_a_step(prelude, closed);
+                        let confined = |request: &[Requested]| {
+                            let confined = reading_confinement(prelude, &["/work/project"])
+                                .with_mode(mode)
+                                .with_network(network);
+                            match hosts_set {
+                                true => confined
+                                    .with_hosts(Some(&hosts_listing(Some(&["a.example"]))))
+                                    .with_requested(request),
+                                false => confined.with_requested(request),
+                            }
+                        };
+                        let before = confined(&[]).profile(&[&script]);
+                        let after = confined(&[Requested::Loopback]).profile(&[&script]);
+                        let told = inserted(&before, &after);
+                        let at = format!("{at}, host list {hosts_set}");
+                        assert_eq!(told.contains("loopback"), listens, "{at}: {told}");
+                        assert_eq!(told.contains("listen on"), listens, "{at}: {told}");
+                        assert_eq!(told.contains("connect to"), connects, "{at}: {told}");
+
+                        // The sentence after a failed process listing says how a local service
+                        // is found, and names `loopback` only in the rule that is true of every
+                        // row above, and so says nothing of it the backend does not do.
+                        let after_a_listing = confined(&[]).profile(&[&listing]);
+                        let listed = inserted(&before, &after_a_listing);
+                        match prelude {
+                            Prelude::MacOs => {
+                                assert!(
+                                    listed.contains("connecting to its port"),
+                                    "{at}: {listed}"
+                                );
+                                assert!(listed.contains(LOOPBACK_CONNECT_RULE), "{at}: {listed}");
+                                let outside_the_rule = listed.replace(LOOPBACK_CONNECT_RULE, "");
+                                assert!(!outside_the_rule.contains("loopback"), "{at}: {listed}");
+                                assert!(!outside_the_rule.contains("listen"), "{at}: {listed}");
+                            }
+                            Prelude::Linux | Prelude::Windows => {
+                                assert_eq!(listed, "", "{at}: {listed}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// SANDBOX-14, SANDBOX-19: the planner is told on macOS, in the description and after a
@@ -5504,6 +5836,211 @@ mod tests {
         aliased.program = "launch".to_string();
         let said = failed(Prelude::MacOs, true, &[&aliased]);
         assert!(said.contains(MACOS_LAUNCH_UNCONFINED_SENTENCE), "{said}");
+    }
+
+    /// SANDBOX-8, SANDBOX-19: after a failed step on macOS whose program lists processes, the
+    /// planner is told that the sandbox refuses listing them, that the failure is not an answer
+    /// about the program it looked for, and that a local service is found by connecting to its
+    /// port, which is the one rule `loopback` has for a connect and only where the session accepts
+    /// a request. The step is chosen by the file its program resolved to and by the session, and
+    /// the function takes no output and no exit code.
+    ///
+    /// The faults it rejects are the sentence left out, said on another platform or for a line
+    /// with none of these programs, matched on a name that merely contains one, matched on the
+    /// name the line used where the file it resolved to is the one to match, naming the
+    /// process-info refusal for programs it does not stop, naming `loopback` where the session
+    /// accepts no request, and naming it as how a connection is made.
+    #[test]
+    fn a_failed_process_listing_step_on_macos_says_the_sandbox_refused_it_and_to_connect_to_the_port()
+     {
+        let failed = |prelude, offered, steps: &[&Step]| {
+            reading_confinement(prelude, &["/work/project"])
+                .with_mode(SandboxMode::WorkspaceWrite)
+                .with_requests_offered(offered)
+                .profile(steps)
+        };
+        let make = step("/usr/bin/make", &["test"]);
+        let baseline = failed(Prelude::MacOs, true, &[&make]);
+        let listers = [
+            "/usr/bin/pgrep",
+            "/usr/bin/pkill",
+            "/usr/bin/killall",
+            "/usr/sbin/lsof",
+            "/bin/ps",
+        ];
+        for lister in listers {
+            let lister = step(lister, &["-x", "Brave"]);
+            let said = failed(Prelude::MacOs, true, &[&lister]);
+            let told = inserted(&baseline, &said);
+            assert!(
+                told.contains("the sandbox refuses listing processes"),
+                "{told}"
+            );
+            for program in ["pgrep", "pkill", "killall", "lsof", "ps"] {
+                assert!(told.contains(&format!("`{program}`")), "{program}: {told}");
+            }
+            assert!(
+                told.contains("whether or not") && told.contains("not an answer"),
+                "{told}"
+            );
+            assert!(told.contains("connecting to its port"), "{told}");
+            assert!(
+                told.contains("curl http://127.0.0.1:9222/json/version"),
+                "{told}"
+            );
+            assert!(told.contains(LOOPBACK_CONNECT_RULE), "{told}");
+            // The rule is the only place the sentence names the scope, and it never says a scope
+            // is how a connection is made.
+            assert!(
+                !told.replace(LOOPBACK_CONNECT_RULE, "").contains("loopback"),
+                "{told}"
+            );
+            // The causes differ by program and `process-info*` stops `lsof` alone.
+            assert!(!told.contains("process-info"), "{told}");
+            for elsewhere in [Prelude::Linux, Prelude::Windows] {
+                let said = failed(
+                    elsewhere,
+                    true,
+                    &[&step("/usr/bin/pgrep", &["-x", "Brave"])],
+                );
+                assert!(!said.contains("listing processes"), "{elsewhere:?}: {said}");
+                assert!(!said.contains("9222"), "{elsewhere:?}: {said}");
+            }
+        }
+
+        // Where the session accepts no request the sentence names no scope and no argument.
+        let refused = |home: Option<&Path>, offered| {
+            Confinement::new(
+                Prelude::MacOs,
+                PathBuf::from("/tmp"),
+                home,
+                vec![PathBuf::from("/work/project")],
+                Some(Path::new("/var/scratch")),
+            )
+            .with_mode(SandboxMode::WorkspaceWrite)
+            .with_requests_offered(offered)
+        };
+        let pgrep = step("/usr/bin/pgrep", &["-x", "Brave"]);
+        for (home, offered) in [(Some(Path::new(HOME)), false), (None, true), (None, false)] {
+            let said = refused(home, offered).profile(&[&pgrep]);
+            let plain = refused(home, offered).profile(&[&make]);
+            let told = inserted(&plain, &said);
+            assert!(told.contains("connecting to its port"), "{told}");
+            assert!(
+                told.contains("curl http://127.0.0.1:9222/json/version"),
+                "{told}"
+            );
+            assert!(!told.contains("loopback"), "{home:?} {offered}: {told}");
+            assert!(!told.contains("scope"), "{home:?} {offered}: {told}");
+        }
+
+        // The same words follow a listing in any mode that confines, whatever else the line runs.
+        for mode in [
+            SandboxMode::Strict,
+            SandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite,
+        ] {
+            let said = reading_confinement(Prelude::MacOs, &["/work/project"])
+                .with_mode(mode)
+                .profile(&[&make, &pgrep]);
+            assert!(
+                said.contains("the sandbox refuses listing processes"),
+                "{mode:?}"
+            );
+        }
+
+        // Chosen by the file the program resolved to: a name that only contains one of these, a
+        // different program given one of these names, and a listing given another name.
+        for other in [
+            step("/usr/bin/make", &["pgrep"]),
+            step("/usr/bin/pgrepx", &[]),
+            step("/usr/bin/xpgrep", &[]),
+            step("/usr/bin/pgrep-wrapper", &[]),
+            step("/usr/bin/psql", &[]),
+            step("/usr/bin/ps2pdf", &[]),
+            step("/usr/bin/lsof-helper", &[]),
+            step("/usr/bin/killall5", &[]),
+            step("/usr/bin/kill", &["-0", "1"]),
+        ] {
+            let said = failed(Prelude::MacOs, true, &[&other]);
+            assert_eq!(said, baseline, "{other:?}");
+        }
+        let mut renamed = step("/usr/bin/true", &[]);
+        renamed.program = "pgrep".to_string();
+        assert_eq!(failed(Prelude::MacOs, true, &[&renamed]), baseline);
+        let mut aliased = step("/usr/bin/pgrep", &["-x", "Brave"]);
+        aliased.program = "find-process".to_string();
+        let said = failed(Prelude::MacOs, true, &[&aliased]);
+        assert!(
+            said.contains("the sandbox refuses listing processes"),
+            "{said}"
+        );
+        let after_make = failed(Prelude::MacOs, true, &[&make, &pgrep]);
+        assert!(
+            after_make.contains("the sandbox refuses listing processes"),
+            "{after_make}"
+        );
+        assert_eq!(
+            after_make
+                .matches("the sandbox refuses listing processes")
+                .count(),
+            1,
+            "said once for a line with several: {after_make}"
+        );
+        let twice = failed(Prelude::MacOs, true, &[&pgrep, &pgrep]);
+        assert_eq!(
+            twice
+                .matches("the sandbox refuses listing processes")
+                .count(),
+            1,
+            "{twice}"
+        );
+    }
+
+    /// TOOL-6: the sentences about `loopback` and about listing processes name no tool. They are
+    /// read in a `run` description and in a `run` result, by a lead, a delegate and a turn a person
+    /// addressed to a definition, whose lists differ, so a word that is the name of a tool on one
+    /// list would send a turn that lacks it to a call it cannot make. The names are read off the
+    /// tools each kind of turn is built, so a tool added later is covered.
+    ///
+    /// The fault it rejects is a sentence that tells the planner to use a tool by name, as the
+    /// older advice to arrange a later look does.
+    #[test]
+    fn the_sentences_about_loopback_and_listing_processes_name_no_tool() {
+        use crate::tools::{Running, Scheduling};
+        let mut names = std::collections::BTreeSet::new();
+        for scheduling in [
+            Scheduling::ArrangingALook,
+            Scheduling::PacingALoop,
+            Scheduling::TheirInterval,
+            Scheduling::NoLaterLook,
+        ] {
+            for running in [Running::Offered, Running::Withheld] {
+                names.extend(
+                    crate::tools::available(
+                        scheduling,
+                        crate::watch::Arming::Allowed { free: 1 },
+                        crate::exec::Deadlines::BUILT_IN,
+                        running,
+                    )
+                    .into_iter()
+                    .map(|tool| tool.function.name),
+                );
+            }
+        }
+        for tool in ["run", "ask_user", "read_output", "request_path", "read_git"] {
+            assert!(names.contains(tool), "{tool} is not a tool here: {names:?}");
+        }
+        for sentence in [
+            LOOPBACK_CONNECT_RULE,
+            MACOS_PROCESS_LISTING_SENTENCE,
+            MACOS_LISTENING_SENTENCE,
+            MACOS_CLOSED_LOOPBACK_SENTENCE,
+        ] {
+            for word in sentence.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                assert!(!names.contains(word), "{word:?} names a tool in {sentence}");
+            }
+        }
     }
 
     /// SANDBOX-29: every sentence after a failed step that names `'unconfined': true` presents it as
@@ -5858,7 +6395,7 @@ mod tests {
                 true,
             )
             .map(|linux| format!(
-                "{linux}{MACOS_LISTENING_SENTENCE}{MACOS_GIT_SENTENCE}{TRUSTED_DIRECTORY_LINE_SENTENCE}"
+                "{linux}{MACOS_LISTENING_SENTENCE} {LOOPBACK_CONNECT_RULE}{MACOS_GIT_SENTENCE}{TRUSTED_DIRECTORY_LINE_SENTENCE}"
             )),
             stated(
                 true,

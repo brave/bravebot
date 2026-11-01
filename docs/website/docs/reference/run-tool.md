@@ -15,7 +15,7 @@ Runs a command line. **You approve the compiled plan before anything runs.**
 | `deadline_seconds` | how long to wait, defaulting to 300 seconds ([below](#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([below](#leaving-a-pipeline-running)) |
 | `stdin_ref` | a reference whose contents are fed to the first program ([below](#filtering-something-the-agent-may-not-read)) |
-| `scopes` | credential scopes (`remote`, `aws`, `kubernetes`, `docker`, `signing`), toolchain lists, `loopback` and `ssh-key` to add to every stage, by name; accepted in `strict`, `read-only` and `workspace-write` modes (`standard` is the old name of the last), not in `off`, and asked about every time. Under `read-only` the network stays closed and the `remote` scope lends nothing, so `git push` and `gh pr create` fail. `signing`, `loopback` and `ssh-key` are never remembered. `ssh-key` lends nothing: it only has you choose again which ssh key a `git push` offers its owner ([details](../customize/configuration.md#gitidentities)) |
+| `scopes` | credential scopes (`remote`, `aws`, `kubernetes`, `docker`, `signing`), toolchain lists, `loopback` and `ssh-key` to add to every stage, by name; accepted in `strict`, `read-only` and `workspace-write` modes (`standard` is the old name of the last), not in `off`, and asked about every time. Under `read-only` the network stays closed and the `remote` scope lends nothing, so `git push` and `gh pr create` fail. `signing`, `loopback` and `ssh-key` are never remembered. On macOS `loopback` lends listening on a port of this machine, which a `cargo test` over tests that bind a port and a build through `sccache` need, and a connect to a port of this machine from a line that has no network access. It adds nothing to a connect from a line that has network access: a line with an open network connects to a port of this machine without it, and a line held to a host list connects to the list's proxy port alone with or without it, so asking for it there only costs you a question. Linux and Windows read no such request, so it changes nothing there, and you are still asked. `ssh-key` lends nothing: it only has you choose again which ssh key a `git push` offers its owner ([details](../customize/configuration.md#gitidentities)) |
 | `read` | ask for the output in this result; honoured only when [bypassing with no screening](#reading-the-output-in-the-same-result) |
 
 ```
@@ -422,6 +422,18 @@ too: a later step that succeeds does not hide an earlier failure. It is said for
 where the planner holds a reference it may not read. The verdict is read off the processes and the
 clock, never out of a byte the program printed, so it is structure exactly as a line count is and
 puts nothing in the planner's context that a program chose.
+
+**On macOS a failed `pgrep`, `pkill`, `killall`, `lsof` or `ps` is not an answer.** The sandbox
+refuses listing processes, so those programs fail whether or not the program they look for is
+running. The result says so, and says that a local service is found by connecting to its port, such
+as `curl http://127.0.0.1:9222/json/version` for a browser started with
+`--remote-debugging-port=9222`. The description of `run` also tells the planner to look for a
+browser's debugging port before it asks you about quitting or relaunching the browser. That connect
+needs no scope from a line with an open network and no host list. A line a host list holds to its
+proxy reaches only the proxy's port of this machine, so the probe is refused there. On Windows a
+container may reach a port of this machine only with a machine-wide loopback exemption, so the probe
+may be refused there too. The planner may still ask you about the browser. See
+[confinement](../security/security.md#confinement).
 
 Output the planner **may** read comes back as text, capped at 16 KiB unless
 [`run.maxOutput`](../customize/configuration.md#runmaxoutput) names another figure. Past the cap the

@@ -1059,6 +1059,39 @@ fn a_closed_network_stops_a_program_with_no_reason_to_reach_it() {
     assert!(!refused, "a closed network let a connection through");
 }
 
+/// SANDBOX-3: a requested `loopback` lends a stage with a closed network a port of this machine on
+/// macOS and changes nothing elsewhere. Linux gives that stage a network namespace of its own,
+/// where the host's listener is not there, and nothing reads the request. The regression it
+/// rejects: a request that reaches the host's loopback from the namespace, or one that is read on
+/// the platforms where it has nothing to lend. The open network is the control that the listener
+/// is reachable from this machine at all, and the closed network without the request is the
+/// control that the request lets macOS through.
+#[cfg(unix)]
+#[test]
+fn a_requested_loopback_reaches_a_listener_from_a_closed_network_on_macos_only() {
+    use bravebot_sandbox::scope::Requested;
+    if !can_close_the_network() {
+        return;
+    }
+    let places = Places::new("network-closed-loopback");
+    let line = |port: u16| format!("nc -z 127.0.0.1 {port}");
+    let closed = places.confinement().with_network(Network::Closed);
+    let asked = closed.clone().with_requested(&[Requested::Loopback]);
+
+    let control = reached_a_listener(&places, line, Some(&places.confinement()));
+    let without = reached_a_listener(&places, line, Some(&closed));
+    let with = reached_a_listener(&places, line, Some(&asked));
+
+    assert!(control, "the open network did not reach the listener");
+    assert!(!without, "a closed network let a connection through");
+    assert_eq!(
+        with,
+        cfg!(target_os = "macos"),
+        "a closed network with a requested loopback reached the listener on a platform other \
+         than macOS, or did not reach it on macOS"
+    );
+}
+
 /// The regression it rejects: the closed setting taking egress from the stages it exists to leave
 /// it with. A `git ls-remote` carries the remote scope and `curl` exists to fetch, and both reach
 /// the listener with the network closed.

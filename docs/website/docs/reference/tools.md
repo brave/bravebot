@@ -519,7 +519,7 @@ Runs a command line. **You approve the compiled plan before anything runs.** The
 | `directory` | where to run, inside the workspace or a directory you added ([details](run-tool.md#the-directory-carries-over-and-nothing-else-does)) |
 | `deadline_seconds` | how long to wait, defaulting to 300 seconds ([details](run-tool.md#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([details](run-tool.md#leaving-a-pipeline-running)) |
-| `stdin_ref` | a reference whose contents are fed to the first program ([details](run-tool.md#filtering-something-the-agent-may-not-read)) |
+| `stdin_ref` | a reference whose contents are fed to the first program ([details](run-tool.md#filtering-something-the-agent-may-not-read)); a program that sends text, such as a summary a processor wrote, takes its body this way |
 | `read` | ask for the output in this result; honoured only when [bypassing with no screening](run-tool.md#reading-the-output-in-the-same-result) |
 
 The line is compiled by bravebot's own grammar and never handed to a shell. The prompt shows the
@@ -528,6 +528,9 @@ replace. A line that writes a file or reads one in through `<` is asked about ev
 that only reads what you vouched for runs unasked, and what a line prints stays quarantined unless
 you vouched for every step of it (see [the answers](run-tool.md#the-answers-and-how-long-each-one-lasts)
 and [the output](run-tool.md#the-output)).
+
+A summary, a translation or other text made from an output the planner may not read is written by
+[`spawn_processor`](#spawn_processor), which also says how that text reaches a program.
 
 ## `read_output`
 
@@ -794,6 +797,30 @@ An answer is for **one** document and may be written **only** to the file the ca
 planner said nothing and there was more than one input, the answer belongs nowhere and may be written
 nowhere.
 
+**A summary, a translation, a rewrite, an explanation or a list of the points made of something the
+planner was not shown is written by a processor.** The planner cannot write what it has not read, and
+a script it writes can only cut the original down. It names the form wanted in `instruction`, such as
+a plain-text summary of each of six stories, two sentences each, with each link kept. `instruction`
+asks for the document alone, with no remarks about what the processor did, and names the form and its
+length where the document is itself a summary, a translation or an explanation.
+
+**Getting the answer to a program that uses it.** An answer about a fetched page or a run's output is
+for no file and can be written nowhere, so the planner saves the original to a file first, in the
+scratch directory when it has one. It ends the `run` line that made the text with `> path`, or writes
+a fetched page with [`write_file`](#write_file) and `contents_ref`, and then calls
+[`read_file`](#read_file) on the file for a reference to name in `reads`. The planner is told not to
+save the page with a script that opens the file itself. The answer is written over the same file with
+`write_file`, and the program that sends it is run with the file's path as an argument. Or the
+answer's reference is given to [`run`](#run) as `stdin_ref`, which needs no file. The recipient and
+the subject are the planner's and only the body comes from the processor. The sending line is an
+ordinary `run` line. One that names the file is put to you unless a vouched entry, a remembered line,
+a rule you wrote or your trust of the directory answers it. One fed the answer as `stdin_ref` is put
+to you unless a rule you wrote decides it, and no rule decides it when the answer was made from
+private content, such as a summary of a run's output.
+
+The planner's last message says what was sent and to whom, and calls the text a summary only if a
+processor wrote one.
+
 **Refused once the model has been shown private content.** After [`read_output`](#read_output) or
 [`vet_content`](#vet_content) has shown it something private, or a delegate has reported something
 private, what it writes is private too, and a processor takes no private instruction, so every
@@ -981,6 +1008,12 @@ every question is declined rather than answered on your behalf.
 
 This tool is for what the planner cannot find out itself: which of two approaches, whether something
 is in scope, which of two plausible files you meant. Never for a fact about the machine.
+
+The planner is also told not to ask a question your request already answers, and not to ask whether
+to do what you asked or whether to do it automatically, because you asked for it. What is left to
+ask is a choice your request leaves open and that differs in consequence, such as which of two
+accounts to send from. Each question it asks costs your attention, and no
+[permission mode](../security/permission-modes.md) answers it for you.
 
 ## `propose_plan`
 

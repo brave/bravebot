@@ -8589,8 +8589,8 @@ fn consult_about_a_run<S: Sink>(
     if unconfined || !confined || tools.permission_mode.get() != crate::PermissionMode::Auto {
         return crate::confirm::Classified::NotAsked;
     }
-    // Only a line it can be shown whole: nothing fed to it from a reference, no credential scope
-    // asked for, nothing private released.
+    // Only a line it can be shown whole: nothing fed to it from a reference, no name in `scopes`
+    // (a credential scope, a toolchain list, `loopback` or `ssh-key`), nothing private released.
     if !requested.is_empty() || stdin || plan.releases_private() {
         return crate::confirm::Classified::NotAsked;
     }
@@ -13961,6 +13961,236 @@ mod tests {
         );
     }
 
+    /// The processor's description as the turn it is read in is offered it.
+    fn processor_description(running: Running) -> String {
+        available(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            Deadlines::BUILT_IN,
+            running,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "spawn_processor")
+        .expect("the turn is offered a processor")
+        .function
+        .description
+    }
+
+    /// SPAWN-6. A request for a summary, a translation, a rewrite, an explanation or a list of the
+    /// points made of content the planner was not shown is done by a processor, and the
+    /// description is where a planner choosing between its tools reads that. A planner asked to
+    /// email a summary of a page had a processor and `write_file` and used neither: it wrote a
+    /// script that cut the page's own sentences into the body, and said it had not read them.
+    ///
+    /// The route is the one the tools accept. A processor's answer is written only over the file
+    /// the call was about, so a page that is no file is saved to one first, by a redirection or by
+    /// `write_file`, where the harness opens the file. The sending program then reads that file,
+    /// or takes the answer as `stdin_ref`.
+    ///
+    /// The description forbids saving the page with a script that opens the file itself and gives
+    /// no reason. The reason is that a file a script opens on its own is not recorded as holding
+    /// what the planner was not shown (trust-map.md, Known costs). A planner told that would know
+    /// which way of saving a page lets it read the page back, so the reason stays in SPAWN-6.
+    #[test]
+    fn a_processor_is_described_as_the_writer_of_text_made_from_content_not_shown() {
+        let description = processor_description(Running::Offered);
+        for stated in [
+            // The kinds of text, in the words a person asks for them in.
+            "A summary, a translation, a rewrite, an explanation or a list of the points made of \
+             content you were not shown is written by this tool",
+            // The form is named in the instruction, so a summary comes back as the one asked for.
+            "Ask for the form wanted, for example a plain-text summary of each of six stories, \
+             two sentences each, with each link kept",
+            // A script that scrapes cannot summarise, which is the defect the planner showed.
+            "Do not leave it to a script you write, which can only cut the original down",
+            // An answer about a reference that is no file may be written nowhere (PROC-6).
+            "about a reference that is no file, such as a fetched page or a run's output, is for \
+             no document and cannot be written anywhere, so save the original to a file first, \
+             in the scratch directory if you were given one",
+            "end the run line that made it with `> path`, or write a fetched page with \
+             write_file and contents_ref",
+            "call read_file on the file for a reference to name in reads",
+            "Then write the answer over the same file with write_file",
+            "run the program that sends it with the file's path as an argument, so it reads the \
+             body from the file",
+            "Or give the answer's reference to run as stdin_ref, which needs no file",
+            // The head of the message is the planner's and only the body is derived.
+            "The recipient and the subject are yours and only the body comes from the processor",
+            // What the person is told afterwards.
+            "Your final message says what was sent and to whom",
+            "Call the text a summary in your final message only if a processor wrote one",
+        ] {
+            assert!(
+                description.contains(stated),
+                "the description does not say '{stated}': {description}"
+            );
+        }
+        assert!(
+            description.contains("Do not save it with a script that opens the file itself. Then"),
+            "the description allows a script to write the file, or does not end the sentence \
+             there: {description}"
+        );
+        assert!(
+            !description.contains("recorded"),
+            "the description says when a file is recorded as holding what the planner was not \
+             shown: {description}"
+        );
+        // PROC-4 pins the closing sentence, and the paragraph above is not the last thing said.
+        assert!(
+            description.ends_with("run, read_output and the file tools keep working."),
+            "the description no longer closes on the refusal after private content: {description}"
+        );
+    }
+
+    /// TOOL-6. The same description is read by a turn that holds no `run`: a reader delegate, and a
+    /// turn addressed to a definition that dropped it. It is told who writes derived text and what
+    /// to call the result, and is not sent to a program that sends it. The one `run` the sentence
+    /// about private content has always named is the gap `tool-surface.md` records, and is taken
+    /// out first so the rest is checked.
+    #[test]
+    fn the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one() {
+        let withheld = processor_description(Running::Withheld);
+        for stated in [
+            "A summary, a translation, a rewrite, an explanation or a list of the points made of \
+             content you were not shown is written by this tool",
+            "Ask for the form wanted, for example a plain-text summary of each of six stories",
+            "Call the text a summary in your final message only if a processor wrote one",
+        ] {
+            assert!(
+                withheld.contains(stated),
+                "a turn without run is not told '{stated}': {withheld}"
+            );
+        }
+        let rest = withheld.replace("run, read_output and the file tools keep working", "");
+        let offered = processor_description(Running::Offered);
+        for run_only in ["run", "script", "stdin_ref", "sends it"] {
+            assert!(
+                offered.contains(run_only),
+                "'{run_only}' is not in the text of a turn with run, so the check below shows \
+                 nothing: {offered}"
+            );
+            assert!(
+                !rest.contains(run_only),
+                "a turn without run is sent to '{run_only}': {withheld}"
+            );
+        }
+        assert!(
+            offered.contains("Or give the answer's reference to run as stdin_ref"),
+            "a turn with run is not sent to it: {offered}"
+        );
+    }
+
+    /// SPAWN-6. The `instruction` parameter said "no explanation, no summary", which is the advice
+    /// for a change to a file and read, by a planner asked for a summary, as a ban on asking for
+    /// one. It means no remarks about what the processor did, and the planner is told to name the
+    /// form when the document is itself derived text. The planning prompt carries the same advice
+    /// for a changed file and says it the same way.
+    #[test]
+    fn the_processor_instruction_does_not_forbid_asking_for_a_summary() {
+        let offered = available(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let instruction = offered
+            .iter()
+            .find(|t| t.function.name == "spawn_processor")
+            .expect("the turn is offered a processor")
+            .function
+            .parameters["properties"]["instruction"]["description"]
+            .as_str()
+            .expect("a description")
+            .to_string();
+        assert!(
+            !instruction.contains("no summary") && !instruction.contains("no explanation"),
+            "the instruction forbids the document a person may have asked for: {instruction}"
+        );
+        assert!(
+            instruction.contains("no remarks about what it did, no code fence"),
+            "the instruction does not ask for the document alone: {instruction}"
+        );
+        assert!(
+            instruction.contains(
+                "Where the document is itself a summary, a translation or an explanation, name \
+                 that form and its length"
+            ),
+            "the instruction does not tell the planner to name the form: {instruction}"
+        );
+
+        let planning = crate::turn::PLANNING;
+        assert!(
+            !planning.contains("no explanation, no summary"),
+            "the planning prompt forbids the document a person may have asked for"
+        );
+        assert!(
+            planning.contains("the whole document, no commentary on what was changed or why"),
+            "the planning prompt does not say what to leave out of a changed file"
+        );
+    }
+
+    /// SPAWN-6. `write_file` said `contents_ref` is how to write out "such as what spawn_processor
+    /// produced", which a planner reads as the way to save any processor's answer. An answer is
+    /// written only over the file the call was about, and one about a fetched page or a run's
+    /// output is for no file (PROC-6), so a planner that took the sentence at its word was refused
+    /// before anyone was asked. A fetched page is what `contents_ref` does write out anywhere.
+    ///
+    /// The route for saving a page to a file first is in the processor's description and is said
+    /// there only to a turn that holds `run`, so the parameter points at it only for that turn. A
+    /// turn without `run` is told where an answer may be written and is not sent to a description
+    /// that holds no route for it.
+    #[test]
+    fn the_write_file_reference_text_does_not_offer_a_processors_answer_as_a_free_write() {
+        let contents_ref = |running: Running| -> String {
+            available(
+                Scheduling::ArrangingALook,
+                crate::watch::Arming::Unavailable,
+                Deadlines::BUILT_IN,
+                running,
+            )
+            .iter()
+            .find(|t| t.function.name == "write_file")
+            .expect("the turn is offered write_file")
+            .function
+            .parameters["properties"]["contents_ref"]["description"]
+                .as_str()
+                .expect("a description")
+                .to_string()
+        };
+        let route = "the spawn_processor description says how to save a page to a file first";
+        for running in [Running::Offered, Running::Withheld] {
+            let described = contents_ref(running);
+            assert!(
+                !described.contains("such as what spawn_processor produced"),
+                "contents_ref offers a processor's answer as something to write anywhere \
+                 ({running:?}): {described}"
+            );
+            assert!(
+                described.contains("such as a fetched page"),
+                "contents_ref does not name the page a fetch gave ({running:?}): {described}"
+            );
+            assert!(
+                described.contains(
+                    "What spawn_processor produced may be written only over the file that call \
+                     was about"
+                ),
+                "contents_ref does not say where a processor's answer may go ({running:?}): \
+                 {described}"
+            );
+        }
+        let offered = contents_ref(Running::Offered);
+        assert!(
+            offered.contains(route),
+            "contents_ref does not send the planner to where the route is written: {offered}"
+        );
+        let withheld = contents_ref(Running::Withheld);
+        assert!(
+            !withheld.contains(route) && !withheld.contains("save a page to a file"),
+            "a turn without run is sent to a route its processor description does not hold: \
+             {withheld}"
+        );
+    }
+
     /// The prompt this tool draws belongs to the person who set the sub-task going, about content
     /// they never asked to see, in the middle of work they are not reading. No kind is offered it,
     /// whatever it holds: the capability a delegate has for reading files would otherwise hand it
@@ -15480,6 +15710,100 @@ mod tests {
         );
     }
 
+    /// A session with a browser already running and its debugging port open asked the person
+    /// whether it could quit and relaunch the browser, because every way of looking it tried for
+    /// the process was refused and it never tried the port. The description tells the planner to
+    /// try the port first and to ask about quitting only after that is refused, in every turn that
+    /// is offered `run`, which is each kind of scheduling and a delegate that holds `run`. The
+    /// probe sentence says nothing of whether the probe needs a scope, network access or
+    /// `loopback`, because whether a line may connect to a port of this machine depends on the
+    /// platform and on a host list, which the description does not know (SANDBOX-3). None of the
+    /// three sentences names a tool, so a delegate and an addressed turn read nothing they cannot
+    /// act on (TOOL-6), and none names `loopback`, which the `scopes` entry and the confinement
+    /// text name.
+    ///
+    /// The faults it rejects are no sentence, the question allowed before the probe, a probe
+    /// sentence that says the probe needs no scope, network access or `loopback`, which would not
+    /// hold under a host list and may not hold on Windows, and would leave a planner whose probe
+    /// was refused asking about the browser, a sentence that names a tool, and a sentence missing
+    /// from one kind of scheduling or from a delegate.
+    #[test]
+    fn the_run_description_says_to_probe_a_browsers_debugging_port_before_asking_about_quitting_it()
+    {
+        use bravebot_core::delegate::Kind;
+        let everything: Vec<String> = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .into_iter()
+        .map(|tool| tool.function.name)
+        .collect();
+        let read = |at: &str, described: &str| {
+            let first = sentence_with(described, "Before asking");
+            assert!(first.starts_with("Before asking"), "{at}: {first}");
+            assert!(
+                first.contains("whether a browser is running")
+                    && first.contains("whether to quit or relaunch it"),
+                "{at}: {first}"
+            );
+            let probe = sentence_with(described, "/json/version");
+            assert!(
+                probe.contains("`curl http://127.0.0.1:9222/json/version`")
+                    && probe.contains("--remote-debugging-port=9222"),
+                "{at}: {probe}"
+            );
+            for said in ["scope", "network access", "loopback"] {
+                assert!(!probe.contains(said), "{at}: {said} in {probe}");
+            }
+            let ask = sentence_with(described, "only after that probe");
+            assert!(
+                ask.starts_with("Ask about quitting or relaunching a browser only after")
+                    && ask.contains("is refused"),
+                "{at}: {ask}"
+            );
+            let order = [first, probe, ask].map(|sentence| described.find(sentence));
+            assert!(
+                order[0] < order[1] && order[1] < order[2] && order[0].is_some(),
+                "{at}: asked before the probe is described: {described}"
+            );
+
+            // TOOL-6: no word of the three sentences is the name of a tool this turn may lack.
+            for sentence in [first, probe, ask] {
+                for word in sentence.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                    assert!(!everything.iter().any(|tool| tool == word), "{at}: {word}");
+                }
+                assert!(!sentence.contains("loopback"), "{at}: {sentence}");
+            }
+        };
+
+        for scheduling in [
+            Scheduling::ArrangingALook,
+            Scheduling::PacingALoop,
+            Scheduling::TheirInterval,
+            Scheduling::NoLaterLook,
+        ] {
+            read(
+                &format!("{scheduling:?}"),
+                &tool_description(scheduling, "run"),
+            );
+        }
+
+        // A delegate is built from the same table with a list of its own, so each kind that holds
+        // `run` reads the sentences too, and at least one kind does.
+        let mut holding = 0;
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("enumerated");
+            let held = for_delegate(&kind.capabilities(), None, None, Deadlines::BUILT_IN);
+            if let Some(run) = held.iter().find(|tool| tool.function.name == "run") {
+                holding += 1;
+                read(&format!("delegate {name}"), &run.function.description);
+            }
+        }
+        assert!(holding > 0, "no kind of delegate is offered `run`");
+    }
+
     /// A session asked to watch a file read it once, said what it held, and left nothing watching.
     /// Both techniques already existed and nothing joined a watch request to either, so the
     /// description has to: which one a bound picks, which one outlives a turn, and that the turn
@@ -15531,6 +15855,53 @@ mod tests {
         assert!(
             described.contains("no clock for"),
             "the description asks the planner for a time of day it cannot know: {described}"
+        );
+    }
+
+    /// RUN-29. A planner writing the line that sends a message reads `run`'s description and the
+    /// `stdin_ref` parameter, and neither said that the body of a summary or a translation of
+    /// something it was not shown is a processor's to write. The output sentence is where `run`
+    /// already names the processor as a place a quarantined output goes, so the pointer is there,
+    /// and the how stays in the processor's description (SPAWN-6) rather than being said twice.
+    /// `stdin_ref` is where a processor's answer is handed to the program with no file.
+    #[test]
+    fn the_run_description_points_text_made_from_an_output_at_the_processor() {
+        let described = run_description();
+        assert!(
+            described.contains(
+                "hand it to spawn_processor, or write it to a file with write_file. A summary, \
+                 a translation or other text made from it is written by spawn_processor, whose \
+                 description says how that text reaches a program."
+            ),
+            "the output sentence does not send derived text to the processor: {described}"
+        );
+
+        let offered = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let stdin = offered
+            .iter()
+            .find(|t| t.function.name == "run")
+            .expect("run is offered")
+            .function
+            .parameters["properties"]["stdin_ref"]["description"]
+            .as_str()
+            .expect("a description")
+            .to_string();
+        assert!(
+            stdin.contains(
+                "A program that sends text, such as a summary a processor wrote, takes its body \
+                 this way: name the processor's answer here."
+            ),
+            "stdin_ref does not say a processor's answer can be a body: {stdin}"
+        );
+        // The line that already stood in this parameter still stands.
+        assert!(
+            stdin.contains("do not also add a '<' redirection to the line"),
+            "stdin_ref lost its advice about redirection: {stdin}"
         );
     }
 
@@ -16097,35 +16468,121 @@ mod tests {
         );
     }
 
+    /// The `ask_user` description as the turn it is read in is offered it.
+    fn ask_user_description(running: Running) -> String {
+        available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            running,
+        )
+        .into_iter()
+        .find(|t| t.function.name == "ask_user")
+        .expect("ask_user is offered")
+        .function
+        .description
+    }
+
     /// TOOL-6. The advice to look before asking names `run` only on a list that holds one. A turn
     /// addressed to a definition that keeps `ask_user` and drops `run` reads this description, and
     /// would otherwise be sent to a name it is refused.
     #[test]
     fn ask_user_names_run_only_where_the_turn_holds_one() {
-        let described = |running: Running| -> String {
-            available(
-                Scheduling::ArrangingALook,
-                Arming::Allowed { free: 1 },
-                Deadlines::BUILT_IN,
-                running,
-            )
-            .into_iter()
-            .find(|t| t.function.name == "ask_user")
-            .expect("ask_user is offered")
-            .function
-            .description
-        };
-        let offered = described(Running::Offered);
+        let offered = ask_user_description(Running::Offered);
         assert!(
             offered.contains("look with list_files, search, read_file or run instead"),
             "a turn with run is not sent to it: {offered}"
         );
-        let withheld = described(Running::Withheld);
+        let withheld = ask_user_description(Running::Withheld);
         assert!(
             withheld.contains("look with list_files, search or read_file instead")
                 && !withheld.contains("run"),
             "a turn without run is sent to it: {withheld}"
         );
+    }
+
+    /// ASK-12. Asked to send an email from a web mail account, a planner put two questions to the
+    /// person, and one of them was how the email should be sent, with "send it automatically" among
+    /// the options. The request was to send it, so the question had no open choice in it and the
+    /// person answered what they had already said. The description names the three questions that
+    /// are not asked: one the request answers, whether to do what was asked, and whether to do it
+    /// automatically. Each is a phrase of its own so that removing any one fails the test, and
+    /// each is checked on the description of a turn without `run`, which reads the same text.
+    #[test]
+    fn ask_user_says_not_to_ask_what_the_request_states_or_whether_to_do_what_was_asked() {
+        for running in [Running::Offered, Running::Withheld] {
+            let described = ask_user_description(running);
+            for stated in [
+                "Do not ask a question whose answer the request states.",
+                "Do not ask whether to do what the user asked,",
+                "or whether to do it automatically, because they asked for it.",
+            ] {
+                assert!(
+                    described.contains(stated),
+                    "ask_user does not say '{stated}' ({running:?}): {described}"
+                );
+            }
+        }
+    }
+
+    /// ASK-12. What is left to ask is a choice the request leaves open and that differs in
+    /// consequence, with the example of a person who holds two accounts, which the planner cannot
+    /// settle from the request and the person can settle in a word. A description that only
+    /// forbade questions would leave a planner unsure whether any question was left to ask.
+    #[test]
+    fn ask_user_leaves_a_question_for_a_choice_the_request_leaves_open() {
+        for running in [Running::Offered, Running::Withheld] {
+            let described = ask_user_description(running);
+            for stated in [
+                "What is left to ask is a choice that the request leaves open and that differs \
+                 in consequence",
+                "such as which of two accounts to send from.",
+            ] {
+                assert!(
+                    described.contains(stated),
+                    "ask_user does not say '{stated}' ({running:?}): {described}"
+                );
+            }
+        }
+    }
+
+    /// ASK-12. Each question the planner asks costs the user's attention, and the four sentences
+    /// this change adds say that and nothing about where the question goes or what becomes of it.
+    /// A one-shot run declines every question (ASK-7) and a question closes with no answer where
+    /// `askIdleSeconds` is set (ASK-9), so an added sentence saying that a question is put to the
+    /// user and waits for an answer would be false on those turns, and would say whether a person
+    /// is shown a question, which the planner is told nothing about (AUTO-7). The older clause that
+    /// the questions are put to the user one at a time is unchanged and is not checked here. The
+    /// description names no mode, classifier or other thing that answers a prompt: no mode but
+    /// plan mode is named to the planner (MODE-3). A sentence written as "in auto mode a question
+    /// still goes to the person" tells a planner that a mode may answer for the person, and one
+    /// written as "whatever mode the session is in" tells it that the session has one.
+    #[test]
+    fn ask_user_says_every_question_costs_the_users_attention_and_names_no_mode() {
+        for running in [Running::Offered, Running::Withheld] {
+            let described = ask_user_description(running);
+            assert!(
+                described.contains("Each question you ask costs the user's attention."),
+                "ask_user does not say that a question costs the user's attention ({running:?}): \
+                 {described}"
+            );
+            let lowered = described.to_lowercase();
+            for unsaid in [
+                "mode",
+                "classifier",
+                "permission",
+                "approve",
+                "answers prompts",
+                "on your behalf",
+                "waits for their answer",
+                "every question you ask",
+            ] {
+                assert!(
+                    !lowered.contains(unsaid),
+                    "ask_user tells the planner about '{unsaid}' ({running:?}): {described}"
+                );
+            }
+        }
     }
 
     /// The tool must tell the planner it will not see the output, or it spends rounds running
