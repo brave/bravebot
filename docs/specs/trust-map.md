@@ -669,7 +669,9 @@ The path is absolute, begins with `~` for the home directory, or is relative to 
 directory, which is the primary root and is the directory `/cd` moves. A `~` is read first, so
 `~/notes` is the home directory's `notes`, and where no home directory is known it is a name under
 the working directory, as `/cd` and a settings file read it. A relative path is resolved against the
-working directory before anything is opened. Its leading `.` and `..` are taken out against the
+working directory before anything is opened, through the implementation `--add-dir`
+([CLI-11](cli.md#CLI-11)) resolves one with, apart from `~`, which `--add-dir` leaves to the shell.
+Its leading `.` and `..` are taken out against the
 working directory's own path, which is canonical and so holds no link for a `..` to step over, and
 its remaining components are appended in order, so `/add-dir ../notes` opens the directory beside
 the project and `/add-dir ../` the directory that holds it. A `..` after a name is left in place for
@@ -724,6 +726,9 @@ other answer here does (TRUST-6): leaving a tree reachable once nothing vouches 
 outlive the answer that allowed it. Closing one takes both halves for the same reason, and without it
 `/clear` was the only way to close a directory, which discards the conversation too.
 
+`verified-by: bravebot_agent::workspace::an_absolute_directory_name_is_not_joined_onto_a_root`
+`verified-by: bravebot_agent::workspace::a_relative_directory_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name`
+`verified-by: bravebot_agent::workspace::a_relative_directory_name_is_refused_against_a_root_whose_name_is_not_text`
 `verified-by: bravebot_agent::workspace::a_file_in_an_added_directory_is_readable_by_its_absolute_path`
 `verified-by: bravebot_agent::workspace::closing_added_directories_makes_them_unreachable_again`
 `verified-by: bravebot_agent::workspace::closing_one_added_directory_refuses_what_only_it_reached`

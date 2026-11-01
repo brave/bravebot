@@ -59,7 +59,8 @@ pub use error::{Remedy, WorkspaceError};
 #[cfg(unix)]
 use other_names::{LinkNames, directory_identity};
 pub(crate) use resolve::destination;
-use resolve::{expand_home, named_home, refuse_unkeyable, written_below};
+pub use resolve::expand_home;
+use resolve::{named_home, refuse_unkeyable, written_below};
 pub(crate) use results::MAX_ENTRIES;
 pub use results::{
     ContextLine, FileTally, Listing, MAX_SEARCH_CONTEXT, MAX_SEARCH_FILES, Match, Matches, Page,
@@ -83,7 +84,7 @@ pub use checkouts::{
 };
 use checkouts::{Made, TemporaryCheckouts, WorkingWrites};
 use reach::HostGrants;
-pub use reach::{Moved, PathReach, ReferenceProblem, Referenced};
+pub use reach::{Moved, PathReach, ReferenceProblem, Referenced, named_directory};
 
 /// The most an attachment may weigh.
 ///
@@ -4190,6 +4191,7 @@ mod tests {
     use super::resolve::refuse_misleading_names;
     use super::volume::{FileId, folds_case_by};
     use super::*;
+    use bravebot_i18n::t;
     use std::collections::HashMap;
     use std::io;
 
@@ -6122,6 +6124,111 @@ mod tests {
             "{error:?}"
         );
         let _ = std::fs::remove_dir_all(home.parent().expect("base"));
+    }
+
+    /// CLI-11, SHARE-001: `--add-dir`, a settings file's names, and the terminal's `/cd`,
+    /// `/add-dir` and `/add-dir close` all resolve a typed directory name through this one
+    /// function, so a relative name in front of either reads the same way.
+    ///
+    /// An absolute name is left alone. Joining it onto a root would name a path inside the
+    /// project that nobody asked for.
+    #[test]
+    fn an_absolute_directory_name_is_not_joined_onto_a_root() {
+        assert_eq!(
+            named_directory(Path::new("/tmp/project"), "/opt/other").ok(),
+            Some("/opt/other".to_string())
+        );
+    }
+
+    /// TRUST-9: the leading `.` and `..` of a relative name are cleaned against the root and
+    /// nothing after a name is. A root is expected to be canonical, so a leading `..` is exact,
+    /// and `../notes` becomes the spelling an opened directory is recorded under. A `..` after a
+    /// name is left alone because the name may be a link, whose target the file system takes the
+    /// `..` from.
+    ///
+    /// The failure this rejects is a name joined as typed, which `/add-dir close` cannot match
+    /// against the directory it opened without asking where the name leads, and one cleaned
+    /// throughout, which reads `sub/../x` as `x` whether or not `sub` is a link.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_directory_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name() {
+        let root = Path::new("/w/proj");
+        for (typed, resolved) in [
+            ("../notes", "/w/notes"),
+            ("./../notes", "/w/notes"),
+            ("../../x", "/x"),
+            ("../../../x", "/x"),
+            (".", "/w/proj"),
+            ("..", "/w"),
+            ("./sub/dir", "/w/proj/sub/dir"),
+            ("sub/../x", "/w/proj/sub/../x"),
+            ("../project/../notes", "/w/project/../notes"),
+            ("/opt/other", "/opt/other"),
+        ] {
+            assert_eq!(
+                named_directory(root, typed).ok(),
+                Some(resolved.to_string()),
+                "{typed}"
+            );
+        }
+    }
+
+    /// TRUST-9 and PATH-003: a relative name is refused against a root whose name is not text,
+    /// and is resolved against its lookalike, the name that spells the replacement character.
+    /// The string made here becomes a reach grant and a trust key, and a rendering of the first
+    /// that substitutes for the bytes it cannot show would name the second. An absolute name
+    /// needs no root and resolves against either.
+    ///
+    /// The names are built in memory, since the file system of a Mac cannot hold the first.
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_directory_name_is_refused_against_a_root_whose_name_is_not_text() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let not_text = Path::new(OsStr::from_bytes(b"/w/proj-\xff"));
+        let lookalike = Path::new("/w/proj-\u{FFFD}");
+
+        for relative in ["notes", "../notes", ".", "./sub"] {
+            match named_directory(not_text, relative) {
+                Err(WorkspaceError::Invalid { path, reason }) => {
+                    assert_eq!(path, relative);
+                    assert_eq!(reason, t!(session_directory_root_not_text));
+                }
+                other => {
+                    panic!("{relative} was resolved against a name that is not text: {other:?}")
+                }
+            }
+            assert!(
+                named_directory(lookalike, relative).is_ok(),
+                "{relative} was refused against a root that is text"
+            );
+        }
+        assert_eq!(
+            named_directory(lookalike, "../notes").ok(),
+            Some("/w/notes".to_string())
+        );
+        for root in [not_text, lookalike] {
+            assert_eq!(
+                named_directory(root, "/opt/other").ok(),
+                Some("/opt/other".to_string()),
+                "an absolute name was refused for {root:?}"
+            );
+        }
+    }
+
+    /// `named_directory` has no reading of `~` of its own: a leading `~` means something
+    /// different to each caller (the terminal expands it to the home directory itself for
+    /// CMDLINE-4; `--add-dir` leaves it to the shell), so a caller that wants it expanded does
+    /// so before calling this, and an unexpanded `~` is read as an ordinary relative component.
+    #[test]
+    fn named_directory_does_not_read_a_leading_tilde_itself() {
+        let root = Path::new("/w/proj");
+        assert_eq!(
+            named_directory(root, "~notes").ok(),
+            Some("/w/proj/~notes".to_string()),
+            "a leading `~` was expanded by the function callers must expand it before"
+        );
     }
 
     /// The trust map is asked under the key, so a `~` spelled in the key would be a rule for a

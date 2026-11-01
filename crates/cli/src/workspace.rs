@@ -142,9 +142,17 @@ pub(crate) fn unattended_trust_with(
 /// checkout would leave the tree the run was pointed at more trusted than the one it works in.
 /// Reads there are on the same footing as reads of the project's own files.
 ///
-/// `~` is left to the shell, which expands it before this ever sees the path. A path that is not
-/// absolute, does not exist, is not a directory, or lies inside the working one is refused by the
-/// workspace, and the refusal names which.
+/// A relative name, such as `--add-dir ../notes`, is resolved against the working directory
+/// first (CLI-11), through the one implementation `/cd` and `/add-dir` resolve a name against it
+/// with (TRUST-9), so the two cannot come to resolve the same name apart.
+///
+/// `~` is left to the shell, which expands it before this ever sees the path: unlike a relative
+/// name, an unexpanded `~` is read as an ordinary directory component rather than as the home
+/// directory, since giving it a second, possibly different reading here is a second place for a
+/// `~` the person types to resolve apart from the one the shell already gave it.
+///
+/// A path that is not absolute once resolved, does not exist, is not a directory, or lies inside
+/// the working one is refused by the workspace, and the refusal names which.
 ///
 /// Returns what the person is to be told about the ones that opened: a directory holding the
 /// working directory leaves no delegate a checkout (CHECKOUT-7), and a run is where nobody is
@@ -155,7 +163,15 @@ pub(crate) fn open_directories(
 ) -> Result<Vec<String>, String> {
     let mut notices = Vec::new();
     for directory in directories {
-        let added = workspace.add_directory(directory).map_err(|problem| {
+        let named = bravebot_agent::workspace::named_directory(workspace.root(), directory)
+            .map_err(|problem| {
+                t!(
+                    session_directory_not_added,
+                    directory = directory,
+                    problem = problem.to_string()
+                )
+            })?;
+        let added = workspace.add_directory(&named).map_err(|problem| {
             t!(
                 session_directory_not_added,
                 directory = directory,
