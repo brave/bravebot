@@ -16,9 +16,10 @@ title, and the info panel beside the transcript, which holds the session's name,
 issue and pull request it is for, the model and effort it runs on, its context and cache, its token
 total, the language servers and MCP servers it has started, and its plan. A session gets its links
 from `/issue` and `/pr`, from `--issue` and `--pr`, and from the planner's
-[`set_link`](tools/set-link.md) for an address the person typed. Giving a session its links from
-what `gh pr create` prints is proposed in
-[brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267) and not built. How a session
+[`set_link`](tools/set-link.md) for an address the person typed. A session does not get its links from
+what `gh pr create` prints. That needs a reader that branches on untrusted run output
+([RUN-4](tools/run.md#RUN-4)), which is an exception no maintainer has accepted, so it is
+not built ([brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267)). How a session
 gets its name is [sessions.md](sessions.md), and the keys a settings file can move are
 [INPUT-32](terminal-input.md#INPUT-32). Listing the sessions that keep running after their terminal
 is closed is proposed in [background-sessions.md](background-sessions.md) and not built.
