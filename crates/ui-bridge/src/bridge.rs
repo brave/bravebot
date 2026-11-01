@@ -2335,7 +2335,24 @@ impl Bridge {
             if open.watches.lock().map(|w| w.is_empty()).unwrap_or(true) {
                 continue;
             }
-            let Ok(mut workspace) = Workspace::new(open.project.clone()) else {
+            // The session's map and added directories are held by a worker for the length of a
+            // turn. Where they are held a watch is still looked at, but only where the answer
+            // does not need them: a path inside the project. Any other watch is left armed for the
+            // next poll and not ended as out of reach for the contention (FSWATCH-7).
+            let held = match open.state.try_lock() {
+                Ok(state) => Some((state.directories.clone(), state.answers.trust.clone())),
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                    let state = poisoned.into_inner();
+                    Some((state.directories.clone(), state.answers.trust.clone()))
+                }
+                Err(std::sync::TryLockError::WouldBlock) => None,
+            };
+            let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+            let Ok(mut workspace) = turn_workspace(
+                open.project.clone(),
+                &settings,
+                &bravebot_config::Managed::load(),
+            ) else {
                 if let Ok(mut watches) = open.watches.lock() {
                     for watch in watches.live() {
                         self.emitter.send(Event::new(
@@ -2348,16 +2365,25 @@ impl Bridge {
                 }
                 continue;
             };
-            if let Ok(state) = open.state.try_lock() {
-                for directory in &state.directories {
+            if let Some((directories, _)) = &held {
+                for directory in directories {
                     let _ = workspace.add_directory(&directory.display().to_string());
                 }
             }
+            let mode = open.permission_mode.clone();
             let due = {
                 let Ok(mut watches) = open.watches.lock() else {
                     continue;
                 };
-                let ended = watches.look(now, |path, under| workspace.look(path, under));
+                let ended = watches.look_deferring(now, |path, under| match &held {
+                    Some((_, trust)) => Some(bravebot_agent::tools::look_at_a_watch(
+                        &workspace, &mode, trust, path, under,
+                    )),
+                    None => match workspace.look(path, under) {
+                        bravebot_agent::watch::Looked::OutOfReach => None,
+                        inside => Some(inside),
+                    },
+                });
                 for (number, reason) in ended {
                     self.emitter.send(Event::new("watch.ended", &handle, json!({"number": number, "reason": match reason {
                         bravebot_agent::watch::Reaped::Aged => "expired", bravebot_agent::watch::Reaped::OutOfReach => "out-of-reach",
@@ -2370,6 +2396,11 @@ impl Bridge {
             let Some((number, path, change)) = due else {
                 continue;
             };
+            // A fire starts a turn, which takes the state. Where a worker still holds it the fire
+            // waits for the next poll, and the dispatch thread never waits on the worker.
+            if held.is_none() {
+                continue;
+            }
             let prompt = bravebot_agent::watch::fired(number, &path, change);
             // Announce the cause before starting a worker, so early events follow it.
             self.emitter.send(Event::new(
@@ -4749,6 +4780,182 @@ mod sandbox_tests {
 mod watch_tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    /// FSWATCH-7, PATHREQ-7: a watch armed on a file beside the project under bypass, and the
+    /// session that looks at it. Returns the bridge, the handle, the events sent, the watches,
+    /// the session's state (for a test to hold) and the directory beside the project.
+    #[expect(
+        clippy::type_complexity,
+        reason = "the handles a test holds, named once where it is read"
+    )]
+    fn bypassing_a_watch_beside_the_project(
+        reads_stay_inside: bool,
+    ) -> (
+        Bridge,
+        Arc<Mutex<Vec<Event>>>,
+        Arc<Mutex<bravebot_agent::watch::Watches>>,
+        Arc<Mutex<State>>,
+        Instant,
+        [tempfile::TempDir; 2],
+    ) {
+        let project = tempfile::tempdir().unwrap();
+        let beside = tempfile::tempdir().unwrap();
+        let root = project.path().canonicalize().unwrap();
+        let outside = beside.path().canonicalize().unwrap().join("notes.txt");
+        std::fs::write(&outside, "one").unwrap();
+        if reads_stay_inside {
+            std::fs::create_dir_all(root.join(".bravebot")).unwrap();
+            std::fs::write(
+                root.join(".bravebot/settings.json"),
+                r#"{"permissions": {"readsStayInWorkspace": true}}"#,
+            )
+            .unwrap();
+        }
+        let now = Instant::now();
+        let mode = LiveMode::new(PermissionMode::Bypass);
+        let workspace = Workspace::new(root.clone()).unwrap();
+        let trust = trusted::trusting_the_workspace(&root);
+        let profile = bravebot_agent::home::profile();
+        let reach =
+            bravebot_agent::tools::reach_of_a_watch(&mode, profile.as_deref(), &workspace, || {
+                workspace.is_trusted_in(&trust)
+            });
+        let looked =
+            workspace.look_reaching(&outside.display().to_string(), workspace.root(), reach);
+        assert!(
+            matches!(looked, bravebot_agent::watch::Looked::Saw(_)),
+            "the first look, which every case below starts from"
+        );
+        let mut watches = bravebot_agent::watch::Watches::new();
+        watches
+            .arm(
+                outside.display().to_string(),
+                workspace.root().to_path_buf(),
+                1,
+                looked,
+                now,
+            )
+            .unwrap();
+        let watches = Arc::new(Mutex::new(watches));
+        let state = Arc::new(Mutex::new(State::fresh(trust)));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let held = Arc::clone(&events);
+        let mut bridge = Bridge::new(Box::new(move |e| held.lock().unwrap().push(e)));
+        bridge.mint(Open {
+            watches: Arc::clone(&watches),
+            state: Arc::clone(&state),
+            permission_mode: mode,
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
+        });
+        (bridge, events, watches, state, now, [project, beside])
+    }
+
+    /// FSWATCH-7: a worker holding the session's state for a turn leaves a watch beside the project
+    /// armed, and the next poll that finds the state free looks at it again with the reach. The
+    /// regression it rejects: a poll that cannot take the map looks with no reach and ends the
+    /// watch as out of reach for nothing but contention.
+    #[test]
+    fn a_watch_beside_the_project_stays_armed_while_a_turn_holds_the_session() {
+        let (mut bridge, events, watches, state, now, _places) =
+            bypassing_a_watch_beside_the_project(false);
+        let held = state.lock().unwrap();
+        bridge.poll_watches_at(now + Duration::from_secs(6));
+        drop(held);
+        assert_eq!(watches.lock().unwrap().live().len(), 1);
+        assert!(events.lock().unwrap().is_empty());
+
+        bridge.poll_watches_at(now + Duration::from_secs(12));
+        assert_eq!(watches.lock().unwrap().live().len(), 1);
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    /// FSWATCH-7: while a worker still holds the session's state, a watch on a path inside the
+    /// project is looked at and the change it sees waits to fire until the state is free. The
+    /// regressions it rejects: a poll that skips every open session whose state is held, which
+    /// makes no look at all, and a poll that fires while the state is held, which makes the
+    /// dispatch thread wait on the worker.
+    #[test]
+    fn a_watch_inside_the_project_is_looked_at_while_a_turn_holds_the_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::write(root.join("watched"), "old").unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sent = Arc::clone(&events);
+        let mut bridge = Bridge::new(Box::new(move |e| sent.lock().unwrap().push(e)));
+        let now = Instant::now();
+        let workspace = Workspace::new(root.clone()).unwrap();
+        let mut watches = bravebot_agent::watch::Watches::new();
+        watches
+            .arm(
+                "watched".into(),
+                workspace.root().to_path_buf(),
+                1,
+                workspace.look("watched", workspace.root()),
+                now,
+            )
+            .unwrap();
+        let state = Arc::new(Mutex::new(State::fresh(TrustStore::new(&root))));
+        bridge.mint(Open {
+            watches: Arc::new(Mutex::new(watches)),
+            state: Arc::clone(&state),
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
+        });
+        std::fs::write(root.join("watched"), "new").unwrap();
+        let held = state.lock().unwrap();
+        let looking = now + Duration::from_secs(6);
+        bridge.poll_watches_at(looking);
+        drop(held);
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "a fire started a turn while the state was held"
+        );
+        let watches = Arc::clone(&bridge.open.values().next().unwrap().watches);
+        assert!(
+            watches.lock().unwrap().due(looking).is_some(),
+            "the held poll made no look at the watch"
+        );
+    }
+
+    /// FSWATCH-7: a watch beside the project that bypass reached ends when it is too old even
+    /// while a turn holds the session. The regression it rejects: a poll that skips the session
+    /// for the held state, which lets a watch outlive its limit for as long as the turn runs.
+    #[test]
+    fn a_watch_beside_the_project_expires_while_a_turn_holds_the_session() {
+        let (mut bridge, events, watches, state, now, _places) =
+            bypassing_a_watch_beside_the_project(false);
+        let held = state.lock().unwrap();
+        bridge.poll_watches_at(now + Duration::from_secs(7 * 24 * 60 * 60));
+        drop(held);
+        assert!(watches.lock().unwrap().is_empty());
+        assert_eq!(events.lock().unwrap()[0].data["reason"], "expired");
+    }
+
+    /// PERM-16, PATHREQ-7: where a settings layer keeps reads inside the project, the poll's look
+    /// holds no reach and a watch beside the project ends as out of reach. The regression it
+    /// rejects: a poll that builds its workspace without the setting a turn's workspace gets.
+    #[test]
+    fn a_poll_keeps_reads_inside_the_project_where_the_settings_ask_for_it() {
+        let (mut bridge, events, watches, _state, now, _places) =
+            bypassing_a_watch_beside_the_project(true);
+        bridge.poll_watches_at(now + Duration::from_secs(6));
+        assert!(watches.lock().unwrap().is_empty());
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name, "watch.ended");
+        assert_eq!(events[0].data["reason"], "out-of-reach");
+    }
 
     #[test]
     fn a_failed_automatic_turn_stops_its_watch_and_never_reads_file_content_into_the_prompt() {

@@ -347,6 +347,18 @@ impl Watches {
         now: Instant,
         mut look: impl FnMut(&str, &Path) -> Looked,
     ) -> Vec<(usize, Reaped)> {
+        self.look_deferring(now, |path, under| Some(look(path, under)))
+    }
+
+    /// [`Watches::look`] for a caller that cannot always judge a path at this moment, such as a
+    /// session whose map a running turn holds. A look that gives `None` leaves the watch as it
+    /// was, to be looked at again on the next pass: it is neither ended nor counted as a look. A
+    /// watch still ends when it is too old, whatever the caller can judge.
+    pub fn look_deferring(
+        &mut self,
+        now: Instant,
+        mut look: impl FnMut(&str, &Path) -> Option<Looked>,
+    ) -> Vec<(usize, Reaped)> {
         let mut ended = Vec::new();
         self.live.retain_mut(|watch| {
             if now.saturating_duration_since(watch.began) >= MAX_AGE {
@@ -356,7 +368,10 @@ impl Watches {
             if now.saturating_duration_since(watch.looked) < BETWEEN_LOOKS {
                 return true;
             }
-            let token = match look(&watch.path, &watch.under) {
+            let Some(looked) = look(&watch.path, &watch.under) else {
+                return true;
+            };
+            let token = match looked {
                 Looked::Saw(token) => Some(token),
                 // A file somebody deleted is not a permission that stopped holding. The watch
                 // goes on, and what it has to say about it is the third fact it compares:
@@ -665,6 +680,42 @@ mod tests {
         assert_eq!(
             watches.look(now + BETWEEN_LOOKS, |_, _| Looked::OutOfReach),
             vec![(1, Reaped::OutOfReach)]
+        );
+        assert!(watches.is_empty());
+    }
+
+    /// FSWATCH-7: a look the caller cannot judge leaves the watch armed and unlooked, and the
+    /// watch still ends when it is too old. The regressions it rejects: a deferred look read as
+    /// out of reach, which ends the watch for nothing but contention, and a deferral that also
+    /// skips the age check, which keeps a watch alive past its limit while a turn is long.
+    #[test]
+    fn a_look_the_caller_cannot_judge_leaves_the_watch_armed_and_still_ages_it() {
+        let mut watches = Watches::new();
+        let now = Instant::now();
+        armed(&mut watches, "a.txt", now);
+
+        let mut asked = 0;
+        assert!(
+            watches
+                .look_deferring(now + BETWEEN_LOOKS, |_, _| {
+                    asked += 1;
+                    None
+                })
+                .is_empty()
+        );
+        assert_eq!(asked, 1, "the look was asked for");
+        assert_eq!(watches.live().len(), 1);
+
+        assert_eq!(
+            watches.look_deferring(now + BETWEEN_LOOKS + BETWEEN_LOOKS, |_, _| Some(saw(
+                "first"
+            ))),
+            vec![],
+            "a look made after a deferral is a look like any other"
+        );
+        assert_eq!(
+            watches.look_deferring(now + MAX_AGE, |_, _| None),
+            vec![(1, Reaped::Aged)]
         );
         assert!(watches.is_empty());
     }

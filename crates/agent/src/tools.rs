@@ -7611,6 +7611,7 @@ pub(crate) const TOOLS_NAMING_A_PATH: &[(&str, &str, bool)] = &[
     ("search", "directory", false),
     ("read_git", "repository", false),
     ("run", "directory", false),
+    ("watch_file", "path", false),
 ];
 
 /// The tools that take a path, or a directory, and are given no reach by the mode, each with why.
@@ -7623,11 +7624,6 @@ pub(crate) const TOOLS_NAMING_A_PATH_WITHOUT_REACH: &[(&str, &str)] = &[
     (
         "lsp",
         "the server indexes the workspace root and the path is not resolved through the workspace (LSP-1)",
-    ),
-    (
-        "watch_file",
-        "a watch is looked at later with no call in progress, where a reach held for one call is \
-         gone, so a watch armed outside the workspace would end at its first look",
     ),
     (
         "apply_checkout",
@@ -7659,8 +7655,20 @@ impl ReachFacts<'_> {
         workspace: &Workspace,
         tool: &str,
     ) -> Option<crate::workspace::BypassReach> {
+        self.reach_for(tool, workspace, || workspace_is_trusted(policy, workspace))
+    }
+
+    /// [`ReachFacts::for_call`] with the answer to "is the workspace trusted" supplied by the
+    /// caller and asked only where the mode is bypass. For a caller with no call in progress and
+    /// no policy, which is a session looking at a watch.
+    pub(crate) fn reach_for(
+        &self,
+        tool: &str,
+        workspace: &Workspace,
+        trusted: impl FnOnce() -> bool,
+    ) -> Option<crate::workspace::BypassReach> {
         let mode = self.permission_mode.get();
-        if mode != crate::PermissionMode::Bypass || !workspace_is_trusted(policy, workspace) {
+        if mode != crate::PermissionMode::Bypass || !trusted() {
             return None;
         }
         let tool = strip_namespace(tool);
@@ -7688,6 +7696,55 @@ impl ReachFacts<'_> {
 /// scope, a path or a line with no sandbox is accepted on (TRUST-7).
 pub(crate) fn workspace_is_trusted<S: Sink>(policy: &Policy<'_, S>, workspace: &Workspace) -> bool {
     policy.trusts_path(&workspace.trust_key("."))
+}
+
+/// The reach a watch armed under a reach is looked at with now, or `None` where the live mode no
+/// longer gives one (MODE-8, PATHREQ-7, FSWATCH-7).
+///
+/// For a session looking at a watch with no call in progress, which has no policy: `trusted` is
+/// whether the working directory is trusted by the session's map with the record of untrusted
+/// memories applied, asked the way [`workspace_is_trusted`] asks it, and it is asked only where the
+/// mode is bypass. Read from the live mode at each look, so the reach ends when the key leaves
+/// bypass, and from the person's rules at each look, so a path is judged where it leads now. Nothing
+/// here is a file's content.
+pub fn reach_of_a_watch(
+    permission_mode: &crate::LiveMode,
+    profile: Option<&std::path::Path>,
+    workspace: &Workspace,
+    trusted: impl FnOnce() -> bool,
+) -> Option<crate::workspace::BypassReach> {
+    ReachFacts {
+        permission_mode: permission_mode.clone(),
+        profile,
+    }
+    .reach_for("watch_file", workspace, trusted)
+}
+
+/// One look at a watched path, for a session with no call in progress (FSWATCH-7).
+///
+/// The reach is derived here from the live mode, the person's rules and `trust`, which is the
+/// session's map before the record of untrusted memories is applied to it. Outside bypass nothing
+/// beyond the workspace is reachable, so the profile directory and the record are not read at all.
+/// The terminal and the bridge both call this, so a watch is judged one way.
+pub fn look_at_a_watch(
+    workspace: &Workspace,
+    permission_mode: &crate::LiveMode,
+    trust: &bravebot_core::trust::TrustStore,
+    path: &str,
+    under: &std::path::Path,
+) -> crate::watch::Looked {
+    if permission_mode.get() != crate::PermissionMode::Bypass {
+        return workspace.look_reaching(path, under, None);
+    }
+    let profile = crate::home::profile();
+    let reach = reach_of_a_watch(permission_mode, profile.as_deref(), workspace, || {
+        workspace.is_trusted_in(&crate::memory::with_recorded(
+            trust,
+            workspace,
+            crate::home::directory().as_deref(),
+        ))
+    });
+    workspace.look_reaching(path, under, reach)
 }
 
 /// Whether a turn with these facts accepts a `scopes` argument on `run` and a `request_path` call,
@@ -26827,6 +26884,102 @@ mod tests {
                 said.contains("changed while the user was being asked about it"),
                 "the planner was not told the answer was thrown away: {said}"
             );
+        }
+    }
+
+    /// FSWATCH-7: the one look both front ends take at a watch.
+    mod looking_at_a_watch {
+        use super::arguments::Scratch;
+        use super::*;
+        use crate::watch::Looked;
+        use crate::{LiveMode, PermissionMode};
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        /// A project, a directory beside it holding a file, and the workspace over the project.
+        fn places(name: &str) -> (Scratch, Workspace, String) {
+            let scratch = Scratch::new(&format!("watch-look-{name}"));
+            let project = scratch.path.join("project");
+            let beside = scratch.path.join("beside");
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::create_dir_all(&beside).unwrap();
+            let outside = beside.canonicalize().unwrap().join("notes.txt");
+            std::fs::write(&outside, "one").unwrap();
+            let workspace = Workspace::new(project.canonicalize().unwrap()).unwrap();
+            (scratch, workspace, outside.display().to_string())
+        }
+
+        /// A watch beside the project is looked at under bypass where the working directory is
+        /// trusted, and is out of reach under any other mode and where it is not trusted. The
+        /// regressions it rejects: a look that takes the reach from the mode alone, which reaches
+        /// beside an untrusted project, and a look that never gives the reach, which ends the
+        /// watch the moment bypass is on.
+        #[test]
+        fn a_watch_beside_the_project_is_reached_under_bypass_in_a_trusted_project_only() {
+            let (_scratch, workspace, outside) = places("reach");
+            let trusting = crate::trusted::trusting_the_workspace(workspace.root());
+            let not_trusting = crate::workspace::trust_store(workspace.root());
+            let bypass = LiveMode::new(PermissionMode::Bypass);
+            let ask = LiveMode::new(PermissionMode::Ask);
+            let look = |mode: &LiveMode, trust| {
+                look_at_a_watch(&workspace, mode, trust, &outside, workspace.root())
+            };
+
+            assert!(matches!(look(&bypass, &trusting), Looked::Saw(_)));
+            assert!(matches!(look(&ask, &trusting), Looked::OutOfReach));
+            assert!(matches!(look(&bypass, &not_trusting), Looked::OutOfReach));
+        }
+
+        /// A path inside the project is seen under every mode and with no trust, since a look of
+        /// it asks nothing of the map. The regression it rejects: a look that is out of reach
+        /// for everything unless bypass gives it a reach.
+        #[test]
+        fn a_watch_inside_the_project_is_seen_whatever_the_mode_and_the_map() {
+            let (_scratch, workspace, _) = places("inside");
+            std::fs::write(workspace.root().join("inside.txt"), "one").unwrap();
+            let not_trusting = crate::workspace::trust_store(workspace.root());
+            for mode in [PermissionMode::Ask, PermissionMode::Bypass] {
+                let looked = look_at_a_watch(
+                    &workspace,
+                    &LiveMode::new(mode),
+                    &not_trusting,
+                    "inside.txt",
+                    workspace.root(),
+                );
+                assert!(matches!(looked, Looked::Saw(_)), "{mode:?}");
+            }
+        }
+
+        /// The trust a watch is judged by is the answer a call is judged by (TRUST-7), for a map
+        /// that trusts the working directory and one that does not. The regression it rejects: a
+        /// look that asks the map under another key than the one `workspace_is_trusted` asks, so
+        /// a call and a watch in one project disagree about whether it is trusted.
+        #[test]
+        fn a_watch_asks_the_trust_question_a_call_asks() {
+            let (_scratch, workspace, _) = places("agree");
+            for trust in [
+                crate::trusted::trusting_the_workspace(workspace.root()),
+                crate::workspace::trust_store(workspace.root()),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "ask whether the project is trusted");
+                let policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy")
+                .with_file_authority(FileAuthority::new(trust.clone()));
+                assert_eq!(
+                    workspace_is_trusted(&policy, &workspace),
+                    workspace
+                        .is_trusted_in(&crate::memory::with_recorded(&trust, &workspace, None)),
+                );
+            }
         }
     }
 }

@@ -2896,7 +2896,18 @@ fn event_loop(
             // time, so the order between them decides nothing.
             None => match (!showing_sessions)
                 .then(|| {
-                    session.watch_fired(Instant::now(), |path, under| workspace.look(path, under))
+                    // The reach is derived again at each pass from the live mode, so a watch on a
+                    // path outside the workspace ends once the key leaves bypass (FSWATCH-7).
+                    let session_mode = session.live_permission_mode();
+                    session.watch_fired(Instant::now(), |path, under| {
+                        bravebot_agent::tools::look_at_a_watch(
+                            &workspace,
+                            &session_mode,
+                            &answers.trust,
+                            path,
+                            under,
+                        )
+                    })
                 })
                 .flatten()
             {

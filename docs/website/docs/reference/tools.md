@@ -1128,7 +1128,8 @@ write its own next prompt, and a field for how often to look would make the late
 choose.
 
 **Nothing is asked that a read would not ask.** Inside the working directory a watch is the promotion a
-read of the planner's own choice of file already gets; outside it, whatever answer already stands. A path
+read of the planner's own choice of file already gets; outside it, whatever answer already stands, and
+where the person has turned permission prompts off, a path a read reaches. A path
 a read would be refused is a watch that is refused. Asking to be told when a file changes is asking for
 less than reading it, so a prompt of its own here would be a second question to somebody who answered
 the first.

@@ -71504,6 +71504,9 @@ struct PathTurn {
     workspace: Workspace,
     trust: bravebot_core::trust::TrustStore,
     events: Vec<Event>,
+    /// The watches the turn asked to arm, which are armed only when a test turns the task's
+    /// arming on with [`ARM_WATCHES`].
+    watches: Vec<bravebot_agent::watch::Armed>,
 }
 
 /// Places a request for a path is made against: a session, a home that holds the places a request
@@ -71518,6 +71521,26 @@ thread_local! {
     /// person: the terminal can, a window cannot. Read when the task is built, on the test's thread.
     static FRONT_END_CAN_ASK_ABOUT_UNCONFINED: std::cell::Cell<bool> =
         const { std::cell::Cell::new(true) };
+    /// Whether the task a [`path_turn`] runs may arm standing watches, as a session that looks
+    /// again does. Off by default so the tool list of other tests is unchanged.
+    static ARM_WATCHES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Turns the task's arming of standing watches on for the length of a test and off again when the
+/// test ends, including when an assertion fails, so a failure leaves nothing set on the thread.
+struct ArmingWatches;
+
+impl ArmingWatches {
+    fn on() -> Self {
+        ARM_WATCHES.set(true);
+        Self
+    }
+}
+
+impl Drop for ArmingWatches {
+    fn drop(&mut self) {
+        ARM_WATCHES.set(false);
+    }
 }
 
 impl PathPlaces {
@@ -71612,6 +71635,11 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
         .with_confined_runs(true)
         .asking_about_unconfined(FRONT_END_CAN_ASK_ABOUT_UNCONFINED.get())
         .with_sandbox_mode(mode);
+    if ARM_WATCHES.get() {
+        task = task
+            .looking_again(true)
+            .arming(bravebot_agent::watch::Arming::Allowed { free: 8 });
+    }
     if let Some(permissions) = permissions {
         task = task.with_permissions(permissions);
     }
@@ -71631,6 +71659,11 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
         &bravebot_core::cancel::Cancel::new(),
     );
     outcome.outcome.as_ref().expect("the turn runs");
+    let watches = outcome
+        .outcome
+        .as_ref()
+        .map(|done| done.watches.clone())
+        .unwrap_or_default();
     let first = received.recv().expect("first request");
     let results = (0..calls.len())
         .map(|_| received.recv().expect("a later request"))
@@ -71641,6 +71674,252 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
         workspace,
         trust: outcome.decisions.trust,
         events: sink.events().to_vec(),
+        watches,
+    }
+}
+
+/// PATHREQ-7, FSWATCH-7: a watch armed on a file beside the session under bypass stays armed while
+/// the mode is bypass, fires when the file is written, and ends as out of reach at the first look
+/// after the key leaves bypass. A link retargeted into `~/.ssh` is judged where it now leads.
+///
+/// The regressions it rejects: a look that takes no reach (the watch ends at its first look, so the
+/// unchanged-then-written steps fail), a reach copied at arming and never read again (the
+/// out-of-reach step fails), and a look that skips the person's rules (the link step fails).
+#[test]
+fn under_bypass_a_watch_beside_the_session_fires_and_ends_when_the_key_leaves_bypass() {
+    use bravebot_agent::watch::{Change, Looked, Reaped, Watches};
+    use std::time::{Duration, Instant};
+
+    let places = PathPlaces::new("watch-reach-bypass");
+    let target = places.beside.join("notes.txt");
+    std::fs::write(&target, "one").expect("a file beside the session");
+    std::fs::write(places.home.join(".ssh/id"), "KEY").expect("a key");
+    let calls = [(
+        "watch_file",
+        serde_json::json!({ "path": target.display().to_string() }),
+    )];
+    let _arming = ArmingWatches::on();
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let turn = path_turn(
+        "watch-reach-bypass",
+        &places,
+        &calls,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypassing(&mut asked),
+    );
+    let said = newest_tool_result(turn.results[0].clone());
+    assert!(said.contains("watching:"), "armed: {said}");
+    assert_eq!(turn.watches.len(), 1, "{said}");
+    assert!(
+        matches!(turn.watches[0].looked, Looked::Saw(_)),
+        "{:?}",
+        turn.watches[0].looked
+    );
+    assert!(
+        turn.workspace.added_directories().is_empty() && turn.workspace.path_reach().is_empty(),
+        "the directory was opened"
+    );
+    // The arming call put one record in the trail naming the mode, the tool and the field, and
+    // /status lists the directory from the same list.
+    let records = turn
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "path_reach",
+                detail,
+            } => Some(detail.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert!(
+        records[0].contains("bypass mode")
+            && records[0].contains("path of watch_file")
+            && records[0].contains(&places.beside.display().to_string()),
+        "{}",
+        records[0]
+    );
+    let listed = turn.workspace.reached_directories();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(
+        (listed[0].tool.as_str(), listed[0].field, listed[0].mode),
+        ("watch_file", "path", "bypass")
+    );
+    assert_eq!(listed[0].directory, places.beside);
+    assert!(turn.workspace.take_new_reaches().is_empty());
+    let trust = trusting_the_workspace();
+    let look_as = |mode: &bravebot_agent::LiveMode, path: &str, under: &std::path::Path| {
+        let reach = bravebot_agent::tools::reach_of_a_watch(
+            mode,
+            Some(places.home.as_path()),
+            &turn.workspace,
+            || turn.workspace.is_trusted_in(&trust),
+        );
+        turn.workspace.look_reaching(path, under, reach)
+    };
+    let mode = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Bypass);
+    let root = turn.workspace.root().to_path_buf();
+    let mut watches = Watches::new();
+    let began = Instant::now();
+    let number = watches
+        .arm(
+            turn.watches[0].path.clone(),
+            root.clone(),
+            1,
+            turn.watches[0].looked.clone(),
+            began,
+        )
+        .expect("armed");
+    let at = |seconds| began + Duration::from_secs(seconds);
+
+    // Unchanged: still armed, nothing to report.
+    let ended = watches.look(at(6), |path, under| look_as(&mode, path, under));
+    assert!(ended.is_empty(), "ended with the mode in bypass: {ended:?}");
+    assert_eq!(watches.live()[0].change(), None);
+
+    // Written: the watch fires.
+    std::fs::write(&target, "two, and longer").expect("written");
+    let ended = watches.look(at(12), |path, under| look_as(&mode, path, under));
+    assert!(ended.is_empty(), "ended with the mode in bypass: {ended:?}");
+    assert_eq!(watches.live()[0].change(), Some(Change::Written));
+
+    // A link retargeted into a refusal category is judged where it now leads.
+    let moved = places.beside.join("moved.txt");
+    std::fs::rename(&target, &moved).expect("moved");
+    std::os::unix::fs::symlink(places.home.join(".ssh/id"), &target).expect("a link");
+    assert_eq!(
+        look_as(&mode, &turn.watches[0].path, &root),
+        Looked::OutOfReach,
+        "a link into ~/.ssh was looked at"
+    );
+    std::fs::remove_file(&target).expect("link removed");
+
+    // A link retargeted into a second sibling directory is looked at and reached, and the look
+    // records nothing: a record left unreported would be put in the trail by the next call, named
+    // for that call's tool.
+    let other = places
+        .beside
+        .parent()
+        .expect("a parent")
+        .join("other-beside");
+    std::fs::create_dir_all(&other).expect("a second sibling directory");
+    std::fs::write(other.join("notes.txt"), "elsewhere").expect("a file there");
+    std::os::unix::fs::symlink(other.join("notes.txt"), &target).expect("a link");
+    assert!(
+        matches!(look_as(&mode, &turn.watches[0].path, &root), Looked::Saw(_)),
+        "a link into a second sibling was not looked at"
+    );
+    std::fs::remove_file(&target).expect("link removed");
+    assert!(
+        turn.workspace.take_new_reaches().is_empty(),
+        "a look left a reach for a later call to report"
+    );
+    assert_eq!(turn.workspace.reached_directories().len(), 1);
+    std::fs::rename(&moved, &target).expect("moved back");
+
+    // The key leaves bypass: the next look ends the watch.
+    mode.set(bravebot_agent::PermissionMode::Ask);
+    let ended = watches.look(at(18), |path, under| look_as(&mode, path, under));
+    assert_eq!(ended, vec![(number, Reaped::OutOfReach)]);
+    assert!(watches.live().is_empty());
+}
+
+/// PATHREQ-7: a watch is refused at arming where a read of the path is, in each refusal category,
+/// outside bypass, in a workspace nobody trusted, and where a settings layer keeps reads inside.
+/// The control is a sibling file that arms. The regression it rejects is a reach given to
+/// `watch_file` that skips a refusal the other file tools keep.
+#[test]
+fn a_watch_is_refused_at_arming_where_a_read_of_the_path_is() {
+    let places = PathPlaces::new("watch-reach-refused");
+    let target = places.beside.join("notes.txt");
+    std::fs::write(&target, "one").expect("a file beside the session");
+    std::fs::write(places.home.join(".ssh/id"), "KEY").expect("a key");
+    let link = places.beside.join("to-ssh");
+    std::os::unix::fs::symlink(places.home.join(".ssh"), &link).expect("a link into ~/.ssh");
+    let watching = |path: &std::path::Path| {
+        (
+            "watch_file",
+            serde_json::json!({ "path": path.display().to_string() }),
+        )
+    };
+    let _arming = ArmingWatches::on();
+    let refused = [
+        watching(&places.home),
+        watching(&places.home.join(".ssh/id")),
+        watching(&link.join("id")),
+    ];
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let mut all = vec![watching(&target)];
+    all.extend(refused.iter().cloned());
+    let turn = path_turn(
+        "watch-reach-refused-bypass",
+        &places,
+        &all,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypassing(&mut asked),
+    );
+    assert!(
+        newest_tool_result(turn.results[0].clone()).contains("watching:"),
+        "the control was refused: {}",
+        turn.results[0]
+    );
+    for (at, what) in ["home", "ssh", "a link into ssh"].iter().enumerate() {
+        let said = newest_tool_result(turn.results[at + 1].clone());
+        assert!(said.contains("outside the workspace"), "{what}: {said}");
+    }
+    assert_eq!(turn.watches.len(), 1, "only the control arms");
+
+    // Outside bypass, in an untrusted workspace and with reads kept inside: the control is refused.
+    let control = [watching(&target)];
+    for (what, permission, trust, inside) in [
+        (
+            "asking",
+            bravebot_agent::PermissionMode::Ask,
+            trusting_the_workspace(),
+            false,
+        ),
+        (
+            "untrusted",
+            bravebot_agent::PermissionMode::Bypass,
+            bravebot_core::trust::TrustStore::new("/work"),
+            false,
+        ),
+        (
+            "reads kept inside",
+            bravebot_agent::PermissionMode::Bypass,
+            trusting_the_workspace(),
+            true,
+        ),
+    ] {
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let turn = path_turn_in(
+            &format!("watch-reach-refused-{what}"),
+            &places,
+            &control,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            permission,
+            trust,
+            None,
+            &mut bypassing(&mut asked),
+            inside,
+            |_| {},
+        );
+        let said = newest_tool_result(turn.results[0].clone());
+        assert!(
+            said.contains("resolves outside the workspace"),
+            "{what}: {said}"
+        );
+        assert!(turn.watches.is_empty(), "{what}: armed");
     }
 }
 

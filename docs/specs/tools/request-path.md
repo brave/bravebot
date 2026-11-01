@@ -155,9 +155,11 @@ where the path leads through links:
 
 `read_git` reaches a repository outside the workspace and then reads its history only where the
 whole of its `.git` is vouched for ([GIT-1](read-git.md#GIT-1)), as it does for a repository in the
-workspace nobody vouched for, so its answer there is that refusal. `watch_file` is not given the
-reach: a watch is looked at later with no call in progress, so one armed outside the workspace
-would end at its first look, and the refusal for a path outside the workspace stands for it.
+workspace nobody vouched for, so its answer there is that refusal. `watch_file` is given the reach
+too. A watch is looked at later with no call in progress, so the session that looks derives the
+reach again at each look, from the live mode, the person's rules and the trust map
+([FSWATCH-7](../file-watches.md#FSWATCH-7)). A watch armed outside the workspace under bypass keeps
+looking while the mode is bypass and ends as out of reach at the first look after it is not.
 
 A refused path gets the refusal it always had and reaches nothing. The sandbox mode does not change
 the file tools' reach: it holds under `workspace-write`, `strict` and `off` and on every platform.
@@ -230,3 +232,6 @@ delegate, which has a workspace of its own under `isolation: checkout`.
 `verified-by: bravebot_agent::turn::under_bypass_a_directory_whose_name_is_not_text_is_not_opened`
 `verified-by: bravebot_agent::turn::under_bypass_a_directory_holding_the_project_says_it_ends_checkouts`
 `verified-by: bravebot_agent::workspace::a_directory_opened_through_a_clone_is_open_in_the_workspace_it_came_from`
+`verified-by: bravebot_agent::turn::under_bypass_a_watch_beside_the_session_fires_and_ends_when_the_key_leaves_bypass`
+`verified-by: bravebot_agent::turn::a_watch_is_refused_at_arming_where_a_read_of_the_path_is`
+`verified-by: bravebot_agent::workspace::a_look_holding_a_reach_is_judged_by_the_refusals_of_a_read_and_records_nothing`
