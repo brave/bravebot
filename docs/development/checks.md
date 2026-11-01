@@ -29,6 +29,16 @@ not. A lint is added to the table once the tree has none of it. A test target th
 unit tests unwrap), because `allow-unwrap-in-tests` in `clippy.toml` exempts a `#[test]` function and
 a `#[cfg(test)]` module and not a helper in `tests/` or under `cfg(all(test, unix))`.
 
+`bravebot-sandbox` also denies `clippy::undocumented_unsafe_blocks` with an inner attribute in
+`crates/sandbox/src/lib.rs` and in `crates/sandbox/tests/windows.rs`, a root of its own that the
+library attribute does not reach, so every `unsafe` block there has a `// SAFETY:` comment stating
+why it is sound. The lint is not in the workspace table because other crates and targets have
+`unsafe` blocks without one, for example `bravebot-skus`, `bravebot-ui-files`, `fuzz/`,
+`crates/agent/src/preamble.rs` and the tests of `bravebot-agent`, `bravebot-tui`,
+`bravebot-ui-bridge`, `bravebot-cli` and `bravebot-session`. It is checked on the Linux, macOS and
+Windows clippy runs, which each compile different blocks. Place the comment directly above the
+`// nosemgrep:` line, and for an `unsafe impl` between the attributes and the item.
+
 Lints the tree has hundreds of sites of are held to the base instead: `make check-lint-increase`
 runs clippy over the libraries and binaries at the merge base and at the branch, and fails when a lint
 reports more sites in a crate than it did. Mark a site that is right with

@@ -453,6 +453,7 @@ fn the_account_owns_or_can_write(_path: &Path) -> bool {
     reason = "`libc::geteuid` takes no arguments, cannot fail and has no preconditions"
 )]
 fn the_effective_user() -> u32 {
+    // SAFETY: `geteuid` takes no arguments, cannot fail and has no preconditions.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe { libc::geteuid() }
 }
@@ -471,6 +472,8 @@ fn the_account_can_write(path: &Path) -> bool {
     let Ok(name) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
         return false;
     };
+    // SAFETY: `access` reads a NUL-terminated string through the pointer, and `name` is a
+    // `CString` that is alive until the call returns.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe { libc::access(name.as_ptr(), libc::W_OK) == 0 }
 }

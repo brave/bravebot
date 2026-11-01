@@ -311,6 +311,61 @@ fn a_crate_that_exempts_nothing_forbids_rather_than_denies() {
     }
 }
 
+/// `bravebot-sandbox` denies `clippy::undocumented_unsafe_blocks` at its library root and at each
+/// root under `tests/`, so a block there without a `// SAFETY:` comment is an error. The library
+/// root reaches `src/`, and each file under `tests/` is a root of its own.
+#[test]
+fn every_sandbox_root_that_has_unsafe_denies_undocumented_blocks() {
+    const ATTRIBUTE: &str = "#![deny(clippy::undocumented_unsafe_blocks)]";
+
+    fn has_unsafe(path: &Path) -> bool {
+        if path.is_dir() {
+            return std::fs::read_dir(path)
+                .expect("a source directory")
+                .any(|entry| has_unsafe(&entry.expect("a directory entry").path()));
+        }
+        path.extension().is_some_and(|extension| extension == "rs")
+            && std::fs::read_to_string(path)
+                .expect("a source file")
+                .lines()
+                .any(|line| {
+                    let line = line.trim_start();
+                    !line.starts_with("//")
+                        && (line.contains("unsafe {")
+                            || line.contains("unsafe impl")
+                            || line.contains("unsafe fn")
+                            || line.contains("unsafe extern"))
+                })
+    }
+
+    let sandbox = workspace().join("crates/sandbox");
+    let mut roots = vec![(sandbox.join("src/lib.rs"), sandbox.join("src"))];
+    for entry in std::fs::read_dir(sandbox.join("tests")).expect("the sandbox tests directory") {
+        let path = entry.expect("a directory entry").path();
+        if path.extension().is_some_and(|extension| extension == "rs") {
+            roots.push((path.clone(), path));
+        }
+    }
+
+    let mut with_unsafe = 0;
+    for (root, reach) in roots {
+        if !has_unsafe(&reach) {
+            continue;
+        }
+        with_unsafe += 1;
+        let source = std::fs::read_to_string(&root).expect("a crate root");
+        assert!(
+            source.lines().any(|line| line.trim() == ATTRIBUTE),
+            "{} has `unsafe` and does not carry `{ATTRIBUTE}`",
+            root.display()
+        );
+    }
+    assert!(
+        with_unsafe > 0,
+        "no sandbox root has `unsafe`, so this test checked nothing"
+    );
+}
+
 /// A reader that accepts the wrong shapes enforces nothing, and the wrong shapes are the ones a
 /// crate skipping the rule would have: an `allow` at the root, the attribute named in prose, the
 /// attribute on one item rather than on the crate, and the attribute inside a module, which says

@@ -50,6 +50,8 @@ impl Inspection {
     reason = "`prctl` takes integers and marks this process non-dumpable"
 )]
 pub fn refuse_same_user_inspection() -> Inspection {
+    // SAFETY: `PR_SET_DUMPABLE` takes integers only. The four trailing arguments are unused by
+    // this option and are passed as zero, and no pointer is read or written.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let set = unsafe {
         libc::prctl(
@@ -112,8 +114,9 @@ mod tests {
         if std::env::var_os(CHILD).is_none() {
             return;
         }
-        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         assert_eq!(
+            // SAFETY: `PR_SET_DUMPABLE` takes integers only, and no pointer is read or written.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             unsafe {
                 libc::prctl(
                     libc::PR_SET_DUMPABLE,
@@ -126,8 +129,9 @@ mod tests {
             0
         );
         assert_eq!(refuse_same_user_inspection(), Inspection::Refused);
-        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         assert_eq!(
+            // SAFETY: `PR_GET_DUMPABLE` takes integers only, and no pointer is read or written.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             unsafe {
                 libc::prctl(
                     libc::PR_GET_DUMPABLE,

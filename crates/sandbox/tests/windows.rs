@@ -8,6 +8,7 @@
 //! a job that reported green having confined nothing would be the false confidence this crate is
 //! meant to remove.
 #![cfg(windows)]
+#![deny(clippy::undocumented_unsafe_blocks)]
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use bravebot_sandbox::base::{Prelude, base};
@@ -664,6 +665,8 @@ fn a_stage_inherits_no_handle_but_the_streams_it_is_given() {
     let sandbox = sandbox();
     let spawning = spawning();
     let (reader, writer) = std::io::pipe().expect("a pipe");
+    // SAFETY: `writer` is an open pipe handle for the call, and the call takes a handle and two
+    // flag masks and reads no memory.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let marked = unsafe {
         SetHandleInformation(
@@ -714,8 +717,8 @@ fn on_this_console() -> Vec<u32> {
 
     let mut attached = vec![0u32; 64];
     loop {
-        // Sound because the buffer holds as many identifiers as the count says, and the call
-        // writes none when it needs more.
+        // SAFETY: the buffer holds as many identifiers as the count says, and the call writes
+        // none when it needs more.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let count =
             unsafe { GetConsoleProcessList(attached.as_mut_ptr(), attached.len() as u32) } as usize;
@@ -738,12 +741,16 @@ fn give_this_process_a_console() {
     };
 
     let streams = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
+    // SAFETY: `GetStdHandle` takes a constant naming a stream and reads no memory.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let held = streams.map(|stream| unsafe { GetStdHandle(stream) });
+    // SAFETY: `AllocConsole` takes no arguments and reads no memory.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let allocated = unsafe { AllocConsole() };
     assert_ne!(allocated, 0, "{}", std::io::Error::last_os_error());
     for (stream, handle) in streams.into_iter().zip(held) {
+        // SAFETY: `handle` is the value `GetStdHandle` returned for this stream above, and the
+        // call reads no memory.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe { SetStdHandle(stream, handle) };
     }
