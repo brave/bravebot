@@ -272,6 +272,8 @@ releases in front of the person without either.
 `verified-by: bravebot_cli::host::an_answered_question_is_kept_only_as_far_as_any_other_output`
 `verified-by: bravebot_cli::host::a_held_question_does_not_run_out_the_idle_time`
 `verified-by: bravebot_cli::plain::each_question_tells_the_watcher_its_kind`
+`verified-by: bravebot_cli::plain::a_line_is_reported_drawn_only_after_it_is_written`
+`verified-by: bravebot_cli::host::a_question_is_not_published_held_until_its_last_line_is_in_the_backlog`
 `verified-by: bravebot_cli::running::a_background_session_runs_its_prompt_and_takes_a_reply_only_while_idle`
 
 <a id="BG-8"></a>

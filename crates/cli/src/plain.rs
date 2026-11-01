@@ -3625,10 +3625,12 @@ mod tests {
         }
     }
 
-    /// A watcher that keeps what the screen held each time it was told a line is being waited for.
+    /// A watcher that keeps what the screen held each time it was told a line is being waited for
+    /// and each time it was told what asks for the line is drawn.
     struct SeesTheScreen {
         screen: Screen,
         at_each_wait: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        at_each_draw: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     }
 
     impl Watcher for SeesTheScreen {
@@ -3639,21 +3641,21 @@ mod tests {
             self.at_each_wait.lock().expect("the record").push(text);
         }
 
-        fn drawn(&mut self, _on: Waiting) {}
+        fn drawn(&mut self, _on: Waiting) {
+            let text = self.screen.text();
+            self.at_each_draw.lock().expect("the record").push(text);
+        }
 
         fn received(&mut self, _on: Waiting, _line: Option<&str>) {}
     }
 
-    /// BG-9: the watcher is told a line is being waited for before what asks for the line is
-    /// written. A terminal attached to a background session answers as soon as it has drawn the
-    /// marker or the question, so a session that said it was waiting only afterwards would refuse
-    /// that line.
-    #[test]
-    fn a_line_is_waited_for_before_what_asks_for_it_is_written() {
-        type Asked = Prompting<std::io::BufReader<std::io::Cursor<Vec<u8>>>, Screen>;
-        // What a way of asking is called, what it draws to ask for the line, and the call that asks.
-        type Case = (&'static str, String, Box<dyn Fn(&mut Asked)>);
-        let cases: Vec<Case> = vec![
+    type Asked = Prompting<std::io::BufReader<std::io::Cursor<Vec<u8>>>, Screen>;
+    // What a way of asking is called, what it draws to ask for the line, and the call that asks.
+    type Case = (&'static str, String, Box<dyn Fn(&mut Asked)>);
+
+    /// Every way a session asks for a line.
+    fn ways_of_asking() -> Vec<Case> {
+        vec![
             (
                 "the prompt",
                 MARKER.to_string(),
@@ -3689,22 +3691,40 @@ mod tests {
                     let _ = asking.ask_user(&series_of(&[("Region", "Which?")]));
                 }),
             ),
-        ];
-        let mut problems = Vec::new();
-        for (what, invitation, act) in cases {
-            let screen = Screen::default();
-            let at_each_wait = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            let mut asking = Prompting::watched(
-                std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
-                screen.clone(),
-                Box::new(SeesTheScreen {
-                    screen: screen.clone(),
-                    at_each_wait: at_each_wait.clone(),
-                }),
-            );
-            act(&mut asking);
+        ]
+    }
 
-            let waits = at_each_wait.lock().expect("the record");
+    /// Asks the way `act` does, with a watcher that keeps the screen at each wait and at each
+    /// draw. Returns the screen, then what it held at each wait and at each draw.
+    fn asked_while_watched(act: &dyn Fn(&mut Asked)) -> (Screen, Vec<String>, Vec<String>) {
+        let screen = Screen::default();
+        let at_each_wait = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let at_each_draw = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut asking = Prompting::watched(
+            std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+            screen.clone(),
+            Box::new(SeesTheScreen {
+                screen: screen.clone(),
+                at_each_wait: at_each_wait.clone(),
+                at_each_draw: at_each_draw.clone(),
+            }),
+        );
+        act(&mut asking);
+        let waits = at_each_wait.lock().expect("the record").clone();
+        let draws = at_each_draw.lock().expect("the record").clone();
+        (screen, waits, draws)
+    }
+
+    /// BG-9: the watcher is told a line is being waited for before what asks for the line is
+    /// written. A terminal attached to a background session answers as soon as it has drawn the
+    /// marker or the question, so a session that said it was waiting only afterwards would refuse
+    /// that line.
+    #[test]
+    fn a_line_is_waited_for_before_what_asks_for_it_is_written() {
+        let mut problems = Vec::new();
+        for (what, invitation, act) in ways_of_asking() {
+            let (screen, waits, _) = asked_while_watched(&act);
+
             if waits.len() != 1 {
                 problems.push(format!("{what} waited {} times, not once", waits.len()));
             } else if waits[0].contains(&invitation) {
@@ -3715,6 +3735,28 @@ mod tests {
             }
             if !screen.text().contains(&invitation) {
                 problems.push(format!("{what} never drew {invitation:?}"));
+            }
+        }
+        assert!(problems.is_empty(), "{problems:#?}");
+    }
+
+    /// BG-7: the watcher is told what asks for the line has been drawn only after it is written.
+    /// The host publishes a question as held from that call, and a terminal that attaches once it
+    /// is published is replayed what was written by then, so a call made before the write would
+    /// leave the last line of a held question out of that replay.
+    #[test]
+    fn a_line_is_reported_drawn_only_after_it_is_written() {
+        let mut problems = Vec::new();
+        for (what, invitation, act) in ways_of_asking() {
+            let (_, _, draws) = asked_while_watched(&act);
+
+            if draws.len() != 1 {
+                problems.push(format!("{what} was drawn {} times, not once", draws.len()));
+            } else if !draws[0].contains(&invitation) {
+                problems.push(format!(
+                    "{what} was reported drawn before the whole of it was written: {}",
+                    draws[0]
+                ));
             }
         }
         assert!(problems.is_empty(), "{problems:#?}");
