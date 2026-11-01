@@ -193,7 +193,8 @@ fn record_of(project: &Path, found: &Found) -> Record {
                     message: match said {
                         Spoken::Person(text) => Message::user(text.as_str()),
                         Spoken::Agent(text) => Message::assistant(text.as_str()),
-                    },
+                    }
+                    .into(),
                     composed: Some(Composed::Imported),
                     address: None,
                     source: None,

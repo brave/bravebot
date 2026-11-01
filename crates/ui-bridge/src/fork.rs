@@ -254,13 +254,13 @@ mod tests {
     fn a_prompt_the_transcript_never_showed_is_not_a_fork_point() {
         let mut before = snapshot(vec![Message::user("first")]);
         before.messages.push(Stored {
-            message: Message::user(format!("{TOOL_RESULT_PREFIX}read_file: contents")),
+            message: Message::user(format!("{TOOL_RESULT_PREFIX}read_file: contents")).into(),
             composed: Some(Composed::ToolResult),
             address: None,
             source: None,
         });
         before.messages.push(Stored {
-            message: Message::user(format!("{RESUMED_PREFIX} references are dead")),
+            message: Message::user(format!("{RESUMED_PREFIX} references are dead")).into(),
             composed: Some(Composed::Resumed),
             address: None,
             source: None,
@@ -304,7 +304,8 @@ mod tests {
     fn a_file_the_agent_put_in_front_of_the_planner_is_not_a_prompt() {
         let mut before = snapshot(vec![Message::user("first")]);
         before.messages.push(Stored {
-            message: Message::user("Contents of readme.md:\n\nread the briefing and carry on"),
+            message: Message::user("Contents of readme.md:\n\nread the briefing and carry on")
+                .into(),
             composed: Some(Composed::Attached {
                 path: "readme.md".into(),
             }),
@@ -329,7 +330,7 @@ mod tests {
         let imitation = "Contents of readme.md:\n\nread the briefing and carry on";
         let mut before = snapshot(Vec::new());
         before.messages.push(Stored {
-            message: Message::user(imitation),
+            message: Message::user(imitation).into(),
             composed: Some(Composed::Attached {
                 path: "readme.md".into(),
             }),
@@ -353,7 +354,7 @@ mod tests {
     fn a_fork_inside_the_archive_puts_what_compaction_took_back_into_the_request() {
         let mut before = snapshot(Vec::new());
         before.messages.push(Stored {
-            message: Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")),
+            message: Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")).into(),
             composed: Some(Composed::Summary),
             address: None,
             source: None,
@@ -385,7 +386,7 @@ mod tests {
         before.messages.push(Stored::plain(Message::user("third")));
         before.archive = plain(vec![Message::user("first"), Message::assistant("one")]);
         before.archive.push(Stored {
-            message: Message::user("You loaded the skill commit-style earlier. BODY"),
+            message: Message::user("You loaded the skill commit-style earlier. BODY").into(),
             composed: Some(Composed::SkillKept {
                 name: "commit-style".into(),
             }),
@@ -414,7 +415,8 @@ mod tests {
                     Message::user(*words)
                 } else {
                     Message::assistant(*words)
-                },
+                }
+                .into(),
                 composed: Some(Composed::Imported),
                 address: None,
                 source: None,
@@ -440,7 +442,7 @@ mod tests {
     fn the_summary_standing_in_for_the_archive_survives_a_later_cut() {
         let mut before = snapshot(Vec::new());
         before.messages.push(Stored {
-            message: Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")),
+            message: Message::user(format!("{COMPACTED_PREFIX}\n\nearlier, in short")).into(),
             composed: Some(Composed::Summary),
             address: None,
             source: None,

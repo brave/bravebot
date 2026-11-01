@@ -31,6 +31,7 @@ use bravebot_core::label::{Confidentiality, Integrity, Label};
 use bravebot_core::slot::{SlotId, SlotStore};
 use bravebot_core::value::Labelled;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Why a user message was composed rather than typed, for the surfaces that draw one.
 ///
@@ -250,8 +251,11 @@ pub struct Stored {
     ///
     /// Flattened, so a record written before any of this existed reads as a message with nothing
     /// composed about it, which is what it is.
+    ///
+    /// Behind an [`Arc`] so [`Conversation::shared_with_system`] hands out the message itself and a
+    /// fork of the exchange copies pointers. A message is never changed once it is stored.
     #[serde(flatten)]
-    pub message: Message,
+    pub message: Arc<Message>,
     /// Absent for a prompt, an answer and a result, which is nearly all of them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composed: Option<Composed>,
@@ -275,7 +279,7 @@ impl Stored {
     /// A message nobody composed: a prompt, an answer, or a result.
     pub fn plain(message: Message) -> Self {
         Self {
-            message,
+            message: Arc::new(message),
             composed: None,
             address: None,
             source: None,
@@ -528,6 +532,19 @@ impl Conversation {
         self.assembled(system, self.messages.len())
     }
 
+    /// The same as [`Conversation::with_system`], with each message shared and not copied.
+    ///
+    /// For a fork of the exchange that is taken at every round and asked over only if a question
+    /// comes. A stored message is handed out as the `Arc` that holds it. A message the request
+    /// carries in another form, a stubbed result or the answer to a call that never ran, is built
+    /// new. The quarantine is not part of it.
+    pub fn shared_with_system(&self, system: &str) -> Vec<Arc<Message>> {
+        self.assembled_marked(system, self.messages.len())
+            .into_iter()
+            .map(|(message, _)| message)
+            .collect()
+    }
+
     /// The same, and whose words each message after the system prompt holds.
     ///
     /// One list from one pass, so a mark cannot land on a message other than the one it was made
@@ -540,7 +557,10 @@ impl Conversation {
             .map(|(_, mark)| mark.clone())
             .collect();
         (
-            marked.into_iter().map(|(message, _)| message).collect(),
+            marked
+                .into_iter()
+                .map(|(message, _)| Arc::unwrap_or_clone(message))
+                .collect(),
             marks,
         )
     }
@@ -553,25 +573,25 @@ impl Conversation {
     fn assembled(&self, system: &str, end: usize) -> Vec<Message> {
         self.assembled_marked(system, end)
             .into_iter()
-            .map(|(message, _)| message)
+            .map(|(message, _)| Arc::unwrap_or_clone(message))
             .collect()
     }
 
     /// [`Conversation::assembled`] with each message's origin beside it.
-    fn assembled_marked(&self, system: &str, end: usize) -> Vec<(Message, Provenance)> {
+    fn assembled_marked(&self, system: &str, end: usize) -> Vec<(Arc<Message>, Provenance)> {
         let exchange = &self.messages[..end];
         let mut messages = Vec::with_capacity(exchange.len() + 1);
-        messages.push((Message::system(system), Provenance::Driver));
+        messages.push((Arc::new(Message::system(system)), Provenance::Driver));
 
         for (index, stored) in exchange.iter().enumerate() {
             let message = &stored.message;
             match self.stub_at(index) {
                 Some(stub) => {
-                    let mut stubbed = message.clone();
+                    let mut stubbed = Message::clone(message);
                     stubbed.content = Content::Text(stub);
-                    messages.push((stubbed, Provenance::Driver));
+                    messages.push((Arc::new(stubbed), Provenance::Driver));
                 }
-                None => messages.push((message.clone(), stored.provenance())),
+                None => messages.push((Arc::clone(message), stored.provenance())),
             }
 
             let Some(calls) = &message.tool_calls else {
@@ -580,10 +600,10 @@ impl Conversation {
             for call in calls {
                 if !answered(exchange, index, &call.id) {
                     messages.push((
-                        Message::tool_result(
+                        Arc::new(Message::tool_result(
                             call.id.clone(),
                             "(this call did not run: the turn ended first)",
-                        ),
+                        )),
                         Provenance::Driver,
                     ));
                 }
@@ -615,7 +635,7 @@ impl Conversation {
     /// second reading of the same message.
     pub fn push_composed(&mut self, message: Message, composed: Composed) {
         self.messages.push(Stored {
-            message,
+            message: Arc::new(message),
             composed: Some(composed),
             address: None,
             source: None,
@@ -625,7 +645,7 @@ impl Conversation {
     /// [`Conversation::push_composed`] for a message whose composer also knows whose words it holds.
     pub fn push_composed_from(&mut self, message: Message, composed: Composed, source: Provenance) {
         self.messages.push(Stored {
-            message,
+            message: Arc::new(message),
             composed: Some(composed),
             address: None,
             source: Some(source),
@@ -679,7 +699,7 @@ impl Conversation {
     /// of a request came from, so it is never worked out from the words.
     pub fn push_from(&mut self, message: Message, source: Provenance) {
         self.messages.push(Stored {
-            message,
+            message: Arc::new(message),
             composed: None,
             address: None,
             source: Some(source),
@@ -1011,7 +1031,7 @@ impl Conversation {
             // other words, and the rest of one cut short is the person's to ask for again.
             let named = matches!(stored.composed, Some(Composed::SkillNamed { .. }));
             carried.push(Stored {
-                message: Message::user(kept_skill(name, shown, cut, named)),
+                message: Arc::new(Message::user(kept_skill(name, shown, cut, named))),
                 composed: Some(Composed::SkillKept { name: name.clone() }),
                 address: None,
                 source: stored.source.clone(),
@@ -1210,7 +1230,7 @@ impl Conversation {
         self.messages.insert(
             0,
             Stored {
-                message: Message::user(note),
+                message: Arc::new(Message::user(note)),
                 composed: Some(Composed::Summary),
                 address: None,
                 source: None,
@@ -1425,7 +1445,7 @@ impl Conversation {
     /// resume's note is, so it is not written down and is not drawn as something anyone said.
     pub fn note_unfinished_turn(&mut self) {
         self.messages.push(Stored {
-            message: Message::user(UNFINISHED_TURN),
+            message: Arc::new(Message::user(UNFINISHED_TURN)),
             composed: Some(Composed::Resumed),
             address: None,
             source: None,
@@ -1463,7 +1483,7 @@ impl Conversation {
         let mut messages = snapshot.messages;
         if let Some(note) = dead_references(snapshot.references) {
             messages.push(Stored {
-                message: Message::user(note),
+                message: Arc::new(Message::user(note)),
                 composed: Some(Composed::Resumed),
                 address: None,
                 source: None,
@@ -3813,7 +3833,9 @@ mod tests {
     #[test]
     fn a_cut_never_falls_in_front_of_a_skill_the_person_named() {
         let named = Stored {
-            message: Message::user("The user named the skill ship-it as /ship-it"),
+            message: Arc::new(Message::user(
+                "The user named the skill ship-it as /ship-it",
+            )),
             composed: Some(Composed::SkillNamed {
                 name: "ship-it".to_string(),
             }),

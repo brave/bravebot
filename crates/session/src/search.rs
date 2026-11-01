@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn a_file_attached_to_a_prompt_is_not_searched() {
         let attached = Stored {
-            message: Message::user("Contents of notes.md:\n\nthe tokenizer is broken"),
+            message: Message::user("Contents of notes.md:\n\nthe tokenizer is broken").into(),
             composed: Some(Composed::Attached {
                 path: "notes.md".into(),
             }),
@@ -496,7 +496,8 @@ mod tests {
     #[test]
     fn a_line_the_agent_wrote_for_a_person_is_still_searched() {
         let ran = Stored {
-            message: Message::user("I ran `make` in the shell myself. It printed: linker exploded"),
+            message: Message::user("I ran `make` in the shell myself. It printed: linker exploded")
+                .into(),
             composed: Some(Composed::Written),
             address: None,
             source: None,
@@ -510,7 +511,7 @@ mod tests {
     #[test]
     fn the_words_of_a_message_between_sessions_are_searched_and_the_frame_is_not() {
         let heard = Stored {
-            message: Message::user("FRAME-SENTENCE\n> advice about the linker"),
+            message: Message::user("FRAME-SENTENCE\n> advice about the linker").into(),
             composed: Some(Composed::SessionMessage {
                 from: "11111111-1111-4111-8111-111111111111".into(),
                 name: "build".into(),
@@ -528,7 +529,7 @@ mod tests {
     #[test]
     fn an_imported_session_is_not_searched() {
         let imported = Stored {
-            message: Message::user("deploy to the staging cluster"),
+            message: Message::user("deploy to the staging cluster").into(),
             composed: Some(Composed::Imported),
             address: None,
             source: None,
@@ -933,7 +934,7 @@ mod tests {
     #[test]
     fn a_note_in_an_imported_session_is_not_searched() {
         let imported = Stored {
-            message: Message::user("deploy to the staging cluster"),
+            message: Message::user("deploy to the staging cluster").into(),
             composed: Some(Composed::Imported),
             address: None,
             source: None,
