@@ -16,13 +16,17 @@
 
 use bravebot_ui_bridge::host::{Ended, Host, MAX_LINE, Setup};
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PATIENCE: Duration = Duration::from_secs(30);
+
+/// How long a client's reader waits in one read before it looks at whether the client has left.
+const LOOK: Duration = Duration::from_millis(20);
 
 fn a_host(workspaces: Vec<std::path::PathBuf>) -> Host {
     Host::new(Setup {
@@ -36,6 +40,8 @@ fn a_host(workspaces: Vec<std::path::PathBuf>) -> Host {
 struct Client {
     stream: UnixStream,
     said: mpsc::Receiver<Value>,
+    reading: JoinHandle<()>,
+    leaving: Arc<AtomicBool>,
     served: JoinHandle<(Host, Ended)>,
     next: u64,
 }
@@ -43,12 +49,30 @@ struct Client {
 impl Client {
     fn attach(mut host: Host) -> Self {
         let (near, far) = UnixStream::pair().unwrap();
-        let reader = BufReader::new(near.try_clone().unwrap());
+        // The reader ends by looking at `leaving` between reads. A read that waits for the
+        // socket to be shut down can stay blocked on macOS.
+        near.set_read_timeout(Some(LOOK)).unwrap();
+        let mut reader = BufReader::new(near.try_clone().unwrap());
         let (sender, said) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in reader.lines().map_while(Result::ok) {
-                if let Ok(value) = serde_json::from_str::<Value>(&line) {
-                    let _ = sender.send(value);
+        let leaving = Arc::new(AtomicBool::new(false));
+        let gone = Arc::clone(&leaving);
+        let reading = std::thread::spawn(move || {
+            let mut line = Vec::new();
+            while !gone.load(Ordering::SeqCst) {
+                match reader.read_until(b'\n', &mut line) {
+                    Ok(0) => return,
+                    Ok(_) if line.ends_with(b"\n") => {
+                        if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+                            let _ = sender.send(value);
+                        }
+                        line.clear();
+                    }
+                    // The connection ended inside a line; the next read says so.
+                    Ok(_) => {}
+                    // The wait is over. What has come of a line is kept for the next read.
+                    Err(error)
+                        if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                    Err(_) => return,
                 }
             }
         });
@@ -59,6 +83,8 @@ impl Client {
         Self {
             stream: near,
             said,
+            reading,
+            leaving,
             served,
             next: 0,
         }
@@ -78,10 +104,22 @@ impl Client {
     }
 
     /// The client goes away, and the host comes back with how the connection ended.
+    ///
+    /// The client closes its end and does not shut it down: on macOS a shutdown can leave the host
+    /// blocked in its read, and then this wait never ends. The reader thread holds another
+    /// descriptor for the same socket, so it stops first and the connection closes with the last.
     fn leave(self) -> (Host, Ended) {
-        // The reader thread holds another descriptor for the same socket, so dropping this one
-        // would not end the connection.
-        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+        self.leaving.store(true, Ordering::SeqCst);
+        self.reading.join().expect("the reader did not panic");
+        drop(self.stream);
+        let waited = Instant::now();
+        while !self.served.is_finished() {
+            assert!(
+                waited.elapsed() < PATIENCE,
+                "the host did not see the client close its end"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         self.served.join().expect("the host did not panic")
     }
 }
