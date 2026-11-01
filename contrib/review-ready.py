@@ -7,6 +7,10 @@ A pull request is ready when it is mergeable, is not a draft, has every check pa
 has an approval as the latest review by the reviewer and has no latest review, by anyone, that
 requests changes. Each is printed to stdout as `<url>  <title>`, once, as soon as it is seen.
 
+A check counts by its latest run. GitHub keeps every run of a check on the commit, including one
+cancelled because a newer run of the workflow started, and the pull request page shows only the
+latest, so an earlier run does not count once a later run of the same workflow and name has started.
+
 GitHub computes `mergeable` lazily and reports UNKNOWN for every open pull request after the base
 branch moves, until each one has been read. A pull request that is not a draft, is approved and is
 green but still UNKNOWN is pending: the list is read again every INTERVAL seconds for up to
@@ -48,6 +52,31 @@ def check_result(check):
     return result
 
 
+def check_key(check):
+    """What names a check across its runs: the workflow and name of a check run, or the context of a
+    commit status. None when the entry has neither, so it is never taken for a run of another."""
+    if check.get("name"):
+        return ("run", check.get("workflowName"), check["name"])
+    if check.get("context"):
+        return ("status", check["context"])
+    return None
+
+
+def latest_runs(checks):
+    """The checks whose result counts. GitHub keeps every run of a check on the commit, such as one
+    cancelled because a newer run of the workflow started, and shows only the latest. An entry is left
+    out when another entry for the same check started later. An entry that has no result yet, or that
+    cannot be ordered because it has no name or no start time or shares its start time, always counts."""
+    newest = {}
+    for check in checks:
+        key, started = check_key(check), check.get("startedAt")
+        if key is not None and started:
+            newest[key] = max(newest.get(key, started), started)
+    return [check for check in checks
+            if not check_result(check) or not check.get("startedAt") or check_key(check) is None
+            or check["startedAt"] == newest[check_key(check)]]
+
+
 def classify(pr, reviewer):
     """READY when mergeable, PENDING when GitHub has not said, None when the pull request is not one
     the reviewer can pick up whatever mergeable turns out to be, or conflicts."""
@@ -61,7 +90,7 @@ def classify(pr, reviewer):
                    for review in reviews)
     if not approved or any(review.get("state") == "CHANGES_REQUESTED" for review in reviews):
         return None
-    if any(check_result(check) not in PASSED for check in pr.get("statusCheckRollup") or []):
+    if any(check_result(check) not in PASSED for check in latest_runs(pr.get("statusCheckRollup") or [])):
         return None
     return READY if mergeable == "MERGEABLE" else PENDING
 

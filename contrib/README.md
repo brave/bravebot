@@ -11,7 +11,8 @@ computed as mergeable.
 
 A pull request is listed when it is mergeable, is not a draft, has every check passed, skipped or
 neutral, has an approval as the latest review by `REVIEWER`, and has no latest review by anyone that
-requests changes. After main moves, GitHub reports `mergeable` as `UNKNOWN` for every open pull
+requests changes. Only the latest run of each check counts: a run cancelled because a newer run of
+the workflow started stays on the commit, and the pull request page hides it. After main moves, GitHub reports `mergeable` as `UNKNOWN` for every open pull
 request until each has been read, so a single read drops approved, passing pull requests without
 saying so. A pull request that would be listed if it were `MERGEABLE` is pending: the list is read
 again every 3 seconds for up to `WAIT` seconds (30 by default) while any is pending, and stderr

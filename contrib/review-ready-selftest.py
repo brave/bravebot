@@ -71,6 +71,19 @@ def line(number):
     return f"https://github.com/brave/bravebot/pull/{number}  title {number}"
 
 
+def run(conclusion, started, name="Process narration", workflow="Narration"):
+    """One run of a check on the head commit. GitHub lists every run, not only the latest, and
+    `started` is the minute and second the run began on 2026-11-01 at 14:00 UTC."""
+    return {"__typename": "CheckRun", "workflowName": workflow, "name": name, "conclusion": conclusion,
+            "startedAt": f"2026-11-01T14:{started}Z"}
+
+
+def status(state, started, context="ci/build"):
+    """One commit status, which has a context and a state where a check run has a name and a conclusion."""
+    return {"__typename": "StatusContext", "context": context, "state": state,
+            "startedAt": f"2026-11-01T14:{started}Z"}
+
+
 class Result:
     def __init__(self, done, log_path):
         self.code, self.out, self.err = done.returncode, done.stdout, done.stderr
@@ -235,6 +248,46 @@ class ReviewReady(unittest.TestCase):
         self.serve([pr(1, checks=[{"conclusion": None, "state": "SUCCESS"}, {"conclusion": "SKIPPED"},
                                   {"conclusion": "NEUTRAL"}]), pr(2, checks=[])])
         self.assertEqual(self.run_script().out.splitlines(), [line(1), line(2)])
+
+    def test_a_run_that_a_later_run_of_the_same_check_replaced_does_not_count(self):
+        """A new run of a workflow cancels the one still going, and GitHub keeps both on the commit.
+        The pull request page shows the later run, so the pull request is listed when that one passed."""
+        passed = run("SUCCESS", "04:15")
+        cases = {
+            "cancelled, then passed": [run("CANCELLED", "04:00"), passed],
+            "passed, listed before the cancelled run it replaced": [passed, run("CANCELLED", "04:00")],
+            "failed, then passed on a re-run": [run("FAILURE", "04:00"), passed],
+            "status failed, then passed": [status("FAILURE", "04:00"), status("SUCCESS", "04:15")],
+        }
+        for name, checks in cases.items():
+            with self.subTest(name):
+                self.serve([pr(1, checks=checks + [run("SUCCESS", "04:05", "Specs", "CI")])])
+                self.assertEqual(self.run_script(wait="0").out, line(1) + "\n")
+
+    def test_only_the_latest_run_of_the_same_check_is_looked_past_and_no_other_check_is_merged_into_it(self):
+        """The newest run decides, and a different check, another workflow's check of the same name, or
+        a run that cannot be ordered never stands in for it."""
+        cases = {
+            "passed, then failed on a re-run": [run("SUCCESS", "04:00"), run("FAILURE", "04:15")],
+            "passed, then running again": [run("SUCCESS", "04:00"), {**run("", "04:15"), "status": "IN_PROGRESS"}],
+            "passed, then queued with no start time": [
+                run("SUCCESS", "04:00"), {**run("", "04:15"), "status": "QUEUED", "startedAt": "0001-01-01T00:00:00Z"}],
+            "status passed, then failed": [status("SUCCESS", "04:00"), status("FAILURE", "04:15")],
+            "cancelled and never replaced": [run("CANCELLED", "04:00")],
+            "failed, then another check passed": [run("FAILURE", "04:00", "Specs", "CI"), run("SUCCESS", "04:15", "Locales", "CI")],
+            "failed, then the same name passed in another workflow": [
+                run("FAILURE", "04:00", "Affected checks", "CI"), run("SUCCESS", "04:15", "Affected checks", "Dependencies")],
+            "failed and passed at the same time": [run("FAILURE", "04:00"), run("SUCCESS", "04:00")],
+            "failed and passed with no start time": [
+                {k: v for k, v in run(result, "04:00").items() if k != "startedAt"} for result in ("FAILURE", "SUCCESS")],
+        }
+        for name, checks in cases.items():
+            with self.subTest(name):
+                self.log.unlink(missing_ok=True)
+                self.serve([pr(1, checks=checks)])
+                result = self.run_script()
+                self.assertEqual((result.code, result.out, result.err), (0, "", ""))
+                self.assertEqual(len(result.calls), 1)
 
     def test_a_failure_of_gh_exits_non_zero_on_the_first_read_and_on_a_later_one(self):
         """A failed read must not look like a list with nothing ready."""
