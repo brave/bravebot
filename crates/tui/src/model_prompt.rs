@@ -13,6 +13,9 @@
 //! are drawn for a person, who picks one, and what they picked becomes the `model` field of later
 //! requests. That field is routing, and a person choosing it off a list they read is the
 //! endorsement for it, the same way a person approving a write destination is.
+//!
+//! A section can be folded to its heading, so a service with hundreds of models can be put out of
+//! the way to reach the ones under it, and the page keys walk the list a screenful at a time.
 
 use bravebot_aichat::models::Model;
 use ratatui::Frame;
@@ -21,6 +24,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use std::cell::Cell;
 use std::sync::mpsc;
 
 use crate::list_picker::Placed;
@@ -65,6 +69,12 @@ pub struct Picker {
     held_from: Option<usize>,
     /// A model a prompt file named, for the cursor to open on instead of the one in use (CMD-17).
     wanted: Option<String>,
+    /// The services whose section is folded: the heading is drawn and the models under it are not,
+    /// so no key stops on them and none of them can be taken.
+    folded: Vec<String>,
+    /// How many rows tall the list was when it was last drawn, for a page key to move by. Set by
+    /// [`draw`], the one place that knows how much room the panel came out with.
+    page: Cell<usize>,
 }
 
 impl Picker {
@@ -78,6 +88,8 @@ impl Picker {
             listing: None,
             held_from: None,
             wanted: None,
+            folded: Vec::new(),
+            page: Cell::new(0),
         };
         picker.select_current();
         picker
@@ -219,19 +231,186 @@ impl Picker {
         seen
     }
 
-    /// The model under the cursor.
+    /// The model under the cursor, where its section is open.
+    ///
+    /// A model in a folded section is not drawn, so it is not one a person has read and cannot be
+    /// the one they took.
     pub fn chosen(&self) -> Option<&Model> {
+        self.under_cursor()
+            .filter(|model| !self.is_folded(service_of(model)))
+    }
+
+    /// The model the cursor is on, drawn or not.
+    fn under_cursor(&self) -> Option<&Model> {
         self.matching().get(self.selected).copied()
     }
 
+    fn is_folded(&self, service: &str) -> bool {
+        self.folded.iter().any(|folded| folded == service)
+    }
+
+    /// Whether the cursor is on a model that is not drawn. A fold leaves the cursor on a model
+    /// still drawn wherever there is one, so this is only so where every section is folded.
+    fn is_hidden(&self) -> bool {
+        self.under_cursor()
+            .is_some_and(|model| self.is_folded(service_of(model)))
+    }
+
+    /// Where among the matching models the ones in open sections are: the models drawn, and the
+    /// only ones a key stops on.
+    fn open(&self) -> Vec<usize> {
+        self.matching()
+            .iter()
+            .enumerate()
+            .filter(|(_, model)| !self.is_folded(service_of(model)))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
     fn down(&mut self) {
-        let last = self.matching().len().saturating_sub(1);
-        self.selected = (self.selected + 1).min(last);
+        let selected = self.selected;
+        if let Some(next) = self.open().into_iter().find(|index| *index > selected) {
+            self.selected = next;
+        }
         self.held_from = None;
     }
 
     fn up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
+        let selected = self.selected;
+        if let Some(previous) = self
+            .open()
+            .into_iter()
+            .rev()
+            .find(|index| *index < selected)
+        {
+            self.selected = previous;
+        }
+        self.held_from = None;
+    }
+
+    /// The first model drawn, which is not the first match where that one is in a folded section.
+    fn home(&mut self) {
+        if let Some(first) = self.open().first() {
+            self.selected = *first;
+        }
+        self.held_from = None;
+    }
+
+    /// The last model drawn, which is not the last match where that one is in a folded section.
+    fn end(&mut self) {
+        if let Some(last) = self.open().last() {
+            self.selected = *last;
+        }
+        self.held_from = None;
+    }
+
+    /// Move the cursor a screenful through the models drawn, going `forward` or back.
+    ///
+    /// Counted in rows of the list and not in models, since the headings and the gaps are rows too:
+    /// a step of as many models as the list is tall would, past each boundary between sections,
+    /// carry the cursor further than the list shows, and the rows between were never on screen.
+    /// One row less than the list is tall, so the page that arrives begins on the row the last one
+    /// ended on, and a window that gave its top row to a held heading still leaves none unseen.
+    /// The cursor lands on the last model within that distance in the direction it travels, and
+    /// not on the first model past it: a page that ended on a heading or a gap would otherwise
+    /// carry the cursor over the models just short of it, and they would not be drawn on either
+    /// screen. Where no model is within the distance, only headings and gaps lie between, and the
+    /// cursor goes to the next model. Going back, one that ends before the first model stops on
+    /// the first.
+    fn turn_page(&mut self, forward: bool) {
+        let landing = {
+            let matching = self.matching();
+            let rows = rows(self, &matching);
+            let models: Vec<(usize, usize)> = rows
+                .iter()
+                .enumerate()
+                .filter_map(|(row, entry)| match entry {
+                    Row::Model(index, _) => Some((row, *index)),
+                    _ => None,
+                })
+                .collect();
+            let step = self.page.get().saturating_sub(1).max(1);
+            let from = cursor_row(&rows, self.selected);
+            let landing = if forward {
+                let wanted = from.saturating_add(step);
+                models
+                    .iter()
+                    .rev()
+                    .find(|(row, _)| *row > from && *row <= wanted)
+                    .or_else(|| models.iter().find(|(row, _)| *row > from))
+                    .or(models.last())
+            } else {
+                let wanted = from.saturating_sub(step);
+                models
+                    .iter()
+                    .rev()
+                    .find(|(row, _)| *row <= wanted)
+                    .or(models.first())
+            };
+            landing.map(|(_, index)| *index)
+        };
+        if let Some(index) = landing {
+            self.selected = index;
+        }
+        self.held_from = None;
+    }
+
+    /// Fold the section the cursor is in, and move the cursor to the nearest model still drawn: the
+    /// one after the section, or the last one before it where the section was the last.
+    ///
+    /// Where nothing is left drawn the cursor stays in the section, which is then drawn as the row
+    /// it is on, so [`Picker::unfold`] has a section to open.
+    fn fold(&mut self) {
+        let Some(service) = self
+            .under_cursor()
+            .map(|model| service_of(model).to_string())
+        else {
+            return;
+        };
+        if self.is_folded(&service) {
+            return;
+        }
+        self.folded.push(service);
+        let selected = self.selected;
+        let open = self.open();
+        if let Some(near) = open
+            .iter()
+            .find(|index| **index >= selected)
+            .or(open.last())
+        {
+            self.selected = *near;
+        }
+        self.held_from = None;
+    }
+
+    /// Open a folded section and put the cursor on its first model: the section the cursor is in,
+    /// or the nearest folded one above it, or the first folded one in the list.
+    fn unfold(&mut self) {
+        let (service, first) = {
+            let matching = self.matching();
+            let upto = (self.selected + 1).min(matching.len());
+            let Some(service) = matching[..upto]
+                .iter()
+                .rev()
+                .map(|model| service_of(model))
+                .find(|service| self.is_folded(service))
+                .or_else(|| {
+                    matching
+                        .iter()
+                        .map(|model| service_of(model))
+                        .find(|service| self.is_folded(service))
+                })
+            else {
+                return;
+            };
+            let first = matching
+                .iter()
+                .position(|model| service_of(model) == service)
+                .unwrap_or(self.selected);
+            (service.to_string(), first)
+        };
+        self.folded.retain(|folded| *folded != service);
+        self.selected = first;
         self.held_from = None;
     }
 
@@ -257,8 +436,10 @@ impl Picker {
     /// A cursor that stayed at its index would land on an unrelated model with every keystroke,
     /// and one that reset to the top would lose the row somebody had already found by scrolling.
     fn searching(&mut self, change: impl FnOnce(&mut String)) {
-        let was = self.chosen().map(|model| model.key.clone());
+        let was = self.under_cursor().map(|model| model.key.clone());
         change(&mut self.search);
+        // A search is a look for something, and a section folded away would hide it.
+        self.folded.clear();
         let found = self
             .matching()
             .iter()
@@ -325,7 +506,9 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
 
     match code {
         KeyCode::Esc => Outcome::Cancel,
-        KeyCode::Enter if picker.is_loading() => Outcome::Continue,
+        // The cursor is in a section folded away, so there is no model drawn to take, and leaving
+        // the picker as taking nothing does would close it on a key meant to do something.
+        KeyCode::Enter if picker.is_loading() || picker.is_hidden() => Outcome::Continue,
         KeyCode::Enter => Outcome::Select,
         KeyCode::Up => {
             picker.up();
@@ -333,6 +516,32 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
         }
         KeyCode::Down => {
             picker.down();
+            Outcome::Continue
+        }
+        KeyCode::PageUp => {
+            picker.turn_page(false);
+            Outcome::Continue
+        }
+        KeyCode::PageDown => {
+            picker.turn_page(true);
+            Outcome::Continue
+        }
+        KeyCode::Home => {
+            picker.home();
+            Outcome::Continue
+        }
+        KeyCode::End => {
+            picker.end();
+            Outcome::Continue
+        }
+        // The search is a line that only grows at its end, so these two have no caret to move and
+        // are free to fold the section the cursor is in and open it again.
+        KeyCode::Left => {
+            picker.fold();
+            Outcome::Continue
+        }
+        KeyCode::Right => {
+            picker.unfold();
             Outcome::Continue
         }
         KeyCode::Backspace => {
@@ -407,7 +616,7 @@ pub fn handle_mouse(
 /// The row of the list, counting headings and gaps, that is the first drawn in `area`.
 fn first_drawn(picker: &Picker, area: Rect) -> usize {
     let matching = picker.matching();
-    let rows = rows(&matching);
+    let rows = rows(picker, &matching);
     window(
         &rows,
         cursor_row(&rows, picker.selected),
@@ -505,6 +714,7 @@ pub fn draw(frame: &mut Frame, picker: &Picker) {
         layout[0].y,
     ));
 
+    picker.page.set(usize::from(layout[2].height));
     frame.render_widget(Paragraph::new(list_lines(picker, layout[2])), layout[2]);
 
     frame.render_widget(
@@ -518,35 +728,57 @@ pub fn draw(frame: &mut Frame, picker: &Picker) {
 
 /// One drawn row of the list.
 enum Row<'a> {
-    /// A heading naming the service that answers everything under it.
-    Service(&'a str),
+    /// A heading naming the service that answers everything under it, and what is left undrawn
+    /// under it where its section is folded.
+    Service(&'a str, Option<Folded>),
     /// A model, and where it sits among the matching ones.
     Model(usize, &'a Model),
     /// The space between one service and the next.
     Gap,
 }
 
+/// A section drawn as its heading alone.
+struct Folded {
+    /// How many of the matching models are under it.
+    hidden: usize,
+    /// Whether the cursor is on one of them. The heading is then drawn as the row the cursor is
+    /// on, since there is no model drawn for it to be on.
+    cursor: bool,
+}
+
 impl Picker {
     /// How many rows the list would take if nothing had to scroll, for sizing the panel.
     fn rows_needed(&self) -> usize {
-        rows(&self.matching()).len()
+        rows(self, &self.matching()).len()
     }
 }
 
-/// The rows the matching models make: a heading, its models, a gap, the next heading.
-fn rows<'a>(matching: &[&'a Model]) -> Vec<Row<'a>> {
+/// The rows the matching models make: a heading, its models, a gap, the next heading. A folded
+/// section is its heading alone.
+fn rows<'a>(picker: &Picker, matching: &[&'a Model]) -> Vec<Row<'a>> {
     let mut rows = Vec::new();
     let mut service: Option<&str> = None;
     for (index, model) in matching.iter().enumerate() {
         let this = service_of(model);
+        let folded = picker.is_folded(this);
         if service != Some(this) {
             if service.is_some() {
                 rows.push(Row::Gap);
             }
-            rows.push(Row::Service(this));
+            let shut = Folded {
+                hidden: 0,
+                cursor: false,
+            };
+            rows.push(Row::Service(this, folded.then_some(shut)));
             service = Some(this);
         }
-        rows.push(Row::Model(index, model));
+        match rows.last_mut() {
+            Some(Row::Service(_, Some(shut))) if folded => {
+                shut.hidden += 1;
+                shut.cursor |= index == picker.selected;
+            }
+            _ => rows.push(Row::Model(index, model)),
+        }
     }
     rows
 }
@@ -583,17 +815,21 @@ fn laid_out(picker: &Picker, area: Rect) -> Vec<(Option<usize>, Line<'static>)> 
         )];
     }
 
-    let rows = rows(&matching);
+    let rows = rows(picker, &matching);
     let visible = (area.height as usize).max(1);
     let cursor = cursor_row(&rows, picker.selected);
     let (heading, first, shown) = window(&rows, cursor, visible, picker.held_from);
 
+    // A heading held at the top is always an open section's: only a model is held under one.
     let mut lines: Vec<(Option<usize>, Line<'static>)> = heading
-        .map(|service| (None, service_line(service)))
+        .map(|service| (None, service_line(service, None, area.width as usize)))
         .into_iter()
         .collect();
     lines.extend(rows.iter().skip(first).take(shown).map(|row| match row {
-        Row::Service(service) => (None, service_line(service)),
+        Row::Service(service, folded) => (
+            None,
+            service_line(service, folded.as_ref(), area.width as usize),
+        ),
         Row::Gap => (None, Line::raw("")),
         Row::Model(index, model) => (
             Some(*index),
@@ -676,7 +912,7 @@ fn section_of<'a>(rows: &[Row<'a>], at: usize) -> Option<&'a str> {
         return None;
     }
     rows[..at].iter().rev().find_map(|row| match row {
-        Row::Service(service) => Some(*service),
+        Row::Service(service, _) => Some(*service),
         _ => None,
     })
 }
@@ -691,14 +927,33 @@ fn start(rows: usize, cursor: usize, visible: usize) -> usize {
         .min(rows - visible)
 }
 
-/// A service heading: who answers for everything drawn under it.
-fn service_line(service: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        format!(" {service}"),
-        Style::default()
-            .fg(theme::accent())
-            .add_modifier(Modifier::BOLD),
-    ))
+/// A service heading: who answers for everything drawn under it, and whether the models under it
+/// are drawn or folded away.
+///
+/// The mark sits in the column the models' marks do, so the name starts where the names of the
+/// models under it start. A folded section says how many models it holds, since the heading is all
+/// there is to read of them, and is drawn as the row the cursor is on where the cursor is in it.
+fn service_line(service: &str, folded: Option<&Folded>, width: usize) -> Line<'static> {
+    let heading = Style::default()
+        .fg(theme::accent())
+        .add_modifier(Modifier::BOLD);
+    let Some(folded) = folded else {
+        return Line::from(Span::styled(format!(" ▾ {service}"), heading));
+    };
+    let count = format!("  ({})", folded.hidden);
+    if folded.cursor {
+        let on_bar = Style::default()
+            .fg(theme::on_primary())
+            .add_modifier(Modifier::BOLD);
+        let text = format!(" ▸ {service}{count}");
+        let padding = " ".repeat(width.saturating_sub(display_width(&text)));
+        return Line::from(vec![Span::styled(text, on_bar), Span::raw(padding)])
+            .style(theme::picked_out());
+    }
+    Line::from(vec![
+        Span::styled(format!(" ▸ {service}"), heading),
+        Span::styled(count, Style::default().fg(theme::muted())),
+    ])
 }
 
 /// One model's row: a mark for the one in use, the name, and what the row costs on the right.
@@ -1529,7 +1784,7 @@ mod tests {
                 for line in &screen {
                     let text = line
                         .trim_matches(|c: char| c == '│' || c.is_whitespace())
-                        .trim_start_matches('●')
+                        .trim_start_matches(['●', '▾'])
                         .trim();
                     if text.is_empty() {
                         heading = None;
@@ -2136,5 +2391,481 @@ mod tests {
             handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
         }
         picker
+    }
+
+    /// Three sections of two models, so a section can be folded with one either side of it, and
+    /// none of them is the automatic model the cursor would open on: it opens on `alpha-one`.
+    fn three_services() -> Vec<Model> {
+        vec![
+            served_by("Alpha", "alpha/one", "alpha-one"),
+            served_by("Alpha", "alpha/two", "alpha-two"),
+            served_by("Beta", "beta/one", "beta-one"),
+            served_by("Beta", "beta/two", "beta-two"),
+            served_by("Gamma", "gamma/one", "gamma-one"),
+            served_by("Gamma", "gamma/two", "gamma-two"),
+        ]
+    }
+
+    fn pressed(picker: &mut Picker, keys: &[KeyCode]) {
+        for key in keys {
+            let outcome = handle_key(picker, *key, KeyModifiers::NONE);
+            assert_eq!(outcome, Outcome::Continue, "{key:?}");
+        }
+    }
+
+    /// The text of each row of a screen without the border and the marks the picker puts before a
+    /// name, which is what a model's name or a service's is when it is drawn.
+    fn names_on(screen: &[String]) -> Vec<String> {
+        screen
+            .iter()
+            .map(|line| {
+                line.trim_matches(|c: char| c == '│' || c.is_whitespace())
+                    .trim_start_matches(['●', '▾', '▸'])
+                    .trim()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// The fill behind the first cell of `text` and whether the colours are swapped there: the two
+    /// ways [`theme::picked_out`] marks a row, so a row is the one the cursor is on exactly where
+    /// these match the cursor's row.
+    fn look_of(picker: &Picker, text: &str) -> (ratatui::style::Color, bool) {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| draw(frame, picker))
+            .expect("draw succeeds");
+        let buffer = terminal.backend().buffer().clone();
+        let screen: Vec<String> = buffer
+            .content()
+            .chunks(80)
+            .map(|line| line.iter().map(|cell| cell.symbol()).collect())
+            .collect();
+        let (row, byte) = screen
+            .iter()
+            .enumerate()
+            .find_map(|(row, line)| line.find(text).map(|byte| (row, byte)))
+            .unwrap_or_else(|| panic!("{text} is not on the screen: {screen:#?}"));
+        let column = screen[row][..byte].chars().count();
+        let cell = &buffer[(column as u16, row as u16)];
+        (cell.bg, cell.modifier.contains(Modifier::REVERSED))
+    }
+
+    /// VIEW-40. Rejects: a fold that hides the wrong section or every section, one that leaves the
+    /// models drawn under a heading that says they are folded, and a heading that does not say how
+    /// many models it is holding back or which way it will open.
+    #[test]
+    fn left_folds_the_section_the_cursor_is_in_to_its_heading() {
+        let mut picker = Picker::new(three_services(), None);
+        pressed(&mut picker, &[KeyCode::Down, KeyCode::Down, KeyCode::Left]);
+
+        let output = rendered_at(&picker, 60, 20);
+        assert!(output.contains("▸ Beta  (2)"), "{output}");
+        for gone in ["beta-one", "beta-two"] {
+            assert!(!output.contains(gone), "{gone} is drawn folded: {output}");
+        }
+        for kept in ["alpha-one", "alpha-two", "gamma-one", "gamma-two"] {
+            assert!(output.contains(kept), "{kept} was folded away: {output}");
+        }
+        assert!(output.contains("▾ Alpha"), "{output}");
+        assert!(output.contains("▾ Gamma"), "{output}");
+    }
+
+    /// VIEW-40. Rejects: a fold that leaves the cursor on a model no longer drawn, and one that
+    /// moves it to the top or the wrong side of the section: the cursor goes to the model after
+    /// the section, or the one before it where nothing comes after.
+    #[test]
+    fn a_fold_moves_the_cursor_to_the_nearest_model_still_drawn() {
+        let mut first = Picker::new(three_services(), None);
+        pressed(&mut first, &[KeyCode::Left]);
+        assert_eq!(named(&first), Some("beta-one"), "after the first section");
+
+        let mut middle = Picker::new(three_services(), None);
+        pressed(&mut middle, &[KeyCode::Down, KeyCode::Down, KeyCode::Left]);
+        assert_eq!(named(&middle), Some("gamma-one"), "after the middle one");
+
+        let mut last = Picker::new(three_services(), None);
+        pressed(&mut last, &[KeyCode::End, KeyCode::Left]);
+        assert_eq!(named(&last), Some("beta-two"), "before the last one");
+    }
+
+    /// VIEW-40. Rejects: arrow keys, Home and End that stop on a model in a folded section, which
+    /// is a row on no screen: Up and Down go over it, and Home and End go to the first and last
+    /// models drawn when the sections at both ends are folded.
+    #[test]
+    fn the_keys_go_over_the_models_of_a_folded_section() {
+        let mut picker = Picker::new(three_services(), None);
+        pressed(&mut picker, &[KeyCode::Down, KeyCode::Down, KeyCode::Left]);
+        assert_eq!(named(&picker), Some("gamma-one"));
+        pressed(&mut picker, &[KeyCode::Up]);
+        assert_eq!(named(&picker), Some("alpha-two"), "up into the fold");
+        pressed(&mut picker, &[KeyCode::Down]);
+        assert_eq!(named(&picker), Some("gamma-one"), "down into the fold");
+
+        let mut ends = Picker::new(three_services(), None);
+        // Alpha folded leaves beta-one; Gamma folded from its first model leaves beta-two.
+        pressed(&mut ends, &[KeyCode::Left]);
+        pressed(&mut ends, &[KeyCode::Down, KeyCode::Down, KeyCode::Left]);
+        assert_eq!(named(&ends), Some("beta-two"));
+        pressed(&mut ends, &[KeyCode::Home]);
+        assert_eq!(
+            named(&ends),
+            Some("beta-one"),
+            "Home reached a folded model"
+        );
+        pressed(&mut ends, &[KeyCode::End]);
+        assert_eq!(named(&ends), Some("beta-two"), "End reached a folded model");
+    }
+
+    /// VIEW-40. Rejects: a picker that closes when Enter is pressed on a section folded away, which
+    /// is what taking nothing does everywhere else, and one that offers a model nobody could see.
+    /// Escape still leaves, and Right brings the models back to be taken.
+    #[test]
+    fn nothing_is_taken_from_a_section_folded_away() {
+        let mut picker = Picker::new(one_service_and_a_word_in_common(), None);
+        pressed(&mut picker, &[KeyCode::Left]);
+        assert!(picker.chosen().is_none(), "a folded model is offered");
+
+        let outcome = handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(outcome, Outcome::Continue, "Enter on a folded section");
+        pressed(&mut picker, &[KeyCode::Left]);
+        assert!(picker.chosen().is_none(), "folding twice opened it");
+        let outcome = handle_key(&mut picker, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(outcome, Outcome::Cancel);
+
+        pressed(&mut picker, &[KeyCode::Right]);
+        assert_eq!(named(&picker), Some("llama-8b"));
+        let outcome = handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(outcome, Outcome::Select);
+
+        // A section folded beside the cursor's does not stop it being taken.
+        let mut beside = Picker::new(three_services(), None);
+        pressed(&mut beside, &[KeyCode::Down, KeyCode::Down, KeyCode::Left]);
+        let outcome = handle_key(&mut beside, KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(outcome, Outcome::Select);
+        assert_eq!(named(&beside), Some("gamma-one"));
+    }
+
+    /// VIEW-40. Rejects: Right that opens nothing, one that leaves the cursor where it was and not
+    /// in the section that opened, one that opens every section at once, and one that opens them in
+    /// an order a person cannot predict. The section the cursor is in opens first, then the nearest
+    /// one above it, then the first in the list.
+    #[test]
+    fn right_opens_a_folded_section_and_puts_the_cursor_on_its_first_model() {
+        let mut picker = Picker::new(three_services(), None);
+        // Fold all three: Alpha, then Gamma, then Beta, which is the one the cursor is left in.
+        pressed(&mut picker, &[KeyCode::Left]);
+        pressed(&mut picker, &[KeyCode::Down, KeyCode::Down, KeyCode::Left]);
+        pressed(&mut picker, &[KeyCode::Left]);
+        assert!(picker.chosen().is_none());
+        let drawn = rendered_at(&picker, 60, 20);
+        for folded in ["▸ Alpha  (2)", "▸ Beta  (2)", "▸ Gamma  (2)"] {
+            assert!(drawn.contains(folded), "{folded}: {drawn}");
+        }
+
+        pressed(&mut picker, &[KeyCode::Right]);
+        assert_eq!(
+            named(&picker),
+            Some("beta-one"),
+            "the section holding the cursor"
+        );
+        let drawn = rendered_at(&picker, 60, 20);
+        assert!(drawn.contains("beta-two"), "{drawn}");
+        assert!(
+            !drawn.contains("alpha-one") && !drawn.contains("gamma-one"),
+            "{drawn}"
+        );
+
+        pressed(&mut picker, &[KeyCode::Right]);
+        assert_eq!(named(&picker), Some("alpha-one"), "the nearest one above");
+        pressed(&mut picker, &[KeyCode::Right]);
+        assert_eq!(named(&picker), Some("gamma-one"), "the first one left");
+        pressed(&mut picker, &[KeyCode::Right]);
+        assert_eq!(
+            named(&picker),
+            Some("gamma-one"),
+            "nothing was left to open"
+        );
+        let drawn = rendered_at(&picker, 60, 20);
+        assert!(!drawn.contains('▸'), "{drawn}");
+    }
+
+    /// VIEW-40. Rejects: folds that outlive a search, which hide the very models a person typed to
+    /// find, and a cursor that loses its model when the folds go.
+    #[test]
+    fn typing_or_backspacing_opens_every_section() {
+        let mut picker = Picker::new(three_services(), None);
+        pressed(&mut picker, &[KeyCode::Down, KeyCode::Down, KeyCode::Left]);
+        assert!(!rendered_at(&picker, 60, 20).contains("beta-one"));
+
+        pressed(&mut picker, &[KeyCode::Char('a')]);
+        let drawn = rendered_at(&picker, 60, 20);
+        assert!(
+            drawn.contains("beta-one") && !drawn.contains('▸'),
+            "{drawn}"
+        );
+        assert_eq!(
+            named(&picker),
+            Some("gamma-one"),
+            "the cursor lost its model"
+        );
+
+        pressed(&mut picker, &[KeyCode::Down, KeyCode::Left]);
+        assert!(!rendered_at(&picker, 60, 20).contains("gamma-two"));
+        pressed(&mut picker, &[KeyCode::Backspace]);
+        let drawn = rendered_at(&picker, 60, 20);
+        assert!(
+            drawn.contains("gamma-two") && !drawn.contains('▸'),
+            "{drawn}"
+        );
+    }
+
+    /// VIEW-40. Rejects: a folded section that is drawn like any other heading where it holds the
+    /// cursor, which leaves a person with an Enter key, no model to take, and nothing on the screen
+    /// showing where the cursor is. A folded section the cursor is not in is drawn as a heading.
+    #[test]
+    fn a_folded_section_holding_the_cursor_is_drawn_as_the_row_it_is_on() {
+        let mut on_a_model = Picker::new(one_service_and_a_word_in_common(), None);
+        let picked_row = look_of(&on_a_model, "llama-8b");
+        let unpicked_heading = look_of(&on_a_model, "OpenRouter");
+        assert_ne!(
+            picked_row, unpicked_heading,
+            "the fixture cannot tell them apart"
+        );
+
+        pressed(&mut on_a_model, &[KeyCode::Left]);
+        assert_eq!(look_of(&on_a_model, "▸ OpenRouter  (4)"), picked_row);
+
+        let mut beside = Picker::new(three_services(), None);
+        pressed(&mut beside, &[KeyCode::Down, KeyCode::Down, KeyCode::Left]);
+        assert_eq!(look_of(&beside, "▸ Beta  (2)"), unpicked_heading);
+        assert_eq!(look_of(&beside, "gamma-one"), picked_row);
+    }
+
+    /// VIEW-40, VIEW-41. Rejects: keys that panic, move the cursor or close the picker where there are no
+    /// models to act on: a search matching nothing and a list still being waited for.
+    #[test]
+    fn the_fold_and_page_keys_do_nothing_where_there_are_no_models() {
+        let (_held, listing) = mpsc::channel();
+        let mut waiting = Picker::loading(None, listing);
+        let mut empty = Picker::new(offered(), None);
+        typing(&mut empty, "zzzz");
+        for picker in [&mut waiting, &mut empty] {
+            for key in [
+                KeyCode::Left,
+                KeyCode::Right,
+                KeyCode::PageUp,
+                KeyCode::PageDown,
+                KeyCode::Home,
+                KeyCode::End,
+                KeyCode::Up,
+                KeyCode::Down,
+            ] {
+                pressed(picker, &[key]);
+                assert!(picker.chosen().is_none(), "{key:?} found a model");
+            }
+        }
+        assert!(waiting.is_loading());
+    }
+
+    /// VIEW-40. Rejects: a Ctrl chord read as the key it holds, so Ctrl-Left folds as Left does.
+    #[test]
+    fn a_ctrl_chord_does_not_fold() {
+        let mut picker = Picker::new(three_services(), None);
+        let outcome = handle_key(&mut picker, KeyCode::Left, KeyModifiers::CONTROL);
+        assert_eq!(outcome, Outcome::Continue);
+        let drawn = rendered_at(&picker, 60, 20);
+        assert!(
+            drawn.contains("alpha-one") && !drawn.contains('▸'),
+            "{drawn}"
+        );
+    }
+
+    /// VIEW-41. Rejects: a page counted in models, which carries the cursor further than the list
+    /// shows wherever a heading or a gap is in the way and leaves models that were never on the
+    /// screen. At 60 by 14 the list is six rows and a page is five: from the automatic model on
+    /// the second row, past the gap and OpenRouter's heading, to the third of its models. Counting
+    /// five models lands two models further on, and counting six rows lands on the fourth.
+    #[test]
+    fn a_page_moves_the_cursor_a_screenful_less_a_row_counting_headings_and_gaps() {
+        let mut picker = Picker::new(a_roster_longer_than_the_panel(), None);
+        let (shown, _) = shown_in(&picker, 60, 14);
+        assert_eq!(shown.list.height, 6, "the arithmetic below is for six rows");
+        assert_eq!(named(&picker), Some("Automatic"));
+
+        pressed(&mut picker, &[KeyCode::PageDown]);
+        assert_eq!(named(&picker), Some("model-2"));
+        pressed(&mut picker, &[KeyCode::PageUp]);
+        assert_eq!(named(&picker), Some("Automatic"), "back to where it began");
+    }
+
+    /// VIEW-41. Rejects: pages that skip models, stop short of the end, move the cursor against the
+    /// way the key points, or take one press for each model. Every model is drawn on some screen on
+    /// the way down and on the way back, across the boundaries of a short section, a long one and
+    /// another short one, at each height that leaves the list two to six rows.
+    #[test]
+    fn paging_shows_every_model_and_stops_at_both_ends() {
+        let roster = a_long_section_between_two_short_ones();
+        for height in 10..=14 {
+            let mut picker = Picker::new(roster.clone(), None);
+            pressed(&mut picker, &[KeyCode::Home]);
+            let mut seen = std::collections::HashSet::new();
+            let mut note = |picker: &Picker| {
+                seen.extend(names_on(&screen_at(picker, 60, height)));
+            };
+            note(&picker);
+
+            // A page is a row less than the list is tall, and at least one row.
+            let list = usize::from(placed(Rect::new(0, 0, 60, height), &picker).list.height);
+            let step = list.saturating_sub(1).max(1);
+            let rows = picker.rows_needed();
+            let mut presses = 0;
+            let mut was = picker.selected;
+            loop {
+                pressed(&mut picker, &[KeyCode::PageDown]);
+                note(&picker);
+                presses += 1;
+                assert!(picker.selected >= was, "{height} rows: a page went back");
+                if picker.selected == was || presses > rows {
+                    break;
+                }
+                was = picker.selected;
+            }
+            assert_eq!(
+                named(&picker),
+                Some("qwen2.5"),
+                "{height} rows: did not reach the end"
+            );
+            for model in &roster {
+                assert!(
+                    seen.contains(&model.display_name),
+                    "{height} rows: {} was never drawn on the way down",
+                    model.display_name
+                );
+            }
+            // Each press goes on by the page, so the end is that many rows away at most, and one
+            // press for each model, or for each row, is not paging.
+            assert!(
+                presses <= rows / step + 2,
+                "{height} rows: {presses} presses for {rows} rows in pages of {step}"
+            );
+
+            let mut seen: std::collections::HashSet<String> =
+                names_on(&screen_at(&picker, 60, height))
+                    .into_iter()
+                    .collect();
+            let mut was = picker.selected;
+            for _ in 0..=rows {
+                pressed(&mut picker, &[KeyCode::PageUp]);
+                seen.extend(names_on(&screen_at(&picker, 60, height)));
+                assert!(picker.selected <= was, "{height} rows: a page went forward");
+                if picker.selected == was {
+                    break;
+                }
+                was = picker.selected;
+            }
+            assert_eq!(
+                named(&picker),
+                Some("Automatic"),
+                "{height} rows: did not reach the top"
+            );
+            for model in &roster {
+                assert!(
+                    seen.contains(&model.display_name),
+                    "{height} rows: {} was never drawn on the way up",
+                    model.display_name
+                );
+            }
+        }
+    }
+
+    /// VIEW-41. Rejects: a page counted over the models of a section folded away, which lands the
+    /// cursor on a model that is not drawn: the page goes from the automatic model to the first
+    /// of the section after the fold, and back from the end to the automatic model.
+    #[test]
+    fn paging_goes_over_a_folded_section() {
+        let mut picker = Picker::new(a_long_section_between_two_short_ones(), None);
+        // Down to OpenRouter's first model, then fold it: the cursor goes to the first Ollama model.
+        pressed(&mut picker, &[KeyCode::Down, KeyCode::Left]);
+        assert_eq!(named(&picker), Some("llama3.2"));
+        pressed(&mut picker, &[KeyCode::Up]);
+        assert_eq!(named(&picker), Some("Automatic"));
+
+        let (shown, _) = shown_in(&picker, 60, 14);
+        assert_eq!(shown.list.height, 6);
+        pressed(&mut picker, &[KeyCode::PageDown]);
+        assert_eq!(named(&picker), Some("llama3.2"));
+        pressed(&mut picker, &[KeyCode::PageDown]);
+        assert_eq!(named(&picker), Some("qwen2.5"));
+        pressed(&mut picker, &[KeyCode::PageUp]);
+        assert_eq!(named(&picker), Some("Automatic"));
+    }
+
+    /// VIEW-40, MOUSE-46. Rejects: a turn of the wheel that stops on a model of a folded section,
+    /// or that counts the folded models against the turns it was asked for.
+    #[test]
+    fn the_wheel_goes_over_the_models_of_a_folded_section() {
+        let mut picker = Picker::new(three_services(), None);
+        pressed(&mut picker, &[KeyCode::Down, KeyCode::Down, KeyCode::Left]);
+        let (shown, _) = shown_in(&picker, 80, 24);
+        let (now, mut last) = (std::time::Instant::now(), None);
+        let mut turn = |picker: &mut Picker, kind, wheel| {
+            let outcome = handle_mouse(picker, shown, event(kind, 0, 0), &mut last, now, wheel);
+            assert_eq!(outcome, Outcome::Continue, "{kind:?}");
+            named(picker).map(str::to_string)
+        };
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollUp, 1).as_deref(),
+            Some("alpha-two")
+        );
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollDown, 1).as_deref(),
+            Some("gamma-one")
+        );
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollDown, 9).as_deref(),
+            Some("gamma-two")
+        );
+    }
+
+    /// VIEW-40, MOUSE-15. Rejects: a press read against the models in the roster rather than the
+    /// rows drawn, which names the model a folded section took the place of, and a press on the
+    /// heading of a folded section that opens it, takes a model or moves the cursor.
+    #[test]
+    fn a_press_finds_its_model_among_rows_a_fold_has_left_out() {
+        let mut picker = Picker::new(three_services(), None);
+        pressed(&mut picker, &[KeyCode::Down, KeyCode::Down, KeyCode::Left]);
+        let (shown, screen) = shown_in(&picker, 80, 24);
+        let (now, mut last) = (std::time::Instant::now(), None);
+
+        let (row, column) = row_of(&screen, "gamma-two");
+        let outcome = handle_mouse(&mut picker, shown, press(row, column), &mut last, now, 3);
+        assert_eq!(outcome, Outcome::Continue);
+        assert_eq!(named(&picker), Some("gamma-two"));
+        let outcome = handle_mouse(&mut picker, shown, press(row, column), &mut last, now, 3);
+        assert_eq!(outcome, Outcome::Select);
+
+        let (row, column) = row_of(&screen, "▸ Beta");
+        let mut last = None;
+        let outcome = handle_mouse(&mut picker, shown, press(row, column), &mut last, now, 3);
+        assert_eq!(outcome, Outcome::Continue);
+        assert_eq!(
+            named(&picker),
+            Some("gamma-two"),
+            "the heading moved the cursor"
+        );
+        assert!(
+            !rendered_at(&picker, 80, 24).contains("beta-one"),
+            "the heading opened the section"
+        );
+    }
+
+    /// VIEW-40. Rejects: a key line longer than the widest panel, which the terminal cuts off, so
+    /// the last words, the one that says how to leave, are the ones that are lost.
+    #[test]
+    fn the_key_line_is_drawn_whole_in_the_widest_panel() {
+        let keys = t!(model_picker_keys).to_string();
+        let output = rendered_at(&Picker::new(offered(), None), 120, 24);
+        assert!(output.contains(&keys), "{keys} was cut: {output}");
     }
 }

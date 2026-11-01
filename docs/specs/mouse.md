@@ -447,6 +447,7 @@ the box is [MOUSE-16](#MOUSE-16)'s. The keys stay the way to do it without a mou
 `verified-by: bravebot_tui::app::tests::pickers::the_preferences_picker_opened_mid_turn_takes_a_press_and_the_wheel_too`
 `verified-by: bravebot_tui::app::tests::pickers::a_double_click_in_place_takes_the_model_pointed_at_on_every_row_of_a_list_scrolled_or_not`
 `verified-by: bravebot_tui::model_prompt::a_press_on_a_model_moves_the_cursor_and_a_second_takes_it`
+`verified-by: bravebot_tui::model_prompt::a_press_finds_its_model_among_rows_a_fold_has_left_out`
 `verified-by: bravebot_tui::model_prompt::two_presses_on_different_models_or_far_apart_take_nothing`
 `verified-by: bravebot_tui::model_prompt::a_press_on_no_model_and_any_other_mouse_event_leave_the_picker_alone`
 `verified-by: bravebot_tui::model_prompt::a_press_finds_its_model_in_a_list_that_has_scrolled_under_a_held_heading`
@@ -1571,7 +1572,8 @@ does not select what the picker covers.
 While a picker is open, a turn of the wheel anywhere on the screen moves its cursor up or down by the
 number of rows `tui.wheelRows` names, the distance it moves the transcript at rest, and stops at the
 first row and the last. In the model picker a row is a model, so the step is in models and the
-headings and the spaces between sections are not counted. In the search over the prompts already
+headings, the spaces between sections and the models of a folded section
+([VIEW-40](terminal-transcript.md#VIEW-40)) are not counted. In the search over the prompts already
 sent a turn of the wheel up moves the cursor to older prompts and one down to newer ones, and stops at
 the oldest and the newest. In the lists of sessions it moves the cursor that many sessions, over the
 headings of the sessions view, and stops at the first and the last. In each of these it takes no row,
@@ -1591,6 +1593,7 @@ deleting a record do not read the wheel. The keys stay the way to do it without 
 `verified-by: bravebot_tui::list_picker::the_wheel_moves_the_cursor_by_the_rows_asked_and_stops_at_both_ends`
 `verified-by: bravebot_tui::app::tests::pickers::the_wheel_walks_a_picker_opened_mid_turn_by_the_wheel_rows`
 `verified-by: bravebot_tui::model_prompt::the_wheel_moves_the_cursor_by_the_models_asked_over_the_headings`
+`verified-by: bravebot_tui::model_prompt::the_wheel_goes_over_the_models_of_a_folded_section`
 `verified-by: bravebot_tui::app::tests::history_search::the_wheel_walks_the_prompts_by_the_wheel_rows_and_stops_at_both_ends`
 `verified-by: bravebot_tui::sessions_view::the_wheel_moves_the_cursor_by_the_sessions_asked_over_the_headings`
 `verified-by: bravebot_tui::sessions_screen_tests::the_wheel_walks_the_cursor_and_stops_at_the_ends`

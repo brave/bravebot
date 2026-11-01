@@ -238,6 +238,15 @@ screen without the name of what answers it: the same model name is often reachab
 one service, billed and credentialled differently, and which one answers is what you are choosing
 between.
 
+**Left folds the section the cursor is in** down to its heading, which then says how many models it
+holds, and **Right** opens it again. The cursor moves to the nearest model still drawn. The arrow
+keys, Home, End and the wheel go over the models of a folded section, and Enter does nothing while
+the cursor is in one. Typing or deleting a character opens every section, so a search never hides a
+match.
+
+**PageDown and PageUp** move the cursor a screenful at a time through the models drawn, and **Home**
+and **End** go to the first and the last.
+
 ## When the environment declines colour or motion
 
 Two environment variables are read before the first frame, and each answers to being set rather than
