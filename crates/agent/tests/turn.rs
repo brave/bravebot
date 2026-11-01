@@ -52036,6 +52036,60 @@ fn an_answer_about_a_reference_that_is_no_file_is_refused_outside_a_new_scratch_
     assert!(fixture.outbox().is_none(), "the sender ran");
 }
 
+/// A link in the session's directory that leads to a new file in another directory of the workspace
+/// is a name inside the session's directory for a write that lands outside it. The workspace accepts
+/// it, so only the rule for an answer about no file can refuse it, and it does so for where the
+/// write lands, before anybody is asked.
+#[cfg(unix)]
+#[test]
+fn an_answer_about_a_reference_that_is_no_file_is_refused_through_a_link_out_of_the_scratch_directory()
+ {
+    let mut fixture = DerivedTextFixture::new("derived-text-unnamed-linked");
+    let given = std::path::Path::new(&fixture.file)
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let sibling = Scratch::new("derived-text-unnamed-linked-sibling");
+    fixture
+        .workspace
+        .add_directory(sibling.path.to_str().expect("utf-8 path"))
+        .expect("the added directory");
+    let in_the_project = sibling.path.join("linked-target.txt");
+    let link = given.join("link.txt");
+    std::os::unix::fs::symlink(&in_the_project, &link).unwrap();
+    let (site, _pages) = serve_pages(vec![page(DERIVED_PAGE)]);
+    let mut confirmer = RecordingConfirmer::approving().and_approving_runs();
+
+    let mut replies = page_then_answer(&site);
+    replies.push(tool_request_2(
+        "write_file",
+        &format!(r#"{{"path":"{}","contents_ref":"ref:3"}}"#, link.display()),
+    ));
+    replies.push(reply_with("I could not save the summary."));
+    let (_outcome, requests) = fixture.run(replies, &mut confirmer);
+
+    let refusals: Vec<String> = planner_tool_results(&requests)
+        .into_iter()
+        .filter(|result| result.starts_with("Result of write_file"))
+        .collect();
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert!(
+        refusals[0].contains("only to a new file in the scratch directory"),
+        "a write through a link out of the directory was not refused for landing outside it: {}",
+        refusals[0]
+    );
+    assert!(
+        !in_the_project.exists(),
+        "an answer about no file was written into the workspace through a link"
+    );
+    assert!(
+        confirmer.seen.is_empty(),
+        "a write that could not be allowed was put to the person first: {:?}",
+        confirmer.seen
+    );
+    assert!(fixture.outbox().is_none(), "the sender ran");
+}
+
 /// A call over a file and a page, naming neither, is for no document, and the scratch directory
 /// does not make it one: the rule for a reference that is no file applies only when every reference
 /// the processor read is one.

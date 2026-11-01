@@ -141,11 +141,11 @@ scratch path to write such an answer to, and the write is refused.
 game's HTML into a Python script, because the destination was a path it named and a person
 approved it.
 
-A file input fixes where its answer goes, and a reference that is no file fixes nothing. Requiring
-the planner to save the page to a file first gave the answer a path the planner chose anyway, at
-the cost of two more calls, one to save the page and one to read it back. It also left a way to
-read the page: a page saved by a script that opens the file itself is not recorded as content the
-planner was not shown ([TRUST-2](trust-map.md#TRUST-2) and Known costs in the same spec). The
+A file input fixes where its answer goes, and a reference that is no file fixes nothing. Saving
+the page to a file first would give the answer a path the planner chooses anyway, and costs two
+more calls, one to save the page and one to read it back. Saving it with a script that opens the
+file itself leaves the page readable, since such a file is not recorded as content the planner was
+not shown ([TRUST-2](trust-map.md#TRUST-2) and Known costs in the same spec). The
 scratch directory belongs to the session and is outside the project. A file already there is never
 replaced, because a line a person approved earlier names a program and its arguments
 ([RUN-3](tools/run.md#RUN-3)) and not the bytes of the file it reads.
