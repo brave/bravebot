@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT, ASSISTANT_BUBBLE, COMPOSER_SEND, TRUST_APPROVE } from './drive-support.mjs'
+import { COMPOSER_INPUT, ASSISTANT_BUBBLE, COMPOSER_SEND, approveTrust } from './drive-support.mjs'
 
 /** A line of the file the plan reads and releases. It may reach a screen and no model. */
 const SENTINEL = 'SENTINEL-README-BYTES'
@@ -175,7 +175,7 @@ try {
   await record.getByRole('button', { name: 'New chat here', exact: true }).click()
   await composer.waitFor()
   if (await trust.isVisible().catch(() => false)) {
-    await trust.locator(TRUST_APPROVE).click()
+    await approveTrust(trust)
     await trust.waitFor({ state: 'hidden' })
   }
   assert.equal(await page.locator('.bubble').count(), 0, 'the new session holds nothing the run said')

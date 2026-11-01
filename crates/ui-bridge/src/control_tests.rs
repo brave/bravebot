@@ -254,6 +254,51 @@ fn the_startup_question_carries_the_directory_and_the_record_spelled_for_a_perso
     }
 }
 
+/// PROMPT-1: the bridge sends a directory whose name holds a zero-width space and a right-to-left
+/// override spelled in `shownDirectory`, equal to `shown_path`. `directory` stays as held, which is
+/// what mobile and the editor key on, and differs from the spelled field. This pins the bridge's
+/// field only; the spelling was already sent before the window's yes was gated, and that the window
+/// draws the field is pinned in ui/scripts/shown-name.test.mjs.
+#[test]
+fn the_startup_question_spells_a_directory_that_holds_invisible_characters() {
+    let (mut bridge, said) = a_bridge();
+    let project = Path::new("/work/pro\u{200b}j\u{202e}ect");
+    let identity = trusted::Identity::of(tempfile::tempdir().unwrap().path()).expect("a directory");
+    let handle = bridge.mint(Open::opened(
+        project.to_path_buf(),
+        State::fresh(TrustStore::new(project)),
+        false,
+        Some((
+            trusted::Store::new(Path::new("/home/me/state"), project),
+            identity,
+        )),
+        false,
+    ));
+    bridge.ask_about_trust(&handle);
+    let events = said.lock().unwrap();
+    let [event] = events.as_slice() else {
+        panic!("one event was expected: {:?}", names(&said));
+    };
+    assert_eq!(event.name, "trust.request");
+    let shown = event.data["shownDirectory"]
+        .as_str()
+        .expect("a spelled directory");
+    assert_eq!(shown, bravebot_agent::confirm::shown_path(project));
+    assert!(
+        shown.contains("\\u{200b}") && shown.contains("\\u{202e}"),
+        "{shown}"
+    );
+    assert!(
+        !shown.contains('\u{200b}') && !shown.contains('\u{202e}'),
+        "{shown}"
+    );
+    assert_eq!(
+        event.data["directory"],
+        json!("/work/pro\u{200b}j\u{202e}ect")
+    );
+    assert_ne!(event.data["directory"], event.data["shownDirectory"]);
+}
+
 /// A session with no view has nothing to hand over, and a session that is not open cannot be
 /// taken. Neither runs the hand-over or changes who can answer.
 #[test]

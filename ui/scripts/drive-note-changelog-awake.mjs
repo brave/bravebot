@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { inheritedEnv, launchWorld, listening } from './drive-world.mjs'
-import { COMPOSER_NAME, TRUST_APPROVE } from './drive-support.mjs'
+import { COMPOSER_NAME, TRUST_APPROVE, approveTrust } from './drive-support.mjs'
 
 const shots = process.env.EXTRAS_SHOTS ?? join(tmpdir(), 'bravebot-extras')
 mkdirSync(shots, { recursive: true })
@@ -111,7 +111,7 @@ try {
   await trust.waitFor()
   await besidePrimary(trust, "Don't trust", trust.locator(TRUST_APPROVE))
   await page.screenshot({ path: join(shots, 'trust-dialog.png') })
-  await trust.locator(TRUST_APPROVE).click()
+  await approveTrust(trust)
   await trust.waitFor({ state: 'hidden' })
   assert.equal((await menuItem('session.note')).label, 'Add Note…')
   await turnEnded(await turn('Say hello.', () => content('Hello.')))

@@ -1,4 +1,4 @@
-import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, COMPOSER_SEND, TRUST_APPROVE } from '../../drive-support.mjs'
+import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, COMPOSER_SEND, TRUST_APPROVE, readTrust, trustQuestion } from '../../drive-support.mjs'
 import { BOT_NAME, botRow, openBotsTab } from '../bots.mjs'
 // A bot, working — which is the only way to show the part that matters.
 //
@@ -48,6 +48,7 @@ export default {
 
     if (await page.locator('.trust').isVisible().catch(() => false)) {
       await s.say('Trust the folder', 'The same question any new chat asks, once per folder.', 2.2)
+      await readTrust(trustQuestion(page))
       await s.click(TRUST_APPROVE)
       await page.waitForTimeout(800)
     }

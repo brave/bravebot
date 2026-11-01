@@ -17,6 +17,8 @@ governs:
   - crates/core/src/invisible.rs
   - ui/src/renderer/shown.ts
   - ui/src/renderer/components/Transcript.tsx
+  - ui/src/renderer/components/Approval.tsx
+  - ui/src/renderer/components/TrustPrompt.tsx
   - ui/src/renderer/components/Diff.tsx
 documented-by:
   - docs/website/docs/security/permissions.md
@@ -197,7 +199,7 @@ bound to the arguments as held.
 `verified-by: bravebot_cli::plain::a_question_in_lines_spells_a_name_that_would_draw_as_another`
 `verified-by: bravebot_ui_bridge::acp::the_title_of_a_question_about_a_file_spells_a_name_that_would_draw_as_another`
 `verified-by: bravebot_ui_bridge::wire::a_write_and_a_credential_read_carry_the_name_spelled_for_a_person`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the write, credential-read, vouch and run cards, the startup question, the notice and the list of what is kept, the list of proposed rules, a tool line and the Context lists of files read and written through react-dom and asserts each draws the name the agent spelled and not the name as written, ui/scripts/drive-remembered-trust.mjs asks the startup question in the real window about a directory whose name ends in a space, and make check-ui runs them)`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the write, credential-read, vouch and run cards, the startup question, the notice and the list of what is kept, the list of proposed rules, a tool line and the Context lists of files read and written through react-dom and asserts each draws the name the agent spelled and not the name as written, ui/scripts/drive-remembered-trust.mjs asks the startup question in the real window about a directory whose name ends in a space and about a long directory in a 900x560 window, and make check-ui runs them)`
 `verified-by: bravebot_agent::confirm::a_name_that_draws_as_nothing_is_shown_as_what_it_is`
 `verified-by: bravebot_agent::confirm::a_directory_in_a_path_that_starts_or_ends_in_a_space_is_shown_as_what_it_is`
 `verified-by: bravebot_agent::confirm::a_byte_that_is_not_text_is_shown_as_the_byte_and_not_as_another_name`
@@ -208,6 +210,7 @@ bound to the arguments as held.
 `verified-by: bravebot_ui_bridge::wire::a_run_request_carries_a_directory_that_is_not_text_spelled_as_the_bytes_it_holds`
 `verified-by: bravebot_ui_bridge::wire::a_vouch_request_carries_the_name_and_the_rule_spelled_for_a_person`
 `verified-by: bravebot_ui_bridge::control_tests::the_startup_question_carries_the_directory_and_the_record_spelled_for_a_person`
+`verified-by: bravebot_ui_bridge::control_tests::the_startup_question_spells_a_directory_that_holds_invisible_characters`
 `verified-by: bravebot_agent::report::a_line_spells_the_name_of_a_file_and_nothing_else`
 `verified-by: bravebot_agent::report::a_list_of_files_names_a_file_without_its_slot_and_spelled`
 `verified-by: bravebot_agent::tools::a_file_calls_line_spells_a_name_a_person_could_not_otherwise_tell_apart`
@@ -253,8 +256,9 @@ sends neither sentence. The output prompt says
 what approving does. The vetting prompt says what approving does and, because nothing else on the
 screen would, what it does not: no path is vouched for, so the same thing read again asks again. The trust prompt explains the consequence and names both answers, and says that a command the
 sandbox confines then runs in the directory without asking ([RUN-5](tools/run.md#RUN-5)), above the lines
-that scroll so that it is on the screen whenever a yes can be taken. The desktop interface's question does
-not say so, so its yes does not grant it and it does not act on a kept answer that says so. The prompt
+that scroll so that it is on the screen whenever a yes can be taken. The desktop interface's question says it too, in the words the bridge hands it, and its yes
+tells the bridge that it did, since a yes that does not say so grants nothing of the kind
+([TRUST-7](trust-map.md#TRUST-7)). The prompt
 about a directory a settings file asked for says that opening it grants reach and trust, and that a
 file asked for it. The plan prompt says that nothing the run reads can add a step, drop one, or send
 anything anywhere the plan does not already name; that approving the plan is not approving its
@@ -368,7 +372,16 @@ and the content's first row; for a vetted picture they are all of it, down to th
 a run they are the head and every row of the plan, down to the access the line spends and each
 warning, and a remembered approval also waits on the row saying what it covers. For a call they are
 the tool and every argument, and not the server's description of the tool. For a language server,
-an MCP server, a tool list, an exposure and a plan they are all of the card. The terminal keeps the
+an MCP server, a tool list, an exposure and a plan they are all of the card. For the window's trust
+question about the working directory ([TRUST-23](trust-map.md#TRUST-23)) they are the directory, every row
+saying what an answer does, the sentence that confined lines run without asking when the question
+carries it, and the row naming the file a yes is kept in. The directory is drawn in a box that
+scrolls inside itself, so a long path cannot push those rows out of the dialog, and the box
+is one of the boxes that clip a row. Its yes, labelled "Trust and remember" where a yes is kept and
+"Trust for this session" where it is not, takes no press until those rows have been on screen, and
+its no is taken at every draw. A yes cannot be pressed before the sentence has been on screen, so a
+yes that tells the bridge the sentence was shown (`confinedLines`) followed a draw that had it on
+screen. The terminal keeps the
 host of a fetch and of a moved server pinned, which a card that scrolls with the transcript cannot,
 so the card waits on them instead: for a fetch, the first row of the address, the host and the
 access it spends; for a moved server, where it was declared, the first row of where its reply
@@ -414,7 +427,7 @@ in a window is the same question asked with a mouse, so it owes the same.
 `verified-by: bravebot_tui::trust_prompt::paging_through_a_list_on_a_short_terminal_reads_every_rule`
 `verified-by: bravebot_tui::trust_prompt::a_question_a_small_terminal_cuts_off_takes_no_answer`
 `verified-by: bravebot_tui::trust_prompt::a_question_that_fits_its_box_says_nothing_of_scrolling`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs pins that every row an approval rests on is marked as deciding for each kind of card and that the count opens, resets and stays shut as described, and make check-ui runs it; ui/scripts/drive-shown.mjs draws each card too tall for a 900x560 window and checks, independently of the card's own count, that no approval opens or is taken before those rows have been on screen, and that rows swept through under the overlay drawn while a file is dragged over the transcript, which takes no pointer, count for nothing until the drag ends)`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs pins that every row an approval rests on is marked as deciding for each kind of card and that the count opens, resets and stays shut as described, and make check-ui runs it; ui/scripts/drive-shown.mjs draws each card too tall for a 900x560 window and checks, independently of the card's own count, that no approval opens or is taken before those rows have been on screen, and that rows swept through under the overlay drawn while a file is dragged over the transcript, which takes no pointer, count for nothing until the drag ends; ui/scripts/shown-name.test.mjs renders the window's startup question and asserts that the directory, the rows saying what an answer does and the row naming the file are marked as deciding and that its yes is held shut under both labels and its no is not, and ui/scripts/drive-shown.mjs asks that question in the real window with a directory too long for it and checks that its yes is refused until those rows have been on screen, and that it opens once they have, although the composer's fade lies under the window's dialog and not over it)`
 
 ## What an answer means
 

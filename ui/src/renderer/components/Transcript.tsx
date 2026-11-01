@@ -2,7 +2,7 @@ import { Watches } from './Watches'
 import type { Enhancement } from '../enhancing'
 import type { FileAttachment } from '../../shared/files'
 import { Permissions } from './Permissions'
-import { Fragment, memo, useContext, useId, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useLayoutEffect, useEffect, useMemo, useRef, useState } from 'react'
 import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
@@ -38,7 +38,7 @@ import type { Turns, TurnDisclosure } from '../turn-details'
 import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
 import { middleTruncate } from '../truncate'
 import { pointForPrompt, undoRow } from '../rewind'
-import { ShownContext, leftWords, mayAnswer, useShown, type OnScreen } from '../shown'
+import { Answers, Approve } from './Approval'
 import { showToast } from '../toasts'
 import { EMPTY_STAGING, named, stageDrop, stagePaste, stageSummon, withoutMarker, type Staging, type SummonedBot } from '../staging'
 import { placeCards, summonedIn, summonMarker, type Placement, type Summon } from '../../shared/summons'
@@ -1745,60 +1745,6 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
  */
 function Unanswered(): React.JSX.Element {
   return <div className="decided unanswered">Nobody answered this</div>
-}
-
-/**
- * The row a waiting question's answers sit in. It counts the rows the card marks as deciding that
- * have not been on screen yet, says how many are left, and the approving buttons in it wait until
- * none are (PROMPT-4). A refusal never waits.
- */
-function Answers({ children }: { children: React.ReactNode }): React.JSX.Element {
-  const row = useRef<HTMLDivElement>(null)
-  const counted = useShown(row)
-  const note = useId()
-  const shown = useMemo<OnScreen>(() => ({ ...counted, note }), [counted, note])
-  const words = leftWords(shown)
-  return (
-    <div className="confirm-actions" ref={row}>
-      {words && <span className="shown-left" id={note}>{words}</span>}
-      <ShownContext.Provider value={shown}>{children}</ShownContext.Provider>
-    </div>
-  )
-}
-
-/**
- * Whether an approving button is open, the note saying why not and its id, and `press`, which
- * measures once more before it answers, so a row scrolled away since the last count stops it.
- */
-function useApproval(standing: boolean, onClick: () => void): {
-  open: boolean
-  words: string | undefined
-  reason: string | undefined
-  press: () => void
-} {
-  const shown = useContext(ShownContext)
-  const open = mayAnswer(shown, standing)
-  const words = open ? undefined : leftWords(shown) ?? undefined
-  return { open, words, reason: words && shown.note, press: () => { if (open && shown.now(standing)) onClick() } }
-}
-
-/** A card's approving Leo button. `standing` is an answer that also covers later questions. */
-function Approve({ kind = 'filled', className = 'approve', standing = false, tooltip, onClick, children }: {
-  kind?: 'filled' | 'outline'
-  className?: string
-  standing?: boolean
-  tooltip?: string
-  onClick: () => void
-  children: React.ReactNode
-}): React.JSX.Element {
-  const { open, words, press } = useApproval(standing, onClick)
-  // The note's id would not resolve inside the button's shadow root, so its words go across instead.
-  return (
-    <Button kind={kind} size="small" className={className} data-tooltip={tooltip} isDisabled={!open} aria-disabled={!open}
-      aria-description={words} onClick={press}>
-      {children}
-    </Button>
-  )
 }
 
 /**

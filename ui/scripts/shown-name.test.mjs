@@ -10,6 +10,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build, buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
+import { TRUST_CASE } from './shown-cases.mjs'
+import { texts, withoutModal, plainLeo } from './shown-markup.mjs'
 
 const require = createRequire(import.meta.url)
 const React = require('react')
@@ -34,20 +37,7 @@ function evaluate(source) {
 const load = (path) => evaluate(buildSync(options(path)).outputFiles[0].text)
 
 const { Row, SessionNotices, RulesBanner } = load('src/renderer/components/Transcript.tsx')
-// The modal portals into `document.body`, which a server render has none of, so the question is
-// drawn inside a plain element: what is asserted is the question's own text.
-const withoutModal = {
-  name: 'without-modal',
-  setup(build) {
-    build.onResolve({ filter: /\/Modal$/ }, () => ({ path: 'modal', namespace: 'stub' }))
-    build.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
-      contents: 'import React from "react"; export const Modal = ({ children }) => React.createElement("div", null, children)',
-      loader: 'js',
-      resolveDir: process.cwd(),
-    }))
-  },
-}
-const { TrustPrompt } = evaluate((await build({ ...options('src/renderer/components/TrustPrompt.tsx'), plugins: [withoutModal] })).outputFiles[0].text)
+const { TrustPrompt } = evaluate((await build({ ...options('src/renderer/components/TrustPrompt.tsx'), plugins: [withoutModal, plainLeo] })).outputFiles[0].text)
 const { PathPermissions, RememberedHere } = load('src/renderer/components/Permissions.tsx')
 const { Context } = load('src/renderer/components/Context.tsx')
 const t = load('src/renderer/transcript.ts')
@@ -172,8 +162,69 @@ test('the startup question draws the directory and the file a yes is kept in as 
     confinedLines: null,
     onAnswer() {},
   }))
-  assert.ok(markup.includes('<code class="path">&quot;/work␣&quot;</code>'), markup)
+  assert.ok(markup.includes('&quot;/work␣&quot;</code>'), markup)
   assert.ok(markup.includes('<code>&quot;/home/me/state␣/trusted&quot;</code>'), markup)
+})
+
+// PROMPT-4 and TRUST-23: the yes is held until the directory and each row saying what an answer
+// does have been on screen, and a server render has measured nothing, so it draws the gate shut.
+const trust = (props = {}) => renderToStaticMarkup(React.createElement(TrustPrompt, {
+  directory: '/work', keeping: '/home/me/state/trusted', confinedLines: 'It also lets a command run.', onAnswer() {}, ...props,
+}))
+
+// drive-shown.mjs waits in the window on these words. A word drawn outside a row the question marks
+// as deciding, or drawn twice, would let the drive pass for a row the gate does not count.
+test('every word the trust drive waits on is drawn once, in a row the question marks as deciding', () => {
+  const markup = trust(TRUST_CASE.props)
+  const runs = texts(markup)
+  for (const token of TRUST_CASE.tokens) {
+    const holding = runs.filter((run) => run.text.includes(token))
+    assert.equal(holding.reduce((sum, run) => sum + run.text.split(token).length - 1, 0), 1, `${token} is drawn once\n${markup}`)
+    assert.equal(holding[0].deciding, 'all', `${token} is drawn outside every row marked as deciding\n${markup}`)
+  }
+})
+
+test('the startup question marks the directory and every row saying what an answer does as deciding', () => {
+  const markup = trust()
+  assert.equal(markup.match(/data-deciding="all"/g)?.length, 6, markup)
+  assert.ok(/data-test="trust-path"[^>]*>\/work<\/code>/.test(markup) || /data-deciding="all"[^>]*data-test="trust-path"/.test(markup), markup)
+  assert.ok(/<p class="aside"[^>]*data-deciding="all"/.test(markup), markup)
+  assert.equal(trust({ keeping: null, confinedLines: null }).match(/data-deciding="all"/g)?.length, 4)
+})
+
+test('the startup question holds its yes shut until the rows have been on screen, and its no is never held', () => {
+  const markup = trust()
+  const yes = markup.match(/<[^>]*data-test="trust-approve"[^>]*>/)?.[0] ?? ''
+  const no = markup.match(/<[^>]*data-test="trust-decline"[^>]*>/)?.[0] ?? ''
+  assert.ok(/\bdisabled\b/.test(yes) && /aria-disabled="true"/.test(yes), yes || markup)
+  assert.ok(!/disabled/.test(no), no || markup)
+})
+
+// The yes reads "Trust and remember" where a yes is kept and "Trust for this session" where it is
+// not, and each is held shut until the rows have been on screen.
+test('the yes is held shut under both of its labels, and the no under neither', () => {
+  for (const [keeping, label] of [['/home/me/state/trusted', 'Trust and remember'], [null, 'Trust for this session']]) {
+    const markup = trust({ keeping, confinedLines: null })
+    const yes = markup.match(/<button[^>]*data-test="trust-approve"[^>]*>[^<]*<\/button>/)?.[0] ?? ''
+    const no = markup.match(/<button[^>]*data-test="trust-decline"[^>]*>[^<]*<\/button>/)?.[0] ?? ''
+    assert.ok(yes.endsWith(`>${label}</button>`), `${label}: ${yes || markup}`)
+    assert.ok(/\bdisabled\b/.test(yes) && /aria-disabled="true"/.test(yes), `${label}: ${yes}`)
+    assert.ok(!/disabled/.test(no), `${label}: ${no}`)
+  }
+})
+
+// A directory of three 255-character components draws as one deciding row in a box that scrolls
+// inside itself. A server render measures nothing, so the box is held to the rule in the style
+// sheet; drive-shown.mjs holds the window to it.
+test('a directory of three 255-character components is one deciding row in a box with a height limit', () => {
+  const long = `/work/${'a'.repeat(255)}/${'b'.repeat(255)}/${'c'.repeat(255)}`
+  const markup = trust({ directory: long })
+  assert.equal(markup.split(long).length - 1, 1, 'the directory is drawn once')
+  assert.ok(new RegExp(`<code class="path"[^>]*data-deciding="all"[^>]*>${long}</code>`).test(markup), markup)
+  const css = readFileSync('src/renderer/styles/dialogs.css', 'utf8')
+  const box = css.match(/\.trust \.path \{[^}]*\}/)?.[0] ?? ''
+  assert.match(box, /max-height:\s*[^;]+;/, box)
+  assert.match(box, /overflow-y:\s*auto;/, box)
 })
 
 test('the notice that a yes was kept names the file as spelled', () => {

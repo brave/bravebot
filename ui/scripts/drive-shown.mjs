@@ -17,8 +17,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { agentInfo, oneModelList } from './acceptance-fixture.mjs'
-import { CASES } from './shown-cases.mjs'
-import { COMPOSER_NAME } from './drive-support.mjs'
+import { CASES, TRUST_CASE } from './shown-cases.mjs'
+import { COMPOSER_NAME, readTrust as read } from './drive-support.mjs'
 
 const output = process.env.SHOWN_OUTPUT || join(tmpdir(), 'bravebot-shown')
 mkdirSync(output, { recursive: true })
@@ -45,8 +45,10 @@ try {
     // Electron's own handler puts a modal box up, which stops the main process and every call into the page.
     process.on('uncaughtException', (error) => globalThis.shown.thrown.push(String(error?.stack ?? error)))
     const replace = (name, fn) => { ipcMain.removeHandler(name); ipcMain.handle(name, fn) }
+    replace('bravebot:choose-directory', () => globalThis.shown.chosen)
     replace('bravebot:request', async (_, method, p = {}) => {
       if (method.endsWith('.reply')) { globalThis.shown.replies.push({ method, ...p }); return { ok: {} } }
+      if (method === 'session.new') return { ok: globalThis.shown.fresh }
       if (method === 'agent.info') return { ok: info }
       if (method === 'session.list') return { ok: { sessions: [row] } }
       if (method === 'models.list') return { ok: models }
@@ -80,7 +82,9 @@ try {
   // it was inside every box that clips it, its own included, and points across its middle hit it.
   // It knows nothing of `data-deciding` or of the card's own count, so a row the card forgot to
   // mark still fails here.
-  const watch = (found) => page.evaluate(({ tokens, standing }) => {
+  const CARD = { card: '.confirm', actions: '.confirm-actions', approve: '.confirm-actions .approve', reject: '.confirm-actions .reject' }
+  const DIALOG = { card: '.modal.trust', actions: '.trust-answers', approve: '.trust-answers .approve', reject: '.trust-answers [data-test="trust-decline"]' }
+  const watch = (found, where = CARD) => page.evaluate(({ tokens, standing, where }) => {
     const all = [...tokens, ...standing]
     const state = { card: null, seen: new Set(), width: null, quiet: 0, violations: [], stopped: false }
     globalThis.oracle?.stop()
@@ -102,7 +106,9 @@ try {
       const found = occurrence(token)
       if (!found) return false
       let clip = { top: 0, left: 0, right: innerWidth, bottom: innerHeight }
-      for (let at = found.element; at; at = at.parentElement) {
+      // A row in a dialog is slotted into a box inside the dialog's shadow tree, which is the box that clips it.
+      const up = (at) => at.assignedSlot ?? at.parentElement ?? (at.getRootNode() instanceof ShadowRoot ? at.getRootNode().host : null)
+      for (let at = found.element; at; at = up(at)) {
         const style = getComputedStyle(at)
         if (style.overflowX === 'visible' && style.overflowY === 'visible') continue
         const box = at.getBoundingClientRect()
@@ -116,8 +122,8 @@ try {
     }
     const tick = () => {
       if (state.stopped) return
-      state.card ??= [...document.querySelectorAll('.confirm')].find((card) => all.every((token) => card.textContent?.includes(token))) ?? null
-      if (state.card?.isConnected && state.card.querySelector('.confirm-actions')) {
+      state.card ??= [...document.querySelectorAll(where.card)].find((card) => all.every((token) => card.textContent?.includes(token))) ?? null
+      if (state.card?.isConnected && state.card.querySelector(where.actions)) {
         const width = state.card.getBoundingClientRect().width
         // The card's count is a frame behind what is on screen, so after a change of width the
         // buttons are left a few frames to close before an open one is held against it.
@@ -126,18 +132,18 @@ try {
         for (const token of all) if (!state.seen.has(token) && inView(token)) state.seen.add(token)
         if (state.quiet > 0) state.quiet -= 1
         else {
-          for (const button of state.card.querySelectorAll('.confirm-actions .approve')) {
+          for (const button of state.card.querySelectorAll(where.approve)) {
             const needs = button.classList.contains('always') ? all : tokens
             const unseen = needs.filter((token) => !state.seen.has(token))
             if (!closed(button) && unseen.length) state.violations.push(`"${button.textContent?.trim()}" open before ${unseen.join(', ')} was on screen`)
           }
         }
-        for (const button of state.card.querySelectorAll('.confirm-actions .reject')) if (closed(button)) state.violations.push(`"${button.textContent?.trim()}" waited`)
+        for (const button of state.card.querySelectorAll(where.reject)) if (closed(button)) state.violations.push(`"${button.textContent?.trim()}" waited`)
       }
       requestAnimationFrame(tick)
     }
     requestAnimationFrame(tick)
-  }, found)
+  }, { tokens: found.tokens, standing: found.standing, where })
   const violations = () => page.evaluate(() => globalThis.oracle.state.violations)
 
   /** Scrolls the transcript over the card, bottom to top and back, and every box inside it through. */
@@ -243,6 +249,82 @@ try {
     await page.evaluate(() => globalThis.oracle.stop())
     answered.push(name)
     console.log('SHOWN', name)
+  }
+
+  // The question asked before the agent works in a directory. It is a dialog opened by choosing a
+  // folder, not a card put to the transcript by an event, so it is reached through New chat with
+  // the folder picker and `session.new` mocked. The directory is a long path in a box that scrolls
+  // inside a dialog whose body scrolls, so some of what a yes rests on starts out of view.
+  {
+    const found = TRUST_CASE
+    const { directory: far, keeping, confinedLines } = found.props
+    const fresh = (session) => ({ session, branch: null, model: 'sample/fast', shownDirectory: far, remembered: null, keeping, shownKeeping: keeping, confinedLines, autoVetting: false, permissionMode: 'ask', sandboxMode: 'workspace-write' })
+    const ask = async (session) => {
+      await app.evaluate((_, v) => { globalThis.shown.chosen = v.far; globalThis.shown.fresh = v.fresh }, { far, fresh: fresh(session) })
+      await page.setViewportSize(SMALL)
+      await watch(found, DIALOG)
+      await page.getByRole('button', { name: 'New chat', exact: true }).click()
+      const dialog = page.getByRole('dialog', { name: 'Project trust', exact: true })
+      await dialog.waitFor()
+      return dialog
+    }
+    const answers = (dialog) => dialog.locator('.trust-answers [data-test="trust-approve"], .trust-answers [data-test="trust-decline"]').evaluateAll((buttons) => buttons.map((button) => ({
+      test: button.getAttribute('data-test'),
+      closed: button.hasAttribute('disabled') || button.getAttribute('aria-disabled') === 'true',
+    })))
+    // A yes pressed before the rows have been on screen sends nothing.
+    let dialog = await ask('s-trust-1')
+    const before = await answers(dialog)
+    assert.ok(before.find((button) => button.test === 'trust-approve')?.closed, `trust: the yes is open in a dialog nobody has read: ${JSON.stringify(before)}`)
+    assert.ok(before.find((button) => button.test === 'trust-decline') && !before.find((button) => button.test === 'trust-decline').closed, `trust: the no waited: ${JSON.stringify(before)}`)
+    assert.match(await dialog.locator('.shown-left').innerText(), /^\d+ more lines? to read before approving$/, 'trust: the note')
+    const sent = (await replies()).length
+    const yes = dialog.locator('[data-test="trust-approve"]')
+    await yes.click({ force: true })
+    await yes.dispatchEvent('click')
+    await frames(4)
+    assert.equal((await replies()).length, sent, 'trust: a press on a closed yes sent a reply')
+
+    // Read through, the yes opens and says what it also granted.
+    const boxes = await read(dialog)
+    assert.ok(boxes.inner > 0, `trust: the directory was not drawn in a box that scrolls: ${JSON.stringify(boxes)}`)
+    assert.deepEqual(await page.evaluate(() => globalThis.oracle.unseen()), [], 'trust: the sweep did not bring every row on screen')
+    await frames(40)
+    assert.ok((await answers(dialog)).every((button) => !button.closed), `trust: still closed after every row was on screen: ${JSON.stringify(await answers(dialog))}`)
+    assert.equal(await dialog.locator('.shown-left').count(), 0, 'trust: the note outlived the rows it counts')
+    await page.screenshot({ path: join(output, 'shown-trust-read-900x560.png') })
+    await yes.click()
+    const reply = await replied(sent)
+    assert.equal(reply.method, 'trust.reply', 'trust: the reply')
+    assert.equal(reply.session, 's-trust-1', 'trust: answered the right session')
+    assert.equal(reply.trusted, true, 'trust: the answer')
+    assert.equal(reply.confinedLines, true, 'trust: a yes sent after the sentence was on screen says it grants what the sentence says')
+    assert.deepEqual(await violations(), [], 'trust: the yes was open early')
+    await dialog.waitFor({ state: 'hidden' })
+    await page.evaluate(() => globalThis.oracle.stop())
+
+    // The no answers at every draw, whether or not the rows were read. The window cannot be made
+    // narrower than 900px, where the dialog is the same width, so a change of width is not driven
+    // here. The count this dialog shares with the cards starts again on one in shown.test.mjs.
+    dialog = await ask('s-trust-2')
+    const early = await answers(dialog)
+    assert.ok(early.find((button) => button.test === 'trust-approve')?.closed, `trust: the yes was open on the second draw: ${JSON.stringify(early)}`)
+    const ready = (await replies()).length
+    await dialog.locator('[data-test="trust-decline"]').click()
+    const refused = await replied(ready)
+    assert.equal(refused.trusted, false, 'trust: the refusal')
+    assert.deepEqual(await violations(), [], 'trust: the no waited')
+    await dialog.waitFor({ state: 'hidden' })
+    await page.evaluate(() => globalThis.oracle.stop())
+    answered.push('trust')
+    console.log('SHOWN trust')
+
+    // Back to the session the other cases put their cards to.
+    await page.setViewportSize(SMALL)
+    await page.reload()
+    await page.locator('.session').filter({ hasText: 'Write the release notes' }).first().click()
+    await page.getByRole('textbox', { name: COMPOSER_NAME }).waitFor()
+    await emit('turn.started', { turn: 2 })
   }
 
   // A veil takes no pointer, so no hit test finds it; the dock's fade over the foot of the

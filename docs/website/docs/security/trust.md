@@ -400,8 +400,10 @@ the checkout: full paths on disk would each name somewhere that is no longer the
 match, and the session would resume as though nobody had vouched for anything.
 
 The question grants standing permission, and it says that a yes is kept: what it covers, how to take
-it back and the file it writes are on the screen before you answer. A yes is honoured on narrower
-terms than it is given on.
+it back and the file it writes are on the screen before you answer. In the desktop app the yes stays
+closed, with a line saying how many are left to read, until the directory and each of those lines have
+been on screen; a long directory scrolls inside its own box, and the no is always open. A yes is
+honoured on narrower terms than it is given on.
 
 ### Remembering the answer
 
