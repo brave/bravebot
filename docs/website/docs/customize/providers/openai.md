@@ -74,6 +74,7 @@ is restarted, including a level the model would have taken, and
 
 The conversation is never kept at the service (`store` is off), the reply is always streamed, and the model's
 earlier reasoning is not sent back with a later request. Pictures are sent, and a document attachment is not.
+A reply the service stops for its content, or that holds a refusal part, ends the turn as a refusal and is not asked for again. The words the service wrote are not shown, and a call that arrived beside a refusal is not run.
 
 An entry that names `@ai-sdk/openai` in `npm`, as it does in opencode, is sent requests at `/responses` under
 its `baseURL` whatever its id, so it reaches a proxy that serves that route:

@@ -54,7 +54,7 @@ rather than refused. opencode's `cost`, `modality` and `package` fields do nothi
 **A gateway bravebot already knows an endpoint for needs no `baseURL`.** [`openrouter`](openrouter.md)
 and [`openai`](openai.md) are the names it knows today. Any other id needs one written down, and an entry with neither a known name
 nor a stated endpoint configures no service. A stated `baseURL` always wins, so a known name stays
-usable against a proxy or a private deployment. A known name supplies the endpoint and no credential:
+usable against a proxy or a private deployment. A port is read as digits that fit in 65535 after the host; a `:` followed by anything else, such as `https://gw.example.com:/v1` or `:abc`, leaves the entry out of the gateways, and `bravebot doctor` names it by its id and by the text written where the port belongs, without the rest of the address. A `BRAVE_AI_CHAT_ENDPOINT` written the same way fails the configuration with an error that names that text. A known name supplies the endpoint and no credential:
 the block still says where its credential lives, as [below](#the-credential). What is different at
 `api.openai.com` follows the host a request goes to, whatever the entry is called, and is on the
 [OpenAI page](openai.md).
@@ -120,6 +120,33 @@ models it offers, and how an entry reaches the Responses API.
 [Reaching Google Vertex AI](google-vertex.md) says how an entry keyed `google-vertex`
 reaches Vertex AI with or without a project, and what express mode is.
 
+### Cloudflare
+
+An entry keyed `cloudflare-workers-ai` that states `options.accountId` reaches Cloudflare Workers AI
+at `https://api.cloudflare.com/client/v4/accounts/<accountId>/ai/v1`. An entry keyed
+`cloudflare-ai-gateway` that states `options.accountId` and `options.gatewayId` reaches Cloudflare AI
+Gateway at `https://gateway.ai.cloudflare.com/v1/<accountId>/<gatewayId>/compat`. A model on the
+gateway is named `<provider>/<model>`, as `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`, and
+the name is sent as written.
+
+```json
+{
+  "provider": {
+    "cloudflare-ai-gateway": {
+      "options": { "accountId": "abc123", "gatewayId": "my-gateway" }
+    }
+  }
+}
+```
+
+An account id is letters and digits, and a gateway id is letters, digits, `-` and `_`. An entry whose
+id is missing or holds any other character configures no service, and the gateway has no default id.
+Where the entry names no `env`, states no `apiKey` and states no `baseURL`, the key is read from
+`CLOUDFLARE_API_KEY` for Workers AI and `CLOUDFLARE_API_TOKEN` for AI Gateway. The ids are read from
+`options` only, so `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_GATEWAY_ID` are not used. A gateway that
+requires authentication takes its `cf-aig-authorization` header in `options.headers`. A `baseURL` the
+entry states is where its requests go instead of the built address.
+
 ### The credential
 
 Name a variable in `env` and keep the token wherever you already keep secrets. Or store it with
@@ -150,9 +177,15 @@ custody and leaves the token live there.
 **A block naming no credential at all is a different statement, and a supported one.** No `env`, no
 `options.apiKey` and no stored key is you saying this gateway wants none: its requests carry no
 `authorization` header and its roster is asked for without one. `doctor` reports it as needing none
-rather than as missing one. Deciding this by endpoint instead would refuse the same local service reached across a LAN or
-through a reverse proxy, and a dummy `apiKey` would just teach people to write fake credentials into a
+rather than as missing one. A dummy `apiKey` would just teach people to write fake credentials into a
 file they paste into issues.
+
+**One exception: a known name with no `baseURL` of its own.** A block for `openai`, `openrouter` or
+`anthropic` that states no `baseURL` is reached at a service that refuses every request without a key,
+so naming no credential there means one is missing. `bravebot auth status` says it is not signed in,
+`doctor` says none was found, and the request is refused with the remedy named. A block that states
+its own `baseURL`, such as a local service reached under a known name, keeps the reading above. So
+does a block that carries the credential in an `Authorization` header it names in `headers`.
 
 ### A local Ollama, or another gateway that wants no key
 
@@ -194,8 +227,13 @@ answers only where a gateway does not offer the narrower question. Models that c
 left out.
 
 Nothing is capped. Ordering does that work instead: the model a session would use comes first and the
-rest are sorted by name. A listing that cannot be fetched contributes nothing and takes nothing away
-from the rest of the roster.
+rest are sorted by name. A listing that cannot be read contributes nothing and takes nothing away
+from the rest of the roster, and the picker says which gateway's could not be read, by the name its
+block gives it. The terminal says so in a note before the picker is drawn, and adds that one of its
+models can be named as `--model <id>/<model>`. The desktop app shows a warning that names the gateway
+and says to try again. A gateway whose block names a credential nothing holds is not asked and is not
+mentioned in that note, since `bravebot doctor` reports the missing credential. A gateway whose block
+lists its models is not asked.
 
 **`whitelist` and `blacklist` narrow a fetched roster** without listing every model. Each is an array
 of ids as the gateway names them. The whitelist is applied first and the blacklist then removes from
@@ -278,8 +316,11 @@ differently shows nothing. It is not saved to the session and is not sent back i
 
 ### Retries and a reply gone quiet
 
-A request that fails because the connection gave out, or because the service said it was busy, is
-sent again twice, after a pause of one second and then two. A reply that is still arriving is given
+A request that fails because the connection gave out, because the name of the host did not resolve,
+because the network is down or unreachable, or because the service said it was busy, is sent again
+twice, after a pause of one second and then two. With the default count, a mistyped host is therefore sent three times before
+the failure is reported, since a name that does not exist and a network that is not up yet cannot be
+told apart by the failure. A reply that is still arriving is given
 up on when nothing has come for two minutes. Both are figures you can change for one gateway in its
 `options`:
 

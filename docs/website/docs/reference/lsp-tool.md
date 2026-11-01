@@ -19,6 +19,14 @@ start is refused where nobody can be asked, as in a one-shot run, unless that an
 | `line`, `character` | 1-based position of the symbol, as a search or a read reported it; not used by `diagnostics` |
 | `query` | for `workspaceSymbol`, the name to look for |
 
+**`path` is not confined to the workspace.** The tool joins it onto the root the server was started in, so
+an absolute path or one with `..` names a file outside the workspace, and a link inside the workspace that
+leads out is followed. Only `deny` rules are consulted. A server for the file's extension is asked about
+the file and reads it with your own access. Hover text is untrusted and a location in an outside file is
+shown as outside the workspace and not readable, but the locations, line numbers and diagnostic counts of
+an outside file still reach the agent. The file tools refuse such a path and this tool does not. This is a
+known defect, tracked as [#3519](https://github.com/brave/bravebot/issues/3519).
+
 This answers what [`search`](tools.md#search) cannot. A search for a name finds every comment and string that
 mentions it; this finds the declaration the compiler agrees on.
 

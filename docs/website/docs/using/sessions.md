@@ -80,7 +80,7 @@ stays on the screen you are left looking at. A session that never wrote a record
 
 **A session is open in one place at a time.** The process running a session holds its record, so
 resuming it from a second terminal or window is refused, and the refusal names the session and says
-to copy it with `bravebot --fork <id>`. `--resume`, `--continue`, the `--resume` list, `/resume`, a
+to copy it with `bravebot --fork <id>`. `--resume`, `--continue`, the Sessions screen, `/resume`, a
 one-shot run given a task, the desktop app and `attach` or `reply` on a stopped background session
 all refuse in the same way. Two processes that wrote one record would each replace the other's turns,
 and with them any file you had not trusted: the file would read as trusted afterwards. The hold ends
@@ -328,7 +328,7 @@ is in [the mouse](transcript.md#what-a-click-does). It holds
   the first turn, and a round that reports nothing spent leaves the previous figures in place,
 - the language servers the session has started, by program name, and the MCP servers, by alias,
 - the files the session has written, as a count with the lines added and removed, once one has been
-  written. Clicking the count opens the files view below,
+  written. Clicking the heading or the count opens the files view below,
 - the plan, which stays after the turn ends. A task still pending or in progress is drawn with a
   filled `■` while a turn is running, and dim with a hollow `□` while none is, as after the turn
   that wrote the list has ended or in a resumed session. Where it runs past the bottom it shows the
@@ -415,7 +415,11 @@ rule in a settings file that allows something does not answer a question for you
 background session states its mode on its opening lines and again when `attach` joins it. The
 refusal of bypass says that a session nobody watches does not run in a mode that answers every
 question, and names a one-shot run (`-p`) as the way to ask for that. `--dangerously-bypass-approvals-and-sandbox`
-is refused the same way. With no model service configured, `--bg` is refused in the terminal you
+is refused the same way. Every word after the prompt is part of the prompt, so a one-shot option given there
+(`--model`, `--effort`, `--advisor`, `--file`, `--session-ref`, `--add-dir`, `--trust-workspace`, `--trace`,
+`--json`, `--json-stream`, `--output-schema`, `--mode`, `--max-rounds`, `--max-tokens` or `--goal`) is refused
+by name, the first that appears, and none of it reaches the session. A prompt whose sentence merely contains
+one of those words keeps running as the prompt it is. With no model service configured, `--bg` is refused in the terminal you
 typed it in, with the configuration status and the five routes (Bedrock, an OpenAI-compatible
 gateway, a ChatGPT sign-in, an xAI sign-in, Brave's premium service), and no background process is started.
 
@@ -428,7 +432,8 @@ gateway, a ChatGPT sign-in, an xAI sign-in, Brave's premium service), and no bac
 | `bravebot sessions stop <id>` | stop the turn and the process. The record is kept |
 
 A session is `working`, `needs input`, `idle`, `interrupted` or `stopped`. A question the session would
-ask is held until you attach and answer it, however long that takes. That includes the question about
+ask is held until you attach and answer it, however long that takes. A terminal that attaches while the
+question is held is shown all of it, however long it is. That includes the question about
 starting an [MCP server](../customize/mcp-servers.md) nobody has approved, which is held as
 `needs input (server)` and drawn as a foreground session draws it. The question about sending a
 [message to another session](../reference/tools.md#message_session) is held the same way. Closing the terminal, losing the
@@ -455,7 +460,8 @@ socket requires. A confined stage cannot read that directory.
 directory and how many, unless you pass `-y`, and `--dry-run` prints what it would remove and
 removes nothing. Each deletes the record, its trail, its search index and its lock, and nothing else: your
 prompt history is one file for every project and stays, and so do the sessions of other
-directories. A session running in the background is left until you stop it with
+directories. The [Sessions screen](sessions-screen.md) deletes the session under the cursor on Backspace
+after asking, and only `y` answers. A session running in the background is left until you stop it with
 `bravebot sessions stop`. A session open in another terminal is not seen, and its next save writes
 its record back, so close it first. Both work under `--incognito`.
 
@@ -463,6 +469,12 @@ Nothing needs to be asked for to remove an old one: when a session starts, every
 written for [`retentionDays`](../customize/configuration.md#retentiondays) days is removed, with its
 trail and its search index, and the session you are starting is left whatever its age. A record that
 is gone cannot be resumed, forked or searched, so run `/export` first to keep the words.
+
+In the desktop app, with chats grouped by project, the actions menu beside a project heading's **+**
+offers **Delete all chats in `<project>`…**. It asks first, saying how many conversations go and how
+many a background session keeps, then removes them; it cannot be undone. A conversation open in the
+window is closed and deleted with the rest. While one of the project's chats is still answering, nothing
+is closed and the delete is refused.
 
 ## Importing sessions from Claude Code
 
@@ -488,6 +500,11 @@ desktop app does not fork a session that holds them; `/branch` in the terminal s
 The record comes from the files Claude Code keeps under `$CLAUDE_CONFIG_DIR`, or `~/.claude`.
 `bravebot sessions import opencode` is refused: opencode keeps its sessions in a database file this
 build cannot read.
+
+The desktop app does the same from the actions menu beside a project heading: **Import from Claude
+Code…** lists the project's Claude Code sessions, marks the ones copied before as **Imported**, and
+copies the ones you tick in as chats. A copy stays here if the session is later deleted in Claude
+Code.
 
 ## Starting over
 
@@ -542,12 +559,26 @@ messages go to an archive that both still read.
 asks for that work on demand, at any size, without consulting the budget. `/compact keep the lexer
 benchmarks` says what the summary must keep.
 
+When the budget calls for a compaction, the results of tool calls older than the last two exchanges
+(or the last six rounds, whichever is later) are dropped from the request first, each replaced by a
+fixed line naming the tool and the size dropped. A summary is asked for only if the conversation is
+still over the budget. This is done only when it frees about 4,000 tokens, and it leaves short results
+and the planner's latest task list alone. The record and the transcript keep the whole result, and
+the model reads a file again if it needs those lines.
+
 The budget is the window the endpoint advertises for **whichever model is in force**, where it
 advertises one, so a one-shot run and a session both get the window of the model they are asking for.
 The built-in default only stands in, for a model resolved per request and for an entry that advertises
 nothing, including when you switch to such a model from one that advertised a window: the default
 replaces the earlier figure rather than leaving it standing. See
 [Configuration](../customize/configuration.md#context-budget) for setting it by hand.
+
+A session looks the window up while it draws its first screen, and takes it when the answer arrives. A
+message sent before then waits for it, for up to 10 seconds. The lookup asks only the service that
+answers the model in force, so a start does not wait on gateways it is not using. A request for a model
+list, including the one `/model` makes of every service, is asked of all of them at once and gives up on
+a service that does not answer within a few seconds, so the list waits for the slowest service and not
+for each in turn.
 
 A cut has to free more than it keeps, so a conversation with nothing worth giving up is left long
 rather than summarised once per round. That is measured twice, in exchanges and in bytes: a cut that

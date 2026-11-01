@@ -436,6 +436,15 @@ a file you took off the line afterwards was never part of it.
 Stopping a turn leaves the queue alone: the next waiting prompt starts as it would after any turn,
 and the rest go on waiting in order.
 
+**The desktop app sends Enter into the running turn too.** The planner reads the line at the turn's next
+round boundary, as the words of your own input and under the routing the turn began with. The line is
+drawn under the box as sent to this turn and moves into the transcript when the planner is given it. A
+turn that is being stopped, a plan run (which asks nothing between rounds) and a line still unread when
+the turn ends do not take it: the line becomes a turn of its own and goes at once, ahead of anything
+queued, even when Stop has paused the queue. **Alt+Enter**, or **Queue for after**, holds the line for
+after the turn instead; that queue is the one Stop pauses and **Resume** releases. A message with a file
+chosen by the attach button, and any message sent while a bot's memory is being updated, is queued rather than sent into the turn. A turn that failed for any other reason leaves an unread line in the queue it paused.
+
 ### Sending the queue now
 
 **Ctrl-Enter** queues whatever is in the box, as Enter does, then stops the running turn so that what

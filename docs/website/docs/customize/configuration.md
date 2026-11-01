@@ -924,7 +924,7 @@ box shows it dimmed where the invitation was. Tab or Right moves it into the box
 edit; nothing sends it, and a suggestion that begins with `/` is only text until you press Enter.
 Any other key removes it. Each one is a request that costs tokens, charged to the session and shown
 by `/cost`. None is asked for in plan mode, in an incognito session or after a turn that failed or
-was stopped. Only the boolean `true` turns it on.
+was stopped, and none is offered after an exchange that met content nobody vouched for. Only the boolean `true` turns it on.
 
 ### `terminalTitle`
 

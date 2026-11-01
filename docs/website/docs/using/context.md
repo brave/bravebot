@@ -47,6 +47,16 @@ A name containing whitespace is written with a backslash before each whitespace 
 writes that form for you. The picker leaves out a file or folder whose name holds a line break, and a file whose
 name ends in whitespace, because the line is trimmed when it is sent. Name such a file with `--file`.
 
+## Addressing a definition from the `@` list
+
+Typing `@` also lists the [delegate definitions](../customize/agents.md) this session resolved, the ones
+`/agent` accepts, each with its description, above the files. Picking one writes a `[@Name]` marker
+into the box and addresses that message to the definition, as `/agent <name> <task>` does, with the
+marker taken out of the task. A message addresses at most one definition: picking a second replaces
+the first, and deleting the marker takes the pick off. Shift-Enter starts a new line and keeps the
+pick. While a turn runs, the message waits as the `/agent` line it becomes. The marker is not a file
+name, so a line holding it names no file. The desktop app lists its bots in the same place.
+
 ## Naming an earlier session: `@session:<id>`
 
 After the files, the `@` picker lists earlier sessions of this directory by title and age. Typing a

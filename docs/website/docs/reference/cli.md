@@ -127,6 +127,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--safe` | load none of your hooks, skills, definitions, MCP server requests or `AGENTS.md`, and say so once; sign-in, model and permissions still apply |
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
 | `--accept-edits` | for a one-shot run, write files without asking; commands, fetches and a write that would create a credential are still refused ([below](#--accept-edits)) |
+| `--auto` | for a one-shot run, open it in the auto permission mode, where a classifier answers a confined command and the first fetch of a URL ([below](#--auto)) |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
 | `--dangerously-bypass-approvals-and-sandbox` | as `--dangerously-skip-permissions` with `--sandbox off`: nothing is asked, a language server's start included, and no program is confined; refused where that flag is, and beside a `--sandbox` other than `off` |
 | `-h`, `--help` | show the help |
@@ -134,9 +135,9 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 
 `-p` may lead, as it does for other agents: `bravebot -p "task"`.
 
-Nine flags are taken out of the line before anything dispatches on it, so each may go anywhere and
+Ten flags are taken out of the line before anything dispatches on it, so each may go anywhere and
 each combines with every way of starting, one another included: `--incognito`, `--safe`, `--locked`,
-`--dangerously-skip-permissions`, `--accept-edits`, `--settings`, `--vet`, `--tools` and `--no-shell`. `--agent` is taken out there too, and
+`--dangerously-skip-permissions`, `--accept-edits`, `--auto`, `--settings`, `--vet`, `--tools` and `--no-shell`. `--agent` is taken out there too, and
 combines with a session, `--plain` and a one-shot run, but not with `--resume`, `--continue`,
 `--fork` or `--mode manifest`, a task carrying on a session included.
 `--issue` and `--pr` are taken out there too, and combine with a session opened by no command,
@@ -184,7 +185,8 @@ outside the workspace. See [modes](../security/permission-modes.md) for what it 
 
 Opens a one-shot run in the accepting-edits mode, so a script that only needs to change files does
 not have to take the larger grant. Writes go through unasked. A command, a fetch, vouching for a
-directory and a write the credential scan found a value in are refused, because nobody can be asked.
+directory, a write the credential scan found a value in and a write to a
+[protected path](../security/permission-modes.md) are refused, because nobody can be asked.
 A `deny` rule still holds, and an allow rule still decides nothing in a one-shot run.
 
 ```sh
@@ -193,6 +195,20 @@ bravebot --accept-edits -p "apply the lint fixes"
 
 It is refused together with `--dangerously-skip-permissions`, and refused where the line starts no
 one-shot run: a session has the mode key.
+
+### `--auto`
+
+Opens a one-shot run in the [auto mode](../security/permission-modes.md#auto). Writes go through as
+they do under `--accept-edits`, and a command the sandbox confines and the first fetch of a URL are
+put to a classifier on the session's own model, which answers only by allowing. Where it does not
+allow, the question is refused, because nobody can be asked.
+
+```sh
+bravebot --auto -p "run the tests and fix what fails"
+```
+
+It is refused together with `--dangerously-skip-permissions` or `--accept-edits`, and refused where
+the line starts no one-shot run: a session has the mode key.
 
 ## `--mode <turn|manifest>`
 
@@ -787,7 +803,9 @@ word for an effect to follow.
 
 Brave Bot keeps a diagnostic log you can attach to a bug report. It records the shape of a failure:
 the host a request went to, the status it came back with, how many attempts were made, and whether
-a language server or an MCP server started. It never records a prompt, a reply, a file's contents,
+a language server or an MCP server started. A reply that is reset, cut off or runs out of time while
+it is still being read counts as a failed request. A request you stopped, and a read that fails after
+you stopped it, are not recorded as failures. It never records a prompt, a reply, a file's contents,
 a header, a credential or the text of an error.
 
 Each run that has something to write makes its own file in `logs/` in the [state
@@ -796,6 +814,8 @@ directory](#doctor), readable by you alone, and the ten most recent are kept. At
 server starting, and `debug` adds the detail between them. `doctor` prints the directory.
 
 An [`--incognito`](../using/incognito.md) session writes no log.
+
+When the desktop app's page fails, the window shows a "This window hit an error" screen with **Reload** and **Copy details**, where the details are the error, the components being drawn and the stack, shown as text and sent nowhere. The app also asks the agent to write one `window.fault` line for the failure, for an error nothing caught, for a promise nothing handled, and for the window's process or another process of the app ending. The line holds the kind of failure and, where known, the error's name, Electron's reason, the process and an exit code, as fixed words; anything else is written as `other`. At most twenty are written in a run, and none in an incognito session.
 
 ## `bug-report`
 
@@ -815,6 +835,14 @@ environment value or file of the directory holds a place in it.
 Nothing reads the file back. An [`--incognito`](../using/incognito.md) session, or a machine with no
 home directory, writes no report, and the command exits with status 1. Any argument is refused with
 status 2.
+
+In the desktop app, **Help ▸ Report a Bug…** (also a link in **About**) opens a preview of the same
+report, with the settings report from Run Diagnostics in place of `doctor`'s output and a note saying
+what it names. **Save Report…** writes it where you choose, `bravebot-bug-report.txt` in Documents by
+default, readable by you alone. **Copy** puts it on the clipboard, **Open an Issue** opens the
+repository's new issue page with nothing filled in, and **Show Log** reveals the newest diagnostic log
+in your file manager without opening it. Nothing sends the report. An incognito session, or a machine
+with no home directory, is told a report is not available.
 
 ## `update`
 
@@ -876,7 +904,9 @@ in. See [Vetting](../security/vetting.md).
 bravebot doctor
 ```
 
-Answers "what will this actually use", and changes nothing. It reports:
+Answers "what will this actually use", and changes nothing. Text it names from a settings file, such as a
+rule, a key or an environment name, is drawn with its control characters replaced, because the project and
+local files belong to whoever made the checkout. It reports:
 
 - every backend this build can reach and what identifies it, which names the settings set;
 - the premium host and whether a premium key is stored, never its value, and the premium key file's path where it cannot be read ([Brave's premium service](../customize/premium.md));
@@ -988,7 +1018,8 @@ which to run. It needs a terminal for that. A script names the way instead:
 
 `brave` needs a terminal, and is refused with status 2 where standard input or standard error is not one.
 `gateway` needs a terminal even with the id named, since the key is typed rather than given as an
-argument. With one service offered it asks for no id. Where the machine-level file names the
+argument. A word after the id is refused with status 2 by `auth login`, `auth status` and `auth logout`
+alike, and is not repeated, since it may be a key. With one service offered it asks for no id. Where the machine-level file names the
 gateways, only those are offered, and the list and the refusal of any other id name that file.
 
 `auth logout brave` removes the stored premium key and ends nothing at Brave, where the key still works
@@ -1052,7 +1083,7 @@ Studio and llama-server on this machine what each serves, shows what it would ad
 ## `mcp`
 
 ```sh
-bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--stdio] -- <program> [args...]
+bravebot mcp add <alias> [-s <scope>] [-e|--env <name>[=<value>]...]... [--dir <path>] [--allowed-hosts <list>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--choice <tool>:<argument>]... [--stdio] -- <program> [args...]
 bravebot mcp add <alias> [-s <scope>] [--startup-timeout <seconds>] [--tool-timeout <seconds>] [--tools <list>] [--exclude-tools <list>] [--ask-every-call] [--bearer-env <name>] [--header-env <header>=<name>...] --http <url>
 bravebot mcp get <alias>
 bravebot mcp list
@@ -1100,8 +1131,9 @@ rule: Bash(git commit *)
 file: /work/app/.bravebot/settings.json
 ```
 
-When the deciding rule was written with a [`reason`](../customize/configuration.md#permissions), a
-`reason: ...` line follows `file:`.
+The rule is printed as its file spelled it, with each control character drawn as its picture, because a
+checkout's settings files can hold any text. When the deciding rule was written with a
+[`reason`](../customize/configuration.md#permissions), a `reason: ...` line follows `file:`.
 
 When no rule matches, it says so and the ordinary approval gates decide. An `allow` rule from a
 checkout's settings is not in force until you grant it at the question a session asks, so it is
