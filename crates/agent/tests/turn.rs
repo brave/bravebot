@@ -27060,6 +27060,24 @@ fn requests_for_one_run_trusting(
     mode: bravebot_sandbox::SandboxMode,
     trust: bravebot_core::trust::TrustStore,
 ) -> (String, String) {
+    requests_for_one_run_vouching(
+        root,
+        command,
+        mode,
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+    )
+}
+
+/// [`requests_for_one_run_trusting`] with the programs the person has already vouched for, so a
+/// line that runs only those prints what the planner may read.
+fn requests_for_one_run_vouching(
+    root: &std::path::Path,
+    command: &str,
+    mode: bravebot_sandbox::SandboxMode,
+    trust: bravebot_core::trust::TrustStore,
+    vouched: bravebot_core::programs::TrustedPrograms,
+) -> (String, String) {
     let workspace = Workspace::new(root).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![
         tool_request(
@@ -27091,7 +27109,7 @@ fn requests_for_one_run_trusting(
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut RecordingSink::new(),
         trust,
-        bravebot_core::programs::TrustedPrograms::new(),
+        vouched,
         None,
         &bravebot_core::cancel::Cancel::new(),
     )
@@ -29653,6 +29671,315 @@ fn the_failure_sentence_names_the_menu_under_workspace_write() {
     }
 }
 
+/// A program named `name` in `directory` under `root` that runs `body` with `sh`, returned by its
+/// path. The name is what a line resolves to, so a stub named `pgrep` is the program the sentence
+/// about listing processes is chosen from, whatever it does.
+#[cfg(unix)]
+fn a_stub_named(
+    root: &std::path::Path,
+    directory: &str,
+    name: &str,
+    body: &str,
+) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = root.join(directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join(name);
+    std::fs::write(&file, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    file
+}
+
+/// The result a planner is sent after a turn that confines runs under `mode`, opened on `root`,
+/// runs `program`.
+#[cfg(unix)]
+fn result_of_running(
+    root: &std::path::Path,
+    program: &std::path::Path,
+    mode: bravebot_sandbox::SandboxMode,
+) -> String {
+    let (_, second) = requests_for_one_run_at(root, &program.display().to_string(), mode);
+    message_from(&second, "Result of run").to_string()
+}
+
+/// What a result says of confinement after the account of how the run ended, up to the paragraph
+/// break that ends it. The account of what the line printed follows that break.
+#[cfg(target_os = "macos")]
+fn confinement_paragraph(result: &str) -> &str {
+    let from = &result[result
+        .find("Confinement:")
+        .expect("a confinement paragraph")..];
+    // The body is JSON, so a paragraph break is the two characters `\` and `n`.
+    &from[..from.find("\\n\\n").unwrap_or(from.len())]
+}
+
+/// How the sentence the driver adds on macOS after a step that lists processes fails begins.
+#[cfg(target_os = "macos")]
+const LISTING_SENTENCE_START: &str = "On macOS the sandbox refuses listing processes";
+
+/// SANDBOX-8, SANDBOX-19: a real `pgrep` run through `run` under the macOS profile fails, and the
+/// result the planner is sent says that the sandbox refuses listing processes, that the failure is
+/// not an answer about the program, and that a local service is found by connecting to its port.
+/// It carries nothing `pgrep` printed (the line is not vouched for, so its output is quarantined)
+/// and no list of processes, and the first request carries the sentence that tells the planner to
+/// probe the port before asking whether to quit a browser.
+///
+/// This is the report of #3611: a planner in a session with Brave running looked for it with
+/// `pgrep`, met exit 3 and asked the person whether it could quit and relaunch the browser. The
+/// faults it rejects are a result that names neither the refusal nor the port, one that carries
+/// what `pgrep` printed in place of saying the sandbox did it, and a description without the
+/// probe-first sentence. It runs where confinement starts and macOS holds the profile; a machine
+/// that cannot start a confined program skips it.
+#[test]
+#[cfg(target_os = "macos")]
+fn a_real_pgrep_refused_by_the_macos_profile_is_told_to_be_the_sandbox_and_to_probe_the_port() {
+    if cannot_confine_here() {
+        return;
+    }
+    let scratch = Scratch::new("run-real-pgrep");
+    let (first, second) = requests_for_one_run_at(
+        &scratch.path,
+        "pgrep -x bravebot-no-such-program",
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+    );
+    let result = message_from(&second, "Result of run");
+
+    assert!(
+        result.contains("It failed: step 1 exited"),
+        "pgrep was not refused, so this tests nothing: {result}"
+    );
+    let paragraph = confinement_paragraph(result);
+    for said in [
+        LISTING_SENTENCE_START,
+        "fail whether or not the program they look for is running",
+        "that failure is not an answer about the program",
+        "A local service is found by connecting to its port",
+        "curl http://127.0.0.1:9222/json/version",
+    ] {
+        assert!(paragraph.contains(said), "{said:?} is not in {paragraph}");
+    }
+
+    // The planner is not given what pgrep printed, nor a listing, nor words that depend on how the
+    // step ended.
+    assert!(result.contains("could not be shown to you"), "{result}");
+    for printed in ["sysmon", "sysmond", "Cannot get process list"] {
+        assert!(!result.contains(printed), "{printed:?} is in {result}");
+    }
+    assert!(
+        !paragraph.contains("process-info"),
+        "the refusal of one program is named for all: {paragraph}"
+    );
+
+    let description = run_description(&first);
+    assert!(
+        description.contains("look for its debugging port"),
+        "{description}"
+    );
+}
+
+/// SANDBOX-19: the sentence about listing processes is the same words for exit 1, exit 2, exit 3
+/// and a step that was killed, whatever the step printed, and for each of the programs it names. It
+/// is chosen from the file a step resolved to and takes no exit code, so a stub named `pgrep`
+/// that exits with any code earns it. The fault it rejects is the sentence chosen from, or changed
+/// by, the exit code, such as said only for `pgrep`'s own code 3.
+#[test]
+#[cfg(target_os = "macos")]
+fn the_process_listing_sentence_is_the_same_words_for_any_exit_code() {
+    if cannot_confine_here() {
+        return;
+    }
+    let scratch = Scratch::new("run-listing-any-code");
+    let mode = bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let mut seen: Vec<(&str, String)> = Vec::new();
+    for (how, name, body, ended) in [
+        ("exit-1", "pgrep", "exit 1", "step 1 exited 1"),
+        ("exit-2", "pgrep", "exit 2", "step 1 exited 2"),
+        ("exit-3", "pgrep", "exit 3", "step 1 exited 3"),
+        ("killed", "pgrep", "kill -9 $$", "step 1 was killed"),
+        ("ps-exit-71", "ps", "exit 71", "step 1 exited 71"),
+        ("lsof-exit-1", "lsof", "exit 1", "step 1 exited 1"),
+    ] {
+        let program = a_stub_named(&scratch.path, how, name, body);
+        let result = result_of_running(&scratch.path, &program, mode);
+        assert!(result.contains(ended), "{how}: {result}");
+        let paragraph = confinement_paragraph(&result).to_string();
+        assert!(
+            paragraph.contains(LISTING_SENTENCE_START),
+            "{how}: {paragraph}"
+        );
+        seen.push((how, paragraph));
+    }
+    let (_, one) = &seen[0];
+    for (how, paragraph) in &seen[1..] {
+        assert_eq!(paragraph, one, "{how} is told other words than exit 1");
+    }
+}
+
+/// SANDBOX-19: what a step printed does not choose the sentence about listing processes. A
+/// program that is not one of those it names gets nothing of it whether it is silent or prints
+/// the very words `pgrep` prints when the profile refuses it, and a program that is one of them
+/// gets all of it whether it is silent or prints a success. The paragraph is the same for each
+/// pair, so no byte of output reaches the choice. The faults it rejects are a sentence chosen from
+/// standard error or standard output, and one chosen from the name the planner typed.
+#[test]
+#[cfg(target_os = "macos")]
+fn the_process_listing_sentence_is_chosen_from_the_program_and_not_from_what_it_printed() {
+    if cannot_confine_here() {
+        return;
+    }
+    let scratch = Scratch::new("run-listing-by-program");
+    let mode = bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let refused_words = "echo 'sysmon request failed with error: sysmond service not found' >&2; \
+         echo 'pgrep: Cannot get process list' >&2; echo 'Operation not permitted'; exit 3";
+    let paragraph = |directory: &str, name: &str, body: &str| {
+        let program = a_stub_named(&scratch.path, directory, name, body);
+        let result = result_of_running(&scratch.path, &program, mode);
+        assert!(result.contains("step 1 exited 3"), "{directory}: {result}");
+        confinement_paragraph(&result).to_string()
+    };
+
+    let (silent, loud) = (
+        paragraph("other-silent", "finder", "exit 3"),
+        paragraph("other-loud", "finder", refused_words),
+    );
+    assert!(!silent.contains("listing processes"), "{silent}");
+    assert_eq!(silent, loud, "what a program printed changed the paragraph");
+
+    let (silent, loud) = (
+        paragraph("lister-silent", "pgrep", "exit 3"),
+        paragraph(
+            "lister-loud",
+            "pgrep",
+            "echo 'all well' >&2; echo 'found 1 process'; exit 3",
+        ),
+    );
+    assert!(silent.contains(LISTING_SENTENCE_START), "{silent}");
+    assert_eq!(silent, loud, "what a program printed changed the paragraph");
+}
+
+/// SANDBOX-19: the sentence about listing processes follows a step that did not exit zero, on a
+/// turn that confines, under a mode that has a profile. A `pgrep` that exits 0, the same stub
+/// under the mode `off`, and the same stub on a turn that does not confine runs are told none of
+/// it, and the control is the stub that fails under the profile, so an absence means something.
+/// The faults it rejects are the sentence added to a run that worked, and one said where nothing
+/// confined the program.
+#[test]
+#[cfg(unix)]
+fn the_process_listing_sentence_follows_a_failure_under_a_profile_and_nothing_else() {
+    if cannot_confine_here() {
+        return;
+    }
+    let scratch = Scratch::new("run-listing-success-and-off");
+    let mode = bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let failing = a_stub_named(&scratch.path, "fails", "pgrep", "exit 3");
+    let working = a_stub_named(&scratch.path, "works", "pgrep", "echo 1234");
+
+    let control = result_of_running(&scratch.path, &failing, mode);
+    assert_eq!(
+        control.contains("refuses listing processes"),
+        cfg!(target_os = "macos"),
+        "{control}"
+    );
+
+    let result = result_of_running(&scratch.path, &working, mode);
+    assert!(result.contains("It exited 0."), "{result}");
+    assert!(!result.contains("Confinement:"), "{result}");
+    assert!(!result.contains("listing processes"), "{result}");
+
+    let off = result_of_running(&scratch.path, &failing, bravebot_sandbox::SandboxMode::Off);
+    assert!(off.contains("step 1 exited 3"), "{off}");
+    assert!(!off.contains("Confinement:"), "{off}");
+    assert!(!off.contains("listing processes"), "{off}");
+
+    // A turn that does not confine runs: the stub lives beside the session's directory, which is
+    // where `requests_for_one_run` opens one.
+    let outside = Scratch::new("run-listing-not-confined-stub");
+    let failing = a_stub_named(&outside.path, "fails", "pgrep", "exit 3");
+    let (_, second, _) = requests_for_one_run(
+        "run-listing-not-confined",
+        &failing.display().to_string(),
+        false,
+    );
+    let result = message_from(&second, "Result of run");
+    assert!(result.contains("step 1 exited 3"), "{result}");
+    assert!(!result.contains("Confinement:"), "{result}");
+    assert!(!result.contains("listing processes"), "{result}");
+}
+
+/// RUN-13, RUN-14, SANDBOX-19: the sentence about listing processes comes after the account of how
+/// the run ended and is the same words whether the planner may read what the line printed or holds
+/// a reference to it. It carries no advice about `read_output` or about vouching, which RUN-14 puts
+/// in a quarantined result only. The control is the quarantined result, which carries that advice,
+/// so an absence in the paragraph means something. The faults it rejects are the sentence said only
+/// where the output is quarantined, or said with the advice about reading or vouching beside it.
+#[test]
+#[cfg(target_os = "macos")]
+fn the_process_listing_sentence_follows_the_account_of_the_ending_whether_or_not_the_output_is_shown()
+ {
+    if cannot_confine_here() {
+        return;
+    }
+    const PRINTED: &str = "text-the-stub-printed-on-standard-error";
+    let scratch = Scratch::new("run-listing-shown-or-kept");
+    let mode = bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let program = a_stub_named(
+        &scratch.path,
+        "lister",
+        "pgrep",
+        &format!("echo {PRINTED} >&2; exit 3"),
+    );
+    let command = program.display().to_string();
+    let ran = |vouched| {
+        let (_, second) = requests_for_one_run_vouching(
+            &scratch.path,
+            &command,
+            mode,
+            trusting_the_workspace(),
+            vouched,
+        );
+        message_from(&second, "Result of run").to_string()
+    };
+    let kept = ran(bravebot_core::programs::TrustedPrograms::new());
+    let shown = ran(bravebot_core::programs::TrustedPrograms::from_iter([
+        vouched_in(&command, &[], &scratch.path),
+    ]));
+
+    assert!(
+        kept.contains("could not be shown to you") && !kept.contains(PRINTED),
+        "the output was shown, so this is not the quarantined result: {kept}"
+    );
+    assert!(kept.contains("read_output"), "{kept}");
+    assert!(
+        shown.contains(PRINTED) && !shown.contains("could not be shown to you"),
+        "the output was kept, so this is not the readable result: {shown}"
+    );
+    for (how, result) in [("kept", &kept), ("shown", &shown)] {
+        let ended = result
+            .find("It failed: step 1 exited 3")
+            .unwrap_or_else(|| panic!("{how}: no account of how the run ended: {result}"));
+        let listing = result
+            .find(LISTING_SENTENCE_START)
+            .unwrap_or_else(|| panic!("{how}: no sentence about listing processes: {result}"));
+        assert!(
+            ended < listing,
+            "{how}: the sentence is before the account: {result}"
+        );
+        let paragraph = confinement_paragraph(result);
+        for advice in ["read_output", "vouch"] {
+            assert!(
+                !paragraph.contains(advice),
+                "{how}: {advice:?} is in {paragraph}"
+            );
+        }
+    }
+    assert_eq!(
+        confinement_paragraph(&kept),
+        confinement_paragraph(&shown),
+        "what the planner may read changed the paragraph"
+    );
+}
+
 /// The `run` tool's description in `request`, the first a planner is sent.
 fn run_description(request: &str) -> String {
     let request: serde_json::Value = serde_json::from_str(request).expect("json");
@@ -29673,9 +30000,10 @@ fn run_description(request: &str) -> String {
 /// The control is the same turn in a trusted workspace, which names both: a sentence left out
 /// whatever the session accepts fails it. The faults it rejects are a description or a failure
 /// sentence still pointing the planner at the closed routes, which the first call it makes then
-/// spends, and the read-only ending of the fixed text, which is a text of its own. The read-only
-/// arm needs a `read-only` stage to start, which a platform that cannot deny the network refuses
-/// (SANDBOX-5), so it runs only where one starts.
+/// spends, a macOS description that still tells it to ask for `loopback`, and the read-only ending
+/// of the fixed text, which is a text of its own. The read-only arm needs a `read-only` stage to
+/// start, which a platform that cannot deny the network refuses (SANDBOX-5), so it runs only where
+/// one starts.
 #[test]
 fn in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path() {
     if cannot_confine_here() {
@@ -29717,7 +30045,14 @@ fn in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_n
                 "{mode_name} {where_}: {said}"
             );
         }
+        // `loopback` is a name on that menu, and only macOS tells a planner to ask for it.
+        assert_eq!(
+            trusted_description.contains("loopback"),
+            cfg!(target_os = "macos"),
+            "{mode_name}: {trusted_description}"
+        );
         for (where_, said) in [("description", &description), ("failure", &failure)] {
+            assert!(!said.contains("loopback"), "{mode_name} {where_}: {said}");
             assert!(
                 !said.contains("asked for with the `request_path` tool"),
                 "{mode_name} {where_}: {said}"
@@ -29779,6 +30114,99 @@ fn a_failed_job_on_a_confining_turn_says_what_it_ran_under() {
         account.contains("It failed: step 1 exited 1. Confinement: programs could read and write"),
         "{account}"
     );
+}
+
+/// The account a planner is sent when a job it started in the background has finished, for a turn
+/// that confines runs under `mode` and is opened on `root`, which runs `program`.
+#[cfg(target_os = "macos")]
+fn account_of_a_job_running(
+    root: &std::path::Path,
+    program: &std::path::Path,
+    mode: bravebot_sandbox::SandboxMode,
+) -> String {
+    let workspace = Workspace::new(root).expect("workspace");
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request_2(
+        "run",
+        &serde_json::json!({ "command": program.display().to_string(), "background": true })
+            .to_string(),
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        // The session `requests_for_one_run_at` opens, so the account and the result of the same
+        // line are told under the same profile.
+        &Task::new("start it and get on with something else")
+            .with_profile(Some(
+                bravebot_agent::home::profile().unwrap_or_else(|| root.join("profile")),
+            ))
+            .with_confined_runs(true)
+            .with_sandbox_mode(mode),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains(JOB_1_FINISHED))
+        .expect("the turn was never told the job ended");
+    message_from(told, JOB_1_FINISHED).to_string()
+}
+
+/// SANDBOX-8, SANDBOX-19 (#3611): a job that lists processes and fails is told, in the account of
+/// how it ended, the sentence the result of the same line run in the foreground is told: the
+/// sandbox refuses listing processes, the failure is no answer about the program, and a local
+/// service is found by its port. The account is built where a job is kept, from the job's own
+/// steps, so it is a second place the sentence has to be attached. The control is a program the
+/// sentence does not name, run the same way, whose account has the confinement paragraph and not
+/// the sentence, so a sentence in every account fails it.
+///
+/// The fault it rejects is the job's account built without the steps of its line, which says what
+/// the job ran under and nothing of what its program does there; the older test of the account
+/// runs `false` and passes against it. A line moved to the background after it was waited for is
+/// kept by the same function, so it is reasoned only.
+#[test]
+#[cfg(target_os = "macos")]
+fn a_failed_job_that_lists_processes_is_told_what_a_failed_run_of_it_is_told() {
+    if cannot_confine_here() {
+        return;
+    }
+    let scratch = Scratch::new("background-listing");
+    let mode = bravebot_sandbox::SandboxMode::WorkspaceWrite;
+    let lister = a_stub_named(&scratch.path, "lister", "pgrep", "exit 3");
+    let other = a_stub_named(&scratch.path, "other", "finder", "exit 3");
+
+    let run = result_of_running(&scratch.path, &lister, mode);
+    let foreground = confinement_paragraph(&run);
+    assert!(foreground.contains(LISTING_SENTENCE_START), "{run}");
+    let sentence = &foreground[foreground
+        .find(LISTING_SENTENCE_START)
+        .expect("the sentence")..];
+    let sentence = &sentence[..sentence.find("9222.").expect("its end") + "9222.".len()];
+
+    let account = account_of_a_job_running(&scratch.path, &lister, mode);
+    assert!(account.contains("It failed: step 1 exited 3."), "{account}");
+    assert!(
+        confinement_paragraph(&account).contains(sentence),
+        "the job's account lacks the sentence {sentence:?}: {account}"
+    );
+
+    let account = account_of_a_job_running(&scratch.path, &other, mode);
+    assert!(account.contains("It failed: step 1 exited 3."), "{account}");
+    assert!(account.contains("Confinement:"), "{account}");
+    assert!(!account.contains("listing processes"), "{account}");
 }
 
 /// SANDBOX-19, PATHREQ-5: the account of a failed job is a second place the confinement sentence is
@@ -49967,13 +50395,21 @@ fn a_fetch_to_a_name_that_resolves_to_this_machine_fails_without_reaching_it() {
 
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
+    // What the fetch answered with. The request's tool table is in the body too, and the `run`
+    // description names a local address in its example, so the address is looked for in the result
+    // alone.
+    let answered = tool_results(&second);
     assert!(
-        second.contains(&format!("error: fetching {url} failed")),
-        "the planner was not told which fetch failed: {second}"
+        answered.contains(&format!("error: fetching {url} failed")),
+        "the planner was not told which fetch failed: {answered}"
     );
     assert!(
-        !second.contains("127.0.0.1") && !second.contains("SENTINEL-LOCAL-BYTES"),
-        "an address or a body reached the planner's context: {second}"
+        !answered.contains("127.0.0.1"),
+        "an address reached the planner's context: {answered}"
+    );
+    assert!(
+        !second.contains("SENTINEL-LOCAL-BYTES"),
+        "a body reached the planner's context: {second}"
     );
     assert!(
         requests
@@ -66068,6 +66504,12 @@ struct AutoRun {
     trail: Vec<String>,
     /// Whether the line ran and made its file.
     made_it: bool,
+    /// What the file it made holds, where it made one.
+    #[cfg(target_os = "macos")]
+    made_text: Option<String>,
+    /// The requests that were the planner's own rounds, in order.
+    #[cfg(target_os = "macos")]
+    rounds: Vec<String>,
 }
 
 fn an_auto_run(mode: bravebot_agent::PermissionMode, said: &str, command: &str) -> AutoRun {
@@ -66099,7 +66541,6 @@ fn an_auto_run_calling(
         RUNS.fetch_add(1, Ordering::Relaxed)
     ));
     std::fs::write(scratch.path.join("page.txt"), "alpha\nbeta\n").unwrap();
-    let workspace = Workspace::new(&scratch.path).expect("workspace");
     // One word for each call the classifier could be put, so a call wrongly put to it is answered
     // rather than left to fail for want of a reply.
     let words = (0..=before.len()).map(|_| reply_with(said)).collect();
@@ -66110,7 +66551,19 @@ fn an_auto_run_calling(
         .map(|call| tool_request_2("run", call))
         .chain(std::iter::once(reply_with("done")))
         .collect();
-    let (endpoint, received) = serve_sequence_answering_checks_with(words, calls);
+    let served = serve_sequence_answering_checks_with(words, calls);
+    an_auto_run_served(mode, &scratch, served, with_profile)
+}
+
+/// [`an_auto_run_calling`] for a planner and a classifier that are already being served, in a
+/// session opened on `scratch`.
+fn an_auto_run_served(
+    mode: bravebot_agent::PermissionMode,
+    scratch: &Scratch,
+    (endpoint, received): (String, MockRequests),
+    with_profile: bool,
+) -> AutoRun {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -66138,10 +66591,11 @@ fn an_auto_run_calling(
     )
     .expect("turn runs");
 
-    let classifier = received
+    let (classifier, rounds): (Vec<String>, Vec<String>) = received
         .try_iter()
-        .filter(|body| body.contains(A_CLASSIFIER_ASKING))
-        .collect();
+        .partition(|body| body.contains(A_CLASSIFIER_ASKING));
+    #[cfg(not(target_os = "macos"))]
+    drop(rounds);
     let trail = sink
         .events()
         .iter()
@@ -66151,7 +66605,8 @@ fn an_auto_run_calling(
                 detail,
             } if detail.starts_with("answered by")
                 || detail.starts_with("no mode answered")
-                || detail.starts_with("the classifier") =>
+                || detail.starts_with("the classifier")
+                || detail.starts_with("the planner asked for") =>
             {
                 Some(detail.clone())
             }
@@ -66164,6 +66619,10 @@ fn an_auto_run_calling(
         asked,
         trail,
         made_it: scratch.path.join("made.txt").exists(),
+        #[cfg(target_os = "macos")]
+        made_text: std::fs::read_to_string(scratch.path.join("made.txt")).ok(),
+        #[cfg(target_os = "macos")]
+        rounds,
     }
 }
 
@@ -66303,13 +66762,16 @@ fn a_run_with_nothing_to_hold_it_is_not_put_to_the_classifier() {
     assert!(!scratch.path.join("made.txt").exists());
 }
 
-/// AUTO-3: a confined line that asked for a credential scope, is fed a reference on standard input,
-/// or releases a private file is not put to the classifier, whatever it would have said, and goes
-/// to the person. The classifier is shown the line and the directory and nothing a reference holds
-/// or a scope lends, so its word is not a person's reading of the whole. Each line is one the
+/// AUTO-3: a confined line that asked for anything in `scopes`, whether a credential scope, a
+/// toolchain list, `loopback` or `ssh-key`, is fed a reference on standard input, or releases a
+/// private file is not put to the classifier, whatever it would have said, and goes to the
+/// person. The classifier is shown the line and the directory and nothing a reference holds or a
+/// scope lends, so its word is not a person's reading of the whole. Each line is one the
 /// classifier would allow if asked and the sandbox confines, so only the guard in
-/// `ask_about_the_run` keeps it from the model. The regression it rejects: the guard reduced to
-/// the confinement, which approves such a line unasked on a model's word.
+/// `ask_about_the_run` keeps it from the model. The regressions it rejects: the guard reduced to
+/// the confinement, which approves such a line unasked on a model's word, and a guard that keeps
+/// only a credential scope or a toolchain list from the classifier, which puts a line that asked
+/// for `loopback` or `ssh-key` to it.
 #[test]
 fn a_run_with_a_scope_a_reference_or_a_private_release_is_not_put_to_the_classifier() {
     use bravebot_agent::PermissionMode;
@@ -66323,6 +66785,24 @@ fn a_run_with_a_scope_a_reference_or_a_private_release_is_not_put_to_the_classif
             "a credential scope",
             &[][..],
             r#"{"command":"touch made.txt","scopes":["aws"]}"#,
+            true,
+        ),
+        (
+            "a toolchain list",
+            &[][..],
+            r#"{"command":"touch made.txt","scopes":["cargo"]}"#,
+            true,
+        ),
+        (
+            "loopback",
+            &[][..],
+            r#"{"command":"touch made.txt","scopes":["loopback"]}"#,
+            true,
+        ),
+        (
+            "ssh-key",
+            &[][..],
+            r#"{"command":"touch made.txt","scopes":["ssh-key"]}"#,
             true,
         ),
         (
@@ -66354,6 +66834,245 @@ fn a_run_with_a_scope_a_reference_or_a_private_release_is_not_put_to_the_classif
         assert_eq!(run.asked, 1, "{what}: the person was not asked");
         assert!(!run.made_it, "{what}: ran on the classifier's word");
     }
+}
+
+/// What a stand-in for a browser started with `--remote-debugging-port` answers at `/json/version`.
+#[cfg(target_os = "macos")]
+const STAND_IN_BROWSER_VERSION: &str = r#"{"Browser":"Brave/1.99.0"}"#;
+
+/// The description of the `scopes` argument of the `run` tool in `request`.
+#[cfg(target_os = "macos")]
+fn run_scopes_description(request: &str) -> String {
+    let request: serde_json::Value = serde_json::from_str(request).expect("json");
+    request["tools"]
+        .as_array()
+        .expect("tools offered")
+        .iter()
+        .find(|tool| tool["function"]["name"] == "run")
+        .expect("run offered")["function"]["parameters"]["properties"]["scopes"]["description"]
+        .as_str()
+        .expect("a description")
+        .to_string()
+}
+
+/// How many calls to the tool `name` the conversation in `request` holds.
+#[cfg(target_os = "macos")]
+fn calls_to(request: &str, name: &str) -> usize {
+    let request: serde_json::Value = serde_json::from_str(request).expect("json");
+    request["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|message| message["tool_calls"].as_array().into_iter().flatten())
+        .filter(|call| call["function"]["name"] == name)
+        .count()
+}
+
+/// SANDBOX-3, SANDBOX-26, AUTO-3 (#3616): a browser is running with its debugging port open on this
+/// machine, and the session is in auto. A plain `curl` to the port is a line the classifier
+/// answers, so nobody is asked, and it runs under the real macOS profile with the network open and
+/// no `loopback`, and reaches the port. The same line with `scopes: ["loopback"]` is the one
+/// session recorded: it is not put to the classifier (AUTO-3), it goes to the person every time,
+/// and it does not run on the classifier's word. That cost is why the request the planner reads
+/// says a line with network access does not ask for `loopback` to connect, and the test reads that
+/// request: the rule is in the `scopes` entry and in the confinement paragraph of the description,
+/// where it is true of the platform that reads it. The probe sentence of the description says
+/// nothing of scopes, since a line held to a host list's proxy or run on Windows may not reach the
+/// port.
+///
+/// The faults it rejects are a profile that does not let an open network reach a local port, a line
+/// that asks for `loopback` put to the classifier, a request that again says connecting needs
+/// `loopback`, and a probe sentence that says the probe needs no scope. That a model chooses not to
+/// send `scopes` is its choice and no test can pin it: the rule is what a model reads, and this
+/// test shows what each choice costs.
+///
+/// It runs where confinement starts and macOS holds the profile; a machine that cannot start a
+/// confined program skips it, and a skip is not a pass.
+#[test]
+#[cfg(target_os = "macos")]
+fn in_auto_a_line_that_only_connects_to_a_local_port_needs_no_loopback_and_one_that_asks_goes_to_the_person()
+ {
+    use bravebot_agent::PermissionMode;
+    if cannot_confine_here() {
+        return;
+    }
+    let line = |scopes: &[&str]| {
+        let (browser, heads) = serve_pages(vec![page(STAND_IN_BROWSER_VERSION)]);
+        let mut input = json!({ "command": format!("curl -s -o made.txt {browser}/json/version") });
+        if !scopes.is_empty() {
+            input["scopes"] = json!(scopes);
+        }
+        let run = an_auto_run_calling(PermissionMode::Auto, "allow", &[], &input.to_string(), true);
+        let reached: Vec<String> = heads.try_iter().collect();
+        (run, reached)
+    };
+
+    let (plain, reached) = line(&[]);
+    assert_eq!(plain.classifier.len(), 1, "{:?}", plain.trail);
+    assert!(
+        plain.classifier[0].contains("/json/version"),
+        "{}",
+        plain.classifier[0]
+    );
+    assert_eq!(plain.asked, 0, "the person was asked: {:?}", plain.trail);
+    assert!(
+        plain
+            .trail
+            .iter()
+            .any(|entry| entry == "answered by auto mode, nobody was asked"),
+        "{:?}",
+        plain.trail
+    );
+    assert_eq!(
+        plain.made_text.as_deref(),
+        Some(STAND_IN_BROWSER_VERSION),
+        "the line did not reach the port with the network open: {:?}",
+        plain.trail
+    );
+    assert_eq!(reached.len(), 1, "{reached:?}");
+    assert!(reached[0].starts_with("GET /json/version"), "{reached:?}");
+
+    let (asking, reached) = line(&["loopback"]);
+    assert!(
+        asking.classifier.is_empty(),
+        "a line that asked for loopback was put to the classifier: {:?}",
+        asking.classifier
+    );
+    assert_eq!(asking.asked, 1, "{:?}", asking.trail);
+    assert!(!asking.made_it, "it ran on nobody's word");
+    assert!(reached.is_empty(), "{reached:?}");
+    assert!(
+        asking
+            .trail
+            .iter()
+            .any(|entry| entry.starts_with("the planner asked for loopback on this line")),
+        "{:?}",
+        asking.trail
+    );
+    assert!(
+        !asking
+            .trail
+            .iter()
+            .any(|entry| entry == "answered by auto mode, nobody was asked"),
+        "{:?}",
+        asking.trail
+    );
+
+    // What the planner reads, in the first request of each turn, tells it which of the two lines
+    // to send.
+    for run in [&plain, &asking] {
+        let first = &run.rounds[0];
+        let described = run_description(first);
+        for said in [
+            "look for its debugging port",
+            "only from a line that has no network access",
+            "so do not ask for it there",
+        ] {
+            assert!(described.contains(said), "{said:?} is not in {described}");
+        }
+        let probe = described
+            .split(". ")
+            .find(|sentence| sentence.contains("/json/version"))
+            .expect("the description gives the probe");
+        assert!(
+            !probe.contains("scope") && !probe.contains("network access"),
+            "the probe sentence says what a line needs to connect: {probe}"
+        );
+        let scopes = run_scopes_description(first);
+        for said in [
+            "only from a line that has no network access",
+            "so do not ask for it there",
+            "On Linux and Windows `loopback` changes nothing",
+        ] {
+            assert!(scopes.contains(said), "{said:?} is not in {scopes}");
+        }
+        assert!(!scopes.contains("listen on and connect to"), "{scopes}");
+    }
+}
+
+/// #3611: a browser is running with its debugging port open, and the planner is a script that does
+/// what the `run` description in its first request says: it probes the port when that request tells
+/// it to look for the port before asking, and asks the person whether to quit the browser when it
+/// does not. The probe is a plain `curl` line, which auto mode answers, so nobody is asked about
+/// the line either. The turn ends with the planner having made no `ask_user` call, the stand-in
+/// browser having been asked for its version once, and the result of the probe in the second
+/// request.
+///
+/// A script proves what the request carries and that following it costs no question: the sentence
+/// is in the request, a plain line to the port runs unasked under the real macOS profile, and the
+/// script asks only when the sentence is missing. It does not prove that a model follows the
+/// sentence, which only a session with a model shows. The fault it rejects is a request without
+/// the probe-first sentence, which makes this script ask to quit the browser as the session in the
+/// report did.
+///
+/// It runs where confinement starts and macOS holds the profile; a machine that cannot start a
+/// confined program skips it, and a skip is not a pass.
+#[test]
+#[cfg(target_os = "macos")]
+fn a_planner_that_follows_the_run_description_probes_the_debugging_port_and_makes_no_ask_user_call()
+{
+    use bravebot_agent::PermissionMode;
+    if cannot_confine_here() {
+        return;
+    }
+    let (browser, heads) = serve_pages(vec![page(STAND_IN_BROWSER_VERSION)]);
+    let probe = json!({ "command": format!("curl -s {browser}/json/version") }).to_string();
+    let quit = r#"{"questions":[{"header":"Brave","question":"Brave only opens a CDP port if it is launched with the flag. If it is running now, may I quit it and relaunch it with --remote-debugging-port on your main profile?","options":[{"label":"Quit and relaunch"},{"label":"Use it as it is"}]}]}"#;
+    let mut round = 0;
+    let planner = move |request: &str| {
+        round += 1;
+        let described = run_description(request);
+        let told_to_probe = described.contains("look for its debugging port")
+            && described.contains("Ask about quitting or relaunching a browser only after");
+        Some(Some(match (round, told_to_probe) {
+            (1, true) => tool_request_2("run", &probe),
+            (1, false) => tool_request_2("ask_user", quit),
+            _ => reply_with("Brave is running with its debugging port open"),
+        }))
+    };
+    let scratch = Scratch::new("auto-probe-before-asking");
+
+    let run = an_auto_run_served(
+        PermissionMode::Auto,
+        &scratch,
+        serve_rounds(vec![reply_with("allow")], false, planner),
+        false,
+    );
+
+    assert_eq!(run.rounds.len(), 2, "{:?}", run.rounds);
+    for round in &run.rounds {
+        assert_eq!(
+            calls_to(round, "ask_user"),
+            0,
+            "the planner asked the person"
+        );
+    }
+    assert_eq!(calls_to(&run.rounds[1], "run"), 1, "{}", run.rounds[1]);
+    let reached: Vec<String> = heads.try_iter().collect();
+    assert_eq!(
+        reached.len(),
+        1,
+        "the port was not probed once: {reached:?}"
+    );
+    assert!(reached[0].starts_with("GET /json/version"), "{reached:?}");
+    assert!(
+        message_from(&run.rounds[1], "Result of run").contains("It exited 0."),
+        "{}",
+        run.rounds[1]
+    );
+    assert_eq!(run.classifier.len(), 1, "{:?}", run.trail);
+    assert_eq!(
+        run.asked, 0,
+        "the line was put to the person: {:?}",
+        run.trail
+    );
+    assert!(
+        run.trail
+            .iter()
+            .any(|entry| entry == "answered by auto mode, nobody was asked"),
+        "{:?}",
+        run.trail
+    );
 }
 
 /// AUTO-3, AUTO-8: the classifier's allow word answers the first question about a URL, and its no
@@ -74459,13 +75178,17 @@ fn a_download_from_a_name_that_resolves_to_this_machine_fails_without_reaching_i
     assert!(!scratch.path.join("data.bin").exists());
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
+    // What the download answered with. The request's tool table is in the body too, and the `run`
+    // description names a local address in its example, so the address is looked for in the result
+    // alone.
+    let answered = tool_results(&second);
     assert!(
-        second.contains(&format!("error: downloading {url} failed")),
-        "the planner was not told which download failed: {second}"
+        answered.contains(&format!("error: downloading {url} failed")),
+        "the planner was not told which download failed: {answered}"
     );
     assert!(
-        !second.contains("127.0.0.1"),
-        "an address reached the planner's context: {second}"
+        !answered.contains("127.0.0.1"),
+        "an address reached the planner's context: {answered}"
     );
 }
 

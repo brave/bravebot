@@ -837,6 +837,7 @@ where it also cannot tell success from failure.
 `verified-by: bravebot_agent::turn::the_planner_is_told_how_a_run_it_may_read_ended`
 `verified-by: bravebot_agent::turn::the_planner_is_told_how_a_run_it_may_not_read_ended`
 `verified-by: bravebot_agent::turn::a_line_whose_failed_stage_is_followed_by_one_that_worked_is_told_which_failed`
+`verified-by: bravebot_agent::turn::the_process_listing_sentence_follows_the_account_of_the_ending_whether_or_not_the_output_is_shown`
 
 <a id="RUN-14"></a>
 ### RUN-14: a quarantined result says what would lift the quarantine
@@ -921,6 +922,7 @@ is not inferring it: the planner still cannot vouch for anything, and a person s
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_how_to_read_it_where_nobody_is_asked`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_how_to_stop_being_asked`
 `verified-by: bravebot_agent::turn::what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching`
+`verified-by: bravebot_agent::turn::the_process_listing_sentence_follows_the_account_of_the_ending_whether_or_not_the_output_is_shown`
 
 <a id="RUN-15"></a>
 ### RUN-15: a pipeline may be left running, and what started it ends it
@@ -2193,6 +2195,53 @@ sentences into the body.
 `verified-by: bravebot_agent::tools::the_run_description_points_text_made_from_an_output_at_the_processor`
 `verified-by: bravebot_agent::turn::a_summary_of_a_fetched_page_reaches_the_sending_program_on_its_standard_input`
 
+<a id="RUN-30"></a>
+### RUN-30: the tool's own description says to look for a browser's debugging port before asking about quitting the browser
+
+`run`'s description must say, in the text of every turn that is offered `run` and in the same words
+on every platform, that before asking whether a browser is running, or whether to quit or relaunch
+it, the planner looks for its debugging port. It must say that a browser started with
+`--remote-debugging-port=9222` answers `curl http://127.0.0.1:9222/json/version`, and that quitting
+or relaunching a browser is asked about only after that probe is refused. The three sentences stand
+in that order, in the part of the description that says what `run` is for, outside the confinement
+text appended for a platform. They say nothing of which scope the probe needs: whether a line may
+connect to a port of this machine depends on the platform, the network and a host list, which this
+text does not know ([SANDBOX-3](../sandboxing.md#SANDBOX-3)). The `scopes` entry and the confinement
+text say when `loopback` is asked for ([SANDBOX-19](../sandboxing.md#SANDBOX-19),
+[SANDBOX-26](../sandboxing.md#SANDBOX-26)).
+
+**Why.** The profile refuses listing processes on macOS ([SANDBOX-8](../sandboxing.md#SANDBOX-8)),
+so a planner cannot see that a browser is running. A planner with no other look asks the person
+whether it may quit and relaunch the browser, which holds the person's own profile, even when the
+browser is already listening on its port. A connection to the port shows whether the browser is
+listening, and when the line is allowed to connect it costs the person nothing, so it comes before
+the question. Whether a line is allowed to connect depends on the session's network and host list
+([SANDBOX-20](../sandboxing.md#SANDBOX-20), [SANDBOX-24](../sandboxing.md#SANDBOX-24)) and on the
+platform, so a refused probe is a known cost ([Known costs](#known-costs)).
+
+**Why the description carries the sentences and no built-in skill does.** The description is part of
+every request that offers `run`, to a delegate as well, so the planner reads the sentences before its
+first look. A skill reaches the planner only if it chooses to load it. The product ships only the
+built-in skills `loop` and `bravebot-help` ([SKILL-12](../skills.md#SKILL-12),
+[SKILL-13](../skills.md#SKILL-13), [SKILL-17](../skills.md#SKILL-17)), neither covers browsers, and
+a third would add an entry to the listing of every request in every session
+([SKILL-18](../skills.md#SKILL-18)) for a rule that takes one sentence. A person can still write a
+browser skill in their own directory, where `search_skills` finds it.
+
+**What stays true.** The sentences are fixed text. Nothing a program printed reaches them, and they
+are the same whether or not a browser is running and whether or not an earlier probe was refused.
+The probe is a `run` like any other: the driver tells the planner how it ended
+([RUN-13](#RUN-13)), what the port answered is the program's output and is quarantined unless the
+line was vouched for ([RUN-4](#RUN-4), [RUN-14](#RUN-14)), and the line is asked about as any other
+is ([RUN-5](#RUN-5)). Process inspection stays refused. The sentences name no tool, so a delegate
+or an addressed turn that is not offered `ask_user` or `read_output` is told nothing it cannot act
+on ([TOOL-6](tool-surface.md#TOOL-6)). They tell the planner what to try. A test can show that
+the request carries them and that a planner which follows them asks the person nothing, and cannot
+show that a model follows them.
+
+`verified-by: bravebot_agent::tools::the_run_description_says_to_probe_a_browsers_debugging_port_before_asking_about_quitting_it`
+`verified-by: bravebot_agent::turn::a_planner_that_follows_the_run_description_probes_the_debugging_port_and_makes_no_ask_user_call`
+
 ## Open questions
 
 - Whether output can ever be trusted by proof rather than by assertion is issue #3, and it may not
@@ -2203,3 +2252,14 @@ sentences into the body.
   and its arguments that a stage can read nothing the label does not account for. It is a proof about a program where
   RUN-7 is a person taking responsibility for one, and the two must not be merged. It remains
   unwired.
+
+## Known costs
+
+- **A probe the sandbox refuses looks like a port nobody listens on.** [RUN-30](#RUN-30) tells the
+  planner to ask about quitting or relaunching a browser once its probe is refused, and the
+  description does not know whether the line is held to a host list's proxy port, which refuses
+  every other port of this machine, or runs on Windows, where a container may reach a port of this
+  machine only with a machine-wide loopback exemption
+  ([SANDBOX-24](../sandboxing.md#SANDBOX-24)). A probe refused for either reason fails as a closed
+  port does, so the planner then asks about a browser that is listening, and the person answers
+  that question.

@@ -180,13 +180,29 @@ capability, and a container without it is refused a host name lookup as well as 
 Which programs a session asks egress for is [SANDBOX-20](#SANDBOX-20)'s.
 
 On macOS the profile also refuses binding a port and accepting on it, so a confined stage cannot
-listen on the loopback interface, and a server it starts, such as the one `sccache` runs, or a test
-that binds `127.0.0.1:0`, fails with `Operation not permitted`. A stage the plan lends loopback
-([SANDBOX-26](#SANDBOX-26)) may bind and accept on this machine's own addresses and connect to
-them, and reaches no other address and no resolver. That grant is separate from egress: a closed
-network stays closed for it, and to a stage that has egress, which connects anywhere, it adds only
-listening. A stage held to a proxy's port ([SANDBOX-24](#SANDBOX-24)) may listen and still connects
-to that port alone, since another local port could be a service that carries it past the host list.
+listen on the loopback interface, whether or not it has egress, and a server it starts, such as the
+one `sccache` runs, or a test that binds `127.0.0.1:0`, fails with `Operation not permitted`. A
+stage that has egress and is held to no proxy's port connects to a port of this machine without
+loopback, since its egress rule matches the loopback address, and a stage that has none is refused
+the same connection. A stage the plan lends loopback ([SANDBOX-26](#SANDBOX-26)) may bind and accept
+on this machine's own addresses and connect to them, and reaches no other address and no resolver.
+That grant is separate from egress: a closed network stays closed for it, so a stage with no egress
+that is lent loopback connects to a port of this machine and to no other address, and to a stage
+that has egress it adds only listening. A stage held to a proxy's port
+([SANDBOX-24](#SANDBOX-24)) may listen when lent loopback and connects to that port alone, with or
+without loopback, since another local port could be a service that carries it past the host list.
+A host list holds a stage to the proxy only when the stage has egress. A stage with no egress is
+held to no proxy, so loopback lets it connect to a port of this machine whether or not a host list
+is set.
+
+On Linux and Windows nothing in the backend reads a request for loopback, so it changes nothing
+there. On Linux a stage with the network open shares the host's network and connects to a port of
+this machine, and this clause says nothing of whether it can listen, since no test shows it. A
+stage with no network, or held to a proxy's port, is in the network namespace described above,
+which holds no listener of the host's loopback, and a request for loopback does not take a stage
+with no network out of it. On Windows a policy that names loopback asks for the same capabilities,
+makes the same grants and is refused or applied as the same policy without it. No test connects to
+or listens on a port from a container, so this clause says nothing of either on Windows.
 
 **Why.** A connect to a socket reaches whatever serves it, with that server's authority. A program
 that reaches a Docker daemon's socket can start a container with the home directory mounted, which
@@ -204,8 +220,12 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::macos::loopback_is_granted_by_its_own_rows_and_opens_no_other_address`
 `verified-by: bravebot_sandbox::macos::a_process_granted_loopback_connects_to_a_local_port_and_one_without_it_cannot`
 `verified-by: bravebot_sandbox::macos::a_process_granted_loopback_can_listen_and_one_without_it_cannot`
+`verified-by: bravebot_sandbox::macos::an_open_network_connects_to_a_local_port_without_loopback_and_a_closed_one_needs_it`
+`verified-by: bravebot_sandbox::macos::a_process_with_an_open_network_listens_only_when_granted_loopback`
 `verified-by: bravebot_sandbox::macos::loopback_leaves_a_stage_held_to_a_port_with_that_port_alone`
 `verified-by: bravebot_sandbox::macos::a_process_held_to_a_port_and_granted_loopback_reaches_no_other_local_port`
+`verified-by: bravebot_agent::confine::only_a_stage_with_egress_is_pointed_at_the_proxy_and_only_under_a_list`
+`verified-by: bravebot_agent::confine::a_requested_loopback_lends_loopback_and_no_network`
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_cannot_reach_a_socket_outside_its_grants`
 `verified-by: bravebot_sandbox::macos::a_write_grant_reaches_no_socket_inside_a_refusal`
 `verified-by: bravebot_sandbox::macos::a_confined_process_granted_egress_can_reach_the_resolver`
@@ -217,6 +237,9 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::linux::a_policy_requiring_network_denial_is_refused_where_no_namespace_can_be_made`
 `verified-by: bravebot_sandbox::linux::a_kernel_that_refuses_the_namespace_refuses_the_stage`
 `verified-by: bravebot_sandbox::linux::a_stage_with_no_network_cannot_connect_to_anything`
+`verified-by: bravebot_sandbox::linux::a_stage_held_to_the_proxy_cannot_connect_around_it`
+`verified-by: bravebot_agent::confine::a_closed_network_stops_a_program_with_no_reason_to_reach_it`
+`verified-by: bravebot_agent::confine::a_requested_loopback_reaches_a_listener_from_a_closed_network_on_macos_only`
 `verified-by: bravebot_sandbox::linux::a_stage_that_replaces_the_proxys_socket_with_a_link_is_not_relayed_to_what_it_leads_to`
 `verified-by: bravebot_sandbox::linux::a_confined_process_runs`
 `verified-by: bravebot_sandbox::linux::a_confined_process_can_write_inside_its_grants`
@@ -237,6 +260,7 @@ macOS while it has egress and on Linux whatever its network.
 `verified-by: bravebot_sandbox::windows::a_policy_that_did_not_ask_for_the_network_asks_for_no_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_that_asked_for_the_network_asks_for_the_internet_client_capability`
 `verified-by: bravebot_sandbox::windows::a_policy_withholding_the_network_is_applied_rather_than_refused`
+`verified-by: bravebot_sandbox::windows::a_policy_granted_loopback_asks_for_what_the_same_policy_without_it_asks_for`
 `verified-by: bravebot_sandbox::windows::no_grant_lets_a_confined_process_rewrite_an_access_list`
 `verified-by: bravebot_sandbox::windows::a_container_connects_out_only_when_its_policy_asks_for_the_network`
 `verified-by: bravebot_sandbox::windows::a_container_without_the_network_cannot_look_up_a_name`
@@ -426,6 +450,21 @@ empty environment; it does not stop an unconfined same-user process reading the 
 erase that copy, or withhold a variable the caller deliberately hands to a child. Windows is not
 covered.
 
+On macOS the same profile makes the programs that list processes fail, under the base and under
+the run base ([SANDBOX-12](#SANDBOX-12)), which a `run` stage gets and which reads the whole
+machine. `pgrep`, `pkill`, `killall`, `lsof` and `ps` each fail whether or not the program they
+look for is running. The causes differ: `pgrep` and `pkill` look up the `com.apple.sysmond`
+service, which the profile does not name, and exit 3; `killall` reads the process table through a
+sysctl the profile does not name; `lsof` needs the `process-info*` refusal lifted; and `ps` is not
+started, because `sandbox-exec` cannot start a setuid platform program under any profile. The
+refusal above is unchanged. After a failed step whose program is one of the five, the planner is
+told that the sandbox refuses listing processes, that the failure is not an answer about the
+program, and that a local service is found by connecting to its port, such as
+`curl http://127.0.0.1:9222/json/version` for a browser started with
+`--remote-debugging-port=9222` ([SANDBOX-19](#SANDBOX-19)). The sentence does not attribute the
+failure to the `process-info*` refusal, which is the cause for `lsof` alone. It is chosen from the
+file the step resolved to, and nothing the step printed reaches it.
+
 The directory a process starts in is the caller's as well. A policy may name one, and otherwise the
 process starts in this one's. Naming it grants nothing: a process started in a directory it may not
 read is refused its first read of it, so a caller meaning the process to work there grants the
@@ -434,6 +473,8 @@ directory too.
 `verified-by: bravebot_sandbox::exec_environment::a_confined_child_cannot_read_its_parents_exec_time_environment`
 `verified-by: bravebot_sandbox::macos::process_inspection_is_refused_and_sysctls_are_named_machine_queries`
 `verified-by: bravebot_sandbox::macos::a_program_that_asks_for_the_longest_argument_list_runs_under_the_base`
+`verified-by: bravebot_sandbox::macos::process_listing_programs_fail_under_both_bases_whether_or_not_what_they_seek_runs`
+`verified-by: bravebot_agent::turn::a_real_pgrep_refused_by_the_macos_profile_is_told_to_be_the_sandbox_and_to_probe_the_port`
 `verified-by: bravebot_agent::usability::every_workflow_works_under_the_default`
 `verified-by: bravebot_sandbox::linux::the_environment_a_confined_process_receives_is_the_callers`
 `verified-by: bravebot_sandbox::macos::the_environment_a_confined_process_receives_is_the_callers`
@@ -1671,7 +1712,8 @@ and would accept a request, the description and this sentence also name the menu
 from ([SANDBOX-26](#SANDBOX-26)); under `off` they name none, since none is accepted. A session
 accepts a request only in a workspace the person has trusted ([TRUST-7](trust-map.md#TRUST-7),
 [PATHREQ-5](tools/request-path.md#PATHREQ-5)), so in any other the description and this sentence
-name neither the menu nor `request_path`. They say instead that `run` accepts no `scopes` argument
+name neither the menu nor `request_path`, and on macOS do not tell the planner to ask for
+`loopback`. They say instead that `run` accepts no `scopes` argument
 and `request_path` is refused, that nobody is asked, and that the person can trust the workspace or
 add a directory with `/add-dir` or `--add-dir`, a directory to read under `read-only`. The description
 reads that fact as each turn starts and this sentence reads it when the result is composed. The
@@ -1730,16 +1772,58 @@ program resolved to, so a different program given the name `open` does not earn 
 reached under another name does. The sentence is not said on Linux or Windows, and not where the
 session would refuse the request.
 
+On macOS, where the session would accept a request, the description also says that a program
+cannot listen on a port of this machine unless its line asks for `loopback`, so `cargo test` over
+tests that bind `127.0.0.1:0` and a build through `sccache` fail with `Operation not permitted`
+without it, and that `loopback` is asked for to connect to a port of this machine only from a line
+that has no network access, since it adds nothing to a connect from a line that has network access
+([SANDBOX-3](#SANDBOX-3)). Where the network is closed, and under `read-only`, which closes it, the
+description adds that a line that asks for `loopback` may still connect to a port of this machine.
+A session that would accept no request is told none of this, and on Linux and Windows the
+description says nothing of `loopback`; the `scopes` entry of the tool says that it changes nothing
+there ([SANDBOX-26](#SANDBOX-26)). The sentence after a failed step says what a step that asked for
+`loopback` could do, in its account of the network. On macOS with the network closed and no host
+list it could listen on and connect to this machine's own ports. On macOS with the network closed
+and a host list it could listen on them, and connect to them if it has no network access, since a
+host list holds only the steps that have network access to the proxy's port. On macOS with the
+network open it could listen on them: without a host list a step connects without the request, and
+with one every step is held to the proxy's port. On Linux and Windows the sentence says nothing of
+`loopback`.
+
+On macOS, a failed result for a line with a step that runs `pgrep`, `pkill`, `killall`, `lsof` or
+`ps`, from a run or from a job left running, also says that the sandbox refuses listing processes,
+so those programs fail whether or not the program they look for is running, that such a failure is
+not an answer about the program, and that a local service is found by connecting to its port, such
+as `curl http://127.0.0.1:9222/json/version` for a browser started with
+`--remote-debugging-port=9222` ([SANDBOX-8](#SANDBOX-8)). It does not name the rule of the profile
+that refuses each program, since they differ. Where the session would accept a request it ends with
+the rule above about when `loopback` is asked for to connect. Where it would not, the sentence says
+to connect to the port and does not tell the planner to ask for `loopback`. The step is chosen by
+the file its program resolved to, as for `open`, so a different program given the name `pgrep` does
+not earn it and `pgrep` reached under another name does. The words are the same for any exit status
+and whatever the step printed, and are said once for a line with several such steps. They are not
+said on Linux or Windows, in a result whose steps all exited zero, under the mode `off`, or on a
+turn that confines no run.
+
 **Why.** A refused step reports `exited 1` and its standard error is quarantined, so the planner
 cannot see that the sandbox refused it. Without this sentence it cannot tell a sandbox refusal from
 a fault in the machine, so it chases causes that do not apply and sends the person to run
-diagnostics that cannot show the boundary.
+diagnostics that cannot show the boundary. A refused process listing is the same: `pgrep` exits 3
+under the profile whether or not the program it looks for is running, so a planner without the
+sentence takes the failure for an answer and asks the person about a program that is running. A
+description that says `loopback` lets a line connect to a port of this machine can lead the planner
+to ask for it on a line that only connects to one, and each such line is put to the person
+([SANDBOX-26](#SANDBOX-26)).
 
 **It branches on no output.** The inputs are the session's directories, the compiled step and the
 exit status the result already reports ([RUN-13](tools/run.md#RUN-13)). Nothing a program printed
 reaches the sentence, and it names no path a program chose, so the same sentence follows a refusal,
 a failing test and a typo. It adds no branch on the exit status beyond the one that already
-chooses `It failed` over `It exited 0`.
+chooses `It failed` over `It exited 0`. The sentences about `loopback` and about listing processes
+are chosen from the platform, the network, whether a host list holds the stages that have network
+access, the menu names a step asked for and the file a step resolved to, and are the same words for
+every exit status. They name no tool, since a delegate and a turn a person addressed to a definition
+read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface.md#TOOL-6)).
 
 `verified-by: bravebot_agent::confine::a_confining_turn_tells_the_planner_what_a_refusal_means`
 `verified-by: bravebot_agent::confine::a_turn_that_does_not_confine_says_nothing_of_confinement`
@@ -1777,6 +1861,16 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::confine::a_failed_step_says_where_the_key_was_chosen_at_a_prompt`
 `verified-by: bravebot_agent::confine::a_failed_push_says_whether_an_agent_was_lent_which_keys_were_readable_and_the_way_out`
 `verified-by: bravebot_agent::confine::a_failed_push_promises_a_key_prompt_only_where_one_will_be_shown`
+`verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_listening_needs_loopback`
+`verified-by: bravebot_agent::confine::the_planner_is_told_of_loopback_only_what_the_sandbox_does_on_its_platform`
+`verified-by: bravebot_agent::confine::a_failed_process_listing_step_on_macos_says_the_sandbox_refused_it_and_to_connect_to_the_port`
+`verified-by: bravebot_agent::turn::a_real_pgrep_refused_by_the_macos_profile_is_told_to_be_the_sandbox_and_to_probe_the_port`
+`verified-by: bravebot_agent::turn::the_process_listing_sentence_is_the_same_words_for_any_exit_code`
+`verified-by: bravebot_agent::turn::the_process_listing_sentence_is_chosen_from_the_program_and_not_from_what_it_printed`
+`verified-by: bravebot_agent::turn::the_process_listing_sentence_follows_a_failure_under_a_profile_and_nothing_else`
+`verified-by: bravebot_agent::turn::a_failed_job_that_lists_processes_is_told_what_a_failed_run_of_it_is_told`
+`verified-by: bravebot_agent::confine::the_sentences_about_loopback_and_listing_processes_name_no_tool`
+`verified-by: bravebot_sandbox::macos::process_listing_programs_fail_under_both_bases_whether_or_not_what_they_seek_runs`
 
 <a id="SANDBOX-20"></a>
 ### SANDBOX-20: a session may close the network, and a stage keeps it only for a reason it carries
@@ -2821,7 +2915,14 @@ for the line whose argv shows no operation to key a scope on ([SANDBOX-16](#SAND
 that runs `gh` or `cargo` inside it, or `git rebase` that signs what it rewrites, and for a line
 that listens on a port of this machine ([SANDBOX-3](#SANDBOX-3)), `cargo test` over tests that
 bind one or a build through `sccache`. `loopback` is the loopback grant and nothing else: it reads
-no path, and a closed network ([SANDBOX-20](#SANDBOX-20)) stays closed for it. `ssh-key` is a
+no path, and a closed network ([SANDBOX-20](#SANDBOX-20)) stays closed for it. The planner asks for
+it to listen, and to connect to a port of this machine only from a line that has no network access.
+A line that has network access gains no connect from the grant: it connects without it, or is held
+to a host list's proxy port with it or without it, and the grant gives it listening
+([SANDBOX-3](#SANDBOX-3)). On Linux and Windows nothing reads the request, so it changes nothing
+there, and it is still accepted and asked about. The `scopes` entry of the tool, which is the same
+text on every platform, says this, and says when to connect in the words the description uses
+([SANDBOX-19](#SANDBOX-19)). `ssh-key` is a
 request for the person to choose again which ssh key a push offers its owner, for the line whose
 push was refused for permission ([SANDBOX-16](#SANDBOX-16)): it lends nothing, reads no path, and
 only has the run prompt number the keys for an owner already chosen. It is never remembered. Every other name is
@@ -2868,6 +2969,13 @@ planner chose is a credential lent to a program a checkout may have written. Ask
 trusting no output is what keeps a name from becoming a standing allowance that the person approved
 for a different line.
 
+A request is asked about every time, remembered nowhere ([SANDBOX-27](#SANDBOX-27)) and kept from
+the auto-mode classifier ([AUTO-3](auto-mode.md#AUTO-3)), whatever it lends. One that lends the line
+nothing it needs, such as `loopback` for a connect from a line that has network access, costs the
+person a question for each line. The description therefore says when `loopback` is asked for to
+connect, and that it is not asked for from a line that has network access
+([SANDBOX-19](#SANDBOX-19)).
+
 `verified-by: bravebot_sandbox::scope::a_request_is_a_word_of_the_menu_and_nothing_near_it`
 `verified-by: bravebot_sandbox::scope::the_menu_is_every_scope_and_every_toolchain`
 `verified-by: bravebot_sandbox::scope::signing_can_be_requested_and_not_remembered`
@@ -2883,6 +2991,8 @@ for a different line.
 `verified-by: bravebot_agent::confine::a_requested_loopback_lends_loopback_and_no_network`
 `verified-by: bravebot_agent::confine::a_requested_loopback_sorts_last_and_the_prompt_names_its_stage`
 `verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_listening_needs_loopback`
+`verified-by: bravebot_agent::confine::the_planner_is_told_of_loopback_only_what_the_sandbox_does_on_its_platform`
+`verified-by: bravebot_agent::turn::in_auto_a_line_that_only_connects_to_a_local_port_needs_no_loopback_and_one_that_asks_goes_to_the_person`
 `verified-by: bravebot_agent::confine::a_request_is_kept_once_in_the_menus_order`
 `verified-by: bravebot_agent::confine::the_description_names_each_requested_scope_and_the_stage_it_is_for`
 `verified-by: bravebot_agent::confine::a_strict_stage_that_asked_for_a_scope_reads_that_credential_only`

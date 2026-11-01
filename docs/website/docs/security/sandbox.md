@@ -112,9 +112,11 @@ begin a session that asks about those hosts again. A stage with the network poin
 on macOS and Linux it may connect only to that proxy, so a program that ignores the proxy settings
 is still held to the list. On Linux that needs the same kernel support as `run.network`, and a stage
 is refused, naming this setting, where the kernel lacks it. On Windows a stage is refused while a list
-is set, naming this setting. A `run` that asks for `loopback` is then given the right to listen only. A list that is set,
-even an empty one, is a list, and an
-empty `allowedHosts` refuses every host. See [the sandbox](security.md) for what the list
+is set, naming this setting. On macOS a `run` that asks for `loopback` is then given the right to
+listen, and a step with network access still connects to the proxy's port alone. A step with no
+network access is not held to the proxy, so `loopback` lets it connect to a port of this machine as
+it does without a list. On Linux the request changes nothing. A list that is set, even an empty one,
+is a list, and an empty `allowedHosts` refuses every host. See [the sandbox](security.md) for what the list
 can and cannot hold back.
 
 `deniedHosts` and `onUnlisted: refuse` only take reach away, so any file may write them. `allowedHosts`

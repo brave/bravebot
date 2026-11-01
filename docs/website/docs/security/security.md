@@ -142,7 +142,11 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   not name is readable.
 
   On macOS a program cannot listen on a port of the
-  machine unless the planner asks for `loopback` on that line and you approve it, and only `git`
+  machine unless the planner asks for `loopback` on that line and you approve it, whether or not
+  the line has network access. A line with an open network and no host list connects to a port of
+  the machine without it. A line held to a host list connects to the list's proxy port alone, with
+  or without it. A line with no network access connects to a port of the machine only with it, and
+  then to no other address. On Linux and Windows nothing reads that request. Also on macOS, only `git`
   itself writes a `.git`, so a script, `make`, `npm` or `gh` that runs git to commit, check out or
   clone is refused. On Windows a program runs in a container that reaches only the directories the
   session was opened on, its scratch directory, the system temporary directory, the system and
@@ -396,6 +400,23 @@ such as a file watcher built on FSEvents or Spotlight, loses that feature. The c
 services are in the list only for a stage allowed to reach the network. A stage held to a host list
 has them, and macOS fetches a certificate's issuer from its own process, so the host list does not
 bound that one request.
+
+**On macOS a stage cannot list processes.** `pgrep`, `pkill`, `killall`, `lsof` and `ps` fail under
+the sandbox whether or not the program they look for is running, so their failure says nothing
+about that program. They fail for different reasons, and the refusal stays: the sandbox keeps other
+processes' arguments and environment out of reach. A failed step that ran one of them carries a
+sentence from Brave Bot saying that the sandbox refuses listing processes, that the failure is not
+an answer about the program, and that a local service is found by connecting to its port instead,
+such as `curl http://127.0.0.1:9222/json/version` for a browser started with
+`--remote-debugging-port=9222`. Where the session accepts a request for a scope, that sentence ends
+with when `loopback` is needed to connect, which is only from a line that has no network access.
+The `run` description also tells the planner to look for a browser's debugging port before it asks
+you whether to quit or relaunch the browser. That probe is refused for a line a host list holds to
+its proxy, which reaches only the proxy's port of the machine. On Windows a container may reach a
+port of the machine only with a machine-wide loopback exemption, so the probe may be refused there.
+A refused probe fails as a closed port does, so the planner may then ask you about the browser.
+The sentence after a failed step is chosen by the program the step resolved to and is the same
+whatever the step exited with or printed. It is not said on Linux or Windows.
 
 **On Linux every program starts in a session of its own**, so it has no controlling terminal and
 cannot type into yours, which kernels before 6.10 would otherwise allow. A terminal's interrupt and

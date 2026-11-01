@@ -5,6 +5,7 @@
 //! read, label or declassify content stay in `tools.rs`.
 
 use super::{WHY, offer_runs};
+use crate::confine::LOOPBACK_CONNECT_RULE;
 use bravebot_aichat::protocol::Tool;
 use bravebot_core::todo::Status;
 use serde_json::json;
@@ -1052,6 +1053,11 @@ fn table(
              or other text made from it is written by spawn_processor, whose description says \
              how that text reaches a program. Do use it to compile and test what you changed. \
              \
+             Before asking whether a browser is running, or whether to quit or relaunch it, look \
+             for its debugging port. A browser started with --remote-debugging-port=9222 answers \
+             `curl http://127.0.0.1:9222/json/version`. Ask about quitting or relaunching a \
+             browser only after that probe is refused. \
+             \
              A program meant to keep running, such as a server or a watcher, needs \
              background: true. Without it the line is waited on and stopped at its deadline \
              ("
@@ -1106,18 +1112,21 @@ fn table(
                     "scopes": {
                         "type": "array",
                         "items": { "type": "string", "enum": bravebot_sandbox::scope::Requested::MENU },
-                        "description": "Credential scopes, toolchain lists and `loopback` to add to \
-                                        every stage of this one line, by name from the list \
-                                        given, for a script that runs `gh`, `aws`, `git commit` \
-                                        or a build inside it and so shows no operation of its \
-                                        own. `loopback` lets the line listen on and connect to \
-                                        ports of this machine, which `cargo test` and `sccache` \
-                                        need on macOS. `ssh-key` has the user choose again \
-                                        which ssh key a `git push` offers its owner, after a \
-                                        push was refused for permission. Only where the session \
-                                        is told it accepts them. The user is asked about the line \
-                                        every time with the names shown, and no answer to it is \
-                                        remembered. A name outside the list is an error."
+                        "description": format!(
+                            "Credential scopes, toolchain lists and `loopback` to add to \
+                             every stage of this one line, by name from the list \
+                             given, for a script that runs `gh`, `aws`, `git commit` \
+                             or a build inside it and so shows no operation of its \
+                             own. On macOS `loopback` is for listening on a port of \
+                             this machine, which `cargo test` and `sccache` need. \
+                             {LOOPBACK_CONNECT_RULE} On Linux and Windows `loopback` \
+                             changes nothing. `ssh-key` has the user choose again \
+                             which ssh key a `git push` offers its owner, after a \
+                             push was refused for permission. Only where the session \
+                             is told it accepts them. The user is asked about the line \
+                             every time with the names shown, and no answer to it is \
+                             remembered. A name outside the list is an error."
+                        )
                     },
                     "unconfined": {
                         "type": "boolean",

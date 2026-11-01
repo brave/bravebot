@@ -8589,8 +8589,8 @@ fn consult_about_a_run<S: Sink>(
     if unconfined || !confined || tools.permission_mode.get() != crate::PermissionMode::Auto {
         return crate::confirm::Classified::NotAsked;
     }
-    // Only a line it can be shown whole: nothing fed to it from a reference, no credential scope
-    // asked for, nothing private released.
+    // Only a line it can be shown whole: nothing fed to it from a reference, no name in `scopes`
+    // (a credential scope, a toolchain list, `loopback` or `ssh-key`), nothing private released.
     if !requested.is_empty() || stdin || plan.releases_private() {
         return crate::confirm::Classified::NotAsked;
     }
@@ -15708,6 +15708,100 @@ mod tests {
                 && described.contains("`directory` argument is how a line runs elsewhere"),
             "the description does not say cd is refused and directory is the route: {described}"
         );
+    }
+
+    /// A session with a browser already running and its debugging port open asked the person
+    /// whether it could quit and relaunch the browser, because every way of looking it tried for
+    /// the process was refused and it never tried the port. The description tells the planner to
+    /// try the port first and to ask about quitting only after that is refused, in every turn that
+    /// is offered `run`, which is each kind of scheduling and a delegate that holds `run`. The
+    /// probe sentence says nothing of whether the probe needs a scope, network access or
+    /// `loopback`, because whether a line may connect to a port of this machine depends on the
+    /// platform and on a host list, which the description does not know (SANDBOX-3). None of the
+    /// three sentences names a tool, so a delegate and an addressed turn read nothing they cannot
+    /// act on (TOOL-6), and none names `loopback`, which the `scopes` entry and the confinement
+    /// text name.
+    ///
+    /// The faults it rejects are no sentence, the question allowed before the probe, a probe
+    /// sentence that says the probe needs no scope, network access or `loopback`, which would not
+    /// hold under a host list and may not hold on Windows, and would leave a planner whose probe
+    /// was refused asking about the browser, a sentence that names a tool, and a sentence missing
+    /// from one kind of scheduling or from a delegate.
+    #[test]
+    fn the_run_description_says_to_probe_a_browsers_debugging_port_before_asking_about_quitting_it()
+    {
+        use bravebot_core::delegate::Kind;
+        let everything: Vec<String> = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        )
+        .into_iter()
+        .map(|tool| tool.function.name)
+        .collect();
+        let read = |at: &str, described: &str| {
+            let first = sentence_with(described, "Before asking");
+            assert!(first.starts_with("Before asking"), "{at}: {first}");
+            assert!(
+                first.contains("whether a browser is running")
+                    && first.contains("whether to quit or relaunch it"),
+                "{at}: {first}"
+            );
+            let probe = sentence_with(described, "/json/version");
+            assert!(
+                probe.contains("`curl http://127.0.0.1:9222/json/version`")
+                    && probe.contains("--remote-debugging-port=9222"),
+                "{at}: {probe}"
+            );
+            for said in ["scope", "network access", "loopback"] {
+                assert!(!probe.contains(said), "{at}: {said} in {probe}");
+            }
+            let ask = sentence_with(described, "only after that probe");
+            assert!(
+                ask.starts_with("Ask about quitting or relaunching a browser only after")
+                    && ask.contains("is refused"),
+                "{at}: {ask}"
+            );
+            let order = [first, probe, ask].map(|sentence| described.find(sentence));
+            assert!(
+                order[0] < order[1] && order[1] < order[2] && order[0].is_some(),
+                "{at}: asked before the probe is described: {described}"
+            );
+
+            // TOOL-6: no word of the three sentences is the name of a tool this turn may lack.
+            for sentence in [first, probe, ask] {
+                for word in sentence.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                    assert!(!everything.iter().any(|tool| tool == word), "{at}: {word}");
+                }
+                assert!(!sentence.contains("loopback"), "{at}: {sentence}");
+            }
+        };
+
+        for scheduling in [
+            Scheduling::ArrangingALook,
+            Scheduling::PacingALoop,
+            Scheduling::TheirInterval,
+            Scheduling::NoLaterLook,
+        ] {
+            read(
+                &format!("{scheduling:?}"),
+                &tool_description(scheduling, "run"),
+            );
+        }
+
+        // A delegate is built from the same table with a list of its own, so each kind that holds
+        // `run` reads the sentences too, and at least one kind does.
+        let mut holding = 0;
+        for name in Kind::NAMES {
+            let kind = Kind::from_name(name).expect("enumerated");
+            let held = for_delegate(&kind.capabilities(), None, None, Deadlines::BUILT_IN);
+            if let Some(run) = held.iter().find(|tool| tool.function.name == "run") {
+                holding += 1;
+                read(&format!("delegate {name}"), &run.function.description);
+            }
+        }
+        assert!(holding > 0, "no kind of delegate is offered `run`");
     }
 
     /// A session asked to watch a file read it once, said what it held, and left nothing watching.
