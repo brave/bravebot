@@ -71825,6 +71825,7 @@ struct PathTurn {
     events: Vec<Event>,
     /// The watches the turn asked to arm, which are armed only when a test turns the task's
     /// arming on with [`ARM_WATCHES`].
+    #[cfg(unix)]
     watches: Vec<bravebot_agent::watch::Armed>,
 }
 
@@ -71981,6 +71982,7 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
         &bravebot_core::cancel::Cancel::new(),
     );
     outcome.outcome.as_ref().expect("the turn runs");
+    #[cfg(unix)]
     let watches = outcome
         .outcome
         .as_ref()
@@ -71996,6 +71998,7 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
         workspace,
         trust: outcome.decisions.trust,
         events: sink.events().to_vec(),
+        #[cfg(unix)]
         watches,
     }
 }
