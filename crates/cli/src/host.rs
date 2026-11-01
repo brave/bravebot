@@ -1553,6 +1553,15 @@ mod tests {
             let asked = holding(&shared, ask);
 
             let replay = replayed(&shared);
+            let last_200 = |text: &str| -> String {
+                text.chars()
+                    .rev()
+                    .take(200)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect()
+            };
 
             assert!(
                 replay.starts_with("ok\nearlier output\n"),
@@ -1561,8 +1570,18 @@ mod tests {
             let question = format!("{}\n{title} {} ", lines.join("\n"), t!(line_answer));
             assert!(
                 replay.ends_with(&question),
-                "{kind}: the replay does not end with the whole question; it begins {:?}",
-                replay.chars().take(200).collect::<String>()
+                "{kind}: the replay does not end with the whole question; the replay is {} bytes \
+                 and the question {}; counting back from the end they first differ {:?} bytes \
+                 from it; the replay ends {:?} and the question ends {:?}",
+                replay.len(),
+                question.len(),
+                replay
+                    .bytes()
+                    .rev()
+                    .zip(question.bytes().rev())
+                    .position(|(kept, asked)| kept != asked),
+                last_200(&replay),
+                last_200(&question)
             );
             // The question is longer than what is kept ahead of it, so the check above is not met
             // by a question that was short enough to survive the cut.
