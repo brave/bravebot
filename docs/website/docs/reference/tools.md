@@ -806,7 +806,8 @@ which the planner does not see either.
 | `instruction` | what to do with them and what to produce |
 
 
-An answer is for **one** document and may be written **only** to the file the call was about. Where the
+An answer is for **one** document and may be written **only** to the file the call was about, or, where
+the processor read only references that are no file, to a new file in the scratch directory. Where the
 planner said nothing and there was more than one input, the answer belongs nowhere and may be written
 nowhere.
 
@@ -817,19 +818,18 @@ a plain-text summary of each of six stories, two sentences each, with each link 
 asks for the document alone, with no remarks about what the processor did, and names the form and its
 length where the document is itself a summary, a translation or an explanation.
 
-**Getting the answer to a program that uses it.** An answer about a fetched page or a run's output is
-for no file and can be written nowhere, so the planner saves the original to a file first, in the
-scratch directory when it has one. It ends the `run` line that made the text with `> path`, or writes
-a fetched page with [`write_file`](#write_file) and `contents_ref`, and then calls
-[`read_file`](#read_file) on the file for a reference to name in `reads`. The planner is told not to
-save the page with a script that opens the file itself. The answer is written over the same file with
-`write_file`, and the program that sends it is run with the file's path as an argument. Or the
-answer's reference is given to [`run`](#run) as `stdin_ref`, which needs no file. The recipient and
-the subject are the planner's and only the body comes from the processor. The sending line is an
-ordinary `run` line. One that names the file is put to you unless a vouched entry, a remembered line,
-a rule you wrote or your trust of the directory answers it. One fed the answer as `stdin_ref` is put
-to you unless a rule you wrote decides it, and no rule decides it when the answer was made from
-private content, such as a summary of a run's output.
+**Getting the answer to a program that uses it.** A fetched page or a run's output needs no file. The
+planner names its reference in `reads`, so nothing is saved first. The answer's reference is given to
+[`run`](#run) as `stdin_ref`, which needs no file. Or the answer is written with
+[`write_file`](#write_file) and `contents_ref` to a new file in the scratch directory, and the
+program that sends it is run with the file's path as an argument. A path outside the scratch
+directory, a file that is already there, and a session with no scratch directory are each refused
+before you are asked. An answer about a file the planner already has is written over that file, as
+before. The recipient and the subject are the planner's and only the body comes from the processor.
+The sending line is an ordinary `run` line. One that names the file is put to you unless a vouched
+entry, a remembered line, a rule you wrote or your trust of the directory answers it. One fed the
+answer as `stdin_ref` is put to you unless a rule you wrote decides it, and no rule decides it when
+the answer was made from private content, such as a summary of a run's output.
 
 The planner's last message says what was sent and to whom, and calls the text a summary only if a
 processor wrote one.

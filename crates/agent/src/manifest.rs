@@ -1825,7 +1825,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             // path is written once and so is still the one the call was made against. A plan is a
             // precommitment rather than a wider permission, so an answer minted here carries the
             // home the same call would give it in a turn.
-            policy.answers_for(&out_slot, spec.about(), slots);
+            policy.answers_for(&out_slot, &spec, slots);
             // And what it said about that document, so the approval the document is put to shows
             // the claim made about it. A plan does not put the remark in a transcript at all, so
             // the prompt is the only place a planned run has to show it.
@@ -2263,7 +2263,12 @@ fn write<S: Sink, C: Confirmer>(
             // destination passed the routing lock, which says nothing about which document the
             // bytes are for: an answer the plan sends to some other file is refused here.
             policy
-                .write_belongs_here(&path, &slot, slots)
+                .write_belongs_here(
+                    &path,
+                    &crate::tools::write_site(workspace, &path),
+                    &slot,
+                    slots,
+                )
                 .map_err(|d| d.to_string())?;
             let content = policy
                 .resolve("write_file", &slot, slots)

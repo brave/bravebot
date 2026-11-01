@@ -2181,10 +2181,10 @@ processor's description says how that text reaches a program. The `stdin_ref` pa
 description must say that a program that sends text, such as a summary a processor wrote, takes its
 body by naming the processor's answer there.
 
-The how is not said here. Saving the original to a file, writing the answer over it and running the
-sender with the file's path are in the processor's description
-([spawn-processor.md](spawn-processor.md)), once, since a copy in each of two descriptions is edited
-separately and comes to say different things.
+The how is not said here. Naming the output's reference in `reads`, writing the answer to a new file
+in the scratch directory and running the sender with the file's path are in the processor's
+description ([spawn-processor.md](spawn-processor.md)), once, since a copy in each of two
+descriptions is edited separately and comes to say different things.
 
 **Why.** A planner writing the line that sends a message reads `run`'s description and its
 parameters. The sentence that names the processor as a place an output may go is where it learns what

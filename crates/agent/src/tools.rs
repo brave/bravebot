@@ -173,8 +173,9 @@ pub struct Output {
     ///
     /// [PROMPT-12]: ../../../docs/specs/prompting.md
     pub told: Option<Labelled<String>>,
-    /// Which document a processor's answer is about, where it produced one.
-    pub answers_for: Option<Option<SlotId>>,
+    /// What a processor's answer is for, where it produced one: the call, whose reads and document
+    /// decide where the answer may be written.
+    pub answers_for: Option<bravebot_core::processor::ProcessorSpec>,
     /// What an isolated processor said about what it did. For the person watching only.
     pub said: Option<Labelled<String>>,
     /// The number a processor chose, where the call asked it to choose (PROC-16). Set by the tool
@@ -1247,7 +1248,7 @@ struct Produced {
     /// `Some(None)` is a processor that was given several documents and told which of them it
     /// was about by nobody: its answer is for no file in particular, and the turn records that
     /// so a write of it is refused rather than guessed at.
-    answers_for: Option<Option<SlotId>>,
+    answers_for: Option<bravebot_core::processor::ProcessorSpec>,
     /// What an isolated processor said about what it did, for the person watching.
     ///
     /// Never part of `text`, which is what the planner is told about: this half of a processor's
@@ -2092,6 +2093,24 @@ pub(crate) fn landing_of(workspace: &Workspace, proposed_path: &str) -> std::pat
     workspace
         .resolve(proposed_path)
         .unwrap_or_else(|_| std::path::PathBuf::from(proposed_path))
+}
+
+/// Where a write of `proposed_path` lands, for the gate that holds an answer about references that
+/// are no file to a new file in the scratch directory. Resolved as the write resolves it, so a link
+/// or a `..` in the name that leads out of the directory is seen for what it reaches. Routing only.
+pub(crate) fn write_site(
+    workspace: &Workspace,
+    proposed_path: &str,
+) -> bravebot_core::policy::WriteSite {
+    let landing = landing_of(workspace, proposed_path);
+    let is_new = matches!(
+        std::fs::symlink_metadata(&landing),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    );
+    bravebot_core::policy::WriteSite {
+        landing: landing.to_string_lossy().into_owned(),
+        is_new,
+    }
 }
 
 /// What a write did, for the person watching: a line saying how much changed, and the hunks
@@ -4693,7 +4712,7 @@ fn quarantined_body<S: Sink>(
 
     // Where an answer belongs, decided when the processor was asked and not now.
     policy
-        .write_belongs_here(path, &slot, slots)
+        .write_belongs_here(path, &write_site(workspace, path), &slot, slots)
         .map_err(|denial| format!("refused: {denial}"))?;
 
     // A picture is written as the file it encodes, and only under the name its type has (WRITE-9).
@@ -11212,7 +11231,7 @@ fn spawn_processor<S: Sink>(
                 .costing(done.usage)
                 .waiting(waited)
                 .of_content();
-            produced.answers_for = Some(spec.about().cloned());
+            produced.answers_for = Some(spec.clone());
             produced.said = done.note;
             produced.substituted = done.substituted;
             produced
@@ -14490,18 +14509,14 @@ mod tests {
              written by this tool, because you cannot write it from what you have not read. Ask \
              for the form wanted, for example a plain-text summary of each of six stories, two \
              sentences each, with each link kept. Do not leave it to a script you write, which \
-             can only cut the original down. A processor's answer about a reference that is no \
-             file, such as a fetched page or a run's output, is for no document and cannot be \
-             written anywhere, so save the original to a file first, in the scratch directory if \
-             you were given one: end the run line that made it with `> path`, or write a fetched \
-             page with write_file and contents_ref, and call read_file on the file for a \
-             reference to name in reads. Do not save it with a script that opens the file \
-             itself. Then write the answer over the same file with write_file, and run the \
-             program that sends it with the file's path as an argument, so it reads the body \
-             from the file. Or give the answer's reference to run as stdin_ref, which needs no \
-             file. The recipient and the subject are yours and only the body comes from the \
-             processor. Your final message says what was sent and to whom. Call the text a \
-             summary in your final message only if a processor wrote one. Once your context \
+             can only cut the original down. A fetched page or a run's output needs no file: \
+             name its reference in reads. Then give the answer's reference to run as stdin_ref, \
+             or write the answer with write_file and contents_ref to a new file in the scratch \
+             directory and run the program that sends it with the file's path as an argument, so \
+             it reads the body from the file. The recipient and the subject are yours and only \
+             the body comes from the processor. Your final message says what was sent and to \
+             whom. Call the text a summary in your final message only if a processor wrote one. \
+             Once your context \
              holds private content, as it does after read_output or vet_content shows you some, \
              after a delegate reports some, and in a conversation resumed with some, every later \
              spawn_processor call is refused for the rest of the conversation: what you write is \
@@ -14585,61 +14600,53 @@ mod tests {
         );
     }
 
-    /// SPAWN-6. The route for text made from a reference that is no file saves the original to a
-    /// file first, which needs `write_file` to write the answer over it and `read_file` to give the
-    /// reference that names it. A list with `run` and without either is told that the answer goes to
-    /// the program as `stdin_ref`, which needs no file, and is sent to neither tool. A list without
-    /// `run` is told the route to no program at all, and keeps naming the two tools it holds.
+    /// SPAWN-6. A processor's answer about a reference that is no file is written to a new file with
+    /// `write_file`, so a list without it is told that the answer goes to the program as
+    /// `stdin_ref`, which needs no file, and is sent to neither the write nor the file. The route
+    /// reads no file first, so a list without `read_file` is told the same as one with it. A list
+    /// without `run` is told the route to no program at all.
     #[test]
-    fn the_route_through_a_file_is_described_only_where_the_list_holds_the_file_tools() {
+    fn the_write_to_a_file_is_described_only_where_the_list_holds_write_file() {
         let with = description_of(&the_table_without(&[]), "spawn_processor");
-        let by_file = "so save the original to a file first, in the scratch directory if you \
-                       were given one: end the run line that made it with `> path`, or write a \
-                       fetched page with write_file and contents_ref, and call read_file on the \
-                       file for a reference to name in reads. Do not save it with a script that \
-                       opens the file itself. Then write the answer over the same file with \
-                       write_file, and run the program that sends it with the file's path as an \
-                       argument, so it reads the body from the file. Or give the answer's \
-                       reference to run as stdin_ref, which needs no file.";
-        let without_a_file = "Give the answer's reference to run as stdin_ref, which needs no \
-                              file, in the line of the program that sends it.";
+        let to_a_file = "Then give the answer's reference to run as stdin_ref, or write the \
+                         answer with write_file and contents_ref to a new file in the scratch \
+                         directory and run the program that sends it with the file's path as an \
+                         argument, so it reads the body from the file.";
+        let stdin_alone = "Then give the answer's reference to run as stdin_ref, in the line of \
+                           the program that sends it.";
         assert!(
-            with.contains(by_file) && names_the_tool(&with, "read_file"),
-            "a list holding every tool is not told the route through a file: {with}"
+            with.contains(to_a_file) && names_the_tool(&with, "write_file"),
+            "a list holding every tool is not told it may write the answer to a file: {with}"
+        );
+        assert!(
+            !names_the_tool(&with, "read_file") && !with.contains("save the original"),
+            "the description sends the planner to save the original first: {with}"
         );
 
-        // Without `read_file` there is no reference to name in `reads`, so the file is no route.
+        // Nothing is read first, so the file tool a reference to it would come from is no part of
+        // the route.
         let unreadable = description_of(&the_table_without(&["read_file"]), "spawn_processor");
-        assert!(!names_the_tool(&unreadable, "read_file"), "{unreadable}");
         assert_eq!(
-            unreadable,
-            with.replace(
-                &format!("and cannot be written anywhere, {by_file}"),
-                &format!("and cannot be written anywhere. {without_a_file}")
-            ),
-            "taking read_file off changed more than the route through a file"
+            unreadable, with,
+            "taking read_file off changed the description"
         );
 
-        // Without `write_file` the answer cannot be written over the file either.
+        // Without `write_file` there is no file to write the answer to.
         let unwritable = description_of(&the_table_without(&["write_file"]), "spawn_processor");
-        for gone in ["write_file", "read_file", "contents_ref"] {
+        for gone in ["write_file", "contents_ref"] {
             assert!(!names_the_tool(&unwritable, gone), "{unwritable}");
         }
         assert!(
-            unwritable.contains(without_a_file)
-                && !unwritable.contains("save the original to a file first")
+            unwritable.contains(stdin_alone)
+                && !unwritable.contains("scratch directory")
                 && unwritable.contains("Do not leave it to a script you write")
                 && unwritable.contains("The recipient and the subject are yours"),
-            "a list without write_file lost more than the route through a file: {unwritable}"
+            "a list without write_file lost more than the write to a file: {unwritable}"
         );
 
-        // A list without `run` is sent to no route, so the file tools it holds are not named for
-        // one.
+        // A list without `run` is sent to no route, so the program is not named for one.
         let no_run = description_of(&the_table_without(&["run"]), "spawn_processor");
-        assert!(
-            !names_the_tool(&no_run, "read_file") && !names_the_tool(&no_run, "stdin_ref"),
-            "{no_run}"
-        );
+        assert!(!names_the_tool(&no_run, "stdin_ref"), "{no_run}");
     }
 
     /// `read_output` points a run at `vet_content` for what it is holding besides a command's
@@ -15036,15 +15043,9 @@ mod tests {
     /// email a summary of a page had a processor and `write_file` and used neither: it wrote a
     /// script that cut the page's own sentences into the body, and said it had not read them.
     ///
-    /// The route is the one the tools accept. A processor's answer is written only over the file
-    /// the call was about, so a page that is no file is saved to one first, by a redirection or by
-    /// `write_file`, where the harness opens the file. The sending program then reads that file,
-    /// or takes the answer as `stdin_ref`.
-    ///
-    /// The description forbids saving the page with a script that opens the file itself and gives
-    /// no reason. The reason is that a file a script opens on its own is not recorded as holding
-    /// what the planner was not shown (trust-map.md, Known costs). A planner told that would know
-    /// which way of saving a page lets it read the page back, so the reason stays in SPAWN-6.
+    /// The route is the one the tools accept. A processor's answer about a page or a run's output is
+    /// for no file, so it is given to `run` as `stdin_ref` or written to a new file in the scratch
+    /// directory (PROC-6). The page is not saved to a file first.
     #[test]
     fn a_processor_is_described_as_the_writer_of_text_made_from_content_not_shown() {
         let description = processor_description(Running::Offered);
@@ -15057,17 +15058,12 @@ mod tests {
              two sentences each, with each link kept",
             // A script that scrapes cannot summarise, which is the defect the planner showed.
             "Do not leave it to a script you write, which can only cut the original down",
-            // An answer about a reference that is no file may be written nowhere (PROC-6).
-            "about a reference that is no file, such as a fetched page or a run's output, is for \
-             no document and cannot be written anywhere, so save the original to a file first, \
-             in the scratch directory if you were given one",
-            "end the run line that made it with `> path`, or write a fetched page with \
-             write_file and contents_ref",
-            "call read_file on the file for a reference to name in reads",
-            "Then write the answer over the same file with write_file",
-            "run the program that sends it with the file's path as an argument, so it reads the \
-             body from the file",
-            "Or give the answer's reference to run as stdin_ref, which needs no file",
+            // A reference that is no file is named in reads as it is.
+            "A fetched page or a run's output needs no file: name its reference in reads",
+            // Where the answer goes (PROC-6).
+            "give the answer's reference to run as stdin_ref, or write the answer with write_file \
+             and contents_ref to a new file in the scratch directory and run the program that \
+             sends it with the file's path as an argument, so it reads the body from the file",
             // The head of the message is the planner's and only the body is derived.
             "The recipient and the subject are yours and only the body comes from the processor",
             // What the person is told afterwards.
@@ -15079,16 +15075,16 @@ mod tests {
                 "the description does not say '{stated}': {description}"
             );
         }
-        assert!(
-            description.contains("Do not save it with a script that opens the file itself. Then"),
-            "the description allows a script to write the file, or does not end the sentence \
-             there: {description}"
-        );
-        assert!(
-            !description.contains("recorded"),
-            "the description says when a file is recorded as holding what the planner was not \
-             shown: {description}"
-        );
+        for gone in [
+            "save the original to a file first",
+            "cannot be written anywhere",
+            "Do not save it with a script",
+        ] {
+            assert!(
+                !description.contains(gone),
+                "the description still tells the planner '{gone}': {description}"
+            );
+        }
         // PROC-4 pins the closing sentence, and the paragraph above is not the last thing said.
         assert!(
             description.ends_with("run, read_output and the file tools keep working."),
@@ -15129,7 +15125,7 @@ mod tests {
             );
         }
         assert!(
-            offered.contains("Or give the answer's reference to run as stdin_ref"),
+            offered.contains("give the answer's reference to run as stdin_ref"),
             "a turn with run is not sent to it: {offered}"
         );
     }
@@ -15184,15 +15180,10 @@ mod tests {
     }
 
     /// SPAWN-6. `write_file` said `contents_ref` is how to write out "such as what spawn_processor
-    /// produced", which a planner reads as the way to save any processor's answer. An answer is
-    /// written only over the file the call was about, and one about a fetched page or a run's
-    /// output is for no file (PROC-6), so a planner that took the sentence at its word was refused
-    /// before anyone was asked. A fetched page is what `contents_ref` does write out anywhere.
-    ///
-    /// The route for saving a page to a file first is in the processor's description and is said
-    /// there only to a turn that holds `run`, so the parameter points at it only for that turn. A
-    /// turn without `run` is told where an answer may be written and is not sent to a description
-    /// that holds no route for it.
+    /// produced", which a planner reads as the way to save any processor's answer anywhere. An
+    /// answer is written only over the file the call was about, and one about a fetched page or a
+    /// run's output only to a new file in the scratch directory (PROC-6). The parameter says both,
+    /// to a turn with `run` and to one without, since writing the file needs no program.
     #[test]
     fn the_write_file_reference_text_does_not_offer_a_processors_answer_as_a_free_write() {
         let contents_ref = |running: Running| -> String {
@@ -15211,7 +15202,6 @@ mod tests {
                 .expect("a description")
                 .to_string()
         };
-        let route = "the spawn_processor description says how to save a page to a file first";
         for running in [Running::Offered, Running::Withheld] {
             let described = contents_ref(running);
             assert!(
@@ -15226,23 +15216,18 @@ mod tests {
             assert!(
                 described.contains(
                     "What spawn_processor produced may be written only over the file that call \
-                     was about"
+                     was about. When the call read only references that are no file, such as a \
+                     fetched page or a run's output, it may be written only to a new file in \
+                     the scratch directory."
                 ),
                 "contents_ref does not say where a processor's answer may go ({running:?}): \
                  {described}"
             );
+            assert!(
+                !described.contains("save a page to a file"),
+                "contents_ref sends the planner to saving a page first ({running:?}): {described}"
+            );
         }
-        let offered = contents_ref(Running::Offered);
-        assert!(
-            offered.contains(route),
-            "contents_ref does not send the planner to where the route is written: {offered}"
-        );
-        let withheld = contents_ref(Running::Withheld);
-        assert!(
-            !withheld.contains(route) && !withheld.contains("save a page to a file"),
-            "a turn without run is sent to a route its processor description does not hold: \
-             {withheld}"
-        );
     }
 
     /// The prompt this tool draws belongs to the person who set the sub-task going, about content

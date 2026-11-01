@@ -4352,12 +4352,8 @@ where
                         // Recorded here, where the slot is minted, so a write of it goes there
                         // and nowhere else: a planner that assumed a second answer was about a
                         // second file wrote a game's HTML into a Python script.
-                        if let Some(about) = &output.answers_for {
-                            policy.answers_for(
-                                &reference.slot,
-                                about.as_ref(),
-                                conversation.quarantine(),
-                            );
+                        if let Some(spec) = &output.answers_for {
+                            policy.answers_for(&reference.slot, spec, conversation.quarantine());
                         }
                         // And what the processor said about that document, kept beside it
                         // rather than only reported. The remark enters the transcript here,

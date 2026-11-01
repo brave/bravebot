@@ -85,6 +85,20 @@ impl PathAuthority {
     }
 }
 
+/// Where a write lands, as the host resolves it, for a gate that the name the planner typed cannot
+/// answer: a link or a `..` in the name leads out of a directory under a spelling that looks
+/// inside it.
+///
+/// Routing only. It holds the resolved path of the file and whether a file is there, and is built
+/// by the tool that is about to write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteSite {
+    /// The path the write lands on, resolved.
+    pub landing: String,
+    /// Whether nothing is there yet.
+    pub is_new: bool,
+}
+
 /// Permission to take the bytes out of a transport envelope, for as long as the decoder needs.
 ///
 /// Confined to `Vec<u8>`, which is the shape of an envelope off a socket. A tool argument, a
@@ -5397,28 +5411,41 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// slot's path is written once, when its bytes arrive, so the path read here is the one the
     /// call was made against. Where nothing said which document the answer is for, it is for
     /// nothing in particular and may be written nowhere until something does.
+    ///
+    /// A call that read only references that are no file has no document to name. Its answer is
+    /// for those references and may become a new file in the session's scratch directory, which
+    /// [`Policy::write_belongs_here`] holds it to.
     pub fn answers_for(
         &mut self,
         slot: &SlotId,
-        about: Option<&SlotId>,
+        spec: &crate::processor::ProcessorSpec,
         slots: &mut crate::slot::SlotStore,
     ) {
         // An answer replaces the document it is about, so it is written to that file or nowhere. A
         // document that is a decoding of another encoding is not the file's own text, and writing
         // an answer over the file would put UTF-8 where the file held UTF-16 or U+FFFD where it
         // held a byte, so such an answer is for no file.
-        let home = match about
-            .filter(|about| !slots.is_decoded(about))
-            .and_then(|about| {
-                slots
-                    .path_of(about, &PathAuthority::mint())
-                    .map(|path| (path.to_string(), about.clone()))
-            }) {
-            Some((path, named_by)) => crate::slot::Home::Only { path, named_by },
-            None => crate::slot::Home::Unsaid,
+        let about = spec.about();
+        let home = if spec.reads().iter().all(|read| slots.is_no_file(read)) {
+            crate::slot::Home::Scratch
+        } else {
+            match about
+                .filter(|about| !slots.is_decoded(about))
+                .and_then(|about| {
+                    slots
+                        .path_of(about, &PathAuthority::mint())
+                        .map(|path| (path.to_string(), about.clone()))
+                }) {
+                Some((path, named_by)) => crate::slot::Home::Only { path, named_by },
+                None => crate::slot::Home::Unsaid,
+            }
         };
         let said = match &home {
             crate::slot::Home::Only { path, .. } => format!("{slot} answers for {path}"),
+            crate::slot::Home::Scratch => format!(
+                "{slot} answers for references that are no file, so it may be written only to a \
+                 new file in the scratch directory"
+            ),
             _ => format!(
                 "{slot} answers for no document in particular, so it may be written nowhere"
             ),
@@ -5432,9 +5459,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// A processor produces one document however many it was given, and a planner that assumed a
     /// second answer was about a second file wrote a game's HTML into a Python script. What the
     /// document is for is fixed when the processor is asked, by the planner, before it runs.
+    ///
+    /// `site` is where the write lands as the host resolves it. An answer about references that
+    /// are no file may land only on a file that does not exist yet inside the scratch directory,
+    /// which `path`, as the planner typed it, cannot show: a link in the directory or a `..` would
+    /// lead out of it under a name that looks like it lies inside.
     pub fn write_belongs_here(
         &mut self,
         path: &str,
+        site: &WriteSite,
         slot: &SlotId,
         slots: &crate::slot::SlotStore,
     ) -> Gated<()> {
@@ -5461,6 +5494,36 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                      Ask a processor about the file you mean if that is a different one."
                 ),
             )),
+            // Said in fixed sentences chosen from where the write lands and whether a file is
+            // there, never from the answer, and without the name of either file.
+            crate::slot::Home::Scratch if self.scratch.is_none() => Err(self.deny(
+                "write",
+                Principle::IntegrityGate,
+                format!(
+                    "{slot} is an answer about references that are no file, and this session has \
+                     no scratch directory to write it to. Give it to run as stdin_ref."
+                ),
+            )),
+            crate::slot::Home::Scratch if !self.is_scratch(&self.keyed(&site.landing)) => Err(self
+                .deny(
+                    "write",
+                    Principle::IntegrityGate,
+                    format!(
+                        "{slot} is an answer about references that are no file, so it may be \
+                         written only to a new file in the scratch directory. Name a path there, \
+                         or give it to run as stdin_ref."
+                    ),
+                )),
+            crate::slot::Home::Scratch if !site.is_new => Err(self.deny(
+                "write",
+                Principle::IntegrityGate,
+                format!(
+                    "{slot} is an answer about references that are no file, so it may be written \
+                     only to a file that does not exist yet. Name a new path in the scratch \
+                     directory, or give it to run as stdin_ref."
+                ),
+            )),
+            crate::slot::Home::Scratch => Ok(()),
             crate::slot::Home::Unsaid => Err(self.deny(
                 "write",
                 Principle::IntegrityGate,
@@ -9886,13 +9949,275 @@ five
             .unwrap()
             .write("the answer")
             .unwrap();
-        policy.answers_for(&answer, Some(&slot), &mut slots);
+        policy.answers_for(&answer, &spec, &mut slots);
         assert!(
             policy
-                .write_belongs_here("wide.txt", &answer, &slots)
+                .write_belongs_here(
+                    "wide.txt",
+                    &WriteSite {
+                        landing: "/work/wide.txt".to_string(),
+                        is_new: false
+                    },
+                    &answer,
+                    &slots
+                )
                 .is_err(),
             "an answer about a decoding may be written over the file it was decoded from"
         );
+    }
+
+    /// A slot written by hand has no path, like a page a fetch gave or what a program printed.
+    fn a_slot_with_no_path(slots: &mut SlotStore, id: &str) -> SlotId {
+        let slot = SlotId::new(id);
+        slots
+            .writer_for(slot.clone(), Label::untrusted_public())
+            .unwrap()
+            .write("the page")
+            .unwrap();
+        slot
+    }
+
+    /// A slot read out of a file, which keeps the file's path.
+    fn a_slot_read_from_a_file(
+        policy: &mut Policy<'_, RecordingSink>,
+        slots: &mut SlotStore,
+        id: &str,
+        name: &str,
+    ) -> SlotId {
+        let slot = SlotId::new(id);
+        let entries = Labelled::new(vec![name.to_string()], Label::untrusted_public());
+        policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                0,
+                std::slice::from_ref(&slot),
+                slots,
+            )
+            .expect("an entry may be reserved");
+        policy
+            .materialise("process", &slot, slots, |_| {
+                Ok(crate::slot::Fill::from("the file\n".to_string()))
+            })
+            .expect("the file is read");
+        slot
+    }
+
+    /// The answer a processor gives over `reads`, minted the way a turn mints it.
+    fn the_answer_over(
+        policy: &mut Policy<'_, RecordingSink>,
+        slots: &mut SlotStore,
+        reads: &[SlotId],
+        about: Option<SlotId>,
+        id: &str,
+    ) -> SlotId {
+        let spec = policy
+            .before_processor(
+                "p",
+                reads,
+                &Labelled::trusted("summarise it".to_string()),
+                about,
+                slots,
+            )
+            .expect("a spec");
+        let answer = SlotId::new(id);
+        slots
+            .writer_for(answer.clone(), Label::untrusted_public())
+            .unwrap()
+            .write("the answer")
+            .unwrap();
+        policy.answers_for(&answer, &spec, slots);
+        answer
+    }
+
+    fn a_site(landing: &str, is_new: bool) -> WriteSite {
+        WriteSite {
+            landing: landing.to_string(),
+            is_new,
+        }
+    }
+
+    /// PROC-6. An answer made only from references that are no file has no document to replace. It
+    /// may become a new file in the session's scratch directory, and nowhere else: not a file that
+    /// is already there, not a path outside the directory, not a name that climbs out of it, and
+    /// not anywhere in a session that has no scratch directory.
+    #[test]
+    fn an_answer_about_references_that_are_no_file_may_become_a_new_file_in_the_scratch_directory_only()
+     {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+        let mut slots = SlotStore::new();
+        let page = a_slot_with_no_path(&mut slots, "ref:1");
+        // Named as the document, which a slot with no path cannot be.
+        let answer = the_answer_over(
+            &mut policy,
+            &mut slots,
+            std::slice::from_ref(&page),
+            Some(page.clone()),
+            "ref:3",
+        );
+
+        policy
+            .write_belongs_here(
+                "summary.txt",
+                &a_site("/tmp/bravebot-scratch-1/summary.txt", true),
+                &answer,
+                &slots,
+            )
+            .expect("a new file in the scratch directory");
+
+        for (landing, is_new, refused_for) in [
+            (
+                "/work/summary.txt",
+                true,
+                "a path outside the scratch directory",
+            ),
+            (
+                "/tmp/bravebot-scratch-10/summary.txt",
+                true,
+                "a sibling that shares a prefix",
+            ),
+            (
+                "/tmp/bravebot-scratch-1/../summary.txt",
+                true,
+                "a name that climbs out",
+            ),
+            (
+                "/tmp/bravebot-scratch-1/summary.txt",
+                false,
+                "a file that exists",
+            ),
+        ] {
+            let refusal = policy
+                .write_belongs_here("summary.txt", &a_site(landing, is_new), &answer, &slots)
+                .expect_err(refused_for);
+            assert!(
+                !refusal.message.contains(landing) && refusal.message.contains("ref:3"),
+                "the refusal for {refused_for} names the file or not the reference: {}",
+                refusal.message
+            );
+        }
+        let mut sink = RecordingSink::new();
+        let mut without = open_policy(&mut sink);
+        let refusal = without
+            .write_belongs_here(
+                "summary.txt",
+                &a_site("/tmp/bravebot-scratch-1/summary.txt", true),
+                &answer,
+                &slots,
+            )
+            .expect_err("a session with no scratch directory has nowhere to write it");
+        assert!(
+            refusal.message.contains("no scratch directory")
+                && refusal.message.contains("stdin_ref"),
+            "the refusal does not say there is no directory or what else to do: {}",
+            refusal.message
+        );
+    }
+
+    /// PROC-6. A reference that is no file does not change where an answer about a file goes. Over
+    /// a file and a page the answer is for no document unless the planner names the file, and then
+    /// it is for that file. Over only the file it is for that file. None of the three may become
+    /// a new file in the scratch directory.
+    #[test]
+    fn an_answer_over_a_file_is_for_that_file_or_for_nothing_and_never_a_new_file_in_scratch() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+        let mut slots = SlotStore::new();
+        let page = a_slot_with_no_path(&mut slots, "ref:1");
+        let file = a_slot_read_from_a_file(&mut policy, &mut slots, "ref:2", "notes.txt");
+        let both = [page, file.clone()];
+        let unnamed = the_answer_over(&mut policy, &mut slots, &both, None, "ref:3");
+        let named = the_answer_over(&mut policy, &mut slots, &both, Some(file.clone()), "ref:4");
+        let alone = the_answer_over(
+            &mut policy,
+            &mut slots,
+            std::slice::from_ref(&file),
+            None,
+            "ref:5",
+        );
+
+        let scratch = a_site("/tmp/bravebot-scratch-1/summary.txt", true);
+        let refusal = policy
+            .write_belongs_here("summary.txt", &scratch, &unnamed, &slots)
+            .expect_err("an answer over a file and a page, naming neither, is for no document");
+        assert!(
+            refusal.message.contains("never told which document"),
+            "unexpected refusal: {}",
+            refusal.message
+        );
+        for answer in [&named, &alone] {
+            policy
+                .write_belongs_here(
+                    "notes.txt",
+                    &a_site("/work/notes.txt", false),
+                    answer,
+                    &slots,
+                )
+                .expect("an answer about a file goes over that file");
+            let refusal = policy
+                .write_belongs_here("summary.txt", &scratch, answer, &slots)
+                .expect_err("an answer about a file is not written to a new file in scratch");
+            assert!(
+                refusal
+                    .message
+                    .contains("so it cannot be written anywhere else"),
+                "unexpected refusal: {}",
+                refusal.message
+            );
+        }
+    }
+
+    /// PROC-6. An answer made from an answer about references that are no file is for no file
+    /// either, so a summary can be translated and the translation written. An answer made from an
+    /// answer about a file is not: it is for that file's document or for nothing.
+    #[test]
+    fn an_answer_made_from_an_answer_about_no_file_is_for_no_file_either() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
+        let mut slots = SlotStore::new();
+        let page = a_slot_with_no_path(&mut slots, "ref:1");
+        let summary = the_answer_over(
+            &mut policy,
+            &mut slots,
+            std::slice::from_ref(&page),
+            None,
+            "ref:3",
+        );
+        let translation = the_answer_over(
+            &mut policy,
+            &mut slots,
+            std::slice::from_ref(&summary),
+            None,
+            "ref:5",
+        );
+        let scratch = a_site("/tmp/bravebot-scratch-1/translation.txt", true);
+        policy
+            .write_belongs_here("translation.txt", &scratch, &translation, &slots)
+            .expect("the translation of a summary of a page is for no file");
+
+        let file = a_slot_read_from_a_file(&mut policy, &mut slots, "ref:6", "notes.txt");
+        let edited = the_answer_over(
+            &mut policy,
+            &mut slots,
+            std::slice::from_ref(&file),
+            None,
+            "ref:7",
+        );
+        let reworded = the_answer_over(
+            &mut policy,
+            &mut slots,
+            std::slice::from_ref(&edited),
+            None,
+            "ref:9",
+        );
+        policy
+            .write_belongs_here("translation.txt", &scratch, &reworded, &slots)
+            .expect_err("an answer made from an answer about a file is not for a new file");
     }
 
     /// An answer with no line in it names no document, so it can be written nowhere. It was the

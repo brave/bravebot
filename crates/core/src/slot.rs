@@ -143,8 +143,15 @@ pub enum Home {
     /// is what the write is checked against; the slot is what a refusal may say back to the
     /// planner, which must not be told a filename it was never shown.
     Only { path: String, named_by: SlotId },
-    /// Nothing said which document the answer is for: the processor was given more than one, or
-    /// given something that is not a document at all. It may be written nowhere until something
+    /// The answer is for references that are no file: a fetched page, a run's output, or an
+    /// answer made from those. It has no document to replace, so it may become a new file in the
+    /// session's scratch directory and no other file.
+    ///
+    /// A file that already exists is never replaced by such an answer, and the file it becomes is
+    /// recorded as untrusted when it is written.
+    Scratch,
+    /// Nothing said which document the answer is for: the processor was given more than one
+    /// document, or a document beside something else. It may be written nowhere until something
     /// says which.
     Unsaid,
 }
@@ -502,6 +509,22 @@ impl SlotStore {
     /// whether asking for the bytes will open a file.
     pub fn is_unread(&self, id: &SlotId) -> bool {
         matches!(self.slots.get(id), Some(Entry::Unread(_)))
+    }
+
+    /// Whether this slot is neither a file's contents nor an answer about one: what a fetch gave,
+    /// what a program printed, or an answer made only from those.
+    ///
+    /// Metadata: a yes or a no, and no part of any name the slot is tied to. A slot read from a
+    /// file keeps its path and an answer about a file or about nothing in particular keeps that
+    /// home, so neither is one. It decides where an answer about this slot may be written
+    /// ([`Home::Scratch`]).
+    pub fn is_no_file(&self, id: &SlotId) -> bool {
+        match self.slots.get(id) {
+            Some(Entry::Read { path, home, .. }) => {
+                path.is_none() && matches!(home, Home::Anywhere | Home::Scratch)
+            }
+            _ => false,
+        }
     }
 
     /// The file a slot is waiting on, where it is waiting on one.

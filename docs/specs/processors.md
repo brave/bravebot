@@ -125,9 +125,30 @@ earlier answer is for neither of them.
 A plan fixed before the run is no exception. It names its destinations in advance, which says
 nothing about which document an answer is for.
 
+**An answer about references that are no file.** A processor given only references that are no
+file has no document to name: a page a fetch gave, what a program printed, or an answer made from
+those. Its answer is for those references, and the one place it may be written is a file that does
+not exist yet in the session's scratch directory, judged by where the host resolves the path.
+The write is refused before anyone is asked when the path is outside the directory, climbs out of
+it, names a file that is already there, or the session has no scratch directory. The refusal names
+the answer's reference and no file, and says to give the answer to `run` as `stdin_ref`, which needs
+no file. The file is recorded untrusted like any file an answer is written to. An answer over a
+file beside any other input, or made from an answer about a file, is unchanged: it is for the file
+the call was about, or for nothing. A plan names its files inside the workspace, so it has no
+scratch path to write such an answer to, and the write is refused.
+
 **Why.** This is not a label rule and cannot be one. Every gate passed when a planner wrote a
 game's HTML into a Python script, because the destination was a path it named and a person
 approved it.
+
+A file input fixes where its answer goes, and a reference that is no file fixes nothing. Saving the
+page to a file first would give the answer a path the planner chooses anyway, and costs two more
+calls, one to save the page and one to read it back. Saving it with a script that opens the file
+itself leaves the page readable, since such a file is not recorded as content the planner was not
+shown ([TRUST-2](trust-map.md#TRUST-2) and Known costs in the same spec). The scratch directory
+belongs to the session and is outside the project. A file already there is never replaced, because
+a line a person approved earlier names a program and its arguments ([RUN-3](tools/run.md#RUN-3)) and
+not the bytes of the file it reads.
 
 `verified-by: bravebot_agent::turn::an_answer_about_nothing_in_particular_can_be_written_nowhere`
 `verified-by: bravebot_agent::turn::an_answer_cannot_be_written_to_a_file_it_is_not_about`
@@ -137,6 +158,16 @@ approved it.
 `verified-by: bravebot_agent::manifest::two_spellings_of_one_path_are_one_document`
 `verified-by: bravebot_agent::manifest::a_planned_answer_cannot_be_written_to_a_name_that_differs_by_trailing_whitespace`
 `verified-by: bravebot_agent::turn::an_answer_cannot_be_written_to_a_file_named_like_its_own_with_trailing_whitespace`
+`verified-by: bravebot_core::policy::an_answer_about_references_that_are_no_file_may_become_a_new_file_in_the_scratch_directory_only`
+`verified-by: bravebot_core::policy::an_answer_over_a_file_is_for_that_file_or_for_nothing_and_never_a_new_file_in_scratch`
+`verified-by: bravebot_core::policy::an_answer_made_from_an_answer_about_no_file_is_for_no_file_either`
+`verified-by: bravebot_agent::turn::a_summary_of_a_fetched_page_is_written_to_a_new_file_with_no_page_saved_first`
+`verified-by: bravebot_agent::turn::an_answer_about_a_programs_output_and_an_answer_made_from_it_are_written_to_a_new_file`
+`verified-by: bravebot_agent::turn::an_answer_about_a_reference_that_is_no_file_is_refused_outside_a_new_scratch_file`
+`verified-by: bravebot_agent::turn::an_answer_about_a_reference_that_is_no_file_cannot_be_written_through_a_link_out_of_the_scratch_directory`
+`verified-by: bravebot_agent::turn::an_answer_over_a_page_and_a_saved_file_is_still_written_nowhere`
+`verified-by: bravebot_agent::turn::an_answer_about_a_reference_that_is_no_file_is_refused_where_there_is_no_scratch_directory`
+`verified-by: bravebot_agent::manifest::a_planned_answer_about_a_fetched_slot_cannot_be_written_into_the_workspace`
 `verified-by: bravebot_core::policy::a_file_beside_another_input_is_not_taken_for_the_document`
 
 <a id="PROC-7"></a>
