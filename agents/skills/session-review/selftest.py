@@ -493,7 +493,7 @@ class mock_home:
 class Prompts(unittest.TestCase):
     def test_the_prompt_templates_name_only_values_the_script_supplies(self):
         for name, supplied in (
-            ("analyze.md", {"session_id", "build", "turns", "from_turn", "notes", "from_note", "notes_file", "record_file", "audit_file", "tracker", "root", "commit", "ref", "results_file"}),
+            ("analyze.md", {"session_id", "build", "turns", "from_turn", "max_problems", "notes", "from_note", "notes_file", "record_file", "audit_file", "tracker", "root", "commit", "ref", "results_file"}),
             ("verify.md", {"session_id", "problem_id", "build", "claim", "record_file", "audit_file", "notes_file", "root", "commit", "results_file"}),
         ):
             used = set(re.findall(r"\{\{(\w+)\}\}", (HERE / name).read_text()))

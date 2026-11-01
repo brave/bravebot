@@ -216,7 +216,8 @@ gh label create beyond-parity --repo brave/bravebot --color 0E8A16 \
 ```
 
 The [session-review skill](../../agents/skills/session-review/SKILL.md), which files the problems
-bravebot gave a person in a recorded session, applies `bug` or `enhancement`, `session-analysis`, an
+bravebot gave a person in a recorded session, including signs of frustration and wasted context,
+cost or time whose cause is in the product, applies `bug` or `enhancement`, `session-analysis`, an
 `area` where one is clear, and no axis. `session-analysis` marks an issue found by reading a recorded
 session, and `is:open label:session-analysis` lists them. It files defects in the product only, and
 leaves out defects in this repository's skills, scripts, `Makefile`, `contrib/` and CI workflows. It
