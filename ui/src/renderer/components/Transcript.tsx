@@ -2786,15 +2786,17 @@ function Card({
       const { request, decision } = entry
       const count = request.resources.length
       return (
-        <div className={`confirm mcp-resources ${request.vetting.verdict === 'unsafe' ? 'unsafe' : ''}`}>
-          <div className="confirm-head" data-deciding="all">
-            <span className="intent">offer resources</span>
-            <code className="path">{request.alias}</code>
-            <span className="counts">
-              {count} resource{count === 1 ? '' : 's'}
-            </span>
-            <VettingVerdict vetting={request.vetting} />
-          </div>
+        <DecisionCard
+          className={`confirm mcp-resources ${request.vetting.verdict === 'unsafe' ? 'unsafe' : ''}`}
+          answerable={answerable}
+          subject={request.alias}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You offered these resources to the model' : 'You kept these resources from the model' }}
+          head={<CardHead icon="wrench" intent="Offer resources" deciding
+            subject={<code className="path">{request.alias}</code>}
+            counts={<span className="counts">{count} resource{count === 1 ? '' : 's'}</span>}
+            trust={<VettingVerdict vetting={request.vetting} />} />}
+          actions={<YesOrNo kind="mcp-resources" request={request.request} onDecide={onDecide} reject="Continue without them" approve="Offer these resources" />}
+        >
 
           <VettingReason vetting={request.vetting} />
 
@@ -2831,31 +2833,22 @@ function Card({
             Approving this list allows the model to read any of these resources without asking
             again for the rest of the session. The same list is not asked about again.
           </p>
-
-          <YesOrNo
-            kind="mcp-resources"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Continue without them"
-            approve="Offer these resources"
-            approved="You offered these resources to the model"
-            rejected="You kept these resources from the model"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
     case 'mcp-resource-read': {
       const { request, decision } = entry
       return (
-        <div className="confirm mcp-resource-read">
-          <div className="confirm-head">
-            <span className="intent">read resource</span>
-            <code className="path" data-deciding="first">{request.uri}</code>
-          </div>
-
+        <DecisionCard
+          className="confirm mcp-resource-read"
+          answerable={answerable}
+          subject={request.uri}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed reading this resource' : 'You refused reading this resource' }}
+          head={<CardHead icon="eye-on" intent="Read resource" deciding
+            subject={<code className="path" data-deciding="first">{request.uri}</code>} />}
+          actions={<YesOrNo kind="mcp-resource-read" request={request.request} onDecide={onDecide} reject="Refuse reading" approve="Allow reading" />}
+        >
           <p className="permission-scope" data-deciding="all">
             <strong>Server:</strong> <code>{request.alias}</code>
           </p>
@@ -2865,19 +2858,7 @@ function Card({
             Allowing this read remembers this resource for the rest of the session, so reading
             it again does not ask again.
           </p>
-
-          <YesOrNo
-            kind="mcp-resource-read"
-            request={request.request}
-            answerable={answerable}
-            decision={decision}
-            onDecide={onDecide}
-            reject="Refuse reading"
-            approve="Allow reading"
-            approved="You allowed reading this resource"
-            rejected="You refused reading this resource"
-          />
-        </div>
+        </DecisionCard>
       )
     }
 
