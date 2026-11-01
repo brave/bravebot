@@ -1358,27 +1358,31 @@ the info panel is open and the widths differ.
 
 In the model picker, Left folds the section the cursor is in. The models of a folded section are not
 drawn, and its heading says how many matching models it holds (`▸ Name  (3)`) where an open section's
-heading is marked `▾`. The cursor goes to the nearest model still drawn: the first after the section,
-or the last before it where nothing comes after. Right opens the folded section the cursor is in, or
-else the nearest one above it, or else the first one in the list, and puts the cursor on that
-section's first model. Up, Down, Home, End and the wheel go over the models of a folded section, and
-none of them can be taken: while the cursor is in a folded section Enter leaves the picker open and
-takes nothing, and Escape leaves it as it does anywhere. Where every section is folded the cursor
-stays in the last one folded, and that heading is drawn as the row the cursor is on. Typing a
-character or deleting one opens every section. A press on the heading of a section does nothing
+heading is marked `▾`. The cursor goes to the heading of the section folded, which is drawn as the
+row the cursor is on. Up, Down, Home, End and the page keys stop on the heading of a folded section
+as they stop on a model, so a list with every section folded is walked by the same keys, and they go
+over the models of a folded section. The wheel goes over the headings and the models of a folded
+section. Right opens the folded section the cursor is on, or else the nearest one above it, or else
+the first one in the list, and puts the cursor on that section's first model. A heading cannot be
+taken: while the cursor is on one Enter leaves the picker open and takes nothing, and Escape leaves
+it as it does anywhere. Typing a character or deleting one opens every section and puts the cursor on
+the first model of the section it was on. A press on the heading of a section does nothing
 ([MOUSE-15](mouse.md#MOUSE-15)). The key line names the keys, and is short enough to be drawn whole in
 the widest panel.
 
 **Why.** A gateway's roster runs to hundreds of models and is listed beside Brave's own and whatever
 a settings file configured, so the section wanted can be several screens below the first one. Folding
-puts a section out of the way without taking it out of the search. Enter does nothing while the
-cursor is in a folded section because the picker closes on a row taken with nothing under the cursor,
-and a key pressed to look at the list should not end it. A search opens every section because a
+puts a section out of the way without taking it out of the search. The cursor stops on a folded
+heading because a cursor that skipped it would leave a person with every section folded unable to
+move until they had opened one, and would leave the section just folded with no way to open it
+again. Enter does nothing while the cursor is on a heading because the picker closes on a row taken
+with nothing under the cursor, and a key pressed to look at the list should not end it. A search opens every section because a
 section folded away would hide the models a person typed to find.
 
 `verified-by: bravebot_tui::model_prompt::left_folds_the_section_the_cursor_is_in_to_its_heading`
-`verified-by: bravebot_tui::model_prompt::a_fold_moves_the_cursor_to_the_nearest_model_still_drawn`
-`verified-by: bravebot_tui::model_prompt::the_keys_go_over_the_models_of_a_folded_section`
+`verified-by: bravebot_tui::model_prompt::a_fold_puts_the_cursor_on_the_heading_it_folded`
+`verified-by: bravebot_tui::model_prompt::the_keys_stop_on_the_heading_of_a_folded_section_and_go_over_its_models`
+`verified-by: bravebot_tui::model_prompt::the_arrows_walk_the_headings_of_a_list_folded_entirely`
 `verified-by: bravebot_tui::model_prompt::nothing_is_taken_from_a_section_folded_away`
 `verified-by: bravebot_tui::model_prompt::right_opens_a_folded_section_and_puts_the_cursor_on_its_first_model`
 `verified-by: bravebot_tui::model_prompt::typing_or_backspacing_opens_every_section`
@@ -1395,10 +1399,11 @@ section folded away would hide the models a person typed to find.
 
 In the model picker, PageDown and PageUp move the cursor by the height of the list less one row,
 counted in rows of the list, so the headings and the gaps between sections count. The cursor lands on
-the last model within that distance, and where no model is within it, on the next one. It stops at the
-first model and the last. Every model is drawn on some screen on the way down and on the way back, and
-a model in a folded section ([VIEW-40](#VIEW-40)) is neither drawn nor landed on. Home and End go to
-the first and last model drawn. The height is the list as the last frame drew it.
+the last model within that distance, and where no model is within it, on the next one. A folded
+section ([VIEW-40](#VIEW-40)) is one row, its heading, which a page can land on, and its models are
+neither drawn nor landed on. It stops at the first row the cursor can be on and the last. Every model
+is drawn on some screen on the way down and on the way back. Home and End go to the first and last of
+those rows. The height is the list as the last frame drew it.
 
 **Why.** The panel is as tall as the terminal allows and a gateway's roster is longer than that, so
 arrowing one row at a time is the only way through it that the search does not replace. A step counted
