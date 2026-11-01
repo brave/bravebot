@@ -315,6 +315,52 @@ and what they wrote, and no key on it depends on any of that text.
 `verified-by: bravebot_tui::ask::a_wide_answer_and_a_long_tag_leave_the_keys_on_the_review`
 `verified-by: bravebot_tui::ask::the_answer_remembered_is_the_one_confirmed`
 
+<a id="ASK-12"></a>
+### ASK-12: the description says that a question the request answers is not asked, and that each question costs the user's attention
+
+The `ask_user` description says four things, in these words:
+
+- Do not ask a question whose answer the request states.
+- Do not ask whether to do what the user asked, or whether to do it automatically, because they
+  asked for it.
+- What is left to ask is a choice that the request leaves open and that differs in consequence, such
+  as which of two accounts to send from.
+- Each question you ask costs the user's attention.
+
+They follow the sentences that say to ask only for what the planner cannot find out itself, to look
+first, and that a quarantined result does not stop it asking afterwards ([ASK-4](#ASK-4)), which are
+kept as they were. The four sentences are the same on every turn. They name no tool, so a turn
+without `run` reads them unchanged ([TOOL-6](tool-surface.md#TOOL-6)), and they name no mode,
+classifier or other thing that answers a prompt, so they do not change when the person changes mode
+([MODE-8](../permission-modes.md#MODE-8)). The planner is told of no mode but plan mode
+([MODE-3](../permission-modes.md#MODE-3), [MODE-8](../permission-modes.md#MODE-8)), and these
+sentences add none. The four sentences say nothing about what decides a question
+([AUTO-7](../auto-mode.md#AUTO-7)) and nothing about whether a person is shown it. The older clause
+that the questions "are put to the user one at a time" is kept as it was and is not one of the four.
+The fourth sentence says what a question costs and does not say where it goes or what becomes of it,
+because a one-shot run declines every question ([ASK-7](#ASK-7)) and a question closes with no
+answer where `askIdleSeconds` is set ([ASK-9](#ASK-9)).
+
+No permission mode answers a question the planner posed ([MODE-7](../permission-modes.md#MODE-7),
+[AUTO-4](../auto-mode.md#AUTO-4)), and this clause does not state that again. The description does
+not say it either, since the planner is told nothing about modes. Which questions a mode may answer
+is not changed by this clause. The text is fixed in the tool table and is built from nothing the
+session read or was given, so the driver branches on no content to produce it.
+
+**Why.** A question the request already answers costs the user's attention and decides nothing, and
+a planner that has been told only to ask what it cannot find out itself has no sentence that says a
+request can be the answer. A planner asked to send an email from a web mail account has no open
+choice in how to send it, so asking how, with "send it automatically" among the options, returns what
+the request said. The description cannot say that no mode answers the question, because it names no
+mode, so it says what a question costs and which questions are left to ask.
+
+`verified-by: bravebot_agent::tools::ask_user_says_not_to_ask_what_the_request_states_or_whether_to_do_what_was_asked`
+`verified-by: bravebot_agent::tools::ask_user_leaves_a_question_for_a_choice_the_request_leaves_open`
+`verified-by: bravebot_agent::tools::ask_user_says_every_question_costs_the_users_attention_and_names_no_mode`
+`verified-by: bravebot_agent::tools::asking_is_described_as_a_last_resort_after_looking`
+`verified-by: bravebot_agent::tools::ask_user_says_that_looking_first_does_not_forfeit_the_question`
+`verified-by: bravebot_agent::turn::the_request_carries_the_four_ask_user_sentences_where_a_task_is_to_send_an_email`
+
 ## Known costs
 
 - Only the terminal picker reviews. The line-by-line interface and the desktop app still settle a

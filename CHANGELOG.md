@@ -1,6 +1,7 @@
 ## Unreleased
 
  - Changed a request for a summary, translation, rewrite or explanation of a page the agent may not read to be answered by a processor that writes it, where the agent passed on the page's own sentences and said it had not read them. The program that sends the text is given the path of a file holding it, or takes it as `stdin_ref`. ([#3604](https://github.com/brave/bravebot/issues/3604))
+ - Changed what the agent is told about asking you a question, so that it does not ask what your request already states or whether to do what you asked, such as how to send an email it was told to send. No permission mode answers a question it does ask. ([#3613](https://github.com/brave/bravebot/issues/3613))
 
 ## [0.20.0](https://github.com/brave/bravebot/releases/tag/v0.20.0)
 

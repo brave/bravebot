@@ -1009,6 +1009,12 @@ every question is declined rather than answered on your behalf.
 This tool is for what the planner cannot find out itself: which of two approaches, whether something
 is in scope, which of two plausible files you meant. Never for a fact about the machine.
 
+The planner is also told not to ask a question your request already answers, and not to ask whether
+to do what you asked or whether to do it automatically, because you asked for it. What is left to
+ask is a choice your request leaves open and that differs in consequence, such as which of two
+accounts to send from. Each question it asks costs your attention, and no
+[permission mode](../security/permission-modes.md) answers it for you.
+
 ## `propose_plan`
 
 Offered in plan mode only. Shows you the finished plan and asks how to proceed.

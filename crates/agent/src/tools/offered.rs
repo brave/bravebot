@@ -927,6 +927,11 @@ fn table(
                 "required": ["query"]
             }),
         ),
+        // ASK-12. The text does not depend on the mode. The four sentences it adds say that a
+        // question costs the user's attention, and name no mode and no place a question goes,
+        // because the planner is told of no mode but plan mode (MODE-3, MODE-8) and nothing about
+        // what decides (AUTO-7). The older clause that the questions are put to the user one at a
+        // time is unchanged.
         Tool::function(
             "ask_user",
             format!(
@@ -935,11 +940,16 @@ fn table(
              scope, which of two plausible files they meant. Never for a fact about this machine. \
              A path, a filename, whether a program is installed, what something is called: go and \
              look with {looking_tools} instead, and note that a quarantined \
-             result does not stop you asking afterwards, so looking first costs you nothing. Ask \
-             everything the plan turns on in one call rather than a question per turn; they are \
-             put to the user one at a time. Offer concrete options where you can; the user may \
-             also answer in their own words or skip a question, and a skipped question is an \
-             answer to work with rather than a reason to ask again."
+             result does not stop you asking afterwards, so looking first costs you nothing. Do \
+             not ask a question whose answer the request states. Do not ask whether to do what \
+             the user asked, or whether to do it automatically, because they asked for it. What \
+             is left to ask is a choice that the request leaves open and that differs in \
+             consequence, such as which of two accounts to send from. Each question you ask \
+             costs the user's attention. Ask everything the plan turns on in one call rather \
+             than a question per turn; they are put to the user one at a time. Offer concrete \
+             options where you can; the user may also answer in their own words or skip a \
+             question, and a skipped question is an answer to work with rather than a reason to \
+             ask again."
             ),
             json!({
                 "type": "object",

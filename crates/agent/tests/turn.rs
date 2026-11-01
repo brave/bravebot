@@ -23586,6 +23586,72 @@ fn a_quarantined_read_does_not_stop_the_planner_asking() {
     );
 }
 
+/// ASK-12. Asked to send an email from a web mail account, a planner put two questions to the
+/// person, and one was how the email should be sent, with "send it automatically" among the
+/// options. The request was to send it, so the person answered what they had already said.
+///
+/// The planner here is a script, so this does not show that a model obeys the description. It
+/// shows that the request the planner is sent carries, in the `ask_user` entry of its tool table,
+/// the sentences that tell it not to ask what the request states, not to ask whether to do what
+/// was asked or to do it automatically, what is left to ask, and what a question costs. That is
+/// the assertion a description without the sentences fails. The assertion that the confirmer was
+/// shown no question is a control: the scripted planner asks nothing whatever the description
+/// says.
+#[test]
+fn the_request_carries_the_four_ask_user_sentences_where_a_task_is_to_send_an_email() {
+    let scratch = Scratch::new("ask-not-how-to-send");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("I sent the email to alice.")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let mut confirmer = AnswersWith::new(Vec::new());
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("send an email from Gmail to alice@example.com saying the build passed"),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let request = received.recv().expect("the request of the one round");
+    let sent: serde_json::Value = serde_json::from_str(&request).expect("a JSON request");
+    let described = sent["tools"]
+        .as_array()
+        .expect("a table of tools")
+        .iter()
+        .find(|tool| tool["function"]["name"] == "ask_user")
+        .expect("the turn was offered ask_user")["function"]["description"]
+        .as_str()
+        .expect("a description")
+        .to_string();
+    for told in [
+        "Do not ask a question whose answer the request states.",
+        "Do not ask whether to do what the user asked, or whether to do it automatically, \
+         because they asked for it.",
+        "What is left to ask is a choice that the request leaves open and that differs in \
+         consequence, such as which of two accounts to send from.",
+        "Each question you ask costs the user's attention.",
+    ] {
+        assert!(
+            described.contains(told),
+            "the planner was not told '{told}': {described}"
+        );
+    }
+
+    // The control. It cannot fail while the planner is scripted to ask nothing.
+    assert!(
+        confirmer.asked.is_empty(),
+        "a request to send an email was met with a question: {:?}",
+        confirmer.asked
+    );
+}
+
 /// A file the user referenced with `@` in the interface reaches the model as trusted context.
 ///
 /// The same channel `--file` uses, which is the point: `Task::files` is precommitted as trusted
