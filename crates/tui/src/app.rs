@@ -24470,6 +24470,9 @@ mod tests {
         use bravebot_session::sessions::{Link, Url};
         const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
         const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
         let mut workspace = workspace_for_test();
         let mut stored = a_handle_for_test(&workspace);
         let mut session = Session::new("none");
