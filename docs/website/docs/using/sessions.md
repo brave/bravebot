@@ -397,7 +397,8 @@ undo.
 Each takes one `http` or `https` link with a host and refuses anything else, a link with a space, a
 line break, an escape or a character outside ASCII in it included. Alone, each says what is set, and `/issue clear` or `/pr clear` removes
 one. Both are written to the session record at once, a resume brings them back, and `/clear` starts
-a session with neither.
+a session with neither. [`--issue` and `--pr`](../reference/cli.md#--issue-url-and---pr-url) give a
+session the same two links when it opens.
 
 ## Sessions in the background
 
