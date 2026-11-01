@@ -136,11 +136,12 @@ clause exists to rule out.
 <a id="LSP-3"></a>
 ### LSP-3: a location's position is structure; its name and the text at it are content
 
-A location is a path, a line and a character, plus the symbol kind for the operations that report
-one. The line and the character are structure, as a line count is for a file the planner may not
-read and as an exit status is under [RUN-13](run.md#RUN-13). The **name** is not: it is bytes out of
-the tree the server indexed, so it is labelled by [LABEL-2](../labels.md#LABEL-2) from the files
-the answer names, and the rest of this clause is what follows from that.
+A location is a path, a line and a character, plus the symbol kind and the end line of the symbol
+for the operations and servers that report them ([LSP-14](#LSP-14)). The line, the character and the
+end line are structure, as a line count is for a file the planner may not read and as an exit status
+is under [RUN-13](run.md#RUN-13). The **name** is not: it is bytes out of the tree the server
+indexed, so it is labelled by [LABEL-2](../labels.md#LABEL-2) from the files the answer names, and
+the rest of this clause is what follows from that.
 
 The **text** at a location is content and gets no such treatment. Hover text, a signature, a
 docstring, a source excerpt: each is bytes a file chose, so each is labelled by
@@ -724,6 +725,42 @@ only through a processor.
 `verified-by: bravebot_agent::lsp::diagnostics_for_a_file_that_is_not_there_start_no_server`
 `verified-by: bravebot_lsp::protocol::a_message_cannot_start_an_entry_of_its_own`
 `verified-by: bravebot_lsp::protocol::a_flood_of_diagnostics_is_capped_in_the_words_and_says_so`
+
+<a id="LSP-14"></a>
+### LSP-14: a location may carry the end line of its symbol, as a number and nothing else
+
+Where a server sends the range that covers the whole of a symbol, the location carries the last line
+of that range, so the planner learns in one answer where a definition starts and stops and can ask
+`read_file` for exactly those lines. The end line is one optional integer, 1-based and inclusive. It
+adds no text to a location, so [LSP-3](#LSP-3) is unchanged: the answer is labelled by the files it
+names, and an answer naming a file nobody vouched for is still one reference that does not show it.
+
+**Which range gives an end.** The field a range is sent in decides it, and nothing in the file is
+read for it. A `LocationLink`'s `targetRange`, a `DocumentSymbol`'s or call-hierarchy item's `range`
+beside its `selectionRange`, and a `SymbolInformation`'s `location.range` cover the whole symbol. A
+plain `Location`'s `range` is usually the name alone, so it gives no end, because a one-line name
+reported as the extent of a function would send the planner to read the wrong lines. A `hover`
+answer names no location ([LSP-3](#LSP-3)), so it has no end line.
+
+**Where there is no end line.** A range with no `end.line`, an end that is not a non-negative
+integer, and an end before the start give no end line, and the location is written as before. A
+server that sends none gives answers with none.
+
+**What the driver does with it.** It writes the number beside the start (`path:12:5 (function), ends
+at line 30`) and does nothing else with it. It builds no `offset` or `limit` for `read_file` from it
+([LSP-2](#LSP-2)), reads no file because of it, and chooses nothing by it ([LABEL-5](../labels.md#LABEL-5)).
+A planner that wants the lines proposes the `offset` and `limit` itself, and they are promoted on
+their own merits under [READ-4](read-file.md#READ-4).
+
+`verified-by: bravebot_lsp::protocol::a_location_link_gives_the_end_of_its_target_range`
+`verified-by: bravebot_lsp::protocol::a_document_symbol_gives_the_end_of_its_range`
+`verified-by: bravebot_lsp::protocol::a_symbol_information_gives_the_end_of_its_location_range`
+`verified-by: bravebot_lsp::protocol::a_plain_location_gives_no_end_line`
+`verified-by: bravebot_lsp::protocol::an_end_that_is_not_a_usable_line_gives_no_end_line`
+`verified-by: bravebot_lsp::protocol::a_location_carries_no_text_from_the_file`
+`verified-by: bravebot_agent::lsp::the_end_of_a_range_is_shown_beside_the_start`
+`verified-by: bravebot_agent::lsp::a_location_with_no_end_is_written_as_before`
+`verified-by: bravebot_agent::lsp::the_end_line_is_in_the_context_only_where_the_answer_is_trusted`
 
 ## Known costs
 

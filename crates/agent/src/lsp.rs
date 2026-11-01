@@ -342,6 +342,8 @@ pub struct Rendered {
     pub line: usize,
     pub character: usize,
     pub kind: Option<&'static str>,
+    /// The last line of the symbol's full range, 1-based, where the server sent one (LSP-14).
+    pub end_line: Option<usize>,
     /// Whether this is outside the working directory, and so not somewhere `read_file` will go.
     pub outside: bool,
 }
@@ -352,6 +354,12 @@ impl Rendered {
         let kind = match self.kind {
             Some(kind) => format!(" ({kind})"),
             None => String::new(),
+        };
+        // LSP-14: a number from the server's range, shown beside the start and only where the
+        // server sent one. Nothing builds a `read_file` offset or limit from it.
+        let kind = match self.end_line {
+            Some(end) => format!("{kind}, ends at line {end}"),
+            None => kind,
         };
         // LSP-4: an outside path is not spelled as though read_file would open it, because most
         // of what goToDefinition finds in a real workspace is in a dependency and a planner that
@@ -425,6 +433,7 @@ pub fn render(location: &Location, root: &Path) -> Rendered {
         line: location.line,
         character: location.character,
         kind: location.kind.map(|kind| kind.as_str()),
+        end_line: location.end_line,
         outside: relative.is_none(),
     }
 }
@@ -634,6 +643,7 @@ mod tests {
             line,
             character: 1,
             kind: None,
+            end_line: None,
         }
     }
 
@@ -860,6 +870,54 @@ mod tests {
         // The rendering says plainly that reading it is not on offer, so the planner does not
         // spend a round discovering that.
         assert!(rendered.line().contains("read_file will not open it"));
+    }
+
+    /// LSP-14: the end is shown beside the start where the server sent one, inside the workspace
+    /// and outside it, and the outside wording of LSP-4 is kept.
+    ///
+    /// The wrong implementation drops the field in `render`, or shows it only for one of the two
+    /// forms.
+    #[test]
+    fn the_end_of_a_range_is_shown_beside_the_start() {
+        let ended = |path: &str| Location {
+            end_line: Some(42),
+            kind: Some(bravebot_lsp::SymbolKind::Function),
+            ..location(path, 10)
+        };
+        let inside = render(&ended("/workspace/src/a.rs"), root()).line();
+        assert_eq!(inside, "src/a.rs:10:1 (function), ends at line 42");
+
+        let outside = render(&ended("/etc/hosts"), root()).line();
+        assert!(outside.contains("/etc/hosts:10:1 (function), ends at line 42"));
+        assert!(outside.contains("outside the workspace, so read_file will not open it"));
+
+        // No kind: the end still shows, and without a stray separator.
+        let unkinded = Location {
+            end_line: Some(42),
+            ..location("/workspace/src/a.rs", 10)
+        };
+        assert_eq!(
+            render(&unkinded, root()).line(),
+            "src/a.rs:10:1, ends at line 42"
+        );
+    }
+
+    /// LSP-14: a location the server gave no full range for is written exactly as before.
+    #[test]
+    fn a_location_with_no_end_is_written_as_before() {
+        assert_eq!(
+            render(&location("/workspace/src/a.rs", 10), root()).line(),
+            "src/a.rs:10:1"
+        );
+        let described = describe(
+            Operation::Definition,
+            &Answer {
+                locations: vec![location("/workspace/src/a.rs", 10)],
+                ..Answer::default()
+            },
+            root(),
+        );
+        assert!(!described.contains("ends at"), "{described}");
     }
 
     /// LSP-3: the locations are listed even when the text beside them is quarantined, because they
@@ -1187,6 +1245,7 @@ mod tests {
             line: 99,
             character: 7,
             kind: None,
+            end_line: None,
         };
         let rendered = render(&reported, root());
         assert_eq!(rendered.line, 99);
@@ -1213,6 +1272,7 @@ mod tests {
                 line: 3,
                 character: 1,
                 kind: None,
+                end_line: None,
             }],
             text: Some("fn f() // and a sentence an attacker wrote".to_string()),
             diagnostics: None,
