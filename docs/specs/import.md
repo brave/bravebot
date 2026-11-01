@@ -285,7 +285,9 @@ again. A running LM Studio or llama-server is written the same way, under its ow
 
 **Bedrock needs a region.** It is offered only where a region is named somewhere bravebot will read
 it, the settings file or the process environment. Without one, bravebot treats Bedrock as not
-configured, so the switch is listed as left ([IMPORT-4](#IMPORT-4)).
+configured, so the switch is listed as left ([IMPORT-4](#IMPORT-4)). A region that
+[BACKEND-33](backends.md#BACKEND-33) refuses for what it holds is imported as stated and then not
+read; `doctor` names it once it is in force.
 
 **The environment is not copied.** A name already set in the process environment is read from
 there at run time, so it is not written to the file.

@@ -241,11 +241,13 @@ with the file or flag that wrote it and each that is not in force with why
 ([SANDBOX-25](sandboxing.md#SANDBOX-25)), and the premium host with whether a premium key is stored,
 never its value ([PREM-14](premium-credentials.md#PREM-14)). A premium key file that cannot be read is
 named on a `premium key` line with its path, and the report ends on the failure status
-([PREM-16](premium-credentials.md#PREM-16)). Each AWS
-account gets its profile and a line saying whether the AWS CLI gives it a credential a request can
-be signed with. Where it does not, the line says why: a session that is signed out names `bravebot
-auth login bedrock`, and a profile the CLI does not have, a CLI that is not installed and an answer
-that is not a credential are each said as such, naming no sign-in. That line does not change the
+([PREM-16](premium-credentials.md#PREM-16)). A Bedrock region that was refused for what it holds,
+which leaves no AWS account to report, is named with the value as written and where it was written
+([BACKEND-33](backends.md#BACKEND-33)). Each AWS account gets its profile and a line saying whether
+the AWS CLI gives it a credential a request can be signed with. Where it does not, the line says
+why: a session that is signed out names `bravebot auth login bedrock`, and a profile the CLI does
+not have, a CLI that is not installed and an answer that is not a credential are each said as such,
+naming no sign-in. That line does not change the
 exit status. Where the report names a Bravebot command that signs in, or one that forgets a
 sign-in, it is `bravebot auth login` or `bravebot auth logout` ([CLI-18](#CLI-18)). The signing key
 is named as never transmitted, and a value from a settings file is never printed: where a credential
@@ -292,6 +294,9 @@ that is not `<host>/<owner>` is refused with the status an argument error has.
 `verified-by: bravebot_cli::doctor::doctor_checks_resolved_agent_link_targets`
 `verified-by: bravebot_cli::doctor::doctor_finds_direnv_only_when_path_contains_an_executable`
 `verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
+`verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_env_block_that_wrote_it`
+`verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_provider_entry_that_wrote_it`
+`verified-by: bravebot_cli::doctor::a_refused_region_and_its_file_are_reported_with_control_characters_drawn_as_pictures`
 
 **Why.** It exists to answer "what will this actually use", so reporting a default when a choice
 is in force would explain the wrong thing, and naming one backend where two are reachable would
