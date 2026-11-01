@@ -164,24 +164,17 @@ fn spawn_processor_description(beside: &dyn Fn(&str) -> bool) -> String {
     // What it says about a summary, a translation or other text made from content the planner was
     // not shown, which a processor writes (SPAWN-6). The route to the program that sends it names
     // `run`, so it is said only where the list holds one. A list without `run` is told who writes
-    // such text and what to call it, and is not sent to a program it cannot start. Saving the
-    // original to a file first needs `write_file` to write the answer over it and `read_file` to
-    // give the reference that names it, so a list without either is sent to `stdin_ref` alone.
+    // such text and what to call it, and is not sent to a program it cannot start. Writing the
+    // answer to a file needs `write_file`, so a list without it is sent to `stdin_ref` alone.
     let derived_text = if beside("run") {
-        let answer_reaches_it = if beside("write_file") && beside("read_file") {
-            "A processor's answer about a reference that is no file, such as a fetched page or a \
-             run's output, is for no document and cannot be written anywhere, so save the \
-             original to a file first, in the scratch directory if you were given one: end the \
-             run line that made it with `> path`, or write a fetched page with write_file and \
-             contents_ref, and call read_file on the file for a reference to name in reads. Do \
-             not save it with a script that opens the file itself. Then write the answer over the \
-             same file with write_file, and run the program that sends it with the file's path as \
-             an argument, so it reads the body from the file. Or give the answer's reference to \
-             run as stdin_ref, which needs no file."
+        let answer_reaches_it = if beside("write_file") {
+            "A fetched page or a run's output needs no file: name its reference in reads. Then \
+             give the answer's reference to run as stdin_ref, or write the answer with write_file \
+             and contents_ref to a new file in the scratch directory and run the program that \
+             sends it with the file's path as an argument, so it reads the body from the file."
         } else {
-            "A processor's answer about a reference that is no file, such as a fetched page or a \
-             run's output, is for no document and cannot be written anywhere. Give the answer's \
-             reference to run as stdin_ref, which needs no file, in the line of the program that \
+            "A fetched page or a run's output needs no file: name its reference in reads. Then \
+             give the answer's reference to run as stdin_ref, in the line of the program that \
              sends it."
         };
         format!(
@@ -475,15 +468,12 @@ fn table(
     } else {
         "list_files, search or read_file"
     };
-    // What write_file says about where a processor's answer may be written. The route for saving a
-    // page to a file first is in the processor's description and is said there only where this
-    // turn holds `run` (SPAWN-6), so a turn without it is not sent there for a route it lacks.
-    let processor_answer_lands = if running.offered() {
-        "What spawn_processor produced may be written only over the file that call was about; \
-         the spawn_processor description says how to save a page to a file first."
-    } else {
-        "What spawn_processor produced may be written only over the file that call was about."
-    };
+    // What write_file says about where a processor's answer may be written (PROC-6). The same for
+    // a turn with `run` and one without, since writing the file needs no program.
+    let processor_answer_lands = "What spawn_processor produced may be written only over the file \
+         that call was about. When the call read only references that are no file, such as a \
+         fetched page or a run's output, it may be written only to a new file in the scratch \
+         directory.";
     let mut tools = vec![
         Tool::function(
             "read_file",

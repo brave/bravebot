@@ -111,49 +111,41 @@ reaches a program that uses it:
   prompt gives the same advice for a changed file in the words "no commentary on what was changed or
   why".
 - A script the planner writes is not the way, because it can only cut the original down.
-- An answer about a reference that is no file, such as a fetched page or a run's output, is for no
-  document and can be written nowhere. The original is saved to a file first, in the scratch
-  directory when the planner was given one: either the run line that made it ends with `> path`, or
-  `write_file` writes a fetched page from its reference. `read_file` on that file then gives the
-  reference to name in `reads`, since a path is not a reference. The description says not to save the
-  original with a script that opens the file itself, and gives no reason. The reason is that a file a
-  script opens on its own is not recorded as holding what the planner was not shown
-  ([TRUST-2](../trust-map.md#TRUST-2) and the known costs of [trust-map.md](../trust-map.md)), so a
-  planner that saved a page that way could read the page back. A planner told that would know which
-  way of saving a page does it, so the reason is kept here and the model-facing text carries the
-  prohibition alone.
-- The answer is written over the same file with `write_file`, and the program that sends it is run
-  with the file's path as an argument. Or the answer's reference is given to `run` as `stdin_ref`,
-  which needs no file. A list that holds `run` and lacks `write_file` or `read_file` has no way to
-  save the original and write the answer over it, so the description gives it `stdin_ref` alone and
-  names neither tool ([TOOL-6](tool-surface.md#TOOL-6)).
-- The `contents_ref` parameter of `write_file` says the same from its side. It names a fetched page
-  as something it writes out and says that what a processor produced may be written only over the
-  file the call was about. On a turn that holds `run` it also points at this description for saving
-  a page to a file first. It offers no processor's answer as something to write anywhere, since the
-  write of an answer about a page or an output is refused before anyone is asked.
+- A fetched page or a run's output needs no file: its reference is named in `reads` as it is. The
+  answer's reference is given to `run` as `stdin_ref`, which needs no file, or written with
+  `write_file` to a new file in the scratch directory ([PROC-6](../processors.md#PROC-6)), and the
+  program that sends it is run with the file's path as an argument. A file the planner already has is
+  a document, and an answer about it is written over it. A list that holds `run` and lacks
+  `write_file` has no way to write the answer to a file, so the description gives it `stdin_ref`
+  alone and names neither tool ([TOOL-6](tool-surface.md#TOOL-6)).
+- The `contents_ref` parameter of `write_file` says the same from its side, to a turn with `run` and
+  to one without, since writing the file needs no program. It names a fetched page as something it
+  writes out and says that what a processor produced may be written only over the file the call was
+  about, or, when the call read only references that are no file, only to a new file in the scratch
+  directory. It offers no processor's answer as something to write anywhere.
 - The recipient and the subject are the planner's. Only the body comes from the processor.
 - The final message says what was sent and to whom, and calls the text a summary only if a
   processor wrote one.
 
 A turn whose list holds no `run` is told which tool writes such text, to name the form, and when to
 call the text a summary. The rest of the list names a script, a run line or `stdin_ref`, so it is
-left out for that turn, and the `contents_ref` parameter of `write_file` does not point at it
-because this description holds no route for that turn. The `run` description's pointer at the
-processor is in [run.md](run.md).
+left out for that turn. The `run` description's pointer at the processor is in [run.md](run.md).
 
 **What stays true.** A processor is still given only the references named in `reads` and an
 instruction from a context holding nothing private, still holds no tools, and its answer is still
 never shown to the planner. The answer is labelled by taint over its inputs, so the file it is
-written over is recorded as untrusted, and the driver carries it into that file and into the
-program without reading it or branching on it. It is written only over the file the call was about,
-which for a processor given exactly one file-backed reference is that file, so this adds no place an
-answer may land.
+written to is recorded as untrusted, and the driver carries it into that file and into the program
+without reading it or branching on it. It is written over the file the call was about, which for a
+processor given exactly one file-backed reference is that file, or, when every reference the
+processor read is no file, to a file that does not exist yet in the scratch directory
+([PROC-6](../processors.md#PROC-6)). The planner types the path and the answer decides nothing
+about it.
 
 **Where the answer lands, and who is asked about sending it.** The answer becomes a file body only
-in the file the call was about, written back inside the workspace it came from
-([PROC-8](../processors.md#PROC-8)). That is the one step in this flow that releases the answer, and
-it is not used for a network body, a command line or a message. Sending is a separate `run` line the
+in the file the call was about, or in a new file in the scratch directory, written inside the
+session's own boundary as a fetched page is ([PROC-8](../processors.md#PROC-8)). That is the one
+step in this flow that releases the answer, and it is not used for a network body, a command line or
+a message. Sending is a separate `run` line the
 planner types. Its program, arguments (the recipient, the subject and the file's path) and directory
 are routing, and it meets the gate every `run` line meets ([RUN-5](run.md#RUN-5)). The person is not
 always asked:
@@ -185,9 +177,11 @@ descriptions it reads say a processor is for, so the description says that a sum
 a rewrite, an explanation or a list of the points made of such content is a processor's to write.
 The `instruction` parameter asks for the document alone and to name the form and its length where
 the document is itself a summary, so a planner that asks a processor for a summary is following it.
-The route to the sending program is spelled out because `write_file` refuses an answer about a
-fetched page or a run's output before anyone is asked. A planner told only to write the answer to a
-file is refused and has no way on.
+The route to the sending program is spelled out because the program takes its body from a file's
+path or from its standard input, and the planner has no other way to hand it an answer it was not
+shown. Neither route needs the page saved to a file first. A planner told to save it first made two
+more calls, and one way of saving it, with a script that opens the file itself, left the page
+readable.
 
 `verified-by: bravebot_agent::tools::a_processor_is_described_as_the_writer_of_text_made_from_content_not_shown`
 `verified-by: bravebot_agent::tools::the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one`
@@ -196,7 +190,9 @@ file is refused and has no way on.
 `verified-by: bravebot_agent::tools::the_write_file_reference_text_does_not_offer_a_processors_answer_as_a_free_write`
 `verified-by: bravebot_agent::turn::a_summary_of_a_scraped_page_reaches_the_sending_program_in_the_file_the_page_was_saved_to`
 `verified-by: bravebot_agent::turn::a_summary_of_a_fetched_page_reaches_the_sending_program_once_the_page_is_saved_to_a_file`
-`verified-by: bravebot_agent::turn::an_answer_about_a_reference_that_is_no_file_cannot_be_written_to_the_file_the_sender_reads`
+`verified-by: bravebot_agent::turn::a_summary_of_a_fetched_page_is_written_to_a_new_file_with_no_page_saved_first`
+`verified-by: bravebot_agent::turn::an_answer_about_a_programs_output_and_an_answer_made_from_it_are_written_to_a_new_file`
+`verified-by: bravebot_agent::turn::an_answer_about_a_reference_that_is_no_file_is_refused_outside_a_new_scratch_file`
 `verified-by: bravebot_agent::turn::a_processor_is_not_given_the_path_of_the_file_a_page_was_saved_to`
 `verified-by: bravebot_agent::turn::a_summary_of_a_fetched_page_reaches_the_sending_program_on_its_standard_input`
 `verified-by: bravebot_core::policy::a_rule_decides_a_line_fed_a_public_reference_and_not_one_fed_a_private_reference`

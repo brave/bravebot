@@ -29,7 +29,7 @@ guards:
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 138
+      - crates/core/src/policy.rs: 139
       - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
@@ -81,7 +81,7 @@ guards:
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
       - crates/agent/tests/workspace.rs: 287
-      - crates/core/src/policy.rs: 30
+      - crates/core/src/policy.rs: 31
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
   - symbol: Labelled::relabel
@@ -358,8 +358,9 @@ than a branch nobody is shown:
   `promote_reference_for_read` and `destination_from_reference`, which [routing.md](routing.md)
   settles and which share `path_of_reference`.
 
-Apart from those, outside the kernel a slot answers one question about its address, whether asking
-for its bytes will open a file, which names nothing.
+Apart from those, outside the kernel a slot answers two questions about its address, whether asking
+for its bytes will open a file and whether the slot is no file's contents and no answer about one,
+which name nothing.
 
 **`bravebot-core` and `bravebot-agent` are both the driver.** Moving a branch from one
 into the other does not remove it.

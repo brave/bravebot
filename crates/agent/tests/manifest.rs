@@ -4038,6 +4038,58 @@ fn a_fetched_slot_is_written_to_a_file_and_answered_as_it_came() {
     assert!(requests.iter().all(|r| !r.contains("THE ISSUE BODY")));
 }
 
+/// An answer about a fetched slot is for no file, and a file written by a plan is named inside the
+/// workspace, so a plan has no place to write it: the one place such an answer may go is a new file
+/// in the session's directory (PROC-6), which the routing lock keeps out of a plan. The write is
+/// refused, and the workspace holds no file for the answer.
+#[cfg(unix)]
+#[test]
+fn a_planned_answer_about_a_fetched_slot_cannot_be_written_into_the_workspace() {
+    let scratch = Scratch::new("connector-unnamed-answer");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let authority = FakeAuthority::new(
+        &scratch,
+        &[
+            r#"{"protocol":1,"outcome":"accepted","standing":"sufficient","payload":"THE ISSUE BODY"}"#,
+        ],
+    );
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "CONNECTOR_FETCH", "args": {"connector": "github", "resource": "issue",
+                "place": "brave/bravebot", "item": "2", "out_slot": "issue"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["issue"], "instruction": "summarise it", "out_slot": "summary"}},
+            {"capability": "FILE_WRITE", "args": {"path": "summary.md", "from_slot": "summary"}},
+        ])),
+        processor_reply("THE SUMMARY"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut asked = RecordsEveryQuestion::default();
+
+    let failure = run_with_connectors(
+        &workspace,
+        &config,
+        &authority.home,
+        "summarise issue 2 into a file",
+        &mut asked,
+        &mut sink,
+    )
+    .expect_err("the write is refused");
+    assert!(
+        failure.to_string().contains("scratch directory"),
+        "unhelpful message: {failure}"
+    );
+    assert!(
+        !scratch.path.join("summary.md").exists(),
+        "an answer about no file was written into the workspace"
+    );
+    assert!(
+        asked.writes.is_empty(),
+        "the refused write was put to the person"
+    );
+}
+
 /// A connector step that does not fit its definition is refused before the plan is put to
 /// anybody, and nothing is sent to the authority.
 #[cfg(unix)]

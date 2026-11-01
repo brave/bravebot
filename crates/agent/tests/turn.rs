@@ -51826,55 +51826,248 @@ fn planner_tool_results(requests: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// A processor's answer over a reference that is no file is for no document, so it cannot be
-/// written to the file the sender reads. That holds for a fetched page and for a program's output,
-/// and naming the reference as the document the call is about changes nothing, since a reference
-/// that is no file has no path to be the document's.
-///
-/// The refusal comes before anybody is asked, so no write is put to the person. Without it, an
-/// answer about a page could be written over any file a planner names.
+/// The first steps of a request for text derived from a page that is no file: the fetch that leaves
+/// the page in `ref:1`, and a processor asked about it, whose answer is `ref:3`.
+#[cfg(unix)]
+fn page_then_answer(site: &str) -> Vec<String> {
+    vec![
+        tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/page"}}"#)),
+        tool_request_2(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"write a plain-text summary of each of the stories on the page, two sentences each, keeping each story's link"}"#,
+        ),
+        processor_reply(DERIVED_SUMMARY),
+    ]
+}
+
+/// A processor's answer about a page that is no file is written to a new file in the session's
+/// directory as it is, with no copy of the page saved first. The sender reads that file. The page,
+/// the answer and the file's bytes reach no request the planner makes, including the request after
+/// the planner reads the file back.
 #[cfg(unix)]
 #[test]
-fn an_answer_about_a_reference_that_is_no_file_cannot_be_written_to_the_file_the_sender_reads() {
-    let fixture = DerivedTextFixture::new("derived-text-no-file");
+fn a_summary_of_a_fetched_page_is_written_to_a_new_file_with_no_page_saved_first() {
+    let fixture = DerivedTextFixture::new("derived-text-unnamed-fetched");
     let file = &fixture.file;
     let (site, _pages) = serve_pages(vec![page(DERIVED_PAGE)]);
+    let mut confirmer =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
+    let asked = confirmer.seen.clone();
+
+    let mut replies = page_then_answer(&site);
+    replies.extend([
+        tool_request_2(
+            "write_file",
+            &format!(r#"{{"path":"{file}","contents_ref":"ref:3"}}"#),
+        ),
+        tool_request_2("read_file", &format!(r#"{{"path":"{file}"}}"#)),
+        tool_request_2(
+            "run",
+            &format!(r#"{{"command":"{}"}}"#, fixture.send_line()),
+        ),
+        reply_with("I sent the message."),
+    ]);
+    let (outcome, requests) = fixture.run(replies, &mut confirmer);
+
+    assert_only_a_processor_read_the_page(&requests);
+    assert_eq!(
+        std::fs::read_to_string(file).unwrap().trim_end(),
+        DERIVED_SUMMARY,
+        "the file does not hold the processor's answer"
+    );
+    assert_eq!(
+        fixture.outbox().expect("the sender never ran"),
+        DerivedTextFixture::message(DERIVED_SUMMARY),
+        "the message is not the planner's head over the processor's body"
+    );
+    assert_eq!(
+        outcome.trust.integrity_of(file),
+        Some(bravebot_core::label::Integrity::Untrusted),
+        "the file holding derived text reads back as trusted"
+    );
+    let lines = asked.lock().unwrap();
+    assert_eq!(
+        lines
+            .iter()
+            .map(|run| run.plan.line.clone())
+            .collect::<Vec<_>>(),
+        [fixture.send_line()],
+        "the person was asked about something other than the line that sends the file"
+    );
+}
+
+/// What a program printed is no file either, so the answer about it goes to a new file the same
+/// way. A summary of a summary does too: the translation is made from an answer about no file.
+#[cfg(unix)]
+#[test]
+fn an_answer_about_a_programs_output_and_an_answer_made_from_it_are_written_to_a_new_file() {
+    let fixture = DerivedTextFixture::new("derived-text-unnamed-output");
+    let file = &fixture.file;
+    let mut confirmer =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
+
+    let (outcome, requests) = fixture.run(
+        vec![
+            tool_request_2("run", r#"{"command":"./scrape"}"#),
+            tool_request_2(
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"write a plain-text summary of each of the stories on the page"}"#,
+            ),
+            processor_reply(DERIVED_SUMMARY),
+            tool_request_2(
+                "spawn_processor",
+                r#"{"reads":["ref:3"],"instruction":"translate the summary into French"}"#,
+            ),
+            processor_reply("TRANSLATION-FROM-PROCESSOR"),
+            tool_request_2(
+                "write_file",
+                &format!(r#"{{"path":"{file}","contents_ref":"ref:5"}}"#),
+            ),
+            tool_request_2(
+                "run",
+                &format!(r#"{{"command":"{}"}}"#, fixture.send_line()),
+            ),
+            reply_with("I sent the message."),
+        ],
+        &mut confirmer,
+    );
+
+    assert_only_a_processor_read_the_page(&requests);
+    assert!(
+        requests_carrying(&requests, "TRANSLATION-FROM-PROCESSOR")
+            .iter()
+            .all(|(planner, _)| !planner),
+        "the planner was sent what the second processor wrote"
+    );
+    assert_eq!(
+        fixture.outbox().expect("the sender never ran"),
+        DerivedTextFixture::message("TRANSLATION-FROM-PROCESSOR"),
+        "the message is not the planner's head over the second answer"
+    );
+    assert_eq!(
+        outcome.trust.integrity_of(file),
+        Some(bravebot_core::label::Integrity::Untrusted),
+        "the file holding derived text reads back as trusted"
+    );
+}
+
+/// An answer about a reference that is no file is written to a new file in the session's directory
+/// and to nothing else. Each refused write is refused before anybody is asked, leaves the file it
+/// aimed at as it was, and the refusal names no file.
+#[cfg(unix)]
+#[test]
+fn an_answer_about_a_reference_that_is_no_file_is_refused_outside_a_new_scratch_file() {
+    let fixture = DerivedTextFixture::new("derived-text-unnamed-refused");
+    let given = std::path::Path::new(&fixture.file).parent().unwrap();
+    let in_the_workspace = fixture.scratch.path.join("summary.txt");
+    let existing = given.join("existing.txt");
+    std::fs::write(&existing, "KEPT-AS-IT-WAS").unwrap();
+    let climbing = format!("{}/../escaped.txt", given.display());
+    let (site, _pages) = serve_pages(vec![page(DERIVED_PAGE)]);
     let mut confirmer = RecordingConfirmer::approving().and_approving_runs();
-    let instruction = "write a plain-text summary of each of the stories on the page";
+
+    let mut replies = page_then_answer(&site);
+    for destination in [
+        // Named from the workspace root, as a path there is.
+        "summary.txt".to_string(),
+        existing.to_string_lossy().into_owned(),
+        climbing.clone(),
+    ] {
+        replies.push(tool_request_2(
+            "write_file",
+            &format!(r#"{{"path":"{destination}","contents_ref":"ref:3"}}"#),
+        ));
+    }
+    replies.push(reply_with("I could not save the summary."));
+    let (_outcome, requests) = fixture.run(replies, &mut confirmer);
+
+    let refusals: Vec<String> = planner_tool_results(&requests)
+        .into_iter()
+        .filter(|result| result.starts_with("Result of write_file"))
+        .collect();
+    assert_eq!(refusals.len(), 3, "{refusals:?}");
+    assert!(
+        refusals[0].contains("only to a new file in the scratch directory"),
+        "a write into the workspace was not refused for being outside the directory: {}",
+        refusals[0]
+    );
+    assert!(
+        refusals[1].contains("only to a file that does not exist yet"),
+        "a write over an existing file was not refused for that: {}",
+        refusals[1]
+    );
+    for refusal in &refusals[..2] {
+        assert!(
+            refusal.contains("refused") && refusal.contains("stdin_ref"),
+            "a refused write does not say what else to do: {refusal}"
+        );
+        for named in ["summary.txt", "existing.txt"] {
+            assert!(
+                !refusal.contains(named),
+                "the refusal names {named}: {refusal}"
+            );
+        }
+    }
+    // A name that climbs out of the directory is refused where the workspace resolves it, before
+    // this rule is asked.
+    assert!(
+        refusals[2].contains("resolves outside the workspace"),
+        "a climbing name was not refused for leaving the workspace: {}",
+        refusals[2]
+    );
+    assert!(
+        !in_the_workspace.exists(),
+        "an answer about no file was written into the workspace"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&existing).unwrap(),
+        "KEPT-AS-IT-WAS",
+        "an answer about no file replaced a file that was there"
+    );
+    assert!(
+        !given.parent().unwrap().join("escaped.txt").exists(),
+        "an answer about no file left the directory by climbing out of it"
+    );
+    assert!(
+        confirmer.seen.is_empty(),
+        "a write that could not be allowed was put to the person first: {:?}",
+        confirmer.seen
+    );
+    assert!(fixture.outbox().is_none(), "the sender ran");
+}
+
+/// A call over a file and a page, naming neither, is for no document, and the scratch directory
+/// does not make it one: the rule for a reference that is no file applies only when every reference
+/// the processor read is one.
+#[cfg(unix)]
+#[test]
+fn an_answer_over_a_page_and_a_saved_file_is_still_written_nowhere() {
+    let fixture = DerivedTextFixture::new("derived-text-unnamed-mixed");
+    let file = &fixture.file;
+    let beside = std::path::Path::new(file).with_file_name("beside.txt");
+    let (site, _pages) = serve_pages(vec![page(DERIVED_PAGE)]);
+    let mut confirmer = RecordingConfirmer::approving().and_approving_runs();
 
     let (_outcome, requests) = fixture.run(
         vec![
             tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/page"}}"#)),
-            // The page, handed over unnamed.
+            tool_request_2(
+                "write_file",
+                &format!(r#"{{"path":"{file}","contents_ref":"ref:1"}}"#),
+            ),
+            tool_request_2("read_file", &format!(r#"{{"path":"{file}"}}"#)),
+            // The page and the file it was saved to, with neither named as the document.
             tool_request_2(
                 "spawn_processor",
-                &format!(r#"{{"reads":["ref:1"],"instruction":"{instruction}"}}"#),
+                r#"{"reads":["ref:1","ref:5"],"instruction":"write a plain-text summary"}"#,
             ),
             processor_reply(DERIVED_SUMMARY),
             tool_request_2(
                 "write_file",
-                &format!(r#"{{"path":"{file}","contents_ref":"ref:3"}}"#),
-            ),
-            // The page, handed over and named as the document the answer is for.
-            tool_request_2(
-                "spawn_processor",
-                &format!(r#"{{"reads":["ref:1"],"about":"ref:1","instruction":"{instruction}"}}"#),
-            ),
-            processor_reply(DERIVED_SUMMARY),
-            tool_request_2(
-                "write_file",
-                &format!(r#"{{"path":"{file}","contents_ref":"ref:7"}}"#),
-            ),
-            // What a scraper printed, which is no file either.
-            tool_request_2("run", r#"{"command":"./scrape"}"#),
-            tool_request_2(
-                "spawn_processor",
-                &format!(r#"{{"reads":["ref:11"],"instruction":"{instruction}"}}"#),
-            ),
-            processor_reply(DERIVED_SUMMARY),
-            tool_request_2(
-                "write_file",
-                &format!(r#"{{"path":"{file}","contents_ref":"ref:13"}}"#),
+                &format!(
+                    r#"{{"path":"{}","contents_ref":"ref:7"}}"#,
+                    beside.display()
+                ),
             ),
             reply_with("I could not save the summary."),
         ],
@@ -51885,25 +52078,76 @@ fn an_answer_about_a_reference_that_is_no_file_cannot_be_written_to_the_file_the
         .into_iter()
         .filter(|result| result.starts_with("Result of write_file"))
         .collect();
-    assert_eq!(refusals.len(), 3, "{refusals:?}");
-    for refusal in &refusals {
-        assert!(
-            refusal.contains(
-                "came from a processor that was never told which document its answer is for"
-            ),
-            "a write of an answer about no file was not refused for that: {refusal}"
-        );
-    }
     assert!(
-        !std::path::Path::new(file).exists(),
-        "an answer about no file was written to one anyway"
+        refusals.last().is_some_and(|refusal| refusal.contains(
+            "came from a processor that was never told which document its answer is for"
+        )),
+        "the answer over a page and a file was not refused for naming no document: {refusals:?}"
+    );
+    assert!(!beside.exists(), "the answer was written to a new file");
+}
+
+/// A session with no scratch directory has nowhere to write such an answer, and the refusal says
+/// to give it to `run` as `stdin_ref`, which needs no file.
+#[cfg(unix)]
+#[test]
+fn an_answer_about_a_reference_that_is_no_file_is_refused_where_there_is_no_scratch_directory() {
+    let scratch = Scratch::new("derived-text-no-scratch-directory");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (site, _pages) = serve_pages(vec![page(DERIVED_PAGE)]);
+    let mut replies = page_then_answer(&site);
+    replies.extend([
+        tool_request_2(
+            "write_file",
+            r#"{"path":"summary.txt","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("I could not save the summary."),
+    ]);
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+    let task = Task::new("summarise the page").with_permissions(rules(
+        &[],
+        &[],
+        &["WebFetch(domain:127.0.0.1)"],
+    ));
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let refusal = planner_tool_results(&every_request(&received))
+        .into_iter()
+        .find(|result| result.starts_with("Result of write_file"))
+        .expect("the planner was told what happened to the write");
+    assert!(
+        refusal.contains("no scratch directory") && refusal.contains("stdin_ref"),
+        "the refusal does not say there is no directory or what else to do: {refusal}"
+    );
+    assert!(
+        !scratch.path.join("summary.txt").exists(),
+        "the answer was written into the workspace"
     );
     assert!(
         confirmer.seen.is_empty(),
         "a write that could not be allowed was put to the person first: {:?}",
         confirmer.seen
     );
-    assert!(fixture.outbox().is_none(), "the sender ran");
 }
 
 /// A processor is given references. The path of a file the page was saved to is no reference, so
