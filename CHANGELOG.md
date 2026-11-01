@@ -68,6 +68,7 @@
  - Fixed a task list left open by a finished turn being drawn in the terminal as work still running. ([#2897](https://github.com/brave/bravebot/issues/2897))
  - Fixed a file name or path that holds an escape sequence reaching the terminal unchanged from `--trace`, the notices, the plan and `bravebot doctor`'s skill report. ([#3065](https://github.com/brave/bravebot/issues/3065), [#3055](https://github.com/brave/bravebot/issues/3055))
  - Fixed the Approve button of a decision card in the desktop window opening while a file drag covered the rows you had to read. ([#3080](https://github.com/brave/bravebot/issues/3080))
+ - Fixed the desktop settings view not listing a project or local settings file that names `language`, `attribution` or `retentionDays`, which `bravebot doctor` already reported as ignored. Both now read the same list of keys that only your own file can set. ([#3560](https://github.com/brave/bravebot/issues/3560))
  - Fixed the terminal slowing on a very long word with no break in it.
 
 ## [0.19.0](https://github.com/brave/bravebot/releases/tag/v0.19.0)

@@ -180,8 +180,10 @@ impl Entitled {
 ///
 /// [`Settings::layered`] removes each key from a layer that is not entitled to it before the merge,
 /// because the merge unions every name a layer set and a removed key cannot reach
-/// [`Settings::from_map`]. The layer is recorded under the key in `Settings::not_obeyed` and
-/// reported by the accessor named in the comment on its row.
+/// [`Settings::from_map`]. The layer is recorded under the key in `Settings::not_obeyed`.
+/// [`Settings::not_obeyed_all`] answers for every row, which is what `doctor` and the desktop
+/// settings view read, so a row added here is reported by both. The accessor named in the comment
+/// on a row answers for that key alone and is read by tests only.
 const HOME_ONLY: &[(&str, Entitled)] = &[
     // The key picking which of the providers answers: [`Settings::model_ignored`].
     ("model", Entitled::OwnOrNamed),
@@ -2360,6 +2362,19 @@ impl Settings {
             && self.processor_model.is_none()
             && self.commit_message_instructions.is_none()
             && self.agent.is_none()
+    }
+
+    /// The keys of [`HOME_ONLY`], in the order of the table.
+    pub fn home_only_keys() -> impl Iterator<Item = &'static str> {
+        HOME_ONLY.iter().map(|(key, _)| *key)
+    }
+
+    /// Each file that named a key of [`HOME_ONLY`] from a layer not entitled to it, with the key,
+    /// in the order of the table and weakest layer first within a key.
+    ///
+    /// Carries key names and paths only, never a value a file stated.
+    pub fn not_obeyed_all(&self) -> impl Iterator<Item = (&'static str, &Path)> {
+        Self::home_only_keys().flat_map(|key| self.not_obeyed(key).map(move |path| (key, path)))
     }
 
     /// The files that named `key`, a key of [`HOME_ONLY`], from a layer not entitled to it,

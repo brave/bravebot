@@ -660,6 +660,10 @@ doctor-settings-attribution-ignored =
 # ouverte. Une ligne qui ne fait rien mérite qu'on le dise.
 doctor-settings-retention-ignored =
     retentionDays dans { $path } n'est pas appliqué : il n'est lu que dans ~/.bravebot/settings.json
+# Une clé qu'une copie de travail ne peut pas nommer et qui n'a pas de message propre ci-dessus, de
+# sorte qu'une clé ajoutée à la table est signalée avant que ses mots soient écrits.
+doctor-settings-home-only-ignored =
+    { $key } dans { $path } n'est pas appliqué : il n'est lu que dans les réglages de la personne elle-même
 # Le balayage qui supprime les anciens enregistrements de session, les index du serveur de langage et
 # les constats attend tant que la durée demandée ne peut pas être déterminée, et ne supprime rien,
 # afin que la personne qui a fixé une durée ne se voie pas appliquer à la place celle qui est intégrée.
