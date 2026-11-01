@@ -29,6 +29,30 @@ make review-ready REPO=owner/name REVIEWER=login LIMIT=1000 WAIT=60
 `--interval` sets the seconds between reads. `make check-scripts` runs `review-ready-selftest.py`,
 which serves scripted reads from a stand-in `gh` and runs the script and the make target against it.
 
+## review-ready-menubar
+
+A macOS menu bar app that shows the list `make review-ready` prints. The icon shows how many pull
+requests are listed, and choosing one in the menu opens it in the browser.
+
+```sh
+contrib/review-ready-menubar/install.sh [--interval SECONDS] [--make-args "REVIEWER=login"] [--login] [--dir DIRECTORY]
+contrib/review-ready-menubar/install.sh --uninstall
+```
+
+`install.sh` builds `ReviewReadyMenu.swift` with `swiftc` (Xcode or the Command Line Tools) into
+`~/Applications/ReviewReadyMenu.app` and starts it. The app runs `make review-ready` in the checkout
+the script is in, so `gh` has to be signed in and installed in `/opt/homebrew/bin` or
+`/usr/local/bin`. `--make-args` adds make arguments, `--interval` sets the seconds between
+refreshes (300 by default, never under 30), `--login` installs a LaunchAgent that starts the app at
+login, and `--dir` changes where the app is put. `--uninstall` stops the app and removes it, the
+LaunchAgent and the cache.
+
+The list is cached in `~/Library/Caches/bravebot-review-ready/cache.json` and read at launch, so the
+menu has content before the first refresh finishes. It is refreshed on the interval, after the Mac
+wakes and on Refresh Now. A failed refresh keeps the cached list and adds `!` to the icon. A refresh
+that ends with pull requests still not computed as mergeable shows `review-ready.py`'s `incomplete:`
+line in the menu. Nothing in CI builds this app.
+
 ## check-toolchain.py
 
 Answers whether clippy on this machine knows the lints CI will fail on.
