@@ -30045,10 +30045,9 @@ fn in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_n
                 "{mode_name} {where_}: {said}"
             );
         }
-        // `loopback` is a name on that menu, and only macOS tells a planner to ask for it.
-        assert_eq!(
+        // `loopback` is a name on that menu on every platform.
+        assert!(
             trusted_description.contains("loopback"),
-            cfg!(target_os = "macos"),
             "{mode_name}: {trusted_description}"
         );
         for (where_, said) in [("description", &description), ("failure", &failure)] {
