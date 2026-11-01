@@ -1179,6 +1179,40 @@ mod tests {
     }
 
     #[test]
+    fn a_typed_line_stores_no_approval_flag_whatever_mode_it_carries() {
+        // The line `main` hands `add` carries the mode flags in `Typed` and the words after `add`.
+        // The mode a `Typed` gives is one of the three, and the flag that lets a program approve a
+        // write is refused in the words under each of them and is no mode's flag (SCHEDULE-6).
+        let base = ["--cron", "0 9 * * *", "--prompt", "hi"];
+        let typed_lines = [
+            Typed {
+                bypass: None,
+                starts_in: None,
+            },
+            Typed {
+                bypass: Some(crate::flags::SKIP_PERMISSIONS),
+                starts_in: None,
+            },
+            Typed {
+                bypass: None,
+                starts_in: Some(bravebot_agent::PermissionMode::AcceptEdits),
+            },
+        ];
+        for typed in &typed_lines {
+            let mode = typed.mode().expect("one of the three modes");
+            assert_ne!(mode.flag(), Some("--approve-input-lines"));
+            let plain: Vec<String> = base.iter().map(|s| s.to_string()).collect();
+            assert_eq!(read_addition(&plain, mode).map(|a| a.mode), Some(mode));
+            let approving: Vec<String> = base
+                .iter()
+                .chain(&["--approve-input-lines"])
+                .map(|s| s.to_string())
+                .collect();
+            assert!(read_addition(&approving, mode).is_none());
+        }
+    }
+
+    #[test]
     fn a_prompt_that_would_be_read_as_a_flag_or_is_empty_is_not_usable() {
         assert!(usable_prompt("summarize merged pull requests"));
         assert!(!usable_prompt("   "));

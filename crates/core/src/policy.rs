@@ -2945,6 +2945,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that words answering the planner's question reached it from an input channel the
+    /// person vouched for (CLI-36).
+    ///
+    /// The reply is recorded by [`Policy::record_answers`] as the person's, as every answer is. This
+    /// adds what the act was: nobody typed the words at a keyboard, the person typed the flag that
+    /// says the launching program's lines are theirs. It raises and lowers nothing and routes
+    /// nothing.
+    ///
+    /// This must only ever be reached from a channel a flag the person typed on the command line
+    /// vouched for.
+    pub fn admit_vouched_answer(&mut self, answers: usize) {
+        self.allow(
+            "provenance",
+            format!(
+                "{answers} answers in words, answering a question, sent on an input channel the \
+                 person vouched for with a flag they typed; they may not route"
+            ),
+        );
+    }
+
     /// Transform content without exposing it, keeping its label.
     ///
     /// A tool often needs to reshape what it read, joining lines or adding a truncation notice, before

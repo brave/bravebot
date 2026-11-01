@@ -50,6 +50,9 @@ pub(crate) enum Line {
     Steer(String),
     /// What to pick for each of the questions asked under `id`, as the positions of the choices.
     Answer { id: u64, choices: Vec<Vec<usize>> },
+    /// The words a program gives in answer to the one question asked under `id`, in place of a
+    /// pick. Taken only on a channel a person vouched for (CLI-36).
+    Typed { id: u64, text: String },
     /// End the turn that is running.
     Stop,
 }
@@ -70,6 +73,8 @@ pub(crate) enum Refused {
     BadField,
     /// An answer to a question that is not waiting for one, or that does not fit the question.
     NoSuchQuestion,
+    /// Words in place of a pick, sent on a channel nobody vouched for.
+    NotVouched,
     /// Words that would take the bytes waiting past the cap.
     TooMuchWaiting,
 }
@@ -82,6 +87,7 @@ impl Refused {
             Self::UnknownType => "unknown_type",
             Self::BadField => "bad_field",
             Self::NoSuchQuestion => "no_such_question",
+            Self::NotVouched => "not_vouched",
             Self::TooMuchWaiting => "too_much_waiting",
         }
     }
@@ -482,9 +488,14 @@ pub(crate) fn parse(text: &str) -> Result<Line, Refused> {
         "prompt" => words(fields.text).map(Line::Prompt),
         "steer" => words(fields.text).map(Line::Steer),
         "stop" => Ok(Line::Stop),
-        "answer" => match (fields.id, fields.choices) {
-            (Some(Value::Whole(id)), Some(Value::Positions(choices))) => {
+        // Positions when the line has `choices`, whatever else it holds. Words only when it has
+        // `text` and no `choices`, so a line cannot say both.
+        "answer" => match (fields.id, fields.choices, fields.text) {
+            (Some(Value::Whole(id)), Some(Value::Positions(choices)), _) => {
                 Ok(Line::Answer { id, choices })
+            }
+            (Some(Value::Whole(id)), None, Some(Value::Text(text))) if !text.is_empty() => {
+                Ok(Line::Typed { id, text })
             }
             _ => Err(Refused::BadField),
         },
@@ -550,10 +561,25 @@ struct Shape {
     multiple: bool,
 }
 
+/// What a waiting question is, which decides how an answer to it is taken.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// The planner's own question (`ask_user`), answered by positions or, on a vouched channel,
+    /// by words.
+    Question,
+    /// A write, run or fetch put to the program, answered by a position among the two choices the
+    /// driver fixed. Never answered in words.
+    Permission,
+}
+
 struct Asked {
     id: u64,
+    kind: Kind,
     shape: Vec<Shape>,
 }
+
+/// The two choices a permission is put with, in the order a position names them.
+pub(crate) const PERMISSION_CHOICES: [&str; 2] = ["reject", "approve"];
 
 #[derive(Default)]
 struct State {
@@ -736,6 +762,21 @@ impl Channel {
                 state.asked = None;
                 state.answered = Some(answers);
             }
+            // Words are the person's own only on a channel the person vouched for, and only for
+            // the planner's own question. A permission is never answered in words.
+            Line::Typed { id, text } => {
+                if !self.shared.vouched {
+                    return Err(Refused::NotVouched);
+                }
+                let waiting = state.asked.as_ref().is_some_and(|asked| {
+                    asked.id == id && asked.kind == Kind::Question && asked.shape.len() == 1
+                });
+                if !waiting {
+                    return Err(Refused::NoSuchQuestion);
+                }
+                state.asked = None;
+                state.answered = Some(vec![Answer::Typed(text)]);
+            }
         }
         self.shared.changed.notify_all();
         Ok(())
@@ -808,25 +849,46 @@ impl Channel {
     /// Declined, with no answers at all as [`bravebot_agent::Confirmer::ask_user`] asks, when the
     /// input has ended without one or the turn was stopped while the question waited.
     pub(crate) fn ask(&self, asking: &Asking) -> Vec<Answer> {
+        let shape = asking
+            .prompts
+            .iter()
+            .map(|prompt| Shape {
+                choices: prompt.rows.len(),
+                multiple: prompt.multiple,
+            })
+            .collect();
+        self.put(Kind::Question, shape, |id| json::question_event(id, asking))
+    }
+
+    /// Put one write, run or fetch to the program, with the words that say what the call is, and
+    /// wait for its answer. True only where the program picked the approving choice for it.
+    ///
+    /// The choices are fixed here ([`PERMISSION_CHOICES`]) and the answer is a position among them
+    /// (CLI-36): the driver compares a position with a number it fixed, and reads none of the words
+    /// in `details`, which it hands to the event as they came. Declined, as [`Channel::ask`] is,
+    /// when the input ended or the turn was stopped while it waited.
+    pub(crate) fn ask_permission(&self, kind: &str, details: &[(&str, String)]) -> bool {
+        let shape = vec![Shape {
+            choices: PERMISSION_CHOICES.len(),
+            multiple: false,
+        }];
+        let answers = self.put(Kind::Permission, shape, |id| {
+            json::permission_event(id, kind, details, &PERMISSION_CHOICES)
+        });
+        matches!(answers.as_slice(), [Answer::Chosen(picked)] if picked == &[1])
+    }
+
+    /// Register a question under the next id, say it, and wait for what answers it.
+    fn put(&self, kind: Kind, shape: Vec<Shape>, event: impl FnOnce(u64) -> String) -> Vec<Answer> {
         let id = {
             let mut state = self.lock();
             state.questions += 1;
             let id = state.questions;
             state.answered = None;
-            state.asked = Some(Asked {
-                id,
-                shape: asking
-                    .prompts
-                    .iter()
-                    .map(|prompt| Shape {
-                        choices: prompt.rows.len(),
-                        multiple: prompt.multiple,
-                    })
-                    .collect(),
-            });
+            state.asked = Some(Asked { id, kind, shape });
             id
         };
-        self.say(&json::question_event(id, asking));
+        self.say(&event(id));
 
         let mut state = self.lock();
         loop {
@@ -1346,6 +1408,94 @@ mod tests {
         // The question is over, so the same id answers nothing now.
         deliver(&channel, r#"{"type":"answer","id":1,"choices":[[],[1]]}"#);
         assert!(said.lines().last().unwrap().contains("no_such_question"));
+    }
+
+    /// Words in place of a pick are a line of their own kind, and a line that holds both is the
+    /// pick. Empty words, and words with no id, are not an answer.
+    #[test]
+    fn an_answer_in_words_is_read_as_words_and_a_pick_wins_over_them() {
+        assert_eq!(
+            parse(r#"{"type":"answer","id":2,"text":"the query cache"}"#),
+            Ok(Line::Typed {
+                id: 2,
+                text: "the query cache".into()
+            })
+        );
+        assert_eq!(
+            parse(r#"{"type":"answer","id":2,"choices":[[1]],"text":"ignored"}"#),
+            Ok(Line::Answer {
+                id: 2,
+                choices: vec![vec![1]]
+            })
+        );
+        for refused in [
+            r#"{"type":"answer","id":2,"text":""}"#,
+            r#"{"type":"answer","text":"words"}"#,
+            r#"{"type":"answer","id":2}"#,
+        ] {
+            assert_eq!(parse(refused), Err(Refused::BadField), "{refused}");
+        }
+    }
+
+    /// Words answer the planner's one-prompt question on a vouched channel, and a channel nobody
+    /// vouched for refuses them by name and leaves the question waiting. A question of several
+    /// prompts, and a permission, take no words.
+    #[test]
+    fn words_are_taken_only_on_a_vouched_channel_and_only_for_a_question_of_one_prompt() {
+        let words = r#"{"type":"answer","id":1,"text":"the query cache"}"#;
+
+        let (unvouched, said) = channel(false);
+        let asked = std::thread::spawn({
+            let channel = unvouched.clone();
+            move || channel.ask(&asking(&[(2, false)]))
+        });
+        while said.lines().is_empty() {
+            std::thread::yield_now();
+        }
+        deliver(&unvouched, words);
+        assert!(
+            said.lines().last().unwrap().contains("not_vouched"),
+            "{:?}",
+            said.lines()
+        );
+        deliver(&unvouched, r#"{"type":"answer","id":1,"choices":[[0]]}"#);
+        assert_eq!(
+            asked.join().expect("the question returned"),
+            vec![Answer::Chosen(vec![0])]
+        );
+
+        let (vouched, said) = channel(true);
+        let asked = std::thread::spawn({
+            let channel = vouched.clone();
+            move || channel.ask(&asking(&[(2, false), (2, false)]))
+        });
+        while said.lines().is_empty() {
+            std::thread::yield_now();
+        }
+        deliver(&vouched, words);
+        assert!(
+            said.lines().last().unwrap().contains("no_such_question"),
+            "{:?}",
+            said.lines()
+        );
+        deliver(&vouched, r#"{"type":"answer","id":1,"choices":[[0],[1]]}"#);
+        asked.join().expect("the question returned");
+
+        let asked = std::thread::spawn({
+            let channel = vouched.clone();
+            move || channel.ask(&asking(&[(2, false)]))
+        });
+        while said.lines().len() < 3 {
+            std::thread::yield_now();
+        }
+        deliver(
+            &vouched,
+            r#"{"type":"answer","id":2,"text":"the query cache"}"#,
+        );
+        assert_eq!(
+            asked.join().expect("the question returned"),
+            vec![Answer::Typed("the query cache".into())]
+        );
     }
 
     /// Each question has an id of its own, so an answer meant for the first cannot settle the

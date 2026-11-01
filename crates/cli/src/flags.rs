@@ -28,7 +28,7 @@ pub(crate) const AUTO: &str = "--auto";
 
 /// The flags that begin a one-shot run when one leads the line, so that `main` dispatches on this
 /// list and [`is_a_one_shot`] reads the same one.
-pub(crate) const TASK_FLAGS: [&str; 20] = [
+pub(crate) const TASK_FLAGS: [&str; 21] = [
     "-p",
     "--print",
     "--mode",
@@ -45,6 +45,7 @@ pub(crate) const TASK_FLAGS: [&str; 20] = [
     "--json-stream",
     "--input-format",
     "--trust-input-lines",
+    "--approve-input-lines",
     "--output-schema",
     "--goal",
     "--max-rounds",

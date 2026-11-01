@@ -191,6 +191,7 @@ pub(crate) fn print_help() {
         ("--json-stream", t!(cli_option_json_stream)),
         ("--input-format <format>", t!(cli_option_input_format)),
         ("--trust-input-lines", t!(cli_option_trust_input_lines)),
+        ("--approve-input-lines", t!(cli_option_approve_input_lines)),
         ("--output-schema <path>", t!(cli_option_output_schema)),
         ("--goal <condition>", t!(cli_option_goal)),
         ("--max-rounds <n>", t!(cli_option_max_rounds)),

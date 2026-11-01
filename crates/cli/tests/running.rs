@@ -21204,7 +21204,25 @@ impl LinesRun {
 
     /// Started with exactly `arguments`, so a test can leave `--json-stream` off.
     fn spawn(scratch: &Scratch, cwd: &Path, arguments: &[&str]) -> Self {
-        let mut child = prepared(&scratch.path, Some(cwd), AT_A_GATEWAY, arguments)
+        Self::spawn_with(scratch, cwd, AT_A_GATEWAY, arguments)
+    }
+
+    /// Started in `cwd` with `environment` beside the gateway's, for a run that starts programs.
+    fn start_with_path(scratch: &Scratch, cwd: &Path, flags: &[&str]) -> Self {
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("PATH", "/usr/bin:/bin"));
+        let mut arguments = vec!["--json-stream", "--input-format", "lines"];
+        arguments.extend_from_slice(flags);
+        Self::spawn_with(scratch, cwd, &environment, &arguments)
+    }
+
+    fn spawn_with(
+        scratch: &Scratch,
+        cwd: &Path,
+        environment: &[(&str, &str)],
+        arguments: &[&str],
+    ) -> Self {
+        let mut child = prepared(&scratch.path, Some(cwd), environment, arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -21913,12 +21931,414 @@ fn a_line_does_not_approve_a_write() {
     );
 }
 
+fn a_gateway_writing_files(files: &[&str]) -> Gateway {
+    let mut script: Vec<Model> = files
+        .iter()
+        .map(|name| {
+            Model::Calls(
+                "write_file",
+                serde_json::json!({"path": name, "contents": "hi"}).to_string(),
+            )
+        })
+        .collect();
+    script.push(Model::Words("all done"));
+    a_gateway_following(script, None)
+}
+
+/// CLI-36: a write is put to the program with its id, path and complete contents, and an `answer`
+/// naming the approving position writes it. Declining, by the other position, leaves nothing
+/// written and the run ends on the refused status. A fault that approved on any answer would write
+/// in the second case, and one that never wrote would fail the first.
+#[test]
+fn a_program_approves_a_write_it_was_shown_and_declines_another() {
+    let go = |name: &str, position: u32| {
+        let gateway = a_gateway_writing_files(&["out.txt"]);
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let mut run = LinesRun::start(&scratch, &["--approve-input-lines", "-p", "write out.txt"]);
+        let heard = run.until(|line| line["event"] == "permission");
+        let asked = heard.last().expect("a permission event").clone();
+        assert_eq!(asked["kind"], "write", "{asked}");
+        assert_eq!(asked["call"]["path"], "out.txt", "{asked}");
+        assert_eq!(asked["call"]["contents"], "hi", "{asked}");
+        assert_eq!(asked["choices"][0]["label"], "reject", "{asked}");
+        assert_eq!(asked["choices"][1]["label"], "approve", "{asked}");
+        run.send(&format!(
+            r#"{{"type":"answer","id":{},"choices":[[{position}]]}}"#,
+            asked["id"]
+        ));
+        let (_lines, status, _stderr) = run.finish();
+        (scratch.path.join("out.txt").exists(), status)
+    };
+
+    let (written, status) = go("cli-lines-approve", 1);
+    assert!(written, "an approved write was not made");
+    assert_eq!(status, Some(0));
+
+    let (written, status) = go("cli-lines-decline", 0);
+    assert!(!written, "a declined write was made");
+    assert_eq!(status, Some(4));
+}
+
+/// CLI-36, INCOG-3: under `--incognito` a program still approves the write it was shown, and the
+/// run names no session record. A run that left `--approve-input-lines` out of the incognito path
+/// would never put the event and would decline the write, and one that wrote a record for the
+/// approval would name a session.
+#[test]
+fn an_incognito_run_reading_lines_still_puts_a_write_to_the_program_and_writes_no_record() {
+    let gateway = a_gateway_writing_files(&["out.txt"]);
+    let scratch =
+        Scratch::new("cli-lines-incognito-approve").with_settings(&settings_for(&gateway));
+    let mut run = LinesRun::start(
+        &scratch,
+        &[
+            "--approve-input-lines",
+            "--incognito",
+            "-p",
+            "write out.txt",
+        ],
+    );
+    let heard = run.until(|line| line["event"] == "permission");
+    let asked = heard.last().expect("a permission event").clone();
+    assert_eq!(asked["kind"], "write", "{asked}");
+    run.send(&format!(
+        r#"{{"type":"answer","id":{},"choices":[[1]]}}"#,
+        asked["id"]
+    ));
+    let (rest, status, stderr) = run.finish();
+
+    assert!(scratch.path.join("out.txt").exists(), "{stderr}");
+    assert_eq!(status, Some(0), "{stderr}");
+    let finished = results(&rest);
+    assert_eq!(finished.len(), 1, "{rest:?}");
+    assert!(
+        finished[0]["session"].is_null(),
+        "an incognito turn named a record: {}",
+        finished[0]
+    );
+}
+
+/// CLI-36: an approval answers the one call it was asked about. The second write is put again with
+/// an id of its own, and a program that declines it leaves only the first file. A fault that
+/// remembered the approval for the series would write both without a second event.
+#[test]
+fn an_approval_answers_one_call_and_the_next_is_asked_again() {
+    let gateway = a_gateway_writing_files(&["one.txt", "two.txt"]);
+    let scratch = Scratch::new("cli-lines-one-call").with_settings(&settings_for(&gateway));
+    let mut run = LinesRun::start(
+        &scratch,
+        &["--approve-input-lines", "-p", "write two files"],
+    );
+
+    let first = run.until(|line| line["event"] == "permission");
+    let first = first.last().expect("first").clone();
+    assert_eq!(first["call"]["path"], "one.txt");
+    run.send(&format!(
+        r#"{{"type":"answer","id":{},"choices":[[1]]}}"#,
+        first["id"]
+    ));
+    let second = run.until(|line| line["event"] == "permission");
+    let second = second.last().expect("second").clone();
+    assert_eq!(second["call"]["path"], "two.txt");
+    assert_ne!(second["id"], first["id"]);
+    run.send(&format!(
+        r#"{{"type":"answer","id":{},"choices":[[0]]}}"#,
+        second["id"]
+    ));
+    let (_lines, status, _stderr) = run.finish();
+
+    assert!(scratch.path.join("one.txt").exists());
+    assert!(!scratch.path.join("two.txt").exists());
+    assert_eq!(status, Some(4));
+}
+
+/// CLI-36: the input ending while a permission waits declines it, so the run ends rather than
+/// waiting for an answer that cannot come. A fault that approved on end of input would write.
+#[test]
+fn a_permission_is_declined_when_the_input_ends_without_an_answer() {
+    let gateway = a_gateway_writing_files(&["out.txt"]);
+    let scratch = Scratch::new("cli-lines-permission-eof").with_settings(&settings_for(&gateway));
+    let run = LinesRun::start(&scratch, &["--approve-input-lines", "-p", "write out.txt"]);
+    run.until(|line| line["event"] == "permission");
+    let (_lines, status, _stderr) = run.finish();
+
+    assert!(!scratch.path.join("out.txt").exists());
+    assert_eq!(status, Some(4));
+}
+
+/// CLI-36: a permission is answered by a position among the two choices and nothing else. A
+/// position that is not one, and words, leave it waiting. A fault that took any answer as consent
+/// would write on the first.
+#[test]
+fn a_permission_is_not_answered_by_a_position_that_is_not_a_choice_or_by_words() {
+    let gateway = a_gateway_writing_files(&["out.txt"]);
+    let scratch = Scratch::new("cli-lines-permission-shape").with_settings(&settings_for(&gateway));
+    let mut run = LinesRun::start(
+        &scratch,
+        &[
+            "--approve-input-lines",
+            "--trust-input-lines",
+            "-p",
+            "write out.txt",
+        ],
+    );
+    let asked = run.until(|line| line["event"] == "permission");
+    let id = asked.last().expect("asked")["id"].clone();
+    run.send(&format!(r#"{{"type":"answer","id":{id},"choices":[[7]]}}"#));
+    run.send(&format!(
+        r#"{{"type":"answer","id":{id},"text":"approve"}}"#
+    ));
+    run.sync();
+    run.send(&format!(r#"{{"type":"answer","id":{id},"choices":[[0]]}}"#));
+    let (lines, status, _stderr) = run.finish();
+
+    assert!(!scratch.path.join("out.txt").exists(), "{lines:?}");
+    assert_eq!(status, Some(4));
+    let refused: Vec<_> = lines
+        .iter()
+        .filter(|line| line["event"] == "input_refused")
+        .collect();
+    assert_eq!(refused.len(), 2, "{lines:?}");
+}
+
+/// CLI-36: without `--approve-input-lines` a write is not put to the program, whatever channel is
+/// vouched for. A fault that put permissions on a vouched channel alone would emit the event.
+#[test]
+fn a_vouched_channel_without_the_approval_flag_is_not_asked_about_a_write() {
+    let gateway = a_gateway_writing_files(&["out.txt"]);
+    let scratch = Scratch::new("cli-lines-no-flag").with_settings(&settings_for(&gateway));
+    let run = LinesRun::start(&scratch, &["--trust-input-lines", "-p", "write out.txt"]);
+    let (lines, status, _stderr) = run.finish();
+
+    assert!(
+        lines.iter().all(|line| line["event"] != "permission"),
+        "{lines:?}"
+    );
+    assert!(!scratch.path.join("out.txt").exists());
+    assert_eq!(status, Some(4));
+}
+
+/// CLI-36: words answer the planner's own question on a vouched channel and reach it as the
+/// person's answer. A fault that kept positions only would refuse them here.
+#[test]
+fn words_answer_a_question_on_a_vouched_channel() {
+    let gateway = a_gateway_asking_which_cache();
+    let scratch = Scratch::new("cli-lines-typed").with_settings(&settings_for(&gateway));
+    let mut run = LinesRun::start(&scratch, &["--trust-input-lines", "-p", "set up the cache"]);
+    run.until(|line| line["event"] == "question");
+    run.send(r#"{"type":"answer","id":1,"text":"WORDS-OF-THE-PROGRAM"}"#);
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    assert!(
+        lines.iter().all(|line| line["event"] != "input_refused"),
+        "{lines:?}"
+    );
+    let sent = bodies(&gateway);
+    assert!(
+        sent[1].contains("WORDS-OF-THE-PROGRAM"),
+        "the words did not reach the planner: {}",
+        sent[1]
+    );
+}
+
+/// CLI-36: on a channel nobody vouched for the same line is refused with `not_vouched`, the
+/// question stays waiting, and the words never reach the planner. A fault that took words on any
+/// channel would let a program put its words in the planner's context under a person's footing.
+#[test]
+fn words_are_refused_on_a_channel_nobody_vouched_for() {
+    let gateway = a_gateway_asking_which_cache();
+    let scratch = Scratch::new("cli-lines-typed-unvouched").with_settings(&settings_for(&gateway));
+    let mut run = LinesRun::start(&scratch, &["-p", "set up the cache"]);
+    run.until(|line| line["event"] == "question");
+    run.send(r#"{"type":"answer","id":1,"text":"WORDS-OF-THE-PROGRAM"}"#);
+    let refused = run.until(|line| line["event"] == "input_refused");
+    assert_eq!(refused.last().unwrap()["reason"], "not_vouched");
+    run.send(r#"{"type":"answer","id":1,"choices":[[1]]}"#);
+    let (_lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(0), "{stderr}");
+    let sent = bodies(&gateway);
+    assert!(
+        sent.iter()
+            .all(|body| !body.contains("WORDS-OF-THE-PROGRAM")),
+        "words from an unvouched channel reached the planner"
+    );
+}
+
+/// CLI-36: a run is put to the program with its command and directory, and the command runs only
+/// on the approving position. The same line declined makes no file. A fault that never put a run,
+/// or that ran it whatever the program picked, fails one of the two arms.
+#[cfg(unix)]
+#[test]
+fn a_program_approves_a_run_it_was_shown_and_declines_another() {
+    if !bravebot_sandbox::confinement_works_here() {
+        eprintln!("skipping the approved run test: confinement is unavailable");
+        return;
+    }
+    let go = |name: &str, position: u32| {
+        let gateway = a_gateway_asking_to_run("touch made.txt");
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let project = scratch.path.join("project");
+        std::fs::create_dir_all(&project).expect("a project");
+        let mut run = LinesRun::start_with_path(
+            &scratch,
+            &project,
+            &["--approve-input-lines", "-p", "make a file"],
+        );
+        let heard = run.until(|line| line["event"] == "permission");
+        let asked = heard.last().expect("a permission event").clone();
+        assert_eq!(asked["kind"], "run", "{asked}");
+        assert!(
+            asked["call"]["command"]
+                .as_str()
+                .is_some_and(|command| command.contains("touch")),
+            "{asked}"
+        );
+        assert!(asked["call"]["directory"].is_string(), "{asked}");
+        assert_eq!(asked["choices"][0]["label"], "reject", "{asked}");
+        assert_eq!(asked["choices"][1]["label"], "approve", "{asked}");
+        run.send(&format!(
+            r#"{{"type":"answer","id":{},"choices":[[{position}]]}}"#,
+            asked["id"]
+        ));
+        let (_lines, status, stderr) = run.finish();
+        (project.join("made.txt").exists(), status, stderr)
+    };
+
+    let (made, status, stderr) = go("cli-lines-run-approve", 1);
+    assert!(made, "an approved run did not make the file: {stderr}");
+    assert_eq!(status, Some(0), "{stderr}");
+
+    let (made, status, _) = go("cli-lines-run-decline", 0);
+    assert!(!made, "a declined run made the file");
+    assert_eq!(status, Some(4));
+}
+
+/// CLI-36: a fetch is put to the program with the URL and the host it names, and a decline ends the
+/// run on the refused status with nothing fetched. A fault that left a fetch out of the calls put
+/// to the program would refuse it unasked and write no event.
+#[test]
+fn a_program_is_shown_a_fetch_with_its_url_and_host_and_can_decline_it() {
+    let gateway = a_gateway_following(
+        vec![
+            Model::Calls(
+                "fetch_url",
+                r#"{"url":"https://example.invalid/page"}"#.to_string(),
+            ),
+            Model::Words("all done"),
+        ],
+        None,
+    );
+    let scratch = Scratch::new("cli-lines-fetch").with_settings(&settings_for(&gateway));
+    let mut run = LinesRun::start(&scratch, &["--approve-input-lines", "-p", "fetch a page"]);
+    let heard = run.until(|line| line["event"] == "permission");
+    let asked = heard.last().expect("a permission event").clone();
+    assert_eq!(asked["kind"], "fetch", "{asked}");
+    assert_eq!(
+        asked["call"]["url"], "https://example.invalid/page",
+        "{asked}"
+    );
+    assert_eq!(asked["call"]["host"], "example.invalid", "{asked}");
+    assert_eq!(asked["choices"][0]["label"], "reject", "{asked}");
+    assert_eq!(asked["choices"][1]["label"], "approve", "{asked}");
+    for remembering in ["remember", "always", "stand", "scope"] {
+        assert!(
+            asked.get(remembering).is_none() && asked["call"].get(remembering).is_none(),
+            "{remembering}: {asked}"
+        );
+    }
+    run.send(&format!(
+        r#"{{"type":"answer","id":{},"choices":[[0]]}}"#,
+        asked["id"]
+    ));
+    let (lines, status, stderr) = run.finish();
+
+    assert_eq!(status, Some(4), "{stderr}: {lines:?}");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["event"] == "permission")
+            .count(),
+        0,
+        "the fetch was put twice: {lines:?}"
+    );
+}
+
+/// CLI-36, MODE-2: a write to a protected path is not put to the program, so the run ends on the
+/// refused status with no `permission` event and nothing written. A fault that put every write
+/// would emit the event for `.git/hooks` and let a yes write there.
+#[test]
+fn a_write_to_a_protected_path_is_not_put_to_the_program() {
+    let gateway = a_gateway_writing_files(&[".git/hooks/pre-commit"]);
+    let scratch = Scratch::new("cli-lines-protected").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(project.join(".git/hooks")).expect("a hooks directory");
+    let mut run = LinesRun::start_in(
+        &scratch,
+        &project,
+        &["--approve-input-lines", "-p", "write a hook"],
+    );
+    // Sent before anything could have asked, in the shape that approves.
+    run.send(r#"{"type":"answer","id":1,"choices":[[1]]}"#);
+    let (lines, status, stderr) = run.finish();
+
+    assert!(
+        lines.iter().all(|line| line["event"] != "permission"),
+        "{lines:?}"
+    );
+    assert!(
+        !project.join(".git/hooks/pre-commit").exists(),
+        "a protected path was written: {stderr}"
+    );
+    assert_eq!(status, Some(4), "{stderr}: {lines:?}");
+}
+
+/// CLI-36: a write the credential scan found a value in is not put to the program. A fault that
+/// put it would show the program the bytes of a credential and let its yes write them.
+#[test]
+fn a_write_holding_a_credential_is_not_put_to_the_program() {
+    let gateway = a_gateway_following(
+        vec![
+            Model::Calls(
+                "write_file",
+                serde_json::json!({
+                    "path": "config/master.key",
+                    "contents": "c8f1a0b4d2e6f7a9c3b5d8e0f2a4c6b8d1e3f5a7\n",
+                })
+                .to_string(),
+            ),
+            Model::Words("all done"),
+        ],
+        None,
+    );
+    let scratch = Scratch::new("cli-lines-credential").with_settings(&settings_for(&gateway));
+    let project = scratch.path.join("project");
+    std::fs::create_dir_all(project.join("config")).expect("a directory to write in");
+    let mut run = LinesRun::start_in(
+        &scratch,
+        &project,
+        &["--approve-input-lines", "-p", "write a key"],
+    );
+    run.send(r#"{"type":"answer","id":1,"choices":[[1]]}"#);
+    let (lines, status, stderr) = run.finish();
+
+    assert!(
+        lines.iter().all(|line| line["event"] != "permission"),
+        "{lines:?}"
+    );
+    assert!(
+        !project.join("config/master.key").exists(),
+        "a credential was written: {stderr}"
+    );
+    assert_eq!(status, Some(4), "{stderr}: {lines:?}");
+}
+
 /// CLI-36: a command line that cannot go with the flag is refused with the argument status before
 /// anything is read, each saying which flag was the problem.
 #[test]
 fn input_lines_is_refused_beside_what_it_cannot_go_with() {
     let scratch = Scratch::new("cli-lines-refused");
-    let cases: [(&[&str], &str); 4] = [
+    let cases: [(&[&str], &str); 8] = [
         (
             &["--json-stream", "--input-format", "csv"],
             "--input-format takes lines",
@@ -21930,6 +22350,32 @@ fn input_lines_is_refused_beside_what_it_cannot_go_with() {
         (
             &["--json-stream", "--trust-input-lines", "-p", "x"],
             "--trust-input-lines requires --input-format lines",
+        ),
+        (
+            &["--json-stream", "--approve-input-lines", "-p", "x"],
+            "--approve-input-lines requires --input-format lines",
+        ),
+        (
+            &[
+                "--input-format",
+                "lines",
+                "--approve-input-lines",
+                "--accept-edits",
+            ],
+            "--approve-input-lines cannot be used with --accept-edits",
+        ),
+        (
+            &["--input-format", "lines", "--approve-input-lines", "--auto"],
+            "--approve-input-lines cannot be used with --auto",
+        ),
+        (
+            &[
+                "--input-format",
+                "lines",
+                "--approve-input-lines",
+                "--dangerously-skip-permissions",
+            ],
+            "--approve-input-lines cannot be used with --dangerously-skip-permissions",
         ),
         (
             &[

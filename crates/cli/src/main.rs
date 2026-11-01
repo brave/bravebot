@@ -66,8 +66,8 @@ use crate::flags::{
     without_a_definition, without_a_prompt_to_give, without_a_tool_set_to_limit,
 };
 use crate::invocation::{
-    Given, Invocation, input_lines_conflict, limit_not_with_a_goal, limit_not_with_a_manifest,
-    manifest_conflict, parse_invocation, prompt_to_open_on,
+    Given, Invocation, approve_input_lines_conflict, input_lines_conflict, limit_not_with_a_goal,
+    limit_not_with_a_manifest, manifest_conflict, parse_invocation, prompt_to_open_on,
 };
 use crate::model::{
     model_asked_for, model_for_this_run, model_not_served, nothing_serves,
@@ -888,6 +888,9 @@ struct Prepared {
     input_lines: bool,
     /// Whether the person vouched for those lines.
     trust_input_lines: bool,
+    /// Whether the person let the program sending those lines answer the write, run and fetch
+    /// questions of the run.
+    approve_input_lines: bool,
 }
 
 impl Prepared {
@@ -961,11 +964,22 @@ fn prepare_the_run(
         goal,
         input_lines,
         trust_input_lines,
+        approve_input_lines,
         limits,
     } = invocation;
 
     // Refused before stdin is read, since a run that reads lines owns the rest of the stream.
-    if let Some(conflict) = input_lines_conflict(input_lines, trust_input_lines, mode) {
+    if let Some(conflict) =
+        input_lines_conflict(input_lines, trust_input_lines, approve_input_lines, mode)
+    {
+        return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
+    }
+    if let Some(conflict) = approve_input_lines_conflict(
+        approve_input_lines,
+        skip_permissions,
+        "--dangerously-skip-permissions",
+        starts_in,
+    ) {
         return Err(stopped_before_the_turn(as_json, Ending::Argument, conflict));
     }
 
@@ -1291,6 +1305,7 @@ fn prepare_the_run(
         goal,
         input_lines,
         trust_input_lines,
+        approve_input_lines,
     })
 }
 
@@ -1564,6 +1579,9 @@ fn run_and_report(
     let mut one_shot = OneShot::new(std::io::stdin(), std::io::stderr(), attended);
     if let Some(lines) = lines {
         one_shot = one_shot.with_lines(lines.clone());
+        if prepared.approve_input_lines {
+            one_shot = one_shot.approving_over_lines();
+        }
     }
     // A run `schedule run-now` or `trigger serve` started for a stored entry has nobody to ask, and
     // stops at the first question (SCHEDULE-2).

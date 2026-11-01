@@ -123,6 +123,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--json-stream` | write one event per line as the run goes, then the result object ([below](#--json-stream)) |
 | `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line, for as many turns as it is sent; implies `--json-stream` ([below](#--input-format-lines)) |
 | `--trust-input-lines` | with `--input-format lines`, treat the lines as your own words and not a program's ([below](#--input-format-lines)) |
+| `--approve-input-lines` | with `--input-format lines`, let the program sending the lines approve or decline each write, run or fetch ([below](#--input-format-lines)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
 | `--tools <a,b,c>` | offer the agent only the named tools; a tool a setting removed stays removed, and no MCP server's tools are offered ([below](#--tools-abc-and---no-shell)) |
@@ -631,7 +632,7 @@ is one JSON object with a `type`:
 |---|---|---|
 | `prompt` | `text` | starts a turn with those words; one that arrives while a turn runs waits for its turn |
 | `steer` | `text` | reaches the turn that is running at its next round, as a line typed mid-turn does; one sent while no turn runs, or that the turn ended without taking, starts a turn of its own |
-| `answer` | `id`, `choices` | answers the `question` event with that `id`; `choices` is one array of choice positions for each question, an empty array declining it |
+| `answer` | `id`, `choices` or `text` | answers the `question` or `permission` event with that `id`; `choices` is one array of choice positions for each question, an empty array declining it; `text` answers a question of one prompt in words, and is taken only with `--trust-input-lines` |
 | `stop` | none | ends the turn that is running and leaves the prompts behind it to run |
 
 The words on the command line are the first turn, and `--file` and `--session-ref` attach to it
@@ -647,7 +648,8 @@ before any prompt arrived is a run with no task and exits on status 2.
 reference to it and never the words, and a `steer` waits for a turn of its own. With the flag the
 lines are your words, a `prompt` is the prompt of its turn and a `steer` is delivered to the turn
 running. The flag vouches for the words and nothing else. A write, a command, a fetch and every
-other question are still refused, as in any run nobody is watching, and no line approves one.
+other question are still refused, as in any run nobody is watching, and no line approves one
+unless you also typed `--approve-input-lines`.
 
 **Questions.** A question the planner asks is written as a `question` event and the turn waits for the
 answer:
@@ -660,20 +662,43 @@ answer:
 {"type":"answer","id":1,"choices":[[1]]}
 ```
 
-An answer is positions among the choices the planner offered and no words, sent after the `question`
-event it names. It is refused when no question with that `id` is waiting or the positions do not fit
-the question. A question still waiting
+An answer is positions among the choices the planner offered, sent after the `question` event it
+names. With `--trust-input-lines` it can instead hold `text`, the words you want to give for a
+question of one prompt, and a line with both is taken as its `choices`. Without the flag a line with
+`text` is refused as `not_vouched` and the question keeps waiting. A line is refused when no question
+with that `id` is waiting or the positions do not fit the question. A question still waiting
 when stdin closes, or when the turn is stopped, is declined.
+
+**Approving a write, a command or a fetch.** With `--approve-input-lines` a write, a run or a fetch
+that would ask you is written as a `permission` event and the turn waits for the answer:
+
+```json
+{"schema":1,"event":"permission","id":2,"kind":"run","call":{"command":"make test","directory":"."},"choices":[{"label":"reject"},{"label":"approve"}]}
+```
+
+```json
+{"type":"answer","id":2,"choices":[[1]]}
+```
+
+`kind` is `write`, `run` or `fetch`, and `call` holds the words that say what the call is: `path` and
+`contents` for a write, `command` and `directory` for a run, `url` and `host` for a fetch. `[[1]]`
+approves that one call and `[[0]]` declines it. Nothing is remembered, so the next call is a new
+`permission` event, and nothing is added to your trust map or permission rules. A write to a protected
+path or to which the credential scan found a value, and a command that asks for credential scopes or
+to run unconfined, are not put to the program and stay refused. A decline, stdin closing and a stop
+each decline it, and a decline ends the run on the status for a refusal.
 
 **A line that is not taken** is written as an `input_refused` event with `line`, its number counted
 from 1, and `reason`: `unreadable` (over the size cap of piped input, or not UTF-8), `not_json`,
-`unknown_type`, `bad_field`, `no_such_question` or `too_much_waiting` (the prompts waiting for a turn
+`unknown_type`, `bad_field`, `no_such_question`, `not_vouched` (an `answer` with `text` where nobody
+typed `--trust-input-lines`) or `too_much_waiting` (the prompts waiting for a turn
 already hold as many bytes as that cap). The event holds nothing the line said. A blank
 line is ignored, and a field a line's type does not use is skipped.
 
 The flags are refused with status 2 before stdin is read when `--input-format` names anything but
-`lines` and with `--mode manifest`, and when `--trust-input-lines` comes without
-`--input-format lines`.
+`lines` and with `--mode manifest`, and when `--trust-input-lines` or `--approve-input-lines` comes
+without `--input-format lines`. `--approve-input-lines` is also refused with `--accept-edits`,
+`--auto` and `--dangerously-skip-permissions`, which already answer what it would.
 
 Under `--incognito` no record is written, so each turn is carried on from the conversation held in
 memory for as long as the process runs. Every result names no session.

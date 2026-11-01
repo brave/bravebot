@@ -164,7 +164,9 @@ EOF
 turn over the conversation the last one left, a `steer` reaches the turn that is running, an `answer`
 replies to a question the agent asked, and a `stop` ends the turn in flight. Each turn ends with its
 own result object. Where nobody typed `--trust-input-lines`, the text of a line is a program's words
-and the agent is given a reference to it, never the words. [The reference](../reference/cli.md#--input-format-lines)
+and the agent is given a reference to it, never the words. With `--approve-input-lines` as well, the
+program is also shown each write, command and fetch that would ask you, and approves or declines it
+with an `answer`. [The reference](../reference/cli.md#--input-format-lines)
 has the lines and the events.
 
 ## Sending a follow-up to an earlier run
@@ -328,6 +330,7 @@ the wrong thing to search for.
 | `--json-stream` | one event per line on stdout as the run goes, then the result object |
 | `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line; implies `--json-stream` |
 | `--trust-input-lines` | treat those lines as your own words and not a program's |
+| `--approve-input-lines` | let the program sending those lines approve or decline each write, run or fetch |
 | `--output-schema <path>` | hold the reply to a JSON Schema; a reply off it ends on status 6, one that conforms is also `structured` under `--json` |
 | `--goal <condition>` | keep working until a judge says the condition holds; a condition that never does ends on status 7 |
 | `--max-rounds <n>` | stop the run when the agent asks for a round of tool calls past this many; ends on status 8 |

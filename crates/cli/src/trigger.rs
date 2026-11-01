@@ -1287,6 +1287,16 @@ mod tests {
             &["add", "deploy", "--event", "push", "--", "go", "more"][..],
             &["add", "deploy", "--event", "push", "--", " "][..],
             &["add", "deploy", "--event", "push", "--prompt", "go"][..],
+            // A stored run never carries it (CLI-36): it takes only the stored flags.
+            &[
+                "add",
+                "deploy",
+                "--event",
+                "push",
+                "--approve-input-lines",
+                "--",
+                "go",
+            ][..],
             &[
                 "add", "deploy", "--event", "push", "--filter", "a", "--", "go",
             ][..],
@@ -1333,6 +1343,7 @@ mod tests {
             text.replace("hourly: 6", "hourly: 0"),
             text.replace("event: push", "event: pu sh"),
             format!("{text}flag: --dangerously-skip-permissions-and\n"),
+            format!("{text}flag: --approve-input-lines\n"),
             text.replace("event: push\n", ""),
         ] {
             assert_eq!(Entry::from_text("deploy", &edited), None, "{edited}");

@@ -126,8 +126,9 @@ secret would be one a delivery could not reach, or one that skipped the check.
 
 The run is `bravebot -p <prompt>` with the entry's flags, in the entry's directory. It reads and
 reports. It can write only when the entry holds `--dangerously-skip-permissions`, which the person
-typed beside `add` and which is the only flag an entry holds. `--accept-edits`, `--auto` and
-`--trust-workspace` are not stored. The flag is refused at `add` where a settings layer made the
+typed beside `add` and which is the only flag an entry holds. `--accept-edits`, `--auto`,
+`--trust-workspace` and `--approve-input-lines` ([CLI-36](cli.md#CLI-36)) are not stored, so a
+stored run never carries `--approve-input-lines`. The flag is refused at `add` where a settings layer made the
 bypass mode unreachable, with the key named, and beside every other subcommand. Whether the run
 trusts its directory follows a one-shot run: only a kept answer settles it.
 

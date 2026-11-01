@@ -55,7 +55,9 @@ the same name after `/cd`, in another checkout or behind a link is asked about a
 `/cd`, `/clear` and `--resume`, and a delegate and a manifest run start without it. `r` is not offered
 in an incognito session or for a file outside the directory. Both settle the secret only: a write a
 rule asks about is still asked about. With nobody to ask, the write is refused unless the run is
-bypassing, even where a rule allows it. The desktop application and `--plain` offer yes and no only.
+bypassing, even where a rule allows it. A program that sends input lines and was started with
+`--approve-input-lines` is asked in your place for such a write, one call at a time. The desktop
+application and `--plain` offer yes and no only.
 
 **A write to a protected path is still put to you.** The protected paths are any `.git`, `.bravebot`
 or `.husky` component and the files `.gitmodules`, `.gitconfig` and `.pre-commit-config.yaml`

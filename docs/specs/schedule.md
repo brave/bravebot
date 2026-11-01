@@ -126,4 +126,5 @@ the entry is made at a firing.
 
 `verified-by: bravebot_cli::scheduled_runs::a_layer_that_made_the_bypass_unreachable_refuses_it_at_add_and_at_a_firing`
 `verified-by: bravebot_cli::schedule::a_stored_run_carries_one_of_three_modes_and_never_an_approval_flag`
+`verified-by: bravebot_cli::schedule::a_typed_line_stores_no_approval_flag_whatever_mode_it_carries`
 `verified-by: bravebot_cli::schedule::the_mode_is_read_only_unless_a_flag_was_typed`

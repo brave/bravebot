@@ -467,6 +467,10 @@ pub struct Tools<'a> {
     /// path a rule in the settings file allows, raise no prompt at all, so a refusal that waited
     /// for one would let exactly those writes through.
     pub permission_mode: crate::LiveMode,
+    /// Whether the lines handed to this turn come from a channel the person vouched for with a
+    /// flag they typed (CLI-36). Set from the task by the driver, and read only to say in the trail
+    /// what footing a typed answer to `ask_user` had.
+    pub vouched_channel: bool,
     /// Whether a check that finds nothing may promote a slot without anybody being asked.
     ///
     /// `false` for every turn nobody turned it on for, which is the default and what a turn has
@@ -2680,7 +2684,9 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         "search_skills" => search_skills(policy, tools.skills, &arguments),
         // A delegate's task came from a planner, so the question would ask the person to
         // arbitrate something they never set up. Refused here as well as absent from the list.
-        "ask_user" if !tools.delegated => ask_user(policy, confirmer, &arguments),
+        "ask_user" if !tools.delegated => {
+            ask_user(policy, confirmer, &arguments, tools.vouched_channel)
+        }
         // Offered only in plan mode and only to the turn the person is watching: a delegate's
         // plan came from a planner, and approving it would end a mode the person set for the
         // session. Refused here as well as absent from the list.
@@ -12566,6 +12572,7 @@ fn ask_user<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     confirmer: &mut C,
     arguments: &Value,
+    vouched_channel: bool,
 ) -> Produced {
     let Some(entries) = arguments.get("questions").and_then(Value::as_array) else {
         return Produced::problem(
@@ -12623,6 +12630,19 @@ fn ask_user<S: Sink, C: Confirmer>(
     // here branches on what the person said or counts what they answered. The line a person
     // reads counts the questions asked for the same reason: a count of replies would be a second
     // reading of them, and a skipped question has no reply to count.
+    //
+    // Words that arrived on a channel the person vouched for are recorded as that, beside the
+    // reply, and the count is the number of answers that are words, which is a fact about their
+    // kind and not about what they say (CLI-36).
+    if vouched_channel {
+        let words = answers
+            .iter()
+            .filter(|answer| matches!(answer, bravebot_core::ask::Answer::Typed(_)))
+            .count();
+        if words > 0 {
+            policy.admit_vouched_answer(words);
+        }
+    }
     match policy.record_answers("ask_user", &series, &answers) {
         Ok(text) => Produced::new(
             text,
@@ -19520,7 +19540,7 @@ mod tests {
             )
             .expect("policy")
             .with_trust(trust);
-            let produced = ask_user(&mut policy, confirmer, &arguments);
+            let produced = ask_user(&mut policy, confirmer, &arguments, false);
             // A question has no source in the workspace, so there is nothing for an origin to
             // name.
             assert!(
@@ -19730,7 +19750,7 @@ mod tests {
             .resuming(Integrity::Untrusted);
 
             let mut confirmer = Watching::default();
-            let text = ask_user(&mut policy, &mut confirmer, &three_questions()).text;
+            let text = ask_user(&mut policy, &mut confirmer, &three_questions(), false).text;
 
             assert!(
                 confirmer.seen.is_empty(),
@@ -19758,7 +19778,7 @@ mod tests {
             .resuming(Integrity::Untrusted);
 
             let mut confirmer = Unattended;
-            let text = ask_user(&mut policy, &mut confirmer, &one_question()).text;
+            let text = ask_user(&mut policy, &mut confirmer, &one_question(), false).text;
             assert_eq!(text.label(), Label::trusted_public());
         }
 
@@ -19807,6 +19827,55 @@ mod tests {
             assert_eq!(questions, ["Q0?", "Q1?", "Q2?", "Q3?"]);
         }
 
+        /// CLI-36: words that answer a question on a channel the person vouched for are recorded in
+        /// the trail as arriving that way. On a session, or on a channel nobody vouched for, nothing
+        /// says so, because there the words were typed at a keyboard or were never accepted.
+        #[test]
+        fn words_from_a_vouched_channel_are_recorded_as_that_and_a_position_is_not() {
+            let provenance = |reply: Answer, vouched: bool| {
+                let mut sink = RecordingSink::new();
+                {
+                    let mut policy = Policy::begin(
+                        routing(),
+                        ReleasePlan::new(),
+                        CapabilitySet::from_iter([Capability::FileRead]),
+                        &mut sink,
+                    )
+                    .expect("policy");
+                    let mut confirmer = Watching {
+                        reply: vec![reply],
+                        ..Watching::default()
+                    };
+                    ask_user(&mut policy, &mut confirmer, &one_question(), vouched);
+                }
+                sink.events()
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            bravebot_core::event::Event::GatePassed { gate: "provenance", detail }
+                                if detail.contains("vouched for")
+                                    && detail.contains("answering a question")
+                        )
+                    })
+                    .count()
+            };
+
+            assert_eq!(
+                provenance(Answer::Typed("use the query cache".into()), true),
+                1
+            );
+            assert_eq!(
+                provenance(Answer::Chosen(vec![1]), true),
+                0,
+                "a position carries no words, so there is nothing to say about where they came from"
+            );
+            assert_eq!(
+                provenance(Answer::Typed("use the query cache".into()), false),
+                0
+            );
+        }
+
         /// One call is one decision. A gate run per question would decide, question by question,
         /// whether that one is put to the person, and the gate's record would show it as several
         /// decisions where the call made one.
@@ -19822,7 +19891,7 @@ mod tests {
                 )
                 .expect("policy");
                 let mut confirmer = Watching::default();
-                ask_user(&mut policy, &mut confirmer, &arguments);
+                ask_user(&mut policy, &mut confirmer, &arguments, false);
                 sink.events()
                     .iter()
                     .filter(|event| {
@@ -24717,6 +24786,7 @@ mod tests {
                 mcp: None,
                 jobs: &mut jobs,
                 permission_mode: crate::LiveMode::default(),
+                vouched_channel: false,
                 auto_vetting: false,
                 run_directory: &mut run_directory,
                 confined_failures: &mut confined_failures,

@@ -72,7 +72,9 @@ confines and the first question about a URL when a classifier says to allow it, 
 the classifier does not allow. The three are refused in pairs, and `--accept-edits` and `--auto` are
 refused where the line starts no one-shot run, since a session has the mode key for the same thing. The planner's questions are declined in both modes, because they are not
 permissions. A run given `--input-format lines` puts them to the program sending its lines instead,
-which picks among the choices the planner offered and writes none of the words (CLI-36).
+which picks among the choices the planner offered, and on a channel the person vouched for may
+answer in words (CLI-36). With `--approve-input-lines` as well, that program is also put each
+write, run and fetch, and approves or declines that one call (CLI-36).
 
 **Why.** The alternative to a person is not a default, it is a guess made in their name. The
 planner is told a reply came from a person, so inventing one would be worse than not asking. A flag
@@ -155,7 +157,7 @@ plan and the model line written beside the reply ([TRACE-11](trace.md#TRACE-11))
 may take the reply's place on that stream is the result object in
 CLI-12, and it is still the only thing on it. The events of CLI-24 are the second exception: a run
 given `--json-stream` writes them ahead of that object, and nothing else is on the stream. A run
-given `--input-format lines` writes a result object for each turn it runs, and the two events of
+given `--input-format lines` writes a result object for each turn it runs, and the three events of
 CLI-36 beside the others.
 
 **Why.** A progress line mixed into stdout would corrupt whatever the user piped the reply into.
@@ -563,7 +565,7 @@ working one is opened; anything else is refused by name and the run stops before
 run's trust map holds nothing for it, so a file read there is read on the same footing as the
 project's own files without an answer about them: nothing vouched for it. `--trust-workspace` covers
 the working directory alone. A write there is refused as any other write in an unattended run is,
-and the flag in CLI-1 lifts that exactly as it does elsewhere.
+and the flag in CLI-1 lifts that exactly as it does elsewhere, `--approve-input-lines` included.
 
 **Why.** A headless task pointed at one checkout often needs to read another, and an absolute path
 outside the working directory is otherwise refused whatever else is true, so without this the task
@@ -2142,9 +2144,11 @@ reads it once. Each line is one JSON object with a `type`:
   line typed while a turn runs is ([INPUT-10](terminal-input.md#INPUT-10)). A steer sent while no
   turn runs, and one the turn ended without taking, starts a turn of its own, after the prompts
   already waiting.
-- `answer`, with the `id` of a `question` event and `choices`, answers that question. `choices` holds
-  one array for each question, of the positions of the choices picked in the order the event listed
-  them, and an empty array declines that question.
+- `answer`, with the `id` of a `question` or `permission` event and `choices`, answers that
+  question. `choices` holds one array for each question, of the positions of the choices picked in
+  the order the event listed them, and an empty array declines that question. An `answer` to a
+  `question` may hold `text` in the place of `choices`, which is taken only where the person typed
+  `--trust-input-lines` (below).
 - `stop` ends the turn that is running, as Ctrl-Enter does ([INPUT-36](terminal-input.md#INPUT-36)),
   and leaves the prompts waiting behind it to run. A `stop` sent while no turn runs does nothing.
 
@@ -2171,16 +2175,43 @@ of its turn, and a `steer` is an interjection that may not route, which the trai
 arriving on a channel the person vouched for and not as typed ([LABEL-8](labels.md#LABEL-8)). The
 flag is read from the command line and from nowhere else, as `--trust-workspace` is. It vouches for
 the words of the lines and for nothing else: it approves no effect (CLI-1), answers no trust
-question and vouches for no path.
+question and vouches for no path. An `answer` with `text` for the planner's own question is the
+person's own answer on such a channel, and the trail records it as arriving on a channel the
+person vouched for and not as typed ([LABEL-8](labels.md#LABEL-8)). The words are carried as the line spelt them and
+bounded by the cap of CLI-4, and the driver reads none of them. On a channel nobody vouched for the
+same line is refused as `not_vouched` and the question keeps waiting. A line with both `choices`
+and `text` is taken as its `choices`. A question that holds more than one prompt takes no `text`.
 
 A `steer` on a channel nobody vouched for is held as a `prompt` is. Handed to the running turn it
 would be a reference to words the planner cannot read, which steers nothing.
 
-**What a line cannot do.** The one question put to the program is the planner's own
-([ASK-1](tools/ask-user.md#ASK-1)). Every other question stays refused for want of anybody to ask
-(CLI-1): a write, a run, a fetch, a path, a server, a vouch, and the question the trust map asks about
-the directory. An `answer` names positions among choices the planner offered and carries no words, so
-it puts none into the planner's context. It is refused when no question with that `id` is waiting,
+**What a line cannot do.** The questions put to the program are the planner's own
+([ASK-1](tools/ask-user.md#ASK-1)) and, where the person typed `--approve-input-lines`, a write, a
+run and a fetch. Every other question stays refused for want of anybody to ask (CLI-1): a path, a
+server, a vouch, a host, a plan, and the question the trust map asks about the directory.
+`--approve-input-lines` is a flag of its own, because `--trust-input-lines` answers whose words
+these are and an approval answers whether an effect happens. A person who typed only the first has
+approved nothing. A permission is approved by its position with `--approve-input-lines` alone, and
+words are accepted as an `answer` to the planner's question only with `--trust-input-lines`, so a run
+that does both types both flags.
+
+A `permission` event is written when a write, a run or a fetch reaches the point where a person
+would be asked. It holds `id`, `kind` (`write`, `run` or `fetch`), `call` and `choices`. `call`
+holds the words that say what the call is, which are those the kernel released to put the question:
+`path` and `contents` for a write, `command` and `directory` for a run, `url` and `host` for a
+fetch. `choices` is always `reject` then `approve`. An `answer` to it names one position, `[[1]]` to
+approve and `[[0]]` to decline, and the driver compares that position with the number it fixed
+and reads none of the words of `call`. The approval is for that one call. The next write is a
+new `permission` event with an id of its own, nothing is remembered for the series, and nothing is
+recorded in the trust map or the permission rules. It is declined when stdin closes or the turn is
+stopped while it waits, and a decline ends the run on the status for a refusal as it does in any
+run nobody can ask. A write to a protected path or to which the credential scan found a value, and
+a run that asks for credential scopes or to run unconfined, are not put: the program's yes does not
+stand in for what accepting edits also leaves refused. An `answer` to a `permission` holds
+positions and no words.
+
+An `answer` to a `question` names positions among choices the planner offered, or holds `text` on a
+vouched channel (above). It is refused when no question with that `id` is waiting,
 when it holds other than one array for each question, a position the question does not have or the
 same position twice, and more than one position for a question that takes one. A question takes the
 first answer that fits, and a second naming it finds nothing waiting. A `choices` of more than 16
@@ -2188,7 +2219,13 @@ arrays, or with an array of more than 256 positions, is a field of another kind.
 waiting when stdin closes, or when the turn is stopped, is declined as it is in any run nobody can
 ask ([ASK-7](tools/ask-user.md#ASK-7)).
 
-**What the stream carries.** The events of CLI-24 for each turn, and two more. A `question` event,
+An answer is not remembered. A session in lines keeps no answer memo ([ASK-8](tools/ask-user.md#ASK-8)
+is kept by the terminal interface, `--plain` and the desktop application), so a planner that puts the
+same question again in a later turn is sent it again as a new `question` event, and the program's
+earlier `answer`, in words or by position, is not taken as the person's for it. `lines.rs` does not
+name `AnswerMemo`, which is what holds that by construction.
+
+**What the stream carries.** The events of CLI-24 for each turn, and three more. A `question` event,
 with `id` and `questions`, is written when the planner asks. Each question holds `header`,
 `question`, `choices`, each with a `label` and a `detail` that is `null` where there is none, and
 `multiple`. It is the one event that holds words the result object does not hold, which are those the
@@ -2196,7 +2233,8 @@ kernel released to put the question to somebody, the words a session draws. An `
 with `line`, the number of the line in stdin counted from 1, and `reason`, is written for a line that
 was not taken. `reason` is one of `unreadable`, for a line over the cap of CLI-4 or not UTF-8;
 `not_json`, where it is not one JSON object; `unknown_type`; `bad_field`, where a field its type needs
-is missing, repeated, empty or of another kind; `no_such_question`; and `too_much_waiting`, for
+is missing, repeated, empty or of another kind; `no_such_question`; `not_vouched`, for an `answer`
+with `text` on a channel nobody vouched for; and `too_much_waiting`, for
 words that would take the bytes waiting for a turn past the cap of CLI-4. It holds nothing the line
 said. A blank line is nothing and is not refused.
 
@@ -2207,7 +2245,9 @@ file piped in whole fills no more memory than one piped to `-p` does. A read of 
 ends the input as the end of it does.
 
 Refused with the status for an argument (CLI-6), before stdin is read: `--input-format` with a word
-other than `lines`; `--trust-input-lines` without `--input-format lines`; and
+other than `lines`; `--trust-input-lines` or `--approve-input-lines` without `--input-format lines`;
+`--approve-input-lines` with `--accept-edits`, `--auto` or `--dangerously-skip-permissions`, each of
+which already answers the questions it would; and
 `--input-format lines` with `--mode manifest`, which has one task and no turns to add.
 
 **Under `--incognito`.** An incognito run writes no record ([INCOG-3](incognito.md#INCOG-3)), so
@@ -2226,11 +2266,13 @@ could ask about, so its words take the pessimistic label CLI-3 gives a pipe, and
 raises it is something a person typed on the command line, which is where every other instruction
 for a run nobody is watching is given (CLI-1). A flag that vouched for the lines and also answered
 the permission questions would turn one decision about whose words these are into a standing
-approval of effects, so it does not.
+approval of effects, so it does not. `--approve-input-lines` is that decision made separately, by a
+person who typed it, for one call at a time.
 
-An answer is a position and nothing else, so what a program can choose is among words the planner
-already wrote, and what it sends the driver to act on is ids and enumerated values. A free-text
-answer as well would let it write into the planner's context under the label of a person.
+A permission is answered by a position among two choices the driver fixed, and an `answer` to the
+planner's question is a position or, on a vouched channel, words the person has said are their own.
+What a program sends the driver to act on is ids and enumerated values, and on an unvouched channel
+it cannot write into the planner's context at all.
 
 Words past the cap are refused with an event and the read goes on. A read that paused until a turn
 had taken words would not see the `answer` or the `stop` that the turn in flight is waiting for.
@@ -2247,7 +2289,7 @@ them. The rule keeps untrusted content out of the driver ([LAYER-2](layering.md#
 `lines.rs` is in `bravebot-cli`, which [LAYER-1](layering.md#LAYER-1) lists as presentation: it holds
 no labelled value and mints no witness. It reads the fixed words and the numbers listed here, which
 the envelope spells, and hands the driver what any front end does: the token that stops a turn, a
-position as the answer to a question, and a steer that is the person's own words only where they
+position as the answer to a question, whether a permission was approved, and a steer or an answer in words that is the person's own words only where they
 vouched for the channel. The `text` of a line is unescaped and seen to be there, and nothing in it
 is read: it is carried as the line spelt it, under the channel's label. Those decisions settle no
 effect and put no word of the program's into the planner's context. The program is also what
@@ -2309,7 +2351,28 @@ one the person chose to run with the flag.
 `verified-by: bravebot_cli::running::a_question_is_put_to_the_program_and_its_pick_reaches_the_planner`
 `verified-by: bravebot_cli::running::a_question_is_declined_when_the_input_ends_without_an_answer`
 `verified-by: bravebot_cli::running::a_line_does_not_approve_a_write`
+`verified-by: bravebot_cli::running::a_program_approves_a_write_it_was_shown_and_declines_another`
+`verified-by: bravebot_cli::running::an_approval_answers_one_call_and_the_next_is_asked_again`
+`verified-by: bravebot_cli::running::a_permission_is_declined_when_the_input_ends_without_an_answer`
+`verified-by: bravebot_cli::running::a_permission_is_not_answered_by_a_position_that_is_not_a_choice_or_by_words`
+`verified-by: bravebot_cli::running::a_program_approves_a_run_it_was_shown_and_declines_another`
+`verified-by: bravebot_cli::running::a_program_is_shown_a_fetch_with_its_url_and_host_and_can_decline_it`
+`verified-by: bravebot_cli::running::a_write_to_a_protected_path_is_not_put_to_the_program`
+`verified-by: bravebot_cli::running::a_write_holding_a_credential_is_not_put_to_the_program`
+`verified-by: bravebot_cli::one_shot::a_run_is_put_to_the_program_with_its_command_and_directory_and_runs_only_on_approval`
+`verified-by: bravebot_cli::one_shot::a_fetch_is_put_to_the_program_with_its_url_and_host_and_proceeds_only_on_approval`
+`verified-by: bravebot_cli::one_shot::a_write_to_a_protected_path_is_not_put_to_a_program_that_approves_everything`
+`verified-by: bravebot_cli::one_shot::a_write_the_credential_scan_found_a_value_in_is_not_put_to_a_program_that_approves_everything`
+`verified-by: bravebot_cli::one_shot::a_run_asking_for_scopes_or_to_run_unconfined_is_not_put_to_a_program_that_approves_everything`
+`verified-by: bravebot_cli::one_shot::an_approving_program_cannot_answer_the_question_that_vouches_for_a_path`
+`verified-by: bravebot_cli::running::a_vouched_channel_without_the_approval_flag_is_not_asked_about_a_write`
+`verified-by: bravebot_cli::running::words_answer_a_question_on_a_vouched_channel`
+`verified-by: bravebot_cli::running::words_are_refused_on_a_channel_nobody_vouched_for`
+`verified-by: bravebot_cli::lines::an_answer_in_words_is_read_as_words_and_a_pick_wins_over_them`
+`verified-by: bravebot_cli::lines::words_are_taken_only_on_a_vouched_channel_and_only_for_a_question_of_one_prompt`
+`verified-by: bravebot_agent::tools::words_from_a_vouched_channel_are_recorded_as_that_and_a_position_is_not`
 `verified-by: bravebot_cli::running::input_lines_is_refused_beside_what_it_cannot_go_with`
+`verified-by: bravebot_cli::running::an_incognito_run_reading_lines_still_puts_a_write_to_the_program_and_writes_no_record`
 `verified-by: bravebot_cli::running::a_run_reading_lines_streams_without_being_given_the_stream_flag`
 `verified-by: bravebot_cli::running::a_failed_command_line_for_a_lines_run_is_a_result_object`
 `verified-by: bravebot_cli::running::a_run_that_reads_lines_and_is_sent_no_prompt_has_no_task`
