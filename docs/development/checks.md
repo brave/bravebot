@@ -191,6 +191,11 @@ not build the Android or iOS projects. The Mobile app CI job runs it. The classi
 change under `mobile/` or `packages/agent-client/`, and a change under `mobile/` alone does not run
 the Front end job.
 
+`make check-sdk` builds `bravebot`, then installs, type-checks, builds and tests `packages/sdk`. Its
+tests run that binary against a model service of their own, an empty home and a scratch project, so
+they need no credentials and no desktop session. The SDK CI job runs it, and the classifier gives it
+to any change under `packages/sdk/` or under `crates/`.
+
 `make check-scripts` checks that every required gate runs, that UI, installer and lockfile
 failures reach the caller, and that scanner failures cannot pass as empty scans. The installer
 half also holds `check-npm` to reaching the npm tests and the lockfile lint's own cases before
@@ -359,7 +364,7 @@ gap makes fail, and is the one to read while translating. Run the check before a
 `crates/i18n/locales`.
 
 `make check-versions` holds every file that states the version to the workspace manifest: the
-published wrapper and the desktop application, each of which states it in its own
+published wrapper, the desktop application and the unpublished SDK, each of which states it in its own
 `package.json`; a pnpm lockfile records no version for the project it locks. `make
 check` runs it and so does CI, because the tagging path's own refusal fires on release day, which
 is long after the pull request that moved one file and not the others. It carries a `--selftest`,

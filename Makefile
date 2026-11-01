@@ -34,7 +34,7 @@ RPM_IMAGE = fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e51
 # ui/ are the desktop application's: it is packaged from its own manifest, so a version left
 # behind there is an app bundle naming a release that does not exist. The lock under fuzz/ records
 # the version of every bravebot crate the fuzz targets build, so `check-fuzz` fails on a stale one.
-VERSION_FILES = Cargo.toml Cargo.lock fuzz/Cargo.lock package.json ui/package.json
+VERSION_FILES = Cargo.toml Cargo.lock fuzz/Cargo.lock package.json ui/package.json packages/sdk/package.json
 
 # Forwarded into the cross-build container, which does not inherit the host environment.
 BUILD_ENV = SERVICES_KEY_AICHAT BRAVE_SERVICES_KEY_ID BRAVE_AI_CHAT_ENDPOINT \
@@ -80,6 +80,7 @@ help:
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
 	@echo "  make check-extension       Test the two Brave extensions against a fake browser and a fake debugger"
 	@echo "  make check-agent-client    Build and test the TypeScript session client against a real bravebot-rpc"
+	@echo "  make check-sdk            Build and test the TypeScript SDK against a real bravebot"
 	@echo "  make check-mobile          Type-check and test the React Native app (no device or simulator)"
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
 	@echo "  make locales               What each translation has, and what it is missing"
@@ -317,8 +318,8 @@ check-reviewdog-full: check-reviewdog-selftest
 
 # The npm-lockfile job. The published package is a thin wrapper that downloads the
 # release binary, and it has no dependencies, so that download is the whole supply chain surface
-# it has. The four projects with dependencies are ui/ (Electron's tree), docs/website,
-# packages/agent-client and mobile/. Each has a pnpm lockfile of its own and none is a workspace
+# it has. The five projects with dependencies are ui/ (Electron's tree), docs/website,
+# packages/agent-client, packages/sdk and mobile/. Each has a pnpm lockfile of its own and none is a workspace
 # of another deliberately, so nothing else reaches them.
 #
 # `install --frozen-lockfile --lockfile-only` fails when a lockfile does not satisfy its
@@ -339,6 +340,7 @@ check-npm:
 	pnpm --dir ui install --frozen-lockfile --lockfile-only
 	pnpm --dir docs/website install --frozen-lockfile --lockfile-only
 	pnpm --dir packages/agent-client install --frozen-lockfile --lockfile-only
+	pnpm --dir packages/sdk install --frozen-lockfile --lockfile-only
 	pnpm --dir mobile install --frozen-lockfile --lockfile-only
 	python3 contrib/check-pnpm-lockfiles.py
 
@@ -587,7 +589,7 @@ clean-worktrees:
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
 .PHONY: check-all-local check-all
-check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
+check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-sdk check-mobile check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
 # The gates this branch's changes need, against its merge base with BASE, which check-reviewdog
@@ -694,6 +696,16 @@ check-agent-client:
 	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo build -p bravebot-ui-bridge --bin bravebot-rpc --bin bravebot-host
 	pnpm --dir packages/agent-client install --frozen-lockfile --ignore-scripts
 	pnpm --dir packages/agent-client run check
+
+# The TypeScript SDK under packages/sdk: its types, its build, and its tests, which run the real
+# bravebot binary against a model service of their own. The binary is built here because the tests
+# never build it themselves. The package has its own lockfile and is not a pnpm workspace.
+.PHONY: check-sdk
+check-sdk:
+	ls packages/sdk/tests/*.test.ts >/dev/null
+	BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo build -p bravebot-cli --bin bravebot
+	pnpm --dir packages/sdk install --frozen-lockfile --ignore-scripts
+	pnpm --dir packages/sdk run check
 
 # The React Native app under mobile/: its types and its tests, against the session client it links.
 # The client is built first because the app resolves it through its dist. Neither a device nor a
@@ -1238,11 +1250,11 @@ checksums:
 	done
 	@echo "wrote dist/SHA256SUMS"
 
-# Edits the four files that state the version and commits exactly those, so no lockfile is
+# Edits the files that state the version and commits exactly those, so no lockfile is
 # left behind still naming the old one. It stops there: nothing is pushed and nothing is
 # tagged, and the commit is still reviewed before `github-release` will tag it.
 #
-# The four JSON files are written by contrib/check-versions.py, which is also what reads them, so
+# The JSON files are written by contrib/check-versions.py, which is also what reads them, so
 # the bump and the check cannot disagree about where a version is stated. It replaced a node
 # program embedded in this recipe that could not run at all: a recipe's line continuations are
 # literal backslashes inside the single quotes holding the program, so node was handed a source

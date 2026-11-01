@@ -169,6 +169,9 @@ program is also shown each write, command and fetch that would ask you, and appr
 with an `answer`. [The reference](../reference/cli.md#--input-format-lines)
 has the lines and the events.
 
+A Node program can start these processes through [the TypeScript SDK](sdk.md), which passes
+only the flags it lists.
+
 ## Sending a follow-up to an earlier run
 
 ```sh
