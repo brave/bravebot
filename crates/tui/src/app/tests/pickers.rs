@@ -476,3 +476,63 @@ fn the_model_picker_opened_mid_turn_takes_a_press_the_wheel_and_a_press_outside(
         "the press outside took a model"
     );
 }
+
+/// VIEW-40, in a picker a session holds. Rejects: Enter on a section folded away closing the
+/// picker, which is what the session does with any key that takes a row when nothing is under the
+/// cursor, and a model taken that was folded away. Right opens the section and Enter takes its
+/// first model.
+#[test]
+fn enter_on_a_folded_section_leaves_the_model_picker_open() {
+    let (mut session, _) = a_session_beside_the_panel();
+    open_models(&mut session);
+    drawn(&mut session);
+
+    session.press_in_picking(KeyCode::Left, KeyModifiers::NONE);
+    assert_eq!(model_under_the_cursor(&session), None);
+    session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
+    assert!(session.picking().is_some(), "Enter closed the picker");
+    assert!(session.take_pick().is_none(), "Enter took a folded model");
+
+    session.press_in_picking(KeyCode::Right, KeyModifiers::NONE);
+    session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
+    assert!(session.picking().is_none(), "Enter left the picker open");
+    match session.take_pick() {
+        Some(Picked::Model(model)) => assert_eq!(model.display_name, "first-model"),
+        other => panic!("the row taken was {other:?}"),
+    }
+}
+
+/// VIEW-41, in a picker a session holds. Rejects: a page that is not the list the session drew,
+/// such as a fixed number of rows or the page a picker that has not been drawn would move by. The
+/// list opens on `model-0`, under the heading on the first row, so a page of the list less one row
+/// puts the cursor on the model that many rows down.
+#[test]
+fn page_down_moves_the_model_picker_by_the_list_the_session_drew() {
+    let (mut session, _) = a_session_beside_the_panel();
+    session.open_picking(Picking::Model(crate::model_prompt::Picker::new(
+        a_long_roster(40),
+        None,
+    )));
+    drawn(&mut session);
+    let list = session
+        .laid
+        .popup(crate::state::Panel::Picker)
+        .and_then(|popup| popup.list)
+        .expect("the list was recorded");
+    assert!(
+        list.height > 3,
+        "the fixture's list is too short to tell a page from a row"
+    );
+
+    session.press_in_picking(KeyCode::PageDown, KeyModifiers::NONE);
+    let page = usize::from(list.height) - 1;
+    assert_eq!(
+        model_under_the_cursor(&session),
+        Some(format!("model-{page}"))
+    );
+    session.press_in_picking(KeyCode::PageUp, KeyModifiers::NONE);
+    assert_eq!(
+        model_under_the_cursor(&session),
+        Some("model-0".to_string())
+    );
+}

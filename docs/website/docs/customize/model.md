@@ -28,7 +28,8 @@ narrows, and falls to the first match once that model no longer matches. A searc
 says so, and there is nothing to select while it does.
 
 Rows are **grouped under the service that answers them**, one heading per service, and the heading of
-the section you are scrolling through is held on the top line.
+the section you are scrolling through is held on the top line. Left folds the section the cursor is in
+down to its heading and Right opens it again, and PageDown and PageUp move a screenful at a time.
 
 `automatic-bravebot` lets the server triage per request, and is what an unrecognised name is reset
 to. It is always offered, so it is the one choice that cannot fail to work. The model requested is not

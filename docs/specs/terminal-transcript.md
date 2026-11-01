@@ -1318,6 +1318,66 @@ the info panel is open and the widths differ.
 `verified-by: bravebot_tui::app::tests::scrollbar::a_selection_held_when_the_bar_first_appears_is_put_away_and_not_when_it_only_moves`
 `verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
 
+<a id="VIEW-40"></a>
+### VIEW-40: a section of the model picker folds to its heading
+
+In the model picker, Left folds the section the cursor is in. The models of a folded section are not
+drawn, and its heading says how many matching models it holds (`▸ Name  (3)`) where an open section's
+heading is marked `▾`. The cursor goes to the nearest model still drawn: the first after the section,
+or the last before it where nothing comes after. Right opens the folded section the cursor is in, or
+else the nearest one above it, or else the first one in the list, and puts the cursor on that
+section's first model. Up, Down, Home, End and the wheel go over the models of a folded section, and
+none of them can be taken: while the cursor is in a folded section Enter leaves the picker open and
+takes nothing, and Escape leaves it as it does anywhere. Where every section is folded the cursor
+stays in the last one folded, and that heading is drawn as the row the cursor is on. Typing a
+character or deleting one opens every section. A press on the heading of a section does nothing
+([MOUSE-15](mouse.md#MOUSE-15)). The key line names the keys, and is short enough to be drawn whole in
+the widest panel.
+
+**Why.** A gateway's roster runs to hundreds of models and is listed beside Brave's own and whatever
+a settings file configured, so the section wanted can be several screens below the first one. Folding
+puts a section out of the way without taking it out of the search. Enter does nothing while the
+cursor is in a folded section because the picker closes on a row taken with nothing under the cursor,
+and a key pressed to look at the list should not end it. A search opens every section because a
+section folded away would hide the models a person typed to find.
+
+`verified-by: bravebot_tui::model_prompt::left_folds_the_section_the_cursor_is_in_to_its_heading`
+`verified-by: bravebot_tui::model_prompt::a_fold_moves_the_cursor_to_the_nearest_model_still_drawn`
+`verified-by: bravebot_tui::model_prompt::the_keys_go_over_the_models_of_a_folded_section`
+`verified-by: bravebot_tui::model_prompt::nothing_is_taken_from_a_section_folded_away`
+`verified-by: bravebot_tui::model_prompt::right_opens_a_folded_section_and_puts_the_cursor_on_its_first_model`
+`verified-by: bravebot_tui::model_prompt::typing_or_backspacing_opens_every_section`
+`verified-by: bravebot_tui::model_prompt::a_folded_section_holding_the_cursor_is_drawn_as_the_row_it_is_on`
+`verified-by: bravebot_tui::model_prompt::the_wheel_goes_over_the_models_of_a_folded_section`
+`verified-by: bravebot_tui::model_prompt::a_press_finds_its_model_among_rows_a_fold_has_left_out`
+`verified-by: bravebot_tui::model_prompt::a_ctrl_chord_does_not_fold`
+`verified-by: bravebot_tui::model_prompt::the_fold_and_page_keys_do_nothing_where_there_are_no_models`
+`verified-by: bravebot_tui::model_prompt::the_key_line_is_drawn_whole_in_the_widest_panel`
+`verified-by: bravebot_tui::app::tests::pickers::enter_on_a_folded_section_leaves_the_model_picker_open`
+
+<a id="VIEW-41"></a>
+### VIEW-41: the page keys move the model picker's cursor a screenful
+
+In the model picker, PageDown and PageUp move the cursor by the height of the list less one row,
+counted in rows of the list, so the headings and the gaps between sections count. The cursor lands on
+the last model within that distance, and where no model is within it, on the next one. It stops at the
+first model and the last. Every model is drawn on some screen on the way down and on the way back, and
+a model in a folded section ([VIEW-40](#VIEW-40)) is neither drawn nor landed on. Home and End go to
+the first and last model drawn. The height is the list as the last frame drew it.
+
+**Why.** The panel is as tall as the terminal allows and a gateway's roster is longer than that, so
+arrowing one row at a time is the only way through it that the search does not replace. A step counted
+in models would carry the cursor past the headings and gaps it crosses, and a model just short of the
+boundary would never be on screen. A page of one row less than the list is tall begins on the row the
+last one ended on, which leaves nothing unseen even when a held heading ([VIEW-15](#VIEW-15)) takes the
+top row of the list.
+
+`verified-by: bravebot_tui::model_prompt::a_page_moves_the_cursor_a_screenful_less_a_row_counting_headings_and_gaps`
+`verified-by: bravebot_tui::model_prompt::paging_shows_every_model_and_stops_at_both_ends`
+`verified-by: bravebot_tui::model_prompt::paging_goes_over_a_folded_section`
+`verified-by: bravebot_tui::model_prompt::the_fold_and_page_keys_do_nothing_where_there_are_no_models`
+`verified-by: bravebot_tui::app::tests::pickers::page_down_moves_the_model_picker_by_the_list_the_session_drew`
+
 ## Known costs
 
 - **The desktop window is sent the thinking whether or not it is shown.** Holding it is what lets

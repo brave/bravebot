@@ -1763,7 +1763,7 @@ theme-picker-title = thèmes
 theme-picker-keys = ↑↓ choisir  ·  Entrée valider  ·  Échap garder l'actuel
 model-picker-heading = Choisir un modèle
 model-picker-keys =
-    ↑↓ choisir  ·  Entrée valider  ·  tapez pour rechercher  ·  Échap garder l'actuel
+    ↑↓ PgUp PgDn choisir · ←→ plier · Entrée valider · Échap garder l'actuel
 model-picker-search-placeholder = Rechercher
 model-picker-nothing-matches = aucune correspondance
 model-picker-loading = chargement des modèles…
