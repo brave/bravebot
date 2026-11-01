@@ -1051,6 +1051,13 @@ fn answer_in_a_turn(
         crate::remote_confirm::ToMain::ToolList(request) => {
             answer_tool_list_in_a_turn(terminal, session, replying, &request);
         }
+        crate::remote_confirm::ToMain::ResourceList(request) => {
+            answer_resource_list_in_a_turn(terminal, session, replying, &request);
+        }
+        crate::remote_confirm::ToMain::ResourceRead(request) => {
+            let answer = crate::confirm::ask_resource_read(terminal, &request);
+            replying.plainly(session, answer, crate::remote_confirm::Reply::ResourceRead);
+        }
         crate::remote_confirm::ToMain::McpCall(request) => {
             answer_mcp_call_in_a_turn(terminal, session, replying, &request);
         }
@@ -1187,6 +1194,32 @@ fn answer_tool_list_in_a_turn(
             }
         },
         crate::remote_confirm::Reply::ToolList,
+    );
+}
+
+/// Put the resources an MCP server offers to the person and send the answer back.
+fn answer_resource_list_in_a_turn(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    replying: &Replying<'_>,
+    request: &bravebot_agent::confirm::ResourceListRequest,
+) {
+    let answer = crate::confirm::ask_resource_list(terminal, request);
+    replying.reply(
+        session,
+        answer,
+        |session, answer| {
+            if *answer == crate::confirm::Answer::Approve {
+                // Said on the transcript because the planner reads these resources'
+                // descriptions from here on, in this session and the ones after it.
+                session.note(t!(
+                    session_offered_resources,
+                    alias = &request.alias,
+                    count = request.resources.len()
+                ));
+            }
+        },
+        crate::remote_confirm::Reply::ResourceList,
     );
 }
 

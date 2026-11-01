@@ -2782,6 +2782,86 @@ function Card({
       )
     }
 
+    case 'mcp-resources': {
+      const { request, decision } = entry
+      const count = request.resources.length
+      return (
+        <DecisionCard
+          className={`confirm mcp-resources ${request.vetting.verdict === 'unsafe' ? 'unsafe' : ''}`}
+          answerable={answerable}
+          subject={request.alias}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You offered these resources to the model' : 'You kept these resources from the model' }}
+          head={<CardHead icon="wrench" intent="Offer resources" deciding
+            subject={<code className="path">{request.alias}</code>}
+            counts={<span className="counts">{count} resource{count === 1 ? '' : 's'}</span>}
+            trust={<VettingVerdict vetting={request.vetting} />} />}
+          actions={<YesOrNo kind="mcp-resources" request={request.request} onDecide={onDecide} reject="Continue without them" approve="Offer these resources" />}
+        >
+
+          <VettingReason vetting={request.vetting} />
+
+          <p className="permission-scope" data-deciding="all">
+            The model will read each resource's name, URI and what the server says about
+            it, exactly as shown here. The descriptions are the server's own text. Say no if one
+            gives instructions.
+          </p>
+
+          {/* Each description is the server's text, drawn as text in a marked block, so it never
+              reads as this app's own words (SERVERS-21). */}
+          <ul className="mcp-resources-list" data-deciding="all">
+            {request.resources.map((resource) => (
+              <li key={resource.uri}>
+                <code className="mcp-resource-name">{resource.name}</code>
+                <span className="mcp-resource-uri"><code>{resource.uri}</code></span>
+                {resource.mimeType && <span className="mcp-resource-mime">({resource.mimeType})</span>}
+                {resource.description && (
+                  <blockquote className="mcp-resource-description" data-tooltip="Written by the server">
+                    {resource.description}
+                  </blockquote>
+                )}
+              </li>
+            ))}
+          </ul>
+          {request.refused > 0 && (
+            <p className="permission-scope" data-deciding="all">
+              {request.refused} more resource{request.refused === 1 ? ' is' : 's are'} not listed:
+              {request.refused === 1 ? ' its' : ' their'} name or URI cannot be offered.
+            </p>
+          )}
+
+          <p className="permission-scope" data-deciding="all">
+            Approving this list allows the model to read any of these resources without asking
+            again for the rest of the session. The same list is not asked about again.
+          </p>
+        </DecisionCard>
+      )
+    }
+
+    case 'mcp-resource-read': {
+      const { request, decision } = entry
+      return (
+        <DecisionCard
+          className="confirm mcp-resource-read"
+          answerable={answerable}
+          subject={request.uri}
+          decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed reading this resource' : 'You refused reading this resource' }}
+          head={<CardHead icon="eye-on" intent="Read resource" deciding
+            subject={<code className="path" data-deciding="first">{request.uri}</code>} />}
+          actions={<YesOrNo kind="mcp-resource-read" request={request.request} onDecide={onDecide} reject="Refuse reading" approve="Allow reading" />}
+        >
+          <p className="permission-scope" data-deciding="all">
+            <strong>Server:</strong> <code>{request.alias}</code>
+          </p>
+
+          <p className="permission-scope">
+            What comes back is quarantined: only an isolated processor can be sent to read it.
+            Allowing this read remembers this resource for the rest of the session, so reading
+            it again does not ask again.
+          </p>
+        </DecisionCard>
+      )
+    }
+
     case 'mcp-call': {
       const { request, decision, remember } = entry
       return (
@@ -3112,6 +3192,10 @@ function waitingOn(kind: t.Asking['kind']): string {
       return 'Answer the MCP server'
     case 'mcp-tools':
       return 'Answer the MCP tools'
+    case 'mcp-resources':
+      return 'Answer the MCP resources'
+    case 'mcp-resource-read':
+      return 'Answer the MCP resource read'
     case 'mcp-call':
       return 'Answer the MCP call'
     case 'mcp-move':

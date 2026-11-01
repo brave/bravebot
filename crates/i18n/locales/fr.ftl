@@ -3110,6 +3110,11 @@ session-offered-tools =
         [one] l'outil de { $alias } est proposé au modèle
        *[other] les { $count } outils de { $alias } sont proposés au modèle
     }
+session-offered-resources =
+    { $count ->
+        [one] la ressource de { $alias } est proposée au modèle
+       *[other] les { $count } ressources de { $alias } sont proposées au modèle
+    }
 session-stands-for-tool = { $tool } appelé sans demander dans ce projet
 session-answered-already = déjà répondu : { $question }
 session-question-timed-out = { $seconds ->
@@ -3673,6 +3678,8 @@ verb-read-output = Lire la sortie
 verb-vet-content = Vérifier
 verb-fetch-url = Récupérer
 verb-download-url = Télécharger
+verb-list-mcp-resources = Ressources
+verb-read-mcp-resource = Lire la ressource
 verb-job-output = Tâche
 verb-spawn-agent = Déléguer
 verb-schedule-next = Programmer

@@ -192,6 +192,8 @@ pub const DENIED: &[&str] = &[
     "host.reply",
     "mcp-server.reply",
     "mcp-tools.reply",
+    "mcp-resources.reply",
+    "mcp-resource-read.reply",
     "mcp-call.reply",
     "mcp-move.reply",
 ];

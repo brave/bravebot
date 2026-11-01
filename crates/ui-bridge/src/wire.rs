@@ -25,8 +25,9 @@
 use bravebot_agent::PermissionMode;
 use bravebot_agent::confirm::{
     CallDecision, Decision, ExposureRequest, FetchRequest, HostRequest, Intent, ManifestRequest,
-    McpCallRequest, MoveRequest, OutputRequest, RunDecision, RunRequest, ServerRequest,
-    ToolListRequest, VetRequest, VouchRequest, WriteRequest,
+    McpCallRequest, MoveRequest, OutputRequest, ResourceListRequest, ResourceReadRequest,
+    RunDecision, RunRequest, ServerRequest, ToolListRequest, VetRequest, VouchRequest,
+    WriteRequest,
 };
 use bravebot_agent::conversation::{Address, Composed, Said};
 use bravebot_agent::diff::Change;
@@ -898,6 +899,46 @@ pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
         "refused": request.refused,
         "withheld": request.withheld,
         "vetting": vetting(request.verdict, request.reason.as_deref(), None),
+    })
+}
+
+/// A server's resources, put to the person before the planner receives the list (SERVERS-21).
+///
+/// On approval, the list is promoted to trusted public under LABEL-8 for the rest of the session,
+/// and reading any resource offered in the approved list requires no further confirmation.
+pub fn mcp_resources_request(id: u64, request: &ResourceListRequest) -> Value {
+    let resources: Vec<Value> = request
+        .resources
+        .iter()
+        .map(|res| {
+            json!({
+                "uri": res.uri,
+                "name": res.name,
+                "description": res.description,
+                "mimeType": res.mime_type,
+            })
+        })
+        .collect();
+    json!({
+        "request": id,
+        "alias": request.alias,
+        "resources": resources,
+        "refused": request.refused,
+        "vetting": vetting(request.verdict, request.reason.as_deref(), None),
+    })
+}
+
+/// Asked when the planner requests a URI the approved resource list did not cover, or before the
+/// server's list has been approved (SERVERS-21).
+///
+/// A yes permits reading this specific resource for the turn; the payload is placed into
+/// quarantine as untrusted and private, returning an opaque reference token (ref:N) to the planner,
+/// so no vetting check is run and no vetting field is sent to the front end.
+pub fn mcp_resource_read_request(id: u64, request: &ResourceReadRequest) -> Value {
+    json!({
+        "request": id,
+        "alias": request.alias,
+        "uri": request.uri,
     })
 }
 

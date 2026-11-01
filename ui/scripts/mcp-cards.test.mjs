@@ -95,6 +95,24 @@ const move = (overrides = {}) =>
     ...overrides,
   })
 
+const resources = (overrides = {}) =>
+  t.askedMcpResources({
+    request: 8,
+    alias: 'weather',
+    resources: [{ uri: 'memo://forecast', name: 'Forecast', description: 'the forecast for a city', mimeType: 'text/plain' }],
+    refused: 0,
+    vetting: { verdict: 'safe' },
+    ...overrides,
+  })
+
+const resourceRead = (overrides = {}) =>
+  t.askedMcpResourceRead({
+    request: 9,
+    alias: 'weather',
+    uri: 'memo://forecast',
+    ...overrides,
+  })
+
 test('the server card shows the whole declaration, and a stored value by its name only', () => {
   const markup = draw(server())
 
@@ -156,10 +174,35 @@ test('a list that holds tools that cannot be offered says so', () => {
   assert.ok(draw(tools({ refused: 1 })).includes('1 more tool is not listed'))
 })
 
+test('the resources card draws each resource and its description as the server wrote it, set apart', () => {
+  const markup = draw(resources())
+  assert.ok(markup.includes('<code class="mcp-resource-name">Forecast</code>'), markup)
+  assert.ok(markup.includes('<code>memo://forecast</code>'), markup)
+  assert.ok(markup.includes('(text/plain)'), markup)
+  assert.ok(markup.includes('class="mcp-resource-description"'), markup)
+  assert.ok(markup.includes('the forecast for a city'), markup)
+  assert.ok(markup.includes('without asking again for the rest of the session'), markup)
+  assert.deepEqual(buttons(markup), ['Continue without them', 'Offer these resources'])
+})
+
+test('a list that holds resources that cannot be offered says so', () => {
+  assert.ok(draw(resources({ refused: 2 })).includes('2 more resources are not listed'))
+  assert.ok(draw(resources({ refused: 1 })).includes('1 more resource is not listed'))
+})
+
+test('the resource read card shows the URI and the server it comes from', () => {
+  const markup = draw(resourceRead())
+  assert.ok(markup.includes('<code class="path" data-deciding="first">memo://forecast</code>'), markup)
+  assert.ok(markup.includes('<strong>Server:</strong> <code>weather</code>'), markup)
+  assert.ok(markup.includes('remembers this resource for the rest of the session'), markup)
+  assert.deepEqual(buttons(markup), ['Refuse reading', 'Allow reading'])
+})
+
 test('a description is drawn as text and never as markup', () => {
   const forged = '<img src="https://example.com/x.png"><a href="https://example.com">x</a>'
   for (const markup of [
     draw(tools({ tools: [{ name: 'weather:get_forecast', arguments: [], description: forged }] })),
+    draw(resources({ resources: [{ uri: 'memo://x', name: 'x', description: forged, mimeType: null }] })),
     draw(call({ description: forged, arguments: [{ name: 'city', value: forged }] })),
     draw(move({ destination: forged })),
   ]) {
@@ -195,7 +238,7 @@ test('the move card shows the declaration, the destination and the host a yes re
 })
 
 test('each card takes an answer to itself only, and the third answer only from an approval', () => {
-  const kinds = { 'mcp-server': server(), 'mcp-tools': tools(), 'mcp-call': call(), 'mcp-move': move() }
+  const kinds = { 'mcp-server': server(), 'mcp-tools': tools(), 'mcp-resources': resources(), 'mcp-resource-read': resourceRead(), 'mcp-call': call(), 'mcp-move': move() }
   for (const [kind, entry] of Object.entries(kinds)) {
     const entries = [entry]
     assert.equal(t.outstanding(entries).kind, kind)
@@ -212,7 +255,7 @@ test('each card takes an answer to itself only, and the third answer only from a
 })
 
 test('a question whose turn ended cannot be answered from its card', () => {
-  for (const entry of [server(), tools(), call(), move()]) {
+  for (const entry of [server(), tools(), resources(), resourceRead(), call(), move()]) {
     const markup = draw({ ...entry, interrupted: true })
     assert.deepEqual(buttons(markup), [], entry.kind)
     assert.ok(markup.includes('Nobody answered this'), entry.kind)
@@ -227,7 +270,7 @@ test('what starting the servers came to is said, with a line for each request th
 })
 
 test('the MCP cards are left out of an export and cannot be copied as a message', () => {
-  for (const entry of [server(), tools(), call(), move(), t.mcpStarted({ servers: [], confined: false, notes: [] })]) {
+  for (const entry of [server(), tools(), resources(), resourceRead(), call(), move(), t.mcpStarted({ servers: [], confined: false, notes: [] })]) {
     assert.deepEqual(t.conversation([entry], true), [], entry.kind)
     assert.equal(t.plainText(entry), null, entry.kind)
   }

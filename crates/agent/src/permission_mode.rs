@@ -649,6 +649,33 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
+    /// Promotes a server's resource list only where every check is being bypassed, and asks in
+    /// every other mode. SERVERS-21.
+    ///
+    /// Like a tool list, an approved resource list becomes trusted public under LABEL-8 for the rest
+    /// of the session, so bypassing approves without prompting and records nothing.
+    fn confirm_resource_list(&mut self, request: &crate::confirm::ResourceListRequest) -> Decision {
+        match self.mode.get() {
+            PermissionMode::Bypass => Decision::Approve,
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_resource_list(request),
+        }
+    }
+
+    /// Permits reading one unapproved resource only where checks are bypassed, and asks in every
+    /// other mode. SERVERS-21.
+    fn confirm_resource_read(&mut self, request: &crate::confirm::ResourceReadRequest) -> Decision {
+        match self.mode.get() {
+            PermissionMode::Bypass => Decision::Approve,
+            PermissionMode::Ask
+            | PermissionMode::AcceptEdits
+            | PermissionMode::Plan
+            | PermissionMode::Auto => self.asking().confirm_resource_read(request),
+        }
+    }
+
     /// Asked in every mode but bypass, including plan mode and accepting edits. SERVERS-13.
     ///
     /// Accepting edits does not accept a call: what the server does with it happens off this tree,

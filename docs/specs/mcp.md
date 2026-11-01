@@ -304,3 +304,20 @@ starts is not offered until it starts again, whether or not it announces the cha
 `verified-by: bravebot_mcp::protocol::only_a_message_with_the_method_and_no_id_is_the_notice`
 `verified-by: bravebot_agent::mcp::a_tool_list_the_server_announced_a_change_to_is_put_to_the_person_again_before_it_is_offered`
 `verified-by: bravebot_agent::mcp::a_tool_list_read_again_after_a_change_is_held_to_the_declarations_filters`
+
+<a id="MCP-13"></a>
+### MCP-13: resources are listed within bounds and read into quarantine
+
+A server's resources are listed with `resources/list`, paged up to 8 pages and at most 128
+entries, with malformed entries refused and counted. Control and hiding characters are refused,
+the lengths of `uri`, `name`, and `mimeType` are capped, and every copy of a duplicated `uri` is
+refused. Reading a resource with `resources/read` extracts only text content (ignoring binary
+blobs per MCP-6) and places the content into quarantine as untrusted and private (MCP-1),
+returning an opaque reference token to the planner. Reading requires approval unless the specific
+resource URI was already approved or included in an approved resource list (SERVERS-21).
+
+`verified-by: bravebot_mcp::protocol::resource_list_is_paged_and_bounded`
+`verified-by: bravebot_mcp::protocol::resource_list_refuses_control_and_hidden_characters_and_bounds`
+`verified-by: bravebot_mcp::protocol::resource_read_text_is_joined_and_blobs_ignored`
+`verified-by: bravebot_mcp::stdio::a_stdio_server_lists_and_reads_resources`
+`verified-by: bravebot_mcp::http::an_http_server_lists_resources`
