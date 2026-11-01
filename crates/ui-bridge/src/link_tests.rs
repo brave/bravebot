@@ -57,8 +57,8 @@ fn a_link_set_by_a_turn_that_failed_reaches_the_record_and_leaves_the_rewind_poi
     if !crate::bridge::test_profile::in_isolated_profile() {
         return;
     }
-    let project = crate::bridge::test_profile::project("bridge-set-link-failed");
-    std::fs::create_dir_all(&project).expect("create");
+    let directory = tempfile::tempdir().expect("a project directory");
+    let project = directory.path().to_path_buf();
     let mut state = State::fresh(TrustStore::new(&project));
     state
         .rewind
@@ -97,8 +97,8 @@ fn a_turn_that_set_no_link_opens_no_record() {
     if !crate::bridge::test_profile::in_isolated_profile() {
         return;
     }
-    let project = crate::bridge::test_profile::project("bridge-set-link-none");
-    std::fs::create_dir_all(&project).expect("create");
+    let directory = tempfile::tempdir().expect("a project directory");
+    let project = directory.path().to_path_buf();
     let mut state = State::fresh(TrustStore::new(&project));
     let mut completed = a_turn_that_failed_after_setting(Vec::new());
 
