@@ -102,9 +102,13 @@ try {
       const entries = card.closest('.entries')
       const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
       const top = card.getBoundingClientRect().top - entries.getBoundingClientRect().top + entries.scrollTop
+      const furthest = () => entries.scrollHeight - entries.clientHeight
       for (let at = Math.max(0, top - 24); ; at += 120) {
-        entries.scrollTo({ top: at, behavior: 'instant' }); await frames()
-        if (entries.scrollTop + entries.clientHeight >= entries.scrollHeight - 1) break
+        // The transcript follows a new entry with a smooth scroll, which on a slow host is still running
+        // here and carries the first step past the card's head, so a step is sent again until it holds.
+        const target = Math.min(at, furthest()), until = performance.now() + 5000
+        do { entries.scrollTo({ top: target, behavior: 'instant' }); await frames() } while (Math.abs(entries.scrollTop - target) > 1 && performance.now() < until)
+        if (at >= furthest() - 1) break
       }
     })
     await card.locator('.confirm-actions .approve:not([aria-disabled="true"])').waitFor()
