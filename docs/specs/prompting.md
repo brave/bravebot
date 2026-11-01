@@ -41,6 +41,7 @@ kept_in:
   - Confirmer::confirm_message: one effect; messages covered for the turn
   - Confirmer::ask_user: answers to the planner's questions
   - Confirmer::interjection: nothing
+  - Confirmer::arrival: nothing
   - Confirmer::alert_when_asking: nothing
   - Confirmer::asks_a_person: nothing
   - Asker::anybody_there: nothing

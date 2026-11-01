@@ -422,6 +422,7 @@ impl<'a> GenerateContentClient<'a> {
                     calling: None,
                     thinking: Labelled::new("", Label::untrusted_public()),
                     counted_by_server: false,
+                    prose: false,
                     attempt,
                 });
             },
@@ -520,6 +521,7 @@ impl<'a> GenerateContentClient<'a> {
                     .map(|call| Labelled::new(call.function.name.as_str(), label)),
                 thinking: Labelled::new("", label),
                 counted_by_server: reply.counted,
+                prose: Progress::has_prose(&reply.text),
                 attempt,
             });
         }

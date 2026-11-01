@@ -532,6 +532,15 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
     fn interjection(&mut self) -> Option<String> {
         self.lent.try_hold()?.interjection()
     }
+
+    /// The handle of the confirmer behind the lock, which a turn asks for once, when it begins and
+    /// nothing else holds the lock. Where the lock is held, a delegate's question being answered,
+    /// the handle is one that never reports a line, so no request is cut short for that wait.
+    fn arrival(&self) -> crate::interjections::Arrival {
+        self.lent
+            .try_hold()
+            .map_or_else(crate::interjections::Arrival::never, |held| held.arrival())
+    }
 }
 
 impl<T: Confirmer + ?Sized> Borrowed<'_, '_, T> {

@@ -28,14 +28,24 @@
 //! [`Interjections::begin_turn`] hands the oldest lines to a turn that starts and moves the rest.
 //! The cli and the bridge never hold a line, so for them the buffer is the one queue it always was.
 //!
+//! # Seeing a line arrive
+//!
+//! A turn that is waiting on a model reply cannot ask the buffer for its lines, because asking is
+//! taking and what comes off is off. [`Interjections::arrival`] is the other way to learn that
+//! one is there: a handle that reads whether any line the turn may take is waiting, without the lock
+//! and without taking anything. A held line does not count, since the turn may not take it. The
+//! handle also counts the lines added, so that a reader can tell one added after a moment it
+//! remembers from one that was waiting already.
+//!
 //! # Poisoning
 //!
-//! A poisoned lock reads as empty and drops an addition. The lock is held only while a line is
-//! added, taken or moved between the runs, as `begin_turn` does, and no caller code runs under it,
-//! so it is only poisoned by a panic elsewhere, and the turn is ending either way. Nothing here is
-//! worth failing a turn over.
+//! A poisoned lock reads as empty and drops an addition, and the handle reads as nothing waiting
+//! from the next change on. The lock is held only while a line is added, taken or moved between
+//! the runs, as `begin_turn` does, and no caller code runs under it, so it is only poisoned by a
+//! panic elsewhere, and the turn is ending either way. Nothing here is worth failing a turn over.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Lines waiting for the turn in flight, in the order they were sent.
@@ -44,7 +54,76 @@ use std::sync::{Arc, Mutex};
 /// ([`Interjections::forget_last`]) only because both ends hold the one buffer; a line posted into
 /// a channel is gone.
 #[derive(Debug, Clone, Default)]
-pub struct Interjections(Arc<Mutex<Lines>>);
+pub struct Interjections(Arc<Mutex<Lines>>, Arrival);
+
+/// Whether a line the turn may take is waiting in the buffer it came from, and how many have been
+/// added to it.
+///
+/// Cheap to clone and to read from any thread. Every change to the buffer moves it, so it never
+/// says a line is waiting that the turn could not take. One that comes from no buffer reports
+/// nothing, ever, and says so through [`Arrival::is_listening`].
+#[derive(Debug, Clone)]
+pub struct Arrival(Option<Arc<Seen>>);
+
+/// What an [`Arrival`] reads.
+#[derive(Debug, Default)]
+struct Seen {
+    /// Whether any line the turn may take is waiting.
+    waiting: AtomicBool,
+    /// How many lines have been added for the turn to take, since the buffer was made. Never goes
+    /// down, so a reader that remembers the figure can tell a line added after it from one that was
+    /// already there.
+    typed: AtomicU64,
+}
+
+impl Default for Arrival {
+    /// The handle of a buffer that has just been made, with nothing in it.
+    fn default() -> Self {
+        Self(Some(Arc::default()))
+    }
+}
+
+impl Arrival {
+    /// A handle that never reports a line, for a turn nobody types into.
+    pub fn never() -> Self {
+        Self(None)
+    }
+
+    /// Whether the handle comes from a buffer anybody can add to, so that watching it can ever
+    /// see a line.
+    pub fn is_listening(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// Whether a line the turn may take is waiting.
+    pub fn is_waiting(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|seen| seen.waiting.load(Ordering::Acquire))
+    }
+
+    /// How many lines have been added for the turn to take, in all. A request that remembers the
+    /// figure as it goes out is cut only by a line added after, which is the one typed while it was
+    /// out.
+    pub fn typed(&self) -> u64 {
+        self.0
+            .as_ref()
+            .map_or(0, |seen| seen.typed.load(Ordering::Acquire))
+    }
+
+    fn set(&self, waiting: bool) {
+        if let Some(seen) = &self.0 {
+            seen.waiting.store(waiting, Ordering::Release);
+        }
+    }
+
+    /// Count a line added for the turn to take.
+    fn count(&self) {
+        if let Some(seen) = &self.0 {
+            seen.typed.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+}
 
 /// The two runs of lines one buffer keeps, oldest first. `held` is always the tail of the queue.
 #[derive(Debug, Default)]
@@ -65,25 +144,49 @@ impl Interjections {
     /// `false` where the lock is poisoned and the line was dropped.
     pub fn push(&self, said: String) -> bool {
         let Ok(mut lines) = self.0.lock() else {
+            self.1.set(false);
             return false;
         };
         lines.waiting.push_back(said);
+        self.publish(&lines);
+        self.1.count();
         true
+    }
+
+    /// The handle that says whether a line the turn may take is waiting, without taking it.
+    pub fn arrival(&self) -> Arrival {
+        self.1.clone()
+    }
+
+    /// Move the handle to what the buffer holds now. Called under the lock by everything that
+    /// changes it, so the handle and the buffer cannot be read in disagreement by a thread that
+    /// also holds the lock.
+    fn publish(&self, lines: &Lines) {
+        self.1.set(!lines.waiting.is_empty());
     }
 
     /// Take the oldest line the turn may take, or `None`. Never waits. A held line is not taken.
     pub fn take(&self) -> Option<String> {
-        self.0.lock().ok()?.waiting.pop_front()
+        let Ok(mut lines) = self.0.lock() else {
+            self.1.set(false);
+            return None;
+        };
+        let taken = lines.waiting.pop_front();
+        self.publish(&lines);
+        taken
     }
 
     /// Take every line the turn may take, oldest first, leaving none of them.
     ///
     /// These are the lines a turn left untaken when it ended. Held lines stay held.
     pub fn drain(&self) -> Vec<String> {
-        self.0
-            .lock()
-            .map(|mut lines| lines.waiting.drain(..).collect())
-            .unwrap_or_default()
+        let Ok(mut lines) = self.0.lock() else {
+            self.1.set(false);
+            return Vec::new();
+        };
+        let drained = lines.waiting.drain(..).collect();
+        self.publish(&lines);
+        drained
     }
 
     /// Drop the newest line, held or not, for one the person is taking back.
@@ -92,10 +195,13 @@ impl Interjections {
     /// already taken every line there was. The two ends move independently, so a line can be taken
     /// between the key press and the moment anything looks at the buffer.
     pub fn forget_last(&self) -> bool {
-        self.0
-            .lock()
-            .map(|mut lines| lines.held.pop_back().is_some() || lines.waiting.pop_back().is_some())
-            .unwrap_or(false)
+        let Ok(mut lines) = self.0.lock() else {
+            self.1.set(false);
+            return false;
+        };
+        let forgot = lines.held.pop_back().is_some() || lines.waiting.pop_back().is_some();
+        self.publish(&lines);
+        forgot
     }
 
     /// Add a line behind everything already in the buffer.
@@ -106,12 +212,18 @@ impl Interjections {
     /// `false` where the lock is poisoned and the line was dropped.
     pub fn push_behind(&self, said: String) -> bool {
         let Ok(mut lines) = self.0.lock() else {
+            self.1.set(false);
             return false;
         };
-        if lines.held.is_empty() {
+        let readable = lines.held.is_empty();
+        if readable {
             lines.waiting.push_back(said);
         } else {
             lines.held.push_back(said);
+        }
+        self.publish(&lines);
+        if readable {
+            self.1.count();
         }
         true
     }
@@ -127,6 +239,7 @@ impl Interjections {
     /// turn to take.
     pub fn begin_turn(&self, begun: usize, hold: bool) {
         let Ok(mut lines) = self.0.lock() else {
+            self.1.set(false);
             return;
         };
         let mut rest = std::mem::take(&mut lines.waiting);
@@ -137,6 +250,7 @@ impl Interjections {
         } else {
             lines.waiting = rest;
         }
+        self.publish(&lines);
     }
 
     /// Add a line if the turn will read it, and hand it back if not.
@@ -154,9 +268,14 @@ impl Interjections {
         match self.0.lock() {
             Ok(mut lines) => {
                 lines.waiting.push_back(said);
+                self.publish(&lines);
+                self.1.count();
                 Ok(())
             }
-            Err(_) => Err(said),
+            Err(_) => {
+                self.1.set(false);
+                Err(said)
+            }
         }
     }
 }
@@ -237,6 +356,10 @@ mod tests {
     fn a_poisoned_lock_reads_as_empty_and_drops_additions() {
         let buffer = poisoned();
         assert!(!buffer.push("late".into()));
+        assert!(
+            !buffer.arrival().is_waiting(),
+            "a poisoned buffer reported a line"
+        );
         assert_eq!(buffer.take(), None);
         assert!(buffer.drain().is_empty());
         assert!(!buffer.forget_last());
@@ -321,6 +444,115 @@ mod tests {
         buffer.begin_turn(0, false);
         assert_eq!(buffer.held(), 0);
         assert_eq!(buffer.drain(), vec!["b", "c", "d"]);
+    }
+
+    /// The handle follows what the turn may take, through every way a line enters or leaves.
+    /// Rejects a handle set by `push` alone, which would still say a line is waiting once the turn
+    /// took it, and a turn that cut its reply short for a line that was no longer there.
+    #[test]
+    fn the_arrival_handle_follows_every_way_a_line_enters_or_leaves() {
+        let buffer = Interjections::new();
+        let arrival = buffer.arrival();
+        assert!(!arrival.is_waiting());
+
+        buffer.push("a".into());
+        assert!(arrival.is_waiting());
+        buffer.take();
+        assert!(!arrival.is_waiting(), "a taken line still read as waiting");
+
+        buffer.push("b".into());
+        buffer.push("c".into());
+        buffer.drain();
+        assert!(
+            !arrival.is_waiting(),
+            "a drained line still read as waiting"
+        );
+
+        buffer.push("d".into());
+        assert!(buffer.forget_last());
+        assert!(
+            !arrival.is_waiting(),
+            "a line taken back still read as waiting"
+        );
+
+        assert_eq!(buffer.offer(true, "e".into()), Ok(()));
+        assert!(arrival.is_waiting(), "an offered line was not seen");
+        buffer.drain();
+
+        assert_eq!(buffer.offer(false, "f".into()), Err("f".to_string()));
+        assert!(!arrival.is_waiting(), "a refused line was seen");
+    }
+
+    /// The count rises for each line added for the turn to take and for nothing else. Rejects a
+    /// count that moves when a line is taken, forgotten, held or released from hold, which would
+    /// read a line that was already there as one just typed.
+    #[test]
+    fn the_count_rises_for_each_line_added_for_the_turn_and_for_nothing_else() {
+        let buffer = Interjections::new();
+        let arrival = buffer.arrival();
+        assert_eq!(arrival.typed(), 0);
+        buffer.push("a".into());
+        assert_eq!(arrival.typed(), 1);
+        buffer.push_behind("b".into());
+        assert_eq!(arrival.typed(), 2);
+        assert_eq!(buffer.offer(true, "c".into()), Ok(()));
+        assert_eq!(arrival.typed(), 3);
+        assert_eq!(
+            buffer.offer(false, "refused".into()),
+            Err("refused".to_string())
+        );
+        assert_eq!(arrival.typed(), 3, "a refused line was counted");
+        buffer.take();
+        buffer.forget_last();
+        buffer.drain();
+        assert_eq!(arrival.typed(), 3, "taking a line moved the count");
+
+        buffer.push_behind("d".into());
+        buffer.begin_turn(0, true);
+        let before = arrival.typed();
+        buffer.push_behind("held".into());
+        assert_eq!(arrival.typed(), before, "a held line was counted");
+        buffer.begin_turn(1, false);
+        assert_eq!(arrival.typed(), before, "releasing a held line was counted");
+        assert_eq!(Arrival::never().typed(), 0);
+    }
+
+    /// A held line is for a later turn, so the turn in flight is not told of it. Rejects a handle
+    /// that reads the whole queue, which would cut a reply short for a line the turn may not take
+    /// and then find nothing to take.
+    #[test]
+    fn a_held_line_does_not_read_as_waiting() {
+        let buffer = Interjections::new();
+        let arrival = buffer.arrival();
+        buffer.push_behind("now".into());
+        assert!(arrival.is_waiting());
+        buffer.begin_turn(0, true);
+        assert!(
+            !arrival.is_waiting(),
+            "a line moved into hold still read as waiting"
+        );
+        buffer.push_behind("later".into());
+        assert_eq!(buffer.held(), 2);
+        assert!(!arrival.is_waiting(), "a held line read as waiting");
+        buffer.begin_turn(1, false);
+        assert!(
+            arrival.is_waiting(),
+            "a line released from hold was not seen"
+        );
+    }
+
+    /// A clone of the buffer reports through the same handle, as the front end and the turn hold
+    /// different clones.
+    #[test]
+    fn the_handle_is_shared_by_every_clone() {
+        let front_end = Interjections::new();
+        let turn = front_end.clone();
+        let arrival = turn.arrival();
+        front_end.push("said".into());
+        assert!(arrival.is_waiting());
+        assert!(!Arrival::never().is_waiting());
+        assert!(!Arrival::never().is_listening());
+        assert!(arrival.is_listening());
     }
 
     /// A line for a turn that is not reading comes back unread and does not enter the buffer.

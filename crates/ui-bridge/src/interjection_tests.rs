@@ -23,6 +23,38 @@ fn lines_are_read_in_the_order_they_were_typed() {
     assert_eq!(started.interjections.take(), None);
 }
 
+/// The confirmer a turn is given reports a line the moment `turn.interject` adds it, which is how a
+/// turn waiting on a reply that is still thinking learns to end the wait (INPUT-10). Rejects a
+/// confirmer that leaves the handle at its default, which never reports a line.
+#[test]
+fn the_turns_confirmer_sees_a_line_as_it_is_added() {
+    use crate::turn::{BridgeConfirmer, Pending};
+    use bravebot_agent::confirm::Confirmer;
+    use std::sync::{Arc, Mutex};
+
+    let started = Running::start();
+    let pending: Pending = Arc::new(Mutex::new(None));
+    let (_answers, answering) = std::sync::mpsc::channel();
+    let confirmer = BridgeConfirmer::new(
+        crate::emit::Emitter::new(Box::new(|_| {})),
+        "s1",
+        pending,
+        answering,
+        Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        started.cancel.clone(),
+    )
+    .taking_interjections(started.interjections.clone());
+
+    let arrival = confirmer.arrival();
+    assert!(arrival.is_listening());
+    assert!(!arrival.is_waiting());
+    assert!(started.running.interject("no, the other one".into()));
+    assert!(
+        arrival.is_waiting(),
+        "the turn's confirmer did not see the line `turn.interject` added"
+    );
+}
+
 /// Work that has ended cannot read a line, so the window makes a turn of it.
 #[test]
 fn finished_work_takes_no_line() {

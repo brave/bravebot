@@ -73,8 +73,17 @@ struct Service {
     release: mpsc::Sender<()>,
 }
 
+/// What the first round has said by the time the stub holds it.
+#[derive(Clone, Copy)]
+enum Hold {
+    /// A sentence, so the round is one a person could be reading when a line is typed (INPUT-10).
+    Writing,
+    /// Nothing, as a model that is thinking sends nothing.
+    Silent,
+}
+
 /// A planner that asks for one listing and then answers, holding the first answer back.
-fn stub_service() -> Service {
+fn stub_service(hold: Hold) -> Service {
     let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
     let endpoint = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let asked = Arc::new(Mutex::new(Vec::new()));
@@ -84,7 +93,7 @@ fn stub_service() -> Service {
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let (log, gate) = (Arc::clone(&log), Arc::clone(&gate));
-            std::thread::spawn(move || answer(stream, &log, &gate));
+            std::thread::spawn(move || answer(stream, &log, &gate, hold));
         }
     });
     Service {
@@ -98,6 +107,7 @@ fn answer(
     mut stream: std::net::TcpStream,
     log: &Mutex<Vec<Value>>,
     gate: &Mutex<mpsc::Receiver<()>>,
+    hold: Hold,
 ) {
     let mut reader = BufReader::new(stream.try_clone().expect("the stream clones"));
     let mut start = String::new();
@@ -119,6 +129,7 @@ fn answer(
     let mut body = vec![0u8; length];
     let _ = reader.read_exact(&mut body);
 
+    let mut head_sent = false;
     let (kind, payload) = if start.starts_with("GET") {
         (
             "application/json",
@@ -134,11 +145,28 @@ fn answer(
             .as_array()
             .map(|messages| messages.iter().filter(|m| m["role"] == "tool").count())
             .unwrap_or(0);
-        log.lock().expect("the log").push(asked);
-        if given == 0 {
+        // Only the first request is held. One sent again after a line cut it short is answered at
+        // once, and so is the one after a round's results.
+        let first = {
+            let mut log = log.lock().expect("the log");
+            log.push(asked);
+            log.len() == 1
+        };
+        let answers = given >= 1 || !first;
+        if first {
+            if let Hold::Writing = hold {
+                let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+                let said = json!({"id": "c0", "object": "chat.completion.chunk",
+                    "model": "stub-model",
+                    "choices": [{"index": 0, "finish_reason": null,
+                                 "delta": {"role": "assistant", "content": "Looking around. "}}]});
+                let _ = stream.write_all(format!("{head}data: {said}\n\n").as_bytes());
+                let _ = stream.flush();
+                head_sent = true;
+            }
             let _ = gate.lock().expect("the gate").recv_timeout(PATIENCE);
         }
-        let delta = if given >= 1 {
+        let delta = if answers {
             json!({"role": "assistant", "content": "done"})
         } else {
             json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "t1",
@@ -146,7 +174,7 @@ fn answer(
                 "function": {"name": "list_files",
                              "arguments": json!({"directory": "."}).to_string()}}]})
         };
-        let finish = if given >= 1 { "stop" } else { "tool_calls" };
+        let finish = if answers { "stop" } else { "tool_calls" };
         let chunk = json!({"id": "c1", "object": "chat.completion.chunk",
             "model": "stub-model",
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
@@ -156,10 +184,15 @@ fn answer(
             format!("data: {chunk}\n\ndata: [DONE]\n\n"),
         )
     };
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-        payload.len()
-    );
+    // The head went out ahead of the held answer when the round had already said something, and
+    // the rest of the stream follows it.
+    let response = match head_sent {
+        true => payload,
+        false => format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+            payload.len()
+        ),
+    };
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.flush();
 }
@@ -233,8 +266,34 @@ struct Running {
 }
 
 impl Running {
+    /// A turn whose first round has written a sentence and is held there.
+    ///
+    /// Returned once the window has been told of that sentence, so a line typed next meets a round
+    /// a person could be reading and waits for its boundary.
     fn start(name: &str) -> Self {
-        let mut idle = Self::open(name);
+        let turn = Self::begin(name, Hold::Writing);
+        until(&turn.said, |message| {
+            message["event"] == "tokens" && message["data"]["written"].as_u64() > Some(0)
+        });
+        turn
+    }
+
+    /// A turn whose first request is out and has said nothing, held there.
+    fn start_silent(name: &str) -> Self {
+        let turn = Self::begin(name, Hold::Silent);
+        let until_it_arrives = std::time::Instant::now() + PATIENCE;
+        while turn.service.asked.lock().unwrap().is_empty() {
+            assert!(
+                std::time::Instant::now() < until_it_arrives,
+                "the first request never reached the service"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        turn
+    }
+
+    fn begin(name: &str, hold: Hold) -> Self {
+        let mut idle = Self::open_holding(name, hold);
         let session = idle.session.clone();
         let started = idle.call(
             "turn.send",
@@ -246,8 +305,12 @@ impl Running {
 
     /// The same window with a trusted session and nothing running in it.
     fn open(name: &str) -> Self {
+        Self::open_holding(name, Hold::Writing)
+    }
+
+    fn open_holding(name: &str, hold: Hold) -> Self {
         let scratch = Scratch::new(name);
-        let service = stub_service();
+        let service = stub_service(hold);
         let mut window = front_end(&scratch.home(), &service.endpoint);
         let said = lines(window.0.stdout.take().expect("the front end answers"));
         send(
@@ -363,6 +426,56 @@ fn a_line_typed_while_a_round_runs_is_in_the_next_request() {
         said > tool,
         "the line came before the round it was typed during: {second:?}"
     );
+}
+
+/// A line typed while the model has said nothing yet is in a request at once, without waiting for
+/// the round (INPUT-10, INPUT-46).
+///
+/// The first answer is never released: the turn reaches its end only if the request that carries
+/// the line is sent while the first is still held. A bridge that left the turn waiting out the
+/// round would sit here until the stub's patience ran out. The request that went out first never
+/// carried the line, and the one that replaced it carries no result of a round, because the first
+/// round had run nothing.
+#[test]
+fn a_line_typed_while_the_model_is_thinking_is_in_a_request_at_once() {
+    let mut turn = Running::start_silent("interject-cut");
+
+    let accepted = turn.interject("no, the other one");
+    assert_eq!(
+        accepted["ok"]["accepted"], true,
+        "a running turn did not take the line: {accepted}"
+    );
+
+    let read = until(&turn.said, |message| message["event"] == "turn.interjected");
+    assert_eq!(read["data"]["prompt"], "no, the other one");
+    let ended = until(&turn.said, |message| {
+        message["event"] == "turn.done" || message["event"] == "turn.error"
+    });
+    assert_eq!(ended["event"], "turn.done", "the turn failed: {ended}");
+
+    let asked = turn.service.asked.lock().unwrap().clone();
+    assert_eq!(
+        asked.len(),
+        2,
+        "expected the held request and the one that replaced it"
+    );
+    assert!(
+        conversation(&asked[0])
+            .iter()
+            .all(|(_, text)| !text.contains("the other one")),
+        "the line was in the request that went out before it was typed"
+    );
+    let second = conversation(&asked[1]);
+    let said = second
+        .iter()
+        .position(|(_, text)| text.contains("no, the other one"))
+        .unwrap_or_else(|| panic!("the line did not reach the planner: {second:?}"));
+    assert_eq!(second[said].0, "user", "the line was not the person's own");
+    assert!(
+        second.iter().all(|(role, _)| role != "tool"),
+        "a round that had run nothing left a result: {second:?}"
+    );
+    turn.release_the_first_answer();
 }
 
 /// A turn that has ended, and one that is being stopped, take nothing, so the window knows to make

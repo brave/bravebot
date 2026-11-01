@@ -27,12 +27,28 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Debug, Clone, Default)]
 pub struct Cancel {
     flag: Arc<AtomicBool>,
+    /// The token this one answers to, which is how a request that may be cut short on its own
+    /// still stops when the whole turn does.
+    parent: Option<Box<Cancel>>,
 }
 
 impl Cancel {
     /// A token that has not been cancelled.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A token of its own that also reads as cancelled once `self` is.
+    ///
+    /// Cancelling the child leaves `self` alone. That is what a step that can be stopped without
+    /// ending the turn needs: the step holds the child and the turn holds the parent, and a check
+    /// of the child answers for both while a check of the parent answers for the turn alone.
+    #[must_use]
+    pub fn within(&self) -> Self {
+        Self {
+            flag: Arc::default(),
+            parent: Some(Box::new(self.clone())),
+        }
     }
 
     /// Ask the turn to stop at its next check.
@@ -44,8 +60,20 @@ impl Cancel {
         self.flag.store(true, Ordering::Release);
     }
 
-    /// Whether a stop has been requested.
+    /// Whether a stop has been requested, of this token or of the one it answers to.
     pub fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::Acquire)
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.is_cancelled())
+    }
+
+    /// Whether this token was cancelled itself, whatever its parent says.
+    ///
+    /// What tells a step that was cut short from a turn that was stopped, once both read as
+    /// cancelled.
+    pub fn was_cancelled_itself(&self) -> bool {
         self.flag.load(Ordering::Acquire)
     }
 }
@@ -191,6 +219,35 @@ mod tests {
         assert!(!remote.is_cancelled());
         cancel.cancel();
         assert!(remote.is_cancelled(), "the clone did not see the request");
+    }
+
+    /// A child answers for its parent: stopping the turn stops whatever was started under it.
+    #[test]
+    fn a_child_reads_as_cancelled_once_its_parent_is() {
+        let turn = Cancel::new();
+        let request = turn.within();
+        assert!(!request.is_cancelled());
+        turn.cancel();
+        assert!(request.is_cancelled(), "the stop never reached the request");
+        assert!(
+            !request.was_cancelled_itself(),
+            "the child claimed a cancel that was its parent's"
+        );
+    }
+
+    /// The other direction does not hold, which is the point of having a child: cutting one request
+    /// short leaves the turn that made it running.
+    #[test]
+    fn cancelling_a_child_leaves_its_parent_alone() {
+        let turn = Cancel::new();
+        let request = turn.within();
+        request.cancel();
+        assert!(request.is_cancelled());
+        assert!(request.was_cancelled_itself());
+        assert!(
+            !turn.is_cancelled(),
+            "cutting a request short stopped the turn"
+        );
     }
 
     /// Cancellation crosses a thread boundary, which is the only way it is ever used.

@@ -35,6 +35,7 @@ use crate::timing::Elapsed;
 use crate::tools;
 use crate::workspace::Workspace;
 
+mod cutting;
 mod delegate_end;
 mod hooked;
 mod prompts;
@@ -1350,17 +1351,21 @@ fn attach_vetted_pictures<S: Sink>(
 /// the same thing: the queue is shared and what comes off it is off it, so that throws the line
 /// away and leaves the parent's own boundary with nothing waiting. Not asking is what leaves it
 /// there for the parent's next round, which is where it was aimed.
+///
+/// How many lines went in.
 fn take_interjections<S: Sink, C: Confirmer, R: Reporter>(
     task: &Task,
     confirmer: &mut C,
     policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
     reporter: &mut R,
-) {
+) -> usize {
     if task.delegate.is_some() {
-        return;
+        return 0;
     }
+    let mut taken = 0;
     while let Some(said) = confirmer.interjection() {
+        taken += 1;
         // The one input this whole arrangement takes as trusted, and it stays trusted here for the
         // reason the opening prompt is: a keystroke has no author but the person at the keyboard.
         // What it cannot do is route. Nothing here consults it to decide where an effect lands, and
@@ -1374,6 +1379,7 @@ fn take_interjections<S: Sink, C: Confirmer, R: Reporter>(
         reporter.interjected(said.clone());
         conversation.push_from(Message::user(said), Provenance::Typed);
     }
+    taken
 }
 
 /// Put every message another session sent in front of the planner (MSG-6 to MSG-9, MSG-11).
@@ -3333,6 +3339,13 @@ where
     let mut grown: Option<(crate::request_view::Prompt, String)> = None;
     let addressed = &plan.addressed;
     let read_output_is = || setup::read_output_is(task, plan.offers_read_output);
+    // Whether a line typed while a request is out may end it (INPUT-10). Given up for the rest of
+    // the turn once a cut finds no line to take, so a handle that disagrees with the buffer cannot
+    // send the same request out again and again. A delegate never asks for a line.
+    let mut may_cut = task.delegate.is_none();
+    // Asked for once, here, where nothing else is using the confirmer. A delegate's question being
+    // answered holds it for as long as the person takes, and asking again then would find no handle.
+    let arrival = confirmer.arrival();
     let completion = loop {
         round_steps::before_a_request(
             inputs,
@@ -3392,10 +3405,26 @@ where
         // and a trail with a line per chunk would bury every other line in it.
         let as_written = policy.authorise_display_release("the reply as the model writes it");
 
+        // The request answers to a token of its own, which also reads as cancelled once the turn is
+        // stopped. A line typed while the reply is no more than thinking or a call being written
+        // cancels this one alone, and the turn goes on (INPUT-10).
+        let request_cut = cancel.within();
+        let cuttable = cutting::Cuttable::new();
+        let watch = may_cut
+            .then(|| {
+                cutting::Watch::start(
+                    scope,
+                    arrival.clone(),
+                    cuttable.clone(),
+                    request_cut.clone(),
+                )
+            })
+            .flatten();
+
         let asked_at = Instant::now();
         let completion = {
             let mut client = crate::backend::Backend::select(config, egress, model)
-                .with_cancel(cancel.clone())
+                .with_cancel(request_cut.clone())
                 .in_session(task.account_session());
             if let Some(subscription) = state.subscription.as_mut() {
                 client = client.with_subscription(subscription);
@@ -3411,6 +3440,9 @@ where
                     reporter.phase(phase);
                 }
                 round_shown = progress.output_tokens;
+                // Prose is being read as it arrives, until the model starts a call: the sentence
+                // before a call is over by then, and what the person is waiting on is the call.
+                cuttable.note(progress.prose && progress.calling.is_none());
                 reporter.output_tokens(written_before + round_shown);
                 // Straight through to the screen. Sent whether or not there is anything in it:
                 // asking would be a question about untrusted text, and the interface is the side
@@ -3451,6 +3483,21 @@ where
                 state.account.context_tokens = measured;
                 conversation.measured(state.account.context_tokens);
             }
+        }
+        if let Some(watch) = watch {
+            watch.end();
+        }
+        // A request that a line cut short, as opposed to one the turn was stopped over: nothing of
+        // its reply goes into the conversation, and the line goes in front of the request that
+        // replaces it. The round's tail is cleared when the phase is announced again.
+        if let Err(error) = &completion
+            && error.is_cancelled()
+            && request_cut.was_cancelled_itself()
+            && !cancel.is_cancelled()
+        {
+            let taken = take_interjections(task, confirmer, policy, conversation, reporter);
+            may_cut = taken > 0;
+            continue;
         }
         let mut completion = match round_steps::recover_from_failed_request(
             completion,

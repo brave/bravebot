@@ -2114,6 +2114,19 @@ pub trait Confirmer {
     /// [`Policy::admit_interjection`](bravebot_core::policy::Policy::admit_interjection) for what
     /// it may and may not do once it arrives.
     fn interjection(&mut self) -> Option<String>;
+
+    /// A handle that reads whether a line is waiting for [`Confirmer::interjection`], without
+    /// taking it.
+    ///
+    /// For a turn that is waiting on a model and so cannot poll between rounds. It is how a line
+    /// typed during the wait ends the wait early when the reply is no more than thinking or a call
+    /// being written (INPUT-10). The answer is only about whether a line is there: reading it
+    /// changes nothing, and the line itself still comes from [`Confirmer::interjection`].
+    ///
+    /// A confirmer nobody types into has none, which is what the default says.
+    fn arrival(&self) -> crate::interjections::Arrival {
+        crate::interjections::Arrival::never()
+    }
 }
 
 /// Nobody to ask: refuses every write and answers no question.
@@ -3077,6 +3090,10 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
     /// was asked would put the time a turn spent working under the time it spent waiting.
     fn interjection(&mut self) -> Option<String> {
         self.inner.interjection()
+    }
+
+    fn arrival(&self) -> crate::interjections::Arrival {
+        self.inner.arrival()
     }
 }
 

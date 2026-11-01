@@ -134,7 +134,7 @@ pub fn reply_with(content: &str) -> String {
 }
 
 /// Re-express a whole chat response as the SSE stream that would have delivered it.
-fn as_sse(reply: &str) -> String {
+pub fn as_sse(reply: &str) -> String {
     let parsed: serde_json::Value = serde_json::from_str(reply).expect("a valid reply");
     let mut frames = String::new();
     let mut frame = |value: serde_json::Value| {

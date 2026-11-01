@@ -384,6 +384,12 @@ you typed it. So "no, the other file" reaches the planner while the work it is a
 happening, instead of arriving after the thing it was meant to prevent. A prompt still waiting when
 the turn ends becomes a turn of its own.
 
+When the model is still thinking, or is partway through writing a tool call, the prompt does not
+wait for the round to finish: the request is ended, what the model had written so far is dropped,
+and the request goes out again with your prompt in it. When the model is writing text, the text is
+left to finish, because you may be reading it, and the prompt goes in at the next boundary. Pressing
+Escape still stops the turn.
+
 **A [slash command](../reference/commands.md) is never sent.** Most wait to be carried out: one
 comes off the box and is drawn under it like anything else waiting, but it is not offered to the turn
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
