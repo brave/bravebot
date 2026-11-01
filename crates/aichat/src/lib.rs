@@ -970,6 +970,7 @@ impl<'a> AichatClient<'a> {
                     calling: None,
                     thinking: Labelled::new("", Label::untrusted_public()),
                     counted_by_server: false,
+                    prose: false,
                     attempt,
                 });
             },
@@ -1105,6 +1106,7 @@ impl<'a> AichatClient<'a> {
                 calling: accumulated.calling().map(|name| Labelled::new(name, label)),
                 thinking: Labelled::new(&thinking, label),
                 counted_by_server: reported.is_some(),
+                prose: Progress::has_prose(accumulated.content()),
                 attempt,
             });
         }
@@ -1186,12 +1188,30 @@ pub struct Progress<'a> {
     /// Worth knowing at the point of display: an estimate presented as a billed figure would be
     /// the kind of number that looks like data and is not.
     pub counted_by_server: bool,
+    /// Whether a text event has delivered anything in this attempt, as opposed to thinking or a
+    /// call.
+    ///
+    /// A fact about which kind of event the stream has delivered, like [`Progress::calling`] and
+    /// [`Progress::attempt`], worked out where the stream is decoded and handed on as a bare flag.
+    /// Nothing about what the text says goes into it, not even whether it is blank. The turn reads
+    /// it to tell a reply still being thought out, which a line typed meanwhile may cut short,
+    /// from one a person is already reading (INPUT-10).
+    pub prose: bool,
     /// Which attempt this is, counting from one.
     ///
     /// Above one, an earlier attempt failed in transit and this one restarted the reply. The
     /// count goes back to zero with it, so a display that only ever saw the number climb would
     /// otherwise show it falling for no stated reason.
     pub attempt: u32,
+}
+
+impl Progress<'_> {
+    /// Whether `text`, the reply written so far, is anything at all, for a client to state in the
+    /// report it makes of that reply. Only whether a text event has delivered something is asked:
+    /// the text is not read.
+    pub fn has_prose(text: &str) -> bool {
+        !text.is_empty()
+    }
 }
 
 /// How many times one request is sent before its failure is the caller's, where the provider's block

@@ -948,6 +948,12 @@ impl Confirmer for BridgeConfirmer {
         self.interjections.take()
     }
 
+    // Read while the turn waits on a reply, so a line `turn.interject` adds then is seen as it
+    // arrives (INPUT-46).
+    fn arrival(&self) -> bravebot_agent::interjections::Arrival {
+        self.interjections.arrival()
+    }
+
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         match self.ask(Kind::Write, "confirm.request", |id| {
             wire::write_request(id, request)

@@ -330,6 +330,12 @@ impl Confirmer for RemoteConfirmer {
     fn interjection(&mut self) -> Option<String> {
         self.typed.take()
     }
+
+    /// Whether the person has typed a line for the turn since it last took one, which the turn
+    /// reads while it waits on a reply (INPUT-10).
+    fn arrival(&self) -> bravebot_agent::interjections::Arrival {
+        self.typed.arrival()
+    }
 }
 
 /// The worker's end for progress: sends and moves on.
@@ -540,6 +546,35 @@ mod tests {
             WriteDecision::approve()
         );
         responder.join().expect("responder finished");
+    }
+
+    /// The confirmer a turn is handed reports the lines the terminal adds to the buffer it was made
+    /// from, as they arrive, and stops reporting once the turn has taken them (INPUT-10). Rejects a
+    /// confirmer that leaves the handle at its default, which never reports a line, so a turn
+    /// waiting on a reply that is still thinking would wait it out.
+    #[test]
+    fn the_turns_confirmer_sees_a_line_as_the_terminal_adds_it() {
+        let (outbound, _inbound) = channel::<ToMain>();
+        let (_answer_tx, answer_rx) = channel();
+        let typed = Interjections::new();
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, typed.clone());
+
+        let arrival = confirmer.arrival();
+        assert!(arrival.is_listening());
+        assert!(!arrival.is_waiting());
+        assert!(typed.push("no, the other one".into()));
+        assert!(
+            arrival.is_waiting(),
+            "a line the terminal added was not seen"
+        );
+        assert_eq!(
+            confirmer.interjection().as_deref(),
+            Some("no, the other one")
+        );
+        assert!(
+            !arrival.is_waiting(),
+            "a line the turn took still read as waiting"
+        );
     }
 
     fn a_run() -> RunRequest {

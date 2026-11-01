@@ -524,6 +524,7 @@ impl<'a> AnthropicClient<'a> {
                     calling: None,
                     thinking: Labelled::new("", Label::untrusted_public()),
                     counted_by_server: false,
+                    prose: false,
                     attempt,
                 });
             },
@@ -621,6 +622,7 @@ impl<'a> AnthropicClient<'a> {
                 calling: reply.calling().map(|name| Labelled::new(name, label)),
                 thinking: Labelled::new("", label),
                 counted_by_server: reply.counted,
+                prose: Progress::has_prose(&reply.text),
                 attempt,
             });
         }

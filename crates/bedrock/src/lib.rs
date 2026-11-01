@@ -710,6 +710,7 @@ impl<'a> BedrockClient<'a> {
                     calling: None,
                     thinking: Labelled::new("", Label::untrusted_public()),
                     counted_by_server: false,
+                    prose: false,
                     attempt,
                 });
             },
@@ -809,6 +810,7 @@ impl<'a> BedrockClient<'a> {
                 calling: reply.calling().map(|name| Labelled::new(name, label)),
                 thinking: Labelled::new(&thinking, label),
                 counted_by_server: reply.counted,
+                prose: Progress::has_prose(&reply.text),
                 attempt,
             });
         }
@@ -3186,6 +3188,74 @@ mod tests {
         let completion = result.expect("a reply that thought and then answered");
         assert_eq!(thought, "The user wants a file");
         assert_eq!(completion.content.declassify(&shown), "Here it is.");
+    }
+
+    /// A line typed while the model thinks or writes a call ends the request, and one typed while it
+    /// writes prose waits for the reply (INPUT-10). The flag that decides it is set by text alone:
+    /// the model's reasoning and a call being written do not set it.
+    #[test]
+    fn progress_reports_prose_for_text_and_not_for_thinking_or_a_call() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let model = "a-model-that-thinks";
+        let thinking = || {
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"The user wants a file"}}}"#,
+            )
+        };
+        let silent = streamed(vec![
+            thinking(),
+            eventstream::tests::frame(
+                "contentBlockStart",
+                br#"{"contentBlockIndex":1,"start":{"toolUse":{"toolUseId":"a","name":"write_file"}}}"#,
+            ),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":1,"delta":{"toolUse":{"input":"{}"}}}"#,
+            ),
+            eventstream::tests::frame("messageStop", br#"{"stopReason":"tool_use"}"#),
+        ]);
+        let spoken = streamed(vec![
+            thinking(),
+            eventstream::tests::frame(
+                "contentBlockDelta",
+                br#"{"contentBlockIndex":1,"delta":{"text":"Here it is."}}"#,
+            ),
+            eventstream::tests::frame("messageStop", br#"{"stopReason":"end_turn"}"#),
+        ]);
+
+        for (reply, expected) in [(silent, false), (spoken, true)] {
+            let config = config_for(model);
+            let egress = Egress::new();
+            let (http, _received) = scripted_with_silences(vec![(reply, false)]);
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+
+            let mut reported = Vec::new();
+            client
+                .complete_streaming(&mut policy, &writing_a_file(model), |progress| {
+                    reported.push(progress.prose);
+                })
+                .expect("the reply was read");
+
+            assert!(!reported.is_empty(), "the stream reported nothing");
+            assert_eq!(reported.last(), Some(&expected), "{reported:?}");
+            assert_eq!(reported.contains(&true), expected, "{reported:?}");
+        }
     }
 
     /// Announcing a retry before a wait must not count it as sent when the caller cancels.

@@ -445,6 +445,7 @@ pub(crate) mod scripted {
                 calling: None,
                 thinking: Labelled::new(&piece, Label::untrusted_public()),
                 counted_by_server: false,
+                prose: false,
                 attempt: 1,
             });
         }

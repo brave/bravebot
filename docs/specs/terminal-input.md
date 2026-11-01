@@ -28,6 +28,7 @@ governs:
   - crates/tui/src/command_table.rs
   - crates/ui-bridge/src/running.rs
   - crates/agent/src/interjections.rs
+  - crates/agent/src/turn/cutting.rs
   - ui/src/renderer/interjecting.ts
 documented-by:
   - docs/website/docs/using/interactive-mode.md
@@ -522,6 +523,46 @@ Not mid-round. Every call the planner asked for in a round runs, because a round
 asked for together and answering some while abandoning others leaves calls unanswered. Stopping in
 the middle of one is what the keys in INPUT-4 are for.
 
+**A reply that is only thinking, or a call being written, is cut for it.** While a request is out,
+a prompt sent ends the request when the reply so far is thinking or an open call, and the request
+goes out again at once with the prompt in front of it. Nothing of the cut reply is kept: it does not
+join the conversation, the next request or the record, and the interface is told the prompt went in
+as it is for any interjection. Nothing has run when this happens, since the calls of a round are
+known only when its reply is whole, so no call goes unanswered and the turn carries on as though
+the prompt had been there when the request was first made.
+
+Only a prompt sent while the request is out ends it. One already waiting when the request goes out,
+because it was queued before the turn's first request or ahead of a stop, is read at the next
+boundary as above, and a stop still leaves it queued.
+
+A reply that is prose is left to finish. From its first words until the model opens a call, a
+person may be reading it, and cutting it would take away text they are in the middle of. The prompt
+then waits for the next boundary as above, or becomes a turn of its own when the reply ends the
+turn. The sentence before a call does not hold the cut off once the call has opened.
+
+Stopping the turn ends a request that a prompt could have cut, as INPUT-4 says for any request:
+the request answers to a token of its own, which also reads as cancelled once the turn is. A cut
+that finds no prompt left to take, because the person took it back first, is not repeated for the
+rest of the turn. A delegate, a plan run and a front end nobody types into cut nothing.
+
+**What decides it.** Whether a prompt is waiting, and which kind of event the stream has delivered
+so far: thinking, text, or a call. The clients that decode the stream state whether any text event
+has delivered anything as a flag beside the reply's own fields, as they state which call is open,
+and the turn reads the flag. No word the model wrote is read or compared, not even to tell blank
+text from the rest, and the dropped reply is the model's whole output, so the cut carries nothing
+from it anywhere. What the flag changes is when the person's own prompt goes in, and no effect
+lands on its account. A reply that opens with blank text counts as text and is left to finish.
+
+A cut stream reports no usage, so the turn's token figures leave out the reply that was cut, as
+they do for a stopped one. The connection to the service is left to close when the service next
+sends a piece, as for a stop (Known costs).
+
+**Why.** The next boundary can be minutes away. A model that thinks for a minute before writing a
+call, or writes a long file as one call, holds a correction for all of that time, and the
+correction was meant for that call. Nothing a cut throws away has had an effect, so ending the
+request costs the tokens already spent on it and the time to ask again, and waiting costs the work
+the person was trying to redirect. Prose is excluded because there the cost lands on a reader.
+
 **It may not route.** Routing is precommitted from the prompt that began the turn and stays that
 way, so an interjection reaches the planner as words to read and every effect it goes on to ask for
 is gated against the routing the turn began with. It is trusted, on the footing of the opening
@@ -647,6 +688,28 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_agent::interjections::forget_last_drops_a_held_line_before_a_readable_one`
 `verified-by: bravebot_agent::interjections::beginning_a_turn_removes_the_oldest_lines_and_keeps_the_rest_in_order`
 `verified-by: bravebot_tui::state::prompts_held_back_from_the_turn_are_counted_by_the_shared_buffer`
+`verified-by: bravebot_agent::cutting::a_line_typed_while_the_model_is_thinking_is_in_the_next_request_at_once`
+`verified-by: bravebot_agent::cutting::a_line_typed_while_a_call_is_being_written_is_in_the_next_request_at_once`
+`verified-by: bravebot_agent::cutting::a_line_typed_while_the_model_is_writing_prose_waits_for_the_reply`
+`verified-by: bravebot_agent::cutting::stopping_the_turn_still_ends_a_request_that_a_line_could_have_cut`
+`verified-by: bravebot_agent::cutting::a_cut_that_finds_no_line_is_not_repeated`
+`verified-by: bravebot_agent::cutting::a_delegates_request_is_not_cut_for_a_line_waiting`
+`verified-by: bravebot_aichat::client::an_anthropic_stream_reports_prose_for_text_and_not_for_thinking_or_a_call`
+`verified-by: bravebot_aichat::client::a_responses_stream_reports_prose_for_text_and_not_for_thinking_or_a_call`
+`verified-by: bravebot_aichat::client::a_google_express_stream_reports_prose_for_text_and_not_for_thinking_or_a_call`
+`verified-by: bravebot_bedrock::lib::progress_reports_prose_for_text_and_not_for_thinking_or_a_call`
+`verified-by: bravebot_agent::turn::cutting::a_line_cuts_a_request_that_has_said_nothing_and_leaves_the_turn_going`
+`verified-by: bravebot_agent::turn::cutting::a_reply_that_has_begun_to_say_something_is_not_cut`
+`verified-by: bravebot_agent::turn::cutting::a_line_waiting_before_the_request_does_not_cut_it_and_one_typed_after_does`
+`verified-by: bravebot_agent::turn::cutting::nothing_is_watched_where_nobody_types`
+`verified-by: bravebot_agent::interjections::the_count_rises_for_each_line_added_for_the_turn_and_for_nothing_else`
+`verified-by: bravebot_agent::turn::cutting::a_held_line_cuts_nothing`
+`verified-by: bravebot_agent::interjections::the_arrival_handle_follows_every_way_a_line_enters_or_leaves`
+`verified-by: bravebot_agent::interjections::a_held_line_does_not_read_as_waiting`
+`verified-by: bravebot_agent::interjections::the_handle_is_shared_by_every_clone`
+`verified-by: bravebot_core::cancel::a_child_reads_as_cancelled_once_its_parent_is`
+`verified-by: bravebot_core::cancel::cancelling_a_child_leaves_its_parent_alone`
+`verified-by: bravebot_tui::remote_confirm::the_turns_confirmer_sees_a_line_as_the_terminal_adds_it`
 
 <a id="INPUT-42"></a>
 ### INPUT-42: a prompt waiting on a long command moves the command to the background
@@ -2889,6 +2952,10 @@ turn it is for. The bridge answers `{ "accepted": true }` when the turn is runni
 stopped and asks between rounds, and `false` otherwise. A plan run asks nothing between rounds, so
 it never accepts one.
 
+A line `turn.interject` adds is cut in for a reply that is only thinking or a call being written,
+as [INPUT-10](#INPUT-10) says for the terminal: the request in flight ends and goes out again with
+the line in front of it, and a reply that is prose is left to finish.
+
 The window draws the line under the box as sent to this turn. It is in the transcript only once the
 bridge sends `turn.interjected`, at the moment the planner is given it, and lines are read in the
 order they were sent. A line the bridge does not accept, and a line still unread when the turn
@@ -2923,6 +2990,7 @@ this meaning.
 `verified-by: bravebot_filetype::markers::a_dropped_file_becomes_its_name_and_text_around_it_is_kept`
 `verified-by: bravebot_ui_bridge::interjection_tests::work_that_asks_nothing_between_rounds_takes_no_line`
 `verified-by: bravebot_ui_bridge::interjection_tests::lines_are_read_in_the_order_they_were_typed`
+`verified-by: bravebot_ui_bridge::interjection_tests::the_turns_confirmer_sees_a_line_as_it_is_added`
 `verified-by: bravebot_agent::interjections::a_line_for_a_turn_that_is_not_reading_is_handed_back`
 `verified-by: by-construction (the renderer and the main process are not crates this workspace compiles, so ui/scripts/interjecting.test.mjs drives the window's own event reducer with the bridge's events: a line is in the transcript only after turn.interjected and in the order it was sent, a line unread when the turn is done or stopped goes on past a paused queue, one left by a failed turn waits, a refused line returns to the head of the queue, the window names its markers and writes no words, a paperclip file or the memory update queues the line, and turn.interject forwards only its line and the names of its markers; make check-ui runs the test)`
 

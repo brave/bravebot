@@ -495,6 +495,7 @@ impl<'a> ResponsesClient<'a> {
                     calling: None,
                     thinking: Labelled::new("", Label::untrusted_public()),
                     counted_by_server: false,
+                    prose: false,
                     attempt,
                 });
             },
@@ -631,6 +632,7 @@ impl<'a> ResponsesClient<'a> {
                     .map(|call| Labelled::new(call.name.as_str(), label)),
                 thinking: Labelled::new(&reply.thinking[thought_before..], label),
                 counted_by_server: reply.counted(),
+                prose: Progress::has_prose(&reply.text),
                 attempt,
             });
         }

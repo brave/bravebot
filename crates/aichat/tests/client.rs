@@ -9820,3 +9820,175 @@ fn the_accounts_listing_refused_for_a_listed_code_says_so_and_any_other_keeps_it
         "{outcome:?}"
     );
 }
+
+/// What `Progress.prose` said at each report of a stream, and whether the stream was read.
+///
+/// A line typed while the model is thinking or writing a call ends the request (INPUT-10), and a
+/// line typed while it writes prose waits for the reply. The decision rests on this flag, so each
+/// decoder has to keep thinking out of the text it counts.
+fn prose_reported(
+    mut read: impl FnMut(&mut Policy<'_, RecordingSink>, &mut dyn FnMut(bool)),
+) -> Vec<bool> {
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut reported = Vec::new();
+    read(&mut policy, &mut |prose| reported.push(prose));
+    assert!(!reported.is_empty(), "the stream reported nothing");
+    reported
+}
+
+/// Text sets the flag; thinking and a call being written, with no text before them, do not. The
+/// last report of a reply that wrote text says so, and no report of one that only thought and
+/// called says it did.
+#[test]
+fn an_anthropic_stream_reports_prose_for_text_and_not_for_thinking_or_a_call() {
+    let thinking = |index| {
+        vec![
+            event(
+                "content_block_start",
+                serde_json::json!({"type": "content_block_start", "index": index,
+                    "content_block": {"type": "thinking", "thinking": "", "signature": ""}}),
+            ),
+            event(
+                "content_block_delta",
+                serde_json::json!({"type": "content_block_delta", "index": index,
+                    "delta": {"type": "thinking_delta", "thinking": "private thoughts"}}),
+            ),
+        ]
+    };
+    let mut silent = vec![message_start(5, 0, 0)];
+    silent.extend(thinking(0));
+    silent.extend(call_block(
+        1,
+        "toolu_1",
+        "read_file",
+        &["{\"path\":", "\"x\"}"],
+    ));
+    silent.extend(message_end("tool_use", 9));
+    let mut spoken = vec![message_start(5, 0, 0)];
+    spoken.extend(thinking(0));
+    spoken.extend(text_block(1, &["I will ", "read it."]));
+    spoken.extend(message_end("end_turn", 9));
+
+    for (frames, expected) in [(silent, false), (spoken, true)] {
+        let (endpoint, _received) = serve_stream(frames);
+        let config = config_for(&endpoint);
+        let provider = anthropic_at(&endpoint);
+        let egress = Egress::new();
+        let reported = prose_reported(|policy, report| {
+            AnthropicClient::new(&config, &egress, &provider, "claude-test", None)
+                .complete_streaming(
+                    policy,
+                    &ChatRequest::new("anthropic/claude-test", vec![Message::user("hello")])
+                        .with_tools(reading_tool()),
+                    |progress| report(progress.prose),
+                )
+                .expect("the stream was read");
+        });
+        assert_eq!(reported.last(), Some(&expected), "{reported:?}");
+        assert_eq!(reported.contains(&true), expected, "{reported:?}");
+    }
+}
+
+/// The same for the Responses decoder: a reasoning summary and an open call are not prose.
+#[test]
+fn a_responses_stream_reports_prose_for_text_and_not_for_thinking_or_a_call() {
+    let mut silent = vec![
+        sse(
+            "response.reasoning_summary_text.delta",
+            serde_json::json!({"delta": "weighing it"}),
+        ),
+        sse(
+            "response.output_item.added",
+            serde_json::json!({"output_index": 0, "item": {"type": "function_call",
+                "call_id": "call_9", "name": "add", "arguments": ""}}),
+        ),
+        sse(
+            "response.function_call_arguments.delta",
+            serde_json::json!({"output_index": 0, "delta": "{\"a\":2}"}),
+        ),
+        sse(
+            "response.output_item.done",
+            serde_json::json!({"output_index": 0, "item": {"type": "function_call",
+                "call_id": "call_9", "name": "add", "arguments": "{\"a\":2}"}}),
+        ),
+    ];
+    silent.push(sse("response.completed", completed(10, 4)));
+    let mut spoken = vec![sse(
+        "response.reasoning_summary_text.delta",
+        serde_json::json!({"delta": "weighing it"}),
+    )];
+    spoken.extend(text_reply(&["done"]));
+
+    for (frames, expected) in [(silent, false), (spoken, true)] {
+        let (endpoint, _) = serve_stream(frames);
+        let provider = responses_at(&endpoint);
+        let egress = Egress::new();
+        let reported = prose_reported(|policy, report| {
+            responses_client(&egress, &provider, "a-model")
+                .complete_streaming(
+                    policy,
+                    &ChatRequest::new("a-responses-gateway/a-model", vec![Message::user("hi")])
+                        .with_tools(vec![bravebot_aichat::protocol::Tool::function(
+                            "add",
+                            "Add",
+                            serde_json::json!({"type": "object"}),
+                        )]),
+                    |progress| report(progress.prose),
+                )
+                .expect("the reply was read");
+        });
+        assert_eq!(reported.last(), Some(&expected), "{reported:?}");
+        assert_eq!(reported.contains(&true), expected, "{reported:?}");
+    }
+}
+
+/// The same for the generateContent decoder: a part marked as a thought and a function call are
+/// not prose.
+#[test]
+fn a_google_express_stream_reports_prose_for_text_and_not_for_thinking_or_a_call() {
+    let usage = || Some(serde_json::json!({"promptTokenCount": 50, "candidatesTokenCount": 9}));
+    let silent = vec![
+        piece(
+            serde_json::json!([{"text": "pondering", "thought": true}]),
+            None,
+            None,
+        ),
+        piece(
+            serde_json::json!([{"functionCall": {"name": "read_file", "args": {"path": "x"}}}]),
+            Some("STOP"),
+            usage(),
+        ),
+    ];
+    let spoken = vec![
+        piece(
+            serde_json::json!([{"text": "pondering", "thought": true}]),
+            None,
+            None,
+        ),
+        piece(serde_json::json!([{"text": "I will "}]), None, None),
+        piece(
+            serde_json::json!([{"text": "read it."}]),
+            Some("STOP"),
+            usage(),
+        ),
+    ];
+
+    for (frames, expected) in [(silent, false), (spoken, true)] {
+        let (endpoint, _received) = serve_stream(frames);
+        let provider = express_at(&endpoint);
+        let egress = Egress::new();
+        let reported = prose_reported(|policy, report| {
+            express_client(&egress, &provider, "google/gemini-test")
+                .complete_streaming(
+                    policy,
+                    &ChatRequest::new("google/gemini-test", vec![Message::user("hello")])
+                        .with_tools(reading_tool()),
+                    |progress| report(progress.prose),
+                )
+                .expect("the stream was read");
+        });
+        assert_eq!(reported.last(), Some(&expected), "{reported:?}");
+        assert_eq!(reported.contains(&true), expected, "{reported:?}");
+    }
+}

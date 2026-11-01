@@ -741,6 +741,10 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     fn interjection(&mut self) -> Option<String> {
         self.inner.interjection()
     }
+
+    fn arrival(&self) -> crate::interjections::Arrival {
+        self.inner.arrival()
+    }
 }
 
 #[cfg(test)]
