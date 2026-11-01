@@ -40,6 +40,7 @@ use bravebot_core::policy::{Denial, Policy};
 use bravebot_core::reference::Presentation;
 use bravebot_core::slot::SlotId;
 use std::fmt;
+use std::sync::Arc;
 
 use crate::conversation::Conversation;
 use crate::processor::Chat;
@@ -234,7 +235,9 @@ pub fn enhancement(shown: &str) -> Option<String> {
 #[derive(Debug, Clone)]
 pub struct Question {
     /// The exchange as the planner would be sent it, with nothing of the question on the end yet.
-    exchange: Vec<Message>,
+    ///
+    /// Shared with the conversation it was taken from, so a fork of it copies pointers.
+    exchange: Vec<Arc<Message>>,
     /// The question, as the person typed it.
     asked: String,
     /// The pictures the question named, pasted into the line the question was typed on.
@@ -259,14 +262,14 @@ pub struct Question {
 /// would be sent it under the aside's own instructions, and what the exchange had met.
 #[derive(Debug, Clone)]
 pub struct Fork {
-    exchange: Vec<Message>,
+    exchange: Vec<Arc<Message>>,
     context: Integrity,
 }
 
 impl Fork {
     pub fn of(conversation: &Conversation) -> Self {
         Self {
-            exchange: conversation.with_system(SYSTEM_PROMPT),
+            exchange: conversation.shared_with_system(SYSTEM_PROMPT),
             context: conversation.context(),
         }
     }
@@ -313,7 +316,7 @@ impl Question {
         pasted: Vec<crate::turn::PastedImage>,
     ) -> Self {
         Self {
-            exchange: conversation.with_system(system),
+            exchange: conversation.shared_with_system(system),
             asked: question.to_string(),
             pasted,
             dropped: Vec::new(),
@@ -405,7 +408,11 @@ impl Question {
     /// The record `pasting.md` PASTE-8 asks for is not taken here. This runs wherever the request is
     /// assembled and the gate belongs to the policy, so [`ask`] takes it before calling this.
     fn into_request(self) -> Vec<Message> {
-        let mut messages = self.exchange;
+        let mut messages: Vec<Message> = self
+            .exchange
+            .into_iter()
+            .map(Arc::unwrap_or_clone)
+            .collect();
         let text = format!("{INSTRUCTION}\n\n{}", self.asked);
         messages.push(match (self.pasted.is_empty(), self.dropped.is_empty()) {
             (true, true) => Message::user(text),
@@ -566,6 +573,50 @@ mod tests {
         conversation.push(Message::user("add the feature"));
         conversation.push(Message::assistant("done"));
         conversation
+    }
+
+    /// A fork is taken at every round of every turn that publishes its exchange, and a question is
+    /// asked over it only when somebody types `/btw`. It therefore shares the messages the
+    /// conversation holds and copies none of them, so a round without a question costs one pointer
+    /// per message.
+    #[test]
+    fn a_fork_shares_the_stored_messages_instead_of_copying_them() {
+        let conversation = an_exchange();
+        let fork = Fork::of(&conversation);
+
+        let stored = conversation.messages();
+        assert_eq!(
+            fork.exchange.len(),
+            stored.len() + 1,
+            "the system prompt and the exchange"
+        );
+        for (shared, kept) in fork.exchange[1..].iter().zip(stored) {
+            assert!(
+                Arc::ptr_eq(shared, &kept.message),
+                "a message of the exchange was copied into the fork"
+            );
+        }
+    }
+
+    /// A question is built from the same shared messages as a fork. Rejects building it from a
+    /// copy of each message.
+    #[test]
+    fn a_question_shares_the_stored_messages_instead_of_copying_them() {
+        let conversation = an_exchange();
+        let question = Question::about(&conversation, "why?", Vec::new());
+
+        let stored = conversation.messages();
+        assert_eq!(
+            question.exchange.len(),
+            stored.len() + 1,
+            "the system prompt and the exchange"
+        );
+        for (shared, kept) in question.exchange[1..].iter().zip(stored) {
+            assert!(
+                Arc::ptr_eq(shared, &kept.message),
+                "a message of the exchange was copied into the question"
+            );
+        }
     }
 
     /// The exchange reads as the instruction unless something says otherwise, and a question on

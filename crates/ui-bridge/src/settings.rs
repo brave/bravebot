@@ -98,42 +98,13 @@ pub fn validate(path: &Path) -> Result<(), Failure> {
 
 /// The keys a file above the person's own home directory named and the agent did not obey, with
 /// the file each came from.
+///
+/// Read from the table of keys a checkout may not name, so a key added to it is listed here.
 fn ignored(settings: &Settings) -> Vec<Value> {
-    let named = |key: &'static str, paths: Vec<&Path>| -> Vec<Value> {
-        paths
-            .into_iter()
-            .map(|path| json!({ "name": key, "path": path }))
-            .collect()
-    };
-    let mut ignored = named("model", settings.model_ignored().collect());
-    ignored.extend(named("provider", settings.providers_ignored().collect()));
-    ignored.extend(named("advisorModel", settings.advisor_ignored().collect()));
-    ignored.extend(named(
-        "fallbackModel",
-        settings.fallback_ignored().collect(),
-    ));
-    ignored.extend(named("summaryModel", settings.summary_ignored().collect()));
-    ignored.extend(named("planModel", settings.plan_ignored().collect()));
-    ignored.extend(named(
-        "processorModel",
-        settings.processor_ignored().collect(),
-    ));
-    ignored.extend(named(
-        "commitMessage",
-        settings.commit_message_ignored().collect(),
-    ));
-    ignored.extend(named("agent", settings.agent_ignored().collect()));
-    ignored.extend(named("style", settings.style_ignored().collect()));
-    ignored.extend(named(
-        "sharedSkillDirectories",
-        settings.shared_skill_directories_ignored().collect(),
-    ));
-    ignored.extend(named(
-        "askIdleSeconds",
-        settings.ask_idle_ignored().collect(),
-    ));
-    ignored.extend(named("references", settings.references_ignored().collect()));
-    ignored
+    settings
+        .not_obeyed_all()
+        .map(|(key, path)| json!({ "name": key, "path": path }))
+        .collect()
 }
 
 /// What the settings in force say about the two keys that only refuse and the three run limits.
@@ -311,6 +282,26 @@ mod tests {
             vec![json!({ "name": "style", "path": project })]
         );
         assert_eq!(settings.style(), Some("concise"));
+    }
+
+    /// A checkout naming any key of the table of keys it may not name is listed with the key and the
+    /// file, so `language`, `attribution` and `retentionDays` appear and so does a key added later.
+    #[test]
+    fn a_checkout_naming_any_home_only_key_is_listed_as_ignored() {
+        let keys: Vec<&str> = Settings::home_only_keys().collect();
+        for required in ["language", "attribution", "retentionDays"] {
+            assert!(keys.contains(&required), "{required} is not in the table");
+        }
+        for key in keys {
+            let (directory, settings) =
+                vetting_layers(Some("{}"), Some(&format!(r#"{{"{key}": "stated"}}"#)));
+            let project = directory.path().join("project/.bravebot/settings.json");
+            assert_eq!(
+                ignored(&settings),
+                vec![json!({ "name": key, "path": project })],
+                "{key}"
+            );
+        }
     }
 
     fn vetting_layers(

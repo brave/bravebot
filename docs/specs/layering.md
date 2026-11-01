@@ -141,6 +141,13 @@ read, names one site: the counting allocator its `event_stream` target measures 
 ([fuzzing.md](../development/fuzzing.md)). Taking `deny` where `forbid` would do is the way the rule
 is kept in letter and lost in substance, because `deny` is the one an `allow` added later reopens.
 
+`bravebot-sandbox` additionally denies `clippy::undocumented_unsafe_blocks` at its library root and
+at `tests/windows.rs`, so each of its `unsafe` blocks carries a `// SAFETY:` comment. The other
+crates that name sites do not. A test in `bravebot-cli` checks that the attribute is present at
+every root of the sandbox crate that contains `unsafe`, and clippy on the three lint targets
+enforces the comments.
+
+`verified-by: bravebot_cli::unsafe_code::every_sandbox_root_that_has_unsafe_denies_undocumented_blocks`
 `verified-by: bravebot_cli::unsafe_code::every_crate_root_says_what_it_does_about_unsafe`
 `verified-by: bravebot_cli::unsafe_code::the_rule_reaches_every_example_and_benchmark_beside_a_crate`
 `verified-by: bravebot_cli::unsafe_code::a_crate_that_exempts_nothing_forbids_rather_than_denies`

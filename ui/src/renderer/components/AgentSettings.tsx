@@ -208,7 +208,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
             <h4>Loaded files, in order</h4>{report.layers.length ? <ol>{report.layers.map(path => <li key={path} className="settings-path">{path}</li>)}</ol> : <p>No settings files loaded.</p>}
           </div>
           {report.overrides.map(item => <p key={item.name}><code>{item.name}</code> overridden by <span className="settings-path">{item.path}</span></p>)}
-          {(report.ignored ?? []).map(item => <p key={`${item.name}:${item.path}`}><code>{item.name}</code> in <span className="settings-path">{item.path}</span> is ignored. Only your home settings file or a file you choose above can set it.</p>)}
+          {(report.ignored ?? []).map(item => <p key={`${item.name}:${item.path}`}><code>{item.name}</code> in <span className="settings-path">{item.path}</span> is ignored. Set it in your home settings file instead.</p>)}
           {report.limits && <div><LimitsInForce limits={report.limits} /></div>}
           {report.managed.keys.length > 0 && <p>Managed values: {report.managed.keys.join(', ')}. This override cannot change them.</p>}
         </section>

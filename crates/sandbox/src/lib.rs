@@ -13,6 +13,7 @@
 //! sandbox that was never applied.
 
 #![deny(unsafe_code)]
+#![deny(clippy::undocumented_unsafe_blocks)]
 #![cfg_attr(
     test,
     allow(clippy::disallowed_methods, reason = "the test names its program")

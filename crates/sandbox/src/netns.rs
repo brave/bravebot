@@ -165,23 +165,18 @@ fn probe() -> Result<(), String> {
 
 /// Creates the user and network namespaces, maps the account to itself and brings the loopback
 /// up.
-#[allow(
-    unsafe_code,
-    reason = "the namespace system calls act on memory this function owns"
-)]
+#[allow(unsafe_code, reason = "`unshare` takes flags and no pointer")]
 fn isolate(uid_map: &[u8], gid_map: &[u8]) -> io::Result<()> {
-    // SAFETY: every call here is a plain system call on memory this function owns.
+    // SAFETY: `unshare` takes flags and no pointer.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-    unsafe {
-        if libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNET) != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // The kernel refuses a gid map to a process that may still change its groups.
-        write_file(c"/proc/self/setgroups", b"deny")?;
-        write_file(c"/proc/self/uid_map", uid_map)?;
-        write_file(c"/proc/self/gid_map", gid_map)?;
-        loopback_up()
+    if unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNET) } != 0 {
+        return Err(io::Error::last_os_error());
     }
+    // The kernel refuses a gid map to a process that may still change its groups.
+    write_file(c"/proc/self/setgroups", b"deny")?;
+    write_file(c"/proc/self/uid_map", uid_map)?;
+    write_file(c"/proc/self/gid_map", gid_map)?;
+    loopback_up()
 }
 
 #[allow(
@@ -256,8 +251,8 @@ fn loopback_up() -> io::Result<()> {
     reason = "system calls on memory this function owns, and a fork whose child runs only `serve_forever`"
 )]
 fn start_forwarder(forward: &Forward) -> io::Result<()> {
-    // SAFETY: system calls on memory this function owns; the forked child runs only
-    // `serve_forever`, which is async-signal-safe and never returns.
+    // SAFETY: the pointers passed to `bind`, `listen` and the other calls are to locals that outlive
+    // each call. The forked child runs only `serve_forever`, which never returns.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe {
         let listener = libc::socket(libc::AF_INET, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);

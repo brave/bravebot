@@ -1319,8 +1319,14 @@ every file that was found. The flag that names one, and the path it refuses, are
 | `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | the fifteen `env` names of the network, Google and Bedrock sets ([BACKEND-33](#BACKEND-33)) | home layer, and the file `--settings` names when it is outside the checkout; a project or local layer naming one is ignored and reported by `doctor` |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `commitMessage`, `agent`, `style`, `sharedSkillDirectories` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
+| `language`, `retentionDays` | home layer alone; any other layer naming one is ignored and reported the same way |
+| `references`, `attribution`, `askIdleSeconds` | home layer, and a `--settings` file outside the checkout; a project or local layer, and a `--settings` file inside the checkout, naming one is ignored and reported the same way |
 | anything else | the closest layer that set it wins |
+
+The keys of the three rows above that a layer may not name are read from one table, so `doctor` and
+the desktop settings view each name every file that carried one, and a key added to the table is
+reported by both without an edit to either.
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
 a list under `permissions` as something other than an array, sets nothing there: the weaker layers'
@@ -1421,6 +1427,8 @@ with it.
 `verified-by: bravebot_config::settings::a_command_line_file_that_is_not_there_leaves_the_found_layers_in_force`
 `verified-by: bravebot_config::settings::a_command_line_file_that_is_already_a_layer_is_read_once`
 `verified-by: bravebot_config::settings::the_layers_that_were_read_are_reported_weakest_first`
+`verified-by: bravebot_cli::doctor::a_checkout_naming_any_home_only_key_is_reported_with_the_key_and_the_file`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_naming_any_home_only_key_is_listed_as_ignored`
 `verified-by: bravebot_config::settings::a_name_more_than_one_layer_set_reports_the_file_that_won`
 `verified-by: bravebot_config::settings::an_override_reports_the_name_and_the_file_and_never_the_value`
 `verified-by: bravebot_config::lib::the_environment_outranks_the_settings_file`

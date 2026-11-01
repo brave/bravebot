@@ -300,6 +300,9 @@ impl SeatbeltSandbox {
 #[cfg(target_os = "macos")]
 pub fn user_cache_directory() -> Option<std::path::PathBuf> {
     let mut buffer = [0u8; libc::PATH_MAX as usize];
+    // SAFETY: `confstr` writes at most `buffer.len()` bytes through the pointer, and `buffer` is a
+    // local that outlives the call. A returned length larger than the buffer is rejected below
+    // before the buffer is read.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let length = unsafe {
         libc::confstr(

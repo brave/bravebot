@@ -748,6 +748,10 @@ doctor-settings-attribution-ignored =
 # records are deleted would delete them by being opened. A line that does nothing is worth saying so.
 doctor-settings-retention-ignored =
     retentionDays in { $path } is not obeyed: it is read from ~/.bravebot/settings.json only
+# A key a checkout may not name that has no message of its own above, so a key added to the table is
+# reported before its words are written.
+doctor-settings-home-only-ignored =
+    { $key } in { $path } is not obeyed: it is read from the person's own settings only
 # The sweep that removes old session records, language server indexes and findings waits while the
 # period it was asked for cannot be determined, and removes nothing, so a person who set a period
 # is not swept on the built-in one instead.

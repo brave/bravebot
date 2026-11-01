@@ -89,7 +89,9 @@ const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
 )]
 fn landlock_abi_version() -> libc::c_long {
     const LANDLOCK_CREATE_RULESET_VERSION: libc::c_ulong = 1;
-    // Landlock has no libc wrapper, so the syscall is issued directly.
+    // SAFETY: Landlock has no libc wrapper, so the syscall is issued directly. The attribute
+    // pointer is null, the size is zero and the flag is `LANDLOCK_CREATE_RULESET_VERSION`, with
+    // which the kernel reads no memory and creates no descriptor.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe {
         libc::syscall(
@@ -446,12 +448,17 @@ impl LandlockSandbox {
 
         // Landlock applies to the calling thread and is inherited across exec, so the
         // ruleset is installed in the child between fork and exec.
-        // `pre_exec` is unsafe by definition: its closure runs in the forked child, where
-        // only async-signal-safe work is allowed.
         #[allow(
             unsafe_code,
-            reason = "`pre_exec` is unsafe, and its closure runs only async-signal-safe calls in the forked child"
+            reason = "`pre_exec` is unsafe because its closure runs in the forked child, before exec"
         )]
+        // SAFETY: `pre_exec` requires the closure to be safe to run between fork and exec in a
+        // process that may have had other threads. The closure is `move` and owns its inputs, and
+        // it fails the spawn when any step fails. It is not restricted to async-signal-safe calls:
+        // `std::fs::metadata`, `format!`, `Error::other` and the `landlock` crate allocate in the
+        // child. If another thread of the parent held the allocator's lock at the fork, the child
+        // can block in the allocator and the spawn does not return. This is accepted for now;
+        // `namespace.enter()` and `setsid` allocate nothing.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe {
             command.pre_exec(move || {

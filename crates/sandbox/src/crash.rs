@@ -78,6 +78,8 @@ fn core_dump_limits() -> Option<(libc::rlim_t, libc::rlim_t)> {
         rlim_cur: 0,
         rlim_max: 0,
     };
+    // SAFETY: `getrlimit` writes one `rlimit` through the pointer, and `limit` is a local that
+    // outlives the call.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let read = unsafe { libc::getrlimit(libc::RLIMIT_CORE, &raw mut limit) };
     (read == 0).then_some((limit.rlim_cur, limit.rlim_max))
@@ -91,6 +93,8 @@ fn core_dump_limits() -> Option<(libc::rlim_t, libc::rlim_t)> {
     reason = "`libc::setrlimit` only reads the borrowed `rlimit` for the length of the call, so the FFI call is sound"
 )]
 fn set_core_dump_limit(limit: &libc::rlimit) -> bool {
+    // SAFETY: `setrlimit` only reads the `rlimit` behind the pointer, and `limit` is a reference
+    // that is valid for the length of the call.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let written = unsafe { libc::setrlimit(libc::RLIMIT_CORE, limit) };
     written == 0

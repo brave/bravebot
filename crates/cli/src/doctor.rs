@@ -232,26 +232,57 @@ fn ignored<'a>(paths: impl IntoIterator<Item = &'a Path>, say: impl Fn(String) -
     });
 }
 
-/// What `doctor` says about the retention period: a line for each file that named `retentionDays`
-/// and was not obeyed, and one while the period cannot be determined and the sweep is paused
-/// (STATE-4). Nothing while the sweep runs, which is the ordinary case.
-fn retention_facts(settings: &bravebot_config::Settings) -> Vec<(String, String)> {
-    let not_obeyed = settings.retention_ignored().map(|path| {
-        (
-            t!(doctor_settings_ignored).to_string(),
+/// The line for a file that named `key`, a key of the table of keys a checkout may not name, said
+/// in that key's own message. A key the table gains and this match does not name is said in the
+/// general one, so it is reported before anyone writes its own words.
+fn home_only_line(key: &str, path: String) -> String {
+    match key {
+        "provider" => t!(doctor_settings_provider_ignored, path = path),
+        "model" => t!(doctor_settings_model_ignored, path = path),
+        "advisorModel" => t!(doctor_settings_advisor_ignored, path = path),
+        "fallbackModel" => t!(doctor_settings_fallback_ignored, path = path),
+        "summaryModel" => t!(doctor_settings_summary_ignored, path = path),
+        "planModel" => t!(doctor_settings_plan_ignored, path = path),
+        "processorModel" => t!(doctor_settings_processor_ignored, path = path),
+        "commitMessage" => t!(doctor_settings_commit_message_ignored, path = path),
+        "agent" => t!(doctor_settings_agent_ignored, path = path),
+        "style" => t!(doctor_settings_style_ignored, path = path),
+        "sharedSkillDirectories" => {
             t!(
-                doctor_settings_retention_ignored,
-                path = path.display().to_string()
-            ),
-        )
-    });
-    let paused = settings.retention_unreadable().map(|path| {
-        (
-            t!(doctor_retention).to_string(),
-            t!(doctor_retention_paused, path = path.display().to_string()),
-        )
-    });
-    not_obeyed.chain(paused).collect()
+                doctor_settings_shared_skill_directories_ignored,
+                path = path
+            )
+        }
+        "language" => t!(doctor_settings_language_ignored, path = path),
+        "retentionDays" => t!(doctor_settings_retention_ignored, path = path),
+        "references" => t!(doctor_settings_references_ignored, path = path),
+        "attribution" => t!(doctor_settings_attribution_ignored, path = path),
+        "askIdleSeconds" => t!(doctor_settings_ask_idle_ignored, path = path),
+        other => t!(doctor_settings_home_only_ignored, key = other, path = path),
+    }
+}
+
+/// One line for each file that named a key of the table of keys a checkout may not name.
+fn home_only_lines(settings: &bravebot_config::Settings) -> Vec<String> {
+    settings
+        .not_obeyed_all()
+        .map(|(key, path)| home_only_line(key, path.display().to_string()))
+        .collect()
+}
+
+/// What `doctor` says about the retention period: one while the period cannot be determined and the
+/// sweep is paused (STATE-4). Nothing while the sweep runs, which is the ordinary case. A file that
+/// named `retentionDays` and was not obeyed is one of [`home_only_lines`].
+fn retention_facts(settings: &bravebot_config::Settings) -> Vec<(String, String)> {
+    settings
+        .retention_unreadable()
+        .map(|path| {
+            (
+                t!(doctor_retention).to_string(),
+                t!(doctor_retention_paused, path = path.display().to_string()),
+            )
+        })
+        .collect()
 }
 
 /// The `doctor` facts for `sandbox.filesystem`: each entry of the four lists with the file or flag
@@ -474,9 +505,6 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     ignored(settings.vetting_ignored(), |path| {
         t!(doctor_settings_vetting_ignored, path = path)
     });
-    ignored(settings.providers_ignored(), |path| {
-        t!(doctor_settings_provider_ignored, path = path)
-    });
     // A gateway whose baseURL writes a port that cannot be read is dropped when the settings are
     // read. Naming it here is the only place the missing gateway is explained.
     each(
@@ -484,42 +512,11 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
         settings.providers_refused(),
         |(id, fault)| refused_provider_port(id, &fault.port),
     );
-    ignored(settings.model_ignored(), |path| {
-        t!(doctor_settings_model_ignored, path = path)
-    });
-    ignored(settings.advisor_ignored(), |path| {
-        t!(doctor_settings_advisor_ignored, path = path)
-    });
-    ignored(settings.fallback_ignored(), |path| {
-        t!(doctor_settings_fallback_ignored, path = path)
-    });
-    ignored(settings.summary_ignored(), |path| {
-        t!(doctor_settings_summary_ignored, path = path)
-    });
-    ignored(settings.plan_ignored(), |path| {
-        t!(doctor_settings_plan_ignored, path = path)
-    });
-    ignored(settings.processor_ignored(), |path| {
-        t!(doctor_settings_processor_ignored, path = path)
-    });
-    ignored(settings.commit_message_ignored(), |path| {
-        t!(doctor_settings_commit_message_ignored, path = path)
-    });
-    ignored(settings.agent_ignored(), |path| {
-        t!(doctor_settings_agent_ignored, path = path)
-    });
-    ignored(settings.shared_skill_directories_ignored(), |path| {
-        t!(
-            doctor_settings_shared_skill_directories_ignored,
-            path = path
-        )
-    });
-    ignored(settings.style_ignored(), |path| {
-        t!(doctor_settings_style_ignored, path = path)
-    });
-    ignored(settings.language_ignored(), |path| {
-        t!(doctor_settings_language_ignored, path = path)
-    });
+    // Every key of the table of keys a checkout may not name, from the table itself, so a row
+    // added to it is reported without an edit here.
+    for line in home_only_lines(settings) {
+        fact(t!(doctor_settings_ignored), line);
+    }
     // A tag no catalog answers is read as the reference, as it is from the environment, so a typo
     // would otherwise show English and say nothing.
     each(
@@ -537,15 +534,6 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
             )
         },
     );
-    ignored(settings.ask_idle_ignored(), |path| {
-        t!(doctor_settings_ask_idle_ignored, path = path)
-    });
-    ignored(settings.references_ignored(), |path| {
-        t!(doctor_settings_references_ignored, path = path)
-    });
-    ignored(settings.attribution_ignored(), |path| {
-        t!(doctor_settings_attribution_ignored, path = path)
-    });
     for (label, line) in retention_facts(settings) {
         fact(label, line);
     }
@@ -2258,11 +2246,7 @@ mod tests {
         std::fs::write(&own, r#"{"retentionDays": 7}"#).expect("user file");
         std::fs::write(&project_file, r#"{"retentionDays": 1}"#).expect("project file");
         let ignored = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
-        let report = retention_facts(&ignored)
-            .into_iter()
-            .map(|(label, line)| format!("{label} {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let report = home_only_lines(&ignored).join("\n");
         assert!(
             report.contains(&format!(
                 "retentionDays in {} is not obeyed",
@@ -2270,7 +2254,7 @@ mod tests {
             )),
             "{report}"
         );
-        assert!(!report.contains("nothing is removed"), "{report}");
+        assert!(retention_facts(&ignored).is_empty());
 
         std::fs::write(&own, r#"{"retentionDays": "a week"}"#).expect("user file");
         let paused = bravebot_config::Settings::layered(Some(home), None, None);
@@ -2285,6 +2269,50 @@ mod tests {
                 own.display()
             )),
             "{report}"
+        );
+    }
+
+    /// BACKEND-24: a checkout's file naming any key of the table of keys it may not name is
+    /// reported, with the key and the file. The keys are read from the table, so a key added to it is
+    /// held to this as well, and `language`, `attribution` and `retentionDays` are among them.
+    #[test]
+    fn a_checkout_naming_any_home_only_key_is_reported_with_the_key_and_the_file() {
+        let root = scratch("home-only-keys");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        let keys: Vec<&str> = bravebot_config::Settings::home_only_keys().collect();
+        for required in ["language", "attribution", "retentionDays"] {
+            assert!(keys.contains(&required), "{required} is not in the table");
+        }
+        for key in keys {
+            std::fs::write(&project_file, format!(r#"{{"{key}": "stated"}}"#)).expect("project");
+            let settings = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+            let lines = home_only_lines(&settings);
+            assert_eq!(lines.len(), 1, "{key}: {lines:?}");
+            assert!(
+                lines[0].contains(&format!("{key} in {}", project_file.display())),
+                "{key}: {lines:?}"
+            );
+            // The general message also names the key and the file, so the check above passes for a
+            // key whose own message is missing from the match. Only the general one says this.
+            assert!(
+                !lines[0].contains("the person's own settings"),
+                "{key} is said in the general message: {lines:?}"
+            );
+        }
+    }
+
+    /// BACKEND-24: a key the table gains before its own message is written is said in the general
+    /// message, with the key and the file.
+    #[test]
+    fn a_home_only_key_without_a_message_of_its_own_is_said_in_the_general_one() {
+        let line = home_only_line("keyWithNoMessage", "/checkout/settings.json".to_string());
+        assert_eq!(
+            line,
+            "keyWithNoMessage in /checkout/settings.json is not obeyed: it is read from the person's own settings only"
         );
     }
 

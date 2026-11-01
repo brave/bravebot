@@ -279,7 +279,7 @@ in a workspace ([credential-protection.md](credential-protection.md)).
 The period is `retentionDays` in the person's own `settings.json`: a whole number of days, one or
 more, and 30 where none is stated. One day is the least it can be, so nothing written in the last day
 is removed whatever the setting says. A project or local settings file, and a file the command line
-named, cannot state it: the line is read as no statement and `doctor` names the file
+named, cannot state it: the line is read as no statement, and `doctor` and the desktop settings view name the file
 ([cli.md](cli.md)).
 
 A file's age is its modification time, and no byte it holds decides whether it is kept. A modification
@@ -374,6 +374,7 @@ age does not end them.
 `verified-by: bravebot_agent::findings::the_sweep_does_not_follow_a_link_out_of_the_state_directory`
 `verified-by: bravebot_agent::findings::a_directory_among_the_records_is_left_where_it_is`
 `verified-by: bravebot_cli::doctor::the_retention_section_names_a_paused_sweep_and_a_file_that_was_not_obeyed`
+`verified-by: bravebot_ui_bridge::settings::a_checkout_naming_any_home_only_key_is_listed_as_ignored`
 `verified-by: bravebot_cli::running::a_one_shot_run_removes_old_records_and_keeps_the_one_it_continues`
 `verified-by: bravebot_cli::running::the_period_in_settings_decides_what_a_one_shot_run_removes`
 `verified-by: bravebot_ui_bridge::old_records::a_desktop_front_end_removes_old_records_as_it_starts_and_nothing_a_person_kept`

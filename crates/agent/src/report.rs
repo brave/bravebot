@@ -839,8 +839,9 @@ pub trait Reporter {
     /// The request a turn is about to send the planner, read from the request itself.
     fn request_built(&mut self, _view: crate::request_view::RequestView) {}
 
-    /// Whether this interface keeps the exchange a turn publishes at each round, so a turn copies
-    /// it only for one that does.
+    /// Whether this interface keeps the exchange a turn publishes at each round, so a turn builds
+    /// the fork only for one that does. The fork shares the messages the conversation stores
+    /// ([`crate::aside::Fork::of`]) instead of copying them.
     fn wants_fork(&self) -> bool {
         false
     }

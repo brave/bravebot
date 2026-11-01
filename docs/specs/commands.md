@@ -571,6 +571,8 @@ does not read:
   ([WATCH-19](watching.md#WATCH-19)). A file dropped on it is refused, since reading it records a
   rule in the map the turn answers into. Before the turn has sent a request it says there is nothing
   to read yet. What the question cost is charged to the turn ([SESSION-11](sessions.md#SESSION-11)).
+  The exchange the turn publishes, and the one a question is asked over, hold the messages the
+  conversation stores and copy none of them; the quarantine is not shared.
 
 - **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
   started with, none of which it changes. The trust map and the vouched programs are the turn's: it
@@ -689,6 +691,8 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_second_btw_beside_a_turn_is_refused`
 `verified-by: bravebot_tui::app::btw_with_a_dropped_file_beside_a_turn_is_refused`
 `verified-by: bravebot_tui::app::btw_typed_mid_turn_is_asked_at_once_with_a_prompt_waiting`
+`verified-by: bravebot_agent::aside::a_fork_shares_the_stored_messages_instead_of_copying_them`
+`verified-by: bravebot_agent::aside::a_question_shares_the_stored_messages_instead_of_copying_them`
 `verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_btw_asked_mid_turn`
 `verified-by: bravebot_tui::app::stopping_the_turn_stops_the_question_beside_it`
 `verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_ends_is_stopped`

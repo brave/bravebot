@@ -11,7 +11,7 @@
 //! three names no credential and is asked without one, which is what a local Ollama wants.
 
 use crate::Secret;
-use crate::settings::positive;
+use crate::settings::{object, positive};
 use std::fmt;
 use std::time::Duration;
 
@@ -702,6 +702,7 @@ impl Provider {
             "npm": RESPONSES_SDK,
             "options": {"baseURL": chatgpt_serving_host()},
         });
+        // Unpacks a literal built above, not a lookup of a key in settings, so `object` does not apply.
         let serde_json::Value::Object(entry) = entry else {
             unreachable!("a JSON object literal");
         };
@@ -722,6 +723,7 @@ impl Provider {
             "name": "xAI",
             "options": {"baseURL": xai_serving_host()},
         });
+        // Unpacks a literal built above, not a lookup of a key in settings, so `object` does not apply.
         let serde_json::Value::Object(entry) = entry else {
             unreachable!("a JSON object literal");
         };
@@ -752,12 +754,13 @@ impl Provider {
     /// there is nothing to assume: with no host there is no request to build, and inventing one
     /// produces failures far from the mistake.
     pub fn all(root: &serde_json::Map<String, serde_json::Value>) -> Vec<Self> {
-        let Some(serde_json::Value::Object(block)) = root.get("provider") else {
+        let Some(block) = object(root, "provider") else {
             return Vec::new();
         };
         block
             .iter()
             .filter_map(|(id, entry)| match entry {
+                // Each value met while iterating the block, with no key to look it up by.
                 serde_json::Value::Object(entry) => Self::one(id, entry),
                 _ => None,
             })
@@ -771,14 +774,15 @@ impl Provider {
     /// Kept as a list of its own because `all` returns the entries that stand, and a dropped one
     /// is otherwise a gateway that is missing with nothing saying which line did it.
     pub fn refused(root: &serde_json::Map<String, serde_json::Value>) -> Vec<(String, PortFault)> {
-        let Some(serde_json::Value::Object(block)) = root.get("provider") else {
+        let Some(block) = object(root, "provider") else {
             return Vec::new();
         };
         block
             .iter()
             .filter(|(id, _)| id.as_str() != AWS_PROVIDER_ID)
             .filter_map(|(id, entry)| {
-                let options = entry.get("options").and_then(serde_json::Value::as_object);
+                // `entry` is a `Value` met while iterating the block, with no key to look it up by.
+                let options = entry.as_object().and_then(|entry| object(entry, "options"));
                 let fault = unreadable_port(stated_endpoint(options)?)?;
                 Some((id.clone(), fault))
             })
@@ -787,10 +791,7 @@ impl Provider {
 
     /// One entry under `provider`, or `None` where it does not describe a reachable service.
     fn one(id: &str, entry: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
-        let options = match entry.get("options") {
-            Some(serde_json::Value::Object(options)) => Some(options),
-            _ => None,
-        };
+        let options = object(entry, "options");
 
         if id == AWS_PROVIDER_ID {
             return Self::aws(id, entry, options);
@@ -1615,6 +1616,9 @@ fn id_list(value: Option<&serde_json::Value>) -> Option<Vec<String>> {
 /// The same block the gateway path reads, taken into the shape that backend speaks. `name` is read
 /// here and not there because an inference-profile ARN is unreadable and a gateway's model id is
 /// not, so this is the one place the friendly name is worth more than the id.
+///
+/// This and the functions below that take a `Value` or an `Option<&Value>` match the block
+/// themselves, because `object` takes a map and a key.
 fn bedrock_entries(value: Option<&serde_json::Value>) -> Vec<crate::bedrock::Entry> {
     let Some(serde_json::Value::Object(block)) = value else {
         return Vec::new();
@@ -1622,6 +1626,7 @@ fn bedrock_entries(value: Option<&serde_json::Value>) -> Vec<crate::bedrock::Ent
     block
         .iter()
         .map(|(id, entry)| {
+            // A value met while iterating the block, with no key to look it up by.
             let entry = entry.as_object();
             crate::bedrock::Entry {
                 tier: None,
@@ -1753,17 +1758,17 @@ pub struct AccountModel {
 pub(crate) fn account_models(
     root: &serde_json::Map<String, serde_json::Value>,
 ) -> Vec<AccountModel> {
-    let Some(serde_json::Value::Object(block)) = root.get("provider") else {
+    let Some(block) = object(root, "provider") else {
         return Vec::new();
     };
-    let Some(serde_json::Value::Object(entry)) = block.get(CHATGPT_ID) else {
+    let Some(entry) = object(block, CHATGPT_ID) else {
         return Vec::new();
     };
-    let options = entry.get("options").and_then(serde_json::Value::as_object);
+    let options = object(entry, "options");
     if stated_endpoint(options).is_some() {
         return Vec::new();
     }
-    let Some(serde_json::Value::Object(named)) = entry.get("models") else {
+    let Some(named) = object(entry, "models") else {
         return Vec::new();
     };
     let mut seen = std::collections::HashSet::new();
@@ -1787,16 +1792,16 @@ fn models(value: Option<&serde_json::Value>) -> Vec<Model> {
     block
         .iter()
         .map(|(id, entry)| {
+            // A value met while iterating the block, with no key to look it up by.
             let entry = entry.as_object();
             Model {
                 id: id.to_string(),
                 context_window: entry.and_then(|entry| window(entry.get("limit"))),
                 output_limit: entry.and_then(|entry| ceiling(entry.get("limit"))),
-                options: entry.and_then(|entry| match entry.get("options") {
-                    Some(serde_json::Value::Object(options)) if !options.is_empty() => {
-                        Some(options.clone())
-                    }
-                    _ => None,
+                options: entry.and_then(|entry| {
+                    object(entry, "options")
+                        .filter(|options| !options.is_empty())
+                        .cloned()
                 }),
                 variants: entry
                     .and_then(|entry| entry.get("variants"))
@@ -1815,6 +1820,7 @@ fn variants(value: &serde_json::Value) -> Vec<Variant> {
     block
         .iter()
         .filter_map(|(name, body)| {
+            // A value met while iterating the block, with no key to look it up by.
             let mut options = body.as_object()?.clone();
             let disabled = options.remove("disabled");
             (disabled != Some(serde_json::Value::Bool(true)) && !name.trim().is_empty()).then(
@@ -2615,6 +2621,17 @@ mod tests {
         let model = provider.model("some/model").expect("offered");
         assert_eq!(model.context_window, None);
         assert_eq!(model.options, None);
+    }
+
+    /// An empty `options` object adds nothing to the request body, so it is read as no options
+    /// and not as an empty set that would be merged over the provider's.
+    #[test]
+    fn a_model_with_empty_options_has_none() {
+        let provider = one(r#"{"provider": {"gw": {
+                "options": {"baseURL": "https://example.invalid/v1"},
+                "models": {"m": {"options": {}}}
+            }}}"#);
+        assert_eq!(provider.model("m").expect("offered").options, None);
     }
 
     /// A window nobody stated is the conservative default rather than a refusal. Requiring the

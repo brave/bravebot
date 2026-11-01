@@ -533,13 +533,13 @@ fn a_session_holding_imported_words_is_not_forked() {
     let mut snapshot = conversation.snapshot();
     snapshot.archive = vec![
         bravebot_agent::conversation::Stored {
-            message: Message::user("a prompt typed elsewhere"),
+            message: Message::user("a prompt typed elsewhere").into(),
             composed: Some(bravebot_agent::conversation::Composed::Imported),
             address: None,
             source: None,
         },
         bravebot_agent::conversation::Stored {
-            message: Message::assistant("an answer given elsewhere"),
+            message: Message::assistant("an answer given elsewhere").into(),
             composed: Some(bravebot_agent::conversation::Composed::Imported),
             address: None,
             source: None,

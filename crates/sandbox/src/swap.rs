@@ -38,8 +38,8 @@ pub struct LockedText {
     unsafe_code,
     reason = "the mapping is owned by this value alone, so moving the value to another thread is sound"
 )]
-// SAFETY: nothing writes to the mapping between construction and drop, and the mapping is this
-// value's alone, so it may be moved to any other thread.
+// SAFETY: the mapping is this value's alone, and it has no thread-local state, so moving the
+// value moves the only reference to it.
 // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
 unsafe impl Send for LockedText {}
 #[cfg(unix)]
@@ -47,8 +47,8 @@ unsafe impl Send for LockedText {}
     unsafe_code,
     reason = "nothing writes to the mapping between construction and drop, so reads from any thread are sound"
 )]
-// SAFETY: nothing writes to the mapping between construction and drop, so it may be read from any
-// thread.
+// SAFETY: through a shared reference the mapping is only read. The writes, in `clear` and the
+// unmap in `drop`, take `&mut self` or ownership, which no other thread can hold at the same time.
 // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
 unsafe impl Sync for LockedText {}
 
@@ -155,7 +155,7 @@ impl Drop for LockedText {
     reason = "sysconf(_SC_PAGESIZE) takes no pointers and reads a system constant"
 )]
 fn page_size() -> usize {
-    // SAFETY: `sysconf(_SC_PAGESIZE)` takes no pointers and reads a system constant.
+    // SAFETY: no pointer is passed, and the call has no precondition.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     usize::try_from(size).expect("every Unix this builds for states its page size")
@@ -169,8 +169,8 @@ fn page_size() -> usize {
     reason = "mmap of fresh anonymous private pages, with a failed mapping turned into handle_alloc_error"
 )]
 fn map(len: usize) -> std::ptr::NonNull<u8> {
-    // SAFETY: `mmap` of fresh anonymous private pages, with a failed mapping turned into
-    // `handle_alloc_error`.
+    // SAFETY: a null address, no file descriptor and `MAP_ANONYMOUS` mean the call refers to no
+    // existing memory. The result is used only after it is checked against `MAP_FAILED` below.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let start = unsafe {
         libc::mmap(
@@ -201,8 +201,8 @@ fn map(len: usize) -> std::ptr::NonNull<u8> {
     reason = "mlock on pages this process maps only requests residency, so any range is safe to pass"
 )]
 fn lock(start: std::ptr::NonNull<u8>, len: usize) -> bool {
-    // SAFETY: `mlock` on pages this process maps only requests residency, so any range is safe to
-    // pass.
+    // SAFETY: `mlock` reads and writes no memory in the range. An unmapped range is refused with
+    // an error code, which the result reports.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let locked = unsafe { libc::mlock(start.as_ptr().cast(), len) };
     locked == 0
@@ -330,6 +330,9 @@ mod tests {
         let size = std::mem::size_of::<RegionInfo>();
         let mut info = RegionInfo::default();
         let address = u64::try_from(address.addr()).expect("an address fits in 64 bits");
+        // SAFETY: `proc_pidinfo` writes at most the passed size into `info`, a local of exactly
+        // that size that outlives the call. The written size is compared with `size` below before
+        // `info` is read.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let written = unsafe {
             libc::proc_pidinfo(
@@ -357,6 +360,8 @@ mod tests {
             rlim_cur: 0,
             rlim_max: 0,
         };
+        // SAFETY: `getrlimit` writes one `rlimit` through the pointer, and `limit` is a local that
+        // outlives the call.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let read = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &raw mut limit) };
         assert_eq!(read, 0, "the memory lock limit is readable");
@@ -368,6 +373,8 @@ mod tests {
         reason = "setrlimit(RLIMIT_MEMLOCK) reads a borrowed rlimit, lowering the limit so a test sees a refused lock"
     )]
     fn set_memory_lock_limits(limit: &libc::rlimit) {
+        // SAFETY: `setrlimit` only reads the `rlimit` behind the pointer, and `limit` is a
+        // reference that is valid for the length of the call.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let written = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, limit) };
         assert_eq!(written, 0, "the memory lock limit could not be set");

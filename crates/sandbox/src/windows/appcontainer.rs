@@ -184,6 +184,8 @@ impl Drop for AppContainerSandbox {
             let _ = set_entry(&path, &self.sid, REVOKE_ACCESS, grant);
         }
         let name = self.name.as_ptr();
+        // SAFETY: `name` points at the terminated profile name this value owns, which is alive for
+        // the call. The call reads it and nothing else.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe { DeleteAppContainerProfile(name) };
     }
@@ -340,6 +342,8 @@ impl CreatedProcess {
         use std::os::windows::process::ExitStatusExt;
 
         let process = self.raw();
+        // SAFETY: `process` is the handle `self` owns, which stays open until `self` is dropped.
+        // The call takes the handle and an integer and reads no memory.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let waited = unsafe { WaitForSingleObject(process, INFINITE) };
         if waited != WAIT_OBJECT_0 {
@@ -347,6 +351,8 @@ impl CreatedProcess {
         }
 
         let mut code = 0u32;
+        // SAFETY: `process` is the handle `self` owns, which stays open until `self` is dropped,
+        // and `code` is a local `u32` that is alive for the call and the only memory it writes.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let read = unsafe { GetExitCodeProcess(process, &mut code) };
         if read == 0 {
@@ -363,6 +369,8 @@ impl CreatedProcess {
         use std::os::windows::process::ExitStatusExt;
 
         let process = self.raw();
+        // SAFETY: `process` is the handle `self` owns, which stays open until `self` is dropped.
+        // The call takes the handle and a zero timeout and reads no memory.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let waited = unsafe { WaitForSingleObject(process, 0) };
         if waited == WAIT_TIMEOUT {
@@ -373,6 +381,8 @@ impl CreatedProcess {
         }
 
         let mut code = 0u32;
+        // SAFETY: `process` is the handle `self` owns, which stays open until `self` is dropped,
+        // and `code` is a local `u32` that is alive for the call and the only memory it writes.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let read = unsafe { GetExitCodeProcess(process, &mut code) };
         if read == 0 {
@@ -392,6 +402,8 @@ impl CreatedProcess {
         const KILLED: u32 = 1;
 
         let job = self.job.as_raw_handle() as HANDLE;
+        // SAFETY: `job` is the handle `self.job` owns, which stays open until `self` is dropped.
+        // The call takes the handle and an integer and reads no memory.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let ended = unsafe { TerminateJobObject(job, KILLED) };
         if ended == 0 {
@@ -409,18 +421,22 @@ impl CreatedProcess {
     reason = "calls `CreateJobObjectW` and `SetInformationJobObject`"
 )]
 fn job_ending_on_close() -> Result<OwnedHandle> {
+    // SAFETY: both arguments are null, so the job is unnamed and has default security. The call
+    // reads no memory.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let job = unsafe { CreateJobObjectW(null(), null()) };
     if job.is_null() {
         return Err(Error::last_os_error());
     }
-    // Sound because the call reported success, which means it returned a handle nothing else
-    // owns.
+    // SAFETY: the call reported success, which means it returned a handle nothing else owns, so
+    // the `OwnedHandle` is its only owner and closes it once.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let job = unsafe { OwnedHandle::from_raw_handle(job as RawHandle) };
 
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // SAFETY: the handle is the job created above, still open. `limits` is a local of exactly
+    // the size passed, alive for the call, and the call only reads it.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let limited = unsafe {
         SetInformationJobObject(
@@ -457,11 +473,14 @@ impl Sid {
         reason = "an `unsafe fn` that calls `GetLengthSid` on a `psid` its caller vouches for"
     )]
     unsafe fn copied_from(psid: PSID) -> Self {
+        // SAFETY: the caller guarantees that `psid` points at a valid security identifier, as this
+        // function's `# Safety` section requires, and the call only reads it.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let length = unsafe { GetLengthSid(psid) } as usize;
         let mut words = vec![0u32; length.div_ceil(size_of::<u32>()).max(1)];
-        // Sound because the destination holds at least `length` bytes and the two do not
-        // overlap: one is this vector and the other is the platform's own allocation.
+        // SAFETY: the destination holds at least `length` bytes and the two do not overlap: one is
+        // this vector and the other is the platform's own allocation, which the caller vouches
+        // for and which holds `length` bytes.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -489,6 +508,8 @@ impl Drop for LocalBuffer {
     fn drop(&mut self) {
         if !self.0.is_null() {
             let allocation = self.0 as HLOCAL;
+            // SAFETY: the pointer is non-null and is the allocation this value owns, and `drop`
+            // runs once, so it is freed once and not used afterwards.
             // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             unsafe { LocalFree(allocation) };
         }
@@ -508,6 +529,8 @@ fn create_profile(name: &[u16]) -> Result<Sid> {
     let description = wide(OsStr::new(PROFILE_DESCRIPTION))?;
     let mut psid: PSID = null_mut();
 
+    // SAFETY: `name` and `description` are terminated vectors alive for the call. The capability
+    // list is null with a count of zero, and `psid` is a local the call writes.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let created = unsafe {
         CreateAppContainerProfile(
@@ -524,10 +547,12 @@ fn create_profile(name: &[u16]) -> Result<Sid> {
         return Err(reported("CreateAppContainerProfile", created));
     }
 
-    // Sound because the call above reported success, which means it wrote an identifier
-    // this now owns.
+    // SAFETY: the call above reported success, which means it wrote a valid identifier to
+    // `psid`, and it is not freed until after the copy.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let sid = unsafe { Sid::copied_from(psid) };
+    // SAFETY: `psid` is the identifier the call above wrote, which this function owns. `sid` holds
+    // a copy, and `psid` is not used after this call.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe { FreeSid(psid) };
     Ok(sid)
@@ -550,6 +575,8 @@ fn capability_sids(names: &[&str]) -> Result<Vec<Sid>> {
         let mut resolved: *mut PSID = null_mut();
         let mut resolved_count = 0u32;
 
+        // SAFETY: `name` is a terminated vector alive for the call, and the four out-pointers are
+        // locals the call writes.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let derived = unsafe {
             DeriveCapabilitySidsFromName(
@@ -564,9 +591,9 @@ fn capability_sids(names: &[&str]) -> Result<Vec<Sid>> {
             return Err(Error::last_os_error());
         }
 
-        // Sound because the call reported success, so both arrays hold as many identifiers
-        // as it counted, and each of them and the arrays themselves are this caller's to
-        // free.
+        // SAFETY: the call reported success, so both arrays hold as many identifiers as it
+        // counted, and each of them and the arrays themselves are this caller's to free. Each is
+        // freed once and not used afterwards, and every identifier is copied before it is freed.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe {
             for index in 0..resolved_count as usize {
@@ -598,6 +625,8 @@ fn set_entry(path: &Path, sid: &Sid, mode: ACCESS_MODE, grant: Grant) -> Result<
 
     let mut existing: *mut ACL = null_mut();
     let mut descriptor = null_mut();
+    // SAFETY: `path` is a terminated vector alive for the call, and `existing` and `descriptor`
+    // are locals the call writes. The other out-pointers are null, which the call allows.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let read = unsafe {
         GetNamedSecurityInfoW(
@@ -631,6 +660,9 @@ fn set_entry(path: &Path, sid: &Sid, mode: ACCESS_MODE, grant: Grant) -> Result<
     };
 
     let mut merged: *mut ACL = null_mut();
+    // SAFETY: `entry` is a local, and the count of one matches it. `existing` is the list the
+    // read above returned, which `_descriptor` keeps alive, and `merged` is a local the call
+    // writes.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let built = unsafe { SetEntriesInAclW(1, &entry, existing, &mut merged) };
     if built != ERROR_SUCCESS {
@@ -638,6 +670,9 @@ fn set_entry(path: &Path, sid: &Sid, mode: ACCESS_MODE, grant: Grant) -> Result<
     }
     let _merged = LocalBuffer(merged.cast::<c_void>());
 
+    // SAFETY: `path` is a terminated vector alive for the call, and `merged` is the list built
+    // above, which `_merged` keeps alive until this function returns. The other pointers are
+    // null, which the call allows.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let written = unsafe {
         SetNamedSecurityInfoW(
@@ -668,6 +703,8 @@ impl AttributeList {
         let mut size = 0usize;
         // The call that asks how large the list has to be fails saying so, which is the
         // only way to find out.
+        // SAFETY: a null list with a size out-pointer to a local is how the call is asked for the
+        // size. It writes only `size` and initialises nothing.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe { InitializeProcThreadAttributeList(null_mut(), count, 0, &mut size) };
         if size == 0 {
@@ -678,6 +715,8 @@ impl AttributeList {
             buffer: vec![0u64; size.div_ceil(size_of::<u64>())],
         };
         let buffer = list.as_ptr();
+        // SAFETY: `buffer` points at the vector `list` owns, which holds `size` bytes aligned to
+        // eight and is alive for the call. `size` is the local the first call filled in.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let ready = unsafe { InitializeProcThreadAttributeList(buffer, count, 0, &mut size) };
         if ready == 0 {
@@ -697,6 +736,9 @@ impl AttributeList {
     /// used for: the list holds the pointer rather than a copy of what it points at.
     #[allow(unsafe_code, reason = "calls `UpdateProcThreadAttribute`")]
     fn set(&mut self, attribute: usize, value: *const c_void, size: usize) -> Result<()> {
+        // SAFETY: the list is initialised, because `holding` is the only way to build one and
+        // forgets the list when initialising fails. The caller of `set` keeps `value` alive until
+        // the process is created, as this function's documentation requires.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let updated = unsafe {
             UpdateProcThreadAttribute(self.as_ptr(), 0, attribute, value, size, null_mut(), null())
@@ -712,6 +754,8 @@ impl Drop for AttributeList {
     #[allow(unsafe_code, reason = "calls `DeleteProcThreadAttributeList`")]
     fn drop(&mut self) {
         let buffer = self.as_ptr();
+        // SAFETY: the list was initialised by `holding`, and `drop` runs once, so it is deleted
+        // once and not used afterwards.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe { DeleteProcThreadAttributeList(buffer) };
     }
@@ -790,6 +834,8 @@ fn discarded() -> Result<File> {
 #[allow(unsafe_code, reason = "calls `DuplicateHandle`")]
 fn inheritable(handle: RawHandle) -> Result<OwnedHandle> {
     let mut copy: HANDLE = null_mut();
+    // SAFETY: `handle` is open for the call, `copy` is a local the call writes, and the pseudo
+    // handle for the current process is valid in any process.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let duplicated = unsafe {
         DuplicateHandle(
@@ -805,8 +851,8 @@ fn inheritable(handle: RawHandle) -> Result<OwnedHandle> {
     if duplicated == 0 {
         return Err(Error::last_os_error());
     }
-    // Sound because the call reported success, which means it wrote a handle nothing else
-    // owns.
+    // SAFETY: the call reported success, which means it wrote a handle nothing else owns, so the
+    // `OwnedHandle` is its only owner and closes it once.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     Ok(unsafe { OwnedHandle::from_raw_handle(copy as RawHandle) })
 }
@@ -975,6 +1021,10 @@ fn started(
     // to a console can write input into it, which on the terminal's console is typing an answer
     // to a prompt. Detaching it instead would give each console program it starts a console, and
     // a window, of its own; with this they share the one it was given.
+    // SAFETY: `line` is a terminated, mutable vector, and `block`, `start_in` and the startup
+    // information point at values that live until the call returns: `written`, `directory`,
+    // `startup` and the attribute list it names. `startup` is an extended structure, as the flag
+    // says and its `cb` records, and `created` is a local the call writes.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let started = unsafe {
         CreateProcessW(
@@ -996,11 +1046,13 @@ fn started(
 
     // Nothing here resumes or waits on the initial thread, and a handle to it left open
     // keeps the thread object alive for as long as this process runs.
+    // SAFETY: the call above succeeded, so `hThread` is an open handle this function owns, and it
+    // is closed once and not used afterwards.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe { CloseHandle(created.hThread) };
 
-    // Sound because the call reported success, which means it wrote a process handle
-    // nothing else owns.
+    // SAFETY: the call succeeded, which means `hProcess` is an open handle nothing else owns, so
+    // the `OwnedHandle` is its only owner and closes it once.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let handle = unsafe { OwnedHandle::from_raw_handle(created.hProcess as RawHandle) };
 
@@ -1050,6 +1102,8 @@ impl OwnerOnly {
     fn described_by(sddl: &str) -> Result<Self> {
         let text = wide(OsStr::new(sddl))?;
         let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+        // SAFETY: `text` is a terminated vector alive for the call, and `descriptor` is a local
+        // the call writes. The size out-pointer is null, which the call allows.
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let converted = unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -1109,6 +1163,8 @@ fn create_directories(path: &Path, owner_only: &OwnerOnly) -> Result<()> {
 #[allow(unsafe_code, reason = "calls `CreateDirectoryW`")]
 fn create_directory(path: &Path, owner_only: &OwnerOnly) -> Result<()> {
     let path = wide(path.as_os_str())?;
+    // SAFETY: `path` is a terminated vector alive for the call, `owner_only.attributes` points at
+    // a descriptor that `owner_only` keeps alive for the call.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let created = unsafe { CreateDirectoryW(path.as_ptr(), &owner_only.attributes) };
     if created == 0 {
@@ -1124,6 +1180,8 @@ fn create_directory(path: &Path, owner_only: &OwnerOnly) -> Result<()> {
 pub(crate) fn create_file_owner_only(path: &Path) -> Result<()> {
     let owner_only = OwnerOnly::described_by(OWNER_ONLY_FILE_SDDL)?;
     let path = wide(path.as_os_str())?;
+    // SAFETY: `path` is a terminated vector alive for the call, `owner_only.attributes` points at
+    // a descriptor that `owner_only` keeps alive for the call, and the template handle is null.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let handle = unsafe {
         CreateFileW(
@@ -1139,6 +1197,8 @@ pub(crate) fn create_file_owner_only(path: &Path) -> Result<()> {
     if handle == INVALID_HANDLE_VALUE {
         return Err(Error::last_os_error());
     }
+    // SAFETY: the handle is not `INVALID_HANDLE_VALUE`, so it is open and owned here, and it is
+    // closed once and not used afterwards.
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe { CloseHandle(handle) };
     Ok(())
