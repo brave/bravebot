@@ -792,8 +792,12 @@ impl Conversation {
         self.archive
             .iter()
             .chain(&self.messages)
-            .filter(|stored| matches!(stored.provenance(), Provenance::Typed))
-            .map(|stored| stored.message.content.text())
+            .filter_map(|stored| match stored.provenance() {
+                Provenance::Typed => Some(stored.message.content.text()),
+                // The line alone: what follows it in the message is another session's excerpt.
+                Provenance::TypedWithSessions(line) => Some(line),
+                _ => None,
+            })
             .collect()
     }
 
@@ -1935,6 +1939,22 @@ mod tests {
                 "first typed line".to_string(),
                 "second typed line".to_string()
             ]
+        );
+    }
+
+    /// A line sent with the excerpts of sessions it named is handed over as the line alone. The
+    /// regression it rejects: the whole message, which carries another session's assistant text.
+    #[test]
+    fn a_line_sent_with_session_excerpts_is_typed_without_the_excerpts() {
+        let mut conversation = Conversation::new();
+        conversation.push_from(
+            Message::user("see @session:abc\n\nAssistant: open https://example.com/pull/1"),
+            Provenance::TypedWithSessions("see @session:abc".to_string()),
+        );
+
+        assert_eq!(
+            conversation.typed_by_the_person(),
+            vec!["see @session:abc".to_string()]
         );
     }
 

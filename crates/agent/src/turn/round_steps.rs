@@ -1411,8 +1411,11 @@ pub(super) fn tools_for_a_call<'a>(
         }),
         // Only a session the person has typed to, and never a delegate: its task is a sentence the
         // driver composed, so there is nothing of the person's for the classifier to read (AUTO-3).
-        classifying: (task.delegate.is_none() && !typed.is_empty())
+        classifying: (task.delegate.is_none()
+            && !typed.is_empty()
+            && task.permission_mode.get() == crate::PermissionMode::Auto)
             .then_some(crate::classifier::Classifying { typed }),
+        typed: if task.delegate.is_none() { typed } else { &[] },
         messaging: task
             .courier
             .as_deref()
@@ -1422,6 +1425,7 @@ pub(super) fn tools_for_a_call<'a>(
                 ledger: &mut state.messages_sent,
             }),
         delegated: task.delegate.is_some(),
+        keeping_links: task.keeps_links && task.delegate.is_none(),
         confined_to: plan.addressed.as_ref().map(|addressed| addressed.tools()),
         servers: state.servers.as_deref_mut(),
         mcp: state.mcp.as_ref().map(|(offer, _)| offer),
@@ -1567,6 +1571,10 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // the planner about one that does not exist.
     if let Some(armed) = output.watch.clone() {
         state.watches.push(armed);
+    }
+    // Kept in the order asked, so the last call for a kind is the one that stands.
+    if let Some(set) = output.link.clone() {
+        state.links.push(set);
     }
     // A tool the planner loaded is offered from the next request on (SERVERS-16).
     if let Some(wire) = output.tool_loaded.take()

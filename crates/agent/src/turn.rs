@@ -564,7 +564,9 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             budget_left: None,
             advising: None,
             classifying: None,
+            typed: &[],
             messaging: None,
+            keeping_links: false,
             delegated: false,
             confined_to: None,
             servers: None,
@@ -2195,6 +2197,9 @@ struct Reported<'a> {
     rounds_taken: &'a mut usize,
     worked_out: &'a mut Worked,
     injected_facts: &'a mut std::collections::BTreeSet<String>,
+    // The links `set_link` recorded, written when the rounds end whatever way they ended, so a
+    // turn that fails after recording one still hands it back (SETLINK-2).
+    links: &'a mut Vec<crate::links::LinkSet>,
 }
 
 /// What `answer_the_turn` settles before the first round and `run_rounds` only reads.
@@ -2231,6 +2236,7 @@ struct State<'s> {
     repeats: crate::repeated_call::Repeats,
     wakeup: Option<Wakeup>,
     watches: Vec<crate::watch::Armed>,
+    links: Vec<crate::links::LinkSet>,
     armed: usize,
     advice_asked: usize,
     // What the planner has put to other sessions this turn, which the bound on them and a
@@ -2407,6 +2413,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
     // creates, child scopes and jobs included, is cleaned up before this returns and before the
     // decisions are copied.
     let mut injected_facts = task.injected_facts.clone();
+    let mut links = Vec::new();
     let mut outcome = answer_the_turn(
         inputs,
         &mut channels,
@@ -2423,6 +2430,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
             rounds_taken,
             worked_out,
             injected_facts: &mut injected_facts,
+            links: &mut links,
         },
     );
     let decisions = Decisions {
@@ -2431,6 +2439,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         asked_about: policy.asked().clone(),
         exposed: policy.exposed().clone(),
         injected_facts,
+        links,
     };
     if let Ok(outcome) = &mut outcome {
         outcome.trust = decisions.trust.clone();
@@ -2489,6 +2498,7 @@ where
         rounds_taken,
         worked_out,
         injected_facts: injected_slot,
+        links: links_slot,
     } = reported;
     let sources = workspace.sources();
     let conversation = &mut *channels.conversation;
@@ -2939,6 +2949,12 @@ where
             conversation.push_composed_from(submitted, Composed::Written, Provenance::Driver)
         }
         None if has_attachments => conversation.push_from(submitted, Provenance::TypedWithFiles),
+        // The excerpts share the message but are not the person's words, so only the line
+        // itself is kept as typed (SETLINK-1).
+        None if !task.session_excerpts.is_empty() => conversation.push_from(
+            submitted,
+            Provenance::TypedWithSessions(task.prompt.clone()),
+        ),
         None => conversation.push_from(submitted, Provenance::Typed),
     }
     // Which definition the turn was addressed to, from the name the caller addressed it under and
@@ -3152,6 +3168,7 @@ where
         // to arm. A list rather than one, because the bound is the session's and a turn may ask
         // about several files.
         watches: Vec::new(),
+        links: Vec::new(),
         armed: 0,
         // How many questions the planner has put to its advisor this turn, which the bound on them
         // is read against.
@@ -3230,6 +3247,7 @@ where
         rounds_taken,
         worked_out,
     );
+    *links_slot = state.links.clone();
 
     let completion = completion?;
 
@@ -3281,6 +3299,7 @@ where
         premium: state.subscription.is_some(),
         wakeup: state.wakeup,
         watches: state.watches,
+        links: state.links,
         timing: state.spent.finish(),
         clean: false,
         standing_refusals: Vec::new(),
@@ -3698,9 +3717,11 @@ where
             } else {
                 None
             };
-            // Taken only in auto: it is the one mode that reads them, and the scan is over the whole
-            // conversation.
-            let typed = match task.permission_mode.get() == crate::PermissionMode::Auto {
+            // Taken in auto, which reads them to decide, and for a call that holds an address to
+            // them (SETLINK-1): the scan is over the whole conversation.
+            let typed = match task.permission_mode.get() == crate::PermissionMode::Auto
+                || tools::reads_typed_lines(&call.function.name)
+            {
                 true => conversation.typed_by_the_person(),
                 false => Vec::new(),
             };

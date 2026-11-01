@@ -154,6 +154,8 @@ record written before they were kept reads as having none.
 `verified-by: bravebot_tui::sessions::an_empty_name_is_refused`
 `verified-by: bravebot_session::sessions::a_link_is_written_at_once_and_a_resume_and_a_fork_keep_it`
 `verified-by: bravebot_session::sessions::a_record_from_before_the_links_reads_as_having_none`
+`verified-by: bravebot_session::sessions::setting_a_link_neither_makes_nor_gives_up_a_rewind_point`
+`verified-by: bravebot_tui::app::a_cleared_session_has_neither_link`
 `verified-by: bravebot_session::sessions::the_list_carries_the_links_and_lists_a_record_without_them`
 `verified-by: bravebot_tui::sessions_screen::typing_part_of_a_branch_finds_the_session_that_ran_on_it`
 `verified-by: bravebot_tui::sessions_screen::typing_part_of_an_issue_link_finds_the_session_given_it`

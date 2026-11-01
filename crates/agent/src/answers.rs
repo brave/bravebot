@@ -73,6 +73,8 @@ impl<Rules> Answers<Rules> {
             exposed: decided_exposed,
             // The session's record holds it, not the answers.
             injected_facts: _,
+            // The session's record holds them, not the answers.
+            links: _,
         } = decisions;
         *trust = decided_trust;
         *programs = decided_programs;
@@ -269,6 +271,7 @@ mod tests {
                         asked_about: AskedAbout::new(),
                         exposed: Exposed::new(),
                         injected_facts: Default::default(),
+                        links: Vec::new(),
                     })
                 },
                 [ASKED, ASKED, HELD, ASKED, ASKED, ASKED, HELD],

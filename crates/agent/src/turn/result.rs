@@ -312,6 +312,11 @@ pub struct Outcome {
     /// what holds one. Each has been through the gate a read of that path goes through, and the
     /// session applies the bound on how many may be live.
     pub watches: Vec<crate::watch::Armed>,
+    /// The issue and pull request links this turn recorded, in the order it asked (SETLINK-1).
+    ///
+    /// Each is an address the person typed, so what the session holds is something they wrote.
+    /// Travels back because the session record is held by whatever owns the session.
+    pub links: Vec<crate::links::LinkSet>,
     /// Where the turn's wall clock went.
     ///
     /// Beside the token figures because it answers the other half of the same question. Tokens say
@@ -374,6 +379,10 @@ pub struct Decisions {
     /// (RECALL-9). Written however the turn ended, so a fact the planner was shown on a turn that
     /// failed is not shown again.
     pub injected_facts: std::collections::BTreeSet<String>,
+    /// The links `set_link` recorded this turn, in the order asked, however the turn ended
+    /// (SETLINK-2). A link is written to the record at once (PANEL-12), so a turn that failed
+    /// after recording one still leaves it. A turn that answered has the same list on its outcome.
+    pub links: Vec<crate::links::LinkSet>,
 }
 
 impl Decisions {
@@ -388,6 +397,7 @@ impl Decisions {
             asked_about: task.asked_about.clone(),
             exposed: task.exposed.clone(),
             injected_facts: task.injected_facts.clone(),
+            links: Vec::new(),
         }
     }
 }

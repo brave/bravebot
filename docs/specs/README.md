@@ -120,6 +120,7 @@ the routing-versus-content split they share.
 | [tools/advisor.md](tools/advisor.md) | `ADVISOR` | 9 | `advisor` |
 | [tools/remember.md](tools/remember.md) | `REMEMBER` | 3 | `remember` |
 | [tools/propose-rule.md](tools/propose-rule.md) | `RULE` | 3 | `propose_rule` |
+| [tools/set-link.md](tools/set-link.md) | `SETLINK` | 3 | `set_link` |
 | [tools/recall.md](tools/recall.md) | `RECALLTOOL` | 3 | `recall` |
 
 Topics with no spec yet are ordinary code. Adding one is how a topic becomes review-required.

@@ -10,6 +10,7 @@ guards:
     sites:
       - crates/agent/src/tools.rs: 251
       - crates/agent/src/tools/message.rs: 14
+      - crates/agent/src/tools/link.rs: 6
       - crates/agent/src/tools/recall.rs: 25
   - symbol: Produced::refused_with_a_note
     sites:
@@ -62,6 +63,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`propose_plan`](../permission-modes.md#MODE-14) | `plan` | none | what the person answered, and whether plan mode ended |
 | [`remember`](remember.md) | `key`, `scope`, `supersedes`, `new` | `text` | confirmation, and the kept facts close to the new one |
 | [`propose_rule`](propose-rule.md) | `scope` | `text`, `reason` | what the person answered, and whether the rule was written |
+| [`set_link`](set-link.md) | `kind`, `url` | none | confirmation that the address was recorded, or that it was not a word the person typed |
 | [`recall`](recall.md) | `query`, `key` | none | the kept facts that match, or the one fact read |
 
 Every tool also takes `why`, which is content on every one of them and is left out of the table for

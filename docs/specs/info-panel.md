@@ -14,8 +14,10 @@ documented-by: docs/website/docs/using/sessions.md
 What lets somebody running many sessions at once tell which terminal holds which: the terminal's
 title, and the info panel beside the transcript, which holds the session's name, its goal, the
 issue and pull request it is for, the model and effort it runs on, its context and cache, its token
-total, the language servers and MCP servers it has started, and its plan. Giving a session its links from a URL in a
-prompt, and from what `gh pr create` prints, are proposed in
+total, the language servers and MCP servers it has started, and its plan. A session gets its links
+from `/issue` and `/pr`, from `--issue` and `--pr`, and from the planner's
+[`set_link`](tools/set-link.md) for an address the person typed. Giving a session its links from
+what `gh pr create` prints is proposed in
 [brave/bravebot#1267](https://github.com/brave/bravebot/issues/1267) and not built. How a session
 gets its name is [sessions.md](sessions.md), and the keys a settings file can move are
 [INPUT-32](terminal-input.md#INPUT-32). Listing the sessions that keep running after their terminal
@@ -349,7 +351,8 @@ says the work is finished reads as work still going.
 
 Every row the panel draws comes from text the person typed (the session's name, which comes from a
 prompt or a `/rename` ([SESSION-4](sessions.md#SESSION-4)), a goal's condition, and the links given
-with `/issue` and `/pr`, or `--issue` and `--pr`), the planner's own `todo_write` rows, the driver's own counters (the context
+with `/issue` and `/pr`, or `--issue` and `--pr`, or recorded by `set_link` for an address the person
+typed ([SETLINK-1](tools/set-link.md#SETLINK-1))), the planner's own `todo_write` rows, the driver's own counters (the context
 reading, the cache figures and the token total), the chord in force, the directory and branch the
 session runs in, the session's id (made by the driver from the operating system's random source, so
 no reply, tool result or file supplies it), the programs of the language servers it started (PANEL-13), the aliases of its MCP
@@ -392,6 +395,12 @@ record held and is written to the record as `/issue` is; a link it does not give
 A line that opens no interactive session (a one-shot run, `--plain`, `--bg`, or a command that
 starts none) is refused with them rather than dropping them.
 
+The planner's [`set_link`](tools/set-link.md) gives the session a link under the same check, and
+only for an address that is a whole word of a line the person typed ([SETLINK-1](tools/set-link.md#SETLINK-1)). It
+replaces the link of that kind and is written to the record as `/issue` is.
+
+`verified-by: bravebot_agent::turn::an_address_the_person_typed_reaches_set_link_and_leaves_the_turn`
+
 The Links section has a `Pull request` row and then an `Issue` row, each only while that link is
 set: the word, then the link, cut from the left with an ellipsis where it is longer than the row,
 since the number at its end is what tells two apart. A link that is a GitHub pull request or issue
@@ -405,7 +414,9 @@ address that was set in the person's browser, as `/open` followed by that addres
 `verified-by: bravebot_tui::app::the_issue_and_pr_commands_show_set_and_clear_their_own_link`
 `verified-by: bravebot_tui::app::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
 `verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_session::sessions::setting_a_link_neither_makes_nor_gives_up_a_rewind_point`
 `verified-by: bravebot_tui::app::links_from_the_command_line_replace_what_it_names_and_leave_the_other`
+`verified-by: bravebot_tui::app::the_command_line_links_and_prompt_reach_the_session_once_its_record_is_open`
 `verified-by: bravebot_cli::main::issue_and_pr_flags_are_taken_out_and_set_their_own_link`
 `verified-by: bravebot_cli::main::a_value_that_is_not_one_web_address_is_refused_and_not_repeated`
 `verified-by: bravebot_cli::main::only_a_line_that_opens_a_session_takes_links`

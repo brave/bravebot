@@ -217,6 +217,13 @@ pub struct Task {
     /// [`Reporter::message_sent`]: crate::report::Reporter::message_sent
     /// [`Confirmer::confirm_message`]: crate::confirm::Confirmer::confirm_message
     pub courier: Option<std::sync::Arc<dyn crate::messages::Courier>>,
+    /// Whether the front end running this turn writes the links `set_link` records to the session
+    /// record (SETLINK-2).
+    ///
+    /// `false` unless a caller says so, because a default cannot know whether anything keeps a link
+    /// once the turn returns. A one-shot run, `--plain`, a goal run and a manifest run drop them, so
+    /// the planner is not offered a tool whose "recorded" would be untrue.
+    pub keeps_links: bool,
     /// The model to request, when the user has chosen one.
     ///
     /// `None` means the configured default applies. Supplied per turn rather than read here for
@@ -566,6 +573,7 @@ impl Task {
             advisor: None,
             inbox: None,
             courier: None,
+            keeps_links: false,
             model: None,
             effort: None,
             variant: None,
@@ -795,6 +803,12 @@ impl Task {
         courier: Option<std::sync::Arc<dyn crate::messages::Courier>>,
     ) -> Self {
         self.courier = courier;
+        self
+    }
+
+    /// Say that the front end running this turn keeps the links `set_link` records (SETLINK-2).
+    pub fn keeping_links(mut self, keeps: bool) -> Self {
+        self.keeps_links = keeps;
         self
     }
 

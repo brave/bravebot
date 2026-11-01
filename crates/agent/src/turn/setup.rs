@@ -119,6 +119,9 @@ pub(super) fn offered_tools<S: Sink>(
         }
         tools::offer_remember(&mut offered);
         tools::offer_propose_rule(&mut offered);
+        if tools::keeps_links(task.keeps_links) {
+            tools::offer_set_link(&mut offered);
+        }
         tools::offer_recall(&mut offered);
         if task.courier.is_some() {
             tools::offer_message_session(&mut offered);
@@ -158,6 +161,9 @@ pub(super) fn offered_tools<S: Sink>(
                 }
                 tools::offer_remember(&mut offered);
                 tools::offer_propose_rule(&mut offered);
+                if tools::keeps_links(task.keeps_links) {
+                    tools::offer_set_link(&mut offered);
+                }
                 tools::offer_recall(&mut offered);
                 if task.courier.is_some() {
                     tools::offer_message_session(&mut offered);

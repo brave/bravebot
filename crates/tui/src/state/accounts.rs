@@ -568,7 +568,12 @@ impl Session {
                 ("system", Provenance::TrustedFile(_)) => CONTEXT_INSTRUCTIONS,
                 ("system", Provenance::Trusted("skill list")) => CONTEXT_SKILLS,
                 ("system", _) => CONTEXT_SYSTEM,
-                ("user", Provenance::Typed | Provenance::TypedWithFiles) => CONTEXT_TYPED,
+                (
+                    "user",
+                    Provenance::Typed
+                    | Provenance::TypedWithFiles
+                    | Provenance::TypedWithSessions(_),
+                ) => CONTEXT_TYPED,
                 ("assistant", _) => CONTEXT_PLANNER,
                 ("tool", _) => CONTEXT_RESULTS,
                 _ => CONTEXT_OTHER,

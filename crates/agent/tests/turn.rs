@@ -3020,6 +3020,325 @@ fn a_turn_that_is_not_a_tick_can_arrange_the_next_look() {
     );
 }
 
+/// SETLINK-1 through a whole turn: the lines the person typed reach `set_link` outside the auto mode,
+/// and the address it accepted leaves the turn in `links`.
+///
+/// The regression it rejects: the typed lines handed to a tool only in the auto mode, so that
+/// outside it every `set_link` is refused as not typed, or a link accepted and never returned.
+#[test]
+fn an_address_the_person_typed_reaches_set_link_and_leaves_the_turn() {
+    let scratch = Scratch::new("set-link-typed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let issue = "https://github.com/brave/bravebot/issues/1267";
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "set_link",
+            &json!({"kind": "issue", "url": issue, "why": "the user named it"}).to_string(),
+        ),
+        reply_with("recorded"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new(format!("work on {issue}")).keeping_links(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(outcome.links.len(), 1, "the accepted link was not returned");
+    assert_eq!(outcome.links[0].url, issue);
+    assert_eq!(
+        outcome.links[0].kind,
+        bravebot_agent::links::LinkKind::Issue
+    );
+}
+
+/// The same call for an address the person never wrote: nothing leaves the turn.
+///
+/// The regression it rejects: a driver that hands the planner's own address back without
+/// comparing it with the person's lines.
+#[test]
+fn an_address_the_person_did_not_type_leaves_nothing_in_links() {
+    let scratch = Scratch::new("set-link-not-typed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "set_link",
+            &json!({
+                "kind": "issue",
+                "url": "https://evil.example/issues/1",
+                "why": "the user named it"
+            })
+            .to_string(),
+        ),
+        reply_with("refused"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("work on the build").keeping_links(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert!(
+        outcome.links.is_empty(),
+        "an address nobody typed was returned"
+    );
+}
+
+/// A session named with `@session:` brings that session's words into the person's message, the
+/// assistant's included. An address only that excerpt holds is not one the person typed.
+///
+/// The regression it rejects: the whole message, excerpts included, counted as typed, so an address
+/// an earlier session's assistant produced passes the membership check. The same turn also shows
+/// that an address in the line itself is still accepted.
+#[test]
+fn an_address_only_a_named_sessions_excerpt_holds_is_not_one_the_person_typed() {
+    let scratch = Scratch::new("set-link-excerpt");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let typed = "https://github.com/brave/bravebot/issues/1267";
+    let from_excerpt = "https://github.com/brave/bravebot/pull/4309";
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "set_link",
+            &json!({"kind": "pull_request", "url": from_excerpt, "why": "the excerpt named it"})
+                .to_string(),
+        ),
+        tool_request(
+            "set_link",
+            &json!({"kind": "issue", "url": typed, "why": "the user named it"}).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let excerpt = format!("Excerpt of an earlier session.\n\nAssistant: open {from_excerpt}");
+    let task = Task::new(format!("carry on from @session:abc on {typed}"))
+        .with_session_excerpt("abc", excerpt)
+        .keeping_links(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        outcome.links.len(),
+        1,
+        "the address from the excerpt was accepted: {:?}",
+        outcome.links
+    );
+    assert_eq!(outcome.links[0].url, typed);
+}
+
+/// A line after the first of a multi-line prompt is one the person typed, so an address in it is
+/// recorded.
+///
+/// The regression it rejects: counting only the first line of the prompt.
+#[test]
+fn an_address_in_a_later_line_of_a_multi_line_prompt_is_one_the_person_typed() {
+    let scratch = Scratch::new("set-link-pasted");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let pasted = "https://github.com/brave/bravebot/pull/1270";
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "set_link",
+            &json!({"kind": "pull_request", "url": pasted, "why": "pasted by the user"})
+                .to_string(),
+        ),
+        reply_with("recorded"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new(format!(
+        "look at this\n\nbuild failed\n  see {pasted}\nexit 1\n\nthanks"
+    ))
+    .keeping_links(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(outcome.links.len(), 1, "{:?}", outcome.links);
+    assert_eq!(outcome.links[0].url, pasted);
+}
+
+/// An address that no line the person typed holds is refused by the membership check, whether it
+/// is one the planner got from a place the person did not write or one it put in its own words.
+///
+/// The regression it rejects: searching the whole conversation, or every message with a user
+/// role, rather than the lines the person typed. The refusal is read from the last request, which
+/// carries both results, so a call turned away by another gate does not pass for this one. An
+/// address read from an untrusted file is turned away by the gate on `url` before this check, and
+/// `a_context_that_has_met_something_untrusted_cannot_set_a_link` pins that.
+#[test]
+fn an_address_no_typed_line_holds_is_refused_as_not_typed() {
+    let scratch = Scratch::new("set-link-content");
+    let named_before = "https://github.com/brave/bravebot/issues/2001";
+    let in_planner_text = "https://github.com/brave/bravebot/issues/2002";
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_saying(
+            &format!("The tracker is {named_before}"),
+            "set_link",
+            &json!({"kind": "issue", "url": named_before, "why": "I know it"}).to_string(),
+        ),
+        tool_request_saying(
+            &format!("I will record {in_planner_text}"),
+            "set_link",
+            &json!({"kind": "issue", "url": in_planner_text, "why": "I said it"}).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("link the tracker").keeping_links(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert!(
+        outcome.links.is_empty(),
+        "an address nobody typed was recorded: {:?}",
+        outcome.links
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    let last = sent.last().expect("the last request");
+    assert_eq!(
+        last.matches("not in a line the user typed").count(),
+        2,
+        "each address should be refused as not typed: {last}"
+    );
+}
+
+/// Without `keeping_links` the tool is not offered and a call to it is answered as an unknown name,
+/// so a front end that keeps no link is never told one was recorded.
+///
+/// The regression it rejects: offering and dispatching `set_link` in every turn, so the one-shot
+/// run and the goal runner report a recorded link nobody reads.
+#[test]
+fn a_turn_whose_front_end_keeps_no_link_is_not_offered_set_link() {
+    let scratch = Scratch::new("set-link-not-kept");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let issue = "https://github.com/brave/bravebot/issues/1267";
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "set_link",
+            &json!({"kind": "issue", "url": issue, "why": "the user named it"}).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let outcome = turns::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new(format!("work on {issue}")),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut RecordingSink::new(),
+    )
+    .expect("turn runs");
+
+    assert!(outcome.links.is_empty(), "{:?}", outcome.links);
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        !sent[0].contains("Record the issue or pull request this session is about"),
+        "the tool was offered to a turn that keeps no link"
+    );
+    assert!(
+        sent.last()
+            .is_some_and(|last| last.contains("no such tool")),
+        "the call was not answered as an unknown name"
+    );
+}
+
+/// PANEL-12: a link is written to the record at once, so one recorded in a turn whose next
+/// request is then refused still leaves the turn with the decisions.
+///
+/// The regression it rejects: handing the links back only with an outcome that completed, which
+/// loses the link of every turn that ends in an error.
+#[test]
+fn a_link_recorded_in_a_turn_that_then_fails_still_leaves_the_turn() {
+    let scratch = Scratch::new("set-link-then-failed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let issue = "https://github.com/brave/bravebot/issues/1267";
+
+    let (endpoint, _received) = serve_script(vec![
+        Served::Reply(tool_request(
+            "set_link",
+            &json!({"kind": "issue", "url": issue, "why": "the user named it"}).to_string(),
+        )),
+        Served::Status(401),
+    ]);
+    let config = config_for(&endpoint);
+
+    let completed = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new(format!("work on {issue}")).keeping_links(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(completed.outcome.is_err(), "the turn was meant to fail");
+    assert_eq!(
+        completed.decisions.links.len(),
+        1,
+        "the link recorded before the failure was lost: {:?}",
+        completed.decisions.links
+    );
+    assert_eq!(completed.decisions.links[0].url, issue);
+}
+
 /// And a turn nothing will ask again is offered nothing, whatever it was asked to watch. A
 /// one-shot run prints its reply and exits, and a session running a sentence this program wrote
 /// keeps no loop over it, so a wait asked for on either is discarded the moment the turn ends.

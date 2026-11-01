@@ -2383,6 +2383,45 @@ fn adopt_settings(
     session.adopt_suggestions(settings.suggestions() == Some(true));
 }
 
+/// Put what the command line asked for on a session whose record is open and every startup
+/// question is answered: the links `--issue` and `--pr` gave, the prompt `-p` handed over, the text
+/// a link put in the box, and the Sessions screen `--resume` opens.
+///
+/// Split from `begin_session` so a test can reach it, since that function needs a real terminal for
+/// the questions that come before this.
+fn apply_the_command_line(
+    session: &mut Session,
+    stored: &mut bravebot_session::sessions::Handle,
+    root: &std::path::Path,
+    links: Links,
+    first_turn: Option<String>,
+    prefill: Option<(String, Option<String>)>,
+    choosing: Option<Option<String>>,
+) {
+    // After the record is open, so a link the command line gave replaces one a resumed record held,
+    // as `/issue` and `/pr` would (PANEL-12).
+    links.give_to(stored);
+
+    // Held rather than sent: the loop's first pass sends it, and the loop runs only once the
+    // startup questions are answered.
+    if let Some(prompt) = first_turn {
+        session.hand_over_from_the_command_line(&prompt);
+    }
+
+    // Put in the box after every question is answered, and never handed over: Enter is the person's
+    // to press (LINK-4).
+    if let Some((text, note)) = prefill {
+        if let Some(note) = note {
+            session.note(note);
+        }
+        session.prefill_from_link(&text);
+    }
+
+    if let Some(from_pr) = choosing {
+        sessions_screen::open_sessions_screen(session, stored.id(), root, from_pr.as_deref(), true);
+    }
+}
+
 /// Everything `event_loop` settles before its first pass: the session, a resumed record, the
 /// trust question, the scratch directory, the rules, the named directories and an addressed
 /// definition, in that order.
@@ -2657,34 +2696,15 @@ fn begin_session(
 
     // After the record is open, so a link the command line gave replaces one a resumed record held,
     // as `/issue` and `/pr` would (PANEL-12).
-    links.give_to(&mut stored);
-
-    // Held rather than sent: the loop's first pass sends it, and the loop runs only once this has
-    // returned with every startup question answered. No unit test reaches this call, because this
-    // function needs a real terminal; a scripted session (`contrib/drive_tui.py`) started with `-i`
-    // checks it.
-    if let Some(prompt) = first_turn {
-        session.hand_over_from_the_command_line(&prompt);
-    }
-
-    // Put in the box after every question is answered, and never handed over: Enter is the person's
-    // to press (LINK-4).
-    if let Some((text, note)) = prefill {
-        if let Some(note) = note {
-            session.note(note);
-        }
-        session.prefill_from_link(&text);
-    }
-
-    if let Some(from_pr) = choosing {
-        sessions_screen::open_sessions_screen(
-            &mut session,
-            stored.id(),
-            workspace.root(),
-            from_pr.as_deref(),
-            true,
-        );
-    }
+    apply_the_command_line(
+        &mut session,
+        &mut stored,
+        workspace.root(),
+        links,
+        first_turn,
+        prefill,
+        choosing,
+    );
 
     let run_settings = RunSettings::from_settings(&settings);
     Ok(Begun {
@@ -2832,10 +2852,7 @@ fn event_loop(
         // A drag held outside the transcript scrolls it a step on each pass, with the pointer still
         // and no report to wake the loop (MOUSE-37).
         needs_draw |= session.scroll_toward_the_pointer(Instant::now());
-        needs_draw |= session.link(
-            stored.link(bravebot_session::sessions::Link::Issue),
-            stored.link(bravebot_session::sessions::Link::PullRequest),
-        );
+        needs_draw |= show_the_links(&mut session, &stored);
 
         // A pick made while a turn ran that no loop of the turn was left to carry out, because the
         // turn ended or another working loop began first.
@@ -24445,6 +24462,43 @@ mod tests {
         )
     }
 
+    /// SESSION-3: `/clear` begins a session with neither link, so a link a person or `set_link` gave
+    /// the session before is not carried to the new record or drawn by the panel after it. The fault
+    /// it rejects is a new record seeded from the links the panel was showing.
+    #[test]
+    fn a_cleared_session_has_neither_link() {
+        use bravebot_session::sessions::{Link, Url};
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+        let mut workspace = workspace_for_test();
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+        stored.set_link(Link::Issue, Url::read(ISSUE));
+        stored.set_link(Link::PullRequest, Url::read(PULL));
+        session.link(stored.link(Link::Issue), stored.link(Link::PullRequest));
+        assert_eq!(session.identity().issue.as_deref(), Some(ISSUE));
+
+        let (_, cleared) = clear_session(&mut session, &mut workspace, None);
+        assert_ne!(
+            cleared.id(),
+            stored.id(),
+            "the cleared session kept its record"
+        );
+        assert_eq!(cleared.link(Link::Issue), None, "the issue followed /clear");
+        assert_eq!(
+            cleared.link(Link::PullRequest),
+            None,
+            "the pull request followed /clear"
+        );
+        // The event loop gives the panel the new record's links on its next tick.
+        session.link(cleared.link(Link::Issue), cleared.link(Link::PullRequest));
+        assert_eq!(session.identity().issue, None);
+        assert_eq!(session.identity().pull_request, None);
+        // The session before keeps its links, so it is still resumable with them.
+        assert_eq!(stored.link(Link::Issue), Some(ISSUE));
+        assert_eq!(stored.link(Link::PullRequest), Some(PULL));
+    }
+
     /// ADDRESS-3. The name `--agent` gave is written into the session's record and is the only
     /// thing that puts it there; a session that names none writes none.
     #[test]
@@ -29588,6 +29642,175 @@ mod tests {
             stored.link(Link::PullRequest),
             Some(PULL),
             "an issue given alone cleared the pull request"
+        );
+    }
+
+    /// A turn that failed after `set_link` recorded an address.
+    fn a_failed_turn_that_set(links: Vec<bravebot_agent::links::LinkSet>) -> FinishedTurn {
+        FinishedTurn {
+            decisions: Some(turn::Decisions {
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+                asked_about: Default::default(),
+                exposed: Default::default(),
+                injected_facts: Default::default(),
+                links,
+            }),
+            work: Default::default(),
+            outcome: Err(turn::TurnError::Precommit("the request failed".to_string())),
+            conversation: Conversation::new(),
+            sink: bravebot_session::audit::Trail::new(),
+            servers: None,
+        }
+    }
+
+    /// SETLINK-2: the links a turn recorded reach the session's record and the panel when the turn
+    /// ended in an error, and the turn's rewind point is neither made nor given up by it. The
+    /// faults this rejects: reading the links only from a turn that answered, so a turn that failed
+    /// after `set_link` loses the address; and a hand-off that opens or drops a rewind point.
+    /// `run_turn` and the event loop each make one call to `keep_the_links_of` and
+    /// `show_the_links`, so these are tested directly.
+    #[test]
+    fn a_link_set_by_a_turn_that_failed_reaches_the_record_and_the_panel() {
+        use bravebot_agent::links::{LinkKind, LinkSet};
+        use bravebot_session::sessions::Link;
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let workspace = workspace_for_test();
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+        session.rewind.open(a_point_before(0), "first".to_string());
+        let points = session.rewind.points().len();
+
+        let finished = a_failed_turn_that_set(vec![
+            LinkSet {
+                kind: LinkKind::Issue,
+                url: ISSUE.to_string(),
+            },
+            LinkSet {
+                kind: LinkKind::PullRequest,
+                url: PULL.to_string(),
+            },
+        ]);
+        keep_the_links_of(&finished, &mut stored, &mut session);
+
+        assert_eq!(stored.link(Link::Issue), Some(ISSUE), "the record lost it");
+        assert_eq!(stored.link(Link::PullRequest), Some(PULL));
+        assert_eq!(session.identity().issue.as_deref(), Some(ISSUE));
+        assert_eq!(session.identity().pull_request.as_deref(), Some(PULL));
+        assert_eq!(
+            session.rewind.points().len(),
+            points,
+            "setting a link made or gave up a rewind point"
+        );
+    }
+
+    /// A turn that set no link, and a turn that returned no decisions, leave the links the record
+    /// held as they were.
+    #[test]
+    fn a_turn_that_set_no_link_leaves_the_links_it_found() {
+        use bravebot_session::sessions::{Link, Url};
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let workspace = workspace_for_test();
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+        stored.set_link(Link::Issue, Url::read(ISSUE));
+        show_the_links(&mut session, &stored);
+        assert_eq!(session.identity().issue.as_deref(), Some(ISSUE));
+
+        keep_the_links_of(
+            &a_failed_turn_that_set(Vec::new()),
+            &mut stored,
+            &mut session,
+        );
+        let mut without_decisions = a_failed_turn_that_set(Vec::new());
+        without_decisions.decisions = None;
+        keep_the_links_of(&without_decisions, &mut stored, &mut session);
+
+        assert_eq!(stored.link(Link::Issue), Some(ISSUE));
+        assert_eq!(session.identity().issue.as_deref(), Some(ISSUE));
+    }
+
+    /// R65 of #1267, PANEL-12, CLI-31, LINK-4: what the command line asked for is put on the session
+    /// once its record is open. `begin_session` makes one call to `apply_the_command_line` after
+    /// its questions, so that function is tested without a terminal. The faults this rejects: the
+    /// links of `--issue` and `--pr` never reaching the record, and a prompt from `-p` not held for
+    /// the loop's first pass to send.
+    #[test]
+    fn the_command_line_links_and_prompt_reach_the_session_once_its_record_is_open() {
+        use bravebot_session::sessions::{Link, Url};
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let workspace = workspace_for_test();
+        let mut stored = a_handle_for_test(&workspace);
+        stored.set_link(Link::PullRequest, Url::read(PULL));
+        let mut session = Session::new("none");
+
+        apply_the_command_line(
+            &mut session,
+            &mut stored,
+            workspace.root(),
+            Links {
+                issue: Url::read(ISSUE),
+                pull_request: None,
+            },
+            Some("fix the build".to_string()),
+            None,
+            None,
+        );
+
+        assert_eq!(stored.link(Link::Issue), Some(ISSUE), "--issue was dropped");
+        assert_eq!(
+            stored.link(Link::PullRequest),
+            Some(PULL),
+            "--issue alone cleared the pull request"
+        );
+        assert_eq!(
+            session.start_handed_over().as_deref(),
+            Some("fix the build"),
+            "the prompt was not held for the first pass"
+        );
+    }
+
+    /// LINK-4: text a link carried is put in the box and never handed over, and the sentence that
+    /// says where the session started is in the transcript.
+    #[test]
+    fn text_from_a_link_is_put_in_the_box_and_not_handed_over() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let workspace = workspace_for_test();
+        let mut stored = a_handle_for_test(&workspace);
+        let mut session = Session::new("none");
+
+        apply_the_command_line(
+            &mut session,
+            &mut stored,
+            workspace.root(),
+            Links::default(),
+            None,
+            Some((
+                "review the change".to_string(),
+                Some("started in the checkout".to_string()),
+            )),
+            None,
+        );
+
+        assert_eq!(session.start_handed_over(), None, "a link's text was sent");
+        assert!(
+            said_in_the_transcript(&session)
+                .iter()
+                .any(|said| said.as_str() == "started in the checkout"),
+            "the sentence was not said"
         );
     }
 

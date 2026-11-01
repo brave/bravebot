@@ -18,6 +18,10 @@ pub enum Provenance {
     Typed,
     /// A line a person typed, sent with files they dropped on it. The files' bytes are not typed.
     TypedWithFiles,
+    /// A line a person typed, sent with the excerpts of the sessions it named with `@session:`.
+    /// Holds the line alone: the excerpts are another session's words, assistant text included,
+    /// and are not typed.
+    TypedWithSessions(String),
     /// A sentence this program wrote.
     Driver,
     /// The model's own earlier words, sent back to it.
@@ -46,6 +50,7 @@ impl Provenance {
         match self {
             Self::Typed => t!(request_label_typed).to_string(),
             Self::TypedWithFiles => t!(request_label_typed_with_files).to_string(),
+            Self::TypedWithSessions(_) => t!(request_label_typed_with_sessions).to_string(),
             Self::Driver => t!(request_label_driver).to_string(),
             Self::Planner => t!(request_label_planner).to_string(),
             Self::TrustedFile(path) => t!(request_label_trusted_file, path = path),

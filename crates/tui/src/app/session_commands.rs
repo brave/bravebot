@@ -683,7 +683,7 @@ pub(super) fn link_session(
             },
         },
     };
-    session.link(stored.link(Link::Issue), stored.link(Link::PullRequest));
+    show_the_links(session, stored);
     session.note(said);
 }
 

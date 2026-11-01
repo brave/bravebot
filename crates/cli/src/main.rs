@@ -2017,6 +2017,8 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         asked_about: _,
         exposed: _,
         injected_facts,
+        // A run from the command line opens no panel and keeps no link.
+        links: _,
     } = completed.decisions;
     if let Ok(finished) = &completed.outcome {
         // Only a turn that answered leaves anything for the next, as one that wrote a record does:

@@ -400,6 +400,11 @@ one. Both are written to the session record at once, a resume brings them back, 
 a session with neither. [`--issue` and `--pr`](../reference/cli.md#--issue-url-and---pr-url) give a
 session the same two links when it opens.
 
+The planner can also record them with [`set_link`](../reference/tools.md#set_link), but only for an
+address you typed to it in this session, so a link in a file, a web page or a command's output is
+never recorded. The link is held to the same check, replaces the one of its kind, and is written to
+the session record and drawn in the panel as one you gave with `/issue` or `/pr`.
+
 ## Sessions in the background
 
 `bravebot --bg "<prompt>"` starts a session whose process keeps running after the terminal closes,

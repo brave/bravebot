@@ -1461,6 +1461,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
         // Nor a session to hold a watch. The plan is frozen before anything is read, so a turn
         // that armed one would be adding to a run whose steps were settled without it.
         watches: Vec::new(),
+        links: Vec::new(),
         timing: accounting.elapsed.finish(),
         display: shown,
         notices: Vec::new(),

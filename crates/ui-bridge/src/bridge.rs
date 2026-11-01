@@ -3144,6 +3144,8 @@ fn work(work: Work) {
         // window, they see what the turn is doing, and `turn.cancel` reaches it mid-round. A
         // number would only interrupt work that was going fine (TURN-2).
         .with_rounds(None)
+        // This front end writes the links `set_link` records to the session record (SETLINK-2).
+        .keeping_links(true)
         .with_model(model)
         .in_account_session(state.account.clone())
         .with_attribution(attribution)
@@ -3219,7 +3221,7 @@ fn work(work: Work) {
     #[cfg(test)]
     crate::running::built_in::record("turn", task.account_session().identifier());
     let began_at = std::time::Instant::now();
-    let completed = agent_turn::resume(
+    let mut completed = agent_turn::resume(
         &config,
         &egress,
         &workspace,
@@ -3249,6 +3251,7 @@ fn work(work: Work) {
             .get_or_insert_with(|| Handle::begin(&project, crate::FRONT, crate::agent_build()))
             .set_injected_facts(injected_facts);
     }
+    keep_the_links_of(&mut state, &project, &mut completed);
     state.answers.adopt(completed.decisions);
     let outcome = completed.outcome;
 
@@ -3562,6 +3565,24 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         "account": account.map(AccountFailure::name),
         "accountMessage": said.as_ref().map(|said| &said.sentence),
         "accountCommand": said.as_ref().and_then(|said| said.command) })
+}
+
+/// Keep the links a turn recorded with `set_link` on the session's record, as `/issue` and `/pr`
+/// keep theirs, each read as a link again by the one definition of one. Whatever the turn's
+/// ending: a link is written to the record at once (PANEL-12, SETLINK-2). It reads the decisions
+/// and never the outcome, and it leaves the rewind points as they are, since none holds a link.
+fn keep_the_links_of(
+    state: &mut State,
+    project: &Path,
+    completed: &mut bravebot_agent::turn::CompletedTurn,
+) {
+    let links = std::mem::take(&mut completed.decisions.links);
+    if !links.is_empty() {
+        state
+            .handle
+            .get_or_insert_with(|| Handle::begin(project, crate::FRONT, crate::agent_build()))
+            .apply_links(&links);
+    }
 }
 
 /// Open the point the turn about to run can be rewound to (SESSION-19), as the terminal does.
@@ -5243,6 +5264,10 @@ mod opening_tests;
 #[cfg(test)]
 #[path = "failure_tests.rs"]
 mod failure_tests;
+
+#[cfg(test)]
+#[path = "link_tests.rs"]
+mod link_tests;
 
 #[cfg(test)]
 #[path = "account_session_tests.rs"]

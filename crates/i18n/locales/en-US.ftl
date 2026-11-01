@@ -2834,6 +2834,7 @@ request-trusted = { $what } (trusted)
 request-bytes-mark = [a picture or file, sent as bytes]
 request-label-typed = typed
 request-label-typed-with-files = typed, with dropped files
+request-label-typed-with-sessions = typed, with named sessions
 request-label-driver = driver
 request-label-planner = planner
 request-label-trusted-file = trusted file { $path }
@@ -4477,6 +4478,7 @@ verb-propose-plan = Plan
 verb-message-session = Message
 verb-remember = Remember
 verb-propose-rule = Propose
+verb-set-link = Link
 verb-recall = Recall
 verb-mcp-call = MCP
 verb-unknown = Tool
@@ -4528,6 +4530,10 @@ processor-model-not-served =
 # The endpoint substitutes a model it will not serve rather than refusing. The name it answered
 # with is left out, because a notice is the driver's own words. The model is the one the person named.
 processor-model-substituted = A processor asked for { $model } and was answered by a different model
+# The transcript line for a link the planner recorded with set_link (SETLINK-2). The address is one
+# the person typed, so it is shown in full.
+set-link-recorded-issue = issue link recorded: { $url }
+set-link-recorded-pull-request = pull request link recorded: { $url }
 # A definition's skills line named skills this session did not find. The definition is its file's
 # path and the skills are that file's own words, joined with a comma, both from a vouched-for file.
 delegate-skills-not-found =

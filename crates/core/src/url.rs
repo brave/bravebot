@@ -13,6 +13,25 @@
 //! The same holds for a socket: where the port cannot be read as the transport reads it, there is
 //! none to report.
 
+/// `text`, trimmed, where it is one `http` or `https` URL with a host written in printable ASCII,
+/// or `None` where it is not.
+///
+/// The check a session's issue and pull request links are held to (PANEL-12). A link is drawn in
+/// the info panel on every frame, so anything but printable ASCII refuses it: a newline or an
+/// escape could act on the terminal there, and a direction override or a zero-width character
+/// could make the row read as another link. Kept here so the session record and the `set_link`
+/// tool refuse the same values.
+pub fn web_address(text: &str) -> Option<&str> {
+    let text = text.trim();
+    if !text.chars().all(|c| c.is_ascii_graphic()) {
+        return None;
+    }
+    let (scheme, rest) = text.split_once("://")?;
+    let known = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    (known && !host.is_empty()).then_some(text)
+}
+
 /// The host and port in `url`, lowercased, or `None` where it names no host.
 ///
 /// For a destination somebody wrote down in full, which is a socket rather than a name: two
