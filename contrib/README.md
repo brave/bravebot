@@ -41,8 +41,10 @@ contrib/review-ready-menubar/install.sh --uninstall
 
 `install.sh` builds `ReviewReadyMenu.swift` with `swiftc` (Xcode or the Command Line Tools) into
 `~/Applications/ReviewReadyMenu.app` and starts it. The app runs `make review-ready` in the checkout
-the script is in, so `gh` has to be signed in and installed in `/opt/homebrew/bin` or
-`/usr/local/bin`. `--make-args` adds make arguments, `--interval` sets the seconds between
+the script is in, so `gh` has to be signed in. A menu bar app gets launchd's minimal `PATH`, so the
+app searches the directories `install.sh` finds `gh` and `python3` in, then `/opt/homebrew/bin`,
+`/usr/local/bin` and the system directories. Run `install.sh` again after moving either one.
+`--make-args` adds make arguments, `--interval` sets the seconds between
 refreshes (300 by default, never under 30), `--login` installs a LaunchAgent that starts the app at
 login, and `--dir` changes where the app is put. `--uninstall` stops the app and removes it, the
 LaunchAgent and the cache.

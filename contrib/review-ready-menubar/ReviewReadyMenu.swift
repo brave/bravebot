@@ -10,6 +10,7 @@
 //   ReviewReadyRepoPath         / REVIEW_READY_REPO      the bravebot checkout to run make in
 //   ReviewReadyIntervalSeconds  / REVIEW_READY_INTERVAL  seconds between refreshes (default 300)
 //   ReviewReadyMakeArguments    / REVIEW_READY_MAKE_ARGS extra make arguments, e.g. "REVIEWER=login"
+//   ReviewReadyPath             / REVIEW_READY_PATH      directories to search for gh and python3 first
 
 import AppKit
 
@@ -46,6 +47,13 @@ enum Settings {
             .split(separator: " ").map(String.init)
     }
 
+    /// The directories install.sh found gh and python3 in, then the usual places for them.
+    static var searchPath: String {
+        let usual = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        guard let found = value("ReviewReadyPath", "REVIEW_READY_PATH"), !found.isEmpty else { return usual }
+        return found + ":" + usual
+    }
+
     static var cacheURL: URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("bravebot-review-ready/cache.json")
@@ -58,14 +66,14 @@ struct RunResult {
     var err: String
 }
 
-/// Runs `make review-ready` in the checkout. A menu bar app does not inherit the shell's PATH, so the
-/// usual places for gh and python3 are named.
+/// Runs `make review-ready` in the checkout. A menu bar app does not inherit the shell's PATH, so
+/// the places gh and python3 are looked for are named in Settings.searchPath.
 func runReviewReady() -> RunResult {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/make")
     process.arguments = ["--no-print-directory", "-C", Settings.repoPath, "review-ready"] + Settings.makeArguments
     var environment = ProcessInfo.processInfo.environment
-    environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    environment["PATH"] = Settings.searchPath
     process.environment = environment
     let outPipe = Pipe()
     let errPipe = Pipe()

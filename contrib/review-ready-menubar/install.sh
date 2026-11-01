@@ -6,7 +6,8 @@
 #   contrib/review-ready-menubar/install.sh --uninstall
 #
 # The app is built from ReviewReadyMenu.swift with swiftc (Xcode or the Command Line Tools) into
-# ~/Applications/ReviewReadyMenu.app and runs `make review-ready` in the checkout this script is in.
+# ~/Applications/ReviewReadyMenu.app and runs `make review-ready` in the checkout this script is in,
+# with the directories this shell finds gh and python3 in at the front of its PATH.
 # --login also installs a LaunchAgent so it starts at login. --dir changes where the app is put.
 set -eu
 
@@ -79,6 +80,15 @@ EOF
 plutil -insert ReviewReadyRepoPath -string "$repo" "$plist"
 plutil -insert ReviewReadyIntervalSeconds -string "$interval" "$plist"
 plutil -insert ReviewReadyMakeArguments -string "$make_args" "$plist"
+# The app gets launchd's minimal PATH, so it is given the directories this shell finds gh and python3 in.
+tool_path=""
+for tool in gh python3; do
+    found=$(command -v "$tool" 2>/dev/null || true)
+    case "$found" in
+        /*) tool_path="$tool_path${tool_path:+:}$(dirname "$found")" ;;
+    esac
+done
+plutil -insert ReviewReadyPath -string "$tool_path" "$plist"
 codesign --force --sign - "$app" >/dev/null 2>&1 || true
 
 if [ "$login" -eq 1 ]; then
