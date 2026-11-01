@@ -1406,7 +1406,7 @@ pub struct ListedResource {
     pub mime_type: Option<String>,
 }
 
-/// A request to read an MCP server's resource (SERVERS-21).
+/// A prompt asking whether to read a resource URI not covered by an approved list (SERVERS-21).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceReadRequest {
     /// The alias the person gave the server.
