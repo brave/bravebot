@@ -66,6 +66,7 @@ cli-usage-sessions-delete = Delete one recorded session, its trail and its searc
 cli-usage-sessions-purge = Delete every session recorded for this directory
 cli-usage-sessions-import = Copy sessions another agent kept for this directory
 cli-usage-stats = Total the turns and tokens recorded sessions spent; takes --days <n>, --models and --project [<dir>]
+cli-usage-skill-eval = Run a skill's saved cases with and without it and report both scores; takes --model, --max-rounds <n>, --max-tokens <n> and --trust-workspace
 cli-usage-bg = Start a session that keeps running after the terminal closes
 cli-usage-attach = Join a background session's terminal
 cli-usage-reply = Send a prompt to an idle background session
@@ -4869,6 +4870,34 @@ sessions-purge-done = Deleted: { $count }.
 # What `bravebot stats` says. The figures are numbers the program wrote down, so the only words
 # here are the headings and the sentence saying what the figures cover.
 stats-usage = stats takes --days and a number of days, --models, and --project with a directory if it is not this one
+# What `bravebot skill eval` says. The scores are numbers the program computed from its own record
+# of each run. A case file's name is cleaned of anything a terminal would act on before it is said.
+skill-eval-usage = skill takes eval and a skill name, then --model and a model, --max-rounds and a positive number, --max-tokens and a positive number, and --trust-workspace, each at most once
+skill-eval-takes-no-write-flag = skill eval does not take { $flag }: its runs have nobody to ask and write nothing
+skill-eval-unknown-name = skill eval found no skill named { $name } that this directory would load
+skill-eval-person-only = skill eval does not run { $name }: only a person can name it, and a run here has no person to
+skill-eval-not-read = { $count ->
+    [one] 1 file beside the skill was not read because nobody vouched for it
+   *[other] { $count } files beside the skill were not read because nobody vouched for them
+    }
+skill-eval-case-refused = skill eval stopped: the case file { $file } is not usable ({ $problem })
+skill-eval-problem-malformed = it is not a JSON case of the shape SKILLEVAL-2 describes: { $reason }
+skill-eval-problem-empty-prompt = its prompt is empty
+skill-eval-problem-no-graders = it has no grader, so it would check nothing
+skill-eval-problem-repeats = its repeats is { $repeats }, which is outside 1 to { $most }
+skill-eval-problem-zero-weight = a grader has a weight of 0, which counts for nothing
+skill-eval-no-cases = skill eval found no saved cases for { $name }; they go in an evals directory beside its SKILL.md
+skill-eval-running = Running { $case }, { $runs } times with the skill and { $runs } without it
+skill-eval-runs-failed = { $count ->
+    [one] 1 run ended on an error and has no score
+   *[other] { $count } runs ended on an error and have no score
+    }
+skill-eval-no-score = no score
+skill-eval-with = with the skill
+skill-eval-without = without it
+skill-eval-case = { $case }: WITH { $with }, W/OUT { $without }, difference { $difference }
+skill-eval-arm-counts = { $arm }: { $runs } runs, { $searched } searched for skills, { $loaded } loaded the skill, { $capped } stopped at a limit, { $failed } failed, { $refused } refused calls, { $withheld } with a rubric verdict withheld
+skill-eval-overall = All cases: WITH { $with }, W/OUT { $without }, difference { $difference }
 stats-scope-everything = Every recorded session, in every project
 stats-scope-days = { $days ->
     [one] Sessions last written in the last day, in every project

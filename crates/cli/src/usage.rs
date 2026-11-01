@@ -67,6 +67,10 @@ pub(crate) fn print_help() {
             t!(cli_usage_sessions_import),
         ),
         ("bravebot stats [options]", t!(cli_usage_stats)),
+        (
+            "bravebot skill eval <name> [options]",
+            t!(cli_usage_skill_eval),
+        ),
         ("bravebot --bg <prompt>", t!(cli_usage_bg)),
         ("bravebot attach <id>", t!(cli_usage_attach)),
         ("bravebot reply <id> <prompt>", t!(cli_usage_reply)),

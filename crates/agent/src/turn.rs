@@ -2514,6 +2514,13 @@ where
         .checkout()
         .map(|_| policy.exchange_file_authority(policy.file_authority().unrooted()));
     let (catalogue, mut notices) = crate::skills::discover(policy, sources, task.home.as_deref());
+    // The baseline arm of a skill evaluation: one skill the driver was told by name to leave out.
+    // Nothing else of the catalogue changes, so `search_skills` misses it and `load_skill` refuses
+    // it while every other skill stays.
+    let catalogue = match task.without_skill.as_deref() {
+        Some(name) => catalogue.without(name),
+        None => catalogue,
+    };
 
     // The kinds of delegate this turn can select from, resolved from the same two roots and for
     // the same reason: a definition names a kind, so a file can say what a delegate is for and

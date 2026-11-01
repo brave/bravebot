@@ -35,6 +35,7 @@ mod session_import;
 mod session_search;
 mod sessions_list;
 mod shell_init;
+mod skill_eval;
 mod stats;
 #[cfg(unix)]
 mod supervisor;
@@ -92,6 +93,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 struct Settled {
     as_json: bool,
     skip_permissions: bool,
+    /// The spelling of the bypass flag that was typed, for a refusal that names it. Meaningful only
+    /// where `skip_permissions` is true.
+    bypass_flag: &'static str,
     /// The mode a flag other than the bypass flag opened a one-shot run in (`--accept-edits` or
     /// `--auto`), or `None` where neither was given and the run asks.
     starts_in: Option<bravebot_agent::PermissionMode>,
@@ -458,6 +462,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     Ok(Settled {
         as_json,
         skip_permissions,
+        bypass_flag,
         starts_in,
         carried,
         agent,
@@ -503,6 +508,7 @@ fn main() -> ExitCode {
     let Settled {
         as_json,
         skip_permissions,
+        bypass_flag,
         starts_in,
         carried,
         agent,
@@ -613,6 +619,7 @@ fn main() -> ExitCode {
         Some("auth") => auth::command(&args[1..]),
         Some("sessions") => background::sessions(&args[1..]),
         Some("stats") => stats::command(&args[1..]),
+        Some("skill") => skill_eval::command(&args[1..], skip_permissions.then_some(bypass_flag)),
         Some("--bg") => match carried {
             Some(flag) => stopped_before_the_turn(
                 as_json,

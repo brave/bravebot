@@ -22003,6 +22003,125 @@ fn loading_a_skill_that_does_not_exist_is_refused_rather_than_guessed() {
     );
 }
 
+/// A skill a run was told to do without is not in the catalogue: `load_skill` refuses it as it
+/// refuses a name that never existed, and a skill beside it still loads (SKILLEVAL-4). The same
+/// request with no skill left out loads it, so the refusal is the seam and not the setup.
+#[test]
+fn a_turn_given_a_skill_to_do_without_neither_finds_nor_loads_it() {
+    let scratch = Scratch::new("skill-left-out");
+    write_project_skill(
+        &scratch.path,
+        "left-out",
+        "left-out",
+        "BODY-OF-THE-LEFT-OUT-SKILL",
+    );
+    write_project_skill(&scratch.path, "kept", "kept", "BODY-OF-THE-KEPT-SKILL");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for (without, name, body, loaded) in [
+        (None, "left-out", "BODY-OF-THE-LEFT-OUT-SKILL", true),
+        (
+            Some("left-out"),
+            "left-out",
+            "BODY-OF-THE-LEFT-OUT-SKILL",
+            false,
+        ),
+        (Some("left-out"), "kept", "BODY-OF-THE-KEPT-SKILL", true),
+    ] {
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("load_skill", &format!(r#"{{"name":"{name}"}}"#)),
+            reply_with("understood"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+
+        turns::run_with_trust(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("do it").without_skill(without.map(str::to_owned)),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+            trusting_the_workspace(),
+        )
+        .expect("turn runs");
+
+        let _first = received.recv().expect("first request");
+        let second = received.recv().expect("second request");
+        assert_eq!(
+            second.contains(body),
+            loaded,
+            "without {without:?}, loading {name}: {second}"
+        );
+        assert_eq!(
+            second.contains("no skill named"),
+            !loaded,
+            "without {without:?}, loading {name}: {second}"
+        );
+    }
+}
+
+/// The activity of a `load_skill` call carries the catalogue entry it resolved to, by the
+/// catalogue's own name, and nothing for a name that resolved to no entry (SKILLEVAL-6). Rejects a
+/// call record that sets the field from the call's argument: the model's word is asked for here as
+/// a name that matches nothing, and it must not appear in the field.
+#[test]
+fn a_load_skill_activity_names_the_entry_the_catalogue_resolved() {
+    struct Resolved(Vec<(String, Option<String>)>);
+
+    impl bravebot_agent::report::Reporter for Resolved {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+            self.0.push((activity.tool, activity.skill));
+        }
+    }
+
+    let scratch = Scratch::new("skill-activity-names-the-entry");
+    write_project_skill(&scratch.path, "kept", "kept", "BODY-OF-THE-KEPT-SKILL");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    for (asked, resolved) in [
+        ("kept", Some("kept")),
+        ("Kept", None),
+        ("never-existed", None),
+    ] {
+        let (endpoint, _received) = serve_sequence(vec![
+            tool_request("load_skill", &format!(r#"{{"name":"{asked}"}}"#)),
+            reply_with("understood"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reporter = Resolved(Vec::new());
+        let mut conversation = bravebot_agent::Conversation::new();
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("do it"),
+            &mut conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("turn runs");
+
+        assert_eq!(
+            reporter.0,
+            vec![("load_skill".to_string(), resolved.map(str::to_string))],
+            "asked for {asked}"
+        );
+    }
+}
+
 /// Choosing a skill is the model's decision, not the user's, and the audit trail exists to keep
 /// those apart. Every other promotion is recorded, and this one is no different.
 #[test]

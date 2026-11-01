@@ -72,7 +72,7 @@ guards:
       - crates/agent/src/tools/link.rs: 1
       - crates/agent/src/manifest.rs: 12
       - crates/agent/src/preamble.rs: 1
-      - crates/agent/src/skills.rs: 3
+      - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 25
       - crates/agent/src/turn.rs: 7
