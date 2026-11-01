@@ -227,9 +227,11 @@ fn at_the_start(a_service_is_configured: bool, named: Option<&str>) -> Start {
     let config = match Config::from_env() {
         Ok(config) => config,
         Err(err) => {
+            // Drawn: the problem can quote an endpoint value an environment variable or a
+            // settings file chose (LAYER-3).
             return Start::Ended(fail(
                 Ending::Configuration,
-                t!(cli_configuration_problem, problem = err),
+                crate::progress::printable_lines(&t!(cli_configuration_problem, problem = err)),
             ));
         }
     };

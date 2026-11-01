@@ -68,7 +68,11 @@ pub(crate) fn project_directory(named: Option<PathBuf>) -> Result<PathBuf, ExitC
         .map_err(|_| {
             fail(
                 Ending::Argument,
-                t!(sessions_import_no_project, path = directory.display()),
+                // Drawn: the directory is a name the person's checkout is under (LAYER-3).
+                t!(
+                    sessions_import_no_project,
+                    path = crate::progress::printable_path(&directory)
+                ),
             )
         })
 }
@@ -188,9 +192,11 @@ pub(crate) fn start(words: &[String]) -> ExitCode {
     let mut config = match bravebot_config::Config::from_env() {
         Ok(config) => config,
         Err(err) => {
+            // Drawn: the problem can quote an endpoint value an environment variable or a
+            // settings file chose (LAYER-3).
             return fail(
                 Ending::Configuration,
-                t!(cli_configuration_problem, problem = err),
+                crate::progress::printable_lines(&t!(cli_configuration_problem, problem = err)),
             );
         }
     };
@@ -411,7 +417,11 @@ pub(crate) fn is_running(id: &str) -> bool {
 /// The refusal for `--resume` and `--continue` naming a record a running background session holds,
 /// which says how to join it instead.
 pub(crate) fn refuse_to_resume(id: &str) -> ExitCode {
-    fail(Ending::Failed, held_by_a_background_session(id))
+    // Drawn: the id and the job's name come from stored records (LAYER-3).
+    fail(
+        Ending::Failed,
+        crate::progress::printable_lines(&held_by_a_background_session(id)),
+    )
 }
 
 /// Why a session a background process is running cannot be resumed by a second one.
