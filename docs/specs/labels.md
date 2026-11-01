@@ -15,7 +15,7 @@ guards:
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
-      - crates/agent/src/mcp.rs: 1
+      - crates/agent/src/mcp.rs: 2
       - crates/agent/src/skills.rs: 1
       - crates/agent/src/tools.rs: 30
       - crates/agent/src/turn.rs: 1
@@ -29,13 +29,14 @@ guards:
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 125
-      - crates/core/src/slot.rs: 7
+      - crates/core/src/policy.rs: 138
+      - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
-      - crates/mcp/src/http.rs: 3
+      - crates/core/tests/browser_group_aliases.rs: 1
+      - crates/mcp/src/http.rs: 2
       - crates/mcp/src/lib.rs: 1
-      - crates/mcp/src/protocol.rs: 3
-      - crates/mcp/src/stdio.rs: 3
+      - crates/mcp/src/protocol.rs: 6
+      - crates/mcp/src/stdio.rs: 2
       - crates/net/src/lib.rs: 4
   - symbol: Labelled::declassify
     every-spelling: yes
@@ -47,7 +48,7 @@ guards:
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 38
+      - crates/agent/src/tools.rs: 40
       - crates/agent/src/tools/recall.rs: 1
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
@@ -56,10 +57,10 @@ guards:
       - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
-      - crates/core/src/policy.rs: 65
+      - crates/core/src/policy.rs: 70
       - crates/core/src/value.rs: 1
-      - crates/mcp/tests/http.rs: 4
-      - crates/mcp/tests/stdio.rs: 7
+      - crates/mcp/tests/http.rs: 6
+      - crates/mcp/tests/stdio.rs: 9
       - crates/ui-bridge/tests/workspace.rs: 1
   - symbol: Labelled::trusted
     sites:
@@ -73,14 +74,14 @@ guards:
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/styles.rs: 1
-      - crates/agent/src/tools.rs: 24
+      - crates/agent/src/tools.rs: 25
       - crates/agent/src/turn.rs: 7
       - crates/agent/src/workspace.rs: 16
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
       - crates/agent/tests/workspace.rs: 287
-      - crates/core/src/policy.rs: 26
+      - crates/core/src/policy.rs: 30
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
   - symbol: Labelled::relabel
@@ -90,7 +91,7 @@ guards:
       - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 62
+      - crates/core/src/policy.rs: 66
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -126,11 +127,11 @@ guards:
   - symbol: Policy::promote_reference_for_read
     sites:
       - crates/agent/src/tools.rs: 1
-      - crates/core/src/policy.rs: 4
+      - crates/core/src/policy.rs: 5
   - symbol: Policy::destination_from_reference
     sites:
       - crates/agent/src/tools.rs: 1
-      - crates/core/src/policy.rs: 4
+      - crates/core/src/policy.rs: 5
   - symbol: VettingSpec::where_it_came_from
     sites:
       - crates/core/src/policy.rs: 5
@@ -142,7 +143,7 @@ guards:
       - crates/agent/src/classifier.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 15
+      - crates/agent/src/turn.rs: 16
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:
@@ -153,7 +154,7 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 41
+      - crates/agent/src/tools.rs: 42
       - crates/agent/src/tools/recall.rs: 4
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
@@ -170,7 +171,7 @@ guards:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 6
       - crates/agent/src/tools/recall.rs: 3
-      - crates/core/src/policy.rs: 25
+      - crates/core/src/policy.rs: 26
   - symbol: Policy::adopt_model_output
     sites:
       - crates/agent/src/advisor.rs: 1
@@ -203,6 +204,28 @@ guards:
       - crates/net/src/lib.rs: 1
       - crates/net/tests/egress.rs: 3
       - crates/update/src/lib.rs: 1
+  - symbol: Policy::read_a_number
+    sites:
+      - crates/choice/src/lib.rs: 1
+      - crates/core/src/policy.rs: 8
+  - symbol: Policy::store_a_choice
+    sites:
+      - crates/agent/src/turn.rs: 1
+      - crates/core/src/policy.rs: 4
+      - crates/mcp/src/protocol.rs: 1
+  - symbol: Policy::carry_a_choice
+    sites:
+      - crates/agent/src/mcp.rs: 1
+      - crates/core/src/policy.rs: 10
+      - crates/mcp/src/protocol.rs: 1
+  - symbol: Policy::choice_for_display
+    sites:
+      - crates/agent/src/mcp.rs: 1
+      - crates/core/src/policy.rs: 6
+  - symbol: Carried::into_wire
+    sites:
+      - crates/core/src/policy.rs: 4
+      - crates/mcp/src/protocol.rs: 1
 documented-by: docs/website/docs/how-it-works.md
 ---
 
@@ -264,7 +287,9 @@ slot and the planner is given a **reference**: origin, line count, byte count, l
 entry out of a listing whether it stands for a file or for a directory the walk stopped at. The
 planner acts on content it cannot read by naming that reference, and the policy layer resolves it
 when the write or the call actually happens. Where the content has to be changed rather than moved, it goes
-to a processor, described in [processors.md](processors.md).
+to a processor, described in [processors.md](processors.md). A reference to a number a processor chose
+states its limit and its label and neither count, since the length of the digits would say more about
+the number than the planner is shown ([PROC-16](processors.md#PROC-16)).
 
 The origin is routing, and it is trusted where it is presented. The counts are numbers and the
 label is an enum, but the origin is a string that reaches the planner's context, the trace and the
@@ -279,6 +304,7 @@ wearing the driver's attribution, which is the thing this clause exists to stop.
 `verified-by: bravebot_core::reference::a_visible_presentation_shows_the_content`
 `verified-by: bravebot_core::reference::a_description_names_the_shape_and_not_the_content`
 `verified-by: bravebot_core::reference::a_description_says_how_to_refer_to_the_content`
+`verified-by: bravebot_core::reference::a_choice_reference_states_its_limit_and_no_count`
 `verified-by: bravebot_agent::turn::a_fetched_page_names_the_host_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
 
@@ -299,8 +325,9 @@ reading it: those two numbers are what LABEL-3 already puts in front of the plan
 they were counted from never leave.
 
 Everything else the driver needs out of a labelled value it asks a gate for, and every gate records
-the read: the planner's own arguments, a transport envelope a decoder has to see, and a model's
-reply on its way out of that envelope. A driver holding the bytes without one is the shape this
+the read: the planner's own arguments, a transport envelope a decoder has to see, a model's reply on
+its way out of that envelope, and a processor's answer to the one reader that takes a number out of
+it ([PROC-16](processors.md#PROC-16)). A driver holding the bytes without one is the shape this
 clause exists to stop.
 
 **A slot's address is untrusted content too, and is not carried in a labelled value.** The file a
@@ -504,9 +531,13 @@ and the content has no say in it.
 | an answer a person typed to a question | trusted, because a person wrote it, and as private as the questions it answers, since the reply repeats them | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` `verified-by: bravebot_core::policy::private_questions_are_asked_and_the_reply_stays_private` |
 | the body a person saved from their editor over a proposed write | trusted and public, because a person wrote it and it goes into their workspace as the proposal it replaces was already going to; refused where that proposal was untrusted or still private | `verified-by: bravebot_core::policy::an_edited_body_is_trusted_and_public` `verified-by: bravebot_core::policy::a_proposal_that_was_not_trusted_and_public_is_not_made_so_by_editing_it` |
 | what a processor produced | taint over the inputs it was given | `verified-by: bravebot_core::policy::an_output_is_labelled_by_taint_over_the_inputs` |
+| a number a processor chose from a list | untrusted and private, by taint over what the processor was given, assigned by the policy layer as the reader returns its byte and no better than the answer's. The number is all that is kept of the answer, and which number is read is decided by the crate that reads it, which is the ninth entry of [Known costs](#known-costs). It reaches a call at that label, on the person's answer to the call ([ROUTE-10](routing.md#ROUTE-10), [MCP-14](mcp.md#MCP-14)) | `verified-by: bravebot_core::policy::a_number_read_from_an_answer_keeps_the_label_of_the_answer` `verified-by: bravebot_core::policy::a_stored_choice_is_a_reference_whatever_its_label_and_the_trail_holds_no_digit` `verified-by: bravebot_core::policy::carry_a_choice_consumes_the_endorsement_spends_the_choice_and_refuses_before_spending` |
 | one slot's bytes a person read on their screen and vouched for | trusted and private, because a person read them and said so, and the slot itself keeps what it had | `verified-by: bravebot_core::policy::output_a_person_vouched_for_comes_back_trusted` `verified-by: bravebot_core::policy::vetted_content_a_person_vouched_for_comes_back_trusted` |
 | a server's tool list a person vouched for, or the mode that answers for them | trusted and public, because a person read the whole list as it is drawn and said yes, every session, since nothing the driver runs compares a server's bytes with an earlier list | `verified-by: bravebot_core::policy::a_tool_list_reaches_the_planner_only_through_an_endorsement` `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing` |
 | where a remote server's reply pointed, once a person says the server moved there | trusted and public, because a person read the url as it is drawn and the declaration it is written into is theirs | `verified-by: bravebot_core::policy::a_server_move_is_promoted_only_through_an_endorsement` |
+| a part of a server's tool result: its text, and each picture it carries | untrusted and private, the capability's own label, the same for a picture as for the text and the same whatever the parts hold. Which parts are taken, and under which of four media types, is decided by the transport crate from the `type`, the `mimeType` and the size of the data the server wrote, and is the eighth entry of [Known costs](#known-costs) | `verified-by: bravebot_mcp::stdio::a_tool_result_picture_is_labelled_untrusted_and_private` `verified-by: bravebot_mcp::http::a_tool_result_picture_is_labelled_untrusted_and_private` |
+| the text of a prompt a person ran from a server | untrusted and private, the capability's own label, whoever chose the prompt and typed its arguments, because choosing to run a prompt does not vouch for what it says ([MCP-11](mcp.md#MCP-11)) | `verified-by: bravebot_mcp::stdio::a_prompt_text_is_labelled_untrusted_and_private` `verified-by: bravebot_mcp::http::a_prompt_text_is_labelled_untrusted_and_private` `verified-by: bravebot_agent::mcp::a_prompt_a_person_ran_reaches_the_server_with_their_arguments_and_the_planner_gets_a_reference` |
+| what a session fetched with a tool of what a person held out in the browser, a selection, a link or a tab | untrusted and private, as any part of a server's tool result is. Holding it out gives the bytes no label: they are the page's whichever hand selected them, a selection includes the text the page hides, and the extension that keeps them is not the driver ([BROWSER-39](browser.md#BROWSER-39)) | `verified-by: bravebot_agent::browser_group_servers::what_a_person_held_out_in_the_browser_is_a_reference_and_the_planner_never_holds_it` `verified-by: bravebot_agent::browser_group_servers::an_item_held_out_reaches_the_planner_only_when_a_person_has_read_it_and_every_call_after_is_put_to_the_person` |
 | a picture or a PDF `vet_content` let through | trusted and private on the endorsement that let it through, as promoted text is, and the slot keeps what it had; it goes to the planner in a message of its own rather than joining the user's, so it takes a label where a paste takes none | `verified-by: bravebot_core::policy::a_picture_is_promoted_once_by_any_endorsement_and_attached_as_itself` |
 | a picture pasted at the keyboard | none, because it joins the user's own message, which carries none either, so it is recorded instead | `verified-by: bravebot_core::policy::a_pasted_image_is_recorded_in_the_audit_trail` |
 | pasted text | none, for the same reason, but with the characters a terminal draws as nothing taken out first and counted on the screen ([PASTE-10](pasting.md#PASTE-10)): a character map that reads no meaning from the text and decides no effect | `verified-by: bravebot_tui::state::a_paste_loses_the_characters_a_terminal_draws_as_nothing_and_says_how_many` |
@@ -614,10 +645,12 @@ arrives at all.
 
 ## Known costs
 
-- **Seven places do look at untrusted bytes in order to decide something.** Three are in the policy
+- **Nine places do look at untrusted bytes in order to decide something.** Three are in the policy
   layer, the fourth is the search, which is in `bravebot-agent`, the fifth is the diagnostics
   sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff and decoding of a
-  read, which are in `bravebot-agent` too. The clauses above say
+  read, which are in `bravebot-agent` too, the eighth is the choice of which parts of a tool
+  result are taken, which is in `bravebot-mcp`, and the ninth is the read of a processor's answer
+  for one number, which is in `bravebot-choice`. The clauses above say
   nothing may, so these are exceptions, and they are written down rather than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
@@ -926,3 +959,133 @@ arrives at all.
 
   The result shape is pinned by `a_binary_read_tells_the_model_it_is_binary` in
   `crates/agent/tests/turn.rs`, which fails if the refusal stops being said.
+
+- **The eighth is the choice of which parts of a tool result are taken.** A server's result is a
+  list of parts, each with a `type`, and `bravebot-mcp` decides from what the server wrote what each
+  part is ([MCP-6](mcp.md#MCP-6)). A part of `type` `text` is text. A part of `type` `image` is a
+  picture where its `mimeType` is one of `image/png`, `image/jpeg`, `image/gif` and `image/webp`, its
+  `data` is base64 in its canonical form, and it decodes to between one byte and 8 MiB. Every other
+  part is left out and counted. The comparison with `text` is older than the pictures and is recorded
+  here with them. The crate is not the driver ([LABEL-4](#LABEL-4)) and holds no `declassify`, so no
+  pinned release moves when this changes. The constructors it labels with are pinned, and a second
+  comparison of the same kind elsewhere in the crate is found by reading the diff.
+
+  The crate hands `bravebot-agent` the result already sorted: the text, the pictures, each under a
+  type from the list, and a count of the parts left out. The driver acts on that shape and on no
+  byte. The turn mints a reference for the text and one for each picture, and the planner is told how
+  many parts were left out. Those are decisions taken from a shape the server chose, and this entry
+  covers them too.
+
+  The crate also decides from what the server wrote how a call ended, and the driver reads that. A
+  tool that reports `isError`, a JSON-RPC error and a reply the crate cannot use are each a failure
+  of the call. A reply cannot be used when it does not parse, holds neither a result nor an error,
+  comes with an HTTP status that is not a success, or is a line past 16 MiB
+  ([MCP-13](mcp.md#MCP-13)). The driver tells the planner in its own words that the call failed. In
+  a plan run ([MANIFEST-15](manifest.md#MANIFEST-15)) it reads one distinction in these, which is
+  whether a reply arrived. Every reply is on the same side of it, whatever it holds, so the steps
+  after one run. A call that got no reply, because its connection closed or its bound passed, ends
+  the run. [MCP-5](mcp.md#MCP-5) says which failures are replies.
+
+  Suppose a server, or a page that steers a tool the server relays, is hostile. Everything that buys
+  it is on this list:
+
+  - **Choose whether the result has a text part and how many pictures it has.** The planner is given
+    a reference for each, so it learns the count. A server already sets the number of references a
+    result has by what it returns.
+  - **Choose which of four media types a picture is held under.** The reference names it. It is one
+    of four words the driver wrote, picked by comparing the server's string with the list, and the
+    server's string is not kept. The same word decides the extension a `write_file` of that slot
+    must have ([WRITE-9](tools/write-file.md#WRITE-9)), the extension of the copy `vet_content`
+    writes, and the media type sent to a backend after `vet_content`. A server can make a planner's
+    write of a picture refuse by naming another type, and cannot make one land at a path the
+    planner and the person did not choose.
+  - **Choose how many parts are left out.** By sending parts of other types, pictures of another
+    type or over the cap, or data that is not canonical base64. The planner is told that number, in a
+    sentence the driver wrote.
+  - **Choose a picture's size within the cap.** The reference gives the byte count of the `data:`
+    URI, as it does for any content, and a server already sets that. The row the person is shown
+    gives the number of bytes the base64 decodes to, which the crate counts as it checks the base64.
+    The driver carries that number into a sentence and does not compare it with anything.
+  - **Decide whether a plan run goes on past a call, by not replying.** A server that closes its
+    connection or stays silent past its bound ends the run at that call, so the approved steps after
+    it do not run. Nothing it sends changes which steps run, and it cannot make a step run that the
+    plan did not hold. A server that is not there ends a run the same way.
+
+  That is a few counts, a choice among four words and whether a plan run goes on, for each call, in
+  the driver's sentences. A server could already set each by choosing what to return and whether to
+  answer.
+
+  What is **not** on the list: the label of any part, which is the capability's own whatever the parts
+  hold ([LABEL-8](#LABEL-8)), any byte of a part reaching a decision or a message to the planner, which
+  slot holds what, and any destination or argument of a later call. The `data:` URI held for a picture
+  is this client's own writing, a type from the list and the base64 alphabet and nothing else, so
+  turning it back into bytes cannot fail on what the picture holds. A picture's pixels reach a model
+  in two ways. A processor is given it, which holds no tools and answers in text the planner cannot
+  read ([PROC-15](processors.md#PROC-15)). The planner is shown it after `vet_content`
+  ([VET-4](tools/vet-content.md#VET-4)), which is the existing exception for a picture and costs
+  there what it costs for a picture read from a file.
+
+  Two alternatives cost more. Fixing the media type in the person's declaration of the server would
+  remove the `mimeType` comparison and leave the one on `type`, and would refuse a server that returns
+  more than one kind. Taking no picture leaves a tool such as a page's screenshot unable to return
+  one. Moving the comparison into `bravebot-core` is not a third, since that crate is the driver as
+  well.
+
+  The claims that a part is taken only under these conditions and that nothing else a server wrote is
+  kept are pinned under [MCP-6](mcp.md#MCP-6).
+
+- **The ninth is the read of a processor's answer for one number.** A processor asked to choose
+  ([PROC-16](processors.md#PROC-16)) answers in text. `bravebot-choice` decides from that text which
+  whole number the processor chose, from 1 to the limit the planner wrote, or 0 where it chose none:
+  with the white space at both ends taken off, the text must be one or two ASCII digits with no sign
+  and no leading zero, and the number must not pass the limit. The crate is not the driver
+  ([LABEL-4](#LABEL-4)). It holds no `declassify` and no `Labelled::new`. The text reaches it
+  through one gate of the policy layer, `Policy::read_a_number`, which hands it to a `fn` the crate
+  supplies, takes one byte back and labels that byte as the answer was labelled, by taint over what
+  the processor was given. The gate compares nothing, its uses are pinned in `guards` as the other
+  gates' are, and a second reader of an answer is a moved count. Everything else the crate does is
+  `number_in`, and a second comparison of an answer's text elsewhere in it is found by reading the
+  diff.
+
+  The driver carries the byte and decides nothing from it. It is stored as a labelled number under
+  a reference of its own kind, drawn to the person as digits beside the call it will fill, and put
+  into the one argument the person's declaration names after the person answers the call
+  ([MCP-14](mcp.md#MCP-14)). A 0 is stored, drawn and carried like any other number, and the
+  extension refuses it. The planner is told one sentence that does not depend on the number, and the
+  reference states the limit and the label and no count of lines or bytes. The number leaves the
+  slot store in two gates, `Policy::choice_for_display`, which returns the digits for the person's
+  screen, and `Policy::carry_a_choice`, which returns an opaque `Carried`. Only
+  `bravebot_mcp::protocol::with_choice` opens that, with `Carried::into_wire`, to write the number
+  into the call. The uses of all three are pinned in `guards`.
+
+  Suppose the page a processor read is hostile and talks the processor round. Everything that buys
+  it is on this list:
+
+  - **Choose the number, from 1 to the limit, or 0.** At most 100 values. The planner is shown no
+    number. The person's question draws it and the extension receives it.
+  - **Choose which element the person is asked about.** The page decides which element sits at
+    which number and what each is called. Whether the action happens is decided by the person, in a
+    window of the browser the page cannot rewrite ([ROUTE-10](routing.md#ROUTE-10)).
+  - **Make the call fail,** by answering so that the text reads as 0, or by changing the page after
+    the list. The planner learns that the call failed, as it does when a page hides an element.
+  - **Make the processor's request fail,** by content the service refuses, by an answer cut at the
+    token ceiling, by one the service reports as incomplete, or by answering with no bytes at all,
+    which the transport refuses for every processor. The planner is told in a sentence the driver
+    wrote that the request failed, with one word of a closed set the driver wrote (`refused`,
+    `too-long`, `incomplete` or `undecodable`), as it is for every processor, and no number is
+    stored.
+
+  What is **not** on the list: the label of the number, the tab, the tool, the action, the text
+  typed, the key, which argument the number fills, any byte of the answer beyond the one this crate
+  returns, any sentence to the planner except that failure word and the one about a failed call,
+  and whether the action happens.
+
+  Two alternatives cost more. The person reading the list and typing the number removes this entry
+  and leaves the person doing the processor's work, which is what the extension offers without a
+  processor ([ROUTE-9](routing.md#ROUTE-9)). Moving the reader into `bravebot-core` is not another,
+  since that crate is the driver as well.
+
+  The claims that the reader takes one byte out of an answer and labels it as the answer was
+  labelled are pinned under [PROC-16](processors.md#PROC-16), and the claims that the number reaches
+  a call only through the gate that carries it, after the person's answer, are pinned under
+  [ROUTE-10](routing.md#ROUTE-10) and [MCP-14](mcp.md#MCP-14).

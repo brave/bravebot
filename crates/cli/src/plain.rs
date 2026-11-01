@@ -1678,6 +1678,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             arguments: &request.arguments,
             description: request.description.as_deref(),
             offers_remember: false,
+            asked_every_call: request.asked_every_call,
         });
         self.about(Held::Tools);
         match self.ask(&lines, t!(mcp_call_question)) {
@@ -3900,6 +3901,181 @@ mod tests {
         );
     }
 
+    /// SERVERS-21: a call to a server declared to ask every call is asked in lines with the
+    /// sentence saying no answer to it is remembered, and the same call to a server not declared so
+    /// draws no such sentence. A yes is the one call in both, since a line has room for one answer. The regression it rejects
+    /// is a line that never says why no answer lasts, or says it of every call.
+    #[test]
+    fn a_call_asked_every_time_says_so_in_lines_and_another_call_does_not() {
+        let request = |asked_every_call| McpCallRequest {
+            alias: "cookies".to_string(),
+            tool: "get_cookies".to_string(),
+            arguments: Vec::new(),
+            description: None,
+            may_stand: false,
+            asked_every_call,
+        };
+        for (asked_every_call, said) in [(true, true), (false, false)] {
+            for (typed, expected) in [
+                ("y\n", CallDecision::approve()),
+                ("n\n", CallDecision::reject()),
+                ("", CallDecision::reject()),
+            ] {
+                let mut asking = Prompting::new(
+                    std::io::BufReader::new(std::io::Cursor::new(typed.as_bytes().to_vec())),
+                    Vec::new(),
+                );
+                assert_eq!(
+                    asking.confirm_mcp_call(&request(asked_every_call)),
+                    expected,
+                    "{typed:?}"
+                );
+                let drawn = String::from_utf8(asking.output).expect("text");
+                assert!(drawn.contains("cookies:get_cookies"), "{drawn}");
+                assert_eq!(
+                    drawn.contains(t!(mcp_call_asked_every_time)),
+                    said,
+                    "asked every call {asked_every_call}: {drawn}"
+                );
+            }
+        }
+    }
+
+    /// MCP-14, ROUTE-10, SERVERS-7: a call a choice fills is asked in lines that name the argument
+    /// and give the number and which reference it came from, for 0 and 99 as for any other, before
+    /// the question is put. A yes is the one call. The regression it rejects is a question that
+    /// leaves the arguments out, or draws them after the question has been put, so the person
+    /// answers without the number in front of them.
+    #[test]
+    fn a_call_filled_from_a_choice_is_asked_with_the_number_and_where_it_came_from() {
+        for number in ["0", "7", "99"] {
+            let pair = t!(mcp_call_choice_drawn, number = number, reference = "ref:3");
+            let request = McpCallRequest {
+                alias: "brave-input".to_string(),
+                tool: "click_element".to_string(),
+                arguments: vec![
+                    ("element_number".to_string(), pair.clone()),
+                    (
+                        "url".to_string(),
+                        "\"https://shop.example/cart\"".to_string(),
+                    ),
+                ],
+                description: None,
+                may_stand: false,
+                asked_every_call: true,
+            };
+            for (typed, expected) in [
+                ("y\n", CallDecision::approve()),
+                ("n\n", CallDecision::reject()),
+                ("", CallDecision::reject()),
+            ] {
+                let mut asking = Prompting::new(
+                    std::io::BufReader::new(std::io::Cursor::new(typed.as_bytes().to_vec())),
+                    Vec::new(),
+                );
+                assert_eq!(asking.confirm_mcp_call(&request), expected, "{typed:?}");
+                let drawn = String::from_utf8(asking.output).expect("text");
+                let line = format!("  element_number: {pair}\n");
+                let at = drawn
+                    .find(&line)
+                    .unwrap_or_else(|| panic!("{number}: `{line}` is missing from: {drawn}"));
+                let asked = drawn.find(t!(mcp_call_question)).expect("the question");
+                assert!(
+                    at < asked,
+                    "{number}: the pair came after the question: {drawn}"
+                );
+            }
+        }
+    }
+
+    /// SERVERS-7, SERVERS-21, PROMPT-13: the plain interface asks about a call to the script tool
+    /// with every line of the code on a numbered row of its own and what cannot be seen written out
+    /// where it is, and does not put the code in the question as one escaped string. The answer is
+    /// the one call's. The regression it rejects is a line that draws `code` as the JSON the
+    /// planner sent, in which a line feed is `\n` and a zero-width character is not shown at all.
+    #[test]
+    fn a_script_is_asked_about_in_lines_with_every_line_of_the_code_and_the_unseen_written_out() {
+        let code = "const price = document.title;\n\nreturn price\u{200b}";
+        let request = McpCallRequest {
+            alias: "brave-scripts".to_string(),
+            tool: "run_script".to_string(),
+            arguments: vec![
+                ("url".to_string(), "\"https://shop.example/\"".to_string()),
+                (
+                    "code".to_string(),
+                    serde_json::Value::from(code).to_string(),
+                ),
+            ],
+            description: None,
+            may_stand: false,
+            asked_every_call: true,
+        };
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+            Vec::new(),
+        );
+        assert_eq!(asking.confirm_mcp_call(&request), CallDecision::approve());
+        let drawn = String::from_utf8(asking.output).expect("text");
+        for expected in [
+            "brave-scripts:run_script",
+            "  url: \"https://shop.example/\"",
+            "  code: 3 lines",
+            "    1 character you cannot see is written out below as \u{2039}U+XXXX\u{203a}",
+            "    1 | const price = document.title;",
+            "    2 | ",
+            "    3 | return price\u{2039}U+200B\u{203a}",
+        ] {
+            assert!(
+                drawn.contains(expected),
+                "`{expected}` is missing from: {drawn}"
+            );
+        }
+        assert!(
+            !drawn.contains("\\n"),
+            "the code was drawn as a JSON string: {drawn}"
+        );
+    }
+
+    /// ROUTE-11, PROMPT-13: the plain interface writes out what the terminal's question and the
+    /// confirmation window write out: a space that is not the plain one, a mark past the third on a
+    /// character, and the `‹` of a written-out form typed in the code. The rows come from the
+    /// function the other front ends use, and this holds that this one draws them and not the JSON
+    /// string.
+    #[test]
+    fn a_script_with_a_no_break_space_and_stacked_marks_is_asked_about_with_them_written_out() {
+        let code = "x\u{a0}= 1\ne\u{301}\u{302}\u{303}\u{304}\n\u{2039}U+200B\u{203a}";
+        let request = McpCallRequest {
+            alias: "brave-scripts".to_string(),
+            tool: "run_script".to_string(),
+            arguments: vec![(
+                "code".to_string(),
+                serde_json::Value::from(code).to_string(),
+            )],
+            description: None,
+            may_stand: false,
+            asked_every_call: true,
+        };
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+            Vec::new(),
+        );
+        assert_eq!(asking.confirm_mcp_call(&request), CallDecision::approve());
+        let drawn = String::from_utf8(asking.output).expect("text");
+        for expected in [
+            "  code: 3 lines",
+            "    2 characters you cannot see are written out below as \u{2039}U+XXXX\u{203a}",
+            "    1 | x\u{2039}U+00A0\u{203a}= 1",
+            "    2 | e\u{301}\u{302}\u{303}\u{2039}U+0304\u{203a}",
+            "    3 | \u{2039}U+2039\u{203a}U+200B\u{203a}",
+        ] {
+            assert!(
+                drawn.contains(expected),
+                "`{expected}` is missing from: {drawn}"
+            );
+        }
+        assert!(!drawn.contains('\u{a0}'), "{drawn}");
+    }
+
     /// BG-7: every question a session puts reaches its watcher as the kind it is, which is the
     /// word the roster stores and the list shows. A method that never said its kind would be
     /// listed as a plain question, and one that said another's would be listed as that.
@@ -4065,6 +4241,7 @@ mod tests {
                     arguments: Vec::new(),
                     description: None,
                     may_stand: false,
+                    asked_every_call: false,
                 });
             }),
             held(Held::Tools)

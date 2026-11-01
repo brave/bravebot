@@ -42,6 +42,9 @@ pub(crate) struct Walk {
     /// The session's own handle. Plan mode refuses a plan that writes (MODE-3), and a change made
     /// while the run walks applies to the rest of it (MODE-8).
     pub permission_mode: LiveMode,
+    /// Each MCP server the settings request, with the file that requested it. Started by the run
+    /// where no turn has started them (SERVERS-9, MANIFEST-15).
+    pub mcp_requested: Vec<(std::path::PathBuf, String)>,
     pub workspace: Workspace,
     pub task: String,
     pub run: usize,
@@ -79,6 +82,7 @@ pub(crate) fn walk(walk: Walk) {
         sandbox,
         model,
         permission_mode,
+        mcp_requested,
         workspace,
         task: asked,
         run,
@@ -96,6 +100,33 @@ pub(crate) fn walk(walk: Walk) {
         return;
     };
 
+    let mut reporter =
+        BridgeReporter::new(emitter.clone(), &session).sharing(Arc::clone(&state.roster));
+    let mut asking = BridgeConfirmer::new(
+        emitter.clone(),
+        &session,
+        pending,
+        answers,
+        Arc::clone(&state.question_ids),
+        cancel.clone(),
+    )
+    .answerable_by(answerers);
+
+    // The servers the session started, so a plan may call a tool of a list that was vouched for.
+    // Started here when no turn has, by the function the first turn starts them with, so the
+    // questions about them reach the window through this run and a server nobody approved is not
+    // started. The run puts the lists nobody has been asked about to the person before it plans
+    // (MANIFEST-15).
+    let mcp = crate::bridge::session_servers(
+        &mut state,
+        &emitter,
+        &session,
+        &project,
+        &mcp_requested,
+        &mut asking,
+        &cancel,
+    );
+
     // No files and no conversation: the planner may be shown the task and nothing else
     // (MANIFEST-1). No auto-vetting either, since nothing is read before the plan is fixed.
     let task = Task::new(&asked)
@@ -109,22 +140,12 @@ pub(crate) fn walk(walk: Walk) {
         .with_confined_runs(true)
         .with_sandbox_mode(sandbox)
         // The rules the session opened under, as the terminal passes them. The agent's manifest
-        // runner does not read them today, so no rule holds in a run. A front end says so on the
-        // plan it puts to the person.
+        // runner reads the ones about a server's tool and no others (MANIFEST-15). A front end
+        // names the rest on the plan it puts to the person.
         .with_permissions(state.answers.rules.permissions.clone())
-        .with_permission_mode(permission_mode.clone());
+        .with_permission_mode(permission_mode.clone())
+        .with_mcp(mcp);
 
-    let mut reporter =
-        BridgeReporter::new(emitter.clone(), &session).sharing(Arc::clone(&state.roster));
-    let mut asking = BridgeConfirmer::new(
-        emitter.clone(),
-        &session,
-        pending,
-        answers,
-        Arc::clone(&state.question_ids),
-        cancel.clone(),
-    )
-    .answerable_by(answerers);
     // Screening off the task, which asks for none: nothing fills in a verdict before the plan is
     // fixed, so a confirmer told to screen would refuse on a word nobody made.
     let mut confirmer = Confining::new(&mut asking, permission_mode, task.auto_vetting);

@@ -21,7 +21,7 @@ it.
 | **Planner** | the model | never sees it: it is handed a reference instead |
 | **Driver** | the program | may **carry** it and hand it to an effect, never **read** it |
 | **Policy layer** | the gates inside the driver | the only code allowed to read untrusted bytes, and only at a gate |
-| **Processor** | an isolated model call with no tools | reads it, rewrites it, and can direct nothing |
+| **Processor** | an isolated model call with no tools | reads it, rewrites it, and can nominate one numbered element of a call you allow, for an argument you declared |
 
 ## Labels
 

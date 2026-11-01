@@ -2703,6 +2703,24 @@ where
         .iter()
         .any(|tool| tool.function.name == "read_output");
 
+    // A reference sends its holder to `vet_content`, `spawn_processor`, `write_file` and
+    // `read_output` only where the list holds them, and so do the descriptions of the tools that
+    // name others. A delegate is never offered the first and a reader the third, and a
+    // definition's tools line or the command line can leave any of them out of a turn's.
+    if !offered_names(&offered, "vet_content") {
+        policy.without_vetting();
+    }
+    if !offered_names(&offered, "spawn_processor") {
+        policy.without_spawning();
+    }
+    if !offered_names(&offered, "write_file") {
+        policy.without_writing();
+    }
+    if !offers_read_output {
+        policy.without_reading();
+    }
+    tools::state_what_is_beside(&mut offered);
+
     let setup::ModelForTheTurn {
         pinned_by,
         mut turn_model,
@@ -3317,6 +3335,31 @@ where
     })
 }
 
+/// Whether `name` is among the tools a run was offered.
+fn offered_names(offered: &[bravebot_aichat::protocol::Tool], name: &str) -> bool {
+    offered.iter().any(|tool| tool.function.name == name)
+}
+
+/// Who holds a picture this run has just been handed, for the rows its person is shown about it.
+///
+/// Decided from whether the run is a delegate and from the tools it was offered, which are the
+/// driver's own, and from nothing the picture holds. The rows can say only what those tools can do
+/// about looking at the picture: a delegate is never offered `vet_content`, and a turn addressed to
+/// a definition or limited by the command line may be offered neither it nor `write_file`.
+fn holder_of_a_picture(
+    task: &Task,
+    offered: &[bravebot_aichat::protocol::Tool],
+) -> crate::report::Holder {
+    let writes = offered_names(offered, "write_file");
+    match task.delegate {
+        None => crate::report::Holder::Session {
+            vets: offered_names(offered, "vet_content"),
+            writes,
+        },
+        Some(_) => crate::report::Holder::Delegate { writes },
+    }
+}
+
 /// The rounds of one turn: whatever finished since the last one is collected, a request goes out,
 /// and what the planner asks for is carried out, until it answers or the turn stops. Returns the
 /// reply that ended the rounds; the delegates it started are the caller's to join.
@@ -3907,11 +3950,91 @@ where
                     references.len(),
                     described.join("\n")
                 )
+            } else if !output.pictures.is_empty() {
+                // A server's answer that carried pictures: its text and each picture get a
+                // reference of their own, the text first and the pictures in the order the server
+                // sent them (MCP-6). A picture is quarantined whatever its label says, so the
+                // planner is never shown one it did not receive from a person, and a processor is
+                // given it as a picture.
+                let mut ids = Vec::new();
+                let mut described = Vec::new();
+                let text = policy
+                    .present(
+                        "tool_result",
+                        conversation.next_reference(),
+                        &origin,
+                        &output.text,
+                        conversation.quarantine(),
+                    )
+                    .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                if let Presentation::Quarantined(reference) = &text {
+                    let shown = preview_for(policy, &output.tool, &output.text);
+                    reporter.quarantined(crate::report::Shown {
+                        origin: origin.clone(),
+                        reach: crate::report::Reach::NotThePlanner,
+                        label: reference.label.to_string(),
+                        lines: shown.lines,
+                        preview: shown.preview,
+                    });
+                    ids.push(reference.slot.to_string());
+                }
+                described.push(text.for_context());
+                for picture in &output.pictures {
+                    let kept = policy
+                        .present_a_picture(
+                            "tool_result",
+                            conversation.next_reference(),
+                            &origin,
+                            &picture.uri,
+                            conversation.quarantine(),
+                            picture.media,
+                        )
+                        .map_err(|d| TurnError::Precommit(d.to_string()))?;
+                    if let Presentation::Quarantined(reference) = &kept {
+                        policy.holds_a_picture(
+                            &reference.slot,
+                            picture.media,
+                            conversation.quarantine(),
+                        );
+                        // The driver's sentences about it and nothing the picture holds: the
+                        // person sees that it exists, what kind it is, how big, where it is kept
+                        // and how to look at it.
+                        let rows = crate::report::picture_rows(
+                            picture.media,
+                            picture.bytes,
+                            &reference.slot.to_string(),
+                            holder_of_a_picture(task, &state.offered),
+                        );
+                        reporter.quarantined(crate::report::Shown {
+                            origin: origin.clone(),
+                            reach: crate::report::Reach::NotThePlanner,
+                            label: reference.label.to_string(),
+                            lines: rows.len(),
+                            preview: rows,
+                        });
+                        ids.push(reference.slot.to_string());
+                    }
+                    described.push(kept.for_context());
+                }
+                reporter.landed(crate::report::Landing::Quarantined);
+                result_from = Provenance::Reference(ids.join(", "));
+                let left_out = sentences::left_out_note(output.left_out);
+                format!(
+                    "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its text and its {} are \
+                     quarantined, one reference each.{left_out}\n\n{}",
+                    output.tool,
+                    tools::tally(output.pictures.len(), "picture", "pictures"),
+                    described.join("\n")
+                )
             } else {
                 // Reserved here rather than before the branch above, which reserves one per
                 // entry and would otherwise leave this one hanging: a name handed out and
                 // never used still moves the numbering the planner is reading.
                 let slot = conversation.next_reference();
+                // Whether the tool was asked for a number, which is the planner's argument and not
+                // what the processor answered. The number is stored apart from text.
+                let a_choice = output.chosen.is_some();
+                let chosen = output.chosen.take();
                 let presented = match &output.deferred {
                     Some(deferral) => policy
                         .defer(
@@ -3936,13 +4059,27 @@ where
                         // nosemgrep: trailofbits.rs.panic-in-function-returning-result.panic-in-function-returning-result
                         output.picture.as_deref().expect("just checked"),
                     ),
-                    None => policy.present(
-                        "tool_result",
-                        slot.clone(),
-                        &origin,
-                        &output.text,
-                        conversation.quarantine(),
-                    ),
+                    // A choice is held back whatever its label, and the planner is given the
+                    // reference to it: the same words for every number, 0 included (PROC-16).
+                    None => match chosen {
+                        Some(choice) => policy
+                            .store_a_choice(
+                                "tool_result",
+                                slot.clone(),
+                                &origin,
+                                choice.number,
+                                choice.upto,
+                                conversation.quarantine(),
+                            )
+                            .map(Presentation::Quarantined),
+                        None => policy.present(
+                            "tool_result",
+                            slot.clone(),
+                            &origin,
+                            &output.text,
+                            conversation.quarantine(),
+                        ),
+                    },
                 }
                 .map_err(|d| TurnError::Precommit(d.to_string()))?;
 
@@ -4237,8 +4374,28 @@ where
                         // The bytes exist here, unlike a deferred read, so the person watching
                         // is shown what the planner is not. It is their workspace; they are the
                         // only party who can tell whether this is the right file at all.
-                        if output.deferred.is_none() {
-                            let shown = preview_for(policy, &output.tool, &output.text);
+                        // Nothing to preview for a choice either: the number is not text, and the
+                        // person is shown it where they are asked about the call it fills.
+                        if output.deferred.is_none() && !a_choice {
+                            // A picture or a PDF is described and not previewed: what its slot
+                            // holds is a data URI, and the first lines of one are base64 that
+                            // shows the person nothing. Decided from the driver's record of
+                            // the file's type, as the arm above is.
+                            let shown = match &output.picture {
+                                Some(media) => {
+                                    let rows = crate::report::picture_rows(
+                                        media,
+                                        output.picture_bytes,
+                                        &reference.slot.to_string(),
+                                        holder_of_a_picture(task, &state.offered),
+                                    );
+                                    Preview {
+                                        lines: rows.len(),
+                                        preview: rows,
+                                    }
+                                }
+                                None => preview_for(policy, &output.tool, &output.text),
+                            };
                             // The person's copy says which files, where the planner's says which
                             // references. Same line, two audiences, and only one of them is
                             // being kept from the names.
@@ -4282,8 +4439,9 @@ where
                                 .iter()
                                 .any(|directory| workspace.read_git_opens(policy, directory)),
                         );
+                        let left_out = sentences::left_out_note(output.left_out);
                         format!(
-                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{linked}{advice}{history}",
+                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{linked}{left_out}{advice}{history}",
                             output.tool,
                             reference.describe()
                         )

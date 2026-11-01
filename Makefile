@@ -77,7 +77,7 @@ help:
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
-	@echo "  make check-extension       Test the Brave extension's tools against a fake browser"
+	@echo "  make check-extension       Test the two Brave extensions against a fake browser and a fake debugger"
 	@echo "  make check-agent-client    Build and test the TypeScript session client against a real bravebot-rpc"
 	@echo "  make check-mobile          Type-check and test the React Native app (no device or simulator)"
 	@echo "  make check-all             All local checks, including Linux, UI and the security scan"
@@ -663,12 +663,14 @@ check-package-manifests-selftest:
 check-ui: check-ui-build
 	$(MAKE) check-ui-walkthrough
 
-# The Brave extension's tools against a fake browser. Node alone and nothing to install, and run by
-# check-ui-build so the job CI gives the desktop UI runs it as well: the two front ends in
-# JavaScript share the one job and its Node. `ls` first for the reason check-ui-build gives.
+# The Brave extension's tools against a fake browser, and the tests of the second extension, which
+# holds the browser's debugger, against a fake debugger. Node alone and nothing to install, and run
+# by check-ui-build so the job CI gives the desktop UI runs it as well: the two front ends in
+# JavaScript share the one job and its Node. `ls` first for the reason check-ui-build gives. A test
+# that never ends fails after two minutes and does not hold the check.
 .PHONY: check-extension
 check-extension:
-	ls extension/tests/*.test.mjs >/dev/null && node --test extension/tests/*.test.mjs
+	ls extension/tests/*.test.mjs extension-trusted/tests/*.test.mjs >/dev/null && node --test --test-timeout=120000 extension/tests/*.test.mjs extension-trusted/tests/*.test.mjs
 
 # The TypeScript session client under packages/agent-client: its types, its build, and its tests,
 # which drive a real bravebot-rpc against a model service of their own. The bridge is built here

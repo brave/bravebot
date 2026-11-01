@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hidden inputs</title>
+<style>
+  body { margin: 8px; font: 14px sans-serif; }
+  .row { margin: 4px 0; }
+  .btn { display: inline-block; padding: 2px 10px; border: 1px solid #333; }
+  .clip { position: absolute; clip: rect(0 0 0 0); clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; margin: -1px; }
+  .clear { position: absolute; opacity: 0; width: 0; height: 0; }
+  .none { display: none; }
+</style>
+</head>
+<body>
+<h1>Hidden inputs</h1>
+<div class="row"><label for="resume" class="btn">Upload resume</label><input id="resume" type="file" class="none"></div>
+<div class="row"><label class="btn"><span>Attach photo</span><input type="file" class="clear"></label></div>
+<div class="row"><input type="file" aria-label="Cover letter" class="none"></div>
+<div class="row"><label for="diploma" class="btn">Add diploma</label><input id="diploma" type="file" class="clip"></div>
+<div class="row"><label for="passport" class="btn">Upload passport scan</label><input id="passport" type="file" hidden></div>
+<div class="row"><label for="reference" class="btn">Upload reference</label><input id="reference" type="file" style="visibility: hidden"></div>
+<div class="row"><span id="transcript-label" class="btn">Upload transcript</span><input type="file" aria-labelledby="transcript-label" class="none"></div>
+<div class="row"><input type="file" title="Upload invoice" class="none"></div>
+<div class="row"><button class="btn" onclick="document.getElementById('upload-field').click()">Choose a file</button><input id="upload-field" name="plainname" type="file" class="none"></div>
+<div class="row"><label for="same-a" class="btn">Same name</label><input id="same-a" type="file" class="none"><label for="same-b" class="btn">Same name</label><input id="same-b" type="file" class="none"></div>
+<div class="row"><label for="twin-shown">Twin</label><input id="twin-shown" type="file"> <label for="twin-hidden">Twin</label><input id="twin-hidden" type="file" class="none"></div>
+<div class="row"><label for="locked" class="btn">Locked upload</label><input id="locked" type="file" disabled class="none"></div>
+<fieldset disabled class="row"><label for="frozen" class="btn">Frozen upload</label><input id="frozen" type="file" class="none"></fieldset>
+<div class="row"><label for="card-scan" class="btn">Card scan</label><input id="card-scan" type="file" autocomplete="cc-number" class="none"></div>
+<div class="row"><div id="host"></div><label for="shadowed">Outside label</label></div>
+<div class="row"><iframe srcdoc="<label for=framed>Framed upload</label><input id=framed type=file hidden>" width="200" height="40"></iframe></div>
+<div class="row"><input type="file" class="none"></div>
+<div class="row"><label for="two">First</label> <label for="two">Second</label><input id="two" type="file" hidden></div>
+<div class="row"><label>Notes <input id="notes" type="text"> <input id="after-text" type="file" class="none"></label></div>
+<div class="row"><label for="elsewhere" class="btn">Linked later</label></div>
+<div class="row"><input id="elsewhere" type="file" class="none"></div>
+<script>
+  document.getElementById("host").attachShadow({ mode: "open" }).innerHTML =
+    '<label for="shadowed">Shadow upload</label><input id="shadowed" type="file" hidden>';
+</script>
+</body>
+</html>

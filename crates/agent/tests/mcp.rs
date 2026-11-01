@@ -33,6 +33,7 @@ use bravebot_core::trust::TrustStore;
 use bravebot_mcp::HttpServer;
 use bravebot_net::Egress;
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -347,6 +348,17 @@ fn session(url: &str, scratch: &Scratch, writable: bool) -> Session {
     )
 }
 
+/// A session whose one server is declared to ask every call (SERVERS-21).
+fn session_asking_every_call(url: &str, scratch: &Scratch, writable: bool) -> Session {
+    Session::new(
+        vec![reach(url).asking_every_call(true)],
+        scratch.project(),
+        Some(scratch.state()),
+        writable,
+        Managed::default(),
+    )
+}
+
 /// Answers the MCP prompts as it was told and records them; records the runs it is asked about and
 /// refuses them, and refuses everything else. With a `stop`, it stops the turn at the list, as
 /// Ctrl-C there does.
@@ -361,6 +373,8 @@ struct Answering {
     moves: Vec<MoveRequest>,
     runs: Vec<bravebot_agent::RunRequest>,
     vets: usize,
+    /// What each question about letting a quarantined slot through showed the person.
+    vetted_requests: Vec<bravebot_agent::confirm::VetRequest>,
     asked: usize,
     stop: Option<Cancel>,
 }
@@ -378,6 +392,7 @@ impl Answering {
             moves: Vec::new(),
             runs: Vec::new(),
             vets: 0,
+            vetted_requests: Vec::new(),
             asked: 0,
             stop: None,
         }
@@ -407,8 +422,9 @@ impl Confirmer for Answering {
         Unattended.confirm_read_output(request)
     }
 
-    fn confirm_vetted_read(&mut self, _request: &bravebot_agent::confirm::VetRequest) -> Decision {
+    fn confirm_vetted_read(&mut self, request: &bravebot_agent::confirm::VetRequest) -> Decision {
         self.vets += 1;
+        self.vetted_requests.push(request.clone());
         self.vetted
     }
 
@@ -489,6 +505,23 @@ fn run_turn<C: Confirmer + Send>(
     task: Task,
     confirmer: &mut C,
 ) -> bravebot_agent::Outcome {
+    run_turn_recording(
+        endpoint,
+        project,
+        task,
+        confirmer,
+        &mut RecordingSink::new(),
+    )
+}
+
+/// [`run_turn`], the trail written to `trail`.
+fn run_turn_recording<C: Confirmer + Send>(
+    endpoint: &str,
+    project: &Path,
+    task: Task,
+    confirmer: &mut C,
+    trail: &mut RecordingSink,
+) -> bravebot_agent::Outcome {
     let workspace = Workspace::new(project).expect("workspace");
     turns::run(
         &config_for(endpoint),
@@ -496,7 +529,7 @@ fn run_turn<C: Confirmer + Send>(
         &workspace,
         &task,
         confirmer,
-        &mut RecordingSink::new(),
+        trail,
     )
     .expect("the turn runs")
 }
@@ -651,6 +684,440 @@ fn a_vouched_list_offers_its_tool_and_a_call_answers_quarantined() {
         session.offering(),
         [("weather".to_string(), Offering::Tools(1))]
     );
+}
+
+/// The first eight bytes of a PNG, as base64: a picture this client takes, whatever it shows.
+const A_PNG: &str = "iVBORw0KGgo=";
+
+/// What a result holding `A_PNG` is held as in a slot, which the planner is told the size of.
+const A_PNG_AS_A_URI: &str = "data:image/png;base64,iVBORw0KGgo=";
+
+/// The text a server sends beside a picture. Shaped as an instruction, as the forecast is.
+const CAPTION: &str = "CAPTION-IGNORE-PREVIOUS-INSTRUCTIONS";
+
+/// The weather server answering every call with `parts` as the parts of its result.
+fn serve_answering(parts: Value) -> (String, mpsc::Receiver<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let body = body_of(&stream);
+            let _ = sender.send(body.clone());
+            let request: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            let response = match request.get("method").and_then(Value::as_str) {
+                Some("tools/call") => {
+                    let reply = json!({
+                        "jsonrpc": "2.0",
+                        "id": request.get("id"),
+                        "result": {"content": parts},
+                    })
+                    .to_string();
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    )
+                }
+                _ => answered(&body, "get_forecast"),
+            };
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver)
+}
+
+/// What the tool messages of one request to the planner say, which is all a tool's result is to it.
+fn tool_results(request: &str) -> Vec<String> {
+    let request: Value = serde_json::from_str(request).expect("a request");
+    request["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .filter_map(|message| message["content"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// The text, a PNG and an audio part, in the order a screenshot tool might send them.
+fn a_screenshot_with_a_caption() -> Value {
+    json!([
+        {"type": "text", "text": CAPTION},
+        {"type": "image", "data": A_PNG, "mimeType": "image/png"},
+        {"type": "audio", "data": "AAAA", "mimeType": "audio/wav"},
+    ])
+}
+
+/// MCP-6 and LABEL-3 together. A picture a server returns is a screenshot of whatever a page
+/// held, so a planner that could look at one could be instructed by it: the planner is handed a
+/// reference for the text and one for the picture, with the picture's type and size and a count of
+/// the part left out, and none of the bytes, the caption or a picture part. The person watching is
+/// shown a sentence about the picture and not its base64, with the size of the picture the server
+/// sent and not the size of the data URI the planner is told.
+#[test]
+fn a_picture_a_server_returns_is_never_shown_to_the_planner() {
+    let scratch = Scratch::new("picture-quarantined");
+    let (url, server) = serve_answering(a_screenshot_with_a_caption());
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    let reporter = reported_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("screenshot the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let sent = rounds(&chat);
+    let [_, second] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    assert!(
+        !second.contains("iVBORw0KGgo"),
+        "the picture's bytes reached the planner: {second}"
+    );
+    assert!(
+        !second.contains(CAPTION),
+        "the text beside the picture reached the planner: {second}"
+    );
+    assert!(
+        !second.contains("image_url"),
+        "the planner was sent a picture part: {second}"
+    );
+    let [told] = tool_results(second).try_into().expect("one tool result");
+    assert!(
+        told.contains("[ref:1] what weather:get_forecast returned (1 lines, 36 bytes, (U,priv))"),
+        "the text did not get a reference of its own: {told}"
+    );
+    assert!(
+        told.contains("[ref:2] what weather:get_forecast returned (image/png, 34 bytes, (U,priv))"),
+        "the planner was not told what the picture is: {told}"
+    );
+    assert!(
+        told.contains("1 part was left out"),
+        "the planner was not told a part was left out: {told}"
+    );
+
+    let rows: Vec<_> = reporter
+        .shown
+        .iter()
+        .map(|shown| (shown.label.as_str(), shown.preview.clone()))
+        .collect();
+    assert_eq!(
+        rows.last(),
+        Some(&(
+            "(U,priv)",
+            vec![
+                "a picture, image/png, 8 bytes, held as ref:2 and kept from the model".to_string(),
+                "Ask the model to write it to a file you can open, or to use vet_content on it, \
+                 which asks you about a copy of it before the model sees it."
+                    .to_string()
+            ]
+        )),
+        "the person was not shown the picture's rows: {rows:?}"
+    );
+    assert!(
+        !format!("{:?}", reporter.shown).contains("iVBORw0KGgo"),
+        "the person's rows carry the picture as text: {:?}",
+        reporter.shown
+    );
+}
+
+/// WRITE-9 and PROC-8. The picture a server's tool result carried is written as the file it
+/// encodes, to the path the planner named, after the person approves it: the file holds the bytes
+/// the server sent, no request to the planner carries them, and a name with another type's
+/// extension is refused. The text the same result carried is written as text, as it always was.
+#[test]
+fn a_picture_a_server_returns_can_be_written_to_a_file_the_person_approves() {
+    let scratch = Scratch::new("picture-written");
+    let (url, server) = serve_answering(a_screenshot_with_a_caption());
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        tool_request(
+            "write_file",
+            r#"{"path":"forecast.jpg","contents_ref":"ref:2"}"#,
+        ),
+        tool_request(
+            "write_file",
+            r#"{"path":"forecast.png","contents_ref":"ref:2"}"#,
+        ),
+        tool_request(
+            "write_file",
+            r#"{"path":"forecast.txt","contents_ref":"ref:1"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.writes = true;
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("keep the screenshot").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        std::fs::read(scratch.project().join("forecast.png")).expect("the picture was written"),
+        b"\x89PNG\r\n\x1a\n",
+        "the file does not hold the bytes the server sent"
+    );
+    assert!(
+        !scratch.project().join("forecast.jpg").exists(),
+        "a PNG was written under another type's extension"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.project().join("forecast.txt")).expect("the text"),
+        CAPTION,
+        "the text of the result was not written as text"
+    );
+    for body in rounds(&chat) {
+        assert!(
+            !body.contains("iVBORw0KGgo"),
+            "the picture reached the planner: {body}"
+        );
+    }
+}
+
+/// What lets a processor look at a picture is the slot being marked as one. A server's picture is
+/// handed to the processor as a picture part with its data URI, in a request that offers no tools,
+/// and is never in a request the planner's tools were offered in.
+#[test]
+fn a_processor_is_given_a_servers_picture_as_a_picture() {
+    let scratch = Scratch::new("picture-processor");
+    let (url, server) = serve_answering(a_screenshot_with_a_caption());
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:2"],"instruction":"what does this show?"}"#,
+        ),
+        reply_with("a red square"),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is in the screenshot").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let bodies: Vec<String> = chat.try_iter().collect();
+    let carrying: Vec<&String> = bodies
+        .iter()
+        .filter(|body| body.contains(A_PNG_AS_A_URI))
+        .collect();
+    let [processor] = carrying.as_slice() else {
+        panic!("the picture reached {} requests", carrying.len());
+    };
+    assert!(
+        processor.contains("image_url"),
+        "the picture was sent to the processor as text: {processor}"
+    );
+    assert!(
+        !processor.contains(FORECAST),
+        "the request carrying the picture was offered tools, so it was not a processor"
+    );
+}
+
+/// Two turns of the road a picture takes to the planner. The planner names the picture's
+/// reference, a second model looks at it as a picture, the person is handed a copy to open, and on
+/// their yes it is attached to the next request in a message of its own, after the result that says
+/// so. The copy holds the picture's bytes and is gone with the prompt.
+#[test]
+fn vet_content_attaches_a_servers_picture_after_a_person_says_yes() {
+    let scratch = Scratch::new("picture-vetted");
+    let (url, server) = serve_answering(a_screenshot_with_a_caption());
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:2","expects":"a screenshot of the forecast"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.vetted = Decision::Approve;
+    let cache = scratch.path.join("cache");
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("show me the forecast")
+            .with_mcp(Some(session))
+            .with_cache(Some(cache.clone())),
+        &mut confirmer,
+    );
+
+    let [asked] = confirmer.vetted_requests.as_slice() else {
+        panic!("the person was asked {:?}", confirmer.vetted_requests);
+    };
+    let copy = asked.picture.as_ref().expect("the prompt carried no copy");
+    assert_eq!((copy.media.as_str(), copy.bytes), ("image/png", 8));
+    assert!(copy.path.starts_with(&cache), "{}", copy.path.display());
+    assert!(!copy.path.exists(), "the copy outlived the prompt");
+    assert!(
+        asked.origin.contains("weather:get_forecast") && asked.content.is_empty(),
+        "the prompt said {:?} and held {:?}",
+        asked.origin,
+        asked.content
+    );
+
+    let bodies: Vec<String> = chat.try_iter().collect();
+    let check = bodies
+        .iter()
+        .find(|body| body.contains(A_CHECK_ASKING) && body.contains(A_PNG_AS_A_URI))
+        .expect("no check was shown the picture");
+    assert!(
+        check.contains("image_url"),
+        "the check was shown the picture as text: {check}"
+    );
+    let planner: Vec<&String> = bodies
+        .iter()
+        .filter(|body| !body.contains(A_CHECK_ASKING))
+        .collect();
+    let [_, _, last] = planner.as_slice() else {
+        panic!("the turn made {} rounds", planner.len());
+    };
+    let told = last
+        .find("ref:2 was let through")
+        .expect("the planner was not told the picture was let through");
+    let attached = last
+        .find(A_PNG_AS_A_URI)
+        .expect("the picture was not attached");
+    assert!(
+        told < attached,
+        "the picture came before the result: {last}"
+    );
+    assert!(
+        !last.contains(CAPTION),
+        "the text beside the picture was let through with it: {last}"
+    );
+}
+
+/// A no attaches nothing, whoever's picture it is, and the planner is told the slot was kept back.
+#[test]
+fn a_servers_picture_a_person_keeps_out_is_never_attached() {
+    let scratch = Scratch::new("picture-refused");
+    let (url, server) = serve_answering(a_screenshot_with_a_caption());
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:2","expects":"a screenshot of the forecast"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.vetted = Decision::Reject;
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("show me the forecast")
+            .with_mcp(Some(session))
+            .with_cache(Some(scratch.path.join("cache"))),
+        &mut confirmer,
+    );
+
+    assert_eq!(confirmer.vets, 1, "the person was not asked");
+    let sent = rounds(&chat);
+    let [_, _, last] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    assert!(
+        last.contains("ref:2 was kept back from you"),
+        "the planner was not told the picture was kept back: {last}"
+    );
+    assert!(
+        !last.contains("iVBORw0KGgo"),
+        "a picture the person refused reached the planner: {last}"
+    );
+}
+
+/// A part the transport leaves out is told to the planner as a count whether or not the result held
+/// a picture, so a screenshot that did not arrive is not mistaken for a tool with nothing to say.
+/// The result here has one image that is not base64 and no other part to take a picture from.
+#[test]
+fn a_part_left_out_of_a_text_only_result_is_told_to_the_planner_as_a_count() {
+    let scratch = Scratch::new("picture-left-out");
+    let (url, server) = serve_answering(json!([
+        {"type": "text", "text": CAPTION},
+        {"type": "image", "data": "not base64", "mimeType": "image/png"},
+    ]));
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("screenshot the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+    );
+
+    let sent = rounds(&chat);
+    let [_, second] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    let [told] = tool_results(second).try_into().expect("one tool result");
+    assert!(
+        told.contains("1 part was left out"),
+        "the planner was not told a part was left out: {told}"
+    );
+    assert!(
+        !second.contains(CAPTION) && !second.contains("not base64"),
+        "what the server sent reached the planner: {second}"
+    );
+    assert!(
+        told.contains("[ref:1]") && !told.contains("ref:2"),
+        "a picture was minted for an image that was left out: {told}"
+    );
+}
+
+/// The transport crate cannot name the agent's limits, so the two are held equal here: a picture
+/// a server returns is held to the size a picture read from a file is, and to the media types a
+/// person may paste, which are the types the file table carries as pictures.
+#[test]
+fn a_servers_picture_is_held_to_the_size_and_types_a_picture_from_a_file_is() {
+    assert_eq!(
+        bravebot_mcp::MAX_PICTURE_BYTES,
+        bravebot_agent::workspace::MAX_ATTACHMENT_BYTES
+    );
+    assert_eq!(
+        bravebot_mcp::PICTURE_MEDIA.as_slice(),
+        bravebot_agent::turn::PASTED_IMAGE_MEDIA
+    );
+    let from_files: Vec<&str> = bravebot_filetype::by_name::ATTACHABLE
+        .iter()
+        .map(|(_, media)| *media)
+        .filter(|media| media.starts_with("image/"))
+        .collect();
+    for media in bravebot_mcp::PICTURE_MEDIA {
+        assert!(
+            from_files.contains(&media),
+            "{media} is not a picture read_file takes"
+        );
+    }
 }
 
 /// The weather server, answering every request at once but those for `method`, which it holds for
@@ -1089,9 +1556,23 @@ fn a_turn_calling_the_weather(
     answer: CallDecision,
     permissions: bravebot_core::permissions::Permissions,
 ) -> CallTurn {
+    a_turn_calling_the_weather_declared(name, false, answer, permissions)
+}
+
+/// [`a_turn_calling_the_weather`] over a server whose declaration asks every call (SERVERS-21)
+/// where `asking_every_call` says so.
+fn a_turn_calling_the_weather_declared(
+    name: &str,
+    asking_every_call: bool,
+    answer: CallDecision,
+    permissions: bravebot_core::permissions::Permissions,
+) -> CallTurn {
     let scratch = Scratch::new(name);
     let (url, server) = serve_weather();
-    let session = session(&url, &scratch, true);
+    let session = match asking_every_call {
+        true => session_asking_every_call(&url, &scratch, true),
+        false => session(&url, &scratch, true),
+    };
     let _ = methods(&server);
     let (endpoint, _chat) = serve_chat(vec![
         tool_request(FORECAST, r#"{"city":"Paris"}"#),
@@ -1825,6 +2306,327 @@ fn a_session_that_writes_nothing_records_neither_answer() {
     );
 }
 
+/// One turn calling the forecast in `scratch`'s project over `session`, with `permissions` laid
+/// over it and `confirmer` the one asked, and the MCP methods the server was sent for the call.
+fn forecast_over<C: Confirmer + Send>(
+    session: &Session,
+    server: &mpsc::Receiver<String>,
+    scratch: &Scratch,
+    permissions: bravebot_core::permissions::Permissions,
+    confirmer: &mut C,
+) -> Vec<String> {
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let _ = methods(server);
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session.clone()))
+            .with_permissions(permissions),
+        confirmer,
+    );
+    methods(server)
+}
+
+/// SERVERS-21. A call to a server declared to ask every call is put to the person though an allow
+/// rule names the server and answer 2 was given for the tool in this project, and the prompt says
+/// no answer to it lasts. The controls are the same rule and the same answer 2 on the server not
+/// declared so, where the call is made with nobody asked; they are what make the declaration the
+/// thing under test.
+#[test]
+fn a_server_asked_every_call_asks_though_a_rule_and_answer_two_allow_it() {
+    let scratch = Scratch::new("every-call-rules");
+    let (url, server) = serve_weather();
+    let ordinary = session(&url, &scratch, true);
+    let asking = session_asking_every_call(&url, &scratch, true);
+
+    let mut recording = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    forecast_over(
+        &ordinary,
+        &server,
+        &scratch,
+        Default::default(),
+        &mut recording,
+    );
+    assert!(
+        Standing::read(&scratch.state()).covers("weather", "get_forecast", &scratch.project()),
+        "the earlier answer 2 was not recorded, so the rows below prove nothing"
+    );
+
+    let mut control = Answering::new(Decision::Reject, CallDecision::reject());
+    let made = forecast_over(
+        &ordinary,
+        &server,
+        &scratch,
+        allowing_the_weather(),
+        &mut control,
+    );
+    assert!(
+        control.calls.is_empty(),
+        "the control was asked: {:?}",
+        control.calls
+    );
+    assert_eq!(made, ["tools/call"], "the control was not made");
+
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    let made = forecast_over(
+        &asking,
+        &server,
+        &scratch,
+        allowing_the_weather(),
+        &mut asked,
+    );
+    let [call] = asked.calls.as_slice() else {
+        panic!("the call was not put to the person once: {:?}", asked.calls);
+    };
+    assert!(call.asked_every_call, "the prompt was not told");
+    assert!(!call.may_stand, "answer 2 was offered");
+    assert_eq!(made, ["tools/call"], "the approved call was not made");
+}
+
+/// SERVERS-21. A `deny` rule still refuses a call to a server declared to ask every call, and
+/// refuses it before the question is put: nobody is asked, the server is not sent the call, and the
+/// trail holds the rule's refusal under `mcp_call` and none under `approval`. The controls are the
+/// same server with no rule, where the call is put to the person once, and the same rule on a server
+/// not declared so, which is also refused unasked. They show the question is one this call would
+/// have drawn, and that the declaration did not change what a rule does. The regressions it
+/// rejects are the rules read after the question, and the rules not read for such a server.
+#[test]
+fn a_deny_rule_refuses_a_call_to_a_server_asked_every_call_before_anybody_is_asked() {
+    let deny = || {
+        let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
+            &["Mcp(weather:get_forecast)".to_string()],
+            &[],
+            &[],
+            &bravebot_core::permissions::Anchors::none(),
+        );
+        assert!(rejected.is_empty(), "the rule in this test did not parse");
+        permissions
+    };
+
+    let asked = a_turn_calling_the_weather_declared(
+        "every-call-no-rule",
+        true,
+        CallDecision::approve(),
+        Default::default(),
+    );
+    assert_eq!(asked.asked, 1, "the call was not put to the person");
+    assert_eq!(asked.reached, 1, "the approved call was not made");
+
+    for (name, asking_every_call) in [("every-call-denied", true), ("ordinary-denied", false)] {
+        let turn = a_turn_calling_the_weather_declared(
+            name,
+            asking_every_call,
+            CallDecision::approve(),
+            deny(),
+        );
+        assert_eq!(
+            turn.asked, 0,
+            "asking_every_call {asking_every_call}: a denied call was put to the person"
+        );
+        assert_eq!(
+            turn.reached, 0,
+            "asking_every_call {asking_every_call}: a denied call reached the server"
+        );
+        assert_eq!(
+            refused_under(&turn.trail, "mcp_call").len(),
+            1,
+            "asking_every_call {asking_every_call}: the rule's refusal was not recorded once"
+        );
+        assert_eq!(
+            refused_under(&turn.trail, "approval"),
+            Vec::<String>::new(),
+            "asking_every_call {asking_every_call}: the refusal was recorded as the person's"
+        );
+        assert!(
+            !turn.clean,
+            "asking_every_call {asking_every_call}: a turn whose call a rule refused read as clean"
+        );
+    }
+}
+
+/// SERVERS-21. An answer 2 given at a call to a server declared to ask every call is a yes to that
+/// call and records nothing, so the next call asks again. The regression it rejects is a prompt
+/// that does not offer answer 2 while the turn still writes it down when one arrives.
+#[test]
+fn an_answer_that_would_stand_is_not_recorded_for_a_server_asked_every_call() {
+    let scratch = Scratch::new("every-call-stand");
+    let (url, server) = serve_weather();
+    let session = session_asking_every_call(&url, &scratch, true);
+
+    let mut standing = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    let made = forecast_over(
+        &session,
+        &server,
+        &scratch,
+        Default::default(),
+        &mut standing,
+    );
+    assert_eq!(standing.calls.len(), 1);
+    assert_eq!(made, ["tools/call"], "the yes was not made");
+    assert!(
+        !tools_file(&scratch.state()).exists(),
+        "an answer 2 was written for a server asked every call"
+    );
+
+    let mut again = Answering::new(Decision::Approve, CallDecision::reject());
+    let made = forecast_over(&session, &server, &scratch, Default::default(), &mut again);
+    assert_eq!(again.calls.len(), 1, "the next call was not asked");
+    assert!(made.is_empty(), "a call nobody approved was made");
+}
+
+/// SERVERS-21, SERVERS-13. Bypassing answers a call to a server not declared to ask every call and
+/// does not answer one that is, so the call reaches the person who is asked, and with no yes it is
+/// not made. The control is the server not declared so under the same mode, which is not asked.
+#[test]
+fn bypassing_does_not_answer_a_call_to_a_server_asked_every_call() {
+    for (asking_every_call, asked, made) in [(false, 0, 1), (true, 1, 0)] {
+        let scratch = Scratch::new("every-call-bypass");
+        let (url, server) = serve_weather();
+        let session = match asking_every_call {
+            true => session_asking_every_call(&url, &scratch, true),
+            false => session(&url, &scratch, true),
+        };
+        let (endpoint, _chat) = serve_chat(vec![
+            tool_request(FORECAST, r#"{"city":"Paris"}"#),
+            reply_with("done"),
+        ]);
+        let _ = methods(&server);
+        let mut inner = Answering::new(Decision::Reject, CallDecision::reject());
+        let mut confirmer =
+            bravebot_agent::Confining::new(&mut inner, PermissionMode::Bypass, false);
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("the forecast")
+                .with_mcp(Some(session))
+                .with_permission_mode(PermissionMode::Bypass),
+            &mut confirmer,
+        );
+        assert_eq!(
+            inner.calls.len(),
+            asked,
+            "asking_every_call {asking_every_call}: bypassing changed who was asked"
+        );
+        assert_eq!(
+            methods(&server).len(),
+            made,
+            "asking_every_call {asking_every_call}"
+        );
+    }
+}
+
+/// SERVERS-21. A run with nobody to ask refuses a call to a server declared to ask every call even
+/// where answer 2 was given for the tool in this project, which carries through such a run for a
+/// server not declared so (SERVERS-7). Nothing is sent to the server.
+#[test]
+fn a_run_with_nobody_to_ask_refuses_a_call_to_a_server_asked_every_call() {
+    let scratch = Scratch::new("every-call-one-shot");
+    let (url, server) = serve_weather();
+    let ordinary = session(&url, &scratch, true);
+    let asking = session_asking_every_call(&url, &scratch, true);
+
+    let mut recording = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    forecast_over(
+        &ordinary,
+        &server,
+        &scratch,
+        Default::default(),
+        &mut recording,
+    );
+    // The list of the server declared to ask is vouched for by a person who then refuses the call,
+    // so a later run with nobody to ask is offered the tool and the call is what is decided.
+    let mut vouching = Answering::new(Decision::Approve, CallDecision::reject());
+    let made = forecast_over(
+        &asking,
+        &server,
+        &scratch,
+        Default::default(),
+        &mut vouching,
+    );
+    assert!(made.is_empty(), "the refused call was made: {made:?}");
+
+    let made = forecast_over(
+        &ordinary,
+        &server,
+        &scratch,
+        Default::default(),
+        &mut Unattended,
+    );
+    assert_eq!(made, ["tools/call"], "the control was refused");
+
+    let made = forecast_over(
+        &asking,
+        &server,
+        &scratch,
+        Default::default(),
+        &mut Unattended,
+    );
+    assert!(
+        made.is_empty(),
+        "a call nobody could be asked was made: {made:?}"
+    );
+}
+
+/// SERVERS-21. A client that has no way to put a call to a server declared to ask every call, such
+/// as the window, answers with a refusal nobody was asked for. The planner and the person are told
+/// that, and not that the user did not approve the call, which sends the planner back to ask a
+/// person who was never asked. The control is a person who says no to the same call, who is told
+/// what a no is told and sees no such notice.
+#[test]
+fn a_call_a_client_cannot_ask_about_is_refused_in_words_that_say_nobody_was_asked() {
+    for (case, answer, nobody_asked) in [
+        ("a client that cannot ask", CallDecision::unasked(), true),
+        ("a person who says no", CallDecision::reject(), false),
+    ] {
+        let scratch = Scratch::new("every-call-client-cannot-ask");
+        let (url, server) = serve_weather();
+        let session = session_asking_every_call(&url, &scratch, true);
+        let _ = methods(&server);
+        let (endpoint, chat) = serve_chat(vec![
+            tool_request(FORECAST, r#"{"city":"Paris"}"#),
+            reply_with("fine"),
+        ]);
+        let mut confirmer = Answering::new(Decision::Approve, answer);
+        let said = noticed_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new("what is the forecast").with_mcp(Some(session)),
+            &mut confirmer,
+        );
+
+        assert!(methods(&server).is_empty(), "{case}: the server was called");
+        let sent = rounds(&chat);
+        let told = &sent[1];
+        assert_eq!(
+            told.contains(
+                "every call to weather is put to the user, and this client has no way to ask"
+            ),
+            nobody_asked,
+            "{case}: {told}"
+        );
+        assert_eq!(
+            told.contains("the user did not approve calling weather:get_forecast"),
+            !nobody_asked,
+            "{case}: {told}"
+        );
+        let notices: Vec<&String> = said
+            .iter()
+            .filter(|notice| notice.contains("this client cannot ask"))
+            .collect();
+        assert_eq!(notices.len(), usize::from(nobody_asked), "{case}: {said:?}");
+        if let [notice] = notices.as_slice() {
+            assert!(
+                notice.contains("weather:get_forecast was not called"),
+                "{case}: the notice did not name the call: {notice}"
+            );
+        }
+    }
+}
+
 /// A deny rule refuses the call before anybody is asked, and an allow rule makes it with nobody
 /// asked (PERM-1).
 #[test]
@@ -2374,9 +3176,22 @@ struct Delegated {
 /// calls the weather server's tool. The turn settles the list first, and the person says yes to it
 /// and to every call.
 fn delegate_the_forecast(name: &str, kind: &str) -> Delegated {
+    delegate_the_forecast_recorded(name, kind, false).0
+}
+
+/// [`delegate_the_forecast`], the weather server being declared to ask every call where
+/// `asking_every_call` says so, and the trail the turn left.
+fn delegate_the_forecast_recorded(
+    name: &str,
+    kind: &str,
+    asking_every_call: bool,
+) -> (Delegated, RecordingSink) {
     let scratch = Scratch::new(name);
     let (url, server) = serve_weather();
-    let session = session(&url, &scratch, true);
+    let session = match asking_every_call {
+        true => session_asking_every_call(&url, &scratch, true),
+        false => session(&url, &scratch, true),
+    };
     let _ = methods(&server);
     let spawn = format!(r#"{{"kind":"{kind}","task":"{DELEGATED}"}}"#);
     let (endpoint, chat) = serve_chat_by_marker(vec![
@@ -2397,21 +3212,24 @@ fn delegate_the_forecast(name: &str, kind: &str) -> Delegated {
         ),
     ]);
     let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
-    run_turn(
+    let mut trail = RecordingSink::new();
+    run_turn_recording(
         &endpoint,
         &scratch.project(),
         Task::new(PARENT).with_mcp(Some(session)),
         &mut asked,
+        &mut trail,
     );
     let delegate = rounds(&chat)
         .into_iter()
         .filter(|body| body.contains(DELEGATED) && !body.contains(PARENT))
         .collect();
-    Delegated {
+    let delegated = Delegated {
         delegate,
         asked,
         called: methods(&server),
-    }
+    };
+    (delegated, trail)
 }
 
 /// SERVERS-9 and DELEGATE-10 for a server. A worker holds the servers the turn that spawned it
@@ -2452,6 +3270,235 @@ fn a_workers_call_to_a_servers_tool_is_put_to_the_person() {
     assert!(
         !second.contains(PAYLOAD),
         "what the server answered reached the delegate's planner: {second}"
+    );
+}
+
+/// What the person was shown for the picture a delegate's call to the weather server returned. The
+/// delegate is of `kind`, which a definition written as `definition` names where there is one.
+fn the_rows_shown_for_a_delegates_screenshot(
+    name: &str,
+    kind: &str,
+    definition: Option<&str>,
+) -> Vec<Vec<String>> {
+    let scratch = Scratch::new(name);
+    let home = Scratch::new(&format!("{name}-home"));
+    if let Some(definition) = definition {
+        std::fs::create_dir_all(home.path.join("agents"))
+            .expect("create the definitions directory");
+        std::fs::write(
+            home.path.join("agents").join(format!("{kind}.md")),
+            definition,
+        )
+        .expect("write the definition");
+    }
+    let (url, server) = serve_answering(a_screenshot_with_a_caption());
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let spawn = format!(r#"{{"kind":"{kind}","task":"{DELEGATED}"}}"#);
+    let (endpoint, _chat) = serve_chat_by_marker(vec![
+        (
+            PARENT,
+            vec![
+                tool_request("spawn_agent", &spawn),
+                reply_with("waiting"),
+                reply_with("the delegate reported"),
+            ],
+        ),
+        (
+            DELEGATED,
+            vec![
+                tool_request(FORECAST, r#"{"city":"Paris"}"#),
+                reply_with("looked it up"),
+            ],
+        ),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    let reporter = reported_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new(PARENT)
+            .with_home(Some(home.path.clone()))
+            .with_mcp(Some(session)),
+        &mut asked,
+    );
+    reporter
+        .shown
+        .into_iter()
+        .map(|shown| shown.preview)
+        .filter(|rows| {
+            rows.first()
+                .is_some_and(|row| row.starts_with("a picture, "))
+        })
+        .collect()
+}
+
+/// VIEW-3 for a picture a delegate's call to a server returns. A delegate is not offered
+/// `vet_content` and nobody can ask it for anything, so the person is told what this delegate can do
+/// with the picture and not a way to look at it that is not there. A worker has `write_file`; a
+/// worker whose definition narrows it to `read_file` and the server has no tool that writes a file.
+#[test]
+fn a_picture_a_delegate_holds_is_described_by_what_the_delegate_can_do_with_it() {
+    let held = "a picture, image/png, 8 bytes, held as ref:2 and kept from the model";
+    let narrowed = "---\nname: scout\ndescription: Looks things up.\nkind: worker\ntools: \
+                    read_file\nmcpServers: weather\n---\n\nSCOUT-BY-DEFINITION\n";
+    for (name, kind, definition, look) in [
+        (
+            "delegate-picture-worker",
+            "worker",
+            None,
+            "The delegate cannot ask you to look at it. It can write it to a file you can open.",
+        ),
+        (
+            "delegate-picture-narrowed",
+            "scout",
+            Some(narrowed),
+            "The delegate cannot ask you to look at it and has no tool that writes a file, so \
+             there is no way to open it from here.",
+        ),
+    ] {
+        assert_eq!(
+            the_rows_shown_for_a_delegates_screenshot(name, kind, definition),
+            [vec![held.to_string(), look.to_string()]],
+            "{name}: the person was not told what the delegate can do with the picture"
+        );
+    }
+}
+
+/// What the person was shown for the picture the weather server returned to a turn the person
+/// addressed to a worker whose definition has `fields` beside its name.
+fn the_rows_shown_for_an_addressed_screenshot(name: &str, fields: &str) -> Vec<Vec<String>> {
+    let scratch = Scratch::new(name);
+    let home = Scratch::new(&format!("{name}-home"));
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("scout.md"),
+        format!(
+            "---\nname: scout\ndescription: Looks things up.\nkind: worker\n{fields}---\n\n\
+             SCOUT-BY-DEFINITION\n"
+        ),
+    )
+    .expect("write the definition");
+    let (url, server) = serve_answering(a_screenshot_with_a_caption());
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("looked it up"),
+    ]);
+    let mut asked = Answering::new(Decision::Approve, CallDecision::approve());
+    let reporter = reported_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast")
+            .with_home(Some(home.path.clone()))
+            .addressing(Some("scout".to_string()))
+            .with_mcp(Some(session)),
+        &mut asked,
+    );
+    reporter
+        .shown
+        .into_iter()
+        .map(|shown| shown.preview)
+        .filter(|rows| {
+            rows.first()
+                .is_some_and(|row| row.starts_with("a picture, "))
+        })
+        .collect()
+}
+
+/// VIEW-3 for a picture a server returns to a turn addressed to a definition. The turn is offered
+/// the tools the definition names, so the rows say how to look at the picture with the ones it has:
+/// both, either alone, or neither.
+#[test]
+fn a_picture_an_addressed_turn_holds_is_described_by_the_tools_the_turn_is_offered() {
+    let held = "a picture, image/png, 8 bytes, held as ref:2 and kept from the model";
+    for (name, fields, look) in [
+        (
+            "addressed-picture-both",
+            "",
+            "Ask the model to write it to a file you can open, or to use vet_content on it, \
+             which asks you about a copy of it before the model sees it.",
+        ),
+        (
+            "addressed-picture-writes",
+            "tools: read_file, write_file\nmcpServers: weather\n",
+            "Ask the model to write it to a file you can open.",
+        ),
+        (
+            "addressed-picture-vets",
+            "tools: read_file, vet_content\nmcpServers: weather\n",
+            "Ask the model to use vet_content on it, which asks you about a copy of it before \
+             the model sees it.",
+        ),
+        (
+            "addressed-picture-neither",
+            "tools: read_file\nmcpServers: weather\n",
+            "The model has no tool that writes it to a file or puts a copy of it to you, so \
+             there is no way to open it from here.",
+        ),
+    ] {
+        assert_eq!(
+            the_rows_shown_for_an_addressed_screenshot(name, fields),
+            [vec![held.to_string(), look.to_string()]],
+            "{name}: the person was not told how to look at the picture with the tools the turn \
+             was offered"
+        );
+    }
+}
+
+/// SERVERS-21. A delegate's call to a server declared to ask every call is refused with nobody
+/// asked and nothing sent to the server, and the delegate is told so in words that do not offer
+/// the person as the way round it. The refusal is in the trail under `approval`, naming the call
+/// (TRACE-1), so the turn does not read as having made no refused call. The control is the same
+/// delegation to a server not declared so, where the call is put to the person and made and the
+/// trail holds no refusal.
+#[test]
+fn a_workers_call_to_a_server_asked_every_call_is_refused_unasked() {
+    let (
+        Delegated {
+            delegate,
+            asked,
+            called,
+        },
+        trail,
+    ) = delegate_the_forecast_recorded("delegate-asked-every-call", "worker", true);
+    let [_, second, ..] = delegate.as_slice() else {
+        panic!("the delegate made {} requests", delegate.len());
+    };
+    assert!(
+        second.contains("every call to weather is put to the user"),
+        "the delegate was not told why the call was refused: {second}"
+    );
+    assert!(
+        asked.calls.is_empty(),
+        "a delegate's call to a server asked every call was put to the person: {:?}",
+        asked.calls
+    );
+    assert!(
+        called.is_empty(),
+        "the server heard the delegate: {called:?}"
+    );
+    assert_eq!(
+        refused_under(&trail, "approval"),
+        [
+            "weather:get_forecast: every call to weather is asked about and a delegate is not \
+             asked, so the server was not called"
+        ],
+        "the refusal was not recorded once, under the call"
+    );
+
+    let (Delegated { asked, called, .. }, trail) =
+        delegate_the_forecast_recorded("delegate-not-asked-every-call", "worker", false);
+    assert_eq!(
+        asked.calls.len(),
+        1,
+        "the control was not put to the person"
+    );
+    assert_eq!(called, ["tools/call"], "the control was not made");
+    assert!(
+        refused_under(&trail, "approval").is_empty(),
+        "the control left a refusal: {:?}",
+        refused_under(&trail, "approval")
     );
 }
 
@@ -2934,12 +3981,26 @@ fn moving_with(
     scratch: &Scratch,
     writable: bool,
     managed: Managed,
+    second: (String, mpsc::Receiver<String>),
+    reached: impl FnOnce(HttpServer) -> HttpServer,
+) -> Moving {
+    moving_declared(scratch, writable, managed, second, reached, |declared| {
+        declared
+    })
+}
+
+/// As [`moving_with`], the declaration being what `declare` makes of the bare one.
+fn moving_declared(
+    scratch: &Scratch,
+    writable: bool,
+    managed: Managed,
     (second_url, second): (String, mpsc::Receiver<String>),
     reached: impl FnOnce(HttpServer) -> HttpServer,
+    declare: impl FnOnce(Declaration) -> Declaration,
 ) -> Moving {
     let moved_to = format!("{second_url}/mcp");
     let (first_url, first) = serve_moving(moved_to.clone());
-    let declared = Declaration::http(first_url.clone()).expect("a declaration");
+    let declared = declare(Declaration::http(first_url.clone()).expect("a declaration"));
     let mut declarations = Declarations::default();
     declarations.insert("weather", &declared);
     std::fs::write(declarations_file(&scratch.state()), declarations.to_text()).expect("mcp.json");
@@ -3300,13 +4361,19 @@ fn a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else() {
     approved.approve("weather", was.digest());
     std::fs::write(approvals_file(&state), approved.to_text()).expect("mcp-approved");
 
-    bravebot_agent::mcp::record_a_move(&state, "weather", &was.digest(), &now).expect("recorded");
+    bravebot_agent::mcp::record_a_move(&state, "weather", &was.digest(), "http://127.0.0.1:2/mcp")
+        .expect("recorded");
     assert_eq!(declared_now(&scratch), now);
     let approvals = Approvals::read(&state);
     assert!(approvals.approves(&now.digest()));
     assert!(!approvals.approves(&was.digest()));
 
-    let edited = bravebot_agent::mcp::record_a_move(&state, "weather", &was.digest(), &was);
+    let edited = bravebot_agent::mcp::record_a_move(
+        &state,
+        "weather",
+        &was.digest(),
+        "http://127.0.0.1:1/mcp",
+    );
     assert_eq!(edited, Err(bravebot_agent::mcp::Unmoved::Edited));
     assert_eq!(
         declared_now(&scratch),
@@ -3330,11 +4397,188 @@ fn a_move_keeps_the_bounds_the_declaration_it_replaces_gave() {
     declarations.insert("weather", &was);
     std::fs::write(declarations_file(&state), declarations.to_text()).expect("mcp.json");
 
-    bravebot_agent::mcp::record_a_move(&state, "weather", &was.digest(), &now).expect("recorded");
+    bravebot_agent::mcp::record_a_move(&state, "weather", &was.digest(), "http://127.0.0.1:2/mcp")
+        .expect("recorded");
 
     let moved = declared_now(&scratch);
     assert_eq!(moved, now.timing(bounds));
     assert_eq!(moved.timeouts(), bounds);
+}
+
+/// SERVERS-21. A server that moved is still asked about at every call where its declaration said
+/// so, in the rewritten declaration as well as in the session. The regression it rejects is a
+/// rewrite that keeps the bounds and builds the rest anew, which would leave the server asking no
+/// more than any other from the next session on.
+#[test]
+fn a_move_keeps_the_declaration_asking_every_call() {
+    let scratch = Scratch::new("move-keeps-asking");
+    let state = scratch.state();
+    let was = Declaration::http("http://127.0.0.1:1/mcp".to_string())
+        .expect("was")
+        .asking_every_call(true);
+    let now = Declaration::http("http://127.0.0.1:2/mcp".to_string()).expect("now");
+    let mut declarations = Declarations::default();
+    declarations.insert("weather", &was);
+    std::fs::write(declarations_file(&state), declarations.to_text()).expect("mcp.json");
+
+    bravebot_agent::mcp::record_a_move(&state, "weather", &was.digest(), "http://127.0.0.1:2/mcp")
+        .expect("recorded");
+
+    let moved = declared_now(&scratch);
+    assert!(moved.asks_every_call());
+    assert_eq!(moved, now.asking_every_call(true));
+}
+
+/// SERVERS-22. The arguments a declaration says take a choice reach the session that holds the
+/// server, and its offer answers for the tool they were declared for under the alias of the server
+/// that declared them and for no other tool or server. The regressions it rejects are a session
+/// that drops them on the way from the reached server, an offer that answers for another alias or
+/// another tool, and one that answers for a server the session does not hold.
+#[test]
+fn an_offer_knows_the_arguments_a_declaration_says_take_a_choice_for_that_tool_only() {
+    let scratch = Scratch::new("offer-choice-arguments");
+    let (url, _received) = serve_weather();
+    let (other, _other_received) = serve_weather();
+    let choices = BTreeMap::from([(
+        "get_forecast".to_string(),
+        BTreeSet::from(["city".to_string(), "day".to_string()]),
+    )]);
+    let session = Session::new(
+        vec![
+            reach_as("weather", &url).choosing(choices.clone()),
+            reach_as("plain", &other),
+        ],
+        scratch.project(),
+        Some(scratch.state()),
+        false,
+        Managed::default(),
+    );
+    let offer = session.offer();
+    assert_eq!(
+        offer.choice_arguments("weather", "get_forecast"),
+        choices.get("get_forecast")
+    );
+    assert_eq!(offer.choice_arguments("weather", "get_alerts"), None);
+    assert_eq!(offer.choice_arguments("plain", "get_forecast"), None);
+    assert_eq!(offer.choice_arguments("absent", "get_forecast"), None);
+}
+
+/// SERVERS-11. A move rewrites where a server is reached and nothing else: the tool filters, the
+/// bearer variable, the header variables, the bounds and the property of asking every call stay as
+/// the person wrote them, and the digest approved for the moved server is that of the declaration
+/// written. The regression it rejects is a rewrite that builds the declaration anew from the
+/// address, which drops the filters and the credentials' variable names from the file and approves
+/// a declaration the person never wrote.
+#[test]
+fn a_move_keeps_everything_but_the_address_of_the_declaration_it_replaces() {
+    let scratch = Scratch::new("move-keeps-all");
+    let state = scratch.state();
+    let kept = |url: &str| {
+        Declaration::http(url.to_string())
+            .expect("a url")
+            .heading(
+                [("X-Team".to_string(), "TEAM_HEADER".to_string())].into(),
+                Some("WEATHER_TOKEN".to_string()),
+            )
+            .expect("headers")
+            .filtering(
+                vec!["get_forecast".to_string()],
+                vec!["delete_city".to_string()],
+            )
+            .expect("filters")
+            .timing(Timeouts::new(Some(7), Some(300)).expect("bounds"))
+            .asking_every_call(true)
+    };
+    let was = kept("http://127.0.0.1:1/mcp");
+    let mut declarations = Declarations::default();
+    declarations.insert("weather", &was);
+    std::fs::write(declarations_file(&state), declarations.to_text()).expect("mcp.json");
+    let mut approved = Approvals::default();
+    approved.approve("weather", was.digest());
+    std::fs::write(approvals_file(&state), approved.to_text()).expect("mcp-approved");
+
+    let recorded = bravebot_agent::mcp::record_a_move(
+        &state,
+        "weather",
+        &was.digest(),
+        "http://127.0.0.1:2/mcp",
+    )
+    .expect("recorded");
+
+    let moved = declared_now(&scratch);
+    assert_eq!(moved, kept("http://127.0.0.1:2/mcp"));
+    assert_eq!(
+        recorded, moved,
+        "the declaration returned is the one written"
+    );
+    let approvals = Approvals::read(&state);
+    assert!(approvals.approves(&moved.digest()));
+    assert!(!approvals.approves(&was.digest()));
+}
+
+/// SERVERS-11. A server that moves a second time in one session is recorded over what its first
+/// move wrote: the digest the session holds after a move is the digest approved for the declaration
+/// written, so the next move finds the declaration it was started from. The regression it rejects
+/// is a session that holds the digest of the bare address after a move, which differs from the
+/// declaration in the file whenever that declaration says more, so the second move is refused as
+/// edited while the person is asked.
+#[test]
+fn a_server_that_moves_a_second_time_is_recorded_over_what_the_first_move_wrote() {
+    let scratch = Scratch::new("move-twice");
+    let (third_url, third) = serve_weather();
+    let third_to = format!("{third_url}/mcp");
+    let kept = |url: &str| {
+        Declaration::http(url.to_string())
+            .expect("a url")
+            .filtering(vec!["get_forecast".to_string()], Vec::new())
+            .expect("filters")
+            .asking_every_call(true)
+    };
+    let moving = moving_declared(
+        &scratch,
+        true,
+        Managed::default(),
+        serve_moving(third_to.clone()),
+        |server| server,
+        |declared| {
+            let Declaration::Http { url, .. } = &declared else {
+                panic!("a remote declaration");
+            };
+            kept(url)
+        },
+    );
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        reply_with("done again"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+    assert_eq!(declared_now(&scratch), kept(&moving.moved_to));
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Lyon").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    assert_eq!(confirmer.moves.len(), 2, "{:?}", confirmer.moves);
+    assert_eq!(declared_now(&scratch), kept(&third_to));
+    let approvals = Approvals::read(&scratch.state());
+    assert!(approvals.approves(&kept(&third_to).digest()));
+    assert!(!approvals.approves(&kept(&moving.moved_to).digest()));
+    assert!(
+        methods(&third).contains(&"tools/call".to_string()),
+        "the call did not reach where the server moved the second time"
+    );
 }
 
 /// A server that moved is reached again within the startup bound it was first reached with: a

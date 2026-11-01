@@ -515,6 +515,7 @@ fn a_call(may_stand: bool) -> bravebot_agent::confirm::McpCallRequest {
         arguments: Vec::new(),
         description: None,
         may_stand,
+        asked_every_call: false,
     }
 }
 
@@ -674,7 +675,8 @@ fn refusing_an_mcp_question_is_a_no_in_its_own_shape() {
         Reply::McpCall(CallDecision {
             decision: Decision::Reject,
             stand: false,
-            note: None
+            note: None,
+            unasked: false
         })
     ));
     assert!(matches!(
@@ -1422,6 +1424,91 @@ fn the_window_refuses_an_unconfined_run_without_asking() {
     assert!(!asked, "a card was drawn for it");
     assert_eq!(decision.decision, Decision::Reject);
     assert!(!decision.remember);
+}
+
+/// What a call confirmed under a person who approves whatever is put to them, standing included,
+/// comes back as, and whether any question was put to them at all.
+fn confirm_a_call_with_an_approving_window(
+    request: bravebot_agent::confirm::McpCallRequest,
+) -> (CallDecision, bool) {
+    let harness = harness();
+    let running = harness.running;
+    let pending = Arc::clone(&running.pending);
+    let mut confirmer = harness.confirmer;
+    let done = Arc::new(AtomicBool::new(false));
+    let finished = Arc::clone(&done);
+    let handle = std::thread::spawn(move || {
+        let decision = confirmer.confirm_mcp_call(&request);
+        finished.store(true, std::sync::atomic::Ordering::SeqCst);
+        decision
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut asked = false;
+    while !done.load(std::sync::atomic::Ordering::SeqCst) && std::time::Instant::now() < deadline {
+        let waiting = *pending.lock().expect("not poisoned");
+        if let Some(question) = waiting {
+            asked = true;
+            running.answer(
+                question.id,
+                Reply::McpCall(CallDecision::approve_and_stand()),
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    (handle.join().expect("confirmer"), asked)
+}
+
+/// SERVERS-21: the window draws no card for a call to a server declared to ask every call and
+/// refuses it, where an approving window would have said yes and asked to stand. The control is the
+/// same call to a server not declared so, which the window is asked about and approves. The
+/// regression it rejects is a bridge that forwards the call, since the window draws nothing that
+/// says no answer to it lasts.
+#[test]
+fn the_window_refuses_a_call_asked_every_time_without_asking() {
+    let (decision, asked) = confirm_a_call_with_an_approving_window(a_call(true));
+    assert!(asked, "the call was not put to the window");
+    assert_eq!(decision.decision, Decision::Approve);
+
+    let (decision, asked) =
+        confirm_a_call_with_an_approving_window(bravebot_agent::confirm::McpCallRequest {
+            asked_every_call: true,
+            ..a_call(false)
+        });
+    assert!(!asked, "a card was drawn for it");
+    assert_eq!(decision, CallDecision::unasked());
+}
+
+/// ROUTE-10, MCP-14, SERVERS-21: the window draws no card for a call that a choice fills, however
+/// the number reads, and refuses it with nobody asked. The question the agent puts for such a call
+/// is asked-every-call and draws the number and where it came from as an argument; a window that
+/// drew it would be answering "is this the element" for a person who is shown the element only in
+/// the browser. The control is the same arguments in a request that does not ask every call, which
+/// the window is asked about, so the refusal is the flag's and the harness does hear an answer.
+/// The regression it rejects is a bridge that forwards a call because the window could draw its
+/// arguments.
+#[test]
+fn the_window_refuses_a_call_a_choice_fills_without_asking() {
+    for number in ["0", "7", "99"] {
+        let request = |asked_every_call| bravebot_agent::confirm::McpCallRequest {
+            alias: "brave-input".into(),
+            tool: "click_element".into(),
+            arguments: vec![(
+                "element_number".into(),
+                bravebot_i18n::t!(mcp_call_choice_drawn, number = number, reference = "ref:3")
+                    .to_string(),
+            )],
+            description: None,
+            may_stand: false,
+            asked_every_call,
+        };
+        let (decision, asked) = confirm_a_call_with_an_approving_window(request(false));
+        assert!(asked, "{number}: the control was not put to the window");
+        assert_eq!(decision.decision, Decision::Approve);
+
+        let (decision, asked) = confirm_a_call_with_an_approving_window(request(true));
+        assert!(!asked, "{number}: a card was drawn for it");
+        assert_eq!(decision, CallDecision::unasked(), "{number}");
+    }
 }
 
 fn some_hosts() -> bravebot_agent::confirm::HostRequest {

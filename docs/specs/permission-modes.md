@@ -146,7 +146,8 @@ account through a connector. The plan is
 where the mode has to be answered for the same reason the prompt is not: a body the plan carried,
 going to a path the person vouched for, raises no write prompt at all, so a refusal that waited for
 one would let the whole run through. A plan that writes nothing runs, since there is nothing in it
-for this clause to refuse.
+for this clause to refuse. A call to a server's tool is not a write: the plan runs and the call is
+put to the person at its step, as it is in a turn ([MANIFEST-15](manifest.md#MANIFEST-15)).
 
 A run the person moves into plan mode after approving its plan ([MODE-8](#MODE-8)) is refused at the
 step: the step reads the mode when it is reached, so a write step that has not run yet is refused
@@ -178,6 +179,7 @@ made from less than the person can see themselves.
 `verified-by: bravebot_agent::manifest::plan_mode_refuses_a_plan_that_writes`
 `verified-by: bravebot_agent::manifest::plan_mode_refuses_a_plan_that_acts_through_a_connector`
 `verified-by: bravebot_agent::manifest::plan_mode_runs_a_plan_that_writes_nothing`
+`verified-by: bravebot_agent::manifest_server_calls::plan_mode_runs_a_plan_that_calls_a_server_and_asks_at_the_step`
 `verified-by: bravebot_agent::manifest::plan_mode_chosen_while_the_run_walks_refuses_a_later_write`
 `verified-by: bravebot_ui_bridge::manifest::a_session_in_plan_mode_refuses_a_plan_that_writes`
 
@@ -195,7 +197,9 @@ reachable to the file tools, to `run`'s `directory` and to a redirection with no
 directory opened, wherever the account can reach it and outside the refusals a granted request
 has ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). So are the three questions about a
 server a checkout asks for: whether to start it, whether to offer its list of tools, and whether to
-make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)). Whether a remote server moved
+make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)), except a call to a server
+whose declaration says every call is asked about, which is put to the person in this mode as in every
+other ([SERVERS-21](mcp-servers.md#SERVERS-21)). Whether a remote server moved
 where its reply pointed is not answered: a yes would rewrite the person's declaration to a url the
 server wrote, so the hop is refused unasked ([SERVERS-11](mcp-servers.md#SERVERS-11)).
 Whether programs may reach a host the allowed-hosts list does not cover is not answered either: the
@@ -312,6 +316,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::servers::skipping_permissions_starts_the_server_unasked_and_records_nothing`
 `verified-by: bravebot_agent::mcp::bypassing_answers_both_prompts_and_records_nothing`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_to_move_a_server`
+`verified-by: bravebot_agent::permission_mode::bypassing_answers_a_call_to_a_server_unless_it_is_declared_to_ask_every_call`
 `verified-by: bravebot_agent::permission_mode::a_host_question_is_asked_in_every_mode_but_bypass_which_refuses`
 `verified-by: bravebot_agent::permission_mode::accepting_edits_puts_a_credential_write_to_the_person_and_bypassing_answers_it`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_a_credential_write`

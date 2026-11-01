@@ -60,11 +60,12 @@ impl Piece {
 
 /// What the driver fixed about one processor before it ran.
 ///
-/// Built only by [`crate::policy::Policy::before_processor`]: building one takes a
-/// `SpecAuthority`, which is minted inside the module the gates live in and nowhere else, so no
-/// other module of this crate can make a spec, and nothing here can widen one afterwards. The input
-/// slots, the instruction, and the label the output will carry are all decided before the processor
-/// exists. The processor itself never sees this value.
+/// Built only by [`crate::policy::Policy::before_processor`] and
+/// [`crate::policy::Policy::before_chooser`]: building one takes a `SpecAuthority`, which is
+/// minted inside the module the gates live in and nowhere else, so no other module of this crate
+/// can make a spec, and nothing here can widen one afterwards. The input slots, the instruction,
+/// and the label the output will carry are all decided before the processor exists. The processor
+/// itself never sees this value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessorSpec {
     id: String,
@@ -72,6 +73,7 @@ pub struct ProcessorSpec {
     instruction: String,
     out_label: Label,
     about: Option<SlotId>,
+    choose_upto: Option<u8>,
 }
 
 impl ProcessorSpec {
@@ -81,6 +83,7 @@ impl ProcessorSpec {
         instruction: impl Into<String>,
         out_label: Label,
         about: Option<SlotId>,
+        choose_upto: Option<u8>,
         _authority: &SpecAuthority,
     ) -> Self {
         Self {
@@ -89,7 +92,24 @@ impl ProcessorSpec {
             instruction: instruction.into(),
             out_label,
             about,
+            choose_upto,
         }
+    }
+
+    /// The largest limit a processor can be asked to choose up to.
+    ///
+    /// The answer is read as one or two ASCII digits, so a limit past 99 names an entry no answer
+    /// can reach. `bravebot-choice` holds the reader and a test there holds the two together.
+    pub const LARGEST_CHOICE: u8 = 99;
+
+    /// The limit the planner wrote when it asked this processor to choose one entry of a list.
+    ///
+    /// `Some` is a processor whose whole answer is one whole number from 1 to this limit, or 0
+    /// where no entry fits, and `None` is one whose answer is a document. The planner's own
+    /// argument fixed it before the processor existed, so it says which kind of call this is and
+    /// nothing the processor wrote has any say in it.
+    pub fn choose_upto(&self) -> Option<u8> {
+        self.choose_upto
     }
 
     /// Which document this call is about.

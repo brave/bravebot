@@ -145,6 +145,40 @@ fn quarantined_content_says_how_much_it_left_out() {
     assert_eq!(value["preview"], json!(["first line"]));
 }
 
+/// The window is sent the rows the agent wrote about a picture the model has not seen, as they are
+/// and as a block that carries the label's two axes. The bridge words nothing, so the window and the
+/// terminal say the same thing, and no byte of the picture crosses beside them.
+#[test]
+fn the_rows_about_a_picture_cross_as_the_agent_wrote_them_under_their_label() {
+    let said = bravebot_agent::report::picture_rows(
+        "image/png",
+        118,
+        "ref:2",
+        bravebot_agent::report::Holder::Session {
+            vets: true,
+            writes: true,
+        },
+    );
+    let value = wire::shown(&Shown {
+        origin: "weather:get_forecast returned".into(),
+        reach: Reach::NotThePlanner,
+        label: "(U,priv)".into(),
+        preview: said.clone(),
+        lines: said.len(),
+    });
+    assert_eq!(value["preview"], json!(said));
+    assert_eq!(value["lines"], json!(2));
+    assert_eq!(value["label"], json!("(U,priv)"));
+    assert_eq!(value["labelAxes"], axes("untrusted", "private"));
+    assert!(
+        value["preview"][0]
+            .as_str()
+            .is_some_and(|row| row.starts_with("a picture, image/png, 118 bytes, held as ref:2")),
+        "{value}"
+    );
+    assert!(!value.to_string().contains("base64"), "{value}");
+}
+
 /// Released content reaches the wire with the label it was released under, not a fixed word.
 ///
 /// The label is what the surface at the other end has left to mark by, so a boundary that sent
@@ -2083,6 +2117,7 @@ fn the_mcp_questions_carry_what_a_card_draws() {
             arguments: vec![("city".into(), "\"Paris\"".into())],
             description: None,
             may_stand: false,
+            asked_every_call: false,
         },
     );
     assert_eq!(call["name"], "weather:get_forecast");

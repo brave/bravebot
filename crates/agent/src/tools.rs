@@ -58,7 +58,7 @@ pub use offered::{
     Running, Scheduling, available, for_delegate, for_planner, offer_advisor,
     offer_message_session, offer_propose_plan, offer_propose_rule, offer_recall, offer_remember,
     offer_set_link, offer_tool_loader, state_confinement, state_read_output_answer,
-    state_withheld_variables,
+    state_what_is_beside, state_withheld_variables,
 };
 
 /// The argument every tool takes saying why the call is being made.
@@ -116,6 +116,17 @@ pub struct Apart {
     pub introduced_by: &'static str,
 }
 
+/// The number a processor chose from a list, still labelled, and the limit the planner wrote.
+///
+/// Carried from the tool to the turn and stored there. Nothing in the driver reads the number.
+#[derive(Debug)]
+pub struct ChosenNumber {
+    /// The number, labelled as the processor's answer was.
+    pub number: Labelled<u8>,
+    /// The largest number the planner said the processor could choose.
+    pub upto: u8,
+}
+
 /// What a dispatched call produced, ready to send back as a tool message.
 #[derive(Debug)]
 pub struct Output {
@@ -166,6 +177,10 @@ pub struct Output {
     pub answers_for: Option<Option<SlotId>>,
     /// What an isolated processor said about what it did. For the person watching only.
     pub said: Option<Labelled<String>>,
+    /// The number a processor chose, where the call asked it to choose (PROC-16). Set by the tool
+    /// from the planner's own argument, whatever number the answer was read as, and stored by the
+    /// turn as a reference of its own kind.
+    pub chosen: Option<ChosenNumber>,
     /// The model a processor was answered by, where it is not the one the person named for processors
     /// (PROC-13). The turn words it for the person: this module is read by the planner.
     pub substituted: Option<String>,
@@ -248,6 +263,15 @@ pub struct Output {
     /// rather than as a body. Its presence is also what forces a reference: a picture is never put
     /// in the planner's context, whatever the label on the file it came from says.
     pub picture: Option<String>,
+    /// How many bytes the file `picture` names holds, as the length of what was read. The URI the
+    /// slot holds is longer, and the person is told this one.
+    pub picture_bytes: usize,
+    /// The pictures a server's tool result carried beside its text, in the order the server sent
+    /// them, each to be quarantined as a picture of its own (MCP-6). Empty for every other tool.
+    pub pictures: Vec<bravebot_mcp::Picture>,
+    /// How many parts of a server's tool result its transport left out, which the planner is told as
+    /// a number and nothing else (MCP-6).
+    pub left_out: usize,
     /// A picture `vet_content` promoted, which the turn attaches to the planner's next request in a
     /// message of its own after the round's results (VET-4). Never carried in `text`.
     pub attached: Option<bravebot_core::vetting::Attached>,
@@ -1229,6 +1253,8 @@ struct Produced {
     /// Never part of `text`, which is what the planner is told about: this half of a processor's
     /// answer reaches a screen and stops there.
     said: Option<Labelled<String>>,
+    /// The number a processor chose, where the planner asked it to choose, as [`Output::chosen`].
+    chosen: Option<ChosenNumber>,
     /// The sentence saying a processor was answered by a model other than the one named for processors.
     substituted: Option<String>,
     /// The content alone, where `text` has the driver's own notes after it.
@@ -1273,6 +1299,12 @@ struct Produced {
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
     /// rather than as a body. The driver's own, from a table of extensions.
     picture: Option<String>,
+    /// How many bytes the file `picture` names holds, as [`Output::picture_bytes`].
+    picture_bytes: usize,
+    /// The pictures a server's tool result carried beside its text, as [`Output::pictures`].
+    pictures: Vec<bravebot_mcp::Picture>,
+    /// How many parts of a server's tool result its transport left out, as [`Output::left_out`].
+    left_out: usize,
     /// A picture `vet_content` promoted, for the turn to attach after the round's results.
     attached: Option<bravebot_core::vetting::Attached>,
     /// The delegates the kernel has approved and nobody has started yet.
@@ -1326,6 +1358,7 @@ impl Produced {
             ran_git_in: Vec::new(),
             answers_for: None,
             said: None,
+            chosen: None,
             substituted: None,
             glimpsed: None,
             window: None,
@@ -1337,6 +1370,9 @@ impl Produced {
             covered_by_record: false,
             read_asked: false,
             picture: None,
+            picture_bytes: 0,
+            pictures: Vec::new(),
+            left_out: 0,
             attached: None,
             wakeup: None,
             watch: None,
@@ -1358,6 +1394,18 @@ impl Produced {
         Produced {
             failed: true,
             ..Produced::new(Labelled::trusted(text.clone()), String::new(), text)
+        }
+    }
+
+    /// The number a processor chose, for the turn to store as a reference of its own kind.
+    ///
+    /// The result has no text: what the planner is told is the reference the turn makes, and it is
+    /// the same words for every number. The tool sets this from the planner's own argument
+    /// (`choose_upto`), so a call that asked for a number is a call that produced one, 0 included.
+    fn chosen(choice: ChosenNumber, origin: impl Into<String>, note: impl Into<String>) -> Self {
+        Self {
+            chosen: Some(choice),
+            ..Produced::new(Labelled::trusted(String::new()), origin, note)
         }
     }
 
@@ -1420,12 +1468,14 @@ impl Produced {
         self
     }
 
-    /// Say what this produced is a picture, and the media type it is to be sent under.
+    /// Say what this produced is a picture, and the media type it is to be sent under, and how many
+    /// bytes the file holds.
     ///
     /// Its slot is marked, which is what lets a processor be given it as a part rather than as a
     /// body. The planner is never shown it, whatever the label says.
-    fn of_a_picture(mut self, media: &str) -> Self {
+    fn of_a_picture(mut self, media: &str, bytes: usize) -> Self {
         self.picture = Some(media.to_string());
+        self.picture_bytes = bytes;
         self
     }
 
@@ -2502,10 +2552,28 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
             message::message_session(policy, tools, confirmer, reporter, &arguments)
         }
         other => match &server_tool {
+            // A server declared to ask every call is put to the person, and a delegate's task came
+            // from a planner and not from them, so the call is refused unasked (SERVERS-21).
+            Some((offer, alias, tool)) if tools.delegated && offer.asks_every_call(alias) => {
+                policy.refuse_asked_every_call_in_a_delegate(alias, tool);
+                Produced::problem(format!(
+                    "refused: every call to {alias} is put to the user, and a delegate is not \
+                     able to ask. Do not retry {alias}:{tool}: say in your report what you \
+                     needed from it."
+                ))
+            }
             Some((offer, alias, tool)) => {
                 let egress = tools.chat.egress;
                 call_server_tool(
-                    policy, offer, egress, confirmer, reporter, alias, tool, &arguments,
+                    policy,
+                    offer,
+                    egress,
+                    confirmer,
+                    reporter,
+                    alias,
+                    tool,
+                    &arguments,
+                    &mut *tools.slots,
                 )
             }
             None => Produced::problem(format!("error: no such tool '{other}'")),
@@ -2569,6 +2637,7 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         told: produced.told,
         answers_for: produced.answers_for,
         said: produced.said,
+        chosen: produced.chosen,
         substituted: produced.substituted,
         glimpsed: produced.glimpsed,
         window: produced.window,
@@ -2585,6 +2654,9 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         covered_by_record: produced.covered_by_record,
         read_asked: produced.read_asked,
         picture: produced.picture,
+        picture_bytes: produced.picture_bytes,
+        pictures: produced.pictures,
+        left_out: produced.left_out,
         attached: produced.attached,
         wakeup: produced.wakeup,
         watch: produced.watch,
@@ -3315,14 +3387,16 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // failed. One planner went four references deep before giving up. Nothing to do but say so.
     if destination == Destination::Reference && policy.read_is_quarantined(&keyed) {
         // No processor can be started once the context holds private content, so the move that
-        // names one is left out rather than offered and refused.
-        let work_on_it = if policy.processors_closed() {
-            String::new()
-        } else {
-            format!(
+        // names one is left out rather than offered and refused, as it is where the run is not
+        // offered `spawn_processor`. The result goes back to the file as `path_ref`, which a run
+        // that cannot write is not told of.
+        let work_on_it = match (policy.processors_offered(), policy.writing_is_offered()) {
+            (true, true) => format!(
                 " Give {shown_path} to spawn_processor to work on, and name {shown_path} as \
                  path_ref to write what comes back to the same file."
-            )
+            ),
+            (true, false) => format!(" Give {shown_path} to spawn_processor to work on."),
+            (false, _) => String::new(),
         };
         return priced(confirmed(
             format!(
@@ -3343,16 +3417,15 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // the content this arrangement exists to keep out of it. So a vouched-for directory does not
     // make a picture readable, and there is no trust question here to ask.
     if let Some(media) = media {
-        return priced(match workspace.read_attachment(policy, &path, media) {
-            Ok(encoded) => {
-                let weight = workspace.survey(&proposed_path).unwrap_or(0);
-                Produced::new(
-                    encoded,
-                    shown_path,
-                    format!("{media}, {} KiB", weight.div_ceil(1024)),
-                )
-                .of_content()
-                .of_a_picture(media)
+        let read = workspace.read_attachment_counted(policy, &path, media);
+        return priced(match read {
+            // The size is the one the person is shown beside it, counted when the file was read.
+            // A survey of the file answers for text and fails for the bytes of a picture. It is
+            // written as counted and compared with nothing, so no unit or plural is chosen from it.
+            Ok((encoded, bytes)) => {
+                Produced::new(encoded, shown_path, format!("{media}, {bytes} bytes"))
+                    .of_content()
+                    .of_a_picture(media, bytes)
             }
             Err(e) => file_tool_problem(
                 policy,
@@ -4603,7 +4676,8 @@ fn quarantined_body<S: Sink>(
     slots: &mut SlotStore,
     named: &Labelled<String>,
     path: &str,
-) -> Result<(Labelled<String>, bool, Option<Remark>), String> {
+    destination: Destination,
+) -> Result<Quarantined, String> {
     let slot = policy
         .accept_reference("write_file", "contents_ref", named)
         .map_err(|denial| format!("refused: {denial}"))?;
@@ -4621,6 +4695,14 @@ fn quarantined_body<S: Sink>(
     policy
         .write_belongs_here(path, &slot, slots)
         .map_err(|denial| format!("refused: {denial}"))?;
+
+    // A picture is written as the file it encodes, and only under the name its type has (WRITE-9).
+    // Settled from the driver's record of what the slot is and from the path the planner named,
+    // before the bytes leave the slot, so a refusal releases nothing.
+    let picture = slots.picture_of(&slot).map(str::to_string);
+    if let Some(media) = &picture {
+        a_picture_may_be_written_here(&slot, media, destination, path)?;
+    }
 
     // Asked before the bytes are taken, and answered from where the slot came from rather than
     // from what it holds.
@@ -4641,10 +4723,58 @@ fn quarantined_body<S: Sink>(
             label: label.to_string(),
         });
 
-    Ok((
-        policy.declassify_into_workspace(&slot, path, content),
+    Ok(Quarantined {
+        body: policy.declassify_into_workspace(&slot, path, content),
         changes,
         remark,
+        picture,
+    })
+}
+
+/// What a `contents_ref` came to: the bytes a write will carry, still labelled, and what is known
+/// of them without reading them.
+struct Quarantined {
+    body: Labelled<String>,
+    /// `false` only where the kernel filled the slot from the very file it is written to.
+    changes: bool,
+    remark: Option<Remark>,
+    /// The media type of the picture or PDF the slot holds, where it holds one. The body is then
+    /// the data URI the slot is kept as, and the file is the bytes it encodes (WRITE-9).
+    picture: Option<String>,
+}
+
+/// Whether the picture or PDF `slot` holds, of this `media` type, may be written to `path`.
+///
+/// Compared with the table a read decides a file is a picture by, which is the driver's own and
+/// holds each media type once for each extension it is written with. Only a path the planner named
+/// is compared: the name `path_ref` stands for came out of a listing nobody vouched for, so what
+/// its extension is would be a fact about untrusted bytes, and a write to such a path is refused
+/// instead.
+fn a_picture_may_be_written_here(
+    slot: &SlotId,
+    media: &str,
+    destination: Destination,
+    path: &str,
+) -> Result<(), String> {
+    if destination == Destination::Reference {
+        return Err(format!(
+            "refused: {slot} holds a {media} file, which is written to a path you name with \
+             'path'. A name you were never shown has an extension nothing here may read, so it \
+             cannot be checked against the file's type. Nothing was written."
+        ));
+    }
+    if bravebot_filetype::by_name::media_for(path) == Some(media) {
+        return Ok(());
+    }
+    let extensions: Vec<String> = bravebot_filetype::by_name::ATTACHABLE
+        .iter()
+        .filter(|(_, named)| *named == media)
+        .map(|(extension, _)| format!(".{extension}"))
+        .collect();
+    Err(format!(
+        "refused: {slot} holds a {media} file, which is written to a path ending in {}, and {path} \
+         does not. Nothing was written.",
+        extensions.join(" or ")
     ))
 }
 
@@ -4659,34 +4789,22 @@ fn write_file<S: Sink, C: Confirmer>(
     confirmer: &mut C,
     arguments: &Value,
 ) -> Produced {
-    let workspace = tools.workspace;
-    let found = match path_argument(
-        policy,
-        workspace,
-        "write_file",
-        Purpose::Effect,
-        tools.slots,
-        arguments,
-    ) {
-        Ok(found) => found,
+    let landing = match write_landing(policy, tools, arguments) {
+        Ok(landing) => landing,
         Err(refusal) => return Produced::problem(refusal),
     };
-    // The path is routing, so naming a destination from it is not a content decision, and the
-    // gate that released it ran where the argument was read.
-    let (path, destination, shown_path, proposed_path) =
-        (found.path, found.destination, found.shown, found.released);
     // Resolved as the write resolves it, before the body is released into the path or anybody is
     // asked: no answer makes a destination the workspace does not reach possible. The write
     // resolves it again once the person has answered, since a directory on the way can have become
     // a link while they read the question (TRUST-10).
-    if let Err(unreachable) = tools.workspace.resolve(&proposed_path) {
+    if let Err(unreachable) = tools.workspace.resolve(&landing.proposed_path) {
         return write_refused(
             policy,
             tools,
             "write_file",
-            destination,
+            landing.destination,
             &unreachable,
-            &shown_path,
+            &landing.shown_path,
         );
     }
 
@@ -4731,15 +4849,46 @@ fn write_file<S: Sink, C: Confirmer>(
         // The body is the model's words. Its integrity is that of the context the model was
         // working from, which the kernel tracked: nothing here upgrades anything.
         (Some(contents), None) => match policy.adopt_model_output("write_file", contents) {
-            Ok(body) => policy.declassify_written_into_workspace("write_file", &shown_path, body),
+            Ok(body) => {
+                policy.declassify_written_into_workspace("write_file", &landing.shown_path, body)
+            }
             Err(denial) => return Produced::problem(format!("refused: {denial}")),
         },
         // Quarantined content, going where the planner said without the planner or the driver
         // having read a byte of it. The user still sees it, which is what an approval is.
         (None, Some(reference)) => {
-            match quarantined_body(policy, workspace, tools.slots, &reference, &proposed_path) {
-                Ok((body, would_change, said)) => {
-                    changes_anything = would_change;
+            match quarantined_body(
+                policy,
+                tools.workspace,
+                tools.slots,
+                &reference,
+                &landing.proposed_path,
+                landing.destination,
+            ) {
+                Ok(Quarantined {
+                    body,
+                    picture: Some(media),
+                    ..
+                }) => {
+                    return write_a_picture(
+                        policy,
+                        tools,
+                        confirmer,
+                        landing,
+                        PictureBody {
+                            body,
+                            media,
+                            body_from,
+                        },
+                    );
+                }
+                Ok(Quarantined {
+                    body,
+                    changes,
+                    remark: said,
+                    picture: None,
+                }) => {
+                    changes_anything = changes;
                     remark = said;
                     planner_written = false;
                     body
@@ -4753,12 +4902,7 @@ fn write_file<S: Sink, C: Confirmer>(
         tools,
         confirmer,
         "write_file",
-        Landing {
-            path,
-            destination,
-            shown_path,
-            proposed_path,
-        },
+        landing,
         Body {
             body,
             check_with_server: true,
@@ -4770,6 +4914,31 @@ fn write_file<S: Sink, C: Confirmer>(
         },
         false,
     )
+}
+
+/// Where a `write_file` call lands, as [`path_argument`] settled it.
+///
+/// The path is routing, so naming a destination from it is not a content decision, and the gate
+/// that released it ran where the argument was read.
+fn write_landing<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    arguments: &Value,
+) -> Result<Landing, String> {
+    let found = path_argument(
+        policy,
+        tools.workspace,
+        "write_file",
+        Purpose::Effect,
+        tools.slots,
+        arguments,
+    )?;
+    Ok(Landing {
+        path: found.path,
+        destination: found.destination,
+        shown_path: found.shown,
+        proposed_path: found.released,
+    })
 }
 
 /// Where a write lands, as [`path_argument`] settled it.
@@ -4895,11 +5064,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     };
     // Read before the write, since afterwards the age is the age of this write.
     let replaced_age = workspace.age_of(&proposed_path);
-    let intent = if replaces {
-        Intent::Overwrite
-    } else {
-        Intent::Create
-    };
+    let intent = Intent::of_a_write(replaces);
 
     // Nothing to do, and nothing to ask about. The slot holds what this very file was read as, so
     // writing it puts the file back exactly as it is: a diff with nothing in it, put to a person
@@ -5140,6 +5305,144 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                 .having_changed_a_file()
         }
         Err(e) => write_refused(policy, tools, "write_file", destination, &e, &shown_path),
+    }
+}
+
+/// What a write of a picture or PDF carries.
+struct PictureBody {
+    /// The data URI the slot is kept as, released into the workspace at the label it was
+    /// quarantined at, which the file's recorded trust follows.
+    body: Labelled<String>,
+    /// The media type the driver recorded for the slot.
+    media: String,
+    /// What the planner called the body, for the account it is given afterwards.
+    body_from: String,
+}
+
+/// Write the file the picture or PDF in a slot encodes, after a person approves it (WRITE-9).
+///
+/// The person is shown the slot, its media type, the size of the file and the path it lands in,
+/// and nothing the file holds: it is not text, so there is no diff, no scan and no body to edit.
+/// The bytes leave the slot decoded by the effect that writes them, which is handed the proof that
+/// the destination was endorsed, and nothing here reads one of them. The file is recorded as
+/// holding what the slot held, so a picture from a server's tool result leaves an untrusted file.
+fn write_a_picture<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    landing: Landing,
+    given: PictureBody,
+) -> Produced {
+    let workspace = tools.workspace;
+    let Landing {
+        path,
+        shown_path,
+        proposed_path,
+        ..
+    } = landing;
+    let PictureBody {
+        body,
+        media,
+        body_from,
+    } = given;
+    let label = body.label();
+
+    // What the file holds now is not read: it is replaced whole, and the person is told so.
+    let (replaces, approved_revision) = policy.capture_files(|_, capture| {
+        (
+            workspace.names_a_file(&proposed_path),
+            capture.revision_of(&workspace.trust_key(&proposed_path)),
+        )
+    });
+    let intent = Intent::of_a_write(replaces);
+
+    // How many bytes the file will hold, counted where the URI is turned back into them and shown
+    // to the person who is asked. A count, as a reference's byte count is.
+    let size = {
+        let counted = policy.render_in_place("write_file", &body, |uri| {
+            picture_bytes(&uri).map_or(0, |bytes| bytes.len())
+        });
+        let proof = policy.authorise_display_release("the size of a picture a write would create");
+        counted.declassify(&proof)
+    };
+
+    // Always put to the person, whatever the trust map would have said about the path: the bytes
+    // are nobody's and the file is somebody's, so the pair is the one thing they can answer for
+    // (WRITE-4).
+    let request = WriteRequest {
+        written_since_checkout: false,
+        intent,
+        existing: replaces.then(String::new),
+        // The slot and the path in the one field every front end draws as the destination. There
+        // is no body to put in `contents` and nothing for a diff to say.
+        path: format!(
+            "{} -> {proposed_path}",
+            crate::report::write_picture_source(body_from.as_str(), media.as_str(), size)
+        ),
+        contents: String::new(),
+        diff: Diff::compute("", ""),
+        untrusted: !label.is_trusted(),
+        remark: None,
+        protected: write_is_protected(workspace, &proposed_path),
+        credentials: Vec::new(),
+        may_always: false,
+        record: None,
+        may_edit: false,
+    };
+    let mode = tools.permission_mode.get();
+    let answer = confirmer.confirm_write(&request);
+    policy.record_answer(
+        mode.answers_a_write_unasked(false, request.protected)
+            .then(|| mode.name()),
+    );
+    keep_the_note(policy, "write_file", answer.approved(), answer.note());
+    if !answer.approved() {
+        policy.refuse_unapproved_write("write_file");
+        return Produced::problem(format!(
+            "refused: the user did not approve writing {shown_path}. Do not retry the same \
+             write{}",
+            what_next(answer.note().is_some())
+        ));
+    }
+
+    // The approval is the path's authority, and it is bound to this exact value.
+    policy.issue_grant("file_write", "path", proposed_path.clone());
+    let outcome = workspace.write_streamed_endorsed(
+        policy,
+        &path,
+        label,
+        Some(approved_revision),
+        |file, proof| {
+            use std::io::Write;
+            // No detail of why it did not decode: the error would name a byte of the URI.
+            let bytes = picture_bytes(&body.declassify(proof))
+                .map_err(|_| std::io::Error::other("the picture did not decode"))?;
+            file.write_all(&bytes)
+        },
+    );
+    match outcome {
+        Ok(_) => {
+            workspace.record_write(Some(&shown_path));
+            let verb = if replaces { "replaced" } else { "created" };
+            confirmed(
+                format!(
+                    "{verb} {shown_path} from {body_from} ({media}). It is written and \
+                     quarantined: you cannot read it, and there is nothing further to do for \
+                     it. Do not write {shown_path} again."
+                ),
+                format!("{media}, {size} bytes"),
+            )
+            .marked_untrusted(!label.is_trusted())
+            .having_changed_a_file()
+        }
+        Err(e) => write_refused(
+            policy,
+            tools,
+            "write_file",
+            Destination::Named,
+            &e,
+            &shown_path,
+        ),
     }
 }
 
@@ -7345,11 +7648,23 @@ fn extension_for(media: &str) -> &'static str {
         .map_or("bin", |(extension, _)| *extension)
 }
 
+/// The bytes a picture's data URI encodes.
+///
+/// The URI is this client's own encoding, made at the read or, for a server's picture, by the
+/// transport, which takes only base64 in its canonical form, so this cannot fail on anything a
+/// picture holds.
+fn picture_bytes(uri: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    use base64::Engine;
+    let encoded = uri.split_once(',').map_or("", |(_, encoded)| encoded);
+    base64::engine::general_purpose::STANDARD.decode(encoded)
+}
+
 /// Write the picture `slot` holds to a copy the person can open, with how many bytes it holds.
 ///
 /// The bytes are the ones the slot's data URI encodes, turned back inside the kernel's reshape and
 /// released at a gate of their own, which the trail records as a copy written for the person to
-/// open. The URI is the driver's own encoding from the read, so turning it back cannot fail on
+/// open. The URI is this client's own encoding, made at the read or, for a server's picture, by the
+/// transport, which takes only base64 in its canonical form, so turning it back cannot fail on
 /// anything the picture holds. An `Err` is the driver's sentence for the person watching.
 fn copy_a_picture<S: Sink>(
     policy: &mut Policy<'_, S>,
@@ -7369,11 +7684,7 @@ fn copy_a_picture<S: Sink>(
         .resolve("vet_content", slot, slots)
         .map_err(|denial| format!("refused: {denial}"))?;
     let decoded = policy.render_in_place("vet_content", &content, |uri| {
-        use base64::Engine;
-        let encoded = uri.split_once(',').map_or("", |(_, encoded)| encoded);
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .unwrap_or_default();
+        let bytes = picture_bytes(&uri).unwrap_or_default();
         let size = bytes.len();
         (bytes, size)
     });
@@ -10133,11 +10444,7 @@ fn download_url<S: Sink, C: Confirmer>(
             capture.revision_of(&workspace.trust_key(&proposed_path)),
         )
     });
-    let intent = if replaces {
-        Intent::Overwrite
-    } else {
-        Intent::Create
-    };
+    let intent = Intent::of_a_write(replaces);
 
     // Always put to the person, whatever the trust map would have said about the path: the bytes
     // are nobody's and the file is somebody's, so the pair is the one thing they can answer for.
@@ -10291,25 +10598,45 @@ fn call_server_tool<S: Sink, C: Confirmer, R: Reporter>(
     alias: &str,
     tool: &str,
     arguments: &Value,
+    slots: &mut SlotStore,
 ) -> Produced {
     let name = format!("{alias}:{tool}");
-    let (text, origin, note, failed) = match crate::mcp::call(
-        policy, offer, egress, confirmer, reporter, alias, tool, arguments,
+    let (text, pictures, left_out, origin, note, failed) = match crate::mcp::call(
+        policy,
+        offer,
+        egress,
+        confirmer,
+        reporter,
+        alias,
+        tool,
+        arguments,
+        Some(slots),
     ) {
-        crate::mcp::Called::Answered(text) => {
-            (text, format!("what {name} returned"), "answered", false)
-        }
+        crate::mcp::Called::Answered(output) => (
+            output.text,
+            output.pictures,
+            output.left_out,
+            format!("what {name} returned"),
+            "answered",
+            false,
+        ),
         crate::mcp::Called::Failed(text) => (
             text,
+            Vec::new(),
+            0,
             format!("what {name} said about its failure"),
             "the tool reported a failure",
             true,
         ),
-        crate::mcp::Called::Problem(problem) => return Produced::problem(problem),
+        crate::mcp::Called::Unusable(problem) | crate::mcp::Called::Problem(problem) => {
+            return Produced::problem(problem);
+        }
     };
     let mut produced = Produced::new(text, origin, note).of_content();
     produced.untrusted = true;
     produced.failed = failed;
+    produced.pictures = pictures;
+    produced.left_out = left_out;
     produced
 }
 
@@ -10716,6 +11043,34 @@ fn spawn_processor<S: Sink>(
         }
     }
 
+    // The planner's own number: how many entries of a list it wants a processor to choose among.
+    // A call that gives one asks for a number and no document, so it names none the answer is
+    // about. Both are the planner's arguments, checked before a reference is opened so that a
+    // call that cannot be made reads nothing. The kernel holds the same range when it builds the
+    // spec.
+    let largest = bravebot_core::processor::ProcessorSpec::LARGEST_CHOICE;
+    let choose_upto = match arguments.get("choose_upto") {
+        None | Some(Value::Null) => None,
+        Some(asked) => match asked
+            .as_u64()
+            .and_then(|n| u8::try_from(n).ok())
+            .filter(|n| (2..=largest).contains(n))
+        {
+            Some(upto) => Some(upto),
+            None => {
+                return Produced::problem(format!(
+                    "error: 'choose_upto' must be a whole number from 2 to {largest}"
+                ));
+            }
+        },
+    };
+    if choose_upto.is_some() && argument(arguments, "about").is_some() {
+        return Produced::problem(
+            "error: 'about' and 'choose_upto' cannot be given together: a processor asked for a \
+             number writes no document, so its answer is about none",
+        );
+    }
+
     // Named for the audit trail from the slots it reads, which are the driver's own names for
     // things. Two processors reading the same references in one turn share a name, and that is
     // the honest description of them.
@@ -10726,13 +11081,11 @@ fn spawn_processor<S: Sink>(
     // *code* for one to hold. What confines a processor is that it has no capabilities at all.
     // Reference names, not filenames: this is the planner's copy, and it is the one thing it
     // may not have. The person's copy of the same line is resolved where it is drawn.
-    let origin = {
+    let over = {
         let proof = policy.authorise_display_release("which references a processor was given");
-        format!(
-            "an isolated processor over {}",
-            references_in(arguments).declassify(&proof)
-        )
+        references_in(arguments).declassify(&proof)
     };
+    let origin = format!("an isolated processor over {over}");
 
     // Before the spec, not after: `before_processor` computes the output's label by taint over
     // the inputs, and a slot that reads its file here may come back untrusted where the trust
@@ -10767,12 +11120,40 @@ fn spawn_processor<S: Sink>(
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
-    let spec = match policy.before_processor(&origin, &reads, &instruction, about, tools.slots) {
+    let spec = match choose_upto {
+        Some(upto) => policy.before_chooser(&origin, &reads, &instruction, upto, tools.slots),
+        None => policy.before_processor(&origin, &reads, &instruction, about, tools.slots),
+    };
+    let spec = match spec {
         Ok(spec) => spec,
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
 
     let asked_at = std::time::Instant::now();
+    // A call that asked for a number is answered with one, whatever the processor said: the number
+    // is read outside the driver and carried here as a labelled byte, and what the planner is
+    // told is the same words for every value of it (PROC-16).
+    if let Some(upto) = choose_upto {
+        let answer = processor::choose(policy, &mut tools.chat, tools.slots, &spec);
+        let waited = Some(crate::timing::Interval::since(asked_at));
+        return match answer {
+            Ok(done) => {
+                let mut produced = Produced::chosen(
+                    ChosenNumber {
+                        number: done.number,
+                        upto,
+                    },
+                    origin,
+                    format!("an isolated processor chose one entry of {over}"),
+                )
+                .costing(done.usage)
+                .waiting(waited);
+                produced.substituted = done.substituted;
+                produced
+            }
+            Err(error) => processor_failed(error, waited),
+        };
+    }
     let answer = processor::run(policy, &mut tools.chat, tools.slots, &spec);
     // Taken around the call rather than inside it, so a processor that failed still reports the
     // time it spent failing: a request that errored kept the turn waiting just as long.
@@ -10836,7 +11217,17 @@ fn spawn_processor<S: Sink>(
             produced.substituted = done.substituted;
             produced
         }
-        Err(crate::processor::ProcessorError::Model(refusal)) => {
+        Err(error) => processor_failed(error, waited),
+    }
+}
+
+/// What the planner is told when a processor did not answer.
+fn processor_failed(
+    error: crate::processor::ProcessorError,
+    waited: Option<crate::timing::Interval>,
+) -> Produced {
+    match error {
+        crate::processor::ProcessorError::Model(refusal) => {
             // The planner is told the call did not run and nothing more. The sentence naming the
             // key to correct is the person's, and goes to the note.
             let mut produced = Produced::problem(
@@ -10846,10 +11237,10 @@ fn spawn_processor<S: Sink>(
             produced.note = crate::report::processor_model_refusal(&refusal);
             produced
         }
-        Err(crate::processor::ProcessorError::Chat(error)) => {
+        crate::processor::ProcessorError::Chat(error) => {
             model_request_failed("processor", &error, waited)
         }
-        Err(crate::processor::ProcessorError::Denied(error)) => request_denied(&error, waited),
+        crate::processor::ProcessorError::Denied(error) => request_denied(&error, waited),
     }
 }
 
@@ -14043,6 +14434,539 @@ mod tests {
         assert!(
             !description.chars().any(|c| c.is_ascii_digit()),
             "the description told the model how many it may start: {description}"
+        );
+    }
+
+    /// The tools of the planner's list, with the named ones taken off, as a definition's tools line
+    /// or the kind of a delegate leaves them.
+    fn the_table_without(names: &[&str]) -> Vec<bravebot_aichat::protocol::Tool> {
+        let mut offered = available(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        offered.retain(|tool| !names.contains(&tool.function.name.as_str()));
+        state_what_is_beside(&mut offered);
+        offered
+    }
+
+    fn description_of(offered: &[bravebot_aichat::protocol::Tool], name: &str) -> String {
+        offered
+            .iter()
+            .find(|tool| tool.function.name == name)
+            .unwrap_or_else(|| panic!("{name} is not on the list"))
+            .function
+            .description
+            .clone()
+    }
+
+    /// The words a description names a tool with: the tool's name as a word of its own.
+    fn names_the_tool(description: &str, tool: &str) -> bool {
+        description
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .any(|word| word == tool)
+    }
+
+    /// The planner on an ordinary turn reads the two descriptions as the table wrote them. These
+    /// are the words they had before a description followed the list, so a sentence that changed
+    /// for the session is found here.
+    #[test]
+    fn a_list_holding_every_tool_gets_the_processor_and_read_output_descriptions_it_always_had() {
+        let everything = the_table_without(&[]);
+        assert_eq!(
+            description_of(&everything, "spawn_processor"),
+            "Transform quarantined content you were not shown. Spawns an isolated model with no \
+             tools, no memory and nothing to read but the references you name; it follows your \
+             instruction and its output is quarantined as a new reference. This is how to change \
+             a file you cannot see: name the file's reference, say what has to be true of it \
+             afterwards, then pass the reference that comes back to write_file as contents_ref. \
+             You are not shown its output either, and nobody reads it before it is written, so \
+             be exact about the shape of the answer: the complete document and nothing else. \
+             What the change should be is its decision, not yours. It reads the whole document, \
+             so it can work out what is wrong and where the fix goes, and leave a file alone if \
+             it turns out not to be the one you are after. A summary, a translation, a rewrite, \
+             an explanation or a list of the points made of content you were not shown is \
+             written by this tool, because you cannot write it from what you have not read. Ask \
+             for the form wanted, for example a plain-text summary of each of six stories, two \
+             sentences each, with each link kept. Do not leave it to a script you write, which \
+             can only cut the original down. A processor's answer about a reference that is no \
+             file, such as a fetched page or a run's output, is for no document and cannot be \
+             written anywhere, so save the original to a file first, in the scratch directory if \
+             you were given one: end the run line that made it with `> path`, or write a fetched \
+             page with write_file and contents_ref, and call read_file on the file for a \
+             reference to name in reads. Do not save it with a script that opens the file \
+             itself. Then write the answer over the same file with write_file, and run the \
+             program that sends it with the file's path as an argument, so it reads the body \
+             from the file. Or give the answer's reference to run as stdin_ref, which needs no \
+             file. The recipient and the subject are yours and only the body comes from the \
+             processor. Your final message says what was sent and to whom. Call the text a \
+             summary in your final message only if a processor wrote one. Once your context \
+             holds private content, as it does after read_output or vet_content shows you some, \
+             after a delegate reports some, and in a conversation resumed with some, every later \
+             spawn_processor call is refused for the rest of the conversation: what you write is \
+             private from then on, and a processor takes no private instruction. run, \
+             read_output and the file tools keep working."
+        );
+        assert_eq!(
+            description_of(&everything, "read_output"),
+            "Ask to be shown what a command printed. Give the reference a run handed back. Use \
+             it whenever you ran something to find something out, which is most of the time: a \
+             run's output is quarantined by default, so `which`, `find`, `uname` and the like \
+             tell you nothing until you ask for the result. Ask for the errors too when a run \
+             fails, or you will not know why it failed and must not claim it succeeded. Only for \
+             output from run; a quarantined file is not readable this way. For anything else you \
+             are holding a reference to, vet_content is the question to ask. Output you were \
+             shown the beginning and end of, because the whole was too long for one result, is \
+             the exception: you may read all of it, so nobody is asked, and it comes back a page \
+             at a time from the offset you give. A pattern searches that output instead of \
+             paging it: you get the matching lines, each numbered with the byte it starts at, so \
+             a second call with that byte as the offset reads on from the match you wanted. A \
+             pattern on output you may not read is refused rather than asked about."
+        );
+        let table = available(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        for name in ["spawn_processor", "read_output"] {
+            assert_eq!(
+                description_of(&table, name),
+                description_of(&everything, name),
+                "the table and a pass over a list holding every tool disagree about {name}"
+            );
+        }
+    }
+
+    /// A run is not told in the description of `spawn_processor` to use a tool it is not offered:
+    /// `write_file` is not on a reader's list, `vet_content` is on no delegate's, and a definition's
+    /// tools line can leave out `run` and `read_output`. Each is taken off alone, and the
+    /// description keeps naming the ones that remain.
+    #[test]
+    fn the_processor_description_names_only_the_tools_the_list_holds() {
+        let all = ["write_file", "vet_content", "read_output", "run"];
+        for gone in all {
+            let described = description_of(&the_table_without(&[gone]), "spawn_processor");
+            assert!(
+                !names_the_tool(&described, gone),
+                "a list without {gone} was sent to it: {described}"
+            );
+            for kept in all.into_iter().filter(|name| *name != gone) {
+                assert!(
+                    names_the_tool(&described, kept),
+                    "taking {gone} off took {kept} out of the description too: {described}"
+                );
+            }
+            assert!(
+                described.contains("every later spawn_processor call is refused")
+                    && described.contains("a processor takes no private instruction")
+                    && described.contains("the file tools keep working"),
+                "taking {gone} off took the rule about private content out: {described}"
+            );
+        }
+
+        // Everything taken off at once leaves a sentence that still reads, naming none of them.
+        let bare = description_of(&the_table_without(&all), "spawn_processor");
+        for gone in all {
+            assert!(!names_the_tool(&bare, gone), "{gone} remains: {bare}");
+        }
+        assert!(
+            bare.contains(
+                "as it does after a delegate reports some, and in a conversation resumed with some, \
+                 every later spawn_processor call is refused"
+            ) && bare.ends_with("a processor takes no private instruction. The file tools keep working."),
+            "{bare}"
+        );
+        // Nothing is written, so the description does not say what is written.
+        assert!(
+            !bare.contains("before it is written") && !bare.contains("contents_ref"),
+            "{bare}"
+        );
+    }
+
+    /// SPAWN-6. The route for text made from a reference that is no file saves the original to a
+    /// file first, which needs `write_file` to write the answer over it and `read_file` to give the
+    /// reference that names it. A list with `run` and without either is told that the answer goes to
+    /// the program as `stdin_ref`, which needs no file, and is sent to neither tool. A list without
+    /// `run` is told the route to no program at all, and keeps naming the two tools it holds.
+    #[test]
+    fn the_route_through_a_file_is_described_only_where_the_list_holds_the_file_tools() {
+        let with = description_of(&the_table_without(&[]), "spawn_processor");
+        let by_file = "so save the original to a file first, in the scratch directory if you \
+                       were given one: end the run line that made it with `> path`, or write a \
+                       fetched page with write_file and contents_ref, and call read_file on the \
+                       file for a reference to name in reads. Do not save it with a script that \
+                       opens the file itself. Then write the answer over the same file with \
+                       write_file, and run the program that sends it with the file's path as an \
+                       argument, so it reads the body from the file. Or give the answer's \
+                       reference to run as stdin_ref, which needs no file.";
+        let without_a_file = "Give the answer's reference to run as stdin_ref, which needs no \
+                              file, in the line of the program that sends it.";
+        assert!(
+            with.contains(by_file) && names_the_tool(&with, "read_file"),
+            "a list holding every tool is not told the route through a file: {with}"
+        );
+
+        // Without `read_file` there is no reference to name in `reads`, so the file is no route.
+        let unreadable = description_of(&the_table_without(&["read_file"]), "spawn_processor");
+        assert!(!names_the_tool(&unreadable, "read_file"), "{unreadable}");
+        assert_eq!(
+            unreadable,
+            with.replace(
+                &format!("and cannot be written anywhere, {by_file}"),
+                &format!("and cannot be written anywhere. {without_a_file}")
+            ),
+            "taking read_file off changed more than the route through a file"
+        );
+
+        // Without `write_file` the answer cannot be written over the file either.
+        let unwritable = description_of(&the_table_without(&["write_file"]), "spawn_processor");
+        for gone in ["write_file", "read_file", "contents_ref"] {
+            assert!(!names_the_tool(&unwritable, gone), "{unwritable}");
+        }
+        assert!(
+            unwritable.contains(without_a_file)
+                && !unwritable.contains("save the original to a file first")
+                && unwritable.contains("Do not leave it to a script you write")
+                && unwritable.contains("The recipient and the subject are yours"),
+            "a list without write_file lost more than the route through a file: {unwritable}"
+        );
+
+        // A list without `run` is sent to no route, so the file tools it holds are not named for
+        // one.
+        let no_run = description_of(&the_table_without(&["run"]), "spawn_processor");
+        assert!(
+            !names_the_tool(&no_run, "read_file") && !names_the_tool(&no_run, "stdin_ref"),
+            "{no_run}"
+        );
+    }
+
+    /// `read_output` points a run at `vet_content` for what it is holding besides a command's
+    /// output, so a list without it is not pointed there. The rest of the description is the same.
+    #[test]
+    fn the_read_output_description_names_vet_content_only_where_the_list_holds_it() {
+        let with = description_of(&the_table_without(&[]), "read_output");
+        let without = description_of(&the_table_without(&["vet_content"]), "read_output");
+        assert!(names_the_tool(&with, "vet_content"), "{with}");
+        assert!(!names_the_tool(&without, "vet_content"), "{without}");
+        assert_eq!(
+            without,
+            with.replace(
+                "For anything else you are holding a reference to, vet_content is the question \
+                 to ask. ",
+                ""
+            ),
+            "taking vet_content off changed more than the sentence about it"
+        );
+        // Taking another tool off leaves the sentence.
+        let other = description_of(&the_table_without(&["write_file"]), "read_output");
+        assert_eq!(other, with);
+    }
+
+    /// What the description of `run` says to do with the output that comes back as a reference.
+    fn run_says_of_its_reference(offered: &[bravebot_aichat::protocol::Tool]) -> String {
+        let run = description_of(offered, "run");
+        let from = "otherwise it comes back as a reference, like a file you may not read";
+        let start = run
+            .find(from)
+            .unwrap_or_else(|| panic!("{from:?} is not in {run}"));
+        let end = run[start..]
+            .find(" Do use it to compile and test what you changed.")
+            .unwrap_or_else(|| panic!("the sentence about the output does not end: {run}"))
+            + start;
+        run[start..end].to_string()
+    }
+
+    /// The planner on an ordinary turn reads `fetch_url`, `job_output` and `run` as the table
+    /// wrote them before they followed the list. These are the words they had, so a sentence that
+    /// changed for the session is found here.
+    #[test]
+    fn a_list_holding_every_tool_gets_the_fetch_job_and_run_texts_it_always_had() {
+        let everything = the_table_without(&[]);
+        assert_eq!(
+            description_of(&everything, "fetch_url"),
+            "Fetch an http or https URL. Not the way to read a github.com pull request or issue \
+             where the prompt says the GitHub CLI is on PATH, which names the commands that are. \
+             What comes back is quarantined, like a file nobody vouched for: you get a reference \
+             rather than the text, and you cannot read it or be told what it says. Hand the \
+             reference to spawn_processor to have a question answered about it, or to write_file \
+             as contents_ref to save it. Where you have to read the page yourself, vet_content \
+             has it checked and asks the user to show it to you. The user is asked before \
+             anything leaves the machine."
+        );
+        assert_eq!(
+            description_of(&everything, "job_output"),
+            "See what a background job has printed, and whether it has ended. Give the job name \
+             run handed back. Each call reports what is new since the last one, so calling it \
+             again after doing something else shows what happened in between rather than \
+             repeating what you have seen. Output is quarantined exactly as a run's is: it comes \
+             back as text where the user vouched for every command in the line, and otherwise as \
+             a reference to pass to read_output, spawn_processor or write_file. Use wait_seconds \
+             to wait for the job rather than asking it again and again. Without it a wait costs \
+             a whole turn per look: you call, are told nothing has happened, and answer only to \
+             be asked the same question. A wait ends at the job's next output, so a job that \
+             prints a line every second ends it every second. When what you need is the end of \
+             the job and not its output as it arrives, add until_exit: true, which waits for the \
+             job to end or for wait_seconds to run out and returns what it printed since your \
+             last look in one answer. It is still a wait inside this turn, so it cannot tell you \
+             about anything that happens after the turn ends, and the account of the job's start \
+             says whether it is killed then or kept."
+        );
+        let run = description_of(&everything, "run");
+        assert!(
+            run.contains(
+                "Output comes back as text you can read where the user has vouched for every \
+                 command in the line; otherwise it comes back as a reference, like a file you may \
+                 not read: pass it to read_output to see it, hand it to spawn_processor, or write \
+                 it to a file with write_file. A summary, a translation or other text made from \
+                 it is written by spawn_processor, whose description says how that text reaches a \
+                 program. Do use it to compile and test what you changed."
+            ),
+            "{run}"
+        );
+        let background = everything
+            .iter()
+            .find(|tool| tool.function.name == "run")
+            .expect("run is on the list")
+            .function
+            .parameters["properties"]["background"]["description"]
+            .as_str()
+            .expect("a description")
+            .to_string();
+        assert_eq!(
+            background,
+            "Leave it running instead of waiting for it, and hand back a job name. For a program \
+             meant to keep going: a server, a watcher, a log follower. Use it when you need the \
+             program still up while you do something else, such as starting a server and then \
+             fetching a page from it. While this turn is still going you are told when it ends, \
+             with how it ended and what it printed, so nothing has to poll for that. Call \
+             job_output with the name to see what it has printed before then. Must be one pipeline \
+             with no redirection, and it is killed when this turn ends. Defaults to false, which \
+             waits and hands back the output."
+        );
+
+        // The pass over a list holding every tool is the table's own text.
+        let table = available(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        for name in ["fetch_url", "job_output", "run"] {
+            let in_table = table.iter().find(|t| t.function.name == name).unwrap();
+            let after = everything.iter().find(|t| t.function.name == name).unwrap();
+            assert_eq!(
+                in_table.function.description, after.function.description,
+                "the table and a pass over a list holding every tool disagree about {name}"
+            );
+            assert_eq!(
+                in_table.function.parameters, after.function.parameters,
+                "the table and a pass over a list holding every tool disagree about the \
+                 arguments of {name}"
+            );
+        }
+    }
+
+    /// `fetch_url` hands back a reference and says what to do with it. A list without
+    /// `spawn_processor`, `write_file` or `vet_content` is not sent to it, the moves it does have
+    /// stay, and nothing else in the description changes.
+    #[test]
+    fn the_fetch_description_names_only_the_tools_the_list_holds() {
+        let with = description_of(&the_table_without(&[]), "fetch_url");
+        let moves = " Hand the reference to spawn_processor to have a question answered about it, \
+                     or to write_file as contents_ref to save it.";
+        let reading = " Where you have to read the page yourself, vet_content has it checked and \
+                       asks the user to show it to you.";
+        assert!(with.contains(moves) && with.contains(reading), "{with}");
+
+        for (gone, expected) in [
+            (
+                "spawn_processor",
+                " Hand the reference to write_file as contents_ref to save it.",
+            ),
+            (
+                "write_file",
+                " Hand the reference to spawn_processor to have a question answered about it.",
+            ),
+        ] {
+            let without = description_of(&the_table_without(&[gone]), "fetch_url");
+            assert!(!names_the_tool(&without, gone), "{without}");
+            assert_eq!(without, with.replace(moves, expected), "without {gone}");
+        }
+        let unvetted = description_of(&the_table_without(&["vet_content"]), "fetch_url");
+        assert!(!names_the_tool(&unvetted, "vet_content"), "{unvetted}");
+        assert_eq!(unvetted, with.replace(reading, ""));
+
+        // Neither move and no check: the description still says what comes back.
+        let bare = description_of(
+            &the_table_without(&["spawn_processor", "write_file", "vet_content"]),
+            "fetch_url",
+        );
+        assert_eq!(
+            bare,
+            with.replace(moves, "").replace(reading, ""),
+            "taking all three off changed more than the sentences about them"
+        );
+        assert!(
+            bare.contains("you cannot read it or be told what it says. The user is asked before"),
+            "{bare}"
+        );
+    }
+
+    /// `job_output` says what a job's output is passed to when it comes back as a reference. Each of
+    /// the three tools is named only where the list holds it, and a list with none still says that
+    /// the output comes back as a reference.
+    #[test]
+    fn the_job_output_description_names_only_the_tools_the_list_holds() {
+        let full = description_of(&the_table_without(&[]), "job_output");
+        let sentence = "otherwise as a reference to pass to read_output, spawn_processor or \
+                        write_file.";
+        assert!(full.contains(sentence), "{full}");
+        for (gone, expected) in [
+            (
+                "read_output",
+                "otherwise as a reference to pass to spawn_processor or write_file.",
+            ),
+            (
+                "spawn_processor",
+                "otherwise as a reference to pass to read_output or write_file.",
+            ),
+            (
+                "write_file",
+                "otherwise as a reference to pass to read_output or spawn_processor.",
+            ),
+        ] {
+            let without = description_of(&the_table_without(&[gone]), "job_output");
+            assert!(!names_the_tool(&without, gone), "{without}");
+            assert_eq!(without, full.replace(sentence, expected), "without {gone}");
+        }
+        for (kept, expected) in [
+            (
+                "read_output",
+                "otherwise as a reference to pass to read_output.",
+            ),
+            (
+                "spawn_processor",
+                "otherwise as a reference to pass to spawn_processor.",
+            ),
+            (
+                "write_file",
+                "otherwise as a reference to pass to write_file.",
+            ),
+        ] {
+            let all = ["read_output", "spawn_processor", "write_file"];
+            let gone: Vec<&str> = all.into_iter().filter(|name| *name != kept).collect();
+            let alone = description_of(&the_table_without(&gone), "job_output");
+            assert_eq!(alone, full.replace(sentence, expected), "only {kept}");
+        }
+        let bare = description_of(
+            &the_table_without(&["read_output", "spawn_processor", "write_file"]),
+            "job_output",
+        );
+        assert_eq!(
+            bare,
+            full.replace(sentence, "otherwise as a reference."),
+            "taking all three off changed more than the sentence about them"
+        );
+    }
+
+    /// `run` says what to do with output that comes back as a reference, and how to see what a
+    /// background job has printed so far. Each tool is named only where the list holds it. The
+    /// sentence that sends text made from the output to `spawn_processor` follows the moves, and is
+    /// said where that tool is on the list.
+    #[test]
+    fn the_run_description_names_only_the_tools_the_list_holds() {
+        let full = description_of(&the_table_without(&[]), "run");
+        let in_full = run_says_of_its_reference(&the_table_without(&[]));
+        assert_eq!(
+            in_full,
+            "otherwise it comes back as a reference, like a file you may not read: pass it to \
+             read_output to see it, hand it to spawn_processor, or write it to a file with \
+             write_file. A summary, a translation or other text made from it is written by \
+             spawn_processor, whose description says how that text reaches a program."
+        );
+        let made_from_it = " A summary, a translation or other text made from it is written by \
+                            spawn_processor, whose description says how that text reaches a \
+                            program.";
+        let sentence = |moves: &str, processor: bool| {
+            let then = if processor { made_from_it } else { "" };
+            format!(
+                "otherwise it comes back as a reference, like a file you may not read{moves}.{then}"
+            )
+        };
+        let all = ["read_output", "spawn_processor", "write_file"];
+        for (gone, moves) in [
+            (
+                "read_output",
+                ": hand it to spawn_processor, or write it to a file with write_file",
+            ),
+            (
+                "spawn_processor",
+                ": pass it to read_output to see it, or write it to a file with write_file",
+            ),
+            (
+                "write_file",
+                ": pass it to read_output to see it, or hand it to spawn_processor",
+            ),
+        ] {
+            let offered = the_table_without(&[gone]);
+            let processor = gone != "spawn_processor";
+            assert_eq!(
+                run_says_of_its_reference(&offered),
+                sentence(moves, processor),
+                "without {gone}"
+            );
+            // Only the sentence about the output changed.
+            assert_eq!(
+                description_of(&offered, "run"),
+                full.replace(&in_full, &sentence(moves, processor)),
+                "taking {gone} off changed more than the sentence about the output"
+            );
+            assert_eq!(
+                names_the_tool(&description_of(&offered, "run"), "spawn_processor"),
+                processor,
+                "without {gone}"
+            );
+        }
+        for (kept, moves) in [
+            ("read_output", ": pass it to read_output to see it"),
+            ("spawn_processor", ": hand it to spawn_processor"),
+            ("write_file", ": write it to a file with write_file"),
+            ("", ""),
+        ] {
+            let gone: Vec<&str> = all.into_iter().filter(|name| *name != kept).collect();
+            assert_eq!(
+                run_says_of_its_reference(&the_table_without(&gone)),
+                sentence(moves, kept == "spawn_processor"),
+                "only {kept:?}"
+            );
+        }
+
+        // The first look at what a background job has printed is job_output's, named where it is
+        // held.
+        let background = |offered: &[bravebot_aichat::protocol::Tool]| {
+            offered
+                .iter()
+                .find(|tool| tool.function.name == "run")
+                .expect("run is on the list")
+                .function
+                .parameters["properties"]["background"]["description"]
+                .as_str()
+                .expect("a description")
+                .to_string()
+        };
+        let with_it = background(&the_table_without(&[]));
+        let without_it = background(&the_table_without(&["job_output"]));
+        assert!(names_the_tool(&with_it, "job_output"), "{with_it}");
+        assert!(!names_the_tool(&without_it, "job_output"), "{without_it}");
+        assert_eq!(
+            without_it,
+            with_it.replace(
+                " Call job_output with the name to see what it has printed before then.",
+                ""
+            ),
+            "taking job_output off changed more than the sentence about it"
         );
     }
 

@@ -84,6 +84,7 @@ const INIT_OK: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"20
 const TOOLS_OK: &str = r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"lookup","description":"look something up","inputSchema":{"type":"object"}}]}}"#;
 const CALL_OK: &str =
     r#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"remote answer"}]}}"#;
+const CALL_PICTURE: &str = r#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"caption"},{"type":"image","data":"iVBORw0KGgo=","mimeType":"image/png"},{"type":"resource_link","uri":"https://example.com/a"}]}}"#;
 const CALL_FAILED: &str = r#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"no such record"}],"isError":true}}"#;
 
 /// The prose a server puts beside a JSON-RPC error code, which nothing in the protocol constrains.
@@ -174,8 +175,47 @@ fn a_tool_result_is_labelled_untrusted_and_private() {
         .expect("tool call");
 
     assert_eq!(listing.list().label(), Label::untrusted_public());
-    assert_eq!(result.label(), Label::untrusted_private());
+    assert_eq!(result.text.label(), Label::untrusted_private());
     assert!(policy.finish());
+}
+
+/// A picture a remote tool returns is untrusted and private as its text is, and is held as a
+/// `data:` URI this client wrote. The link beside it is left out and counted.
+#[test]
+fn a_tool_result_picture_is_labelled_untrusted_and_private() {
+    let (url, _received) = serve(vec![json_response(INIT_OK), json_response(CALL_PICTURE)]);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([
+            Capability::WebFetch,
+            Capability::McpCall(ServerAlias::new("remote")),
+        ]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    let mut server = HttpServer::new("remote", &url);
+    server
+        .initialize(&mut policy, &egress, "bravebot", "0.1.0")
+        .expect("handshake");
+    let output = server
+        .call_tool(&mut policy, &egress, "lookup", serde_json::json!({}))
+        .expect("tool call");
+
+    assert_eq!(output.left_out, 1);
+    let [picture] = <[_; 1]>::try_from(output.pictures).expect("one picture");
+    assert_eq!(output.text.label(), Label::untrusted_private());
+    assert_eq!(picture.uri.label(), Label::untrusted_private());
+    assert_eq!(picture.media, "image/png");
+    let proof = policy.authorise_display_release("test reads what the server returned");
+    assert_eq!(output.text.declassify(&proof), "caption");
+    assert_eq!(
+        picture.uri.declassify(&proof),
+        "data:image/png;base64,iVBORw0KGgo="
+    );
 }
 
 /// A server that frames its reply as SSE must still work.
@@ -202,7 +242,7 @@ fn an_sse_framed_reply_is_handled() {
     let result = server
         .call_tool(&mut policy, &egress, "lookup", serde_json::json!({}))
         .expect("tool call over sse");
-    assert_eq!(result.label(), Label::untrusted_private());
+    assert_eq!(result.text.label(), Label::untrusted_private());
 }
 
 /// MCP traffic is ordinary egress, so the network gate must see it.
@@ -497,6 +537,65 @@ fn a_tool_level_error_is_reported_as_a_failure() {
     assert!(policy.finish());
 }
 
+/// A call that was answered is told from one that was not, so that a caller can treat a reply the
+/// same whatever it holds: a result of the wrong shape, a reply that is not JSON, one with neither
+/// a result nor an error and an HTTP status that is not a success are replies this client could not
+/// use, a JSON-RPC error is a server error, and a connection closed with no reply is a transport
+/// failure.
+#[test]
+fn a_call_that_was_answered_is_told_from_one_that_was_not() {
+    let status = "HTTP/1.1 400 Bad Request\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnope";
+    let cases = [
+        (
+            "a wrong shape",
+            json_response(r#"{"jsonrpc":"2.0","id":2,"result":{"content":5}}"#),
+        ),
+        ("not json", json_response("not json at all")),
+        ("neither", json_response(r#"{"jsonrpc":"2.0","id":2}"#)),
+        ("a status", status.to_string()),
+        (
+            "a rejection",
+            json_response(r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"boom"}}"#),
+        ),
+        ("a closed connection", String::new()),
+    ];
+    for (what, reply) in cases {
+        let (url, _received) = serve(vec![json_response(INIT_OK), reply]);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([
+                Capability::WebFetch,
+                Capability::McpCall(ServerAlias::new("remote")),
+            ]),
+            &mut sink,
+        )
+        .expect("policy");
+        let mut server = HttpServer::new("remote", &url);
+        server
+            .initialize(&mut policy, &egress, "bravebot", "0.1.0")
+            .expect("handshake");
+
+        let error = server
+            .call_tool(&mut policy, &egress, "lookup", serde_json::json!({}))
+            .expect_err(what);
+
+        let replied = match &error {
+            McpError::Unusable(_) | McpError::Server { .. } => true,
+            McpError::Transport(_) => false,
+            other => panic!("{what}: got {other}"),
+        };
+        assert_eq!(replied, what != "a closed connection", "{what}: {error}");
+        assert_eq!(
+            matches!(error, McpError::Server { .. }),
+            what == "a rejection",
+            "{what}: {error}"
+        );
+    }
+}
+
 #[test]
 fn a_server_error_is_reported() {
     let error_body = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"boom"}}"#;
@@ -545,7 +644,7 @@ fn a_non_json_reply_is_an_error() {
     let error = server
         .initialize(&mut policy, &egress, "bravebot", "0.1.0")
         .expect_err("must be an error");
-    assert!(matches!(error, McpError::Transport(_)), "got: {error}");
+    assert!(matches!(error, McpError::Unusable(_)), "got: {error}");
 }
 
 /// MCP-8: a rejection is reported as the method that was put and the code the protocol assigns,
@@ -630,7 +729,7 @@ fn a_rejected_reply_names_what_was_read_and_not_the_servers_words() {
         .list_tools(&mut policy, &egress)
         .expect_err("a reply that will not parse is a failure");
 
-    assert!(matches!(error, McpError::Transport(_)), "got: {error}");
+    assert!(matches!(error, McpError::Unusable(_)), "got: {error}");
     let said = error.to_string();
     assert!(said.contains("tools/list"), "{said}");
     assert!(!said.contains("disregard"), "{said}");
@@ -735,7 +834,7 @@ fn a_longer_bound_lets_a_slow_reply_through() {
         .call_tool(&mut policy, &egress, "lookup", serde_json::json!({}))
         .expect("a reply within the bound is read");
 
-    assert_eq!(result.label(), Label::untrusted_private());
+    assert_eq!(result.text.label(), Label::untrusted_private());
     assert!(policy.finish());
 }
 

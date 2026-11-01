@@ -15,7 +15,7 @@ A run that has lanes also writes `tracker.txt` in the work directory: the titles
 `security`, read with `gh issue list`, for the lanes to compare a candidate with before they report it.
 `--tracker FILE` supplies them instead, and a `--mechanical-only` run never asks.
 
-The mechanical half checks what a tool can check and the specs do not yet: that the two documents
+The mechanical half checks what a tool can check and the specs do not yet: that the three documents
 naming the admitted exceptions agree on how many there are, that every crate keeping a network
 client of its own is one the egress register admits and no comment claims a dependency a manifest
 beside it declares, that the register admitting them leaves
@@ -80,6 +80,9 @@ _shared.loader.exec_module(workdir)
 
 REVIEW_DOC = Path("docs/development/reviewing-for-the-rule.md")
 LABELS_SPEC = Path("docs/specs/labels.md")
+# The page a person reads to learn where the rule has exceptions. It counts them in its heading and
+# again in the sentence under it.
+SECURITY_PAGE = Path("docs/website/docs/security/security.md")
 NET_EGRESS_SPEC = Path("docs/specs/network-egress.md")
 
 # The crate holding the policy gate, which is permitted its client by being the gate.
@@ -144,13 +147,15 @@ STRUCT_LABELLED = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+Labelled\b"
 ALLOWED_DERIVES = {"Clone"}
 
 # The gates. A witness may be minted nowhere else, and reaching content through anything but one of
-# these is shape 3.
+# these is shape 3. `Policy::read_a_number` releases a processor's answer to a function the caller
+# names and takes one byte back, so it is counted like the gates that release to a closure.
 GATES = (
     "Policy::present",
     "Policy::render_in_place",
     "Policy::render_pair_in_place",
     "Policy::read_trusted_content",
     "Policy::read_planner_argument",
+    "Policy::read_a_number",
 )
 WITNESS = "Declassification::authorise"
 
@@ -188,10 +193,17 @@ NUMBERS = {
     "six": 6,
     "seven": 7,
     "eight": 8,
+    "nine": 9,
 }
 PLACES = re.compile(
     r"\b(" + "|".join(NUMBERS) + r")\s+places?\s+(?:in|do|that)", re.IGNORECASE
 )
+# How the public page counts them: `## Nine deliberate exceptions`, and a sentence saying that bytes
+# nobody vouched for decide something "in nine places".
+EXCEPTIONS_HEADING = re.compile(
+    r"^#{1,6}\s+(" + "|".join(NUMBERS) + r")\s+deliberate\s+exceptions\b", re.IGNORECASE
+)
+PLACES_SENTENCE = re.compile(r"\b(" + "|".join(NUMBERS) + r")\s+places\b", re.IGNORECASE)
 FUNCTION = re.compile(r"\bfn\s+([A-Za-z0-9_]+)")
 # A name bound to one of the `Fn` traits, which is a parameter whose value is code the caller wrote
 # or a generic the parameter is declared with. The name is what a call has to pass on for the
@@ -525,27 +537,40 @@ def sites_for(symbol, sources):
 
 
 def check_exception_counts():
-    """The two documents naming the admitted exceptions have to agree on how many there are.
+    """The three documents naming the admitted exceptions have to agree on how many there are.
 
-    `labels.md` is where an exception is recorded and `reviewing-for-the-rule.md` is what a reviewer
-    reads before reviewing a label diff. Where the review document names fewer, a reviewer meeting
-    the unnamed one has to decide between calling a recorded exception a violation and assuming the
-    counts already vetted it. Both are wrong, and the document itself says why: an unlisted exception
-    is indistinguishable from a violation.
+    `labels.md` is where an exception is recorded, `reviewing-for-the-rule.md` is what a reviewer
+    reads before reviewing a label diff, and the security page is what a person reads to learn where
+    the rule has exceptions. Where one of them names a different number, a reader meeting an
+    exception has to decide between calling a recorded one a violation and assuming the counts
+    already vetted it. Both are wrong, and the review document says why: an unlisted exception is
+    indistinguishable from a violation. The page counts them twice, in its heading and in the
+    sentence under it, and each is compared.
     """
     if not REVIEW_DOC.is_file() or not LABELS_SPEC.is_file():
         return
 
+    def lines_of(path):
+        return path.read_text(encoding="utf-8").split("\n") if path.is_file() else []
+
     counted = {}
     for path in (REVIEW_DOC, LABELS_SPEC):
-        lines = path.read_text(encoding="utf-8").split("\n")
-        for number, raw in enumerate(lines, start=1):
+        for number, raw in enumerate(lines_of(path), start=1):
             found = PLACES.search(raw)
             if found and "untrusted" in raw.lower():
-                counted[path] = (NUMBERS[found.group(1).lower()], number, raw.strip())
+                counted[path] = [(NUMBERS[found.group(1).lower()], number, raw.strip())]
                 break
+    for number, raw in enumerate(lines_of(SECURITY_PAGE), start=1):
+        found = EXCEPTIONS_HEADING.search(raw)
+        if not found and "untrusted" in raw.lower():
+            found = PLACES_SENTENCE.search(raw)
+        if found:
+            counted.setdefault(SECURITY_PAGE, []).append(
+                (NUMBERS[found.group(1).lower()], number, raw.strip())
+            )
 
-    missing = [str(path) for path in (REVIEW_DOC, LABELS_SPEC) if path not in counted]
+    named = (REVIEW_DOC, LABELS_SPEC, SECURITY_PAGE)
+    missing = [str(path) for path in named if path not in counted]
     if missing:
         yield finding(
             WARNING,
@@ -560,23 +585,24 @@ def check_exception_counts():
         )
         return
 
-    review, spec = counted[REVIEW_DOC], counted[LABELS_SPEC]
-    if review[0] != spec[0]:
+    spec = counted[LABELS_SPEC][0]
+    for path in (REVIEW_DOC, SECURITY_PAGE):
+        stale = [one for one in counted[path] if one[0] != spec[0]]
+        if not stale:
+            continue
         yield finding(
             ERROR,
             "exception-count-disagreement",
-            "the review pass names fewer admitted exceptions than the spec, so an unnamed one "
-            "reads as a violation",
-            f"`{REVIEW_DOC}` says {review[0]} places branch on untrusted bytes and "
+            f"`{path}` counts the admitted exceptions differently from the spec, so a reader checks "
+            "a diff against the wrong number and an unnamed one reads as a violation",
+            f"`{path}` says {stale[0][0]} places branch on untrusted bytes and "
             f"`{LABELS_SPEC}` names {spec[0]}",
             "trust",
             "low",
-            evidence=[
-                f"{REVIEW_DOC}:{review[1]} {review[2][:120]}",
-                f"{LABELS_SPEC}:{spec[1]} {spec[2][:120]}",
-            ],
-            fix="bring the review document to the number the spec records, since the spec is where "
-            "an exception is written down and the review document is what is read before a diff",
+            evidence=[f"{path}:{one[1]} {one[2][:120]}" for one in stale]
+            + [f"{LABELS_SPEC}:{spec[1]} {spec[2][:120]}"],
+            fix="bring the document to the number the spec records, since the spec is where "
+            "an exception is written down and the others are what is read before a diff",
         )
 
 

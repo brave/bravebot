@@ -58,6 +58,10 @@ pub enum SlotError {
     NotWritten(SlotId),
     /// Something that writes or hands on a slot's text asked for a slot whose text is a decoding.
     Decoded(SlotId),
+    /// A choice was asked for under a name that holds none.
+    NotAChoice(SlotId),
+    /// A choice was asked for after a call used it.
+    ChoiceSpent(SlotId),
 }
 
 impl fmt::Display for SlotError {
@@ -73,6 +77,11 @@ impl fmt::Display for SlotError {
                 f,
                 "slot '{s}' holds a file in another encoding as the text it decodes to, which is \
                  not the file's own bytes, so it cannot be written or handed to a program"
+            ),
+            Self::NotAChoice(s) => write!(f, "slot '{s}' holds no choice a processor made"),
+            Self::ChoiceSpent(s) => write!(
+                f,
+                "the choice in slot '{s}' has filled a call already, and a choice fills one"
             ),
         }
     }
@@ -179,9 +188,11 @@ enum Entry {
         /// The media type, where this slot holds a picture rather than text.
         ///
         /// `Some` means the content is a `data:` URI and belongs in a request as a part rather
-        /// than in a message body. Chosen by the driver from a closed table of extensions, never
-        /// taken from a filename and never from anything read, so it decides nothing an attacker
-        /// steers: a slot cannot become a picture by containing something that looks like one.
+        /// than in a message body. Chosen from a closed table, never taken from a filename and never
+        /// as a string a server or a file wrote: for a file the table is of extensions, and for a
+        /// picture a server's tool result carried it is the four media types the transport selects
+        /// from by comparing the `mimeType` the server wrote, which is the eighth Known cost of
+        /// labels.md. A slot cannot become a picture by containing something that looks like one.
         picture: Option<String>,
         /// Where these bytes came from, as the driver described them when it quarantined them:
         /// a path, a URL, a command, a processor. Or the address a deferred read was reserved
@@ -329,6 +340,24 @@ impl From<String> for Fill {
 #[derive(Debug, Default)]
 pub struct SlotStore {
     slots: HashMap<SlotId, Entry>,
+    /// The numbers processors chose, each under a name of its own.
+    ///
+    /// Not an [`Entry`]: a choice is no text, so it is in none of the places text is. The accessors
+    /// that return a slot's label, bytes or address find nothing under a choice's name, and a
+    /// consumer that asks for a choice as it would for text is refused as it is for a name nothing
+    /// holds. Only [`SlotStore::store_choice`] puts one here, and a name is taken for good, by text
+    /// or by a choice.
+    choices: HashMap<SlotId, Choice>,
+}
+
+/// A number a processor chose, and whether a call has used it.
+///
+/// Spent by the one gate that carries it into a call, so a choice fills one call and a second
+/// call that names it is refused.
+#[derive(Debug)]
+struct Choice {
+    number: Labelled<u8>,
+    spent: bool,
 }
 
 impl SlotStore {
@@ -336,8 +365,12 @@ impl SlotStore {
         Self::default()
     }
 
+    /// Whether this name is taken, by text or by a choice.
+    ///
+    /// A choice is counted here so that a name that holds one can neither be written nor deferred
+    /// as text. It is not found by any other accessor.
     pub fn is_written(&self, id: &SlotId) -> bool {
-        self.slots.contains_key(id)
+        self.slots.contains_key(id) || self.choices.contains_key(id)
     }
 
     pub fn label_of(&self, id: &SlotId) -> Option<Label> {
@@ -647,6 +680,58 @@ impl SlotStore {
         Ok(measured)
     }
 
+    /// Keep the number a processor chose under a name of its own.
+    ///
+    /// Only the policy layer stores one, for the same reason only it mints a writer: the label is
+    /// the one the number was read at and not whatever the caller prefers. The name is taken at
+    /// once, and a name that holds text or a choice already is refused, so a choice cannot replace
+    /// anything and nothing can replace it.
+    pub(crate) fn store_choice(
+        &mut self,
+        id: SlotId,
+        chosen: Labelled<u8>,
+    ) -> Result<(), SlotError> {
+        if self.is_written(&id) {
+            return Err(SlotError::AlreadyWritten(id));
+        }
+        self.choices.insert(
+            id,
+            Choice {
+                number: chosen,
+                spent: false,
+            },
+        );
+        Ok(())
+    }
+
+    /// The number kept under `id` as a choice, where no call has used it.
+    ///
+    /// For the gate that draws the number to the person who is asked about the call it will fill.
+    /// The choice stays unspent. Nothing else asks: the number is not text and no accessor of text
+    /// returns it.
+    pub(crate) fn take_choice(&self, id: &SlotId) -> Result<Labelled<u8>, SlotError> {
+        match self.choices.get(id) {
+            None => Err(SlotError::NotAChoice(id.clone())),
+            Some(choice) if choice.spent => Err(SlotError::ChoiceSpent(id.clone())),
+            Some(choice) => Ok(choice.number.clone()),
+        }
+    }
+
+    /// The number kept under `id` as a choice, marked as used by a call.
+    ///
+    /// For the gate that carries the number into the one call it fills. A name that holds no
+    /// choice, or one a call used already, is refused and nothing is marked.
+    pub(crate) fn spend_choice(&mut self, id: &SlotId) -> Result<Labelled<u8>, SlotError> {
+        match self.choices.get_mut(id) {
+            None => Err(SlotError::NotAChoice(id.clone())),
+            Some(choice) if choice.spent => Err(SlotError::ChoiceSpent(id.clone())),
+            Some(choice) => {
+                choice.spent = true;
+                Ok(choice.number.clone())
+            }
+        }
+    }
+
     /// Mint a single-use write capability with a fixed label.
     ///
     /// The label is supplied by the caller minting the writer, the policy layer,
@@ -941,6 +1026,126 @@ mod tests {
         assert!(
             !label.is_trusted(),
             "the reservation was untrusted: {label}"
+        );
+    }
+
+    /// A number a processor chose is kept under a name of its own, and nothing that returns text,
+    /// a label or an address finds it there. A choice stored as a text slot would be handed to a
+    /// processor as a document, written to a file, or named as a path.
+    #[test]
+    fn a_choice_is_kept_apart_from_text_and_no_text_accessor_returns_it() {
+        let mut store = SlotStore::new();
+        store
+            .store_choice(sid("ref:7"), Labelled::new(3u8, Label::untrusted_private()))
+            .expect("a first choice");
+
+        let id = sid("ref:7");
+        assert_eq!(store.label_of(&id), None);
+        assert_eq!(
+            store.take_for_effect(&id).unwrap_err(),
+            SlotError::NotWritten(sid("ref:7"))
+        );
+        assert_eq!(
+            store.take_for_reading(&id).unwrap_err(),
+            SlotError::NotWritten(sid("ref:7"))
+        );
+        assert!(!store.is_unread(&id));
+        assert!(!store.is_decoded(&id));
+        assert!(!store.is_a_picture(&id));
+        assert!(!store.is_from_command(&id));
+        assert!(!store.names_a_directory(&id));
+        assert!(
+            store.inventory().is_empty(),
+            "a choice was listed with the text slots"
+        );
+
+        // The name is taken, so text cannot be put under it and neither can a second choice.
+        assert!(store.is_written(&id));
+        assert!(
+            store
+                .writer_for(sid("ref:7"), Label::untrusted_private())
+                .is_err(),
+            "text was written under the name of a choice"
+        );
+        assert_eq!(
+            store.defer(sid("ref:7"), "notes.md", Label::untrusted_private()),
+            Err(SlotError::AlreadyWritten(sid("ref:7")))
+        );
+        assert_eq!(
+            store.store_choice(sid("ref:7"), Labelled::new(4u8, Label::untrusted_private())),
+            Err(SlotError::AlreadyWritten(sid("ref:7")))
+        );
+
+        // And the other way: a choice cannot be put under the name of text.
+        store
+            .writer_for(sid("ref:8"), Label::untrusted_public())
+            .unwrap()
+            .write("text")
+            .unwrap();
+        assert_eq!(
+            store.store_choice(sid("ref:8"), Labelled::new(1u8, Label::untrusted_public())),
+            Err(SlotError::AlreadyWritten(sid("ref:8")))
+        );
+        assert_eq!(
+            store.take_for_effect(&sid("ref:8")).unwrap().label(),
+            Label::untrusted_public()
+        );
+    }
+
+    /// Reading a choice uses nothing, and spending it uses it once. A read that spent would leave
+    /// the call the person was asked about with no number; a spend that did not mark would let one
+    /// choice fill every call that names it. A name that holds text, or nothing, is no choice to
+    /// either, and neither marks anything.
+    #[test]
+    fn a_choice_is_read_without_being_used_and_used_once() {
+        let mut store = SlotStore::new();
+        store
+            .store_choice(sid("ref:7"), Labelled::new(3u8, Label::untrusted_private()))
+            .expect("a choice");
+        store
+            .writer_for(sid("ref:8"), Label::untrusted_public())
+            .unwrap()
+            .write("text")
+            .unwrap();
+        let id = sid("ref:7");
+
+        for _ in 0..2 {
+            let read = store.take_choice(&id).expect("an unused choice");
+            assert_eq!(read.label(), Label::untrusted_private());
+        }
+        let spent = store.spend_choice(&id).expect("an unused choice");
+        assert_eq!(spent.label(), Label::untrusted_private());
+
+        assert_eq!(
+            store.take_choice(&id).unwrap_err(),
+            SlotError::ChoiceSpent(sid("ref:7"))
+        );
+        assert_eq!(
+            store.spend_choice(&id).unwrap_err(),
+            SlotError::ChoiceSpent(sid("ref:7"))
+        );
+        // Used, the name is still taken: it neither holds a second choice nor takes text.
+        assert!(store.is_written(&id));
+        assert_eq!(
+            store.store_choice(sid("ref:7"), Labelled::new(4u8, Label::untrusted_private())),
+            Err(SlotError::AlreadyWritten(sid("ref:7")))
+        );
+
+        for named in ["ref:8", "ref:99"] {
+            let named = sid(named);
+            assert_eq!(
+                store.take_choice(&named).unwrap_err(),
+                SlotError::NotAChoice(named.clone())
+            );
+            assert_eq!(
+                store.spend_choice(&named).unwrap_err(),
+                SlotError::NotAChoice(named.clone())
+            );
+        }
+        // The text under ref:8 is as it was.
+        assert_eq!(
+            store.take_for_effect(&sid("ref:8")).unwrap().label(),
+            Label::untrusted_public()
         );
     }
 

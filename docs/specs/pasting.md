@@ -43,8 +43,9 @@ It arrives in their own message, on the footing of the prompt it came with, and 
 admits it records that provenance and asserts nothing else. Nothing inspects the pixels and nothing
 could. Being a picture establishes nothing: the trust comes from the gesture and from nowhere else.
 
-It is carried whole rather than quarantined because a processor takes text slots and returns text,
-so there is no reference an image could be reduced to. That is a fact about the mechanism, and not
+It is carried whole rather than quarantined because it arrives in the user's own message, which
+is not quarantined. A picture that is quarantined is held in a slot, and a processor is given it
+there as a picture ([PROC-15](processors.md#PROC-15)). That is a fact about the mechanism, and not
 a second reason to trust it.
 
 ## Clauses

@@ -51,7 +51,7 @@ function StandingLabel({ connector }: { connector: Connector | undefined }): Rea
 }
 
 /** A declaration as it stands: what it runs or reaches, what it receives, and what it may touch. */
-function Declared({ connector }: { connector: Connector | ConnectorPreview }): React.JSX.Element {
+export function Declared({ connector }: { connector: Connector | ConnectorPreview }): React.JSX.Element {
   return (
     <dl className="connector-declaration" data-test="connector-declaration">
       {connector.transport === 'http' ? (
@@ -68,6 +68,7 @@ function Declared({ connector }: { connector: Connector | ConnectorPreview }): R
         <><dt>May read</dt><dd>{connector.reads.map((path) => <div key={path}><code>{path}</code></div>)}</dd></>
       )}
       {connector.directory && <><dt>Runs in, and may write</dt><dd><code>{connector.directory}</code></dd></>}
+      {connector.asks_every_call && <><dt>Calls</dt><dd>Each is asked about, and no answer to one is remembered. This window cannot ask, so it refuses them. The terminal can ask.</dd></>}
       {connector.digest && <><dt>Fingerprint</dt><dd><code>{connector.digest}</code></dd></>}
     </dl>
   )

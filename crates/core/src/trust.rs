@@ -809,6 +809,50 @@ mod tests {
         assert!(!store.is_trusted("src/main.rs"));
     }
 
+    /// BROWSER-32: the browser saves a file the Brave extension downloads in the person's Downloads
+    /// folder, which is outside the workspace and has no rule. A path there is undecided, and not
+    /// trusted, whether or not the workspace is trusted and whatever a rule for a folder of a
+    /// similar name says, `/home/person/Down` being the one a matcher that ignores the end of a
+    /// name would take for it. It is trusted only where a rule the person recorded for the folder,
+    /// as `/add-dir` does (TRUST-9), or a trusted workspace that holds the folder covers it, and
+    /// then every file in the folder is, the downloaded ones included (TRUST-2). A rule for one
+    /// platform's spelling of the folder covers that spelling alone.
+    #[test]
+    fn a_downloads_folder_outside_the_workspace_is_untrusted_until_a_person_vouches_for_it() {
+        let windows = crate::spelling::to_key(r"C:\Users\person\Downloads\report.pdf", true);
+        let downloaded = [
+            "/Users/person/Downloads/report.pdf",
+            "/home/person/Downloads/archive/report.pdf",
+            windows.as_ref(),
+        ];
+        let mut store = TrustStore::new("/home/person/work");
+        store.trust(".");
+        store.trust("/home/person/Down");
+        store.trust("/home/person/Downloads-old");
+        store.trust("/home/person/work/Downloads");
+        for path in downloaded {
+            assert_eq!(store.integrity_of(path), None, "{path}");
+            assert!(!store.is_trusted(path), "{path}");
+        }
+
+        store.trust("/home/person/Downloads");
+        assert!(store.is_trusted("/home/person/Downloads/archive/report.pdf"));
+        assert!(!store.is_trusted("/Users/person/Downloads/report.pdf"));
+        assert!(!store.is_trusted(windows.as_ref()));
+
+        let mut home = TrustStore::new("/home/person");
+        home.trust(".");
+        assert!(
+            home.is_trusted("/home/person/Downloads/archive/report.pdf"),
+            "a workspace that holds the folder trusts what is in it"
+        );
+
+        let mut on_windows = TrustStore::new("/home/person/work");
+        on_windows.trust(&crate::spelling::to_key(r"C:\Users\person\Downloads", true));
+        assert!(on_windows.is_trusted(windows.as_ref()));
+        assert!(!on_windows.is_trusted("/home/person/Downloads/archive/report.pdf"));
+    }
+
     /// RUN-5: a map says confined lines run without asking only where a yes said so, in the
     /// directory the yes was about. A map that never heard the question says nothing, which is what
     /// a directory trusted before the question said it keeps asking on.

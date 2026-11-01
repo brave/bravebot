@@ -7,9 +7,13 @@ governs:
   - crates/core/src/policy.rs
   - crates/agent/src/commit_message.rs
   - crates/agent/src/processor.rs
+  - crates/choice/src/lib.rs
+  - crates/choice/src/number.rs
 guards:
   - symbol: ProcessorSpec::new
   - symbol: Policy::before_processor
+  - symbol: Policy::before_chooser
+  - symbol: Policy::read_a_number
   - symbol: Policy::compose_processor_input
   - symbol: Policy::write_belongs_here
   - symbol: Policy::declassify_into_workspace
@@ -162,9 +166,15 @@ A private slot may become a file body. That is sound only
 because the destination is inside the boundary the bytes came from, so nothing leaves. The trust map
 then records that path as untrusted, so reading it back does not launder it.
 
+A slot that holds a picture or a PDF becomes the file it encodes, byte for byte. The same holds:
+the destination is a path the planner named and a person approved, the write is made at the label
+the slot had with its confidentiality lowered, and the effect that writes the file decodes it while
+the driver reads nothing ([WRITE-9](tools/write-file.md#WRITE-9)).
+
 **Never** reach for it for a network body, a command line, or a message to someone.
 
 `verified-by: bravebot_core::policy::a_write_back_into_the_workspace_lowers_only_confidentiality`
+`verified-by: bravebot_agent::turn::a_picture_slot_is_written_as_the_file_it_encodes_after_the_person_approves`
 
 ## Boundaries
 
@@ -319,6 +329,93 @@ starts, and the person is the only reader of the draft before they decide what t
 `verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
 `verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
 `verified-by: bravebot_tui::app::a_draft_answered_by_another_model_than_the_configured_one_says_so`
+
+<a id="PROC-15"></a>
+### PROC-15: a picture is given to a processor as a picture, and what it answers is text
+
+A slot that holds a picture is part of a processor's input as a part of its own, with its media
+type, and not as text in the body. The slot is one a file was read as ([READ-5](tools/read-file.md#READ-5))
+or a server's tool result carried ([MCP-6](mcp.md#MCP-6)), and the reference to it says what kind of
+thing it is. A processor given one answers as it does for any input: one document or none, as text,
+labelled by taint over its inputs ([PROC-3](#PROC-3)), and the planner is given a reference to it
+and never the text ([PROC-5](#PROC-5)).
+
+Looking at a picture through a processor comes before `vet_content` lets it through. A picture
+`vet_content` lets through makes the context private ([PROC-4](#PROC-4)), and from then on a
+processor is refused.
+
+**Why.** A picture carries whatever words are in it, so a planner that could look at one could be
+instructed by it, and a model told to read a data URI reads it as characters. A processor holds no
+tools and returns text the planner cannot read, so it can be asked what a picture shows without the
+picture or its answer entering the planner's context.
+
+`verified-by: bravebot_agent::turn::a_processor_is_given_a_picture_as_a_picture`
+`verified-by: bravebot_agent::mcp::a_processor_is_given_a_servers_picture_as_a_picture`
+
+<a id="PROC-16"></a>
+### PROC-16: a processor may be asked for one number, and a crate outside the driver reads it from the answer
+
+`spawn_processor` takes `choose_upto`, a whole number from 2 to 99 that the planner writes and that
+is held to the context like every argument ([LABEL-5](labels.md#LABEL-5)). The call takes no
+`about`, and a plan has no field for it ([MANIFEST-15](manifest.md#MANIFEST-15)).
+`Policy::before_chooser` builds the spec as `Policy::before_processor` builds any other
+([PROC-2](#PROC-2)), and refuses a limit outside that range. The processor is told that its whole
+answer is one whole number from 1 to the limit, or 0 where no entry fits, and no remark and no
+marker line are asked of it.
+
+The answer is read once, by `bravebot-choice`. The policy layer releases the text to its reader
+through `Policy::read_a_number` and takes one byte back. The byte is the number where the text,
+with the white space at both ends taken off, is one or two ASCII digits with no sign and no leading
+zero and the value is from 1 to the limit, and 0 in every other case, an empty text included. An
+answer of no bytes at all is refused by the transport before anything reads it, as for every
+processor, and no choice is made. A request that fails, whether on that answer, on content the
+service refuses, on a reply cut at the token ceiling or on one the service reports as incomplete,
+tells the planner one word of a closed set the driver wrote, as it does for every processor. The byte is labelled as the answer is, by taint over what the
+processor was given ([PROC-3](#PROC-3)). Nothing else of the answer is kept, and neither this
+process nor the gate compares the text or the byte. The gate refuses a spec that was not built to
+choose, so the answer of a processor that writes a document is read by no one for a number.
+
+The number is stored under a reference of its own kind, apart from the text slots, so it is no
+document, no path and no body, and the only argument that takes it is one a person's declaration
+names, as [ROUTE-10](routing.md#ROUTE-10) and [MCP-14](mcp.md#MCP-14) say ([PROC-6](#PROC-6),
+[ROUTE-6](routing.md#ROUTE-6)). It is quarantined whatever its label. The planner is told the same
+sentence whatever the answer read was, 0 included: a processor chose one entry of the list, the choice
+is held as `ref:N`, and it is not shown. The reference states the limit and the label and no count of
+lines or bytes ([LABEL-3](labels.md#LABEL-3)), and the person watching is told that a choice was made
+and not which. The person asked about the call it fills is shown the number
+([ROUTE-10](routing.md#ROUTE-10)). An answer with no bytes at all is refused by the transport for
+every processor, and is not read.
+
+**Why.** The decision is taken by a crate that holds no witness and no constructor, from text this
+process does not read. What this process does afterwards depends on no value of the number, so a page
+that talks the processor round buys one of at most a hundred numbers, or a failed request and the
+word for it. The read is the ninth of the
+[Known costs](labels.md#known-costs).
+
+`verified-by: bravebot_choice::number::a_number_is_read_only_from_one_or_two_ascii_digits_in_range`
+`verified-by: bravebot_choice::number::the_limit_is_the_planners_and_not_the_crates`
+`verified-by: bravebot_choice::number::every_number_up_to_the_largest_limit_is_read_and_the_next_is_not`
+`verified-by: bravebot_choice::lib::reading_an_answer_applies_the_planners_limit_and_labels_the_byte_as_the_answer_was`
+`verified-by: bravebot_choice::lib::a_processor_that_was_not_asked_to_choose_has_no_number_read_from_its_answer`
+`verified-by: bravebot_core::policy::reading_a_number_is_refused_for_a_spec_that_asked_for_a_document`
+`verified-by: bravebot_core::policy::the_reader_is_handed_the_answers_text_and_the_planners_limit`
+`verified-by: bravebot_core::policy::a_number_read_from_an_answer_keeps_the_label_of_the_answer`
+`verified-by: bravebot_core::policy::the_trail_of_reading_a_number_holds_no_digit_and_is_the_same_for_every_answer`
+`verified-by: bravebot_core::policy::a_chooser_carries_the_planners_limit_and_names_no_document`
+`verified-by: bravebot_core::policy::a_chooser_is_refused_a_limit_outside_two_to_the_largest`
+`verified-by: bravebot_core::policy::a_chooser_is_refused_for_the_reasons_a_processor_is`
+`verified-by: bravebot_core::slot::a_choice_is_kept_apart_from_text_and_no_text_accessor_returns_it`
+`verified-by: bravebot_core::policy::a_choice_is_no_reference_to_any_gate_that_takes_text`
+`verified-by: bravebot_core::policy::a_stored_choice_is_a_reference_whatever_its_label_and_the_trail_holds_no_digit`
+`verified-by: bravebot_core::reference::a_choice_reference_states_its_limit_and_no_count`
+`verified-by: bravebot_agent::turn::a_processor_asked_to_choose_is_asked_for_a_number_and_not_a_document`
+`verified-by: bravebot_agent::processor::a_processor_not_asked_to_choose_is_refused_before_anything_is_sent`
+`verified-by: bravebot_agent::turn::a_choice_reaches_the_planner_as_a_reference_to_a_choice_and_nothing_else`
+`verified-by: bravebot_agent::turn::the_planner_is_told_the_same_words_whatever_the_processor_answered`
+`verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
+`verified-by: bravebot_agent::browser_group_servers::a_free_text_answer_cannot_be_named_as_a_choice`
+`verified-by: bravebot_agent::turn::a_call_asking_for_a_number_is_refused_unless_it_asks_in_the_planners_own_terms`
+`verified-by: by-construction (Policy::read_a_number takes a function pointer that captures nothing of the caller's and returns a u8, so one byte is all of an answer that leaves the policy layer, and labels.md pins its uses file by file, so a second reader of an answer is a moved count that check-spec fails on)`
 
 ## Known costs
 

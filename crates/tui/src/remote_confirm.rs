@@ -691,6 +691,7 @@ mod tests {
             arguments: vec![("city".into(), "\"Paris\"".into())],
             description: None,
             may_stand: true,
+            asked_every_call: false,
         }
     }
 

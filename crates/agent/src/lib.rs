@@ -79,6 +79,7 @@ mod rule_approval;
 pub mod rules;
 pub mod sandbox_reason;
 pub mod scratch;
+mod server_calls;
 pub mod servers;
 pub mod shared;
 pub mod shell;

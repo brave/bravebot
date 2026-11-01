@@ -20,21 +20,24 @@ use crate::scratch::SessionScratch;
 use crate::servers::EffectivePolicy;
 use bravebot_aichat::protocol::{Tool, Usage};
 use bravebot_config::mcp::{
-    self as records, Approvals, Declaration, Declarations, Digest, Problem, Standing,
+    self as records, Approvals, ChoiceArguments, Declaration, Declarations, Digest, Problem,
+    Standing,
 };
 use bravebot_config::{Managed, Refusal, Rule};
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::event::Sink;
-use bravebot_core::policy::Policy;
+use bravebot_core::policy::{McpStanding, Policy};
+use bravebot_core::slot::{SlotId, SlotStore};
 use bravebot_core::value::Labelled;
 use bravebot_core::vetting::{Endorsed, Verdict};
 use bravebot_i18n::t;
-use bravebot_mcp::protocol::{WIRE_PREFIX, WIRE_SEPARATOR};
+use bravebot_mcp::protocol::{WIRE_PREFIX, WIRE_SEPARATOR, choice_key, with_choice};
 use bravebot_mcp::{
-    HttpServer, Listing, McpError, McpResult, PromptListing, StdioServer, wire_name,
+    HttpServer, Listing, McpError, McpResult, PromptListing, StdioServer, ToolOutput, wire_name,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -60,6 +63,10 @@ pub struct Reached {
     /// The filters the declaration put on the list, which a list read again is held to (MCP-12).
     tools: Vec<String>,
     exclude_tools: Vec<String>,
+    /// Whether the declaration says every call is asked about (SERVERS-21).
+    ask_every_call: bool,
+    /// The arguments of its tools the declaration says take a choice (SERVERS-22).
+    choice_arguments: ChoiceArguments,
 }
 
 impl Reached {
@@ -77,7 +84,23 @@ impl Reached {
             policy: None,
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         }
+    }
+
+    /// The same server, with whether its declaration says every call to it is asked about, which
+    /// no rule and no earlier answer takes back (SERVERS-21).
+    pub fn asking_every_call(mut self, ask: bool) -> Self {
+        self.ask_every_call = ask;
+        self
+    }
+
+    /// The same server, with the arguments of its tools its declaration says take a choice
+    /// (SERVERS-22).
+    pub fn choosing(mut self, choice_arguments: ChoiceArguments) -> Self {
+        self.choice_arguments = choice_arguments;
+        self
     }
 
     /// The same server, with the filters its declaration put on its list, which a list read again
@@ -86,6 +109,12 @@ impl Reached {
         self.tools = tools.to_vec();
         self.exclude_tools = exclude_tools.to_vec();
         self
+    }
+
+    /// The filters [`Reached::filtered_by`] holds, as `(tools, exclude_tools)`.
+    #[cfg(test)]
+    pub(crate) fn filters(&self) -> (&[String], &[String]) {
+        (&self.tools, &self.exclude_tools)
     }
 
     /// The same server, with the policy its process was started under (SERVERS-20). A server with
@@ -240,6 +269,11 @@ struct Server {
     /// The filters on its list, applied to a list read again (MCP-12).
     tools: Vec<String>,
     exclude_tools: Vec<String>,
+    /// Whether every call to it is asked about, whatever a rule or an earlier answer says
+    /// (SERVERS-21).
+    ask_every_call: bool,
+    /// The arguments of its tools the declaration says take a choice (SERVERS-22).
+    choice_arguments: ChoiceArguments,
     /// After `connection`, since fields drop in order: the process is stopped before its home goes.
     _home: Option<SessionScratch>,
 }
@@ -346,6 +380,8 @@ impl Session {
                     policy: reached.policy,
                     tools: reached.tools,
                     exclude_tools: reached.exclude_tools,
+                    ask_every_call: reached.ask_every_call,
+                    choice_arguments: reached.choice_arguments,
                     _home: reached.home,
                 })
             })
@@ -534,7 +570,8 @@ impl Session {
     /// drawn, every session: the list is a server's bytes, and nothing here decides from them
     /// whether it was seen before. A yes promotes it; a no offers none of its tools for the rest
     /// of the session, and a turn stopped at the question leaves it unasked. Settled at the start
-    /// of a turn a person asked for, since that is where there is somebody to put the question to.
+    /// of a turn a person asked for, and of a plan run, since that is where there is somebody to put
+    /// the question to.
     pub fn settle<S: Sink, C: Confirmer, R: Reporter>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -700,7 +737,27 @@ impl Session {
                 return (State::Declined, usage);
             }
         };
-        (offered(promoted), usage)
+        let state = offered(promoted);
+        if let State::Offered(tools) = &state {
+            for tool in tools {
+                for argument in server
+                    .choice_arguments
+                    .get(&tool.name)
+                    .into_iter()
+                    .flatten()
+                {
+                    if shadows_a_choice(tool, argument) {
+                        said.notice(t!(
+                            mcp_tools_choice_shadowed,
+                            alias = alias,
+                            tool = tool.name.as_str(),
+                            argument = argument.as_str()
+                        ));
+                    }
+                }
+            }
+        }
+        (state, usage)
     }
 
     /// The tools this turn may offer: every tool on every list somebody vouched for.
@@ -728,6 +785,22 @@ impl Session {
             deferred: false,
             loaded: Vec::new(),
         }
+    }
+
+    /// Whether the declaration of the server reached as `alias` says every call to it is asked
+    /// about (SERVERS-21).
+    fn asks_every_call(&self, alias: &str) -> bool {
+        self.0
+            .servers
+            .iter()
+            .any(|server| server.alias == alias && server.ask_every_call)
+    }
+
+    /// The arguments of the tool `tool` of the server reached as `alias` that its declaration says
+    /// take a choice (SERVERS-22).
+    fn choice_arguments(&self, alias: &str, tool: &str) -> Option<&BTreeSet<String>> {
+        let server = self.0.servers.iter().find(|server| server.alias == alias)?;
+        server.choice_arguments.get(tool)
     }
 
     /// Whether answer 2 was given about this tool in this project.
@@ -772,7 +845,7 @@ impl Session {
         alias: &str,
         tool: &str,
         arguments: Value,
-    ) -> McpResult<Labelled<String>> {
+    ) -> McpResult<ToolOutput> {
         let server = self.reached(alias)?;
         match &mut *held(&server.connection) {
             Connection::Stdio(server) => server.call_tool(policy, tool, arguments),
@@ -885,9 +958,15 @@ impl Session {
         }
 
         moved.set_bound(bound);
+        // The digest of what is written where something is written, and otherwise of the address
+        // alone, since a session that records nothing has no declaration to read the rest from.
+        let mut digest = declaration.digest();
         if let (Some(directory), true) = (&self.0.directory, self.0.writable) {
-            match record_a_move(directory, alias, &from, &declaration) {
-                Ok(()) => reporter.notice(t!(mcp_move_moved, alias = alias)),
+            match record_a_move(directory, alias, &from, &url) {
+                Ok(recorded) => {
+                    digest = recorded.digest();
+                    reporter.notice(t!(mcp_move_moved, alias = alias));
+                }
                 Err(Unmoved::Edited) => {
                     reporter.notice(t!(mcp_move_edited, alias = alias));
                     return false;
@@ -900,7 +979,7 @@ impl Session {
             reporter.notice(t!(mcp_move_moved, alias = alias));
         }
         *held(&server.connection) = Connection::Http(moved);
-        *held(&server.declaration) = declaration.digest();
+        *held(&server.declaration) = digest;
         true
     }
 }
@@ -924,8 +1003,12 @@ pub enum Unmoved {
     NotWritten(String),
 }
 
-/// Rewrite `alias`'s declaration from `from` to `to`, and approve `to` in the same write
-/// (SERVERS-11).
+/// Rewrite `alias`'s declaration from `from` to the same declaration at `url`, and approve the
+/// result in the same write (SERVERS-11). The declaration written is returned.
+///
+/// Where it is reached is what moved. Everything else is the declaration the person wrote and was
+/// asked about: its tool filters, the variables that name its headers and its bearer token, its
+/// bounds, and whether every call to it is asked about (SERVERS-21).
 ///
 /// The approval is recorded in the approvals file whatever answered for the declaration it
 /// replaces: a project a person said to use every server in answers for what a checkout requests,
@@ -935,8 +1018,8 @@ pub fn record_a_move(
     directory: &Path,
     alias: &str,
     from: &Digest,
-    to: &Declaration,
-) -> Result<(), Unmoved> {
+    url: &str,
+) -> Result<Declaration, Unmoved> {
     let mut declarations = Declarations::read(directory).map_err(|why| {
         Unmoved::NotWritten(t!(
             mcp_unreadable,
@@ -951,8 +1034,9 @@ pub fn record_a_move(
     else {
         return Err(Unmoved::Edited);
     };
-    // Where it is reached is what moved: the bounds the person gave it are still theirs.
-    let to = &to.clone().timing(current.timeouts());
+    let to = current
+        .moved_to(url.to_string())
+        .map_err(|problem| Unmoved::NotWritten(undeclarable(&problem)))?;
     let mut approvals = Approvals::to_change(directory).map_err(|why| {
         Unmoved::NotWritten(t!(
             mcp_unreadable,
@@ -960,7 +1044,7 @@ pub fn record_a_move(
             reason = unreadable_record(&why)
         ))
     })?;
-    declarations.insert(alias, to);
+    declarations.insert(alias, &to);
     approvals.keep_only(&declarations);
     approvals.approve(alias, to.digest());
     crate::home::replace(
@@ -968,7 +1052,8 @@ pub fn record_a_move(
         declarations.to_text(),
     )
     .and_then(|()| crate::home::replace(&records::approvals_file(directory), approvals.to_text()))
-    .map_err(|error| Unmoved::NotWritten(error.to_string()))
+    .map_err(|error| Unmoved::NotWritten(error.to_string()))?;
+    Ok(to)
 }
 
 /// The reason the machine's managed layer gives for keeping `server` from starting, naming its
@@ -1018,6 +1103,23 @@ pub fn unreadable(why: &records::Unreadable) -> String {
         records::Unreadable::Servers => t!(mcp_unreadable_servers).to_string(),
         records::Unreadable::Key(key) => t!(mcp_unreadable_key, key = shown(key)),
     }
+}
+
+/// Whether the server lists the tool `tool` with an argument of the name a choice for `argument`
+/// is given by, `<argument>_ref`, which is then the server's own.
+fn shadows_a_choice(tool: &Drawn, argument: &str) -> bool {
+    let key = choice_key(argument);
+    tool.arguments.iter().any(|own| own.name == key)
+}
+
+/// The arguments of `tool` that are offered as a choice, from the `declared` ones: those the
+/// server's list does not already give an argument `<argument>_ref` for.
+fn choosable<'a>(declared: Option<&'a BTreeSet<String>>, tool: &Drawn) -> Vec<&'a String> {
+    declared
+        .into_iter()
+        .flatten()
+        .filter(|argument| !shadows_a_choice(tool, argument))
+        .collect()
 }
 
 /// A promoted list, as the tools it offers.
@@ -1251,6 +1353,23 @@ struct Offered {
     drawn: Drawn,
 }
 
+/// A tool a plan may name, drawn from a list a person vouched for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Callable {
+    pub alias: String,
+    pub tool: String,
+    pub arguments: Vec<CallableArgument>,
+}
+
+/// One argument of a [`Callable`]: its name, its type where the list gave one, and whether the
+/// tool requires it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallableArgument {
+    pub name: String,
+    pub kind: Option<String>,
+    pub required: bool,
+}
+
 /// The tools one turn offers, and the session they are called through.
 #[derive(Debug, Clone)]
 pub struct Offer {
@@ -1289,17 +1408,38 @@ impl Offer {
                         description.push_str(line);
                     }
                 }
-                let properties: Map<String, Value> = tool
+                let mut properties: Map<String, Value> = tool
                     .drawn
                     .arguments
                     .iter()
                     .map(|argument| (argument.name.clone(), argument.schema()))
                     .collect();
+                // An argument the declaration says takes a choice is offered a second way to be
+                // given, beside the first, and neither is required: the planner gives one of the
+                // two (MCP-14). Not where the server lists an argument of that second name itself.
+                let choosing = choosable(
+                    self.choice_arguments(&tool.alias, &tool.drawn.name),
+                    &tool.drawn,
+                );
+                for argument in &choosing {
+                    properties.insert(
+                        choice_key(argument),
+                        json!({
+                            "type": "string",
+                            "description": format!(
+                                "A reference such as ref:3 to a choice an isolated processor \
+                                 made, in place of {argument}. Give {argument} or this, not both. \
+                                 The user is shown the number and asked before the call is made."
+                            ),
+                        }),
+                    );
+                }
                 let required: Vec<&str> = tool
                     .drawn
                     .arguments
                     .iter()
                     .filter(|argument| argument.required)
+                    .filter(|argument| !choosing.contains(&&argument.name))
                     .map(|argument| argument.name.as_str())
                     .collect();
                 Tool::function(
@@ -1387,12 +1527,61 @@ impl Offer {
         self
     }
 
+    /// Whether the declaration of the server `alias` says every call to it is asked about
+    /// (SERVERS-21).
+    pub fn asks_every_call(&self, alias: &str) -> bool {
+        self.session.asks_every_call(alias)
+    }
+
+    /// The arguments of the tool `tool` of the server `alias` that its declaration says take a
+    /// choice, where it names any (SERVERS-22).
+    pub fn choice_arguments(&self, alias: &str, tool: &str) -> Option<&BTreeSet<String>> {
+        self.session.choice_arguments(alias, tool)
+    }
+
+    /// The arguments of the tool `tool` of the server `alias` that are offered as a choice: those
+    /// its declaration names, less those the server lists an argument `<argument>_ref` for itself
+    /// (SERVERS-22). That argument is the server's, and a call that gives it is sent as written.
+    fn choosable(&self, alias: &str, tool: &str) -> Vec<&String> {
+        let Some(offered) = self
+            .tools
+            .iter()
+            .find(|offered| offered.alias == alias && offered.drawn.name == tool)
+        else {
+            return Vec::new();
+        };
+        choosable(self.choice_arguments(alias, tool), &offered.drawn)
+    }
+
     /// The tool offered under this wire name, as its alias and its word.
     pub fn find(&self, wire: &str) -> Option<(&str, &str)> {
         self.tools
             .iter()
             .find(|tool| tool.wire == wire)
             .map(|tool| (tool.alias.as_str(), tool.drawn.name.as_str()))
+    }
+
+    /// Each tool this offer holds, as a plan may name it (MANIFEST-15): the alias, the tool's word
+    /// and the names of its arguments. A description is the server's prose and a plan needs none
+    /// of it, so none is given.
+    pub fn callable(&self) -> Vec<Callable> {
+        self.tools
+            .iter()
+            .map(|tool| Callable {
+                alias: tool.alias.clone(),
+                tool: tool.drawn.name.clone(),
+                arguments: tool
+                    .drawn
+                    .arguments
+                    .iter()
+                    .map(|argument| CallableArgument {
+                        name: argument.name.clone(),
+                        kind: argument.kind.clone(),
+                        required: argument.required,
+                    })
+                    .collect(),
+            })
+            .collect()
     }
 
     fn description(&self, alias: &str, tool: &str) -> Option<String> {
@@ -1435,12 +1624,108 @@ pub(crate) fn offer_for_test(entries: &[(&str, &str, &str)]) -> Offer {
 
 /// How a call to a server's tool ended, before it is told to the planner.
 pub(crate) enum Called {
-    /// The server answered, with content nobody vouched for.
-    Answered(Labelled<String>),
+    /// The server answered, with content nobody vouched for: its text, and the pictures it sent
+    /// that the transport took.
+    Answered(ToolOutput),
     /// The tool ran and reported a failure, with the server's words about it.
     Failed(Labelled<String>),
-    /// Nothing reached the server, or nothing usable came back. The sentence is this process's own.
+    /// A reply arrived that this client could not take as a result: a JSON-RPC error, a reply it
+    /// could not read, a line past the bound or an HTTP status that is not a success. The sentence
+    /// is this process's own and holds nothing the server wrote.
+    Unusable(String),
+    /// The call was refused, declined or not asked about, was not made, or no reply to it arrived.
+    /// The sentence is this process's own.
     Problem(String),
+}
+
+/// The argument of a call that the planner filled from a choice a processor made (MCP-14).
+struct Filling<'a> {
+    /// The argument the declaration says takes a choice, and the call fills.
+    argument: &'a str,
+    /// What the planner named the choice by: the argument and `_ref`.
+    key: String,
+    /// The reference to the choice.
+    slot: SlotId,
+    /// The choices of the turn making the call.
+    slots: &'a mut SlotStore,
+}
+
+impl Filling<'_> {
+    /// The number and where it came from, as the question draws the argument it will fill.
+    fn drawn<S: Sink>(&self, policy: &mut Policy<'_, S>) -> Result<String, String> {
+        policy
+            .choice_for_display(&self.slot, self.slots)
+            .map(|number| {
+                t!(
+                    mcp_call_choice_drawn,
+                    number = number.as_str(),
+                    reference = self.slot.as_str()
+                )
+            })
+            .map_err(|denial| format!("refused: {denial}"))
+    }
+}
+
+/// Which argument of this call the planner filled from a choice, if it did (MCP-14).
+///
+/// A call names one by writing `<argument>_ref` for an argument the declaration says takes a
+/// choice. Which keys those are comes from the declaration and the planner's own keys; nothing
+/// here reads a choice. A call that names one is refused, with nobody asked, where it also gives
+/// the argument itself or names more than one choice, where a plan makes it (a plan holds no
+/// choice), where its value is no string, where the context has met untrusted content, and where
+/// the reference is not a choice nobody has used.
+fn fill_from_a_choice<'a, S: Sink>(
+    policy: &mut Policy<'_, S>,
+    offer: &'a Offer,
+    alias: &str,
+    tool: &str,
+    pairs: &Map<String, Value>,
+    slots: Option<&'a mut SlotStore>,
+) -> Result<Option<Filling<'a>>, String> {
+    let named: Vec<&String> = offer
+        .choosable(alias, tool)
+        .into_iter()
+        .filter(|argument| pairs.contains_key(&choice_key(argument)))
+        .collect();
+    let argument = match named.as_slice() {
+        [] => return Ok(None),
+        [argument] => *argument,
+        _ => {
+            return Err(format!(
+                "error: {alias}:{tool} names more than one choice, and a call can be filled from \
+                 one"
+            ));
+        }
+    };
+    let key = choice_key(argument);
+    let Some(slots) = slots else {
+        return Err(format!(
+            "refused: {alias}:{tool} names a choice in {key}, and a plan holds no choice"
+        ));
+    };
+    if pairs.contains_key(argument.as_str()) {
+        return Err(format!(
+            "error: {alias}:{tool} was given both {argument} and {key}: give one of the two"
+        ));
+    }
+    let Some(reference) = pairs.get(&key).and_then(Value::as_str) else {
+        return Err(format!(
+            "error: {key} must be a reference such as \"ref:3\" to a choice a processor made"
+        ));
+    };
+    let named = Labelled::new(
+        reference.to_string(),
+        bravebot_core::label::Label::untrusted_public(),
+    );
+    let slot = policy
+        .accept_reference("mcp_call", &key, &named)
+        .map_err(|denial| format!("refused: {denial}"))?;
+    Ok(Some(Filling {
+        argument,
+        key,
+        slot,
+        slots,
+    }))
 }
 
 /// Put one call to the person and make it (SERVERS-7).
@@ -1449,9 +1734,18 @@ pub(crate) enum Called {
 /// the person said at an earlier call to stop asking for it in this project; a call carrying the
 /// person's private data asks whatever was said (PERM-9). The arguments reach the server only past
 /// the endorsement the answer minted.
+///
+/// A call that names a choice a processor made, as `<argument>_ref` for an argument the server's
+/// declaration says takes one, always asks. The question draws the number, and the number is put
+/// into the argument only after the answer, by [`Policy::carry_a_choice`] (ROUTE-10, MCP-14).
+/// `slots` holds the choices of the turn making the call, and a plan has none to give.
 #[expect(
     clippy::too_many_arguments,
     reason = "the arguments are the policy, offer, egress, confirmer, reporter and the alias, tool and arguments of a call"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the gates of one call in the order they apply, each returning its own refusal"
 )]
 pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
@@ -1462,6 +1756,7 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     alias: &str,
     tool: &str,
     arguments: &Value,
+    slots: Option<&mut SlotStore>,
 ) -> Called {
     let name = format!("{alias}:{tool}");
     if let Err(denial) = policy.before_mcp_call_rules(alias, tool) {
@@ -1488,17 +1783,41 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     let labelled = policy.label_model_output("mcp_call", arguments.clone());
 
     let session = &offer.session;
-    let standing = session.stands(alias, tool);
+    let filling = match fill_from_a_choice(policy, offer, alias, tool, pairs, slots) {
+        Ok(filling) => filling,
+        Err(refusal) => return Called::Problem(refusal),
+    };
+    // A call that names a choice is asked about whatever the declaration of the server says.
+    let every_call = session.asks_every_call(alias) || filling.is_some();
+    // An answer recorded for the tool before the declaration said so is not read.
+    let standing = if every_call {
+        McpStanding::AskedEveryCall
+    } else if session.stands(alias, tool) {
+        McpStanding::StoppedAsking
+    } else {
+        McpStanding::Nothing
+    };
     if policy.mcp_call_needs_approval(alias, tool, labelled.label(), standing) {
+        let mut shown: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(key, value)| (key.clone(), value.to_string()))
+            .collect();
+        if let Some(filling) = &filling {
+            match filling.drawn(policy) {
+                Ok(drawn) => shown
+                    .iter_mut()
+                    .filter(|(key, _)| *key == filling.key)
+                    .for_each(|pair| *pair = (filling.argument.to_string(), drawn.clone())),
+                Err(refusal) => return Called::Problem(refusal),
+            }
+        }
         let request = McpCallRequest {
             alias: alias.to_string(),
             tool: tool.to_string(),
-            arguments: pairs
-                .iter()
-                .map(|(key, value)| (key.clone(), value.to_string()))
-                .collect(),
+            arguments: shown,
             description: offer.description(alias, tool),
-            may_stand: session.may_stand(),
+            may_stand: session.may_stand() && !every_call,
+            asked_every_call: every_call,
         };
         let answer = confirmer.confirm_mcp_call(&request);
         crate::tools::keep_the_note(
@@ -1509,10 +1828,21 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
         );
         let told = answer.note().is_some();
         let CallDecision {
-            decision, stand, ..
+            decision,
+            stand,
+            unasked,
+            ..
         } = answer;
         if decision == Decision::Reject {
             policy.refuse_unapproved_call(alias, tool);
+            if unasked {
+                reporter.notice(t!(mcp_call_cannot_be_asked_here, tool = name.as_str()));
+                return Called::Problem(format!(
+                    "refused: every call to {alias} is put to the user, and this client has no \
+                     way to ask, so nobody was asked. Do not retry {name}: say that it needs a \
+                     client that can ask."
+                ));
+            }
             return Called::Problem(format!(
                 "refused: the user did not approve calling {name}. Do not retry the same \
                  call{}",
@@ -1536,7 +1866,18 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     }
 
     policy.endorse_mcp_call(alias, tool);
-    let arguments = match policy.before_mcp_call(alias, tool, labelled) {
+    let carried = match filling {
+        None => policy.before_mcp_call(alias, tool, labelled),
+        Some(Filling {
+            argument,
+            slot,
+            slots,
+            ..
+        }) => policy
+            .carry_a_choice(alias, tool, labelled, &slot, slots)
+            .map(|(arguments, number)| with_choice(arguments, argument, number)),
+    };
+    let arguments = match carried {
         Ok(arguments) => arguments,
         Err(denial) => return Called::Problem(format!("refused: {denial}")),
     };
@@ -1554,6 +1895,9 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     match answered {
         Ok(result) => Called::Answered(result),
         Err(McpError::ToolFailed { detail, .. }) => Called::Failed(detail),
+        Err(error @ (McpError::Server { .. } | McpError::Unusable(_))) => {
+            Called::Unusable(format!("error: calling {name} failed: {error}"))
+        }
         Err(error) => Called::Problem(format!("error: calling {name} failed: {error}")),
     }
 }

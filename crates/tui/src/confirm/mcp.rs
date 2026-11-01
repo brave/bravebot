@@ -1,7 +1,7 @@
 //! The MCP prompts: a server, a move, a tool list and a call.
 
 use bravebot_agent::confirm::{
-    CallDecision, McpCallRequest, MoveRequest, ServerRequest, ToolListRequest,
+    CallDecision, McpCallRequest, MoveRequest, ServerRequest, ToolListRequest, shown_argument,
 };
 use bravebot_i18n::t;
 use ratatui::Terminal;
@@ -643,15 +643,24 @@ pub(super) fn draw_mcp_call(
                 .max()
                 .unwrap_or(0);
             for (name, value) in &request.arguments {
+                let shown = shown_argument(value);
                 lines.extend(marked_rows(
                     &Span::raw("  "),
                     &[Span::raw(format!(
-                        "{:<widest$} {value}",
+                        "{:<widest$} {}",
                         format!("{name}:"),
+                        shown.head,
                         widest = widest + 1
                     ))],
                     width,
                 ));
+                for row in &shown.rows {
+                    lines.extend(marked_rows(
+                        &Span::raw("    "),
+                        &[Span::raw(row.clone())],
+                        width,
+                    ));
+                }
             }
         }
     }
@@ -706,11 +715,11 @@ pub(super) fn draw_mcp_call(
                     approving(theme::muted(), answerable),
                     Span::styled(stand, muted),
                 ));
-                rows.extend(marked_rows(
-                    &hanging,
-                    &[Span::styled(t!(mcp_call_cannot_stand), muted)],
-                    width,
-                ));
+                let reason = match request.asked_every_call {
+                    true => t!(mcp_call_cannot_stand_asked_every_time),
+                    false => t!(mcp_call_cannot_stand),
+                };
+                rows.extend(marked_rows(&hanging, &[Span::styled(reason, muted)], width));
             }
         }
         rows.extend(option("3", refusing(), Span::raw(t!(mcp_call_no))));
@@ -1216,6 +1225,239 @@ mod tests {
             unkept.contains("not offered: nothing answered in this session can be recorded"),
             "answer 2 was drawn as though it could be kept: {unkept}"
         );
+    }
+
+    /// A call to the script tool carrying `code`.
+    fn a_call_carrying_code(code: &str) -> McpCallRequest {
+        McpCallRequest {
+            alias: "brave-scripts".into(),
+            tool: "run_script".into(),
+            arguments: vec![
+                ("url".into(), "\"https://shop.example/cart\"".into()),
+                ("code".into(), serde_json::Value::from(code).to_string()),
+            ],
+            description: None,
+            may_stand: false,
+            asked_every_call: true,
+        }
+    }
+
+    fn call_screen(
+        request: &McpCallRequest,
+        size: (u16, u16),
+        scroll: u16,
+    ) -> (Vec<String>, Drawn) {
+        call_screen_seen(request, size, scroll, &mut Seen::default())
+    }
+
+    fn call_screen_seen(
+        request: &McpCallRequest,
+        size: (u16, u16),
+        scroll: u16,
+        seen: &mut Seen,
+    ) -> (Vec<String>, Drawn) {
+        let mut drawn = Drawn::default();
+        let rows = rows_of(size.0, size.1, |frame| {
+            drawn = draw_mcp_call(frame, request, false, scroll, seen);
+        });
+        (rows, drawn)
+    }
+
+    /// SERVERS-7, PROMPT-13: the code of a call is drawn one numbered row to a line with what cannot
+    /// be seen written out, however many lines it has. Code taller than the box scrolls, the
+    /// numbered rows reach the person in order, every line of it is drawn at some scroll, and a yes
+    /// is taken only from a draw that has reached the last one. The regressions it rejects are the
+    /// code drawn as one escaped string, a draw that stops at the first screen of lines, and a yes
+    /// taken before the last line has been on the screen.
+    #[test]
+    fn a_call_carrying_code_draws_every_line_and_takes_no_yes_before_the_last_line_is_drawn() {
+        let mut code: Vec<String> = (1..=60).map(|n| format!("step{n}();")).collect();
+        code.push("return document.title\u{200b}".to_string());
+        let request = a_call_carrying_code(&code.join("\n"));
+        let (top, drawn) = call_screen(&request, (100, 24), 0);
+        let screen = top.join("\n");
+        assert!(screen.contains("code: 61 lines"), "{screen}");
+        assert!(screen.contains(" 1 | step1();"), "{screen}");
+        assert!(
+            !drawn.answerable(),
+            "a yes is taken while most of the code is off the screen: {screen}"
+        );
+        let mut everything = String::new();
+        let mut seen = Seen::default();
+        let mut taken_before_the_end = false;
+        for scroll in 0..=drawn.furthest() {
+            let (rows, now) = call_screen_seen(&request, (100, 24), scroll, &mut seen);
+            everything.push_str(&box_rows(&rows).join("\n"));
+            everything.push('\n');
+            taken_before_the_end |= scroll < drawn.furthest() && now.answerable();
+        }
+        assert!(
+            !taken_before_the_end,
+            "a yes was taken before the last line had been drawn"
+        );
+        for n in 1..=60 {
+            assert!(
+                everything.contains(&format!("{n:>2} | step{n}();")),
+                "line {n} was never drawn"
+            );
+        }
+        assert!(
+            everything.contains("61 | return document.title\u{2039}U+200B\u{203a}"),
+            "{everything}"
+        );
+        assert!(
+            everything.contains("1 character you cannot see is written out below"),
+            "{everything}"
+        );
+        assert!(!everything.contains("\\n"), "drawn as one JSON string");
+        let (_, end) = call_screen_seen(&request, (100, 24), drawn.furthest(), &mut seen);
+        assert!(end.answerable(), "a yes is not taken after the last line");
+    }
+
+    /// ROUTE-11, PROMPT-13: a space that is not the plain one, a format character and a mark past
+    /// the third on a character are written out in the terminal's question as the confirmation
+    /// window writes them, and a `‹U+200B›` the code holds is written out itself. A terminal that
+    /// drew the code as it came would show the no-break space as a space, the stack of marks over
+    /// the rows around it and the typed form as a written-out character.
+    #[test]
+    fn code_with_a_no_break_space_stacked_marks_and_a_typed_written_form_is_drawn_marked() {
+        let request = a_call_carrying_code(
+            "if (x\u{a0}== 1) {}\nlet e = \"e\u{301}\u{302}\u{303}\u{304}\";\n// \u{2039}U+200B\u{203a}\u{600}",
+        );
+        let (rows, drawn) = call_screen(&request, (100, 30), 0);
+        let screen = rows.join("\n");
+        for expected in [
+            "code: 3 lines",
+            "3 characters you cannot see are written out below",
+            "1 | if (x\u{2039}U+00A0\u{203a}== 1) {}",
+            "2 | let e = \"e\u{301}\u{302}\u{303}\u{2039}U+0304\u{203a}\";",
+            "3 | // \u{2039}U+2039\u{203a}U+200B\u{203a}\u{2039}U+0600\u{203a}",
+        ] {
+            assert!(
+                screen.contains(expected),
+                "`{expected}` is not drawn: {screen}"
+            );
+        }
+        assert!(!screen.contains('\u{a0}'), "{screen}");
+        assert!(drawn.answerable(), "{screen}");
+    }
+
+    /// The same prompt for code short enough to fit: the address, the lines, the sentence about
+    /// the character written out, and the three answers, answer 2 not offered.
+    #[test]
+    fn a_short_script_is_drawn_with_its_address_its_lines_and_the_three_answers() {
+        let request = a_call_carrying_code("const price = document.title;\n\nreturn price\u{200b}");
+        let (rows, drawn) = call_screen(&request, (100, 30), 0);
+        let screen = rows.join("\n");
+        for expected in [
+            "brave-scripts:run_script",
+            "url:  \"https://shop.example/cart\"",
+            "code: 3 lines",
+            "1 character you cannot see is written out below as \u{2039}U+XXXX\u{203a}",
+            "1 | const price = document.title;",
+            "2 |",
+            "3 | return price\u{2039}U+200B\u{203a}",
+            "1. Yes",
+            "not offered: every call to this server is asked about",
+            "3. No",
+        ] {
+            assert!(
+                screen.contains(expected),
+                "`{expected}` is not drawn: {screen}"
+            );
+        }
+        assert!(drawn.answerable(), "{screen}");
+    }
+
+    /// SERVERS-21: a call to a server declared to ask every call says so on the prompt, draws
+    /// answer 2 as unavailable for that reason and not for the reason of a session that records
+    /// nothing, and the keys for it do nothing on a request that cannot stand. Whether a request can
+    /// stand is the request's own word, so what the declaration does to it is tested where the
+    /// request is made. The control is the same request not declared so, where `2` answers. The regressions it rejects are a prompt that gives the wrong reason, which tells
+    /// the person to fix a state directory that is not the cause, and a key that stands.
+    #[test]
+    fn a_call_asked_every_time_is_drawn_with_its_own_reason_for_offering_no_lasting_answer() {
+        let control = call(true, None);
+        assert_eq!(
+            call_answer_for(press(KeyCode::Char('2')), &control, &Drawn::taking_yes()),
+            Some(CallResponse::Answer(CallAnswer::ApproveAndStand)),
+            "the control did not take `2`, so the rows below prove nothing"
+        );
+
+        let request = McpCallRequest {
+            asked_every_call: true,
+            ..call(false, None)
+        };
+        let drawn = drawn_call(&request, false);
+        assert!(
+            drawn.contains("not offered: every call to this server is asked about"),
+            "the prompt did not say why no lasting answer is offered: {drawn}"
+        );
+        assert!(
+            !drawn.contains("nothing answered in this session can be recorded"),
+            "the prompt blamed a session that records nothing: {drawn}"
+        );
+        for key in ['2', 'a', 'A'] {
+            assert_eq!(
+                call_answer_for(press(KeyCode::Char(key)), &request, &Drawn::taking_yes()),
+                None,
+                "`{key}` answered a call to a server asked every time"
+            );
+        }
+        for (key, answer) in [('1', CallAnswer::Approve), ('3', CallAnswer::Reject)] {
+            assert_eq!(
+                call_answer_for(press(KeyCode::Char(key)), &request, &Drawn::taking_yes()),
+                Some(CallResponse::Answer(answer)),
+                "`{key}`"
+            );
+        }
+    }
+
+    /// MCP-14, ROUTE-10, SERVERS-7: the pair a call filled from a choice puts in the question is
+    /// drawn under the argument's own name, with the number first and then the sentence saying a
+    /// processor chose it and which reference it came from, whole and in order at a width where it
+    /// wraps. A 0 is drawn as 0, since the extension refuses it and the person is shown that it was
+    /// chosen, and so is the largest number, from the longest reference.
+    ///
+    /// Rejects a draw that leaves out a value that reads as empty or false, which would show the
+    /// person no number for a 0, and one that cuts a value to a row, which would show the number and
+    /// not that a processor chose it.
+    #[test]
+    fn a_choice_is_drawn_as_the_number_and_where_it_came_from_at_every_width() {
+        for number in ["0", "7", "99"] {
+            for reference in ["ref:3", "ref:123456"] {
+                let drawn = t!(
+                    mcp_call_choice_drawn,
+                    number = number,
+                    reference = reference
+                );
+                let request = McpCallRequest {
+                    alias: "brave-input".into(),
+                    tool: "click_element".into(),
+                    arguments: vec![
+                        ("element_number".into(), drawn.clone()),
+                        ("url".into(), "\"https://shop.example/cart\"".into()),
+                    ],
+                    description: None,
+                    may_stand: false,
+                    asked_every_call: true,
+                };
+                for width in [120, 80, 50] {
+                    let (rows, _) = pinned_screen((width, 30), |frame| {
+                        draw_mcp_call(frame, &request, false, 0, &mut Seen::default())
+                    });
+                    let screen = rows.join("\n");
+                    assert!(
+                        box_words(&rows).contains(&words(&format!("element_number: {drawn}"))),
+                        "{number} from {reference} at {width}: {screen}"
+                    );
+                    assert!(
+                        box_words(&rows).contains("url: \"https://shop.example/cart\""),
+                        "{number} from {reference} at {width}: {screen}"
+                    );
+                }
+            }
+        }
     }
 
     /// A long description shows its first rows until asked for, and says how to see the rest.

@@ -589,6 +589,55 @@ mod tests {
         }
     }
 
+    /// A picture the model has not seen is written as the driver's rows about it, behind the margin
+    /// on every row the long one reaches, under a heading that carries the label, in the words the
+    /// agent hands every front end and with no byte of the picture.
+    #[test]
+    fn a_picture_is_written_as_the_rows_about_it_behind_the_margin_under_its_label() {
+        let said = bravebot_agent::report::picture_rows(
+            "image/png",
+            118,
+            "ref:2",
+            bravebot_agent::report::Holder::Session {
+                vets: true,
+                writes: true,
+            },
+        );
+        let written = log(|p| p.quarantined(quarantining(said.clone(), said.len())));
+
+        assert!(
+            written.contains("notes.md") && written.contains("(U,priv)"),
+            "got: {written}"
+        );
+        assert!(!written.contains("base64"), "got: {written}");
+        let rows: Vec<&str> = written.lines().filter(|row| !row.is_empty()).collect();
+        assert!(
+            rows.len() > said.len() + 1,
+            "the long row does not wrap, so the case is not exercised: {written}"
+        );
+        for row in &rows {
+            assert_eq!(
+                row.chars().position(|c| !c.is_whitespace()),
+                row.chars().position(|c| c == BAR),
+                "a row about the picture begins with content rather than the margin: {row:?}"
+            );
+        }
+        let squeeze = |text: &str| {
+            text.chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+        };
+        let after_the_heading: String = rows[1..]
+            .iter()
+            .map(|row| squeeze(&row.replace(BAR, "")))
+            .collect();
+        assert_eq!(
+            after_the_heading,
+            squeeze(&said.join(" ")),
+            "got: {written}"
+        );
+    }
+
     /// Content kept from the planner is what every block holds, so its heading does not repeat
     /// that on each one. Content in no model's context is the exception and says so.
     #[test]

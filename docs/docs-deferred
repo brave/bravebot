@@ -8,10 +8,6 @@
 
 035a6112c4d7118e1aa8135e8d4154d5313e88d9 credential-protection.md is status: proposed with every clause verified-by: none, so documenting it would describe behaviour not in force; fold it in when the spec goes normative and its clauses are pinned
 cb739c3c9dc4288bfaf26f2d84218b6aec64d1bf DROP-10: the drop list a front end sends over the protocol is desktop or bridge behaviour, and no page describes a desktop or bridge front end yet; fold it in when one exists
-a6081440d1da6d177c0b527d013544646312c828 browser relay and extension: no page describes bravebot-browser; fold in as a Connecting Brave section in customize/mcp-servers.md once bravebot-browser ships in a release
-5892638093a3b34b6c16976e71a0e9e2755e4641 browser relay and extension: no page describes bravebot-browser; fold in as a Connecting Brave section in customize/mcp-servers.md once bravebot-browser ships in a release
-5f95257f4b425800245d8b8182c14e40e6a1531b browser relay and extension: no page describes bravebot-browser; fold in as a Connecting Brave section in customize/mcp-servers.md once bravebot-browser ships in a release
-3139318118d40f846e28e900ec5663faf57849a6 browser relay and extension: no page describes bravebot-browser; fold in as a Connecting Brave section in customize/mcp-servers.md once bravebot-browser ships in a release
 2244053d19eaaefbc29ad54465a6ab29000b711c credential-protection.md is status: proposed; fold in when the spec goes normative and its clauses are pinned
 bf261766f1e2515c07c825c8015959dc19c0c091 credential-protection.md is status: proposed; fold in when the spec goes normative and its clauses are pinned
 28314a051423276ef323112ea42dca132b4f3c00 credential-protection.md is status: proposed; fold in when the spec goes normative and its clauses are pinned

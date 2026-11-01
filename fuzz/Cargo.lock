@@ -98,6 +98,7 @@ dependencies = [
  "base64 0.22.1",
  "bravebot-aichat",
  "bravebot-bedrock",
+ "bravebot-choice",
  "bravebot-config",
  "bravebot-connector",
  "bravebot-core",
@@ -148,6 +149,13 @@ dependencies = [
  "bravebot-signing",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "bravebot-choice"
+version = "0.20.0"
+dependencies = [
+ "bravebot-core",
 ]
 
 [[package]]

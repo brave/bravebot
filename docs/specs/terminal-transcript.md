@@ -120,6 +120,41 @@ user cannot tell was ever in the file.
 [VIEW-30](#VIEW-30) is the one exception: a complete colour code in output drawn for reading is
 taken out and counted.
 
+A picture or a PDF held in a slot is shown as the driver's rows about it and never as the first
+lines of the `data:` URI it is held as, which are base64 that tells a person nothing. The rows say
+what it is (a picture with its media type, or a PDF), its size in bytes, the name it is held under,
+that the model has not seen it and how a person looks at it: by asking for it to be written to a file
+([WRITE-9](tools/write-file.md#WRITE-9)), or for `vet_content` to be called on it, whose question
+puts a copy to the person ([VET-4](tools/vet-content.md#VET-4)). The second row follows the tools
+the run was offered: it gives both ways where `write_file` and `vet_content` are offered, the one
+that is offered where only one is, and says there is no way to open the picture where neither is. A
+turn addressed to a definition is offered the tools the definition names
+([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)), and the command line can leave tools out. A
+delegate is never offered `vet_content` and nobody can ask it for anything, so the rows for a
+picture it holds say what its tools can do instead: that it can write the picture to a file the
+person opens where it is offered `write_file`, and that there is no way to open it where it is not.
+The rows come from
+`bravebot_agent::report::picture_rows`, so every front end draws the same words, and they are drawn
+as any other row of the block is: behind the bar, under the heading that carries the label. The
+media type is an entry of the closed table the driver chose. The size is the number of bytes the
+picture holds: the length of the file read, or what the base64 of a server's part decodes to,
+counted where each was read or checked. It is smaller than the byte count of the `data:` URI that
+the reference the planner holds reports. The name is the reference's, the second row is chosen by
+whether the run is a delegate and by whether its list of tools holds `write_file` and
+`vet_content`, and no byte of the picture is in a row or decides one.
+
+`verified-by: bravebot_agent::turn::a_picture_read_from_a_file_is_described_to_the_person_and_not_drawn_as_base64`
+`verified-by: bravebot_agent::turn::a_pdf_read_from_a_file_is_described_to_the_person_as_a_pdf`
+`verified-by: bravebot_agent::mcp::a_picture_a_server_returns_is_never_shown_to_the_planner`
+`verified-by: bravebot_agent::turn::a_picture_a_delegate_reads_is_described_by_what_the_delegate_can_do_with_it`
+`verified-by: bravebot_agent::mcp::a_picture_a_delegate_holds_is_described_by_what_the_delegate_can_do_with_it`
+`verified-by: bravebot_agent::turn::the_rows_about_a_picture_follow_the_tools_an_addressed_turn_is_offered`
+`verified-by: bravebot_agent::mcp::a_picture_an_addressed_turn_holds_is_described_by_the_tools_the_turn_is_offered`
+`verified-by: bravebot_mcp::protocol::an_image_part_of_a_listed_type_is_taken_as_a_picture`
+`verified-by: bravebot_tui::marking::the_rows_for_a_picture_are_drawn_behind_the_bar_under_the_label`
+`verified-by: bravebot_cli::progress::a_picture_is_written_as_the_rows_about_it_behind_the_margin_under_its_label`
+`verified-by: bravebot_ui_bridge::wire::the_rows_about_a_picture_cross_as_the_agent_wrote_them_under_their_label`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so it is pinned instead by ui/scripts/marking.test.mjs, which renders the real transcript row through react-dom with the two rows read from the catalog and asserts that they are drawn as text in the confined block under the label's chip, and that the markup holds no image, no element that loads, no attribute that fetches and no base64; make check-ui and the Front end CI job both run it)`
 `verified-by: bravebot_tui::marking::quarantined_content_cannot_paint_its_own_margin`
 `verified-by: bravebot_tui::marking::a_neutralised_escape_is_still_visible`
 `verified-by: bravebot_tui::marking::a_tab_in_the_content_or_the_origin_is_drawn_as_a_glyph`
@@ -1380,6 +1415,13 @@ top row of the list.
 
 ## Known costs
 
+- **A picture is not drawn when it arrives.** The rows about a tool's picture or a read file's say
+  where it is held and how to look at it, and the picture itself is drawn only by the question
+  `vet_content` puts, in a terminal that draws real pictures ([VET-4](tools/vet-content.md#VET-4)),
+  and from a copy a person opens. Drawing it on arrival needs the picture's bytes released to a
+  screen without a question, and a place in the transcript's scroll to draw them. The desktop
+  window draws no image for it at all, since an image in released content is never an `<img>`
+  there ([LAYER-5](layering.md#LAYER-5)).
 - **The desktop window is sent the thinking whether or not it is shown.** Holding it is what lets
   turning it on mid-round show what has come so far, as the terminal does, and the cost is an event
   across the pipe for each frame that carries some, however long the model thinks.

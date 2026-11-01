@@ -1,0 +1,140 @@
+/* The confirmation window. A fixed layout: the page's words go into the
+   elements marked "words", as text, and nothing here loads anything. */
+body {
+  font:
+    14px system-ui,
+    sans-serif;
+  margin: 0;
+  padding: 0.75rem 1rem;
+}
+h1 {
+  font-size: 1.15rem;
+  margin: 0 0 0.5rem;
+}
+h2 {
+  font-size: 0.95rem;
+  margin: 1rem 0 0.25rem;
+}
+.action {
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+}
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 0.75rem;
+  margin: 0;
+}
+dt {
+  color: #555;
+}
+dd {
+  margin: 0;
+}
+/* A row draws inside its own box: what a page's characters do beyond it, such as
+   marks that stack above and below a letter, is cut off, so they cannot draw over
+   another row or the destination. The padding and the negative margin let an
+   accent on a capital letter be drawn whole. */
+.words {
+  margin-block: -0.2em;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  padding-block: 0.2em;
+  unicode-bidi: isolate;
+  direction: ltr;
+}
+/* A row of a list is at most five lines tall and scrolls inside its own box, with
+   a scroll bar that stays in view when there is more, so that a long word, or a
+   word of marks that each take a box of their own, cannot push the rows after it
+   or the buttons out of view. */
+dd.words {
+  max-height: 5em;
+  overflow-y: auto;
+}
+/* The site and the address are shown whole. The window shows at most 300
+   characters of an address, which a browser writes in ASCII, and 300 of the widest
+   letter take 8 lines at the width of the window, so the box is taller than five
+   lines and nothing of an address is behind its scroll bar. A row of marks, which
+   each take a box of their own, still scrolls here and cannot push the destination
+   out of view. */
+dd#origin,
+dd#url {
+  max-height: 12em;
+}
+dd.words::-webkit-scrollbar,
+.boxed::-webkit-scrollbar {
+  width: 0.6rem;
+}
+dd.words::-webkit-scrollbar-track,
+.boxed::-webkit-scrollbar-track {
+  background: #e4e4e4;
+}
+dd.words::-webkit-scrollbar-thumb,
+.boxed::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 0.3rem;
+}
+.boxed {
+  background: #f4f4f4;
+  border: 2px solid #444;
+  border-radius: 4px;
+  font: 13px ui-monospace, monospace;
+  margin: 0.25rem 0;
+  max-height: 10rem;
+  overflow: auto;
+  padding: 0.4rem 0.6rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* Code is shown in a taller box than typed text, so that more of it is in view at
+   once. It scrolls as the other boxes do. */
+.code .boxed {
+  max-height: 18rem;
+}
+.quote {
+  color: #8a2d00;
+  font-weight: 700;
+}
+.mark {
+  background: #fde6d4;
+  border: 1px solid #d99a6c;
+  border-radius: 3px;
+  color: #8a2d00;
+  font: 11px ui-monospace, monospace;
+  margin: 0 1px;
+  padding: 0 0.25em;
+}
+.note {
+  color: #555;
+  margin: 0.5rem 0;
+}
+.status {
+  color: #8a2d00;
+  font-weight: 600;
+  margin: 0.5rem 0;
+}
+/* The line that says how long the person has, the status and the two buttons
+   stay at the foot of the window while the rest of the page scrolls under them,
+   so that Allow once and Deny are in view whatever the page's words come to. */
+.bar {
+  background: Canvas;
+  border-top: 1px solid #bbb;
+  bottom: 0;
+  padding-bottom: 0.75rem;
+  position: sticky;
+}
+.buttons {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+button {
+  font: inherit;
+  padding: 0.4rem 1.2rem;
+}
+#deny {
+  font-weight: 600;
+}
+button:disabled {
+  opacity: 0.5;
+}

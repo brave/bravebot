@@ -128,7 +128,7 @@ export function RulesInForce({ rules }: { rules: SettingsRules | null }): React.
   const none = lists.every(([, , held]) => held.length === 0) && !(rules?.filesystem?.length || rules?.filesystemIgnored?.length)
   return <section className="grant-section settings-rules">
     <h3>Rules from settings files</h3>
-    <p className="grant-note">Read when this conversation opened. Edit the settings file to change them; the change applies to the next conversation. Refused comes first, then always asked, then not asked. These rules are not applied to a plan run.</p>
+    <p className="grant-note">Read when this conversation opened. Edit the settings file to change them; the change applies to the next conversation. Refused comes first, then always asked, then not asked. A plan run applies the rules about a server’s tools and no others.</p>
     {none && <p className="grant-empty"><Icon name="settings" />No permission rules are in force.</p>}
     {lists.filter(([, , held]) => held.length > 0).map(([name, meaning, held]) => <div key={name}>
       <h4>{name}</h4>

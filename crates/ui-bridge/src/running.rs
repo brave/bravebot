@@ -111,7 +111,8 @@ pub struct State {
     /// Not saved: a run is written as its own record (MANIFEST-11), and the session's record
     /// holds nothing about it.
     pub runs: usize,
-    /// The MCP servers this session started, once its first turn has started them (SERVERS-9).
+    /// The MCP servers this session started, once its first turn or first plan run has started them
+    /// (SERVERS-9, MANIFEST-15).
     pub mcp: Mcp,
     /// The directory of its own outside the project, made as the session opened (TRUST-14).
     ///
@@ -189,12 +190,12 @@ impl Scratch {
 
 /// Where a session stands with the MCP servers its project requests.
 ///
-/// Started once, by the first turn that runs to the end of starting them, and held until the
-/// session closes, since dropping one stops its server. Not saved to the record, so a reopened or
-/// forked session starts its own.
+/// Started once, by the first turn or plan run that runs to the end of starting them, and held
+/// until the session closes, since dropping one stops its server. Not saved to the record, so a
+/// reopened or forked session starts its own.
 #[derive(Default)]
 pub enum Mcp {
-    /// No turn has started them yet.
+    /// No turn or plan run has started them yet.
     #[default]
     Unstarted,
     /// Started, where any was, with the lines saying why each other request was not.

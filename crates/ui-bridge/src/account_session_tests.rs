@@ -90,6 +90,7 @@ fn walk_a_run(state: &Arc<Mutex<State>>, workspace: &Workspace, run: usize) {
         sandbox: bravebot_sandbox::SandboxMode::default(),
         model: Some(ACCOUNT_MODEL.into()),
         permission_mode: PermissionMode::Ask.into(),
+        mcp_requested: Vec::new(),
         workspace: workspace.clone(),
         task: "tidy the notes".into(),
         run,

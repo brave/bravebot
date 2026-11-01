@@ -20,7 +20,8 @@ use crate::confine::developer_directory;
 use crate::confirm::MoveRequest;
 use crate::mcp::{Connection, Session, Unmoved, managed_refusal, shown, unreadable};
 use bravebot_config::mcp::{
-    self, Approvals, Declaration, Declarations, Digest, Problem, Projects, Timeouts,
+    self, Approvals, ChoiceArguments, Declaration, Declarations, Digest, Problem, Projects,
+    Timeouts,
 };
 use bravebot_config::sandbox_network::Hosts;
 use bravebot_config::{Managed, Server};
@@ -237,7 +238,12 @@ fn only_named(requested: Vec<(PathBuf, String)>, aliases: &[String]) -> Vec<(Pat
         .collect()
 }
 
-fn reach_requested<A: Asker + ?Sized>(
+/// Reach the servers `requested` names for the workspace at `root`, on this machine's state
+/// directory and managed settings, putting a question to `asker` where one is needed.
+///
+/// What the terminal and a one-shot run start with ([`for_this_session`]) and what the desktop
+/// application starts with at a session's first turn or first plan run (SERVERS-9).
+pub fn reach_requested<A: Asker + ?Sized>(
     requested: Vec<(PathBuf, String)>,
     root: &Path,
     asking: Asking,
@@ -317,24 +323,7 @@ pub fn reach<A: Asker + ?Sized>(
             .iter()
             .filter_map(|moving| {
                 match planned(&moving.declaration, &|name| std::env::var_os(name)) {
-                    Ok(Plan::Http {
-                        headers,
-                        timeouts,
-                        tools,
-                        exclude_tools,
-                        ..
-                    }) => {
-                        let plan = Plan::Http {
-                            url: moving.url.clone(),
-                            headers,
-                            declared: moving.declaration.digest(),
-                            timeouts,
-                            tools,
-                            exclude_tools,
-                        };
-                        Some((moving.alias.clone(), plan))
-                    }
-                    Ok(other) => Some((moving.alias.clone(), other)),
+                    Ok(plan) => Some((moving.alias.clone(), plan)),
                     Err(reason) => {
                         notes.push(format!("{}: {reason}", moving.alias));
                         None
@@ -378,7 +367,8 @@ struct Hop {
     url: String,
     /// The digest of that declaration.
     declared: Digest,
-    timeouts: Timeouts,
+    /// The declaration, which a move changes the address of and nothing else (SERVERS-11).
+    declaration: Declaration,
     /// Where the reply pointed: the server's own bytes, until a person says it moved there.
     destination: Labelled<String>,
 }
@@ -451,8 +441,8 @@ fn moves<A: Asker + ?Sized>(
         else {
             continue;
         };
-        let declaration = match Declaration::http(url.clone()) {
-            Ok(declaration) => declaration.timing(hop.timeouts),
+        let declaration = match hop.declaration.moved_to(url.clone()) {
+            Ok(declaration) => declaration,
             Err(problem) => {
                 notes.push(
                     t!(
@@ -487,8 +477,8 @@ fn moved(home: &Home, moving: &Moving, notes: &mut Vec<String>) -> bool {
         notes.push(t!(mcp_move_moved, alias = alias));
         return true;
     };
-    match crate::mcp::record_a_move(directory, alias, &moving.from, &moving.declaration) {
-        Ok(()) => {
+    match crate::mcp::record_a_move(directory, alias, &moving.from, &moving.url) {
+        Ok(_) => {
             notes.push(t!(mcp_move_moved, alias = alias));
             true
         }
@@ -523,14 +513,23 @@ enum Plan {
         exclude_tools: Vec<String>,
         /// The hosts the declaration lists for it, where it lists any.
         allowed_hosts: Option<Vec<String>>,
+        /// Whether every call to the server is asked about (SERVERS-21).
+        ask_every_call: bool,
+        /// The arguments of its tools that take a choice (SERVERS-22).
+        choice_arguments: ChoiceArguments,
     },
     Http {
         url: String,
         headers: Vec<(String, String)>,
         declared: Digest,
+        /// The declaration the plan was made from, which a move of the server changes the address
+        /// of and nothing else (SERVERS-11).
+        declaration: Declaration,
         timeouts: Timeouts,
         tools: Vec<String>,
         exclude_tools: Vec<String>,
+        /// Whether every call to the server is asked about (SERVERS-21).
+        ask_every_call: bool,
     },
 }
 
@@ -875,6 +874,7 @@ fn planned(
             timeouts,
             tools,
             exclude_tools,
+            ask_every_call,
         } => {
             let mut headers = Vec::new();
             let bearer = bearer_env
@@ -898,9 +898,11 @@ fn planned(
                 url: url.clone(),
                 headers,
                 declared: declaration.digest(),
+                declaration: declaration.clone(),
                 timeouts: *timeouts,
                 tools: tools.clone(),
                 exclude_tools: exclude_tools.clone(),
+                ask_every_call: *ask_every_call,
             });
         }
         Declaration::Stdio {
@@ -957,6 +959,8 @@ fn planned(
         tools: tools.clone(),
         exclude_tools: exclude_tools.clone(),
         allowed_hosts: declaration.allowed_hosts().map(<[String]>::to_vec),
+        ask_every_call: declaration.asks_every_call(),
+        choice_arguments: declaration.choice_arguments().clone(),
     })
 }
 
@@ -1570,8 +1574,27 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
             )
         ));
     }
+    if declaration.asks_every_call() {
+        lines.push(format!("{indent}{}", t!(mcp_declaration_asks_every_call)));
+    }
+    lines.extend(choices_line(declaration).map(|line| format!("{indent}{line}")));
     lines.push(format!("{indent}{}", t!(mcp_digest, digest = digest)));
     lines
+}
+
+/// The line that says which arguments of a server's tools take a choice, each as `tool:argument`
+/// as `--choice` spells it, or nothing where the declaration names none (SERVERS-22).
+pub fn choices_line(declaration: &Declaration) -> Option<String> {
+    let pairs: Vec<String> = declaration
+        .choice_arguments()
+        .iter()
+        .flat_map(|(tool, arguments)| {
+            arguments
+                .iter()
+                .map(move |argument| format!("{}:{}", shown(tool), shown(argument)))
+        })
+        .collect();
+    (!pairs.is_empty()).then(|| t!(mcp_declaration_choice_arguments, pairs = pairs.join(", ")))
 }
 
 /// The margin the lines under a declaration's first one start at.
@@ -1606,6 +1629,9 @@ pub fn problem(found: &Problem) -> String {
         Problem::Tools(key) => t!(mcp_problem_tools, key = *key),
         Problem::Hosts(entry) if entry.is_empty() => t!(mcp_problem_hosts_list).to_string(),
         Problem::Hosts(entry) => t!(mcp_problem_hosts, entry = shown(entry)),
+        Problem::AskEveryCall => t!(mcp_problem_ask_every_call).to_string(),
+        Problem::Choice => t!(mcp_problem_choice).to_string(),
+        Problem::ChoiceWithoutAsking => t!(mcp_problem_choice_without_asking).to_string(),
     }
 }
 
@@ -1938,6 +1964,8 @@ fn start_under(
                 tools,
                 exclude_tools,
                 allowed_hosts,
+                ask_every_call,
+                choice_arguments,
             } => {
                 reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
                 let sandbox = match &sandbox {
@@ -2039,6 +2067,11 @@ fn start_under(
                     .map(|reached| match throwaway {
                         Some(throwaway) => reached.holding(throwaway),
                         None => reached,
+                    })
+                    .map(|reached| {
+                        reached
+                            .asking_every_call(ask_every_call)
+                            .choosing(choice_arguments)
                     });
                     let _ = sender.send((alias, outcome, None));
                 });
@@ -2047,9 +2080,11 @@ fn start_under(
                 url,
                 headers,
                 declared,
+                declaration,
                 timeouts,
                 tools,
                 exclude_tools,
+                ask_every_call,
             } => {
                 waiting.push(wait_for(&alias, timeouts));
                 std::thread::spawn(move || {
@@ -2062,11 +2097,12 @@ fn start_under(
                         &tools,
                         &exclude_tools,
                     );
+                    let outcome = outcome.map(|reached| reached.asking_every_call(ask_every_call));
                     let hop = hop.map(|destination| Hop {
                         alias: alias.clone(),
                         url,
                         declared,
-                        timeouts,
+                        declaration,
                         destination,
                     });
                     let _ = sender.send((alias, outcome, hop));
@@ -2237,6 +2273,7 @@ fn handshake_at(
     server.set_bound(timeouts.tool());
     Ok(
         crate::mcp::Reached::new(Connection::Http(server), listing, declared)
+            .filtered_by(tools, exclude_tools)
             .with_prompts(prompts)
             .noting(notes),
     )
@@ -4283,6 +4320,8 @@ mod tests {
             tools: Vec::new(),
             exclude_tools: Vec::new(),
             allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         };
         let granting = Capabilities {
             network_denial_enforced: true,
@@ -4706,6 +4745,59 @@ mod tests {
         );
     }
 
+    /// SERVERS-22: the arguments a declaration says take a choice are drawn where the person is
+    /// asked about the server, as `tool:argument` as `--choice` spells them and in the order of
+    /// the digest, directly above the digest line, and a declaration that names none draws no such
+    /// line. The regressions it rejects are a question that leaves them out, which would let the
+    /// person approve a server without seeing what a processor's choice may fill, and a line
+    /// drawn for every server.
+    #[test]
+    fn the_arguments_that_take_a_choice_are_drawn_above_the_digest_and_only_when_there_are_some() {
+        let asking = Declaration::stdio(words(&["/opt/srv"]), Vec::new(), None)
+            .expect("declaration")
+            .asking_every_call(true);
+        let choosing = asking
+            .clone()
+            .choosing(
+                [
+                    (
+                        "type_text".to_string(),
+                        ["element_number".to_string()].into(),
+                    ),
+                    (
+                        "click_element".to_string(),
+                        ["text".to_string(), "element_number".to_string()].into(),
+                    ),
+                ]
+                .into(),
+            )
+            .expect("choices");
+
+        let said = t!(
+            mcp_declaration_choice_arguments,
+            pairs = "click_element:element_number, click_element:text, type_text:element_number"
+        )
+        .to_string();
+        let lines = drawn("input", &choosing, "abcd1234");
+        let [.., line, digest] = lines.as_slice() else {
+            panic!("{lines:?}");
+        };
+        assert_eq!(line.trim(), said, "{lines:?}");
+        assert!(digest.contains("abcd1234"), "{lines:?}");
+        assert_eq!(
+            choices_line(&choosing).as_deref(),
+            Some(said.as_str()),
+            "the line `list` draws is the one the question draws"
+        );
+
+        let plain = drawn("input", &asking, "abcd1234");
+        assert!(
+            !plain.iter().any(|line| line.contains("take a choice")),
+            "{plain:?}"
+        );
+        assert_eq!(choices_line(&asking), None);
+    }
+
     /// SERVERS-18: header names and environment variable names are drawn,
     /// and secret values are never read or shown.
     #[test]
@@ -4911,6 +5003,8 @@ done
             tools: Vec::new(),
             exclude_tools: Vec::new(),
             allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         };
         Some(start(
             vec![("weather".to_string(), plan)],
@@ -5072,6 +5166,8 @@ while {answering}"#
             tools: Vec::new(),
             exclude_tools: Vec::new(),
             allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         };
         let mut notes = Vec::new();
 
@@ -5287,6 +5383,19 @@ while {answering}"#
     }
 
     fn redirected(name: &str) -> Redirected {
+        redirected_asking(name, false)
+    }
+
+    /// [`redirected`], the declaration saying every call is asked about where `asking` says so.
+    fn redirected_asking(name: &str, asking: bool) -> Redirected {
+        redirected_declaring(name, |declaration| declaration.asking_every_call(asking))
+    }
+
+    /// [`redirected`], the declaration being what `declare` makes of the bare one.
+    fn redirected_declaring(
+        name: &str,
+        declare: impl FnOnce(Declaration) -> Declaration,
+    ) -> Redirected {
         let root = scratch(name);
         let home = root.join("home");
         let project = root.join("project");
@@ -5294,7 +5403,7 @@ while {answering}"#
         std::fs::create_dir_all(project.join(".bravebot")).expect("project");
         let (moved_to, second) = serving(weather, String::new());
         let (declared_url, first) = serving(redirecting, moved_to.clone());
-        let declared = Declaration::http(declared_url.clone()).expect("declaration");
+        let declared = declare(Declaration::http(declared_url.clone()).expect("declaration"));
         let mut declarations = Declarations::default();
         declarations.insert("weather", &declared);
         std::fs::write(mcp::declarations_file(&home), declarations.to_text()).expect("mcp.json");
@@ -5396,6 +5505,70 @@ while {answering}"#
             "the server was not started where it moved: {second:?}"
         );
         let now = Declaration::http(redirected.moved_to.clone()).expect("moved");
+        assert_eq!(declared_in(&redirected.home), now);
+        let approvals = Approvals::read(&redirected.home);
+        assert!(approvals.approves(&now.digest()));
+        assert!(!approvals.approves(&redirected.declared.digest()));
+    }
+
+    /// SERVERS-21: a server moved where its reply pointed is still asked about at every call, in
+    /// the session that moved it and in the declaration the move rewrites. The regression it
+    /// rejects is a rewrite that keeps the bounds and drops the property, which would leave the
+    /// server asking no more than any other from the next session on.
+    #[test]
+    fn a_server_asked_every_call_is_still_asked_every_call_after_it_moves() {
+        let redirected = redirected_asking("cli-servers-move-asks-every-call", true);
+
+        let (reached, _) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        let session = reached.session().expect("a session");
+        assert!(session.offer().asks_every_call("weather"));
+        let now = Declaration::http(redirected.moved_to.clone())
+            .expect("moved")
+            .asking_every_call(true);
+        assert_eq!(declared_in(&redirected.home), now);
+        assert!(Approvals::read(&redirected.home).approves(&now.digest()));
+    }
+
+    /// The declaration a person might write for a remote server that has every key a move must not
+    /// lose, at `url`.
+    fn with_every_key(url: &str) -> Declaration {
+        Declaration::http(url.to_string())
+            .expect("a url")
+            .heading(
+                [("X-Team".to_string(), "TEAM_HEADER".to_string())].into(),
+                Some("WEATHER_TOKEN".to_string()),
+            )
+            .expect("headers")
+            .filtering(
+                vec!["get_forecast".to_string()],
+                vec!["delete_city".to_string()],
+            )
+            .expect("filters")
+            .timing(Timeouts::new(Some(7), Some(300)).expect("bounds"))
+            .asking_every_call(true)
+    }
+
+    /// SERVERS-11: a server moved at its handshake is declared at the new address with every other
+    /// key as the person wrote it, and the digest approved for it is that declaration's. The
+    /// regression it rejects is a rewrite built anew from the address, which drops the tool
+    /// filters and the variables that name the bearer token and the headers from the file and
+    /// approves a declaration the person never wrote.
+    #[test]
+    fn a_server_moved_at_its_handshake_keeps_everything_but_its_address() {
+        let redirected = redirected_declaring("cli-servers-move-keeps-all", |declared| {
+            let Declaration::Http { url, .. } = &declared else {
+                panic!("a remote declaration");
+            };
+            with_every_key(url)
+        });
+
+        let (reached, screen) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        assert!(screen.contains(t!(mcp_move_title)), "{screen}");
+        let now = with_every_key(&redirected.moved_to);
         assert_eq!(declared_in(&redirected.home), now);
         let approvals = Approvals::read(&redirected.home);
         assert!(approvals.approves(&now.digest()));
@@ -5606,6 +5779,8 @@ while {answering}"#
             tools: Vec::new(),
             exclude_tools: Vec::new(),
             allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         };
         let mut notes = Vec::new();
 
@@ -5698,6 +5873,8 @@ while {answering}"#
             tools: Vec::new(),
             exclude_tools: Vec::new(),
             allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         };
         let mut notes = Vec::new();
 
@@ -5782,6 +5959,8 @@ done
             tools: Vec::new(),
             exclude_tools: Vec::new(),
             allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         };
         let home = Home {
             directory: Some(state),
@@ -6027,6 +6206,8 @@ done
             tools: vec!["echo".to_string(), "ping".to_string()],
             exclude_tools: vec!["ping".to_string()],
             allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         };
         let mut notes = Vec::new();
         let started = start(
@@ -6041,6 +6222,190 @@ done
         assert_eq!(started[0].listing().offered(), 1);
         assert_eq!(started[0].listing().refused(), 0);
         assert_eq!(started[0].listing().withheld(), 2);
+    }
+
+    /// A shell script that answers the handshake and lists one tool, `echo`.
+    #[cfg(unix)]
+    const ECHO_SERVER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}\n' "$id"
+      ;;
+    *'"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}}\n' "$id"
+      ;;
+  esac
+done
+"#;
+
+    /// SERVERS-21: the plan of a local server carries the property from its declaration. It starts
+    /// nothing, so it runs where the launch below is skipped for want of confinement. The
+    /// regression it rejects is a plan that drops the property for a local server.
+    #[cfg(unix)]
+    #[test]
+    fn a_local_declaration_asking_every_call_is_planned_as_asking() {
+        let root = scratch("cli-servers-local-plans-asks-every-call");
+        let program = installed(&root.join("bin"), "mock-mcp");
+        for asking in [true, false] {
+            let declaration =
+                Declaration::stdio(vec![program.display().to_string()], Vec::new(), None)
+                    .expect("declaration")
+                    .asking_every_call(asking);
+            let Plan::Stdio { ask_every_call, .. } =
+                planned(&declaration, &|_| None).expect("a plan")
+            else {
+                panic!("a local declaration was not planned as a local server");
+            };
+            assert_eq!(ask_every_call, asking, "asking {asking}");
+        }
+    }
+
+    /// SERVERS-21: a local server, the kind a program of a person's own is, carries the property
+    /// through the confined launch to the session that holds it. Where this machine cannot confine
+    /// a program the launch does not happen, the test says so on stderr and passes, and the plan
+    /// above is what is checked.
+    #[cfg(unix)]
+    #[test]
+    fn a_local_server_declared_to_ask_every_call_is_held_as_one() {
+        let root = scratch("cli-servers-local-asks-every-call");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let script = installed(&root.join("bin"), "mock-mcp");
+        std::fs::write(&script, ECHO_SERVER).expect("write script");
+        let home_dir = root.join("home");
+        std::fs::create_dir_all(&home_dir).expect("home");
+        let home = Home {
+            directory: Some(home_dir),
+            writable: true,
+        };
+        for asking in [true, false] {
+            let plan = Plan::Stdio {
+                program: script.clone(),
+                arguments: Vec::new(),
+                variables: Variables::new(),
+                searched: Vec::new(),
+                reads: Vec::new(),
+                directory: None,
+                declared: digested(&["mock-mcp"]),
+                timeouts: Timeouts::default(),
+                tools: Vec::new(),
+                exclude_tools: Vec::new(),
+                allowed_hosts: None,
+                ask_every_call: asking,
+                choice_arguments: ChoiceArguments::new(),
+            };
+            let mut notes = Vec::new();
+            let started = start(
+                vec![("mock".to_string(), plan)],
+                &home,
+                Stream::Null,
+                &mut notes,
+                &mut Vec::new(),
+            );
+            assert_eq!(started.len(), 1, "notes: {notes:?}");
+            let session =
+                crate::mcp::Session::new(started, PathBuf::new(), None, false, Managed::default());
+            assert_eq!(
+                session.offer().asks_every_call("mock"),
+                asking,
+                "asking {asking}"
+            );
+        }
+    }
+
+    /// SERVERS-22: the plan of a local server carries the arguments its declaration says take a
+    /// choice, and a declaration that names none plans none. It starts nothing, so it runs where
+    /// the launch below is skipped for want of confinement. The regression it rejects is a plan
+    /// that drops them.
+    #[cfg(unix)]
+    #[test]
+    fn a_local_declaration_naming_choice_arguments_is_planned_with_them() {
+        let root = scratch("cli-servers-local-plans-choice-arguments");
+        let program = installed(&root.join("bin"), "mock-mcp");
+        let named: ChoiceArguments = [(
+            "echo".to_string(),
+            ["text".to_string(), "count".to_string()].into(),
+        )]
+        .into();
+        for choices in [named, ChoiceArguments::new()] {
+            let declaration =
+                Declaration::stdio(vec![program.display().to_string()], Vec::new(), None)
+                    .expect("declaration")
+                    .asking_every_call(true)
+                    .choosing(choices.clone())
+                    .expect("choices");
+            let Plan::Stdio {
+                choice_arguments, ..
+            } = planned(&declaration, &|_| None).expect("a plan")
+            else {
+                panic!("a local declaration was not planned as a local server");
+            };
+            assert_eq!(choice_arguments, choices);
+        }
+    }
+
+    /// SERVERS-22: a local server carries the arguments through the confined launch to the session
+    /// that holds it, and its offer answers for the tool they were declared for and no other tool,
+    /// and for no server that declared none. Where this machine cannot confine a program the launch
+    /// does not happen, the test says so on stderr and passes, and the plan above is what is
+    /// checked.
+    #[cfg(unix)]
+    #[test]
+    fn a_local_server_declared_with_choice_arguments_is_held_with_them() {
+        let root = scratch("cli-servers-local-choice-arguments");
+        if Prelude::current().is_none() || !bravebot_sandbox::confinement_works_here() {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        }
+        let script = installed(&root.join("bin"), "mock-mcp");
+        std::fs::write(&script, ECHO_SERVER).expect("write script");
+        let home_dir = root.join("home");
+        std::fs::create_dir_all(&home_dir).expect("home");
+        let home = Home {
+            directory: Some(home_dir),
+            writable: true,
+        };
+        let named: ChoiceArguments = [("echo".to_string(), ["text".to_string()].into())].into();
+        for (alias, choices) in [("mock", named.clone()), ("bare", ChoiceArguments::new())] {
+            let plan = Plan::Stdio {
+                program: script.clone(),
+                arguments: Vec::new(),
+                variables: Variables::new(),
+                searched: Vec::new(),
+                reads: Vec::new(),
+                directory: None,
+                declared: digested(&["mock-mcp", alias]),
+                timeouts: Timeouts::default(),
+                tools: Vec::new(),
+                exclude_tools: Vec::new(),
+                allowed_hosts: None,
+                ask_every_call: true,
+                choice_arguments: choices,
+            };
+            let mut notes = Vec::new();
+            let started = start(
+                vec![(alias.to_string(), plan)],
+                &home,
+                Stream::Null,
+                &mut notes,
+                &mut Vec::new(),
+            );
+            assert_eq!(started.len(), 1, "{alias}: notes: {notes:?}");
+            let session =
+                crate::mcp::Session::new(started, PathBuf::new(), None, false, Managed::default());
+            let offer = session.offer();
+            let held = offer.choice_arguments(alias, "echo");
+            assert_eq!(
+                held.map(|arguments| arguments.iter().map(String::as_str).collect::<Vec<_>>()),
+                (alias == "mock").then(|| vec!["text"]),
+                "{alias}"
+            );
+            assert_eq!(offer.choice_arguments(alias, "other"), None, "{alias}");
+        }
     }
 
     /// The whole response a stand-in server gives `body`, with `result` as the answer.
@@ -6097,9 +6462,11 @@ done
             url,
             headers: Vec::new(),
             declared: declared.digest(),
+            declaration: declared.clone(),
             timeouts: Timeouts::default(),
             tools: Vec::new(),
             exclude_tools: Vec::new(),
+            ask_every_call: false,
         };
         let home = Home {
             directory: None,
@@ -6138,6 +6505,90 @@ done
             !notes[0].contains("not a word"),
             "a refused name was said: {notes:?}"
         );
+    }
+
+    /// MCP-12: a remote server is started holding the filters its declaration gave, as a local one
+    /// is, so a list read again for it is held to them. The regression it rejects is a handshake
+    /// that filters the first list and records no filter, which leaves the server's later lists
+    /// unfiltered.
+    #[test]
+    fn a_remote_server_is_started_holding_the_filters_its_declaration_gave() {
+        let (url, _bodies) = serving(weather, String::new());
+        let declaration = Declaration::http(url)
+            .expect("declaration")
+            .filtering(
+                vec!["get_forecast".to_string()],
+                vec!["delete_city".to_string()],
+            )
+            .expect("filters");
+        let plan = planned(&declaration, &|_| None).expect("a plan");
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let mut notes = Vec::new();
+        let started = start(
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        let [reached] = started.as_slice() else {
+            panic!("started {} servers: {notes:?}", started.len());
+        };
+        assert_eq!(
+            reached.filters(),
+            (
+                ["get_forecast".to_string()].as_slice(),
+                ["delete_city".to_string()].as_slice()
+            )
+        );
+    }
+
+    /// SERVERS-21: a declaration that says every call is asked about reaches the session that
+    /// started the server, through the plan and the handshake, and one that does not say so does
+    /// not. The question that asks about the server says it, and a declaration that says nothing
+    /// draws no such line. The regressions it rejects are a plan that drops the property and a
+    /// start that does not carry it to the server it holds.
+    #[test]
+    fn a_declaration_asking_every_call_reaches_the_server_the_session_holds() {
+        for (asking, line) in [(true, true), (false, false)] {
+            let (url, _bodies) = serving(weather, String::new());
+            let declaration = Declaration::http(url)
+                .expect("declaration")
+                .asking_every_call(asking);
+            let plan = planned(&declaration, &|_| None).expect("a plan");
+            let home = Home {
+                directory: None,
+                writable: false,
+            };
+            let mut notes = Vec::new();
+            let started = start(
+                vec![("weather".to_string(), plan)],
+                &home,
+                Stream::Null,
+                &mut notes,
+                &mut Vec::new(),
+            );
+            assert_eq!(started.len(), 1, "notes: {notes:?}");
+            let session =
+                crate::mcp::Session::new(started, PathBuf::new(), None, false, Managed::default());
+            assert_eq!(
+                session.offer().asks_every_call("weather"),
+                asking,
+                "asking {asking}"
+            );
+            let drawn = drawn("weather", &declaration, "digest");
+            assert_eq!(
+                drawn
+                    .iter()
+                    .any(|row| row.contains("every call is asked about")),
+                line,
+                "{drawn:?}"
+            );
+        }
     }
 
     /// MCP-10: a server whose prompt list is rejected is kept for its tools, with no prompt, and the
@@ -6213,6 +6664,8 @@ done
             tools: Vec::new(),
             exclude_tools: Vec::new(),
             allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         };
         let mut notes = Vec::new();
         let started = start(
@@ -6470,6 +6923,8 @@ done
                     tools: Vec::new(),
                     exclude_tools: Vec::new(),
                     allowed_hosts: None,
+                    ask_every_call: false,
+                    choice_arguments: ChoiceArguments::new(),
                 },
             )]
         };
@@ -6536,6 +6991,8 @@ done
             tools: Vec::new(),
             exclude_tools: Vec::new(),
             allowed_hosts: None,
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         };
         let hosts = listing(Some(&["mine.example"]), &[]);
         let mut notes = Vec::new();
@@ -6600,6 +7057,8 @@ done
             tools: Vec::new(),
             exclude_tools: Vec::new(),
             allowed_hosts: Some(vec!["mine.example".to_string()]),
+            ask_every_call: false,
+            choice_arguments: ChoiceArguments::new(),
         };
         let mut notes = Vec::new();
 

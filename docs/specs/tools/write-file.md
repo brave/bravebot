@@ -19,7 +19,8 @@ confirmation.
 
 `contents_ref` names quarantined content that becomes the whole file. It is **routing**, since it
 decides which bytes the write carries, and it is a name the driver handed out rather than anything
-derived from content.
+derived from content. A slot that holds a picture or a PDF becomes the file it encodes
+([WRITE-9](#WRITE-9)).
 
 Exactly one of the two. Both would leave the driver choosing between text the planner wrote and
 bytes nobody has read, and neither names anything to write, so both shapes are refused before
@@ -233,3 +234,47 @@ replaced can ask for it with `run`.
 `verified-by: bravebot_agent::turn::a_contents_ref_write_over_a_vouched_file_in_another_encoding_is_refused_before_anyone_is_asked`
 `verified-by: bravebot_agent::turn::a_checkout_file_brought_back_over_a_vouched_file_in_another_encoding_is_refused_before_the_person_is_asked`
 `verified-by: bravebot_agent::manifest::a_planned_write_over_a_vouched_file_in_another_encoding_is_refused`
+
+<a id="WRITE-9"></a>
+### WRITE-9: a picture or a PDF in a slot is written as the file it encodes, to a path with its extension
+
+A `contents_ref` that names a slot holding a picture or a PDF ([READ-5](read-file.md#READ-5),
+[MCP-6](../mcp.md#MCP-6)) writes the file the slot's `data:` URI encodes, byte for byte, and not the
+URI as text. The effect that writes the file turns the URI back into its bytes. The driver carries
+the reference, and neither it nor the planner reads one of them. Which slots are pictures is the
+driver's record of them, made where the slot was made and never taken from what it holds.
+
+**The path.** The planner names it with `path`. Its extension must be one the table of attachable
+files ([READ-5](read-file.md#READ-5)) lists for the slot's media type, compared without regard to
+case: `.png` for `image/png`, `.jpg` or `.jpeg` for `image/jpeg`, `.gif` for `image/gif`, `.webp` for
+`image/webp` and `.pdf` for `application/pdf`. A path with another extension, or none, is refused
+before anybody is asked, and the planner is told which extensions the type has. A `path_ref` is
+refused for a picture. The name it stands for came out of a listing nobody vouched for, so its
+extension is a fact about untrusted bytes, and comparing it would be the driver branching on them.
+
+**The question.** Always put to the person, whatever the trust map says, as [WRITE-4](#WRITE-4)
+says of a write through a reference. A permission mode answers it as it answers any write. It shows
+the slot's name, its media type, the size of the file in bytes and the path, in the line every front
+end draws as the destination, and no body: there is no diff, no credential scan and no edit to offer,
+since the body is not text. A no writes nothing and leaves a file already there as it was. A path the
+workspace does not reach is refused before the question, as [WRITE-3](#WRITE-3) says.
+
+**What is recorded.** The write is made at the label the slot had with its confidentiality lowered,
+as [PROC-8](../processors.md#PROC-8) says of any body written by reference, and the path is recorded
+as [TRUST-4](../trust-map.md#TRUST-4) says. A picture from a server's tool result or from a file nobody
+vouched for leaves an untrusted file, and one from a file the person vouched for leaves a trusted
+one. The planner is told which file was written from which reference, and that it cannot read the
+file; it is not told the bytes or their count.
+
+**Why.** A screenshot a session takes can otherwise be looked at by a processor and never kept. The
+`data:` URI written as text is not a file any program opens, and the planner has no other way to
+produce the bytes. The destination stays a path the planner named and a person approved, so
+nothing the picture holds chooses where it lands. The extension is compared with a closed table, so
+a PNG is not saved under a name such as `run.sh`.
+
+`verified-by: bravebot_agent::turn::a_picture_slot_is_written_as_the_file_it_encodes_after_the_person_approves`
+`verified-by: bravebot_agent::turn::a_picture_from_a_vouched_for_file_is_written_at_the_label_its_file_had`
+`verified-by: bravebot_agent::turn::a_picture_write_the_person_refuses_writes_nothing`
+`verified-by: bravebot_agent::turn::a_picture_is_written_only_to_a_path_with_the_extension_its_type_has`
+`verified-by: bravebot_agent::turn::a_picture_is_not_written_to_a_name_the_planner_was_never_shown`
+`verified-by: bravebot_agent::mcp::a_picture_a_server_returns_can_be_written_to_a_file_the_person_approves`

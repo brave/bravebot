@@ -264,6 +264,12 @@ impl Step {
             false => format!(" ({})", elsewhere.join(", ")),
         };
 
+        // A call reads as a call is put to a person, `alias:tool` (SERVERS-7).
+        let (subject, routing) = match self.tool {
+            MCP_CALL => (format!("{subject}:{}", self.text("tool")), String::new()),
+            _ => (subject.to_string(), routing),
+        };
+
         format!("{} {subject}{reads}{on}{writes}{routing}", contract.verb)
             .split_whitespace()
             .collect::<Vec<_>>()
@@ -494,6 +500,12 @@ pub fn is_connector(tool: &str) -> bool {
     tool == CONNECTOR_FETCH || tool == CONNECTOR_ACT
 }
 
+/// The step that calls one tool of an MCP server a person vouched for.
+///
+/// Named for the reason [`ANSWER`] is. Its server and tool are routing, and its arguments are a
+/// body the plan wrote, as a file write's `contents` are.
+pub const MCP_CALL: &str = "mcp_call";
+
 /// The static contract for one tool.
 ///
 /// This is the specification's `TOOL_SCHEMA`, and it plays the same role: the single place that
@@ -697,6 +709,27 @@ const CONTRACTS: &[Contract] = &[
         ],
         headline: &["resource"],
         verb: "act",
+    },
+    // The server is an alias a person typed and the tool a word on a list a person vouched for;
+    // together they are what a person approves a call by (SERVERS-7), so both are routing. The
+    // arguments are the plan's own text, a JSON object whose shape the server's tool decides, and
+    // are carried as `contents` is. The step has no slot field of either kind: a call fills no
+    // slot, and nothing a step produced can be named in its arguments.
+    Contract {
+        tool: MCP_CALL,
+        tier: Tier::Act,
+        required: &["server", "tool"],
+        accepted: &["server", "tool", "arguments"],
+        slot_output: None,
+        slot_inputs: &[],
+        slot_refs: &[],
+        paths: &[],
+        counts: &[],
+        texts: &["arguments"],
+        alternatives: &[],
+        routing: &["server", "tool"],
+        headline: &["server"],
+        verb: "call",
     },
     Contract {
         tool: ANSWER,
@@ -1793,6 +1826,122 @@ mod tests {
         assert_eq!(
             listing.steps()[0].describe(),
             "list docs into names (pattern *.md)"
+        );
+    }
+
+    fn call(server: &str, tool: &str) -> DraftStep {
+        DraftStep::new(MCP_CALL)
+            .with_text("server", server)
+            .with_text("tool", tool)
+    }
+
+    /// A call is locked by the alias and the tool, which are what a person approves it by
+    /// (SERVERS-7), and never by its arguments, which are the plan's body. It reads as `alias:tool`.
+    #[test]
+    fn a_server_call_locks_its_alias_and_tool_and_not_its_arguments() {
+        let plan = validate(&Draft::new(vec![
+            call("brave", "open_tab").with_text("arguments", r#"{"url":"https://example.com"}"#),
+        ]))
+        .unwrap();
+        let routing = plan.routing();
+        assert!(routing.contains(&("step_0_server".to_string(), "brave".to_string())));
+        assert!(routing.contains(&("step_0_tool".to_string(), "open_tab".to_string())));
+        assert!(
+            routing.iter().all(|(key, _)| !key.ends_with("arguments")),
+            "{routing:?}"
+        );
+        assert_eq!(plan.steps()[0].describe(), "call brave:open_tab");
+    }
+
+    /// The step has no field that names a slot, so no argument of a call can be taken from what an
+    /// earlier step produced and a call fills nothing a later step could use.
+    #[test]
+    fn a_server_call_names_no_slot_so_no_argument_comes_from_a_result() {
+        for field in ["out_slot", "from_slot", "reads", "on", "take", "with"] {
+            let failure = validate(&Draft::new(vec![
+                read("a.md", "doc"),
+                call("brave", "open_tab").with_text(field, "doc"),
+            ]))
+            .expect_err(field);
+            assert!(
+                matches!(&failure, ManifestError::Unknown { step: 1, field: named, .. } if named == field),
+                "{field}: {failure:?}"
+            );
+        }
+    }
+
+    /// The schema takes a call by its alias and tool and by nothing else a plan could add.
+    #[test]
+    fn a_server_call_with_an_extra_field_or_a_missing_name_is_refused() {
+        assert!(matches!(
+            validate(&Draft::new(vec![
+                call("brave", "open_tab").with_text("timeout", "5")
+            ])),
+            Err(ManifestError::Unknown { step: 0, .. })
+        ));
+        for field in ["server", "tool"] {
+            let mut step = call("brave", "open_tab");
+            step.args.remove(field);
+            assert!(matches!(
+                validate(&Draft::new(vec![step])),
+                Err(ManifestError::Missing { step: 0, field: named, .. }) if named == field
+            ));
+        }
+        assert!(matches!(
+            validate(&Draft::new(vec![
+                DraftStep::new(MCP_CALL)
+                    .with("server", Arg::Count(1))
+                    .with_text("tool", "open_tab"),
+            ])),
+            Err(ManifestError::WrongType {
+                field: "server",
+                ..
+            })
+        ));
+    }
+
+    /// Arguments are a body the driver hands on as it is, so a number or a list is a wrong shape
+    /// and not an empty object.
+    #[test]
+    fn a_server_calls_arguments_must_be_text() {
+        for wrong in [Arg::Count(3), Arg::List(vec!["a".to_string()])] {
+            assert!(matches!(
+                validate(&Draft::new(vec![
+                    call("brave", "open_tab").with("arguments", wrong)
+                ])),
+                Err(ManifestError::WrongType {
+                    field: "arguments",
+                    wanted: "text",
+                    ..
+                })
+            ));
+        }
+    }
+
+    /// A call may change anything the server can, so it is an action: nothing reads or processes
+    /// after it, and it fills no slot.
+    #[test]
+    fn a_read_after_a_server_call_is_refused() {
+        let failure = validate(&Draft::new(vec![
+            call("brave", "close_tab"),
+            read("a.md", "doc"),
+        ]))
+        .expect_err("a read after an action");
+        assert_eq!(
+            failure,
+            ManifestError::ReadAfterAction {
+                step: 1,
+                tool: "read_file"
+            }
+        );
+        assert!(
+            validate(&Draft::new(vec![
+                read("a.md", "doc"),
+                call("brave", "open_tab"),
+                call("brave", "close_tab"),
+                answer("doc"),
+            ]))
+            .is_ok()
         );
     }
 

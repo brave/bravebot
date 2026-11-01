@@ -41,6 +41,17 @@ pub enum Intent {
     Edit,
 }
 
+impl Intent {
+    /// `Overwrite` where the path already names a file, and `Create` where it does not.
+    pub(crate) fn of_a_write(replaces: bool) -> Self {
+        if replaces {
+            Self::Overwrite
+        } else {
+            Self::Create
+        }
+    }
+}
+
 /// A write the model has asked to perform.
 ///
 /// `path` and `contents` are untrusted strings at this point. They are shown to a person
@@ -1136,6 +1147,73 @@ pub fn shown_text(text: &str) -> String {
     shown(&text.chars().map(Piece::Char).collect::<Vec<_>>(), false)
 }
 
+/// One argument of a call to a server's tool, as the rows a person reads it in (SERVERS-7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShownArgument {
+    /// What follows the argument's name on its own row: the value as JSON, or for text drawn
+    /// line by line, how many lines it has.
+    pub head: String,
+    /// The rows under the first. Empty where the value is drawn on that row alone. A row holds no
+    /// control character, so a front end draws it as it is.
+    pub rows: Vec<String>,
+}
+
+/// An argument's JSON value as a person is shown it.
+///
+/// A string that holds a line feed or a character a person reading code cannot tell from another
+/// or from nothing is drawn line by line: a row saying how many lines it has, a sentence saying
+/// how many characters were written out where there are any, and one numbered row to a line, each
+/// line feed ending a row and each such character written as `‹U+XXXX›` as
+/// [`bravebot_core::invisible::spelled_code`] writes it (PROMPT-13). Those are the controls, the
+/// characters that draw as nothing, the spaces that are not the plain one, the blank braille
+/// pattern, the format and private use characters, and each combining mark past the third on a
+/// character, so a row is marked as the confirmation window of the browser extension marks its
+/// code. A `‹` the text holds is written out as well, so each one on a row opens a character that
+/// was written out. Every character of the text is on a row, so a person who answers has read all
+/// of it. Any other value is drawn as its JSON, on one row, as it always was.
+///
+/// The layout is chosen from the planner's own argument, which a call carries only from a context
+/// that has met nothing untrusted (SERVERS-7), the way [`shown_command`] chooses a quoting. The
+/// text is not parsed, compared or kept, the value sent to the server is the one the planner
+/// wrote, and no front end has to repeat the choice.
+pub fn shown_argument(value: &str) -> ShownArgument {
+    let one_row = || ShownArgument {
+        head: value.to_string(),
+        rows: Vec::new(),
+    };
+    let Ok(serde_json::Value::String(text)) = serde_json::from_str::<serde_json::Value>(value)
+    else {
+        return one_row();
+    };
+    let mut written_out = 0;
+    let lines: Vec<String> = text
+        .split('\n')
+        .map(|line| {
+            let spelled = bravebot_core::invisible::spelled_code(line);
+            written_out += spelled.hidden;
+            spelled.text
+        })
+        .collect();
+    if lines.len() == 1 && written_out == 0 {
+        return one_row();
+    }
+    let digits = lines.len().to_string().len();
+    let mut rows = Vec::with_capacity(lines.len() + 1);
+    if written_out > 0 {
+        rows.push(t!(mcp_call_text_written_out, count = written_out).to_string());
+    }
+    rows.extend(
+        lines
+            .iter()
+            .enumerate()
+            .map(|(at, line)| format!("{:>digits$} | {line}", at + 1)),
+    );
+    ShownArgument {
+        head: t!(mcp_call_text_lines, count = lines.len()).to_string(),
+        rows,
+    }
+}
+
 /// [`shown_name`] over a path held as one, for the prompts and lists that draw a path rather than
 /// a name the planner wrote.
 ///
@@ -1390,8 +1468,12 @@ pub struct McpCallRequest {
     /// The description of the tool on the list the person vouched for.
     pub description: Option<String>,
     /// Whether answer 2 can be recorded, which it cannot where there is no state directory to
-    /// write it into or the session writes nothing.
+    /// write it into, the session writes nothing, or the server is declared to ask every call.
     pub may_stand: bool,
+    /// Whether the server's declaration says every call is asked about (SERVERS-21). The prompt
+    /// says so and offers no answer that lasts, and the permission mode that answers every other
+    /// call unasked does not answer this one.
+    pub asked_every_call: bool,
 }
 
 impl McpCallRequest {
@@ -1485,6 +1567,9 @@ pub struct CallDecision {
     ///
     /// [PROMPT-12]: ../../../docs/specs/prompting.md
     pub note: Option<String>,
+    /// Whether the client refused without a person being asked, because it has no way to put the
+    /// call (SERVERS-21). Only set with a refusal.
+    pub unasked: bool,
 }
 
 impl CallDecision {
@@ -1493,6 +1578,7 @@ impl CallDecision {
             decision: Decision::Approve,
             stand: false,
             note: None,
+            unasked: false,
         }
     }
 
@@ -1501,6 +1587,7 @@ impl CallDecision {
             decision: Decision::Approve,
             stand: true,
             note: None,
+            unasked: false,
         }
     }
 
@@ -1509,6 +1596,17 @@ impl CallDecision {
             decision: Decision::Reject,
             stand: false,
             note: None,
+            unasked: false,
+        }
+    }
+
+    /// A refusal that nobody was asked for: the client cannot put a call to a server declared to
+    /// ask every call, so the call is refused and the planner and the person are told that
+    /// (SERVERS-21).
+    pub fn unasked() -> Self {
+        Self {
+            unasked: true,
+            ..Self::reject()
         }
     }
 
@@ -3109,6 +3207,168 @@ impl fmt::Display for Decision {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The JSON text of a string value, as a call carries an argument.
+    fn json_text(text: &str) -> String {
+        serde_json::Value::String(text.to_string()).to_string()
+    }
+
+    /// SERVERS-7, PROMPT-13: a string argument that holds a line feed is drawn one numbered row to
+    /// a line, so the code of a call to `run_script` is read as the lines it is and not as one
+    /// escaped string. Every line is a row, the empty ones and the one after a closing line feed
+    /// included, and the numbers are aligned. A front end that drew the JSON, or cut at the first
+    /// line, or dropped the empty last line, fails one of these.
+    #[test]
+    fn a_string_argument_with_line_feeds_is_drawn_one_numbered_row_to_a_line() {
+        let shown = shown_argument(&json_text("const a = 1;\n\n  return a\n"));
+        assert_eq!(shown.head, "4 lines");
+        assert_eq!(
+            shown.rows,
+            ["1 | const a = 1;", "2 | ", "3 |   return a", "4 | "]
+        );
+        let many = (1..=12)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let shown = shown_argument(&json_text(&many));
+        assert_eq!(shown.head, "12 lines");
+        assert_eq!(shown.rows.len(), 12);
+        assert_eq!(shown.rows[0], " 1 | line 1");
+        assert_eq!(shown.rows[11], "12 | line 12");
+        assert_eq!(shown_argument(&json_text("a\nb")).head, "2 lines");
+    }
+
+    /// PROMPT-13: a character that draws as nothing, a control character and a tag character are
+    /// each written out where they are, the sentence over the rows counts them, and a line feed is
+    /// the end of a row and is not counted. Text with none of them has no sentence. A front end
+    /// that drew the text as it is would show a row identical to one without the character.
+    #[test]
+    fn a_string_argument_writes_out_what_cannot_be_seen_and_counts_it() {
+        let shown = shown_argument(&json_text(
+            "a\u{200b}b\n\u{202e}c\r\n\tx\u{e0041}\u{85}\u{7f}\u{1b}[31m",
+        ));
+        assert_eq!(shown.head, "3 lines");
+        assert_eq!(
+            shown.rows,
+            [
+                "8 characters you cannot see are written out below as \u{2039}U+XXXX\u{203a}, \
+                 and a tag character also as the letter it stands for.",
+                "1 | a\u{2039}U+200B\u{203a}b",
+                "2 | \u{2039}U+202E\u{203a}c\u{2039}U+000D\u{203a}",
+                "3 | \u{2039}U+0009\u{203a}x\u{2039}U+E0041 A\u{203a}\u{2039}U+0085\u{203a}\
+                 \u{2039}U+007F\u{203a}\u{2039}U+001B\u{203a}[31m",
+            ]
+        );
+        for row in &shown.rows {
+            assert!(!row.chars().any(char::is_control), "{row:?}");
+        }
+        let one = shown_argument(&json_text("a\u{200b}b"));
+        assert_eq!(one.head, "1 line");
+        assert!(one.rows[0].starts_with("1 character you cannot see is written out"));
+        let plain = shown_argument(&json_text("a\nb"));
+        assert_eq!(plain.rows, ["1 | a", "2 | b"]);
+    }
+
+    /// ROUTE-11, PROMPT-13: the question marks what the confirmation window of the browser
+    /// extension marks, so a person who reads the code in both reads it as the same characters.
+    /// A space that is not the plain one, a format character, the blank braille pattern, a private
+    /// use character and a combining mark past the third on a character are each written out and
+    /// counted, on a string that has no line feed and so is drawn as one row of JSON without them.
+    /// A string that kept to the list of characters that draw as nothing would draw each of these
+    /// as the text it looks like.
+    #[test]
+    fn a_string_argument_marks_what_the_confirmation_window_marks() {
+        for (text, count, written) in [
+            ("a\u{a0}b", "1 character", "a\u{2039}U+00A0\u{203a}b"),
+            ("a\u{3000}b", "1 character", "a\u{2039}U+3000\u{203a}b"),
+            ("a\u{202f}b", "1 character", "a\u{2039}U+202F\u{203a}b"),
+            ("a\u{600}b", "1 character", "a\u{2039}U+0600\u{203a}b"),
+            ("a\u{2800}b", "1 character", "a\u{2039}U+2800\u{203a}b"),
+            ("a\u{e000}b", "1 character", "a\u{2039}U+E000\u{203a}b"),
+            ("a\u{100000}b", "1 character", "a\u{2039}U+100000\u{203a}b"),
+            ("\u{301}a", "1 character", "\u{2039}U+0301\u{203a}a"),
+            (
+                "e\u{301}\u{302}\u{303}\u{304}\u{305}",
+                "2 characters",
+                "e\u{301}\u{302}\u{303}\u{2039}U+0304\u{203a}\u{2039}U+0305\u{203a}",
+            ),
+        ] {
+            let shown = shown_argument(&json_text(text));
+            assert_eq!(shown.head, "1 line", "{text:?}");
+            assert_eq!(shown.rows.len(), 2, "{text:?}");
+            assert!(shown.rows[0].starts_with(count), "{text:?}");
+            assert_eq!(shown.rows[1], format!("1 | {written}"), "{text:?}");
+        }
+        let stacked = shown_argument(&json_text(&format!("x{}", "\u{301}".repeat(30))));
+        assert!(stacked.rows[0].starts_with("27 characters"), "{stacked:?}");
+        // Ordinary text is not marked: a plain space, the object replacement character, other
+        // scripts, an emoji, and three marks on a letter keep the JSON on one row.
+        for text in [
+            "a b",
+            "a\u{fffc}b",
+            "caf\u{e9} \u{4e2d}\u{6587} \u{1f600}",
+            "e\u{301}\u{302}\u{303}",
+        ] {
+            let value = json_text(text);
+            let shown = shown_argument(&value);
+            assert_eq!(shown.head, value, "{text:?}");
+            assert!(shown.rows.is_empty(), "{text:?}");
+        }
+    }
+
+    /// PROMPT-13: text that holds the written-out form of a character is not a character that was
+    /// written out. The `‹` of the form is written out wherever it is in the code, and is not
+    /// counted, so each `‹` on a row opens a character the question wrote out, and the sentence
+    /// counts the characters a person cannot see. Code that holds `‹U+200B›` and no character that
+    /// draws as nothing, on a row of its own, would otherwise read as a zero-width space that the
+    /// sentence did not count, or the sentence would be missing and the row would read as if it
+    /// had been written out. On one row of JSON the text is shown as it is, since nothing on
+    /// that row is a written-out character.
+    #[test]
+    fn a_written_out_form_typed_in_a_string_argument_is_not_taken_for_one_the_question_wrote() {
+        let literal = shown_argument(&json_text("a\n\u{2039}U+200B\u{203a}"));
+        assert_eq!(
+            literal.rows,
+            ["1 | a", "2 | \u{2039}U+2039\u{203a}U+200B\u{203a}"]
+        );
+        let both = shown_argument(&json_text("\u{2039}U+200B\u{203a}\n\u{200b}"));
+        assert!(both.rows[0].starts_with("1 character you cannot see is written out"));
+        assert_eq!(
+            both.rows[1..],
+            [
+                "1 | \u{2039}U+2039\u{203a}U+200B\u{203a}",
+                "2 | \u{2039}U+200B\u{203a}"
+            ]
+        );
+        let one_row = json_text("\u{2039}U+200B\u{203a}");
+        let shown = shown_argument(&one_row);
+        assert_eq!(shown.head, one_row);
+        assert!(shown.rows.is_empty());
+    }
+
+    /// SERVERS-7: a value that is not a string holding a line feed or a character that cannot be
+    /// seen is drawn as its JSON on one row, as every argument was, so the prompt of a call that
+    /// has none is not changed. A number, a list and an object holding such a string stay as the
+    /// JSON they are, text that is not JSON is left alone, and a string with only ordinary
+    /// characters keeps its quotes.
+    #[test]
+    fn any_other_argument_is_drawn_as_its_json_on_one_row() {
+        for value in [
+            "3",
+            "true",
+            "null",
+            "\"Toronto, Canada\"",
+            "\"quote \\\" and \\\\ and \u{e9}\"",
+            "[\"a\\nb\", 2]",
+            "{\"code\":\"a\\nb\\u200b\"}",
+            "not json at all\nsecond line",
+            "",
+        ] {
+            let shown = shown_argument(value);
+            assert_eq!(shown.head, value, "{value:?}");
+            assert!(shown.rows.is_empty(), "{value:?}");
+        }
+    }
 
     /// PROMPT-1: a name that would draw as nothing, or as another name, is drawn as what it is,
     /// and a name that is fine is left alone. One row per way a name goes unseen.

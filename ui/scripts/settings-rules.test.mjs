@@ -115,7 +115,8 @@ test('the rules in force are listed by what each list does, and cannot be revoke
   }
   assert.ok(!markup.includes('<button'), 'a rule is changed in its file, so there is nothing to press')
   assert.ok(markup.includes('What a command prints is not trusted because of it'), markup)
-  assert.ok(markup.includes('not applied to a plan run'), markup)
+  assert.ok(markup.includes('A plan run applies the rules about a server’s tools and no others'), markup)
+  assert.ok(!markup.includes('not applied to a plan run'), markup)
 })
 
 test('a list with nothing in it is left out, and no rules at all is said', () => {
@@ -136,16 +137,47 @@ test('a plan names the rules it is not held to', () => {
 
   const entry = t.askedManifest({ request: 1, task: 'write the notes', steps: ['1. [act] write notes.md'] }, held)
   const markup = render(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false })
-  assert.ok(markup.includes('Permission rules are not applied to a plan run'), markup)
+  assert.ok(markup.includes('other than those about a server’s tools are not applied to a plan'), markup)
   assert.ok(markup.includes('<code>Edit(notes.md)</code>'), markup)
   assert.ok(markup.includes('<code>Edit(src/**)</code>'), markup)
+})
+
+// A plan run applies the rules about a server's tool (MANIFEST-15), so the card does not say it
+// holds none of them: a person reading it would check a plan's calls against a rule the run keeps.
+test('a plan does not name the rules about a server’s tools, which it applies', () => {
+  const written = rules({
+    deny: ['Mcp(brave:open_tab)', 'Edit(notes.md)', 'Mcp', 'Read(docs/Mcp(x).md)'],
+    ask: ['Mcp( brave )', 'Bash(mcp-tool)', 'Edit(Mcp.md)'],
+  })
+  const held = t.narrowing(written)
+  // Only the family decides: a file or a command with the word in its name is still not applied.
+  assert.deepEqual(held, ['Edit(notes.md)', 'Read(docs/Mcp(x).md)', 'Bash(mcp-tool)', 'Edit(Mcp.md)'])
+
+  const entry = t.askedManifest({ request: 1, task: 'open the page', steps: ['1. [act] call brave:open_tab'] }, held)
+  const markup = render(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false })
+  assert.ok(!markup.includes('Mcp(brave'), markup)
+  assert.ok(markup.includes('<code>Edit(Mcp.md)</code>'), markup)
+
+  // Spelled for a person, and kept beside the rule it spells when one before it is left out.
+  const spelledAlongside = t.narrowing(rules({
+    deny: ['Mcp(brave)', `Edit(n${ZW}otes)`], shownDeny: ['Mcp(brave)', spelled(`Edit(n${ZW}otes)`)],
+  }))
+  assert.deepEqual(spelledAlongside, ['"Edit(n\\u{200b}otes)"'])
+})
+
+test('a plan in a conversation with rules about servers alone says nothing about rules', () => {
+  const held = t.narrowing(rules({ deny: ['Mcp(brave:open_tab)'], ask: ['Mcp(brave)'] }))
+  assert.deepEqual(held, [])
+  const entry = t.askedManifest({ request: 1, task: 'open the page', steps: ['1. [act] call brave:open_tab'] }, held)
+  const markup = render(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false })
+  assert.ok(!markup.includes('Permission rules'), markup)
 })
 
 test('a plan in a conversation with no such rule says nothing about rules', () => {
   for (const held of [[], t.narrowing(null), t.narrowing(rules({ allow: ['Bash(ls)'] }))]) {
     const entry = t.askedManifest({ request: 1, task: 'write the notes', steps: ['1. [act] write notes.md'] }, held)
     const markup = render(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false })
-    assert.ok(!markup.includes('Permission rules are not applied'), markup)
+    assert.ok(!markup.includes('not applied to a plan'), markup)
   }
 })
 

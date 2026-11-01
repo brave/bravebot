@@ -45,6 +45,22 @@ The margin is on every drawn **row**, not every line of the content. A line wide
 broken to the width by the same step that draws the margin, and each row it breaks into carries a bar
 of its own.
 
+**A picture or a PDF is described and not drawn.** When a file read as a picture, or a picture a tool
+returned such as a screenshot of a page, is held out of the model's reach, the block under the call
+has two rows in the margin, and the first lines of its base64 are not shown:
+
+```
+  ┃ untrusted · shot.png · (T,priv)
+  ┃ a picture, image/png, 70 bytes, held as ref:1 and kept from the model
+  ┃ Ask the model to write it to a file you can open, or to use vet_content on it, which asks you
+  ┃ about a copy of it before the model sees it.
+```
+
+The first row says what it is, how many bytes it holds, and the name it is held under. The
+second says how to look at it, which is covered in
+[A picture or a PDF](../security/vetting.md#a-picture-or-a-pdf). The picture is not drawn here. The
+desktop application shows the same two rows in the same confined block, under the label.
+
 **Colour codes in output are counted and not drawn.** A program that colours its output, such as a CI
 log, writes a code before and after each coloured word. Drawn as pictures, those buried the words.
 In the output of a [shell mode](shell-mode.md) command, in a quarantined block's preview, and in the

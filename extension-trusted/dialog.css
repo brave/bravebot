@@ -1,0 +1,14 @@
+/* The dialog panel, on top of confirm.css. The page's words go into the
+   elements marked "words", as text, and nothing here loads anything. */
+label {
+  display: block;
+  margin: 0.5rem 0 0.25rem;
+}
+input {
+  box-sizing: border-box;
+  font: inherit;
+  width: 100%;
+}
+#dismiss {
+  font-weight: 600;
+}

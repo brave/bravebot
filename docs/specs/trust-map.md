@@ -79,10 +79,18 @@ it, and how long an answer lasts. It does not cover what a label means once assi
 An empty map trusts no path. Trust is granted by a person and never inferred from silence, from
 a path's shape, or from anything a model or a file said.
 
+A folder that another program writes into is no exception. The Downloads folder, where the browser
+saves a file the Brave extension downloads ([BROWSER-32](browser.md#BROWSER-32)), is outside the
+workspace and has no rule, so a file there is undecided and not trusted, on every platform's
+spelling of the folder, whoever put it there. It is trusted only where a rule the person recorded
+covers it: `/add-dir` of the folder ([TRUST-9](#TRUST-9)), or a trusted workspace that holds the
+folder. Either vouches for every file in it, the downloaded ones included ([TRUST-2](#TRUST-2)).
+
 **Why.** This is what makes declining at startup mean something. A default of trusted would make
 the answer decorative.
 
 `verified-by: bravebot_core::trust::an_empty_store_trusts_nothing`
+`verified-by: bravebot_core::trust::a_downloads_folder_outside_the_workspace_is_untrusted_until_a_person_vouches_for_it`
 
 <a id="TRUST-2"></a>
 ### TRUST-2: the longest matching prefix decides

@@ -103,6 +103,16 @@ def with_cwd(where, work):
 REVIEW_TWO = "Two places in the kernel do branch on untrusted bytes, deliberately.\n"
 REVIEW_THREE = "Three places in the kernel do branch on untrusted bytes, deliberately.\n"
 SPEC_THREE = "- **Three places in the policy layer do look at untrusted bytes to decide.**\n"
+PAGE_PATH = "docs/website/docs/security/security.md"
+
+
+def security_page(heading, sentence):
+    """The public page: a heading counting the exceptions, and the sentence under it."""
+    return (
+        f"## {heading} deliberate exceptions\n\n"
+        f"Brave Bot looks at untrusted bytes to decide something in {sentence} places, "
+        "three in the policy layer.\n"
+    )
 
 
 def test_exception_counts():
@@ -110,6 +120,7 @@ def test_exception_counts():
         {
             "docs/development/reviewing-for-the-rule.md": REVIEW_TWO,
             "docs/specs/labels.md": SPEC_THREE,
+            PAGE_PATH: security_page("Three", "three"),
         }
     )
     found = with_cwd(disagreeing, lambda: list(audit.check_exception_counts()))
@@ -124,15 +135,17 @@ def test_exception_counts():
         {
             "docs/development/reviewing-for-the-rule.md": REVIEW_THREE,
             "docs/specs/labels.md": SPEC_THREE,
+            PAGE_PATH: security_page("Three", "three"),
         }
     )
     found = with_cwd(agreeing, lambda: list(audit.check_exception_counts()))
-    check("two documents naming the same number are clean", found == [], str(kinds(found)))
+    check("three documents naming the same number are clean", found == [], str(kinds(found)))
 
     silent = in_tree(
         {
             "docs/development/reviewing-for-the-rule.md": "Read the diff carefully.\n",
             "docs/specs/labels.md": SPEC_THREE,
+            PAGE_PATH: security_page("Three", "three"),
         }
     )
     found = with_cwd(silent, lambda: list(audit.check_exception_counts()))
@@ -141,6 +154,82 @@ def test_exception_counts():
         kinds(found) == ["exception-count-unstated"] and found[0]["severity"] == audit.WARNING,
         str(kinds(found)),
     )
+
+    # The public page counts twice, and a stale count in either place is the one a reader meets.
+    for what, page in (
+        ("the heading of the public page", security_page("Two", "three")),
+        ("the sentence of the public page", security_page("Three", "two")),
+        ("both counts of the public page", security_page("Two", "two")),
+    ):
+        stale = in_tree(
+            {
+                "docs/development/reviewing-for-the-rule.md": REVIEW_THREE,
+                "docs/specs/labels.md": SPEC_THREE,
+                PAGE_PATH: page,
+            }
+        )
+        found = with_cwd(stale, lambda: list(audit.check_exception_counts()))
+        check(
+            f"a stale count in {what} is an error",
+            kinds(found) == ["exception-count-disagreement"]
+            and found[0]["severity"] == audit.ERROR
+            and all(PAGE_PATH in line for line in found[0]["evidence"][:-1]),
+            str(found),
+        )
+
+    # A ninth exception is a count the three documents can name, and a document still saying eight
+    # is the drift the check exists for.
+    review_nine = "Nine places do branch on untrusted bytes, deliberately.\n"
+    spec_nine = "- **Nine places do look at untrusted bytes in order to decide something.**\n"
+    nine = in_tree(
+        {
+            "docs/development/reviewing-for-the-rule.md": review_nine,
+            "docs/specs/labels.md": spec_nine,
+            PAGE_PATH: security_page("Nine", "nine"),
+        }
+    )
+    found = with_cwd(nine, lambda: list(audit.check_exception_counts()))
+    check("three documents naming nine exceptions are clean", found == [], str(kinds(found)))
+
+    for what, review, page in (
+        ("the review document", "Eight places do branch on untrusted bytes, deliberately.\n",
+         security_page("Nine", "nine")),
+        ("the public page", review_nine, security_page("Eight", "eight")),
+    ):
+        stale = in_tree(
+            {
+                "docs/development/reviewing-for-the-rule.md": review,
+                "docs/specs/labels.md": spec_nine,
+                PAGE_PATH: page,
+            }
+        )
+        found = with_cwd(stale, lambda: list(audit.check_exception_counts()))
+        check(
+            f"{what} still counting eight beside a spec counting nine is an error",
+            kinds(found) == ["exception-count-disagreement"]
+            and found[0]["severity"] == audit.ERROR,
+            str(kinds(found)),
+        )
+
+    for what, files in (
+        ("a public page that counts nothing", {PAGE_PATH: "Read the page carefully.\n"}),
+        ("no public page", {}),
+    ):
+        unstated = in_tree(
+            {
+                "docs/development/reviewing-for-the-rule.md": REVIEW_THREE,
+                "docs/specs/labels.md": SPEC_THREE,
+                **files,
+            }
+        )
+        found = with_cwd(unstated, lambda: list(audit.check_exception_counts()))
+        check(
+            f"{what} is a warning, not an error",
+            kinds(found) == ["exception-count-unstated"]
+            and found[0]["severity"] == audit.WARNING
+            and PAGE_PATH in found[0]["summary"],
+            str(found),
+        )
 
 
 # A register with one admitted second client, as the tree has. The bullet has to be about opening a
@@ -1624,6 +1713,57 @@ def test_construction_pinned():
             site["count"]
             for site in audit.sites_for("Labelled::trusted", unrelated)
         ) == 1,
+    )
+
+
+def test_the_gate_that_reads_a_number_is_counted():
+    """The gate hands an answer's text to a function the caller names and takes a byte back.
+
+    It does not refuse untrusted content, because releasing an answer to the reader is what it is
+    for, so naming it in a spec buys nothing and its call sites have to be counted. A second caller
+    outside the kernel is then a moved count.
+    """
+    kernel = [
+        "impl Policy {",
+        "    pub fn read_a_number(",
+        "        &mut self,",
+        "        answer: Labelled<String>,",
+        "        reader: fn(&str, u8) -> u8,",
+        "    ) -> Gated<Labelled<u8>> {",
+        '        let proof = Declassification::authorise("read for one number");',
+        "        Ok(Labelled::new(reader(&answer.declassify(&proof), 9), answer.label()))",
+        "    }",
+        "}",
+    ]
+    sources = {
+        Path("crates/core/src/policy.rs"): kernel,
+        Path("crates/choice/src/lib.rs"): [
+            "pub fn read(policy: &mut Policy, answer: Labelled<String>) -> Gated<Labelled<u8>> {",
+            "    policy.read_a_number(answer, number_in)",
+            "}",
+        ],
+    }
+    found = list(audit.check_gates_pinned([FakeSpec([])], sources))
+    check(
+        "a call of the gate that reads a number is an error until a spec counts it",
+        kinds(found) == ["gate-unpinned"]
+        and any("Policy::read_a_number" in one["title"] for one in found),
+        str(kinds(found)),
+    )
+    named = FakeSpec([], named=["Policy::read_a_number"])
+    found = list(audit.check_gates_pinned([named], sources))
+    check(
+        "naming the gate that reads a number does not count it",
+        kinds(found) == ["gate-unpinned"],
+        str(kinds(found)),
+    )
+    check(
+        "a counted gate that reads a number is clean",
+        list(audit.check_gates_pinned([FakeSpec(audit.GATES)], sources)) == [],
+    )
+    check(
+        "the gate that reads a number is one of the gates",
+        "Policy::read_a_number" in audit.GATES,
     )
 
 
@@ -5347,6 +5487,7 @@ TESTS = (
     test_required_checks_are_the_gates,
     test_run_files_have_owners,
     test_construction_pinned,
+    test_the_gate_that_reads_a_number_is_counted,
     test_gates_pinned,
     test_key_sites_exhaustive,
     test_one_answer_to_which_lines_are_test_code,

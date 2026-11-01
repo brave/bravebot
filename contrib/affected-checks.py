@@ -19,6 +19,7 @@ import argparse
 import contextlib
 import io
 import os
+import posixpath
 import re
 # Fixed git commands with argument lists, never a shell.
 import subprocess  # nosemgrep: gitlab.bandit.B404
@@ -80,6 +81,18 @@ READ_BY_RUST = ("CHANGELOG.md", "README.md")
 
 # Read by a test, and by the build of the agent crate, which carries each spec's clause headings.
 READ_BY_RUST_UNDER = ("docs/specs/",)
+
+# The two Brave extensions, whose tests the job for the desktop UI runs and whose files a Rust test of
+# the relay reads.
+EXTENSIONS = ("extension/", "extension-trusted/")
+
+# Outside the extensions, in any directory, and read by their tests, which the job for the desktop UI
+# runs. A Rust test of the relay reads the design page as well.
+READ_BY_EXTENSION_TESTS = (
+    "docs/design/browser-extension.md",
+    "crates/browser/src/uploads.rs",
+    "crates/browser/tests/file-names.json",
+)
 
 # Part of the desktop UI, and compared by a Rust test with what it generates from the catalogs.
 UI_READ_BY_RUST = ("ui/src/renderer/i18n/messages.gen.ts",)
@@ -157,6 +170,8 @@ def classify(path, desktop, fuzz):
     found = classify_by_area(path, desktop, fuzz)
     if path in READ_BY_THE_SEAM_GUARD or path in ALSO_READ_BY_RUST:
         found = found | {"rust"}
+    if path in READ_BY_EXTENSION_TESTS:
+        found = found | {"rust", "ui"}
     return found
 
 
@@ -202,8 +217,8 @@ def classify_by_area(path, desktop, fuzz):
         return READ_BY_INSTALLER_TESTS[path]
     if path in WINDOWS_INSTALLER_SCRIPTS:
         return frozenset({"ui", "build", "installers"})
-    if path.startswith("extension/"):
-        # The job for the desktop UI runs the extension's tests, and a Rust test reads its files.
+    if path.startswith(EXTENSIONS):
+        # The job for the desktop UI runs the extensions' tests, and a Rust test reads their files.
         return frozenset({"rust", "ui"})
     if path.startswith("packages/agent-client/"):
         # The client's tests run in the job for the desktop UI against the built bridge, and the
@@ -464,6 +479,14 @@ CASES = (
     ("contrib/check-lint-increase.py", {"rust"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
+    ("extension-trusted/manifest.json", {"rust", "ui"}),
+    ("extension-trusted/cdp.js", {"rust", "ui"}),
+    ("extension-trusted/tests/cdp.test.mjs", {"rust", "ui"}),
+    ("docs/design/browser-extension.md", {"rust", "ui"}),
+    ("docs/design/another-design.md", NOTHING),
+    ("crates/browser/src/uploads.rs", {"rust", "ui"}),
+    ("crates/browser/tests/file-names.json", {"rust", "ui"}),
+    ("crates/browser/src/lib.rs", {"rust"}),
     ("npm/scripts/stage-platform-package.js", {"npm", "rust"}),
     ("install.sh", {"rust"}),
     ("install.ps1", {"rust"}),
@@ -520,6 +543,26 @@ def named_by_rust(root):
         for literal in STRING.findall((root / source).read_text(encoding="utf-8")):
             path = re.sub(r"^(\.\.?/)+", "", literal)
             if path in tracked and not path.startswith("crates/"):
+                found.setdefault(path, source)
+    return found
+
+
+SCRIPT_PATH = re.compile(r'["\'`](\.\./\.\./[^"\'`\n]+)["\'`]')
+
+
+def named_by_extension_tests(root):
+    """Each tracked file outside the extensions that a test of either names by a path above the
+    extension's directory."""
+    tracked = set(listed(git(root, "ls-files", "-z")))
+    found = {}
+    for source in sorted(tracked):
+        tests = posixpath.dirname(source)
+        if not (tests in [f"{extension}tests" for extension in EXTENSIONS]
+                and source.endswith(".mjs")):
+            continue
+        for literal in SCRIPT_PATH.findall((root / source).read_text(encoding="utf-8")):
+            path = posixpath.normpath(posixpath.join(tests, literal))
+            if path in tracked and not path.startswith(EXTENSIONS):
                 found.setdefault(path, source)
     return found
 
@@ -581,8 +624,35 @@ def selftest():
         if path not in NAMED_NOT_READ:
             got = classify(path, real, real_fuzz)
             checks.append((f"{path}, named in {source}, needs rust", "rust" in got, sorted(got)))
+    # The extension's tests run in the job for the desktop UI, so a file outside extension/ that
+    # one of them reads needs it as well.
+    for path, source in sorted(named_by_extension_tests(ROOT).items()):
+        got = classify(path, real, real_fuzz)
+        checks.append((f"{path}, named in {source}, needs ui", "ui" in got, sorted(got)))
     for path in sorted(set(NAMED_NOT_READ) - set(named)):
         checks.append((f"{path} is still named by a crate, as NAMED_NOT_READ says", False, None))
+    # Both extensions' tests are scanned, a file inside either is not reported, and a path that is
+    # no tracked file is not either.
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch)
+        env, run, write = fixture_git(root)
+        run("init", "-q", "-b", "main")
+        for directory, outside in (("extension", "docs/first.md"), ("extension-trusted", "docs/second.md")):
+            write(outside, "read\n")
+            write(f"{directory}/tests/x.test.mjs",
+                  f'read("../../{outside}"); read("../../extension/manifest.json"); '
+                  f'read("../../extension-trusted/manifest.json"); '
+                  f'read("../../docs/none.md");\n')
+        write("extension/manifest.json", "{}\n")
+        write("extension-trusted/manifest.json", "{}\n")
+        write("extension-other/tests/y.test.mjs", 'read("../../docs/first.md");\n')
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+        got = named_by_extension_tests(root)
+        checks.append(("a test of either extension that names a file outside both makes it the "
+                       "job's", got == {"docs/first.md": "extension/tests/x.test.mjs",
+                                        "docs/second.md": "extension-trusted/tests/x.test.mjs"},
+                       got))
 
     with tempfile.TemporaryDirectory() as scratch, tempfile.TemporaryDirectory() as elsewhere:
         root = Path(scratch)

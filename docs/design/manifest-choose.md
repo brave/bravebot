@@ -148,6 +148,10 @@ If untrusted data contributes to the computation, the result is untrusted and ca
 A processor may produce `Untrusted("accept")` as evidence or a recommendation. It may be shown to a
 person, and it cannot select the branch itself.
 
+A processor may also nominate the element of a page action. The nomination is untrusted evidence read
+for a number by a crate outside the driver, and the selector is the person's answer in the browser,
+bound to the element they were shown ([ROUTE-10](../specs/routing.md#ROUTE-10)).
+
 ## Execution
 
 Execution has four stages.

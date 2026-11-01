@@ -765,6 +765,30 @@ test('undecided path exceptions are not shown as refusals or grants', () => {
   assert.doesNotMatch(markup, /<button/)
 })
 
+/**
+ * The rows the agent writes about a picture the model has not seen, as the catalog words them. Read
+ * from the catalog so this window is held to the sentences the other front ends are given and not
+ * to a copy of them.
+ */
+const PICTURE_ROWS = (() => {
+  const catalog = readFileSync(join('..', 'crates', 'i18n', 'locales', 'en-US.ftl'), 'utf8')
+  const held = catalog.match(/^tool-picture = \{ \$bytes ->\n\s*\[one\] .*\n\s*\*\[other\] (.*)\n/m)?.[1]
+  const look = catalog.match(/^tool-picture-look = (.*)$/m)?.[1]
+  assert.ok(held && look, 'the catalog no longer has the two rows for a picture')
+  return [held.replace('{ $media }', 'image/png').replace('{ $bytes }', '118').replace('{ $slot }', 'ref:2'), look]
+})()
+
+test('the rows about a picture are drawn as text in the confined block, under the label, with no image', () => {
+  const drawn = draw(confined(PICTURE_ROWS))
+  assert.equal(occurrences(drawn, 'class="quarantine-head"'), 1, drawn)
+  assert.match(drawn, /<pre class="preview">a picture, image\/png, 118 bytes, held as ref:2 and kept from the model\nAsk the model /, drawn)
+  assert.ok(drawn.includes('use vet_content on it'), drawn)
+  assert.deepEqual(chips(drawn).map((chip) => chip.words), [['Untrusted', 'Private']])
+  for (const attribute of FETCHING) assert.ok(!drawn.includes(attribute), `${attribute} in ${drawn}`)
+  for (const element of ['<img', '<iframe', '<canvas', '<a ', '<button']) assert.ok(!drawn.includes(element), `${element} in ${drawn}`)
+  assert.ok(!drawn.includes('base64'), drawn)
+})
+
 /** Each label chip drawn, as the two words it says and the tooltips it carries. */
 const chips = (markup) => [...markup.matchAll(/<span class="label-chip"[^>]*aria-label="([^"]*)"[^>]*>(.*?)<\/span>/g)].map(([, aria, inner]) => ({
   aria,

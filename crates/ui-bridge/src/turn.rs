@@ -858,7 +858,14 @@ impl Confirmer for BridgeConfirmer {
     ///
     /// Answer 2, stop asking about this tool in this project, is kept only where the request says
     /// it can be recorded. A front end that sent it anyway gets answer 1, which is the narrower.
+    ///
+    /// A call to a server declared to ask every call is refused with no card, since the window
+    /// draws none that says no answer to it lasts (SERVERS-21). The refusal says nobody was asked,
+    /// so the planner and the person are not told that the person declined it.
     fn confirm_mcp_call(&mut self, request: &McpCallRequest) -> CallDecision {
+        if request.asked_every_call {
+            return CallDecision::unasked();
+        }
         match self.ask(Kind::McpCall, "mcp-call.request", |id| {
             wire::mcp_call_request(id, request)
         }) {

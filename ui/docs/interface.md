@@ -866,8 +866,8 @@ edited afterwards changes the next conversation.
   project, so an `allow` rule in it is in force. One inside the project is the project's
   file, and its `allow` rule is not.
 - A directory named in `additionalDirectories` is not opened.
-- Rules are not applied to a plan run. A plan card names the `deny` and `ask` rules the
-  conversation holds, so you can check the steps against them.
+- A plan run applies the rules about a server's tools and no others. A plan card names the other
+  `deny` and `ask` rules the conversation holds, so you can check the steps against them.
 
 A folded note at the top of the conversation says what a settings file wrote that is not in
 force: an entry that is not a rule, a project's `allow` rule, or a named directory.

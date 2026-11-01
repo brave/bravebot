@@ -3654,6 +3654,7 @@ mod tests {
             arguments: vec![("city".to_string(), "\"Paris\"".to_string())],
             description: None,
             may_stand: true,
+            asked_every_call: false,
         });
         assert_eq!(answer.decision, Decision::Reject);
 

@@ -150,8 +150,9 @@ export type Entry = (
       request: ManifestRequest
       decision: 'approve' | 'reject' | null
       /**
-       * The session's `deny` and `ask` rules, where it has any. The agent does not apply
-       * permission rules to a manifest run, so the card names the rules the plan is not held to.
+       * The session's `deny` and `ask` rules, where it has any, other than the ones about a
+       * server's tool. A manifest run applies those and no others, so the card names the rules the
+       * plan is not held to.
        */
       unheld?: string[]
     }
@@ -353,10 +354,20 @@ export const askedFetch = (request: FetchRequest): Entry => ({ kind: 'fetch', id
 export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server', id: nextId(), request, decision: null })
 export const askedManifest = (request: ManifestRequest, unheld: string[] = []): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null, unheld })
 
+/**
+ * Whether a rule is about a server's tool, which is the one family a plan run applies (MANIFEST-15).
+ * The family is the text before the first `(`, as the agent reads it.
+ */
+const aboutAServer = (rule: string): boolean => rule.trim().split('(')[0]!.trimEnd() === 'Mcp'
+
+/** The rules of one list that a plan run does not apply, each spelled as `shown` has it (PROMPT-1). */
+const unapplied = (held: string[], shown: string[] | undefined): string[] =>
+  held.flatMap((rule, index) => (aboutAServer(rule) ? [] : [shown?.[index] ?? rule]))
+
 /** The rules that narrow what a session does, which a manifest run is not held to, spelled for a person (PROMPT-1). */
 export const narrowing = (rules: SettingsRules | null | undefined): string[] => [
-  ...(rules?.shownDeny ?? rules?.deny ?? []),
-  ...(rules?.shownAsk ?? rules?.ask ?? []),
+  ...unapplied(rules?.deny ?? [], rules?.shownDeny),
+  ...unapplied(rules?.ask ?? [], rules?.shownAsk),
 ]
 
 /** Whether a settings file wrote something that is not in force, which the person is told. */

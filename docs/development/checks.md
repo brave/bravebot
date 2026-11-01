@@ -130,7 +130,9 @@ the classifier, any run that is not a pull request, and a run where the classifi
 Main and every tag are checked whole, and a push to a pull request cancels the run still going
 for its previous head. A file outside `crates/` that a Rust test reads belongs in
 the classifier's `READ_BY_RUST`; its selftest scans the crates for strings naming such a file and
-stops on one that is in neither that list nor `NAMED_NOT_READ`.
+stops on one that is in neither that list nor `NAMED_NOT_READ`. A file outside `extension/` and
+`extension-trusted/` that a test of either extension reads by a path above its directory belongs in
+`READ_BY_EXTENSION_TESTS`, and its selftest scans those tests for such paths.
 
 The changes job runs the classifier from the pull request's base commit, not from the pull request,
 so a change to the classifier is judged by the copy it replaces. The classifier and the Makefile are

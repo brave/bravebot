@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'"
+    />
+    <title>BraveBot asks for a picture of your screen</title>
+    <link rel="stylesheet" href="confirm.css" />
+  </head>
+  <body>
+    <h1 id="heading">BraveBot asks for a picture of your screen</h1>
+    <p class="action">
+      Choose a screen or a window in the dialog the browser shows. BraveBot takes one picture of
+      what you choose and stops the sharing.
+    </p>
+    <p class="note">
+      A picture of a screen holds everything on it, including what is not a page of Brave. It is
+      shown to you and not to the model. Close this window to cancel.
+    </p>
+    <p id="status" class="status" role="status"></p>
+    <div class="buttons">
+      <button type="button" id="cancel" autofocus>Cancel</button>
+    </div>
+    <script type="module" src="capture.js"></script>
+  </body>
+</html>

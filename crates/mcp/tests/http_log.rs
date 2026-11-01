@@ -147,10 +147,10 @@ fn a_handshake_is_written_to_the_diagnostic_log_when_it_works() {
 }
 
 /// A handshake that failed is written as the kind of failure it was, and the kinds are told apart:
-/// a server that answered with an error is not a connection that did not get through, and a bug
-/// report that read the one as the other would send a person to the wrong place. A server that
-/// answers a request with an error does so under a 200, so nothing about the request itself failed
-/// and only the handshake step can say.
+/// a server that answered with an error, a reply this client could not use and a connection that
+/// did not get through are three places to look, and a bug report that read one as another would
+/// send a person to the wrong place. A server that answers a request with an error does so under a
+/// 200, so nothing about the request itself failed and only the handshake step can say.
 #[test]
 fn a_handshake_that_failed_is_written_as_the_kind_of_failure_at_the_default_level() {
     let refused = format!(
@@ -162,8 +162,11 @@ fn a_handshake_that_failed_is_written_as_the_kind_of_failure_at_the_default_leve
     let answered_with_an_error = logged(bravebot_diag::Level::Error, || {
         handshake(vec![json_response(&refused)]);
     });
-    let did_not_get_through = logged(bravebot_diag::Level::Error, || {
+    let answered_with_a_status = logged(bravebot_diag::Level::Error, || {
         handshake(vec![unavailable]);
+    });
+    let did_not_get_through = logged(bravebot_diag::Level::Error, || {
+        handshake(vec![String::new()]);
     });
 
     let lines: Vec<_> = answered_with_an_error.lines().collect();
@@ -172,17 +175,28 @@ fn a_handshake_that_failed_is_written_as_the_kind_of_failure_at_the_default_leve
         lines[0].ends_with("ERROR mcp.initialize kind=server"),
         "{answered_with_an_error}"
     );
-    let lines: Vec<_> = did_not_get_through.lines().collect();
-    assert_eq!(lines.len(), 2, "{did_not_get_through}");
+    let lines: Vec<_> = answered_with_a_status.lines().collect();
+    assert_eq!(lines.len(), 2, "{answered_with_a_status}");
     assert!(
         lines[0].contains("ERROR net.fetch") && lines[0].contains("status=503"),
-        "{did_not_get_through}"
+        "{answered_with_a_status}"
     );
     assert!(
-        lines[1].ends_with("ERROR mcp.initialize kind=transport"),
+        lines[1].ends_with("ERROR mcp.initialize kind=unusable"),
+        "{answered_with_a_status}"
+    );
+    assert!(
+        did_not_get_through
+            .lines()
+            .last()
+            .is_some_and(|line| line.ends_with("ERROR mcp.initialize kind=transport")),
         "{did_not_get_through}"
     );
-    for log in [&answered_with_an_error, &did_not_get_through] {
+    for log in [
+        &answered_with_an_error,
+        &answered_with_a_status,
+        &did_not_get_through,
+    ] {
         for leaked in [SERVER_PROSE, "disregard", ALIAS] {
             assert!(!log.contains(leaked), "{leaked} reached the log: {log}");
         }

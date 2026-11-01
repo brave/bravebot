@@ -256,6 +256,7 @@ fn drawn(alias: &str, declaration: &Declaration) -> Value {
         "variables": variables,
         "reads": declaration.reads(),
         "directory": directory,
+        "asks_every_call": declaration.asks_every_call(),
         "digest": declaration.digest().short(),
         "problem": null,
     })
@@ -273,11 +274,36 @@ fn resolve(
     existing: Option<&Declaration>,
 ) -> Result<Declaration, Failure> {
     let declaration = resolved(request, directory, existing)?;
-    // The form has no field for the bounds, so a declaration the page edits keeps the ones it had.
-    Ok(match existing {
-        Some(existing) => declaration.timing(existing.timeouts()),
-        None => declaration,
-    })
+    // The form has no field for the bounds, for asking about every call, for the tool filters, for
+    // the headers a remote server sends, for the hosts a local one may reach or for the arguments
+    // that take a choice, so a declaration the page edits keeps what it had (SERVERS-3,
+    // SERVERS-15, SERVERS-21, SERVERS-22). A connector edited to be reached by URL keeps no hosts
+    // and no choices, and one edited to run a program keeps no headers, since the other transport
+    // declares none.
+    let Some(existing) = existing else {
+        return Ok(declaration);
+    };
+    let refused = |found: Problem| Failure::bad_request(servers::problem(&found));
+    let kept = declaration
+        .timing(existing.timeouts())
+        .asking_every_call(existing.asks_every_call())
+        .filtering(existing.tools().to_vec(), existing.exclude_tools().to_vec())
+        .map_err(refused)?;
+    match kept {
+        Declaration::Stdio { .. } => kept
+            .hosting(existing.allowed_hosts().map(<[String]>::to_vec))
+            .and_then(|kept| kept.choosing(existing.choice_arguments().clone()))
+            .map_err(refused),
+        Declaration::Http { .. } => kept
+            .heading(
+                existing
+                    .env_http_headers()
+                    .map(|(header, variable)| (header.to_string(), variable.to_string()))
+                    .collect(),
+                existing.bearer_env().map(str::to_string),
+            )
+            .map_err(refused),
+    }
 }
 
 fn resolved(
