@@ -162,16 +162,20 @@ is waited on for twenty seconds once, and every answer after that says it may be
 
 ## A position is structure; a name and the text at it are content
 
-A location is a path, a line, a column and the kind of symbol. **The line and the column are
-structure**, as a line count is for a file the planner may not read: there is nowhere in two integers
-for prose to sit. **The name is content.** It is bytes out of the tree the server indexed, so an
-answer is labelled by the files it names. Each path is looked up in the trust map. An answer that
-names only files you vouched for is read as written. An answer that names any file you did not vouch
-for comes back whole as a reference, with none of its locations in front of the planner, so somebody
-who owns `vendor/lib.js` cannot use `goToDefinition` to put a sentence in front of the planner
-through its name. A `goToDefinition` into a dependency's source, or a `workspaceSymbol` that matches
-a vendored file, is such an answer where you have not vouched for that tree, and vouching for it is
-the way to see the locations. An answer that names nothing carries no taint.
+A location is a path, a line, a column and the kind of symbol, and where the server sent the range
+of the whole symbol, the line it ends on (`path:12:5 (function), ends at line 30`). **The line, the
+column and the end line are structure**, as a line count is for a file the planner may not read:
+there is nowhere in three integers for prose to sit. The end line lets the planner ask `read_file`
+for exactly the lines of a definition; bravebot does not read them for it. A server that sends no
+range for the whole symbol gives a location with no end line. **The name is content.** It is bytes
+out of the tree the server indexed, so an answer is labelled by the files it names. Each path is
+looked up in the trust map. An answer that names only files you vouched for is read as written. An
+answer that names any file you did not vouch for comes back whole as a reference, with none of its
+locations in front of the planner, so somebody who owns `vendor/lib.js` cannot use
+`goToDefinition` to put a sentence in front of the planner through its name. A `goToDefinition` into
+a dependency's source, or a `workspaceSymbol` that matches a vendored file, is such an answer where
+you have not vouched for that tree, and vouching for it is the way to see the locations. An answer
+that names nothing carries no taint.
 
 The **text** at a location takes the ordinary treatment, because it is bytes the file chose. A
 signature or a source excerpt from a file nobody vouched for comes back as a reference, so one result

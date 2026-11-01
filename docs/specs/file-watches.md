@@ -249,6 +249,20 @@ inside the working directory that is a promotion nobody is asked about, and outs
 whatever the trust map answers. Where the answer that allowed it stops holding, the watch ends and
 says so rather than continuing to look.
 
+Under the mode that answers every permission question, a path outside the workspace is one a read
+reaches ([PATHREQ-7](tools/request-path.md#PATHREQ-7)), so a watch on it is armed with no question
+and the same refusals. The reach is not kept with the watch. Each look is handed it again by the
+session, from the live mode, the person's rules and the trust map, so a path whose link now leads
+into a refused location ends the watch, and so does the first look after the mode leaves bypass.
+The terminal and the window ask this through one function, and it asks whether the working
+directory is trusted the way a call's own reach does (see [trust-map.md](trust-map.md)).
+
+While a turn holds the session's trust map, a watch on a path inside the working directory is still
+looked at, since that look asks nothing of the map. A watch on any other path is not looked at and
+not ended for that: it stays armed until the next pass finds the map free. A watch that is too old
+ends whether or not the map is free, and a change a look sees waits to fire until the turn is over
+([FSWATCH-5](#FSWATCH-5)).
+
 **Why the same gate and not a looser one.** Size and modification time are not content, and a
 watch is still a standing channel about a path. A path nobody vouched for is one this program has
 no business reporting movement on.
@@ -274,9 +288,20 @@ as the absolute path it stands for ([READ-4](tools/read-file.md#READ-4)), so it 
 does not end at the first move for reading as a relative one.
 
 `verified-by: bravebot_agent::tools::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
+`verified-by: bravebot_agent::turn::under_bypass_a_watch_beside_the_session_fires_and_ends_when_the_key_leaves_bypass`
+`verified-by: bravebot_agent::turn::a_watch_is_refused_at_arming_where_a_read_of_the_path_is`
 `verified-by: bravebot_agent::tools::a_file_named_from_the_home_directory_is_armed_on_the_path_it_stands_for`
 `verified-by: bravebot_agent::watch::a_path_the_session_no_longer_reaches_ends_its_watch_and_says_so`
 `verified-by: bravebot_agent::watch::each_look_is_asked_for_the_directory_that_watch_was_armed_under`
+`verified-by: bravebot_agent::workspace::a_look_holding_a_reach_is_judged_by_the_refusals_of_a_read_and_records_nothing`
+`verified-by: bravebot_ui_bridge::bridge::a_watch_beside_the_project_stays_armed_while_a_turn_holds_the_session`
+`verified-by: bravebot_ui_bridge::bridge::a_watch_inside_the_project_is_looked_at_while_a_turn_holds_the_session`
+`verified-by: bravebot_ui_bridge::bridge::a_watch_beside_the_project_expires_while_a_turn_holds_the_session`
+`verified-by: bravebot_agent::watch::a_look_the_caller_cannot_judge_leaves_the_watch_armed_and_still_ages_it`
+`verified-by: bravebot_agent::tools::a_watch_beside_the_project_is_reached_under_bypass_in_a_trusted_project_only`
+`verified-by: bravebot_agent::tools::a_watch_inside_the_project_is_seen_whatever_the_mode_and_the_map`
+`verified-by: bravebot_agent::tools::a_watch_asks_the_trust_question_a_call_asks`
+`verified-by: bravebot_ui_bridge::bridge::a_poll_keeps_reads_inside_the_project_where_the_settings_ask_for_it`
 `verified-by: bravebot_agent::watch::a_move_ends_a_watch_that_has_a_fire_waiting_rather_than_letting_it_go_out`
 `verified-by: bravebot_agent::workspace::a_relative_look_is_out_of_reach_once_the_working_directory_has_moved`
 `verified-by: bravebot_agent::workspace::an_absolute_look_into_a_directory_that_survived_the_move_still_sees_it`

@@ -551,6 +551,7 @@ pub(crate) fn nameable_tools() -> Vec<String> {
     names.push("propose_plan".to_string());
     names.push("remember".to_string());
     names.push("propose_rule".to_string());
+    names.push("set_link".to_string());
     names.push("recall".to_string());
     names.sort();
     names.dedup();

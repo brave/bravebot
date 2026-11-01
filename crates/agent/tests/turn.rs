@@ -3020,6 +3020,325 @@ fn a_turn_that_is_not_a_tick_can_arrange_the_next_look() {
     );
 }
 
+/// SETLINK-1 through a whole turn: the lines the person typed reach `set_link` outside the auto mode,
+/// and the address it accepted leaves the turn in `links`.
+///
+/// The regression it rejects: the typed lines handed to a tool only in the auto mode, so that
+/// outside it every `set_link` is refused as not typed, or a link accepted and never returned.
+#[test]
+fn an_address_the_person_typed_reaches_set_link_and_leaves_the_turn() {
+    let scratch = Scratch::new("set-link-typed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let issue = "https://github.com/brave/bravebot/issues/1267";
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "set_link",
+            &json!({"kind": "issue", "url": issue, "why": "the user named it"}).to_string(),
+        ),
+        reply_with("recorded"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new(format!("work on {issue}")).keeping_links(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(outcome.links.len(), 1, "the accepted link was not returned");
+    assert_eq!(outcome.links[0].url, issue);
+    assert_eq!(
+        outcome.links[0].kind,
+        bravebot_agent::links::LinkKind::Issue
+    );
+}
+
+/// The same call for an address the person never wrote: nothing leaves the turn.
+///
+/// The regression it rejects: a driver that hands the planner's own address back without
+/// comparing it with the person's lines.
+#[test]
+fn an_address_the_person_did_not_type_leaves_nothing_in_links() {
+    let scratch = Scratch::new("set-link-not-typed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "set_link",
+            &json!({
+                "kind": "issue",
+                "url": "https://evil.example/issues/1",
+                "why": "the user named it"
+            })
+            .to_string(),
+        ),
+        reply_with("refused"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("work on the build").keeping_links(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert!(
+        outcome.links.is_empty(),
+        "an address nobody typed was returned"
+    );
+}
+
+/// A session named with `@session:` brings that session's words into the person's message, the
+/// assistant's included. An address only that excerpt holds is not one the person typed.
+///
+/// The regression it rejects: the whole message, excerpts included, counted as typed, so an address
+/// an earlier session's assistant produced passes the membership check. The same turn also shows
+/// that an address in the line itself is still accepted.
+#[test]
+fn an_address_only_a_named_sessions_excerpt_holds_is_not_one_the_person_typed() {
+    let scratch = Scratch::new("set-link-excerpt");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let typed = "https://github.com/brave/bravebot/issues/1267";
+    let from_excerpt = "https://github.com/brave/bravebot/pull/4309";
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "set_link",
+            &json!({"kind": "pull_request", "url": from_excerpt, "why": "the excerpt named it"})
+                .to_string(),
+        ),
+        tool_request(
+            "set_link",
+            &json!({"kind": "issue", "url": typed, "why": "the user named it"}).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let excerpt = format!("Excerpt of an earlier session.\n\nAssistant: open {from_excerpt}");
+    let task = Task::new(format!("carry on from @session:abc on {typed}"))
+        .with_session_excerpt("abc", excerpt)
+        .keeping_links(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        outcome.links.len(),
+        1,
+        "the address from the excerpt was accepted: {:?}",
+        outcome.links
+    );
+    assert_eq!(outcome.links[0].url, typed);
+}
+
+/// A line after the first of a multi-line prompt is one the person typed, so an address in it is
+/// recorded.
+///
+/// The regression it rejects: counting only the first line of the prompt.
+#[test]
+fn an_address_in_a_later_line_of_a_multi_line_prompt_is_one_the_person_typed() {
+    let scratch = Scratch::new("set-link-pasted");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let pasted = "https://github.com/brave/bravebot/pull/1270";
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "set_link",
+            &json!({"kind": "pull_request", "url": pasted, "why": "pasted by the user"})
+                .to_string(),
+        ),
+        reply_with("recorded"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new(format!(
+        "look at this\n\nbuild failed\n  see {pasted}\nexit 1\n\nthanks"
+    ))
+    .keeping_links(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert_eq!(outcome.links.len(), 1, "{:?}", outcome.links);
+    assert_eq!(outcome.links[0].url, pasted);
+}
+
+/// An address that no line the person typed holds is refused by the membership check, whether it
+/// is one the planner got from a place the person did not write or one it put in its own words.
+///
+/// The regression it rejects: searching the whole conversation, or every message with a user
+/// role, rather than the lines the person typed. The refusal is read from the last request, which
+/// carries both results, so a call turned away by another gate does not pass for this one. An
+/// address read from an untrusted file is turned away by the gate on `url` before this check, and
+/// `a_context_that_has_met_something_untrusted_cannot_set_a_link` pins that.
+#[test]
+fn an_address_no_typed_line_holds_is_refused_as_not_typed() {
+    let scratch = Scratch::new("set-link-content");
+    let named_before = "https://github.com/brave/bravebot/issues/2001";
+    let in_planner_text = "https://github.com/brave/bravebot/issues/2002";
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_saying(
+            &format!("The tracker is {named_before}"),
+            "set_link",
+            &json!({"kind": "issue", "url": named_before, "why": "I know it"}).to_string(),
+        ),
+        tool_request_saying(
+            &format!("I will record {in_planner_text}"),
+            "set_link",
+            &json!({"kind": "issue", "url": in_planner_text, "why": "I said it"}).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("link the tracker").keeping_links(true);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    assert!(
+        outcome.links.is_empty(),
+        "an address nobody typed was recorded: {:?}",
+        outcome.links
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    let last = sent.last().expect("the last request");
+    assert_eq!(
+        last.matches("not in a line the user typed").count(),
+        2,
+        "each address should be refused as not typed: {last}"
+    );
+}
+
+/// Without `keeping_links` the tool is not offered and a call to it is answered as an unknown name,
+/// so a front end that keeps no link is never told one was recorded.
+///
+/// The regression it rejects: offering and dispatching `set_link` in every turn, so the one-shot
+/// run and the goal runner report a recorded link nobody reads.
+#[test]
+fn a_turn_whose_front_end_keeps_no_link_is_not_offered_set_link() {
+    let scratch = Scratch::new("set-link-not-kept");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let issue = "https://github.com/brave/bravebot/issues/1267";
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "set_link",
+            &json!({"kind": "issue", "url": issue, "why": "the user named it"}).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let outcome = turns::run(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new(format!("work on {issue}")),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut RecordingSink::new(),
+    )
+    .expect("turn runs");
+
+    assert!(outcome.links.is_empty(), "{:?}", outcome.links);
+    let sent: Vec<String> = received.try_iter().collect();
+    assert!(
+        !sent[0].contains("Record the issue or pull request this session is about"),
+        "the tool was offered to a turn that keeps no link"
+    );
+    assert!(
+        sent.last()
+            .is_some_and(|last| last.contains("no such tool")),
+        "the call was not answered as an unknown name"
+    );
+}
+
+/// PANEL-12: a link is written to the record at once, so one recorded in a turn whose next
+/// request is then refused still leaves the turn with the decisions.
+///
+/// The regression it rejects: handing the links back only with an outcome that completed, which
+/// loses the link of every turn that ends in an error.
+#[test]
+fn a_link_recorded_in_a_turn_that_then_fails_still_leaves_the_turn() {
+    let scratch = Scratch::new("set-link-then-failed");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let issue = "https://github.com/brave/bravebot/issues/1267";
+
+    let (endpoint, _received) = serve_script(vec![
+        Served::Reply(tool_request(
+            "set_link",
+            &json!({"kind": "issue", "url": issue, "why": "the user named it"}).to_string(),
+        )),
+        Served::Status(401),
+    ]);
+    let config = config_for(&endpoint);
+
+    let completed = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new(format!("work on {issue}")).keeping_links(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(completed.outcome.is_err(), "the turn was meant to fail");
+    assert_eq!(
+        completed.decisions.links.len(),
+        1,
+        "the link recorded before the failure was lost: {:?}",
+        completed.decisions.links
+    );
+    assert_eq!(completed.decisions.links[0].url, issue);
+}
+
 /// And a turn nothing will ask again is offered nothing, whatever it was asked to watch. A
 /// one-shot run prints its reply and exits, and a session running a sentence this program wrote
 /// keeps no loop over it, so a wait asked for on either is discarded the moment the turn ends.
@@ -71504,6 +71823,10 @@ struct PathTurn {
     workspace: Workspace,
     trust: bravebot_core::trust::TrustStore,
     events: Vec<Event>,
+    /// The watches the turn asked to arm, which are armed only when a test turns the task's
+    /// arming on with [`ARM_WATCHES`].
+    #[cfg(unix)]
+    watches: Vec<bravebot_agent::watch::Armed>,
 }
 
 /// Places a request for a path is made against: a session, a home that holds the places a request
@@ -71518,6 +71841,29 @@ thread_local! {
     /// person: the terminal can, a window cannot. Read when the task is built, on the test's thread.
     static FRONT_END_CAN_ASK_ABOUT_UNCONFINED: std::cell::Cell<bool> =
         const { std::cell::Cell::new(true) };
+    /// Whether the task a [`path_turn`] runs may arm standing watches, as a session that looks
+    /// again does. Off by default so the tool list of other tests is unchanged.
+    static ARM_WATCHES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Turns the task's arming of standing watches on for the length of a test and off again when the
+/// test ends, including when an assertion fails, so a failure leaves nothing set on the thread.
+#[cfg(unix)]
+struct ArmingWatches;
+
+#[cfg(unix)]
+impl ArmingWatches {
+    fn on() -> Self {
+        ARM_WATCHES.set(true);
+        Self
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ArmingWatches {
+    fn drop(&mut self) {
+        ARM_WATCHES.set(false);
+    }
 }
 
 impl PathPlaces {
@@ -71612,6 +71958,11 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
         .with_confined_runs(true)
         .asking_about_unconfined(FRONT_END_CAN_ASK_ABOUT_UNCONFINED.get())
         .with_sandbox_mode(mode);
+    if ARM_WATCHES.get() {
+        task = task
+            .looking_again(true)
+            .arming(bravebot_agent::watch::Arming::Allowed { free: 8 });
+    }
     if let Some(permissions) = permissions {
         task = task.with_permissions(permissions);
     }
@@ -71631,6 +71982,12 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
         &bravebot_core::cancel::Cancel::new(),
     );
     outcome.outcome.as_ref().expect("the turn runs");
+    #[cfg(unix)]
+    let watches = outcome
+        .outcome
+        .as_ref()
+        .map(|done| done.watches.clone())
+        .unwrap_or_default();
     let first = received.recv().expect("first request");
     let results = (0..calls.len())
         .map(|_| received.recv().expect("a later request"))
@@ -71641,6 +71998,261 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
         workspace,
         trust: outcome.decisions.trust,
         events: sink.events().to_vec(),
+        #[cfg(unix)]
+        watches,
+    }
+}
+
+/// PATHREQ-7, FSWATCH-7: a watch armed on a file beside the session under bypass stays armed while
+/// the mode is bypass, fires when the file is written, and ends as out of reach at the first look
+/// after the key leaves bypass. A link retargeted into `~/.ssh` is judged where it now leads.
+///
+/// The regressions it rejects: a look that takes no reach (the watch ends at its first look, so the
+/// unchanged-then-written steps fail), a reach copied at arming and never read again (the
+/// out-of-reach step fails), and a look that skips the person's rules (the link step fails).
+///
+/// Unix only, because making the links is: a symlink needs a privilege on Windows that a test
+/// cannot count on.
+#[test]
+#[cfg(unix)]
+fn under_bypass_a_watch_beside_the_session_fires_and_ends_when_the_key_leaves_bypass() {
+    use bravebot_agent::watch::{Change, Looked, Reaped, Watches};
+    use std::time::{Duration, Instant};
+
+    let places = PathPlaces::new("watch-reach-bypass");
+    let target = places.beside.join("notes.txt");
+    std::fs::write(&target, "one").expect("a file beside the session");
+    std::fs::write(places.home.join(".ssh/id"), "KEY").expect("a key");
+    let calls = [(
+        "watch_file",
+        serde_json::json!({ "path": target.display().to_string() }),
+    )];
+    let _arming = ArmingWatches::on();
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let turn = path_turn(
+        "watch-reach-bypass",
+        &places,
+        &calls,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypassing(&mut asked),
+    );
+    let said = newest_tool_result(turn.results[0].clone());
+    assert!(said.contains("watching:"), "armed: {said}");
+    assert_eq!(turn.watches.len(), 1, "{said}");
+    assert!(
+        matches!(turn.watches[0].looked, Looked::Saw(_)),
+        "{:?}",
+        turn.watches[0].looked
+    );
+    assert!(
+        turn.workspace.added_directories().is_empty() && turn.workspace.path_reach().is_empty(),
+        "the directory was opened"
+    );
+    // The arming call put one record in the trail naming the mode, the tool and the field, and
+    // /status lists the directory from the same list.
+    let records = turn
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "path_reach",
+                detail,
+            } => Some(detail.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert!(
+        records[0].contains("bypass mode")
+            && records[0].contains("path of watch_file")
+            && records[0].contains(&places.beside.display().to_string()),
+        "{}",
+        records[0]
+    );
+    let listed = turn.workspace.reached_directories();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(
+        (listed[0].tool.as_str(), listed[0].field, listed[0].mode),
+        ("watch_file", "path", "bypass")
+    );
+    assert_eq!(listed[0].directory, places.beside);
+    assert!(turn.workspace.take_new_reaches().is_empty());
+    let trust = trusting_the_workspace();
+    let look_as = |mode: &bravebot_agent::LiveMode, path: &str, under: &std::path::Path| {
+        let reach = bravebot_agent::tools::reach_of_a_watch(
+            mode,
+            Some(places.home.as_path()),
+            &turn.workspace,
+            || turn.workspace.is_trusted_in(&trust),
+        );
+        turn.workspace.look_reaching(path, under, reach)
+    };
+    let mode = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Bypass);
+    let root = turn.workspace.root().to_path_buf();
+    let mut watches = Watches::new();
+    let began = Instant::now();
+    let number = watches
+        .arm(
+            turn.watches[0].path.clone(),
+            root.clone(),
+            1,
+            turn.watches[0].looked.clone(),
+            began,
+        )
+        .expect("armed");
+    let at = |seconds| began + Duration::from_secs(seconds);
+
+    // Unchanged: still armed, nothing to report.
+    let ended = watches.look(at(6), |path, under| look_as(&mode, path, under));
+    assert!(ended.is_empty(), "ended with the mode in bypass: {ended:?}");
+    assert_eq!(watches.live()[0].change(), None);
+
+    // Written: the watch fires.
+    std::fs::write(&target, "two, and longer").expect("written");
+    let ended = watches.look(at(12), |path, under| look_as(&mode, path, under));
+    assert!(ended.is_empty(), "ended with the mode in bypass: {ended:?}");
+    assert_eq!(watches.live()[0].change(), Some(Change::Written));
+
+    // A link retargeted into a refusal category is judged where it now leads.
+    let moved = places.beside.join("moved.txt");
+    std::fs::rename(&target, &moved).expect("moved");
+    std::os::unix::fs::symlink(places.home.join(".ssh/id"), &target).expect("a link");
+    assert_eq!(
+        look_as(&mode, &turn.watches[0].path, &root),
+        Looked::OutOfReach,
+        "a link into ~/.ssh was looked at"
+    );
+    std::fs::remove_file(&target).expect("link removed");
+
+    // A link retargeted into a second sibling directory is looked at and reached, and the look
+    // records nothing: a record left unreported would be put in the trail by the next call, named
+    // for that call's tool.
+    let other = places
+        .beside
+        .parent()
+        .expect("a parent")
+        .join("other-beside");
+    std::fs::create_dir_all(&other).expect("a second sibling directory");
+    std::fs::write(other.join("notes.txt"), "elsewhere").expect("a file there");
+    std::os::unix::fs::symlink(other.join("notes.txt"), &target).expect("a link");
+    assert!(
+        matches!(look_as(&mode, &turn.watches[0].path, &root), Looked::Saw(_)),
+        "a link into a second sibling was not looked at"
+    );
+    std::fs::remove_file(&target).expect("link removed");
+    assert!(
+        turn.workspace.take_new_reaches().is_empty(),
+        "a look left a reach for a later call to report"
+    );
+    assert_eq!(turn.workspace.reached_directories().len(), 1);
+    std::fs::rename(&moved, &target).expect("moved back");
+
+    // The key leaves bypass: the next look ends the watch.
+    mode.set(bravebot_agent::PermissionMode::Ask);
+    let ended = watches.look(at(18), |path, under| look_as(&mode, path, under));
+    assert_eq!(ended, vec![(number, Reaped::OutOfReach)]);
+    assert!(watches.live().is_empty());
+}
+
+/// PATHREQ-7: a watch is refused at arming where a read of the path is, in each refusal category,
+/// outside bypass, in a workspace nobody trusted, and where a settings layer keeps reads inside.
+/// The control is a sibling file that arms. The regression it rejects is a reach given to
+/// `watch_file` that skips a refusal the other file tools keep.
+///
+/// Unix only, because making the link into `~/.ssh` is: a symlink needs a privilege on Windows
+/// that a test cannot count on.
+#[test]
+#[cfg(unix)]
+fn a_watch_is_refused_at_arming_where_a_read_of_the_path_is() {
+    let places = PathPlaces::new("watch-reach-refused");
+    let target = places.beside.join("notes.txt");
+    std::fs::write(&target, "one").expect("a file beside the session");
+    std::fs::write(places.home.join(".ssh/id"), "KEY").expect("a key");
+    let link = places.beside.join("to-ssh");
+    std::os::unix::fs::symlink(places.home.join(".ssh"), &link).expect("a link into ~/.ssh");
+    let watching = |path: &std::path::Path| {
+        (
+            "watch_file",
+            serde_json::json!({ "path": path.display().to_string() }),
+        )
+    };
+    let _arming = ArmingWatches::on();
+    let refused = [
+        watching(&places.home),
+        watching(&places.home.join(".ssh/id")),
+        watching(&link.join("id")),
+    ];
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let mut all = vec![watching(&target)];
+    all.extend(refused.iter().cloned());
+    let turn = path_turn(
+        "watch-reach-refused-bypass",
+        &places,
+        &all,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypassing(&mut asked),
+    );
+    assert!(
+        newest_tool_result(turn.results[0].clone()).contains("watching:"),
+        "the control was refused: {}",
+        turn.results[0]
+    );
+    for (at, what) in ["home", "ssh", "a link into ssh"].iter().enumerate() {
+        let said = newest_tool_result(turn.results[at + 1].clone());
+        assert!(said.contains("outside the workspace"), "{what}: {said}");
+    }
+    assert_eq!(turn.watches.len(), 1, "only the control arms");
+
+    // Outside bypass, in an untrusted workspace and with reads kept inside: the control is refused.
+    let control = [watching(&target)];
+    for (what, permission, trust, inside) in [
+        (
+            "asking",
+            bravebot_agent::PermissionMode::Ask,
+            trusting_the_workspace(),
+            false,
+        ),
+        (
+            "untrusted",
+            bravebot_agent::PermissionMode::Bypass,
+            bravebot_core::trust::TrustStore::new("/work"),
+            false,
+        ),
+        (
+            "reads kept inside",
+            bravebot_agent::PermissionMode::Bypass,
+            trusting_the_workspace(),
+            true,
+        ),
+    ] {
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let turn = path_turn_in(
+            &format!("watch-reach-refused-{what}"),
+            &places,
+            &control,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            permission,
+            trust,
+            None,
+            &mut bypassing(&mut asked),
+            inside,
+            |_| {},
+        );
+        let said = newest_tool_result(turn.results[0].clone());
+        assert!(
+            said.contains("resolves outside the workspace"),
+            "{what}: {said}"
+        );
+        assert!(turn.watches.is_empty(), "{what}: armed");
     }
 }
 

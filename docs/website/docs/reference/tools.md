@@ -6,7 +6,7 @@ description: Every tool the model may call, what it takes, and what it is allowe
 
 # Tools
 
-There are twenty-six tools, and no way to add another from a configuration file. Each one splits its
+There are twenty-seven tools, and no way to add another from a configuration file. Each one splits its
 arguments into **routing**, the part that decides where the effect lands, and **content**, the part
 that is merely carried.
 
@@ -38,6 +38,7 @@ that is merely carried.
 | [`remember`](#remember) | `key`, `scope`, `supersedes`, `new` | `text` | no |
 | [`recall`](#recall) | `query`, `key` | none | no |
 | [`propose_rule`](#propose_rule) | `scope` | `text`, `reason` | **yes, that is what it is for** |
+| [`set_link`](#set_link) | `kind`, `url` | none | no |
 
 Five more are offered only where they mean something.
 [`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
@@ -52,7 +53,7 @@ setting or [`/advisor`](commands.md#advisor-model--off), so not to one that did 
 [`message_session`](#message_session) goes to a background session, so not to a session in a terminal, a
 delegate or a one-shot run.
 
-[`remember`](#remember), [`recall`](#recall) and [`propose_rule`](#propose_rule) are the planner's side of [memory](../customize/memory.md). None of them
+[`remember`](#remember), [`recall`](#recall), [`propose_rule`](#propose_rule) and [`set_link`](#set_link) are the planner's side of [memory](../customize/memory.md) and of the [session's links](../using/sessions.md#telling-sessions-apart). None of them
 is offered to a delegate, and a session that writes nothing under `~/.bravebot`, an
 [incognito](../using/sessions.md#a-session-that-leaves-nothing-behind) one, saves, verifies and proposes nothing.
 
@@ -1128,7 +1129,8 @@ write its own next prompt, and a field for how often to look would make the late
 choose.
 
 **Nothing is asked that a read would not ask.** Inside the working directory a watch is the promotion a
-read of the planner's own choice of file already gets; outside it, whatever answer already stands. A path
+read of the planner's own choice of file already gets; outside it, whatever answer already stands, and
+where the person has turned permission prompts off, a path a read reaches. A path
 a read would be refused is a watch that is refused. Asking to be told when a file changes is asking for
 less than reading it, so a prompt of its own here would be a second question to somebody who answered
 the first.
@@ -1238,6 +1240,28 @@ The rule is appended as one line, `- <text> (<date>) why: <reason>`, to `~/.brav
 back. A call from a context that has met something untrusted is refused before you are asked. Where
 the text or the reason came from private material, you are offered only refusing or typing the rule
 yourself, and what is written is your wording with `why: typed by the person`.
+
+---
+
+## `set_link`
+
+Records the issue or pull request the session is for, from an address you typed.
+
+| Parameter | |
+|---|---|
+| `kind` | `issue` or `pull_request` |
+| `url` | one `http` or `https` address with a host |
+
+The address is recorded only if it is a whole word of a line you typed in this session, so the planner
+chooses nothing you did not write. An address from a file, a page, a tool's result or another session
+is refused, and so is one in a line restored from a saved session or sent with files dropped on it.
+The call does not ask you, because the answer would be the address you already typed. It is held to
+the same check as [`/issue` and `/pr`](../using/sessions.md#telling-sessions-apart), a
+second call for the same kind replaces the first, and the link is written to the session record and
+drawn in the info panel. A call from a context that has met something untrusted is refused, and a
+delegate is not offered the tool. The tool is offered only in the terminal interface and the desktop
+app, which keep the link. It is not offered by `bravebot -p`, the plain loop or a goal run, and an
+[incognito](../using/incognito.md) session, which saves nothing, is not offered it either.
 
 ---
 

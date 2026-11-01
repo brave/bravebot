@@ -44,8 +44,10 @@ use serde_json::{Value, json};
 use crate::lsp::LanguageServers;
 use crate::workspace::{Listing, Page, Paging, Workspace};
 
+mod link;
 mod message;
 mod recall;
+use link::set_link;
 use recall::{propose_rule, recall, remember};
 mod offered;
 
@@ -55,7 +57,8 @@ use offered::state_withheld;
 pub use offered::{
     Running, Scheduling, available, for_delegate, for_planner, offer_advisor,
     offer_message_session, offer_propose_plan, offer_propose_rule, offer_recall, offer_remember,
-    offer_tool_loader, state_confinement, state_read_output_answer, state_withheld_variables,
+    offer_set_link, offer_tool_loader, state_confinement, state_read_output_answer,
+    state_withheld_variables,
 };
 
 /// The argument every tool takes saying why the call is being made.
@@ -259,6 +262,11 @@ pub struct Output {
     /// holds it is the session rather than anything here. Already past the gate a read of the
     /// path goes through, so what arrives is a path this session may look at.
     pub watch: Option<crate::watch::Armed>,
+    /// The issue or pull request link the planner asked to have recorded, where it asked.
+    ///
+    /// Travels back for the reason a watch does: the session record is held by whatever owns the
+    /// session. Already checked to be an address the person typed.
+    pub link: Option<crate::links::LinkSet>,
     /// The delegates the kernel approved, for the turn to start.
     ///
     /// Started by the turn because a delegate outlives the call that asked for one: the call
@@ -464,6 +472,9 @@ pub struct Tools<'a> {
     /// The mode is read again where a question is put, so a mode chosen after this was built
     /// decides the question and not this field.
     pub classifying: Option<crate::classifier::Classifying<'a>>,
+    /// The lines the person typed to this session, oldest first, where this call needs them, and
+    /// empty otherwise. Read by `set_link` to hold an address to what the person wrote (SETLINK-1).
+    pub typed: &'a [String],
     /// What this turn sends messages to other background sessions with, and what it has sent, or
     /// `None` where the session cannot send (MSG-12).
     ///
@@ -471,6 +482,11 @@ pub struct Tools<'a> {
     /// this turn was not offered is answered the way any other unknown name is rather than quietly
     /// working.
     pub messaging: Option<crate::messages::Messaging<'a>>,
+    /// Whether the front end running this turn keeps the links `set_link` records (SETLINK-2).
+    ///
+    /// Read by dispatch as well as by the tool list, for the reason `messaging` is: a call to a tool
+    /// this turn was not offered is answered as an unknown name rather than recorded and dropped.
+    pub keeping_links: bool,
     /// Whether a program `run` starts is held to the profile its plan accounts for.
     ///
     /// `false` for a turn nobody turned it on for, which starts programs with the access the
@@ -1250,6 +1266,8 @@ struct Produced {
     wakeup: Option<crate::turn::Wakeup>,
     /// The path the planner asked to have a standing watch armed on, with the look taken at the call.
     watch: Option<crate::watch::Armed>,
+    /// The link the planner asked to have recorded, already checked against the person's lines.
+    link: Option<crate::links::LinkSet>,
     /// The media type, where what this produced is a picture.
     ///
     /// Recorded on the slot by the turn loop, and what makes a picture reach a processor as a part
@@ -1322,6 +1340,7 @@ impl Produced {
             attached: None,
             wakeup: None,
             watch: None,
+            link: None,
             delegate: Vec::new(),
             loaded: None,
             skill: None,
@@ -1542,6 +1561,28 @@ impl Produced {
         });
         self
     }
+
+    /// Say which link the planner asked to have recorded.
+    fn linking(mut self, kind: crate::links::LinkKind, url: impl Into<String>) -> Self {
+        self.link = Some(crate::links::LinkSet {
+            kind,
+            url: url.into(),
+        });
+        self
+    }
+}
+
+/// Whether a call by this name needs the lines the person typed, which only `set_link` does
+/// outside the auto mode.
+pub(crate) fn reads_typed_lines(name: &str) -> bool {
+    strip_namespace(name) == "set_link"
+}
+
+/// Whether a turn whose front end `keeps` the links `set_link` records offers the tool.
+///
+/// Never in an incognito session, which saves nothing to keep a link in (SETLINK-2).
+pub(crate) fn keeps_links(keeps: bool) -> bool {
+    keeps && !bravebot_core::incognito::engaged()
 }
 
 /// Whether a call by this name changes a file.
@@ -1629,6 +1670,7 @@ fn target_key(tool: &str) -> Option<&'static str> {
         "message_session" => Some("target"),
         "remember" => Some("key"),
         "propose_rule" => Some("text"),
+        "set_link" => Some("url"),
         _ => None,
     }
 }
@@ -2445,6 +2487,12 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         // Refused here as well as absent from the list.
         "remember" if !tools.delegated => remember(policy, tools, &arguments),
         "propose_rule" if !tools.delegated => propose_rule(policy, tools, confirmer, &arguments).0,
+        // Offered to the planner of a session the person has typed to, and never to a delegate:
+        // the address has to be one the person wrote, and a delegate's task is the driver's
+        // sentence. Refused here as well as absent from the list.
+        "set_link" if !tools.delegated && tools.keeping_links => {
+            set_link(policy, tools, &arguments)
+        }
         // Offered with `remember`, to the same turn and for the same reason (RECALL-10).
         "recall" if !tools.delegated => recall(policy, tools, &arguments),
         // Offered to the planner of a background session, and to nothing else: a delegate's task
@@ -2540,6 +2588,7 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         attached: produced.attached,
         wakeup: produced.wakeup,
         watch: produced.watch,
+        link: produced.link,
         delegate: produced.delegate,
         loaded: produced.loaded,
         skill: produced.skill,
@@ -7611,6 +7660,7 @@ pub(crate) const TOOLS_NAMING_A_PATH: &[(&str, &str, bool)] = &[
     ("search", "directory", false),
     ("read_git", "repository", false),
     ("run", "directory", false),
+    ("watch_file", "path", false),
 ];
 
 /// The tools that take a path, or a directory, and are given no reach by the mode, each with why.
@@ -7623,11 +7673,6 @@ pub(crate) const TOOLS_NAMING_A_PATH_WITHOUT_REACH: &[(&str, &str)] = &[
     (
         "lsp",
         "the server indexes the workspace root and the path is not resolved through the workspace (LSP-1)",
-    ),
-    (
-        "watch_file",
-        "a watch is looked at later with no call in progress, where a reach held for one call is \
-         gone, so a watch armed outside the workspace would end at its first look",
     ),
     (
         "apply_checkout",
@@ -7659,8 +7704,20 @@ impl ReachFacts<'_> {
         workspace: &Workspace,
         tool: &str,
     ) -> Option<crate::workspace::BypassReach> {
+        self.reach_for(tool, workspace, || workspace_is_trusted(policy, workspace))
+    }
+
+    /// [`ReachFacts::for_call`] with the answer to "is the workspace trusted" supplied by the
+    /// caller and asked only where the mode is bypass. For a caller with no call in progress and
+    /// no policy, which is a session looking at a watch.
+    pub(crate) fn reach_for(
+        &self,
+        tool: &str,
+        workspace: &Workspace,
+        trusted: impl FnOnce() -> bool,
+    ) -> Option<crate::workspace::BypassReach> {
         let mode = self.permission_mode.get();
-        if mode != crate::PermissionMode::Bypass || !workspace_is_trusted(policy, workspace) {
+        if mode != crate::PermissionMode::Bypass || !trusted() {
             return None;
         }
         let tool = strip_namespace(tool);
@@ -7688,6 +7745,55 @@ impl ReachFacts<'_> {
 /// scope, a path or a line with no sandbox is accepted on (TRUST-7).
 pub(crate) fn workspace_is_trusted<S: Sink>(policy: &Policy<'_, S>, workspace: &Workspace) -> bool {
     policy.trusts_path(&workspace.trust_key("."))
+}
+
+/// The reach a watch armed under a reach is looked at with now, or `None` where the live mode no
+/// longer gives one (MODE-8, PATHREQ-7, FSWATCH-7).
+///
+/// For a session looking at a watch with no call in progress, which has no policy: `trusted` is
+/// whether the working directory is trusted by the session's map with the record of untrusted
+/// memories applied, asked the way [`workspace_is_trusted`] asks it, and it is asked only where the
+/// mode is bypass. Read from the live mode at each look, so the reach ends when the key leaves
+/// bypass, and from the person's rules at each look, so a path is judged where it leads now. Nothing
+/// here is a file's content.
+pub fn reach_of_a_watch(
+    permission_mode: &crate::LiveMode,
+    profile: Option<&std::path::Path>,
+    workspace: &Workspace,
+    trusted: impl FnOnce() -> bool,
+) -> Option<crate::workspace::BypassReach> {
+    ReachFacts {
+        permission_mode: permission_mode.clone(),
+        profile,
+    }
+    .reach_for("watch_file", workspace, trusted)
+}
+
+/// One look at a watched path, for a session with no call in progress (FSWATCH-7).
+///
+/// The reach is derived here from the live mode, the person's rules and `trust`, which is the
+/// session's map before the record of untrusted memories is applied to it. Outside bypass nothing
+/// beyond the workspace is reachable, so the profile directory and the record are not read at all.
+/// The terminal and the bridge both call this, so a watch is judged one way.
+pub fn look_at_a_watch(
+    workspace: &Workspace,
+    permission_mode: &crate::LiveMode,
+    trust: &bravebot_core::trust::TrustStore,
+    path: &str,
+    under: &std::path::Path,
+) -> crate::watch::Looked {
+    if permission_mode.get() != crate::PermissionMode::Bypass {
+        return workspace.look_reaching(path, under, None);
+    }
+    let profile = crate::home::profile();
+    let reach = reach_of_a_watch(permission_mode, profile.as_deref(), workspace, || {
+        workspace.is_trusted_in(&crate::memory::with_recorded(
+            trust,
+            workspace,
+            crate::home::directory().as_deref(),
+        ))
+    });
+    workspace.look_reaching(path, under, reach)
 }
 
 /// Whether a turn with these facts accepts a `scopes` argument on `run` and a `request_path` call,
@@ -13399,6 +13505,29 @@ mod tests {
         assert_eq!(strip_namespace("functions."), "functions.");
     }
 
+    /// The lines the person typed are handed to a call that dispatch will run as `set_link`, in
+    /// whichever spelling it arrives, and to no other name.
+    ///
+    /// The regression it rejects: a suffix or substring match, which hands the typed lines to a
+    /// tool named `reset_link` or `set_link_all`, or a bare comparison that leaves a namespaced
+    /// `set_link` without them, so the address is refused as not typed.
+    #[test]
+    fn only_a_call_that_dispatches_as_set_link_is_handed_the_typed_lines() {
+        for named in ["set_link", "functions.set_link", "functions_set_link"] {
+            assert!(reads_typed_lines(named), "{named}");
+        }
+        for named in [
+            "reset_link",
+            "set_link_all",
+            "xset_link",
+            "set_links",
+            "run",
+            "",
+        ] {
+            assert!(!reads_typed_lines(named), "{named}");
+        }
+    }
+
     /// The planner is told which step failed and how, and acts on that number: a step counted
     /// among the failures rather than among the steps, or a killed step left out, sends it to fix
     /// the wrong program.
@@ -13692,6 +13821,7 @@ mod tests {
         offer_propose_plan(&mut offered);
         offer_remember(&mut offered);
         offer_propose_rule(&mut offered);
+        offer_set_link(&mut offered);
         offer_recall(&mut offered);
 
         for tool in offered {
@@ -22580,6 +22710,15 @@ mod tests {
             workspace: &Workspace,
             body: impl FnOnce(&mut Tools<'_>) -> R,
         ) -> R {
+            with_tools_typed(workspace, &[], body)
+        }
+
+        /// [`with_tools`] for a turn whose person has typed these lines.
+        pub(super) fn with_tools_typed<R>(
+            workspace: &Workspace,
+            typed: &[String],
+            body: impl FnOnce(&mut Tools<'_>) -> R,
+        ) -> R {
             let config = config();
             let egress = bravebot_net::Egress::new();
             let skills = crate::skills::Catalogue::default();
@@ -22623,7 +22762,9 @@ mod tests {
                 budget_left: None,
                 advising: None,
                 classifying: None,
+                typed,
                 messaging: None,
+                keeping_links: true,
             })
         }
 
@@ -26827,6 +26968,327 @@ mod tests {
                 said.contains("changed while the user was being asked about it"),
                 "the planner was not told the answer was thrown away: {said}"
             );
+        }
+    }
+
+    /// FSWATCH-7: the one look both front ends take at a watch.
+    mod looking_at_a_watch {
+        use super::arguments::Scratch;
+        use super::*;
+        use crate::watch::Looked;
+        use crate::{LiveMode, PermissionMode};
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        /// A project, a directory beside it holding a file, and the workspace over the project.
+        fn places(name: &str) -> (Scratch, Workspace, String) {
+            let scratch = Scratch::new(&format!("watch-look-{name}"));
+            let project = scratch.path.join("project");
+            let beside = scratch.path.join("beside");
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::create_dir_all(&beside).unwrap();
+            let outside = beside.canonicalize().unwrap().join("notes.txt");
+            std::fs::write(&outside, "one").unwrap();
+            let workspace = Workspace::new(project.canonicalize().unwrap()).unwrap();
+            (scratch, workspace, outside.display().to_string())
+        }
+
+        /// A watch beside the project is looked at under bypass where the working directory is
+        /// trusted, and is out of reach under any other mode and where it is not trusted. The
+        /// regressions it rejects: a look that takes the reach from the mode alone, which reaches
+        /// beside an untrusted project, and a look that never gives the reach, which ends the
+        /// watch the moment bypass is on.
+        #[test]
+        fn a_watch_beside_the_project_is_reached_under_bypass_in_a_trusted_project_only() {
+            let (_scratch, workspace, outside) = places("reach");
+            let trusting = crate::trusted::trusting_the_workspace(workspace.root());
+            let not_trusting = crate::workspace::trust_store(workspace.root());
+            let bypass = LiveMode::new(PermissionMode::Bypass);
+            let ask = LiveMode::new(PermissionMode::Ask);
+            let look = |mode: &LiveMode, trust| {
+                look_at_a_watch(&workspace, mode, trust, &outside, workspace.root())
+            };
+
+            assert!(matches!(look(&bypass, &trusting), Looked::Saw(_)));
+            assert!(matches!(look(&ask, &trusting), Looked::OutOfReach));
+            assert!(matches!(look(&bypass, &not_trusting), Looked::OutOfReach));
+        }
+
+        /// A path inside the project is seen under every mode and with no trust, since a look of
+        /// it asks nothing of the map. The regression it rejects: a look that is out of reach
+        /// for everything unless bypass gives it a reach.
+        #[test]
+        fn a_watch_inside_the_project_is_seen_whatever_the_mode_and_the_map() {
+            let (_scratch, workspace, _) = places("inside");
+            std::fs::write(workspace.root().join("inside.txt"), "one").unwrap();
+            let not_trusting = crate::workspace::trust_store(workspace.root());
+            for mode in [PermissionMode::Ask, PermissionMode::Bypass] {
+                let looked = look_at_a_watch(
+                    &workspace,
+                    &LiveMode::new(mode),
+                    &not_trusting,
+                    "inside.txt",
+                    workspace.root(),
+                );
+                assert!(matches!(looked, Looked::Saw(_)), "{mode:?}");
+            }
+        }
+
+        /// The trust a watch is judged by is the answer a call is judged by (TRUST-7), for a map
+        /// that trusts the working directory and one that does not. The regression it rejects: a
+        /// look that asks the map under another key than the one `workspace_is_trusted` asks, so
+        /// a call and a watch in one project disagree about whether it is trusted.
+        #[test]
+        fn a_watch_asks_the_trust_question_a_call_asks() {
+            let (_scratch, workspace, outside) = places("agree");
+            let bypass = LiveMode::new(PermissionMode::Bypass);
+            for (trust, trusted) in [
+                (
+                    crate::trusted::trusting_the_workspace(workspace.root()),
+                    true,
+                ),
+                (crate::workspace::trust_store(workspace.root()), false),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut routing = Routing::new();
+                routing.insert_trusted("task", "ask whether the project is trusted");
+                let policy = Policy::begin(
+                    routing,
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::FileRead]),
+                    &mut sink,
+                )
+                .expect("policy")
+                .with_file_authority(FileAuthority::new(trust.clone()));
+                let call_trusts = workspace_is_trusted(&policy, &workspace);
+                assert_eq!(call_trusts, trusted);
+                let looked =
+                    look_at_a_watch(&workspace, &bypass, &trust, &outside, workspace.root());
+                assert_eq!(matches!(looked, Looked::Saw(_)), call_trusts);
+            }
+        }
+    }
+
+    /// SETLINK-1: `set_link` records an address only when it is a whole word of a line the person
+    /// typed and is one web address, on any host.
+    mod setting_a_link {
+        use super::arguments::{Scratch, told, with_tools_typed};
+        use super::*;
+        use crate::links::LinkKind;
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::label::Integrity;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+
+        fn policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "record a link");
+            Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                sink,
+            )
+            .expect("policy")
+        }
+
+        /// What the call answered, whether it failed and the link it asked to have recorded.
+        fn call(
+            typed: &[&str],
+            delegated: bool,
+            untrusted: bool,
+            arguments: Value,
+        ) -> (String, bool, Option<crate::links::LinkSet>) {
+            call_in(typed, delegated, untrusted, false, arguments)
+        }
+
+        /// As [`call`], in a context that may also already hold private content.
+        fn call_in(
+            typed: &[&str],
+            delegated: bool,
+            untrusted: bool,
+            private: bool,
+            arguments: Value,
+        ) -> (String, bool, Option<crate::links::LinkSet>) {
+            let scratch = Scratch::new("set-link");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let typed: Vec<String> = typed.iter().map(|line| line.to_string()).collect();
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            if untrusted {
+                policy = policy.resuming(Integrity::Untrusted);
+            }
+            if private {
+                policy = policy.holding(bravebot_core::label::Confidentiality::Private);
+            }
+            let produced = with_tools_typed(&workspace, &typed, |tools| {
+                tools.delegated = delegated;
+                set_link(&mut policy, tools, &arguments)
+            });
+            (
+                told(&mut policy, &produced.text),
+                produced.failed,
+                produced.link,
+            )
+        }
+
+        fn asking(kind: &str, url: &str) -> Value {
+            json!({"kind": kind, "url": url, "why": "the user named it"})
+        }
+
+        /// The regression it rejects: a tool that records nothing, or the wrong kind.
+        #[test]
+        fn an_address_the_person_typed_is_recorded_under_the_kind_asked_for() {
+            let line =
+                format!("fix this {ISSUE}, see also https://github.com/brave/bravebot/issues/1000");
+            let (said, failed, link) = call(&[&line], false, false, asking("issue", ISSUE));
+            assert!(!failed, "{said}");
+            let link = link.expect("a link");
+            assert_eq!(link.kind, LinkKind::Issue);
+            assert_eq!(link.url, ISSUE);
+
+            let pull = "https://github.com/brave/bravebot/pull/4309";
+            let (said, failed, link) = call(&[pull], false, false, asking("pull_request", pull));
+            assert!(!failed, "{said}");
+            assert_eq!(link.expect("a link").kind, LinkKind::PullRequest);
+        }
+
+        /// The regression it rejects: no comparison with the person's lines, so the planner can
+        /// record an address that came from a file or a tool result.
+        #[test]
+        fn an_address_the_person_did_not_type_is_refused_and_nothing_is_recorded() {
+            let (said, failed, link) = call(
+                &["fix the build"],
+                false,
+                false,
+                asking("issue", "https://evil.example/x"),
+            );
+            assert!(failed, "{said}");
+            assert!(link.is_none(), "an address nobody typed was recorded");
+            assert!(said.contains("not in a line the user typed"), "{said}");
+
+            let (_, failed, link) = call(&[], false, false, asking("issue", ISSUE));
+            assert!(
+                failed && link.is_none(),
+                "a session with no typed line recorded one"
+            );
+        }
+
+        /// The regression it rejects: a substring test, which lets the start of a longer address
+        /// the person wrote stand for an address they did not.
+        #[test]
+        fn the_start_of_a_longer_typed_address_is_refused() {
+            let (said, failed, link) = call(
+                &["see https://github.com/brave/bravebot/issues/12670"],
+                false,
+                false,
+                asking("issue", ISSUE),
+            );
+            assert!(failed && link.is_none(), "{said}");
+        }
+
+        /// The regression it rejects: skipping the PANEL-12 check, so a typed word that is not a
+        /// web address is recorded.
+        #[test]
+        fn a_typed_word_that_is_not_a_web_address_is_refused() {
+            for bad in [
+                "ftp://a.example/x",
+                "javascript:alert(1)",
+                "https://",
+                "two words",
+            ] {
+                let line = format!("use {bad} please");
+                let (said, failed, link) = call(&[&line], false, false, asking("issue", bad));
+                assert!(failed && link.is_none(), "{bad}: {said}");
+                assert!(!said.contains(bad), "the refusal repeated {bad}: {said}");
+            }
+        }
+
+        /// The regression it rejects: accepting any `kind`, or none.
+        #[test]
+        fn a_kind_other_than_issue_or_pull_request_is_refused() {
+            for arguments in [
+                asking("ticket", ISSUE),
+                json!({"url": ISSUE, "why": "the user named it"}),
+            ] {
+                let (said, failed, link) = call(&[ISSUE], false, false, arguments);
+                assert!(failed && link.is_none(), "{said}");
+                assert!(said.contains("'kind'"), "{said}");
+            }
+        }
+
+        /// The regression it rejects: a missing `delegated` guard, which would let a delegate set
+        /// the parent session's link.
+        #[test]
+        fn a_delegate_cannot_set_a_link() {
+            let (said, failed, link) = call(&[ISSUE], true, false, asking("issue", ISSUE));
+            assert!(failed && link.is_none(), "{said}");
+            assert!(said.starts_with("error: no such tool"), "{said}");
+        }
+
+        /// The regression it rejects: reading `url` without the planner-argument gate, so a
+        /// context that has met untrusted content still chooses what the session records.
+        #[test]
+        fn a_context_that_has_met_something_untrusted_cannot_set_a_link() {
+            let (said, failed, link) = call(&[ISSUE], false, true, asking("issue", ISSUE));
+            assert!(failed && link.is_none(), "{said}");
+            assert!(said.starts_with("refused:"), "{said}");
+        }
+
+        /// SETLINK-1: the gate asks about integrity only (`read_planner_argument`), and the recorded
+        /// value is one of the person's own words, so what the context holds does not change the
+        /// outcome: a typed address is recorded and an untyped one is still refused.
+        ///
+        /// The regression it rejects: refusing on the confidentiality axis, which would stop the
+        /// tool after any vetted read, or skipping the typed-line check in a private context.
+        #[test]
+        fn a_context_holding_private_content_still_records_a_typed_address_and_nothing_else() {
+            let (said, failed, link) =
+                call_in(&[ISSUE], false, false, true, asking("issue", ISSUE));
+            assert!(!failed, "{said}");
+            assert_eq!(link.expect("a link").url, ISSUE);
+
+            let other = "https://github.com/brave/bravebot/issues/9";
+            let (said, failed, link) =
+                call_in(&[ISSUE], false, false, true, asking("issue", other));
+            assert!(failed && link.is_none(), "{said}");
+        }
+
+        /// An address on a host other than GitHub is recorded when the person typed it.
+        ///
+        /// The regression it rejects: a check that tests the host for GitHub.
+        #[test]
+        fn an_address_on_another_tracker_is_recorded() {
+            let other = "https://gitlab.example.org/team/project/-/issues/7";
+            let line = format!("work on {other}");
+            let (said, failed, link) = call(&[&line], false, false, asking("issue", other));
+            assert!(!failed, "{said}");
+            assert_eq!(link.expect("a link").url, other);
+        }
+
+        /// A line with several addresses records only the one the planner names, and the planner
+        /// cannot name one that is in no line.
+        ///
+        /// The regression it rejects: taking the first address of a line, or all of them.
+        #[test]
+        fn only_the_address_the_planner_names_is_recorded_from_a_line_with_several() {
+            let other = "https://github.com/brave/bravebot/issues/1000";
+            let line = format!("fix {ISSUE} and see {other}");
+            let (said, failed, link) = call(&[&line], false, false, asking("issue", other));
+            assert!(!failed, "{said}");
+            assert_eq!(link.expect("a link").url, other);
+
+            let (said, failed, link) = call(
+                &[&line],
+                false,
+                false,
+                asking("issue", "https://github.com/brave/bravebot/issues/1001"),
+            );
+            assert!(failed && link.is_none(), "{said}");
         }
     }
 }

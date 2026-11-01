@@ -26,6 +26,11 @@ appearing.
 A directory is refused because what changed inside one is a file name the filesystem produced, and a
 firing may carry nothing off the filesystem.
 
+In [bypass mode](../security/permission-modes.md#bypassing) a file outside the working directory can be watched
+where a read of it would be allowed, with no `/add-dir`. The watch ends, and says so, at the first
+look after the mode is anything else, and at any look where the path now leads somewhere a read would
+be refused.
+
 Asking about one file is what a watch is for. Where what you are waiting on is not a single file, or
 where you want your own line sent again on an interval, the answer is a
 [repeating prompt](../reference/commands.md) instead.

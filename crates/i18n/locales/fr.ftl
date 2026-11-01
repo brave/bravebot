@@ -2504,6 +2504,7 @@ request-trusted = { $what } (fiable)
 request-bytes-mark = [une image ou un fichier, envoyé en octets]
 request-label-typed = saisi
 request-label-typed-with-files = saisi, avec des fichiers déposés
+request-label-typed-with-sessions = saisi, avec des sessions nommées
 request-label-driver = pilote
 request-label-planner = planificateur
 request-label-trusted-file = fichier fiable { $path }
@@ -3686,6 +3687,7 @@ verb-propose-plan = Planifier
 verb-message-session = Message
 verb-remember = Retenir
 verb-propose-rule = Proposer
+verb-set-link = Lier
 verb-recall = Retrouver
 verb-mcp-call = MCP
 verb-unknown = Outil
@@ -3723,6 +3725,8 @@ processor-model-not-served =
     { $model } est défini comme modèle de traitement et aucun service configuré ne le sert : rien n'a
     été envoyé
 processor-model-substituted = Un processeur a demandé { $model } et un autre modèle a répondu
+set-link-recorded-issue = lien de ticket enregistré : { $url }
+set-link-recorded-pull-request = lien de demande de fusion enregistré : { $url }
 delegate-skills-not-found =
     { $count ->
         [one] { $definition } nomme une compétence que cette session n'a pas trouvée, si bien qu'elle n'est pas proposée à son délégué : { $skills }

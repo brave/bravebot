@@ -40,8 +40,9 @@ anybody can read into one they cannot.
 ### ARM-2: the gate is the one a read of that path goes through, and nothing more is granted
 
 Inside the working directory that is the promotion a read of the model's own choice of file
-already gets; outside it, whatever answer already stands. A path a read would be refused is a
-watch that is refused.
+already gets; outside it, whatever answer already stands, and under the permission mode that answers
+every question ([MODE-4](../permission-modes.md#MODE-4)) a path a read reaches
+([PATHREQ-7](request-path.md#PATHREQ-7)). A path a read would be refused is a watch that is refused.
 
 **Why.** A person who asked to be told when a file changes has asked for less than a read of it, so
 a prompt of its own here would put a second question to somebody who has already answered the
@@ -50,6 +51,8 @@ the gate is not looser either.
 
 `verified-by: bravebot_agent::tools::a_path_outside_the_workspace_is_refused_the_way_a_read_of_it_would_be`
 `verified-by: bravebot_agent::tools::a_watch_is_refused_once_the_context_has_met_something_untrusted`
+`verified-by: bravebot_agent::turn::under_bypass_a_watch_beside_the_session_fires_and_ends_when_the_key_leaves_bypass`
+`verified-by: bravebot_agent::turn::a_watch_is_refused_at_arming_where_a_read_of_the_path_is`
 
 <a id="ARM-3"></a>
 ### ARM-3: the path must name a file, or have nothing at it yet

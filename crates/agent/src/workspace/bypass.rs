@@ -6,14 +6,17 @@
 //! decision again by whoever dispatches it, from the live mode, so the reach ends when the key
 //! leaves bypass. The decision reads a path, the person's rules and facts about the path. It reads
 //! no byte of a file and no program output.
+//!
+//! A watch is looked at with no call in progress, so [`Workspace::look_reaching`] holds the reach
+//! its session derives from the live mode for the length of one look (PATHREQ-7, FSWATCH-7).
 
 use super::{Workspace, locked};
 use bravebot_sandbox::rules::{Rules, judged_request};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// The facts a call's reach outside the workspace is decided from, handed over by whoever
-/// dispatches the call and held for that call alone.
+/// The facts a reach outside the workspace is decided from, handed over by whoever dispatches the
+/// call, or by the session that looks at a watch, and held for that call or that look alone.
 #[derive(Debug, Clone)]
 pub struct BypassReach {
     /// The tool the call is of, as the trail names it.
@@ -46,10 +49,20 @@ pub struct Reached {
     pub field: &'static str,
 }
 
+/// A reach held, and whether a first reach into a directory under it is recorded. A call's is
+/// recorded by the call that makes it. A look at a watch has no call to drain the record, so the
+/// next call would be given it as its own; the arming call recorded the directory the watch was
+/// armed in.
+#[derive(Debug, Clone)]
+pub(super) struct HeldReach {
+    reach: BypassReach,
+    records: bool,
+}
+
 /// The reach the call in progress holds, copied and not shared when a workspace is cloned, so a
 /// delegate's call cannot hand the lead session's call its reach or take it away.
 #[derive(Debug, Default)]
-pub(super) struct CallReach(Mutex<Option<BypassReach>>);
+pub(super) struct CallReach(Mutex<Option<HeldReach>>);
 
 impl Clone for CallReach {
     fn clone(&self) -> Self {
@@ -69,7 +82,18 @@ impl Workspace {
     /// call and cleared after it, so a call that was not given the reach never finds one left by
     /// an earlier call.
     pub fn hold_bypass_reach(&self, reach: Option<BypassReach>) {
-        *locked(&self.call_reach.0) = reach;
+        *locked(&self.call_reach.0) = reach.map(|reach| HeldReach {
+            reach,
+            records: true,
+        });
+    }
+
+    /// Hold `reach` for one look at a watch, which records no directory as reached.
+    pub(super) fn hold_bypass_reach_for_a_look(&self, reach: Option<BypassReach>) {
+        *locked(&self.call_reach.0) = reach.map(|reach| HeldReach {
+            reach,
+            records: false,
+        });
     }
 
     /// The directories bypass took the file tools into for the first time since the last call to
@@ -93,7 +117,7 @@ impl Workspace {
         if self.reads_stay_inside {
             return false;
         }
-        let Some(reach) = locked(&self.call_reach.0).clone() else {
+        let Some(HeldReach { reach, records }) = locked(&self.call_reach.0).clone() else {
             return false;
         };
         if reach.excluded.iter().any(|held| resolved.starts_with(held)) {
@@ -121,6 +145,9 @@ impl Workspace {
         } else {
             resolved.parent().unwrap_or(resolved)
         };
+        if !records {
+            return true;
+        }
         let mut held = locked(&self.kept.reached);
         if !held
             .all

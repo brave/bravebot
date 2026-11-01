@@ -1990,14 +1990,7 @@ impl Url {
     /// newline or an escape could act on the terminal there, and a direction override or a
     /// zero-width character could make the row read as another link.
     pub fn read(text: &str) -> Option<Self> {
-        let text = text.trim();
-        if !text.chars().all(|c| c.is_ascii_graphic()) {
-            return None;
-        }
-        let (scheme, rest) = text.split_once("://")?;
-        let known = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
-        let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
-        (known && !host.is_empty()).then(|| Self(text.to_string()))
+        bravebot_core::url::web_address(text).map(|text| Self(text.to_string()))
     }
 }
 
@@ -2489,6 +2482,23 @@ impl Handle {
             record.issue = issue;
             record.pull_request = pull_request;
         });
+    }
+
+    /// Keep each link a turn recorded with `set_link`, the later of two of one kind winning.
+    ///
+    /// Each address is read as a link again by [`Url::read`] before it is kept, so one that fails
+    /// the check of `/issue` and `/pr` sets nothing. Returns whether the turn recorded any, so a
+    /// front end knows to show the links the record now holds.
+    pub fn apply_links(&mut self, links: &[bravebot_agent::links::LinkSet]) -> bool {
+        use bravebot_agent::links::LinkKind;
+        for set in links {
+            let kind = match set.kind {
+                LinkKind::Issue => Link::Issue,
+                LinkKind::PullRequest => Link::PullRequest,
+            };
+            self.set_link(kind, Url::read(&set.url));
+        }
+        !links.is_empty()
     }
 
     /// The notes a person has typed on this session, oldest first.
@@ -5446,6 +5456,117 @@ mod tests {
         let cleared = load(&root, handle.id()).expect("the record is still there");
         assert_eq!(cleared.issue, None, "clearing the issue left it on disk");
         assert_eq!(cleared.pull_request.as_deref(), Some(PULL));
+    }
+
+    /// The links a turn recorded are kept by kind through [`Handle::apply_links`], the later of two
+    /// of one kind wins, one that [`Url::read`] refuses sets nothing, and the answer says whether
+    /// the turn recorded any.
+    ///
+    /// The faults it rejects: swapping the two kinds, keeping the first of two, keeping an address
+    /// that fails the check of `/issue`, and answering `true` for an empty turn.
+    #[test]
+    fn the_links_a_turn_recorded_are_kept_by_kind_and_the_later_one_wins() {
+        use bravebot_agent::links::{LinkKind, LinkSet};
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+        const LATER: &str = "https://github.com/brave/bravebot/issues/1300";
+        const PULL: &str = "https://github.com/brave/bravebot/pull/1270";
+
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-apply-links");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_session(&mut handle);
+
+        assert!(!handle.apply_links(&[]), "an empty turn reported links");
+
+        let set = |kind, url: &str| LinkSet {
+            kind,
+            url: url.to_string(),
+        };
+        assert!(handle.apply_links(&[
+            set(LinkKind::Issue, ISSUE),
+            set(LinkKind::PullRequest, PULL),
+            set(LinkKind::Issue, LATER),
+        ]));
+        assert_eq!(handle.link(Link::Issue), Some(LATER));
+        assert_eq!(handle.link(Link::PullRequest), Some(PULL));
+
+        handle.apply_links(&[set(LinkKind::PullRequest, "not a web address\nat all")]);
+        assert_eq!(
+            handle.link(Link::PullRequest),
+            None,
+            "an address the check refuses was kept"
+        );
+    }
+
+    /// PANEL-12: setting a link, which `set_link` and `/issue` both do through [`Handle::set_link`],
+    /// gives up no rewind point and makes none, since no point holds a link. The faults it rejects
+    /// are a link write that adds a point to the record and one that clears the points as a rename
+    /// does.
+    #[test]
+    fn setting_a_link_neither_makes_nor_gives_up_a_rewind_point() {
+        const ISSUE: &str = "https://github.com/brave/bravebot/issues/1267";
+
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-link-rewind");
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        let (spend, timing, todos) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let trust = TrustStore::new("/work");
+        let programs = TrustedPrograms::default();
+        let save_with = |handle: &mut Handle, points: &[RewindPoint]| {
+            handle.save(
+                "what do the specs say",
+                Standing {
+                    history: None,
+                    conversation: &snapshot,
+                    turns: 1,
+                    tokens: 0,
+                    split: Default::default(),
+                    spend: &spend,
+                    timing: &timing,
+                    model: None,
+                    todos: &todos,
+                    asides: &[],
+                    trust: &trust,
+                    programs: &programs,
+                    directories: &[],
+                    manifest: None,
+                    rewind: points,
+                    checkouts: &[],
+                    touched: None,
+                    answered_by_mode: false,
+                },
+            );
+        };
+
+        let mut without = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_with(&mut without, &[]);
+        without.set_link(Link::Issue, Url::read(ISSUE));
+        let record = load(&root, without.id()).expect("the record was not written");
+        assert_eq!(record.issue.as_deref(), Some(ISSUE));
+        assert!(
+            record.rewind.is_empty(),
+            "setting a link made a rewind point"
+        );
+
+        let points = [
+            a_stored_point(vec![]).into_point(&root),
+            a_stored_point(vec![]).into_point(&root),
+        ];
+        let mut with = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_with(&mut with, &points);
+        assert_eq!(load(&root, with.id()).unwrap().rewind.len(), 2);
+        with.set_link(Link::PullRequest, Url::read(ISSUE));
+        with.set_link(Link::PullRequest, None);
+        let record = load(&root, with.id()).expect("the record is still there");
+        assert_eq!(
+            record.rewind.len(),
+            2,
+            "setting a link changed the rewind points the record holds"
+        );
     }
 
     /// SKILL-21. The skill a person put in force with `/mode` is written with the record, kept by the

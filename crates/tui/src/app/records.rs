@@ -33,6 +33,17 @@ pub(super) fn rewind_point(
     }
 }
 
+/// Give the panel the links the session's record holds, answering as [`Session::link`] does. Called
+/// on every pass of the event loop, after a turn that recorded links and after `/issue` and `/pr`,
+/// so a link set by any of them is the one drawn.
+pub(super) fn show_the_links(
+    session: &mut Session,
+    stored: &bravebot_session::sessions::Handle,
+) -> bool {
+    use bravebot_session::sessions::Link;
+    session.link(stored.link(Link::Issue), stored.link(Link::PullRequest))
+}
+
 /// Say what each point a rewind could reach wrote over, most recent first.
 ///
 /// Most recent first because that is the order the numbers run in: `/rewind 1` is the turn that

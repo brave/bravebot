@@ -13765,6 +13765,102 @@ fn a_directory_the_call_excludes_is_not_reached_and_its_sibling_is() {
     );
 }
 
+/// A look that holds a reach reaches a sibling directory and records nothing, and a look is
+/// judged by the refusals a granted request has: a link into `~/.ssh`, the home directory, a
+/// wildcard, a control character, the person's `denyRead` list and
+/// `permissions.readsStayInWorkspace`. A watch only reads, so `denyWrite` and a persistence
+/// location do not refuse it. A look takes no sandbox mode, so the read-only mode has no case here.
+/// The control is a sibling file the same reach looks at. The regressions it rejects: a look that
+/// skips a refusal a read has, and a look that puts a first reach in the list a later call drains,
+/// which would name that call's tool.
+#[cfg(unix)]
+#[test]
+fn a_look_holding_a_reach_is_judged_by_the_refusals_of_a_read_and_records_nothing() {
+    use bravebot_agent::watch::Looked;
+
+    let places = BypassPlaces::new("look");
+    std::fs::write(places.home.join(".ssh/id_ed25519"), "KEY").unwrap();
+    std::fs::create_dir_all(places.home.join(".config/autostart")).unwrap();
+    std::fs::write(places.home.join(".config/autostart/app.desktop"), "X").unwrap();
+    let link = places.beside.join("to-ssh");
+    std::os::unix::fs::symlink(places.home.join(".ssh"), &link).unwrap();
+    let read_denied = places.beside.join("read-denied");
+    let write_denied = places.beside.join("write-denied");
+    for dir in [&read_denied, &write_denied] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("f.txt"), "F").unwrap();
+    }
+    let entry = |path: &PathBuf| Entry {
+        path: path.display().to_string(),
+        by: None,
+        pinned: false,
+    };
+    let lists = || Lists {
+        deny_read: vec![entry(&read_denied)],
+        deny_write: vec![entry(&write_denied)],
+        ..Lists::default()
+    };
+    let look = |workspace: &Workspace, path: &std::path::Path| {
+        workspace.look_reaching(
+            &path.display().to_string(),
+            workspace.root(),
+            Some(places.reach_with("watch_file", false, lists(), Vec::new())),
+        )
+    };
+    let spelled = |tail: &str| PathBuf::from(format!("{}{tail}", places.beside.display()));
+    let notes = places.beside.join("notes.txt");
+
+    assert!(matches!(look(&places.workspace, &notes), Looked::Saw(_)));
+    assert_eq!(
+        look(&places.workspace, &places.beside.join("absent.txt")),
+        Looked::Absent
+    );
+    for (what, path) in [
+        ("home", places.home.clone()),
+        ("ssh key", places.home.join(".ssh/id_ed25519")),
+        ("a link into ~/.ssh", link.join("id_ed25519")),
+        ("a wildcard", spelled("/*.txt")),
+        ("a control character", spelled("/no\ntes.txt")),
+        ("denyRead", read_denied.join("f.txt")),
+    ] {
+        assert_eq!(
+            look(&places.workspace, &path),
+            Looked::OutOfReach,
+            "{what} was looked at"
+        );
+    }
+    // Neither of these refuses a read.
+    for (what, path) in [
+        ("denyWrite", write_denied.join("f.txt")),
+        (
+            "a persistence location",
+            places.home.join(".config/autostart/app.desktop"),
+        ),
+    ] {
+        assert!(
+            matches!(look(&places.workspace, &path), Looked::Saw(_)),
+            "{what} was refused to a look, which only reads"
+        );
+    }
+
+    let kept = places.workspace.clone().with_reads_kept_inside(true);
+    assert_eq!(
+        look(&kept, &notes),
+        Looked::OutOfReach,
+        "readsStayInWorkspace"
+    );
+
+    // No reach, no look outside the workspace; and the look that did reach recorded nothing.
+    assert_eq!(
+        places
+            .workspace
+            .look_reaching(&notes.display().to_string(), places.workspace.root(), None),
+        Looked::OutOfReach
+    );
+    assert!(places.workspace.take_new_reaches().is_empty());
+    assert!(places.workspace.reached_directories().is_empty());
+}
+
 /// A reach held by one clone of a workspace is not seen by another, so a delegate's call cannot
 /// give the lead session's call its reach or take it away.
 #[test]

@@ -6,10 +6,11 @@
 //! the interesting part is not the request but the answer.
 //!
 //! An answer is split in two, and the split is visible in the types here. A [`protocol::Location`]
-//! is structure: a path, a line, a character, a symbol kind, read off the server's index. It has
-//! nowhere for prose to sit, deliberately, and that is what lets it reach the planner whatever the
-//! trust map says about the file it names. Hover text is the other half: bytes the file chose, so it
-//! is labelled from the trust map and quarantined like anything else nobody vouched for.
+//! is structure: a path, a line, a character, a symbol kind and an optional end line, read off the
+//! server's index. It has nowhere for prose to sit, deliberately, and that is what lets it reach
+//! the planner whatever the trust map says about the file it names. Hover text is the other half:
+//! bytes the file chose, so it is labelled from the trust map and quarantined like anything else
+//! nobody vouched for.
 //!
 //! This is native rather than an MCP server for the reason [mcp.md] gives: a call whose parts must
 //! be labelled separately cannot go behind a boundary that labels the whole thing at once.

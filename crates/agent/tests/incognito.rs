@@ -671,6 +671,94 @@ fn a_checkout_is_not_made_under_the_state_directory() {
     );
 }
 
+/// A model that answers every request with `done` and records each request it is sent.
+fn a_model_that_records_its_requests() -> (String, std::sync::mpsc::Receiver<String>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut length = 0usize;
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 && line.trim() != "" {
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    line.clear();
+                }
+                let mut body = vec![0u8; length];
+                let _ = reader.read_exact(&mut body);
+                let _ = sender.send(String::from_utf8_lossy(&body).to_string());
+                let reply = sse(Some("done"), None);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            });
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), received)
+}
+
+/// INCOG-5, SETLINK-2: a private session saves nothing a recorded link could be kept in, so
+/// `set_link` is not offered to a turn whose front end would otherwise keep links.
+///
+/// The regression it rejects: `keeps_links` testing only what the front end asked for, so the tool
+/// is offered in a private session and records a link that nothing writes. The request is checked
+/// for a tool that is always offered, so an empty list of tools does not pass for the absence.
+#[test]
+fn a_private_session_is_not_offered_set_link() {
+    let scratch = Scratch::new("set-link-not-offered");
+    assert!(
+        bravebot_core::incognito::engaged(),
+        "the fixture is meant to run as an incognito session"
+    );
+    let work = scratch.home.join("work");
+    std::fs::create_dir_all(&work).expect("create the working directory");
+    let workspace = bravebot_agent::Workspace::new(&work).expect("workspace");
+    let (endpoint, received) = a_model_that_records_its_requests();
+    let config = bravebot_config::Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+        _ => None,
+    })
+    .expect("config");
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &bravebot_agent::turn::Task::new("work on https://github.com/brave/bravebot/issues/1267")
+            .keeping_links(true),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut bravebot_core::event::RecordingSink::new(),
+        trust,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    outcome.expect("turn runs");
+
+    let asked: Vec<String> = received.try_iter().collect();
+    let first = asked.first().expect("a request was sent");
+    assert!(
+        first.contains("read_file"),
+        "the request offered no tools, so the absence below proves nothing: {first}"
+    );
+    assert!(
+        !first.contains("set_link"),
+        "a private session was offered set_link: {first}"
+    );
+}
+
 const A_BEDROCK_MODEL: &str =
     "arn:aws:bedrock:us-west-2:111122223333:application-inference-profile/abc";
 

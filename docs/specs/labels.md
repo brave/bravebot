@@ -68,6 +68,7 @@ guards:
       - crates/agent/src/commit_message.rs: 3
       - crates/agent/src/connectors.rs: 1
       - crates/agent/src/tools/message.rs: 1
+      - crates/agent/src/tools/link.rs: 1
       - crates/agent/src/manifest.rs: 12
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
@@ -185,6 +186,7 @@ guards:
     sites:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 16
+      - crates/agent/src/tools/link.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::decode_transport

@@ -59,9 +59,11 @@ BLOCK   confine: read_file.path: '/etc/hosts' resolves outside the workspace; re
 ```
 
 A `watch_file` on a path outside the workspace is recorded the same way, with the path as typed and
-the remedy, and the turn does not end as clean. An absolute path that lands inside the workspace is
-recorded as "is inside the workspace but not named relative to its root; remedy offered: name it
-relative to the workspace root".
+the remedy, and the turn does not end as clean. Where the person has turned permission prompts off,
+a path a read would reach is armed instead, and the first time the session reaches its directory
+the trail carries one `path_reach` record naming the mode, `watch_file` and `path`. An absolute path
+that lands inside the workspace is recorded as "is inside the workspace but not named relative to
+its root; remedy offered: name it relative to the workspace root".
 
 Three pieces of notation appear throughout:
 

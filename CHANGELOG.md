@@ -203,6 +203,7 @@
  - Added dragging the border between the info panel and the transcript to resize the panel, and keeping the width for the next session. ([#2731](https://github.com/brave/bravebot/issues/2731))
  - Added a resize pointer over the border between the info panel and the transcript in Kitty, Ghostty and foot.
  - Added `--issue` and `--pr`, which give a new or resumed session its issue and pull request links. ([#1267](https://github.com/brave/bravebot/issues/1267))
+ - Added a `set_link` tool, which lets the agent record the issue or pull request a session is for. It records only an address you typed to it in this session, and asks nothing. ([#1267](https://github.com/brave/bravebot/issues/1267))
  - Added the `awaySummaryIdleSeconds` setting, which changes how long the terminal has to be unfocused after a turn before the automatic recap. ([#1580](https://github.com/brave/bravebot/issues/1580))
  - Added the context window a running Ollama holds a model with to the import question, with a warning when it is smaller than the window bravebot assumes. ([#1383](https://github.com/brave/bravebot/issues/1383))
  - Added a list of the modes `/sandbox` takes once the word is typed, and the same for the forms `/limit`, `/review` and `/reach` read.

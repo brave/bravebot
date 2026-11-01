@@ -2937,6 +2937,7 @@ done
                 line: 1,
                 character: 1,
                 kind: None,
+                end_line: None,
             }],
             text: None,
             diagnostics: None,

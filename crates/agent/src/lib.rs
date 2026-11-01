@@ -45,6 +45,7 @@ pub mod hunks;
 pub mod interjections;
 #[cfg(test)]
 mod kept_answers;
+pub mod links;
 mod live_sandbox;
 pub mod lsp;
 pub mod manifest;

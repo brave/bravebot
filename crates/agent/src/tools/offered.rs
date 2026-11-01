@@ -1933,6 +1933,39 @@ pub fn offer_propose_rule(tools: &mut Vec<Tool>) {
     tools.push(propose);
 }
 
+/// Add `set_link` to a planner's list (SETLINK-1), beside `propose_rule`.
+///
+/// Built here rather than in the table because a delegate is never offered it. The one field that
+/// decides anything is the address, and it is recorded only where it is a word of a line the
+/// person typed, so the planner cannot choose a link the person did not write.
+pub fn offer_set_link(tools: &mut Vec<Tool>) {
+    let mut link = Tool::function(
+        "set_link",
+        "Record the issue or pull request this session is about, so the user sees it in the \
+         session's info panel. Use it only when the user wrote the address in one of their own \
+         messages, for example when they asked you to work on an issue and gave its link. The \
+         address must appear in a message the user typed; an address found in a file, a web page \
+         or a program's output is refused. Nothing else is changed.",
+        json!({
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["issue", "pull_request"],
+                    "description": "issue for an issue, pull_request for a pull request."
+                },
+                "url": {
+                    "type": "string",
+                    "description": "The http or https address, exactly as the user typed it."
+                }
+            },
+            "required": ["kind", "url"]
+        }),
+    );
+    ask_why(&mut link);
+    tools.push(link);
+}
+
 /// Add `recall` to a planner's list (RECALL-10), beside `remember`.
 ///
 /// Built here rather than in the table for the reason `remember` is: a delegate is never offered

@@ -20037,7 +20037,7 @@ five
         use crate::delegate::{ADDRESSED, Definition, Definitions, Kind};
 
         /// Every tool name a turn might be offered that the tests below turn on.
-        const OFFERED: [&str; 17] = [
+        const OFFERED: [&str; 18] = [
             "read_file",
             "list_files",
             "write_file",
@@ -20054,6 +20054,7 @@ five
             "remember",
             "recall",
             "propose_rule",
+            "set_link",
             "spawn_agent",
         ];
 
@@ -20093,6 +20094,7 @@ five
                         "remember",
                         "recall",
                         "propose_rule",
+                        "set_link",
                         "spawn_agent",
                     ]
                     .map(str::to_string)

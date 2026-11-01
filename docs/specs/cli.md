@@ -2535,3 +2535,21 @@ The `bravebot-acp` program stays, because the tests of the loop start it.
 `verified-by: bravebot_cli::acp::acp_ending_its_input_with_a_question_waiting_writes_nothing_and_exits`
 `verified-by: bravebot_cli::acp::acp_waits_for_the_end_of_an_open_session_before_it_exits`
 `verified-by: bravebot_cli::flags::exactly_the_fifteen_commands_that_start_no_session_are_named`
+
+<a id="CLI-40"></a>
+### CLI-40: `--issue <url>` and `--pr <url>` give the session the command line opens its links
+
+`--issue <url>` and `--pr <url>` give the interactive session a line opens the issue and pull request
+links that `/issue` and `/pr` set. The check, the order the flags are taken in, what a failing value
+does, what replaces what and which lines refuse them are in the second paragraph of
+[PANEL-12](info-panel.md#PANEL-12). The status for a failing value is the one for an argument
+(CLI-6).
+
+**Why.** A link a script or a wrapper already knows should not have to be typed again as a command
+in the session. A value that fails the check is refused where it is written. A variable that
+expanded to nothing, or to a line holding an escape, would otherwise be dropped without a word, and
+a value holding an escape cannot be a link.
+
+`verified-by: bravebot_cli::main::issue_and_pr_flags_are_taken_out_and_set_their_own_link`
+`verified-by: bravebot_cli::main::a_value_that_is_not_one_web_address_is_refused_and_not_repeated`
+`verified-by: bravebot_cli::main::only_a_line_that_opens_a_session_takes_links`

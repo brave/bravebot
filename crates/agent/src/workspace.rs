@@ -1383,7 +1383,9 @@ impl Workspace {
     ///
     /// The reach question is asked on every look rather than only when the watch was armed. A path
     /// this workspace no longer resolves is one the answer that allowed the watch has stopped
-    /// holding for, and the caller ends the watch on it.
+    /// holding for, and the caller ends the watch on it. This look holds no reach, so a path
+    /// outside the workspace and the opened directories ends the watch; [`Workspace::look_reaching`]
+    /// is the look for a session whose permission mode gives one (PATHREQ-7).
     ///
     /// It is asked against the working directory the watch was armed under, which is what `under`
     /// is, and that is the whole of why it is a parameter. A relative path means the primary root
@@ -1405,6 +1407,23 @@ impl Workspace {
             Ok(metadata) => crate::watch::Looked::Saw(change_token(&metadata)),
             Err(_) => crate::watch::Looked::Absent,
         }
+    }
+
+    /// [`Workspace::look`] with the reach a session derives for the watch from the live permission
+    /// mode, held for this look alone and cleared after it (PATHREQ-7). Where the reach is `None`,
+    /// or the mode has left bypass, a path outside the workspace and the opened directories is out
+    /// of reach and the watch ends. The look records no directory as reached: there is no call to
+    /// put the record in the trail, and the arming call recorded the first reach.
+    pub fn look_reaching(
+        &self,
+        relative: &str,
+        under: &Path,
+        reach: Option<BypassReach>,
+    ) -> crate::watch::Looked {
+        self.hold_bypass_reach_for_a_look(reach);
+        let looked = self.look(relative, under);
+        self.hold_bypass_reach(None);
+        looked
     }
 
     /// Write an endorsed file, but only if it still holds `expected`.

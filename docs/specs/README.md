@@ -39,7 +39,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [shell-integration.md](shell-integration.md) | `SHELLINT` | 5 | `bravebot shell-init`: a hook that gives `@bravebot` the commands run in a terminal, as quarantined input |
 | [skills.md](skills.md) | `SKILL` | 19 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for, and what a skill kept as a mode adds to every turn |
 | [instructions.md](instructions.md) | `INSTR` | 17 | which instruction files are looked for, where, in what order, and where what they say ends up |
-| [cli.md](cli.md) | `CLI` | 39 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
+| [cli.md](cli.md) | `CLI` | 40 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
 | [manifest.md](manifest.md) | `MANIFEST` | 14 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 50 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 30 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, what `/help` asks the planner to answer from the documentation, what `/changelog` shows, what `/todos` prints, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/lsp` says, what `/open` lists, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, how a prompt file is expanded, how a line that starts with the word of an MCP server's prompt runs it, and what `/mode` keeps applied |
@@ -99,7 +99,7 @@ the routing-versus-content split they share.
 | [tools/search.md](tools/search.md) | `SEARCH` | 13 | `search` |
 | [tools/repo-map.md](tools/repo-map.md) | `MAP` | 5 | `repo_map` |
 | [tools/read-git.md](tools/read-git.md) | `GIT` | 15 | `read_git` |
-| [tools/lsp.md](tools/lsp.md) | `LSP` | 13 | `lsp` |
+| [tools/lsp.md](tools/lsp.md) | `LSP` | 14 | `lsp` |
 | [tools/write-file.md](tools/write-file.md) | `WRITE` | 8 | `write_file` |
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 8 | `edit_file` |
 | [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 6 | `spawn_processor` |
@@ -120,6 +120,7 @@ the routing-versus-content split they share.
 | [tools/advisor.md](tools/advisor.md) | `ADVISOR` | 9 | `advisor` |
 | [tools/remember.md](tools/remember.md) | `REMEMBER` | 3 | `remember` |
 | [tools/propose-rule.md](tools/propose-rule.md) | `RULE` | 3 | `propose_rule` |
+| [tools/set-link.md](tools/set-link.md) | `SETLINK` | 3 | `set_link` |
 | [tools/recall.md](tools/recall.md) | `RECALLTOOL` | 3 | `recall` |
 
 Topics with no spec yet are ordinary code. Adding one is how a topic becomes review-required.

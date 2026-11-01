@@ -1202,6 +1202,94 @@ fn a_name_out_of_an_unvouched_tree_is_not_in_the_planners_context() {
     }
 }
 
+/// LSP-14: the end line of a definition reaches the planner with the location where the tree is
+/// vouched for, and is not in its context where it is not. The answer is labelled by the files it
+/// names, so the end line changes neither which label an answer gets nor when it is quarantined.
+///
+/// The server answers with a `LocationLink` whose `targetRange` ends on line 30 and whose name
+/// range ends on line 1. A wrong implementation that reads `targetSelectionRange` reports line 1;
+/// one that renders the end outside the labelled answer shows it for the vendored half too.
+#[test]
+fn the_end_line_is_in_the_context_only_where_the_answer_is_trusted() {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+
+    let plain = r#"[{\"uri\":\"file://$DEFINED_AT\",\"range\":{\"start\":{\"line\":0,\"character\":10},\"end\":{\"line\":0,\"character\":14}}}]"#;
+    let linked = r#"[{\"targetUri\":\"file://$DEFINED_AT\",\"targetRange\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":29,\"character\":1}},\"targetSelectionRange\":{\"start\":{\"line\":0,\"character\":10},\"end\":{\"line\":0,\"character\":14}}}]"#;
+    assert!(FAKE_SERVER.contains(plain), "the fixture's reply changed");
+
+    let mut results = Vec::new();
+    for (directory, distrusted) in [("vendor", true), ("lib", false)] {
+        let scratch = Scratch::new(&format!("agent-lsp-the-end-line-{directory}"));
+        let (workspace, _recorded) = a_workspace_with_a_server(&scratch);
+        let program = scratch.path.join("bin").join("rust-analyzer");
+        std::fs::write(&program, FAKE_SERVER.replacen(plain, linked, 1)).expect("write the server");
+        let named = format!("{}/{directory}/b.rs", scratch.path.display());
+        std::fs::create_dir_all(scratch.path.join(directory)).expect("create the directory");
+        std::fs::write(named_on_disk(&named), "x").expect("write the named file");
+        // SAFETY: PATH_LOCK is held for the whole of this body, so no other test in this binary is
+        // reading or writing the environment while this runs.
+        unsafe {
+            std::env::set_var("DEFINED_AT", &named);
+        }
+
+        let (endpoint, received) = serve_sequence(vec![
+            a_question_about_a_symbol(),
+            reply_with("that is where it is"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut asking = AskedAboutServers {
+            asked: 0,
+            reject: false,
+            approve_writes: false,
+        };
+        let mut trust = trusting_the_workspace(&workspace);
+        if distrusted {
+            trust.distrust(directory);
+        }
+
+        let mut conversation = Conversation::new();
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("where is Held declared"),
+            &mut conversation,
+            &mut asking,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trust,
+            TrustedPrograms::new(),
+            None,
+            &Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let _first = received.recv().expect("the question");
+        let carrying_the_answer = received.recv().expect("the request carrying the result");
+        results.push((distrusted, carrying_the_answer));
+    }
+
+    for (distrusted, request) in results {
+        if distrusted {
+            assert!(
+                !request.contains("ends at line") && !request.contains("vendor/b.rs"),
+                "an answer naming an unvouched file reached the planner: {request}"
+            );
+            // Still one reference, so the planner knows a location came back.
+            assert!(request.contains("Result of lsp"), "{request}");
+        } else {
+            let shown = tool_result_in(&request);
+            assert!(
+                shown.contains("lib/b.rs:1:11, ends at line 30"),
+                "the end of the full range is shown beside the start: {shown}"
+            );
+        }
+    }
+}
+
 /// PERM-7: the `lsp` tool leaves out a location in a file a `deny` rule covers and withholds hover
 /// text while any rule covers reading a path, and with no rule the same questions are answered in
 /// full.

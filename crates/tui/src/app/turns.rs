@@ -554,6 +554,8 @@ pub(super) fn run_turn_animated(
         .ticking(tick)
         .arming(arming)
         .looking_again(looking_again)
+        // This front end writes the links `set_link` records to the session record (SETLINK-2).
+        .keeping_links(true)
         // And the files this session has already agreed the planner may be given, so a planner
         // reading the same `.env` on turn after turn is asked about it once.
         .already_exposed(exposed.clone())
@@ -811,6 +813,7 @@ pub(super) fn run_turn_animated(
     whole.then(finished.work);
     stored.set_work(whole);
     stored.set_written(&session.written());
+    keep_the_links_of(&finished, stored, session);
     Ok(finish_turn(
         session,
         config,
@@ -823,6 +826,22 @@ pub(super) fn run_turn_animated(
         finished,
         retained,
     ))
+}
+
+/// The links the turn recorded with `set_link`, read as links again by the one definition of one
+/// before the record keeps them, and kept whatever way the turn ended: a link is written to the
+/// record at once (PANEL-12, SETLINK-1). It reads the decisions and never the outcome, and it
+/// touches no rewind point, since no point holds a link.
+pub(super) fn keep_the_links_of(
+    finished: &FinishedTurn,
+    stored: &mut bravebot_session::sessions::Handle,
+    session: &mut Session,
+) {
+    if let Some(decisions) = &finished.decisions
+        && stored.apply_links(&decisions.links)
+    {
+        show_the_links(session, stored);
+    }
 }
 
 /// Adopt decisions before classifying the joined result or handing state back for saving.
@@ -852,6 +871,8 @@ pub(super) fn finish_turn(
             asked_about,
             exposed,
             injected_facts: _,
+            // Applied to the record above, before the turn was classified.
+            links: _,
         }) => Carried {
             trust,
             programs,
