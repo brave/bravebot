@@ -328,15 +328,14 @@ The `ask_user` description says four things, in these words:
 - Each question you ask costs the user's attention.
 
 They follow the sentences that say to ask only for what the planner cannot find out itself, to look
-first, and that a quarantined result does not stop it asking afterwards ([ASK-4](#ASK-4)), which are
-kept as they were. The four sentences are the same on every turn. They name no tool, so a turn
+first, and that a quarantined result does not stop it asking afterwards ([ASK-4](#ASK-4)). The four sentences are the same on every turn. They name no tool, so a turn
 without `run` reads them unchanged ([TOOL-6](tool-surface.md#TOOL-6)), and they name no mode,
 classifier or other thing that answers a prompt, so they do not change when the person changes mode
 ([MODE-8](../permission-modes.md#MODE-8)). The planner is told of no mode but plan mode
 ([MODE-3](../permission-modes.md#MODE-3), [MODE-8](../permission-modes.md#MODE-8)), and these
 sentences add none. The four sentences say nothing about what decides a question
-([AUTO-7](../auto-mode.md#AUTO-7)) and nothing about whether a person is shown it. The older clause
-that the questions "are put to the user one at a time" is kept as it was and is not one of the four.
+([AUTO-7](../auto-mode.md#AUTO-7)) and nothing about whether a person is shown it. The description also says
+the questions "are put to the user one at a time", and that sentence is not one of the four.
 The fourth sentence says what a question costs and does not say where it goes or what becomes of it,
 because a one-shot run declines every question ([ASK-7](#ASK-7)) and a question closes with no
 answer where `askIdleSeconds` is set ([ASK-9](#ASK-9)).
