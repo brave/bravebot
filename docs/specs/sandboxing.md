@@ -1779,9 +1779,10 @@ without it, and that `loopback` is asked for to connect to a port of this machin
 that has no network access, since it adds nothing to a connect from a line that has network access
 ([SANDBOX-3](#SANDBOX-3)). Where the network is closed, and under `read-only`, which closes it, the
 description adds that a line that asks for `loopback` may still connect to a port of this machine.
-A session that would accept no request is told none of this, and on Linux and Windows the
-description says nothing of `loopback`; the `scopes` entry of the tool says that it changes nothing
-there ([SANDBOX-26](#SANDBOX-26)). The sentence after a failed step says what a step that asked for
+A session that would accept no request is told none of this. On Linux and Windows the description
+does not say when to ask for `loopback` and names it only in the list of names a line may ask for,
+and the `scopes` entry of the tool says that it changes nothing there
+([SANDBOX-26](#SANDBOX-26)). The sentence after a failed step says what a step that asked for
 `loopback` could do, in its account of the network. On macOS with the network closed and no host
 list it could listen on and connect to this machine's own ports. On macOS with the network closed
 and a host list it could listen on them, and connect to them if it has no network access, since a
