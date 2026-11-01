@@ -64,7 +64,8 @@ sudo curl -fsSL -o /etc/apt/sources.list.d/bravebot.sources \
 sudo apt update && sudo apt install bravebot
 ```
 
-The fingerprint `gpg` prints has to be the one above.
+The fingerprint `gpg` prints has to be the one above. The install page lists the releases the
+packages are for, and what a minimal image needs first.
 
 Or with dnf, from the dnf repository, whose packages dnf checks against the same key:
 

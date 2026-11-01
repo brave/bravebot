@@ -52,6 +52,9 @@ fn the_install_instructions_name_the_served_repositories() {
 
     let page = read("docs/website/docs/install.md");
     for needed in [
+        "Debian 12 and 13",
+        "Ubuntu 22.04, 24.04 and 26.04",
+        "apt install curl gpg ca-certificates",
         "sudo apt install bravebot",
         "sudo dnf install bravebot",
         "sudo apt remove bravebot",

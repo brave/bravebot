@@ -579,7 +579,9 @@ The repositories are served at `https://bravebot-apt-release.s3.brave.com` and
 `https://bravebot-rpm-release.s3.brave.com`. The README and the install page tell a person to fetch
 the keyring `bravebot-archive-keyring.gpg` and the source `bravebot.sources` from the first and the
 repository file `bravebot.repo` from the second, and give the key's fingerprint,
-`13F28F0405C49B0B232DBA1BC1E827646A2DE416`. apt accepts the repository only when the key named by
+`13F28F0405C49B0B232DBA1BC1E827646A2DE416`. The install page names the releases the packages are
+for: Debian 12 and 13, Ubuntu 22.04, 24.04 and 26.04, and a Fedora release that still receives
+updates, each on amd64 and arm64. apt accepts the repository only when the key named by
 `Signed-By` signed `InRelease` or `Release.gpg`. dnf, with `gpgcheck=1` in `bravebot.repo`, checks
 the signature on each rpm against the key from `gpgkey`. No instruction turns off a check.
 
@@ -600,9 +602,12 @@ package's key does not decide what is trusted for this one.
 - **The apt and dnf repositories are generated, signed and served elsewhere.** Nothing in this
   tree generates or signs a repository, uploads it, or installs from it, so
   [RELEASE-22](#RELEASE-22) is by-construction for those, and the test holds the text of the
-  instructions and not what the repositories serve. That `apt` and `dnf` install the package from
-  the published repositories is not checked, and neither is which releases they do it on, so the
-  instructions name none as supported (#3466). Changing the signing key reaches a repository as
+  instructions and not what the repositories serve. The served `bravebot.sources`,
+  `bravebot.repo`, `Release`, signatures and key were read against the clause on 2026-11-01. That
+  `apt` and `dnf` install the package from the published repositories on each release the install
+  page names is not checked, because no container run has been made, and the list of releases is
+  chosen from each vendor's support and the glibc requirement and not from an install
+  (#3466). Changing the signing key reaches a repository as
   [RELEASE-14](#RELEASE-14) describes for the install script: a client holds the key it was given,
   so a new key means every client fetches it again.
 

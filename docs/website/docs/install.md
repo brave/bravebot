@@ -50,6 +50,15 @@ fingerprint is `13F28F0405C49B0B232DBA1BC1E827646A2DE416`, and the client checks
 before it installs anything. The package puts the binary at `/usr/bin/bravebot` and requires glibc
 2.30 or newer.
 
+The packages are meant for the releases that have glibc 2.30 or newer and that their vendor still
+supports: Debian 12 and 13, Ubuntu 22.04, 24.04 and 26.04, and a Fedora release that still receives
+updates. Both repositories carry amd64 and arm64 (x86_64 and aarch64 for dnf). The served files
+and the package requirements were read from the repositories, and the steps below have not yet
+been run on each of these releases ([#3466](https://github.com/brave/bravebot/issues/3466)).
+
+A minimal image, such as a container, has none of `curl`, `gpg` and `ca-certificates` for apt, and
+no `sudo`. Install them first (`apt install curl gpg ca-certificates` as root) and leave `sudo` out.
+
 For apt, fetch the key to the place the source names, check its fingerprint, then add the source:
 
 ```sh
