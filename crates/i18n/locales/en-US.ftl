@@ -3823,12 +3823,13 @@ update-available =
 # updates this copy depends on how it was installed, and it is not a translator's to reword.
 # Nothing is asked of a registry, so this says how to update rather than whether to.
 update-how = update with: { $command }
-# Printed by `bravebot update` for a copy neither the npm package nor the install script put
-# here, a build from source above all. There is no command to name, and naming one would replace
-# a binary this program did not install.
+# Printed by `bravebot update` for a copy none of the supported installers put here, a build from
+# source above all. There is no command to name, and naming one would replace a binary this
+# program did not install.
 update-not-installed-by-us =
-    this copy was not installed by the npm package or by the install script, so there is no update
-    command for it. A build from source is updated by pulling and building again.
+    there is no update command for this copy: it was not installed by the npm package, the install
+    script, Homebrew, WinGet, apt or dnf. A build from source is updated by pulling and building
+    again.
 # Said once, on the startup screen of the first launch that sends crash reports (CRASH-9). The key
 # and the variable are the two ways of turning it off, and are not a translator's to reword.
 crash-reports-notice =

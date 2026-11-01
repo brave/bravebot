@@ -47,13 +47,18 @@ question keeps the first thing on the screen the question that grants standing p
 <a id="UPDATE-2"></a>
 ### UPDATE-2: only an installation there is a command for is told anything
 
-Five are: the npm package, which its launcher names when it starts the binary, an install made
+Seven are: the npm package, which its launcher names when it starts the binary, an install made
 by the install script, which is the binary that script recorded, an install made by the PowerShell
-install script, which is the binary that script recorded in a file of its own, and the Homebrew
+install script, which is the binary that script recorded in a file of its own, the Homebrew
 cask and the WinGet package, which are a binary that resolves into a directory only that package
-manager makes: `Caskroom/bravebot/` for the cask, `WinGet/Packages/Brave.Bravebot_*/` for WinGet.
+manager makes (`Caskroom/bravebot/` for the cask, `WinGet/Packages/Brave.Bravebot_*/` for WinGet),
+and the apt and dnf packages, which are the binary at `/usr/bin/bravebot` when the package
+manager's own files on that machine say it owns it. For apt that is a dpkg file list for the
+`bravebot` package that names the path. For dnf it is an rpm database and the `bravebot.repo`
+repository file the install page has a dnf user fetch, and a machine with both managers' files is
+an apt install. A copy at `/usr/bin/bravebot` that those files do not account for is told nothing.
 Any other copy, one built from source above all, is told nothing and asks nothing. The desktop
-app is none of the five: no shell command updates it, and it is told through a link instead
+app is none of the seven: no shell command updates it, and it is told through a link instead
 ([UPDATE-12](#UPDATE-12)).
 
 **Why.** The line exists for the command in it. Telling somebody a release is out without a line
@@ -62,8 +67,11 @@ The recorded path has to be the binary that is running, since a checkout on a ma
 has a script install is not a script install: the command would replace the other copy rather
 than theirs. Each script's record counts for that script alone, so a copy only `install.sh` recorded
 is never offered the PowerShell line and the other way round. A package manager's directory wins over a script record naming the same path: the record can
-only be stale there. Another cask's directory, or one that only resembles the name, is not this
-package's.
+only be stale there, and so it is for `install.sh` run with `INSTALL_DIR=/usr/bin` over a copy a
+package owns. Another cask's directory, or one that only resembles the name, is not this
+package's. The path `/usr/bin/bravebot` alone says nothing, because a person can copy a binary
+there, so the package manager's files have to account for it. They are files on the machine and
+never a response, and what they decide is which of two literals is named, or neither.
 
 `verified-by: bravebot_config::install::the_launcher_saying_npm_is_what_makes_it_an_npm_install`
 `verified-by: bravebot_config::install::the_binary_the_script_recorded_is_a_script_install`
@@ -73,6 +81,12 @@ package's.
 `verified-by: bravebot_config::install::an_installation_nothing_recorded_is_left_alone`
 `verified-by: bravebot_config::install::a_binary_under_a_package_managers_directory_is_that_managers_install`
 `verified-by: bravebot_config::install::a_package_manager_directory_wins_over_a_script_record`
+`verified-by: bravebot_config::install::a_binary_dpkg_lists_as_the_bravebot_package_s_is_an_apt_install`
+`verified-by: bravebot_config::install::a_binary_on_a_machine_with_an_rpm_database_and_the_repository_is_a_dnf_install`
+`verified-by: bravebot_config::install::a_binary_at_the_packaged_path_that_no_package_owns_is_left_alone`
+`verified-by: bravebot_config::install::a_binary_elsewhere_is_not_the_package_on_a_machine_that_has_the_package`
+`verified-by: bravebot_config::install::a_dpkg_listing_decides_before_the_rpm_database`
+`verified-by: bravebot_config::install::a_system_package_wins_over_a_script_record_naming_the_same_path`
 
 <a id="UPDATE-3"></a>
 ### UPDATE-3: the command offered updates the copy that is running
@@ -81,22 +95,27 @@ One fixed line per installation, composed from nothing: not from the answer, not
 not from the environment.
 
 **Why.** This is a line somebody pastes into a shell, so no part of it may come from anywhere a
-value arrives from. Offering the wrong one of the five is its own harm and not a smaller one: the
+value arrives from. Offering the wrong one of the seven is its own harm and not a smaller one: the
 npm command against a script install puts a second copy on the machine and updates neither, and the
 shell script's line is one a Windows shell cannot run. A package manager's own line is the same:
 `brew upgrade --cask bravebot` and `winget upgrade Brave.Bravebot`, which update only what that
-manager installed.
+manager installed. The apt line is `sudo apt update && sudo apt upgrade bravebot`, since
+`apt upgrade bravebot` alone works from the index as it was last fetched and can find nothing newer,
+and the dnf line is `sudo dnf upgrade bravebot`. Each is one constant, so the `&&` is part of the
+literal and not something composed.
 
-The same five literals answer `bravebot update` ([CLI-29](cli.md#CLI-29)), which is why they and
+The same seven literals answer `bravebot update` ([CLI-29](cli.md#CLI-29)), which is why they and
 the installation they are chosen by sit in the configuration surface rather than beside the
 startup line: a presentation crate may not reach another one
-([LAYER-1](layering.md#LAYER-1)), and two copies of the five would be five commands to keep in step.
+([LAYER-1](layering.md#LAYER-1)), and two copies of the seven would be seven commands to keep in step.
 
 `verified-by: bravebot_update::lib::a_newer_version_is_announced_along_with_the_command_that_installs_it`
 `verified-by: bravebot_update::lib::a_script_install_is_given_the_script_again`
 `verified-by: bravebot_update::lib::a_powershell_install_is_given_the_powershell_script_again`
 `verified-by: bravebot_update::lib::a_package_manager_install_is_given_its_managers_upgrade_command`
-`verified-by: by-construction (each command is one of five literals chosen by matching on the installation, so no value composes one)`
+`verified-by: bravebot_config::install::each_installation_is_updated_the_way_it_was_installed`
+`verified-by: bravebot_cli::update::a_copy_apt_or_dnf_installed_is_told_that_managers_upgrade_line`
+`verified-by: by-construction (each command is one of seven literals chosen by matching on the installation, so no value composes one)`
 
 <a id="UPDATE-4"></a>
 ### UPDATE-4: a version is three numbers, compared as numbers
@@ -359,6 +378,19 @@ directory the window was started from turns off neither the ask nor what `update
   the record is told nothing, and a process started with the launcher's variable set is offered
   the npm command whoever set it. The cost is the wrong line of the two, never a wrong
   destination: both commands and both registries are literals in this program.
+
+- **A dnf install is recognised more weakly than an apt one.** dpkg keeps a text list of the
+  files each package installed, so an apt copy is recognised by a list that names the path. The
+  rpm database is not text, so a dnf copy is recognised by an rpm database and the `bravebot.repo`
+  file being on the machine, which does not prove that the binary at `/usr/bin/bravebot` is the
+  package's: a binary copied there by hand on a machine with the repository file is told the dnf
+  line. A copy installed from a downloaded `.rpm` with no repository file is told nothing. The
+  cost is the same wrong line and never a wrong destination.
+
+- **Recognition is reasoned from the package layouts and not observed on a package install.** The
+  dpkg list name, the rpm database paths and the path of the binary come from the packaging in
+  this repository and from how dpkg and rpm lay out their files. No `.deb` or `.rpm` has been
+  installed and run against them.
 
 - **A version that is not three numbers is invisible.** A release published as `1.0`, or as a
   release candidate, is never announced, and neither is a tag with anything after the patch

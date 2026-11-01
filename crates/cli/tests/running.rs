@@ -17222,6 +17222,12 @@ fn update_says_there_is_no_command_for_a_build_from_source() {
         !stdout.contains("npm install") && !stdout.contains("install.sh"),
         "a command was named for a copy nothing installed: {stdout}"
     );
+    // The test binary is not at `/usr/bin/bravebot`, so no package manager owns it, whatever
+    // package manager the machine running the tests has.
+    assert!(
+        !stdout.contains("apt upgrade") && !stdout.contains("dnf upgrade"),
+        "a build outside /usr/bin was given a package manager's line: {stdout}"
+    );
     assert!(
         stdout.contains("no update command"),
         "nothing was said about why there is no command: {stdout}"

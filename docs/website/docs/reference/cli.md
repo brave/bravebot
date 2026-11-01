@@ -852,7 +852,7 @@ with no home directory, is told a report is not available.
 bravebot update
 ```
 
-Prints the command that updates this copy, and runs nothing. Five installations have a command it
+Prints the command that updates this copy, and runs nothing. Seven installations have a command it
 can name:
 
 | How this copy was installed | What it prints |
@@ -862,6 +862,13 @@ can name:
 | `install.ps1` | the same `irm` line that installed it, piped to `iex` |
 | the Homebrew cask | `brew upgrade --cask bravebot` |
 | the WinGet package | `winget upgrade Brave.Bravebot` |
+| the apt package | `sudo apt update && sudo apt upgrade bravebot` |
+| the dnf package | `sudo dnf upgrade bravebot` |
+
+The apt and dnf packages put the binary at `/usr/bin/bravebot`. A binary there is theirs when the
+package manager's files say so: the list dpkg keeps for the `bravebot` package for apt, and an rpm
+database with the `bravebot.repo` file for dnf. A binary at that path that those files do not
+account for is told there is no command, as a build from source is.
 
 A copy none of those put here, a build from source above all, is told there is no update command
 for it; that is a success, since nothing on the machine is wrong. The lines are not

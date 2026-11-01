@@ -77,8 +77,8 @@ above. The repository file sets `gpgcheck=1`, so dnf checks the signature on eac
 that key.
 
 A package installed this way is updated with `sudo apt update && sudo apt upgrade bravebot` or
-`sudo dnf upgrade bravebot`. The startup notice does not recognise a copy in `/usr/bin`, so it
-says nothing about newer releases for one.
+`sudo dnf upgrade bravebot`. The startup notice gives the same line for a copy one of them
+installed.
 
 On Windows there is a PowerShell script, for a machine with no Node on it. It needs no
 Administrator:
@@ -202,10 +202,14 @@ A session that opens on a version something newer has replaced says so, once, un
 question, and gives the line that updates the copy you are running. The notice names the version you
 are running rather than the newer one, which may have moved by the time you update: the npm command for an npm
 install, the script again for a script install, the PowerShell script again for a PowerShell script
-install, `brew upgrade --cask bravebot` for a copy a Homebrew cask installed and `winget upgrade
-Brave.Bravebot` for one WinGet installed. A package manager's copy is recognised by the directory the
-manager keeps it in. A build from source is told nothing,
-since none of those lines would update one. A package can arrive after the release it follows, and
+install, `brew upgrade --cask bravebot` for a copy a Homebrew cask installed, `winget upgrade
+Brave.Bravebot` for one WinGet installed, `sudo apt update && sudo apt upgrade bravebot` for one apt
+installed and `sudo dnf upgrade bravebot` for one dnf installed. Homebrew and WinGet copies are
+recognised by the directory the manager keeps them in. An apt or dnf copy is the binary at
+`/usr/bin/bravebot` when the package manager's own files say it put it there: for apt, the list
+dpkg keeps of the `bravebot` package, and for dnf, an rpm database and the `bravebot.repo` file from
+the install steps above. A binary at that path that those files do not account for is told nothing,
+and so is a build from source, since none of those lines would update one. A package can arrive after the release it follows, and
 until it does the manager says there is nothing to upgrade.
 
 Nothing about it waits. The notice comes from an answer an earlier launch wrote down, and the

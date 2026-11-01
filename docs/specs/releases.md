@@ -602,9 +602,7 @@ package's key does not decide what is trusted for this one.
   [RELEASE-22](#RELEASE-22) is by-construction for those, and the test holds the text of the
   instructions and not what the repositories serve. That `apt` and `dnf` install the package from
   the published repositories is not checked, and neither is which releases they do it on, so the
-  instructions name none as supported (#3466). A copy installed from a package is in `/usr/bin`,
-  which the update notice ([UPDATE-2](updates.md#UPDATE-2)) does not recognise, so it offers such
-  a copy no line (#3461). Changing the signing key reaches a repository as
+  instructions name none as supported (#3466). Changing the signing key reaches a repository as
   [RELEASE-14](#RELEASE-14) describes for the install script: a client holds the key it was given,
   so a new key means every client fetches it again.
 
@@ -653,7 +651,9 @@ package's key does not decide what is trusted for this one.
 - **Opening the package changes is manual, and a package lags its release.** Between a GitHub
   release and the tap and WinGet repository taking the change, the startup notice
   ([UPDATE-2](updates.md#UPDATE-2)) can offer `brew upgrade --cask bravebot` or `winget upgrade
-  Brave.Bravebot` for a version neither can install yet. The command then says there is nothing to
+  Brave.Bravebot` for a version neither can install yet. The apt and dnf repositories are
+  published by a job outside this tree, so they can lag a release in the same way and the notice
+  can offer their lines before the package is there. The command then says there is nothing to
   upgrade, and a later launch is told again. The tap repository this cask belongs in is not named anywhere in
   this tree, so who creates it, and what `brew install` names, is decided where it is published.
 
