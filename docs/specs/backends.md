@@ -2059,12 +2059,12 @@ a Google location is held to ([BACKEND-49](#BACKEND-49)). A value with any other
 every layer that may set the name and for an exported variable, and the
 `options.region` of a `provider` entry is held to it too ([BACKEND-29](#BACKEND-29)).
 
-A region refused for what it holds, while the switch is on, is named by `doctor` with the value as
-written and where it was written: the exported variable, the `env` block of a settings file (with
-the path of that file), the machine-level file that pinned it, or the `amazon-bedrock` entry under
-`provider`. Nothing else the entry holds is printed, the value is drawn with its control characters
+A region refused for what it holds is named by `doctor` with the value as written and where it
+was written: the exported variable, the `env` block of a settings file (with the path of that
+file) or the machine-level file that pinned it, while the switch is on, or the `amazon-bedrock`
+entry under `provider`, whether or not the switch is on. Nothing else the entry holds is printed, the value is drawn with its control characters
 replaced, and nothing is decided from it. A blank region is absence rather than a refusal, a region
-with the switch off is not reported, and a `provider` entry that a machine-level `provider` block
+from `AWS_REGION` with the switch off is not reported, and a `provider` entry that a machine-level `provider` block
 replaced is not reported either, being never read.
 
 A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13

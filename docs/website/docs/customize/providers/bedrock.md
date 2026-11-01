@@ -27,8 +27,8 @@ configured. Every build can reach Brave; the other two are what you configure.
 `us-west-2`. A value with any other character is read as no region, and Bedrock is not configured.
 `bravebot doctor` names such a region as written, and says where it was written: the environment,
 the `env` block of a settings file (with the file's path), the machine-level file, or the
-`amazon-bedrock` entry under `provider`. It names a refused region only while
-`BRAVEBOT_USE_BEDROCK` is on.
+`amazon-bedrock` entry under `provider`. A region from `AWS_REGION` is named only while
+`BRAVEBOT_USE_BEDROCK` is on; the `amazon-bedrock` entry is named whenever it is in force.
 
 Each tier takes either a model id or an inference-profile ARN. With `AWS_PROFILE` unset the AWS CLI
 resolves credentials as it would for any other command, which is what a machine on instance
