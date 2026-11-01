@@ -179,12 +179,12 @@ The `instruction` parameter asks for the document alone and to name the form and
 the document is itself a summary, so a planner that asks a processor for a summary is following it.
 The route to the sending program is spelled out because the program takes its body from a file's
 path or from its standard input, and the planner has no other way to hand it an answer it was not
-shown. Neither route needs the page saved to a file first. Saving the page first costs two more
-calls, and saving it with a script that opens the file itself leaves the page readable.
+shown. Neither route needs the page saved to a file first. Saving it first costs two more calls, and
+saving it with a script that opens the file itself leaves the page readable.
 
 `verified-by: bravebot_agent::tools::a_processor_is_described_as_the_writer_of_text_made_from_content_not_shown`
 `verified-by: bravebot_agent::tools::the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one`
-`verified-by: bravebot_agent::tools::the_route_through_a_file_is_described_only_where_the_list_holds_the_file_tools`
+`verified-by: bravebot_agent::tools::the_write_to_a_file_is_described_only_where_the_list_holds_write_file`
 `verified-by: bravebot_agent::tools::the_processor_instruction_does_not_forbid_asking_for_a_summary`
 `verified-by: bravebot_agent::tools::the_write_file_reference_text_does_not_offer_a_processors_answer_as_a_free_write`
 `verified-by: bravebot_agent::turn::a_summary_of_a_scraped_page_reaches_the_sending_program_in_the_file_the_page_was_saved_to`

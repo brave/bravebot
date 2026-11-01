@@ -192,7 +192,7 @@ planner may not read, which names `spawn_processor` and `write_file`. The proces
 names `write_file`, `vet_content`, `run` and `read_output` only where it does, and the output's names
 `vet_content` only where it does. What the processor's description says about text made from
 content the planner was not shown names `run` only where the list holds one, and sends the answer
-to a program through a file, which names `write_file` and `read_file`, only where the list holds both
+to a program through a file, which names `write_file`, only where the list holds it
 ([SPAWN-6](spawn-processor.md#SPAWN-6)). `fetch_url` names `spawn_processor`, `write_file` and
 `vet_content` only where it does, `job_output` names `read_output`, `spawn_processor` and
 `write_file`, and `run` names those three in what it says to do with output that comes back as a
@@ -211,8 +211,7 @@ Not every description is written this way yet. The read's and the run's advice t
 look, the run's advice on watching a program (which names `read_file` and `job_output`), the words
 of its `read` argument (which name `read_output`), and the sentences in the answers to a run and to
 a job that send a run to `read_output` or `job_output` each name a tool some delegate or definition
-is not offered. So does the pointer in `contents_ref` at the processor's description for saving a
-page to a file first, on a list that holds `run` and `write_file` and no `read_file`.
+is not offered.
 
 `verified-by: bravebot_agent::tools::read_git_names_run_only_where_the_delegate_holds_one`
 `verified-by: bravebot_agent::tools::a_declined_repository_names_run_only_where_the_turn_holds_one`
@@ -226,7 +225,7 @@ page to a file first, on a list that holds `run` and `write_file` and no `read_f
 `verified-by: bravebot_agent::turn::a_reference_an_addressed_turn_is_handed_names_spawn_processor_and_write_file_only_if_offered`
 `verified-by: bravebot_agent::tools::a_list_holding_every_tool_gets_the_processor_and_read_output_descriptions_it_always_had`
 `verified-by: bravebot_agent::tools::the_processor_description_names_only_the_tools_the_list_holds`
-`verified-by: bravebot_agent::tools::the_route_through_a_file_is_described_only_where_the_list_holds_the_file_tools`
+`verified-by: bravebot_agent::tools::the_write_to_a_file_is_described_only_where_the_list_holds_write_file`
 `verified-by: bravebot_agent::tools::the_read_output_description_names_vet_content_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::the_descriptions_of_the_processor_and_read_output_follow_the_tools_a_turn_is_offered`
 `verified-by: bravebot_agent::turn::a_delegate_is_not_told_to_use_a_tool_it_is_not_offered`

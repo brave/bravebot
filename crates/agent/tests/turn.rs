@@ -52036,35 +52036,42 @@ fn an_answer_about_a_reference_that_is_no_file_is_refused_outside_a_new_scratch_
     assert!(fixture.outbox().is_none(), "the sender ran");
 }
 
-/// A link in the session's directory that leads to a new file in another directory of the workspace
-/// is a name inside the session's directory for a write that lands outside it. The workspace accepts
-/// it, so only the rule for an answer about no file can refuse it, and it does so for where the
-/// write lands, before anybody is asked.
+/// The directory is judged by where a write lands, not by the name typed. A link in the session's
+/// directory that points at a file in another directory the person opened is accepted by the
+/// workspace, as is one that points at a name there that is not there yet, which a write would
+/// create. Both are refused for landing outside the session's directory, before anybody is asked,
+/// and the other directory is untouched.
 #[cfg(unix)]
 #[test]
-fn an_answer_about_a_reference_that_is_no_file_is_refused_through_a_link_out_of_the_scratch_directory()
+fn an_answer_about_a_reference_that_is_no_file_cannot_be_written_through_a_link_out_of_the_scratch_directory()
  {
-    let mut fixture = DerivedTextFixture::new("derived-text-unnamed-linked");
-    let given = std::path::Path::new(&fixture.file)
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let sibling = Scratch::new("derived-text-unnamed-linked-sibling");
+    let mut fixture = DerivedTextFixture::new("derived-text-unnamed-link");
+    let opened = Scratch::new("derived-text-unnamed-link-opened");
     fixture
         .workspace
-        .add_directory(sibling.path.to_str().expect("utf-8 path"))
-        .expect("the added directory");
-    let in_the_project = sibling.path.join("linked-target.txt");
-    let link = given.join("link.txt");
-    std::os::unix::fs::symlink(&in_the_project, &link).unwrap();
+        .add_directory(opened.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let given = std::path::Path::new(&fixture.file).parent().unwrap();
+    let kept = opened.path.join("kept.txt");
+    std::fs::write(&kept, "KEPT-AS-IT-WAS").unwrap();
+    let not_there_yet = opened.path.join("not-there-yet.txt");
+    let to_a_file = given.join("link-to-a-file.txt");
+    let to_a_name = given.join("link-to-a-name.txt");
+    std::os::unix::fs::symlink(&kept, &to_a_file).unwrap();
+    std::os::unix::fs::symlink(&not_there_yet, &to_a_name).unwrap();
     let (site, _pages) = serve_pages(vec![page(DERIVED_PAGE)]);
     let mut confirmer = RecordingConfirmer::approving().and_approving_runs();
 
     let mut replies = page_then_answer(&site);
-    replies.push(tool_request_2(
-        "write_file",
-        &format!(r#"{{"path":"{}","contents_ref":"ref:3"}}"#, link.display()),
-    ));
+    for destination in [&to_a_file, &to_a_name] {
+        replies.push(tool_request_2(
+            "write_file",
+            &format!(
+                r#"{{"path":"{}","contents_ref":"ref:3"}}"#,
+                destination.display()
+            ),
+        ));
+    }
     replies.push(reply_with("I could not save the summary."));
     let (_outcome, requests) = fixture.run(replies, &mut confirmer);
 
@@ -52072,22 +52079,34 @@ fn an_answer_about_a_reference_that_is_no_file_is_refused_through_a_link_out_of_
         .into_iter()
         .filter(|result| result.starts_with("Result of write_file"))
         .collect();
-    assert_eq!(refusals.len(), 1, "{refusals:?}");
-    assert!(
-        refusals[0].contains("only to a new file in the scratch directory"),
-        "a write through a link out of the directory was not refused for landing outside it: {}",
-        refusals[0]
+    assert_eq!(refusals.len(), 2, "{refusals:?}");
+    for refusal in &refusals {
+        assert!(
+            refusal.contains("only to a new file in the scratch directory")
+                && refusal.contains("stdin_ref"),
+            "a write through a link was not refused by this rule: {refusal}"
+        );
+        for named in ["kept.txt", "not-there-yet.txt", "link-to-"] {
+            assert!(
+                !refusal.contains(named),
+                "the refusal names {named}: {refusal}"
+            );
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(&kept).unwrap(),
+        "KEPT-AS-IT-WAS",
+        "an answer about no file was written through a link into another directory"
     );
     assert!(
-        !in_the_project.exists(),
-        "an answer about no file was written into the workspace through a link"
+        !not_there_yet.exists(),
+        "an answer about no file created a file in another directory through a link"
     );
     assert!(
         confirmer.seen.is_empty(),
         "a write that could not be allowed was put to the person first: {:?}",
         confirmer.seen
     );
-    assert!(fixture.outbox().is_none(), "the sender ran");
 }
 
 /// A call over a file and a page, naming neither, is for no document, and the scratch directory

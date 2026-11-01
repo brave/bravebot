@@ -141,14 +141,14 @@ scratch path to write such an answer to, and the write is refused.
 game's HTML into a Python script, because the destination was a path it named and a person
 approved it.
 
-A file input fixes where its answer goes, and a reference that is no file fixes nothing. Saving
-the page to a file first would give the answer a path the planner chooses anyway, and costs two
-more calls, one to save the page and one to read it back. Saving it with a script that opens the
-file itself leaves the page readable, since such a file is not recorded as content the planner was
-not shown ([TRUST-2](trust-map.md#TRUST-2) and Known costs in the same spec). The
-scratch directory belongs to the session and is outside the project. A file already there is never
-replaced, because a line a person approved earlier names a program and its arguments
-([RUN-3](tools/run.md#RUN-3)) and not the bytes of the file it reads.
+A file input fixes where its answer goes, and a reference that is no file fixes nothing. Saving the
+page to a file first would give the answer a path the planner chooses anyway, and costs two more
+calls, one to save the page and one to read it back. Saving it with a script that opens the file
+itself leaves the page readable, since such a file is not recorded as content the planner was not
+shown ([TRUST-2](trust-map.md#TRUST-2) and Known costs in the same spec). The scratch directory
+belongs to the session and is outside the project. A file already there is never replaced, because
+a line a person approved earlier names a program and its arguments ([RUN-3](tools/run.md#RUN-3)) and
+not the bytes of the file it reads.
 
 `verified-by: bravebot_agent::turn::an_answer_about_nothing_in_particular_can_be_written_nowhere`
 `verified-by: bravebot_agent::turn::an_answer_cannot_be_written_to_a_file_it_is_not_about`
@@ -164,6 +164,7 @@ replaced, because a line a person approved earlier names a program and its argum
 `verified-by: bravebot_agent::turn::a_summary_of_a_fetched_page_is_written_to_a_new_file_with_no_page_saved_first`
 `verified-by: bravebot_agent::turn::an_answer_about_a_programs_output_and_an_answer_made_from_it_are_written_to_a_new_file`
 `verified-by: bravebot_agent::turn::an_answer_about_a_reference_that_is_no_file_is_refused_outside_a_new_scratch_file`
+`verified-by: bravebot_agent::turn::an_answer_about_a_reference_that_is_no_file_cannot_be_written_through_a_link_out_of_the_scratch_directory`
 `verified-by: bravebot_agent::turn::an_answer_over_a_page_and_a_saved_file_is_still_written_nowhere`
 `verified-by: bravebot_agent::turn::an_answer_about_a_reference_that_is_no_file_is_refused_where_there_is_no_scratch_directory`
 `verified-by: bravebot_agent::manifest::a_planned_answer_about_a_fetched_slot_cannot_be_written_into_the_workspace`
