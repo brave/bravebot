@@ -189,12 +189,14 @@ It was also told in its own prompt what it cannot do, so it holds both answers a
 the tool list is the one that is true.
 
 Not every description is written this way yet. The read's and the run's advice to arrange a later
-look, the processor's, the run's and the job's mention of writing a file, and the output's mention of
-checking a reference each name a tool some delegate is not offered.
+look, the processor's, the run's and the job's mention of writing a file, the processor's mention of
+reading one, the run's pointer at the processor, and the output's mention of checking a reference
+each name a tool some delegate is not offered.
 
 `verified-by: bravebot_agent::tools::read_git_names_run_only_where_the_delegate_holds_one`
 `verified-by: bravebot_agent::tools::a_declined_repository_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::a_query_off_the_list_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::tools::ask_user_names_run_only_where_the_turn_holds_one`
+`verified-by: bravebot_agent::tools::the_text_made_from_content_not_shown_names_run_only_where_the_turn_holds_one`
 `verified-by: bravebot_agent::turn::an_addressed_reader_reads_a_read_git_that_names_no_run`
 `verified-by: bravebot_agent::turn::an_addressed_turn_without_run_reads_an_ask_user_that_names_no_run`

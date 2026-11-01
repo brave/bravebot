@@ -11169,6 +11169,47 @@ five
         );
     }
 
+    /// PERM-9, RUN-3. A line fed a reference is decided by a rule the person wrote, with one
+    /// exception: a reference carrying private content is asked about whatever the rule says. A
+    /// processor's answer is labelled by taint over what it read (PROC-3), so the answer to a
+    /// summary of a fetched page is a public reference that a rule may allow, and the answer to a
+    /// summary of a run's output is a private one that no rule allows.
+    ///
+    /// The line fed nothing is the control. It shows that the rule covers the line, which the
+    /// asserts about the fed ones would otherwise take on trust.
+    #[test]
+    fn a_rule_decides_a_line_fed_a_public_reference_and_not_one_fed_a_private_reference() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_root(std::path::Path::new("/work"))
+            .with_permissions(permissions(&[], &[], &["Bash(mail *)"]));
+        let line = || {
+            plan_of(vec![step_named(
+                "mail",
+                &["-s", "digest", "alice@example.com"],
+            )])
+        };
+
+        assert!(
+            !policy.plan_needs_approval(&line()),
+            "the rule did not cover the line, so the fed ones below prove nothing"
+        );
+
+        let mut public = line();
+        public.stdin = Some(Label::untrusted_public());
+        assert!(
+            !policy.plan_needs_approval(&public),
+            "a rule the person wrote did not decide a line fed a public reference"
+        );
+
+        let mut private = line();
+        private.stdin = Some(Label::untrusted_private());
+        assert!(
+            policy.plan_needs_approval(&private),
+            "a rule decided a line fed a reference made from private content"
+        );
+    }
+
     /// A call to a server's tool is asked about unless something a person said answers for it: a
     /// rule first, and a standing answer only where no rule matched, so an `ask` rule still asks
     /// for a tool somebody once said to stop asking about.

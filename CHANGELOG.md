@@ -1,3 +1,7 @@
+## Unreleased
+
+ - Changed a request for a summary, translation, rewrite or explanation of a page the agent may not read to be answered by a processor that writes it, where the agent passed on the page's own sentences and said it had not read them. The program that sends the text is given the path of a file holding it, or takes it as `stdin_ref`. ([#3604](https://github.com/brave/bravebot/issues/3604))
+
 ## [0.20.0](https://github.com/brave/bravebot/releases/tag/v0.20.0)
 
  - Added the auto permission mode, which answers a command the sandbox confines and the first fetch of a URL with a classifier that sees only the lines you typed and the action. Shift-Tab reaches it after plan mode and `--auto` opens a one-shot run in it. The classifier can only allow, so anything else goes back to you, and bypassing is now two presses past plan mode. ([#3568](https://github.com/brave/bravebot/issues/3568))

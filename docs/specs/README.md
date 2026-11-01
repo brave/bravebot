@@ -102,9 +102,9 @@ the routing-versus-content split they share.
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 13 | `lsp` |
 | [tools/write-file.md](tools/write-file.md) | `WRITE` | 8 | `write_file` |
 | [tools/edit-file.md](tools/edit-file.md) | `EDIT` | 8 | `edit_file` |
-| [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 5 | `spawn_processor` |
+| [tools/spawn-processor.md](tools/spawn-processor.md) | `SPAWN` | 6 | `spawn_processor` |
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 7 | `spawn_agent` |
-| [tools/run.md](tools/run.md) | `RUN` | 28 | `run` |
+| [tools/run.md](tools/run.md) | `RUN` | 29 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 5 | `read_output` |
 | [tools/vet-content.md](tools/vet-content.md) | `VET` | 4 | `vet_content` |

@@ -2170,6 +2170,29 @@ went out of date without saying so.
 `verified-by: bravebot_config::scrub::a_star_spans_any_run_of_characters_and_a_plain_name_matches_only_itself`
 `verified-by: bravebot_config::scrub::a_pattern_is_matched_against_this_processes_own_environment`
 
+<a id="RUN-29"></a>
+### RUN-29: the description points text made from an output at the processor
+
+`run`'s description must say, in the sentence that names where a quarantined output may go, that a
+summary, a translation or other text made from it is written by `spawn_processor`, and that the
+processor's description says how that text reaches a program. The `stdin_ref` parameter's
+description must say that a program that sends text, such as a summary a processor wrote, takes its
+body by naming the processor's answer there.
+
+The how is not said here. Saving the original to a file, writing the answer over it and running the
+sender with the file's path are in the processor's description
+([spawn-processor.md](spawn-processor.md)), once, since a copy in each of two descriptions is edited
+separately and comes to say different things.
+
+**Why.** A planner writing the line that sends a message reads `run`'s description and its
+parameters. The sentence that names the processor as a place an output may go is where it learns what
+a processor is for, so that sentence says that a summary or other text made from an output is the
+processor's to write. A program cannot summarise an output. It can only cut the output's own
+sentences into the body.
+
+`verified-by: bravebot_agent::tools::the_run_description_points_text_made_from_an_output_at_the_processor`
+`verified-by: bravebot_agent::turn::a_summary_of_a_fetched_page_reaches_the_sending_program_on_its_standard_input`
+
 ## Open questions
 
 - Whether output can ever be trusted by proof rather than by assertion is issue #3, and it may not
