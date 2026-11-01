@@ -27042,10 +27042,14 @@ mod tests {
         /// a call and a watch in one project disagree about whether it is trusted.
         #[test]
         fn a_watch_asks_the_trust_question_a_call_asks() {
-            let (_scratch, workspace, _) = places("agree");
-            for trust in [
-                crate::trusted::trusting_the_workspace(workspace.root()),
-                crate::workspace::trust_store(workspace.root()),
+            let (_scratch, workspace, outside) = places("agree");
+            let bypass = LiveMode::new(PermissionMode::Bypass);
+            for (trust, trusted) in [
+                (
+                    crate::trusted::trusting_the_workspace(workspace.root()),
+                    true,
+                ),
+                (crate::workspace::trust_store(workspace.root()), false),
             ] {
                 let mut sink = RecordingSink::new();
                 let mut routing = Routing::new();
@@ -27058,11 +27062,11 @@ mod tests {
                 )
                 .expect("policy")
                 .with_file_authority(FileAuthority::new(trust.clone()));
-                assert_eq!(
-                    workspace_is_trusted(&policy, &workspace),
-                    workspace
-                        .is_trusted_in(&crate::memory::with_recorded(&trust, &workspace, None)),
-                );
+                let call_trusts = workspace_is_trusted(&policy, &workspace);
+                assert_eq!(call_trusts, trusted);
+                let looked =
+                    look_at_a_watch(&workspace, &bypass, &trust, &outside, workspace.root());
+                assert_eq!(matches!(looked, Looked::Saw(_)), call_trusts);
             }
         }
     }
