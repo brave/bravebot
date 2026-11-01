@@ -71847,8 +71847,10 @@ thread_local! {
 
 /// Turns the task's arming of standing watches on for the length of a test and off again when the
 /// test ends, including when an assertion fails, so a failure leaves nothing set on the thread.
+#[cfg(unix)]
 struct ArmingWatches;
 
+#[cfg(unix)]
 impl ArmingWatches {
     fn on() -> Self {
         ARM_WATCHES.set(true);
@@ -71856,6 +71858,7 @@ impl ArmingWatches {
     }
 }
 
+#[cfg(unix)]
 impl Drop for ArmingWatches {
     fn drop(&mut self) {
         ARM_WATCHES.set(false);
@@ -72004,7 +72007,11 @@ fn path_turn_in<C: bravebot_agent::Confirmer + Send>(
 /// The regressions it rejects: a look that takes no reach (the watch ends at its first look, so the
 /// unchanged-then-written steps fail), a reach copied at arming and never read again (the
 /// out-of-reach step fails), and a look that skips the person's rules (the link step fails).
+///
+/// Unix only, because making the links is: a symlink needs a privilege on Windows that a test
+/// cannot count on.
 #[test]
+#[cfg(unix)]
 fn under_bypass_a_watch_beside_the_session_fires_and_ends_when_the_key_leaves_bypass() {
     use bravebot_agent::watch::{Change, Looked, Reaped, Watches};
     use std::time::{Duration, Instant};
@@ -72152,7 +72159,11 @@ fn under_bypass_a_watch_beside_the_session_fires_and_ends_when_the_key_leaves_by
 /// outside bypass, in a workspace nobody trusted, and where a settings layer keeps reads inside.
 /// The control is a sibling file that arms. The regression it rejects is a reach given to
 /// `watch_file` that skips a refusal the other file tools keep.
+///
+/// Unix only, because making the link into `~/.ssh` is: a symlink needs a privilege on Windows
+/// that a test cannot count on.
 #[test]
+#[cfg(unix)]
 fn a_watch_is_refused_at_arming_where_a_read_of_the_path_is() {
     let places = PathPlaces::new("watch-reach-refused");
     let target = places.beside.join("notes.txt");

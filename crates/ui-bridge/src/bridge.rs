@@ -2401,37 +2401,50 @@ impl Bridge {
             if held.is_none() {
                 continue;
             }
-            let prompt = bravebot_agent::watch::fired(number, &path, change);
-            // Announce the cause before starting a worker, so early events follow it.
-            self.emitter.send(Event::new(
-                "watch.fired",
-                &handle,
-                json!({"number": number, "path": path}),
-            ));
-            if let Ok(mut watches) = open.watches.lock() {
-                watches.dispatched(number);
-            }
-            let request = Request::parse(&json!({"id": 0, "method": "turn.send", "params": {"session": handle, "prompt": prompt, "recall": false}}).to_string());
-            if let Ok(request) = request
-                && let Err(error) = self.start_turn(
-                    &request,
-                    Some(bravebot_agent::conversation::Composed::Watch {
-                        number,
-                        path: path.clone(),
-                    }),
-                )
+            self.fire_watch(&handle, number, &path, change);
+        }
+    }
+
+    /// Start the turn a due watch asks for, and end the watch where the turn cannot start.
+    fn fire_watch(
+        &mut self,
+        handle: &str,
+        number: usize,
+        path: &str,
+        change: bravebot_agent::watch::Change,
+    ) {
+        let prompt = bravebot_agent::watch::fired(number, path, change);
+        // Announce the cause before starting a worker, so early events follow it.
+        self.emitter.send(Event::new(
+            "watch.fired",
+            handle,
+            json!({"number": number, "path": path}),
+        ));
+        if let Some(open) = self.open.get(handle)
+            && let Ok(mut watches) = open.watches.lock()
+        {
+            watches.dispatched(number);
+        }
+        let request = Request::parse(&json!({"id": 0, "method": "turn.send", "params": {"session": handle, "prompt": prompt, "recall": false}}).to_string());
+        if let Ok(request) = request
+            && let Err(error) = self.start_turn(
+                &request,
+                Some(bravebot_agent::conversation::Composed::Watch {
+                    number,
+                    path: path.to_string(),
+                }),
+            )
+        {
+            if let Some(open) = self.open.get(handle)
+                && let Ok(mut watches) = open.watches.lock()
             {
-                if let Some(open) = self.open.get(&handle)
-                    && let Ok(mut watches) = open.watches.lock()
-                {
-                    watches.stop(number);
-                }
-                self.emitter.send(Event::new(
-                    "watch.ended",
-                    &handle,
-                    json!({"number": number, "reason": "failed", "message": error.message}),
-                ));
+                watches.stop(number);
             }
+            self.emitter.send(Event::new(
+                "watch.ended",
+                handle,
+                json!({"number": number, "reason": "failed", "message": error.message}),
+            ));
         }
     }
 
