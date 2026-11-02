@@ -394,8 +394,8 @@ pub fn describe_listing(references: &[Reference]) -> String {
     while at < references.len() {
         let start = &references[at];
         let mut end = at + 1;
-        // Files are listed one by one. Directories that follow each other with one label are
-        // one line.
+        // A file reference is passed to spawn_processor or as a path_ref, so each needs its own
+        // line. A directory reference has nothing behind it to act on, so a range loses nothing.
         if start.kind == Kind::Directory {
             while end < references.len()
                 && references[end].kind == Kind::Directory

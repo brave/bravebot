@@ -58,9 +58,9 @@ where the entry sits in the listing, never from its name. The header names only 
 offered, as the description of a single reference does.
 
 **Why.** One reference for the whole listing would leave the planner holding an address it cannot
-use. What came of that in practice was a planner guessing globs to see which came back empty. The
-result is sent again with every later round, and a sentence repeated for each of 110 entries came to
-32 KB, about 8k tokens a round, with the planner invited 109 times to list the same directory again.
+use, and it would guess globs to see which came back empty. Describing every entry in full repeats
+the same sentence for each one, and the result is sent again every round: at 110 entries that is
+about 32 KB (~8k tokens) a round, and one invitation per directory to list the same directory again.
 
 `verified-by: bravebot_agent::turn::a_large_quarantined_listing_says_what_its_references_are_once`
 `verified-by: bravebot_core::reference::a_listing_is_described_once_with_a_line_per_file_and_one_per_run_of_directories`
