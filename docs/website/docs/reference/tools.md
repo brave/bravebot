@@ -634,7 +634,7 @@ See [Vetting](../security/vetting.md) for what the check is, what it may say, an
 
 ## `job_output`
 
-Reports what a [background job](run-tool.md#leaving-a-pipeline-running) has printed since the last look.
+Hands back a slice of what a [background job](run-tool.md#leaving-a-pipeline-running) has printed since the previous look.
 
 | Parameter | |
 |---|---|
@@ -643,8 +643,16 @@ Reports what a [background job](run-tool.md#leaving-a-pipeline-running) has prin
 | `wait_seconds` | sit and watch for up to this long ([below](#a-look-may-wait)) |
 | `until_exit` | with `wait_seconds`, wait for the job to end and not for its output ([below](#a-look-may-wait)) |
 
-Each look reports what is new, counted in bytes, and whether the job has ended. Asking about a job
-that does not exist says so. What is new is counted separately for standard output and standard error,
+Each look hands back a slice: the bytes the job printed since the previous look, and whether the job
+has ended. A line is counted once, by the look that holds its first byte, and the next look begins
+with the rest of a line the previous look cut. Where the output is quarantined, the
+slice is one reference. The result says how many lines of everything the job printed begin in the slice
+and the number the first of them has (for example 40 lines, the first numbered 1222), in the same words
+for every look, and lists every earlier look at the job by its reference, so a line printed
+before the slice is in one of those references and not in the latest. The list is not capped. The
+first look lists none. A look that finds nothing
+new says so and lists the earlier references. Asking about a job
+that does not exist says so. Standard output and standard error are tracked separately,
 so a line arriving on one does not hide what arrived on the other, and text from standard error is
 marked as such.
 
@@ -655,8 +663,8 @@ when the first report is in, while any others keep working. Only a name that is 
 no job.
 
 **A finished job reaches the turn without being asked about.** Between rounds the turn checks whether
-any of its jobs has ended, and the handle, the exit codes and whatever was printed since anybody last
-looked go into the conversation on their own. So a background job that ends quietly is still reported.
+any of its jobs has ended, and the handle, the exit codes and whatever was printed since the previous
+look go into the conversation on their own, with the count of lines that begin in it and the earlier references as for any look. So a background job that ends quietly is still reported.
 The account is given once, by whichever route got there first. Where the output is quarantined it
 says how to lift that, as a `run` result does: [`read_output`](#read_output) for this output, and
 vouching for every stage of the exact command for the next.
@@ -672,8 +680,8 @@ that prints a line per crate costs a look per line. `until_exit: true`, given wi
 for the job to end instead. Output arriving does not end it, including output already waiting when the
 call is made. It comes back when the job ends, when `wait_seconds` runs out, when the turn is
 cancelled, when you stop a job of the turn, or when a line you typed is waiting for the turn, with
-what the job printed since the last look in one
-answer: where the output is quarantined, that is one reference to all of it. `until_exit` with no
+what the job printed since the previous look in one
+answer: where the output is quarantined, that is one reference to that slice, with its count of lines and the earlier references listed as above. `until_exit` with no
 `wait_seconds`, with `kill`, or with anything but `true` or `false`, is refused.
 
 Between 1 second and 10 minutes, and **a value outside that is refused rather than quietly shortened**.

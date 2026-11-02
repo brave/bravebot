@@ -1167,7 +1167,7 @@ impl Drain {
     /// lossily. Decoding a half-arrived character now would hand back U+FFFD and move the offset
     /// past it, so the character that is on its way would never be handed to anybody. Bytes that
     /// are not the start of a character are not waited for: they are not going to become valid.
-    fn since(&self, seen: &mut Mark) -> String {
+    fn since(&self, seen: &mut Mark) -> (String, Counted) {
         let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
         let rest = &read[seen.handed.min(read.len())..];
         let take = match std::str::from_utf8(rest) {
@@ -1179,8 +1179,23 @@ impl Drain {
         // Taken under the same lock as the bytes, so what was looked at is exactly what had arrived
         // when they were taken, and nothing landing after this is counted as looked at.
         seen.looked = read.len();
-        String::from_utf8_lossy(&rest[..take]).into_owned()
+        let counted = seen.count(&rest[..take]);
+        (String::from_utf8_lossy(&rest[..take]).into_owned(), counted)
     }
+}
+
+/// How many lines one delivery from a job completed, counted from the pipes' own bytes.
+///
+/// A count of line starts, never a look at what the bytes spell. Taken from the pipes and not from
+/// the composed text, so the `standard error:` label and the newline [`both_streams`] puts between
+/// the two streams are not lines of the job.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Counted {
+    /// The lines that begin in this delivery. A line is counted once, by the delivery that holds
+    /// its first byte, so a line cut between two deliveries is counted by the earlier one and the
+    /// later one adds nothing for the rest of it. A last line with no newline counts as soon as
+    /// its first byte arrives.
+    pub lines: usize,
 }
 
 /// How much of one pipe a caller has been handed, and how much of it had arrived at that look.
@@ -1193,6 +1208,30 @@ struct Mark {
     handed: usize,
     /// Bytes the pipe had delivered when the caller last looked.
     looked: usize,
+    /// Whether the bytes handed end in the middle of a line, so the next byte continues it.
+    mid_line: bool,
+}
+
+impl Mark {
+    /// Count the lines that begin in `taken`, and remember whether it ends inside one.
+    ///
+    /// A line begins at the first byte of the pipe and after each newline. It is counted where its
+    /// first byte is handed over, so the count does not depend on where a look happens to cut the
+    /// bytes: a cut inside a line neither counts it twice nor leaves it uncounted. The count is a
+    /// number the caller carries into a sentence whose words do not depend on it.
+    fn count(&mut self, taken: &[u8]) -> Counted {
+        let mut lines = 0;
+        for byte in taken {
+            if !self.mid_line {
+                lines += 1;
+                self.mid_line = true;
+            }
+            if *byte == b'\n' {
+                self.mid_line = false;
+            }
+        }
+        Counted { lines }
+    }
 }
 
 /// How much of each of a job's pipes a caller has already been handed.
@@ -1405,11 +1444,20 @@ impl Background {
     /// Each delivery that carries standard error carries the label with it, so a reader of a later
     /// delivery, which holds none of the earlier ones, can still tell the stream apart (CMDLINE-10).
     pub fn since(&self, seen: &mut Seen) -> String {
+        self.take(seen).0
+    }
+
+    /// What [`Background::since`] returns, with the lines that begin in it counted per pipe.
+    ///
+    /// The count is of the pipes' bytes, so the label and the newline joining the streams are not
+    /// in it.
+    pub fn take(&self, seen: &mut Seen) -> (String, Counted) {
         seen.stderr.resize(self.stderr.len(), Mark::default());
-        let stdout = self.stdout.since(&mut seen.stdout);
+        let (stdout, mut counted) = self.stdout.since(&mut seen.stdout);
         let mut errored = String::new();
         for (drain, seen) in self.stderr.iter().zip(seen.stderr.iter_mut()) {
-            let text = drain.since(seen);
+            let (text, more) = drain.since(seen);
+            counted.lines += more.lines;
             if text.is_empty() {
                 continue;
             }
@@ -1418,7 +1466,7 @@ impl Background {
             }
             errored.push_str(&text);
         }
-        both_streams(&stdout, &errored)
+        (both_streams(&stdout, &errored), counted)
     }
 
     /// Whether any pipe has delivered anything since the caller last looked.

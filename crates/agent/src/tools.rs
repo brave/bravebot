@@ -254,6 +254,9 @@ pub struct Output {
     /// Recorded on the slot by the turn loop, since only a slot minted from a command may be
     /// offered to the user for reading.
     pub printed_by: Option<crate::report::Command>,
+    /// Which lines of a job's whole output this result holds and which references earlier looks at
+    /// it became, where it is a look at a background job. Counts and driver-minted names only.
+    pub look: Option<Look>,
     /// Whether the line ran unasked because a record already covers it.
     ///
     /// Read where a quarantined result says what would lift the quarantine: the advice about
@@ -794,12 +797,31 @@ struct Job {
     said: String,
     /// The initial output label. A later file revision can lower its integrity, never raise it.
     label: bravebot_core::label::Label,
-    /// How much of each pipe has already been handed over, so a later look reports what is new.
+    /// How much of each pipe has already been handed over, so a later look is a slice that starts
+    /// where the previous one stopped, which can be partway through a line.
     ///
     /// Counts of bytes, never a comparison of them: nothing here reads what was printed. Per pipe
     /// rather than one offset into the composed text, because output arriving on one stream moves
     /// where the other sits in that composition.
     seen: crate::exec::Seen,
+    /// How many lines of this job's output have been handed over, across every look and the
+    /// account of its finish.
+    ///
+    /// A count of lines and never a line. Moved in [`Job::take`] and nowhere else, so the route
+    /// that hands the output over cannot do it without the count following. It is what lets each
+    /// result say which lines of the whole it holds (a reference states the size of its own slot
+    /// only).
+    ///
+    /// Each line of the job's output is counted once, by the look that holds the first byte of
+    /// it. A look cuts at the bytes that had arrived, which can be in the middle of a line, so
+    /// counting the lines in each look's text would count that line in the look that began it and
+    /// again in the look that finished it.
+    handed: usize,
+    /// The references the turn minted for earlier looks at this job, in order.
+    ///
+    /// Names the driver minted and nothing read out of the output. Recorded by the turn once it
+    /// has minted the slot ([`Jobs::record_look`]), and listed in the next result for this job.
+    looks: Vec<String>,
     /// How much of each pipe the screen has been shown the unread lines of (WATCH-24).
     ///
     /// Byte counts, like `seen`, and only a way to tell that more has arrived since the screen was
@@ -828,6 +850,31 @@ struct Job {
 }
 
 impl Job {
+    /// Take what the job has printed since the last look, and say which lines of everything it has
+    /// printed that is.
+    ///
+    /// The one place output leaves a job for the planner's side, used by `job_output` and by the
+    /// account of a finish alike, so both advance the same count (LABEL-4: counting lines is not
+    /// reading them). The screen's own look ([`Jobs::unread_output`]) copies the cursor and does
+    /// not come through here.
+    ///
+    /// A line is counted once, by the look that holds its first byte. A look cuts at the bytes
+    /// that had arrived, which can be in the middle of a line, and the next look then begins with
+    /// the rest of that line and adds nothing to the count for it. A last line with no newline
+    /// counts as soon as its first byte arrives. The count is of line starts in each pipe's own
+    /// bytes, so the `standard error:` label and the newline that joins the two streams are not
+    /// lines of the job.
+    fn take(&mut self) -> (String, Look) {
+        let (text, counted) = self.running.take(&mut self.seen);
+        let look = Look {
+            first: self.handed + 1,
+            lines: counted.lines,
+            earlier: self.looks.clone(),
+        };
+        self.handed += counted.lines;
+        (text, look)
+    }
+
     /// Whether the person asked to stop it and it is still going, so the stop is theirs to report.
     ///
     /// Its steps having exited first means the stop reached nothing, and how it ended is said from
@@ -865,6 +912,81 @@ impl Job {
     }
 }
 
+/// Which lines of a job's whole output one look covers, and the looks before it that were kept
+/// apart as references.
+///
+/// Counts and names the driver minted, so the sentences built from it (the origin of the result and
+/// [`crate::turn`]'s note beside the reference) carry nothing the job printed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Look {
+    /// The number of the first line this look covers, counting from 1 across the job's whole output.
+    pub first: usize,
+    /// How many lines begin in this look, numbered from `first`. Carried into a sentence whose
+    /// words are the same for every value.
+    pub lines: usize,
+    /// The references of the earlier looks at the same job, oldest first.
+    pub earlier: Vec<String>,
+}
+
+impl Look {
+    /// The origin a reference to this look's output carries: what the job printed over this look's
+    /// span, and not everything it has printed, which a reference to a later look would otherwise
+    /// read as.
+    pub fn origin(&self, said: &str) -> String {
+        format!("what `{said}` printed {}", Self::SINCE)
+    }
+
+    /// Where a look's span starts, in words. The same words for every look, so no line count
+    /// chooses them.
+    pub const SINCE: &'static str =
+        "since the previous look, or since the job started when there was none";
+
+    /// The sentence beside a reference to this look: how many lines of everything `job` has
+    /// printed begin in it and the number the first of them has, and the references of the earlier
+    /// looks at the same job.
+    ///
+    /// The words are the same for every look and carry the two numbers and the references. A line
+    /// is counted by the look that holds its first byte, which the sentence says outright and
+    /// does not repeat for a look that happens to cut one. Which look holds nothing is decided
+    /// from the byte count of its reference, before this is built.
+    ///
+    /// Built from counts and from names the driver minted (`job` is the name the planner typed and
+    /// the references are slot names), so it carries nothing the job printed.
+    pub fn note(&self, job: &str) -> String {
+        let earlier = self.earlier_looks(
+            job,
+            "the lines before these are in them, and none of them is repeated here",
+        );
+        format!(
+            " It holds the part of the output of {job} that arrived {}. Lines of the job's whole \
+             output that begin in it: {}, numbered from {}. A line a look cuts is counted in the \
+             look that holds its first byte, and the next look begins with the rest of it.{earlier}",
+            Self::SINCE,
+            self.lines,
+            self.first,
+        )
+    }
+
+    /// The sentence a look with no new bytes carries in place of [`Look::note`]: it has no
+    /// reference, but what the job printed before is still in the references of the earlier looks.
+    /// Empty where there are none.
+    pub fn note_for_nothing_new(&self, job: &str) -> String {
+        self.earlier_looks(job, "everything it printed before is in them")
+    }
+
+    /// The earlier looks at `job`, by the references the driver minted, followed by what they hold.
+    /// Empty where there are none, which is every look at a job whose output was shown as text.
+    fn earlier_looks(&self, job: &str, holding: &str) -> String {
+        match self.earlier.is_empty() {
+            true => String::new(),
+            false => format!(
+                " Earlier looks at {job} are {}; {holding}.",
+                self.earlier.join(", ")
+            ),
+        }
+    }
+}
+
 /// What a running job has printed that the planner has not looked at, for the screen alone.
 pub(crate) struct Unread {
     pub name: String,
@@ -887,7 +1009,7 @@ pub struct Ended {
     pub outcome: crate::report::Outcome,
     /// What it printed that nobody has been handed yet, cut to the cap where it may be read.
     ///
-    /// `None` where it printed nothing since anybody last looked, which is the job whose exit code
+    /// `None` where no byte arrived since the previous look, which is the job whose exit code
     /// is the whole of its account: a reference to an empty slot spends a name the planner is
     /// reading the numbering of and says nothing. A count of bytes and never a look at one.
     pub printed: Option<Labelled<String>>,
@@ -896,6 +1018,9 @@ pub struct Ended {
     /// Beside the sample for the reason a run's is: the cap bounds what a conversation holds and
     /// not what the program printed, so the middle has to exist somewhere a later call can reach.
     pub whole: Option<Labelled<String>>,
+    /// Which lines of the job's whole output `printed` holds, taken through the same count a
+    /// `job_output` look is, and the references of the looks before it.
+    pub look: Look,
     /// Whether a record of remembered lines stopped the asking for this line (RUN-19), in which
     /// case the account of a quarantined output leaves out the advice about vouching (RUN-14).
     pub covered_by_record: bool,
@@ -960,6 +1085,8 @@ impl Jobs {
                 said: lines.told,
                 label,
                 seen: crate::exec::Seen::default(),
+                handed: 0,
+                looks: Vec::new(),
                 drawn: crate::exec::Seen::default(),
                 reported: false,
                 covered_by_record,
@@ -996,6 +1123,15 @@ impl Jobs {
             0,
             false,
         )
+    }
+
+    /// Remember that the look just taken at the job named became `reference`, so the next result
+    /// for that job can name it. Called by the turn after it mints the slot, for a look that
+    /// produced one: an empty look has none to name.
+    pub(crate) fn record_look(&mut self, name: &str, reference: String) {
+        if let Some(job) = self.running.get_mut(name) {
+            job.looks.push(reference);
+        }
     }
 
     /// Record what the job named was confined to, for the account of a failed finish.
@@ -1039,7 +1175,7 @@ impl Jobs {
                 continue;
             };
             job.reported = true;
-            let printed = job.running.since(&mut job.seen);
+            let (printed, look) = job.take();
             job.label = job.label_now();
             // Capped only where the planner may read it, exactly as a run's output is: what it may
             // not read is quarantined whole, and there is nothing of it in the conversation to
@@ -1060,6 +1196,7 @@ impl Jobs {
                 outcome,
                 printed: (!printed.is_empty()).then(|| Labelled::new(printed, job.label)),
                 whole,
+                look,
                 covered_by_record: job.covered_by_record,
             });
         }
@@ -1297,6 +1434,8 @@ struct Produced {
     /// Recorded on the slot by the turn loop, because only a slot minted from a command may be
     /// offered to the user for reading.
     printed_by: Option<crate::report::Command>,
+    /// As [`Output::look`].
+    look: Option<Look>,
     /// Whether the line ran unasked because a record already covers it.
     ///
     /// What it changes is the advice on a quarantined result: telling a planner that a person
@@ -1385,6 +1524,7 @@ impl Produced {
             usage: Usage::default(),
             inference_interval: None,
             printed_by: None,
+            look: None,
             covered_by_record: false,
             read_asked: false,
             picture: None,
@@ -1515,7 +1655,8 @@ impl Produced {
             "started in the background as {job}. Nothing has been read from it yet. If it ends \
              while this turn is still going you are told so, with how it ended and what it \
              printed, without having to ask; call job_output with \"{job}\" before then to see \
-             what it has printed so far, and again later for what is new. {}",
+             what it has printed. Each look returns what arrived since the previous look, and \
+             the output before it stays in the references of the earlier looks. {}",
             what_becomes_of_a_job(kept)
         ));
         self
@@ -1537,8 +1678,9 @@ impl Produced {
              as {job}. Do not run it again. Nothing has been read from it yet, including what it \
              printed before the move. If it ends while this turn is still going you are told so, \
              with how it ended and what it printed, without having to ask; call job_output with \
-             \"{job}\" before then to see what it has printed so far. It no longer has a \
-             deadline. {}",
+             \"{job}\" before then to see what it has printed. Each look returns what arrived \
+             since the previous look, and the output before it stays in the references of the \
+             earlier looks. It no longer has a deadline. {}",
             after.as_secs_f64(),
             what_becomes_of_a_job(kept)
         ));
@@ -2689,6 +2831,7 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         usage: produced.usage,
         inference_interval: produced.inference_interval,
         printed_by: produced.printed_by,
+        look: produced.look,
         covered_by_record: produced.covered_by_record,
         read_asked: produced.read_asked,
         picture: produced.picture,
@@ -10901,7 +11044,7 @@ fn job_output<S: Sink, R: Reporter>(
     let stopped_now = asked.then(|| job.stop_for_the_person());
     // Per pipe, so output arriving on one stream cannot shift where the other sits in the composed
     // text and hand back bytes this caller was already shown.
-    let fresh = job.running.since(&mut job.seen);
+    let (fresh, look) = job.take();
 
     let ran_for = job.running.ran_for();
     let line = job.line.clone();
@@ -10948,7 +11091,7 @@ fn job_output<S: Sink, R: Reporter>(
     let note = format!(
         "{}, {}",
         outcome.summary(),
-        tally(fresh.lines().count(), "new line", "new lines")
+        tally(look.lines, "new line", "new lines")
     );
 
     // Capped only where the planner may read it, exactly as a foreground run is: output it may not
@@ -10963,15 +11106,13 @@ fn job_output<S: Sink, R: Reporter>(
         None => (fresh, None),
     };
 
-    let mut produced = Produced::new(
-        Labelled::new(fresh, label),
-        format!("what `{said}` has printed"),
-        note,
-    )
-    .of_content()
-    .capped(whole.is_some());
+    let origin = look.origin(&said);
+    let mut produced = Produced::new(Labelled::new(fresh, label), origin, note)
+        .of_content()
+        .capped(whole.is_some());
     produced.whole = whole;
     produced.untrusted = !label.is_trusted();
+    produced.look = Some(look);
     // So a person can be asked to read it later, and can see which command they are reading. This is
     // also the one place the window a wait watched is said to the planner, which the note above is
     // not: that one goes to a screen.
@@ -13623,6 +13764,359 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Starts a script that prints `first`, waits for the file `gate` to exist, then prints
+    /// `second` and exits, as a job under `jobs`, and waits until `first` has arrived.
+    ///
+    /// Gated on a file and not on a sleep, so a look made on a loaded machine cannot catch the
+    /// second burst early.
+    #[cfg(unix)]
+    fn job_printing_in_two_bursts(
+        jobs: &mut Jobs,
+        root: &std::path::Path,
+        first: &str,
+        second: &str,
+    ) -> std::path::PathBuf {
+        job_running_commands(
+            jobs,
+            root,
+            &format!("printf '{first}'"),
+            &format!("printf '{second}'"),
+        )
+    }
+
+    /// As [`job_printing_in_two_bursts`], with each burst given as shell commands, so a burst may
+    /// write to standard error or print a line with no newline.
+    #[cfg(unix)]
+    fn job_running_commands(
+        jobs: &mut Jobs,
+        root: &std::path::Path,
+        first: &str,
+        second: &str,
+    ) -> std::path::PathBuf {
+        use bravebot_core::TrustStore;
+        use bravebot_core::file_authority::FileAuthority;
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::create_dir_all(root).unwrap();
+        let gate = root.join("go");
+        let script = root.join("bursts");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n{first}\nwhile [ ! -e '{}' ]; do sleep 0.05; done\n{second}\n",
+                gate.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let plan = crate::cmdline::compile("./bursts", root, None, &mut |_, _| Ok(())).unwrap();
+        let bravebot_core::command::Steps::Pipeline(steps) = &plan.steps else {
+            panic!("one pipeline");
+        };
+        let running = crate::exec::start_steps(steps, root, None, None).unwrap();
+        jobs.keep(
+            running,
+            JobLines::new(&plan.display(), &crate::cmdline::display_as_written(&plan)),
+            Label::trusted_public(),
+            FileAuthority::new(TrustStore::new(root)),
+            0,
+            false,
+        );
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !job.running.has_more(&job.seen) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the first burst never arrived"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        gate
+    }
+
+    /// Waits until the job under `jobs` has ended and its pipes are drained, so a look taken next
+    /// holds everything the job printed.
+    #[cfg(unix)]
+    fn wait_for_the_job_to_end(jobs: &mut Jobs) {
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !job.running.ended() {
+            assert!(std::time::Instant::now() < deadline, "the job never ended");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// A line cut between two looks is counted once. The first look holds `ab` and the second the
+    /// rest of that line and one more.
+    ///
+    /// Rejects counting `text.lines().count()` per look, which reads the cut line in both looks
+    /// (the second look would count 2 lines, begin at 2, and the third look would begin at 4).
+    #[cfg(unix)]
+    #[test]
+    fn a_line_cut_between_two_looks_is_counted_once() {
+        let root = std::env::temp_dir().join(format!("bravebot-cut-{}", std::process::id()));
+        let mut jobs = Jobs::new();
+        let gate = job_printing_in_two_bursts(&mut jobs, &root, "ab", "c\\nd\\n");
+
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let (text, first) = job.take();
+        assert_eq!(text, "ab");
+        assert_eq!((first.first, first.lines), (1, 1));
+
+        std::fs::write(&gate, "").unwrap();
+        wait_for_the_job_to_end(&mut jobs);
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let (text, second) = job.take();
+        assert_eq!(text, "c\nd\n");
+        // The look holds the rest of line 1 and line 2: it starts after line 1 and adds one line.
+        assert_eq!((second.first, second.lines), (2, 1), "{second:?}");
+
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let (_, third) = job.take();
+        // Rejects a count that is still shifted after the cut line: the next start is line 3.
+        assert_eq!((third.first, third.lines), (3, 0), "{third:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A look whose text has no trailing newline counts the line it ends in, and the look that
+    /// finishes the line adds nothing for it. The next line starts the count where the job's
+    /// output does.
+    ///
+    /// Rejects counting newline bytes (the unterminated `b` would count in neither look, so the
+    /// first look would be 1 line and the next start 2), and rejects counting `lines()` per look
+    /// (the second look would add a line for the rest of `b`).
+    #[cfg(unix)]
+    #[test]
+    fn a_look_with_no_trailing_newline_counts_its_last_line_and_the_next_look_does_not_again() {
+        let root = std::env::temp_dir().join(format!("bravebot-bare-{}", std::process::id()));
+        let mut jobs = Jobs::new();
+        let gate = job_printing_in_two_bursts(&mut jobs, &root, "a\\nb", "c");
+
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let (text, first) = job.take();
+        assert_eq!(text, "a\nb");
+        assert_eq!((first.first, first.lines), (1, 2));
+
+        std::fs::write(&gate, "").unwrap();
+        wait_for_the_job_to_end(&mut jobs);
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let (text, second) = job.take();
+        assert_eq!(text, "c");
+        // Only the rest of line 2: no line begins in this look, so it counts none and the next
+        // look starts at line 3.
+        assert_eq!((second.first, second.lines), (3, 0), "{second:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The sentence beside a look is the same words whatever the numbers are: 0, 1 and many lines
+    /// and a first line of 1 or later read alike, and a job's earlier looks are the only addition.
+    /// The numbers are inserted into the words and nothing in the words is chosen by them.
+    ///
+    /// Rejects an implementation that spells `line` for one and `lines` for the rest, or that
+    /// words a look differently when `lines` is 0 or `first` is 1 (the "the rest of line N" and
+    /// "since it started" variants this sentence replaced), or that leaves the earlier looks out.
+    #[test]
+    fn the_sentence_beside_a_look_is_the_same_words_for_every_count() {
+        let words = |lines: usize, first: usize| {
+            Look {
+                first,
+                lines,
+                earlier: Vec::new(),
+            }
+            .note("job:1")
+        };
+        let expected = |lines: usize, first: usize| {
+            format!(
+                " It holds the part of the output of job:1 that arrived since the previous look, \
+                 or since the job started when there was none. Lines of the job's whole output \
+                 that begin in it: {lines}, numbered from {first}. A line a look cuts is counted \
+                 in the look that holds its first byte, and the next look begins with the rest \
+                 of it."
+            )
+        };
+        for (lines, first) in [(0, 1), (1, 1), (2, 1), (0, 4), (1, 4), (7, 4)] {
+            assert_eq!(words(lines, first), expected(lines, first));
+        }
+        let with_earlier = Look {
+            first: 3,
+            lines: 0,
+            earlier: vec!["ref:1".to_string(), "ref:2".to_string()],
+        }
+        .note("job:1");
+        assert_eq!(
+            with_earlier,
+            format!(
+                "{} Earlier looks at job:1 are ref:1, ref:2; the lines before these are in them, \
+                 and none of them is repeated here.",
+                expected(0, 3)
+            )
+        );
+    }
+
+    /// Standard error between two looks does not move the next look's start: the label line and
+    /// the newline that joins the streams are not lines of the job.
+    ///
+    /// Rejects counting `text.lines()` of the composed text, which counts `standard error:` as a
+    /// line (the second look would count 3 lines and the next start would be 5).
+    #[cfg(unix)]
+    #[test]
+    fn standard_error_between_looks_does_not_shift_the_next_start() {
+        let root = std::env::temp_dir().join(format!("bravebot-err-{}", std::process::id()));
+        let mut jobs = Jobs::new();
+        let gate = job_running_commands(
+            &mut jobs,
+            &root,
+            "printf 'a\\n'",
+            "printf 'e1' >&2; printf 'c\\n'",
+        );
+
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let (text, first) = job.take();
+        assert_eq!(text, "a\n");
+        assert_eq!((first.first, first.lines), (1, 1));
+
+        std::fs::write(&gate, "").unwrap();
+        wait_for_the_job_to_end(&mut jobs);
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let (text, second) = job.take();
+        assert_eq!(text, "c\nstandard error:\ne1");
+        // One line of standard output and one of standard error: lines 2 to 3, not the four the
+        // text spells.
+        assert_eq!((second.first, second.lines), (2, 2), "{second:?}");
+
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let (_, third) = job.take();
+        assert_eq!((third.first, third.lines), (4, 0), "{third:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Each look at a job says which lines of everything the job printed it holds, and names the
+    /// looks before it that kept their lines apart. The count is the job's own, kept across looks:
+    /// a look that counted only its own lines would read as lines 1 to 3 every time.
+    #[cfg(unix)]
+    #[test]
+    fn a_look_counts_the_lines_the_job_has_handed_over_across_looks() {
+        let root = std::env::temp_dir().join(format!("bravebot-looks-{}", std::process::id()));
+        let mut jobs = Jobs::new();
+        let gate = job_printing_in_two_bursts(&mut jobs, &root, "a\\nb\\n", "c\\nd\\ne\\n");
+
+        // The screen is given the unread lines without the planner having looked, so it must not
+        // move the count. Rejects counting in `unread_output`.
+        assert_eq!(jobs.unread_output().len(), 1);
+
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let (text, first) = job.take();
+        assert_eq!(text, "a\nb\n");
+        // Rejects a count that starts at 0, or one that is not kept from the first look, or one
+        // already moved by the screen's look above.
+        assert_eq!((first.first, first.lines), (1, 2));
+        // Rejects naming a look that did not happen.
+        assert!(first.earlier.is_empty(), "{first:?}");
+
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let (text, nothing) = job.take();
+        assert_eq!(text, "");
+        // Rejects an empty look that moves the count, or one that reports line 0.
+        assert_eq!((nothing.first, nothing.lines), (3, 0));
+
+        jobs.record_look("job:1", "ref:7".to_string());
+        std::fs::write(&gate, "").unwrap();
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !job.running.has_more(&job.seen) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the second burst never arrived"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let (text, second) = job.take();
+        assert_eq!(text, "c\nd\ne\n");
+        // Rejects an empty look that advanced the count (3 would be 4), and a count that restarts
+        // at each look (1).
+        assert_eq!((second.first, second.lines), (3, 3));
+        // Rejects a look that forgets the references recorded against its job.
+        assert_eq!(second.earlier, vec!["ref:7".to_string()]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The account of a job that ended takes its output through the same count as a look does, so
+    /// the range it states follows the lines an earlier look already handed over. A route that read
+    /// the output without the count would state lines 1 to 1 for the line after two others.
+    #[cfg(unix)]
+    #[test]
+    fn the_account_of_an_ended_job_continues_the_count_of_the_looks_before_it() {
+        let root = std::env::temp_dir().join(format!("bravebot-ended-{}", std::process::id()));
+        let mut jobs = Jobs::new();
+        let gate = job_printing_in_two_bursts(&mut jobs, &root, "a\\nb\\n", "c\\n");
+
+        let job = jobs.running.get_mut("job:1").unwrap();
+        let (_, first) = job.take();
+        assert_eq!((first.first, first.lines), (1, 2));
+        jobs.record_look("job:1", "ref:4".to_string());
+
+        std::fs::write(&gate, "").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let ended = loop {
+            let mut ended = jobs.ended(OUTPUT_CAP);
+            if let Some(ended) = ended.pop() {
+                break ended;
+            }
+            assert!(std::time::Instant::now() < deadline, "the job never ended");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let printed = ended.printed.map(|printed| printed.into_trusted().ok());
+        assert_eq!(printed, Some(Some("c\n".to_string())));
+        assert_eq!((ended.look.first, ended.look.lines), (3, 1));
+        assert_eq!(ended.look.earlier, vec!["ref:4".to_string()]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The notes that start a job say a look is a slice: each returns what arrived since the
+    /// previous one, and the earlier lines stay in the references of the earlier looks. A note
+    /// that still promised "what is new" or the whole of what the job has printed leaves the
+    /// planner expecting the last reference to hold everything.
+    #[test]
+    fn the_notes_that_start_a_job_say_each_look_is_a_slice() {
+        // Built through an existing constructor, so this test adds no `Labelled::trusted` site to
+        // the count LABEL pins; both notes replace the text anyway.
+        let blank = || Produced::problem(String::new());
+        for (which, produced) in [
+            (
+                "started",
+                blank().started_in_the_background("job:3".to_string(), false),
+            ),
+            (
+                "moved",
+                blank().moved_to_the_background(
+                    "job:3".to_string(),
+                    std::time::Duration::from_secs(2),
+                    false,
+                ),
+            ),
+        ] {
+            let told = produced.text.into_trusted().expect("trusted text");
+            assert!(
+                told.contains("since the previous look") && told.contains("earlier looks"),
+                "{which}: the note does not say a look is a slice: {told}"
+            );
+            assert!(
+                !told.contains("for what is new") && !told.contains("printed so far"),
+                "{which}: the note still promises the whole of the output: {told}"
+            );
+        }
+    }
+
+    /// The reference to an earlier look is recorded only while its job is held: a name the job no
+    /// longer answers to has nothing to list it under, and recording one must not panic or make an
+    /// entry.
+    #[test]
+    fn a_look_recorded_against_a_job_that_is_not_held_is_dropped() {
+        let mut jobs = Jobs::new();
+        jobs.record_look("job:9", "ref:1".to_string());
+        assert!(jobs.is_empty());
+    }
+
     /// A stop the person asked for that no round was left to read is still theirs at the turn's
     /// end: the screen and the trail say they stopped it, and a job nobody asked about is still
     /// the one the turn ended.
@@ -14899,9 +15393,12 @@ mod tests {
         assert_eq!(
             description_of(&everything, "job_output"),
             "See what a background job has printed, and whether it has ended. Give the job name \
-             run handed back. Each call reports what is new since the last one, so calling it \
-             again after doing something else shows what happened in between rather than \
-             repeating what you have seen. Output is quarantined exactly as a run's is: it comes \
+             run handed back. Each call hands back a slice of what the job printed since your \
+             previous look, so calling it again after doing something else shows what happened \
+             in between rather than repeating what you have seen. The result gives the range of \
+             lines the slice covers, and the earlier slices are in the earlier references the \
+             result lists, so a line printed before this slice is in one of those and not in \
+             this one. Output is quarantined exactly as a run's is: it comes \
              back as text where the user vouched for every command in the line, and otherwise as \
              a reference to pass to read_output, spawn_processor or write_file. Use wait_seconds \
              to wait for the job rather than asking it again and again. Without it a wait costs \
@@ -15071,6 +15568,56 @@ mod tests {
             full.replace(sentence, "otherwise as a reference."),
             "taking all three off changed more than the sentence about them"
         );
+    }
+
+    /// A look at a job hands over a slice, and the result lists the references of the looks before
+    /// it. A description that says each call reports "what is new" leaves a planner reading the
+    /// last reference as the whole of the output, and searching it alone for a line printed in an
+    /// earlier look. The wording is the same for a list that holds none of the tools a reference
+    /// is passed to, and it names none of them.
+    #[test]
+    fn the_job_output_description_says_a_look_is_a_slice_and_earlier_slices_are_earlier_references()
+    {
+        let bare_list = ["read_output", "spawn_processor", "write_file"];
+        for (which, offered) in [
+            ("a list holding every tool", the_table_without(&[])),
+            (
+                "a list holding none of the tools a reference goes to",
+                the_table_without(&bare_list),
+            ),
+            (
+                "the table as built",
+                available(
+                    Scheduling::ArrangingALook,
+                    crate::watch::Arming::Unavailable,
+                    Deadlines::BUILT_IN,
+                    Running::Offered,
+                ),
+            ),
+        ] {
+            let said = description_of(&offered, "job_output");
+            for stated in [
+                "a slice of what the job printed since your previous look",
+                "gives the range of lines the slice covers",
+                "earlier slices are in the earlier references the result lists",
+            ] {
+                assert!(
+                    said.contains(stated),
+                    "{which}: job_output no longer says '{stated}': {said}"
+                );
+            }
+            assert!(
+                !said.contains("Each call reports what is new"),
+                "{which}: job_output still says each call reports what is new: {said}"
+            );
+        }
+        let bare = description_of(&the_table_without(&bare_list), "job_output");
+        for tool in bare_list {
+            assert!(
+                !names_the_tool(&bare, tool),
+                "a list without {tool} is sent to it: {bare}"
+            );
+        }
     }
 
     /// `run` says what to do with output that comes back as a reference, and how to see what a

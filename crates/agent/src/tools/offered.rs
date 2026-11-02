@@ -276,9 +276,12 @@ fn job_output_description(beside: &dyn Fn(&str) -> bool) -> String {
     };
     format!(
         "See what a background job has printed, and whether it has ended. Give the job name run \
-         handed back. Each call reports what is new since the last one, so calling it again \
-         after doing something else shows what happened in between rather than repeating what \
-         you have seen. Output is quarantined exactly as a run's is: it comes back as text where \
+         handed back. Each call hands back a slice of what the job printed since your previous \
+         look, so calling it again after doing something else shows what happened in between \
+         rather than repeating what you have seen. The result gives the range of lines the slice \
+         covers, and the earlier slices are in the earlier references the result lists, so a line \
+         printed before this slice is in one of those and not in this one. Output is quarantined \
+         exactly as a run's is: it comes back as text where \
          the user vouched for every command in the line, and otherwise as {reference}. Use \
          wait_seconds to wait for the job rather than asking it again and again. Without it a \
          wait costs a whole turn per look: you call, are told nothing has happened, and answer \

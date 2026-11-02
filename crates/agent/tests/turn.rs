@@ -33215,6 +33215,10 @@ fn a_look_at_a_job_that_printed_nothing_new_says_so_and_hands_back_no_reference(
         told.contains("was stopped") && told.contains("It has printed nothing new."),
         "the planner was not told how the job ended and that nothing new came of it: {told}"
     );
+    assert!(
+        !told.contains("Earlier looks"),
+        "a job that never handed anything over was given earlier looks to name: {told}"
+    );
     for advice in ["ref:", "read_output", "spawn_processor", "vet_content"] {
         assert!(
             !told.contains(advice),
@@ -57113,6 +57117,511 @@ fn one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made() 
     );
 }
 
+/// The nth `Result of job_output` message in a request body, counting from 1, up to the end of the
+/// body. The body holds every earlier result as well, so a check on the latest one cannot be
+/// answered by an earlier one.
+fn nth_job_output_result(body: &str, nth: usize) -> &str {
+    body.split("Result of job_output")
+        .nth(nth)
+        .unwrap_or_else(|| panic!("no job_output result number {nth} in: {body}"))
+}
+
+/// The first reference a result names, as `ref:N`.
+fn first_reference_in(result: &str) -> String {
+    let start = result
+        .find("[ref:")
+        .unwrap_or_else(|| panic!("the result names no reference: {result}"))
+        + 1;
+    let end = start
+        + result[start..]
+            .find(']')
+            .expect("a reference closes its bracket");
+    result[start..end].to_string()
+}
+
+/// A look at a job whose output is kept from the planner hands back only what the job printed since
+/// the previous look. The result has to say so, say which lines of everything the job printed it
+/// covers, and name the references of the earlier looks. Otherwise the line count in the last
+/// reference reads as a running total of the whole log, and the planner searches that one reference
+/// for lines that are in the earlier ones.
+///
+/// Counts and names the driver minted are the only additions: none of the sentinels the job prints
+/// reaches the planner.
+#[test]
+fn a_look_at_a_job_says_it_is_a_slice_with_its_line_range_and_names_the_earlier_looks() {
+    let scratch = Scratch::new("background-slices");
+
+    // Three bursts, each written at once so a look cannot catch half of one, with the job still
+    // running when it is looked at for the third time. Two, three and four lines.
+    let script = scratch.path.join("bursts");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n\
+         printf 'SENTINEL-ONE-A\\nSENTINEL-ONE-B\\n'\n\
+         sleep 2\n\
+         printf 'SENTINEL-TWO-A\\nSENTINEL-TWO-B\\nSENTINEL-TWO-C\\n'\n\
+         sleep 2\n\
+         printf 'SENTINEL-THREE-A\\nSENTINEL-THREE-B\\nSENTINEL-THREE-C\\nSENTINEL-THREE-D\\n'\n\
+         sleep 30\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./bursts","background":true}"#),
+        // Different waits, because three identical calls in a row are held as a repetition.
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":29}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":28}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    // Approved without vouching, so what the job prints stays untrusted and every look is a
+    // reference.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and look at it three times"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        bodies.iter().all(|body| !body.contains("SENTINEL-")),
+        "what the job printed reached the planner"
+    );
+    let last = bodies
+        .last()
+        .expect("the planner was asked nothing after the third look");
+    assert_eq!(
+        last.matches("Result of job_output").count(),
+        3,
+        "the last request does not hold the three looks: {last}"
+    );
+    let first = nth_job_output_result(last, 1);
+    let second = nth_job_output_result(last, 2);
+    let third = nth_job_output_result(last, 3);
+    let first_ref = first_reference_in(first);
+    let second_ref = first_reference_in(second);
+    assert_ne!(first_ref, second_ref);
+
+    // The third look: a slice, its range, and the two earlier references.
+    assert!(
+        third.contains("printed since the previous look"),
+        "the origin does not say the look is what the job printed since the previous one: {third}"
+    );
+    assert!(
+        !third.contains("` has printed"),
+        "the origin still reads as everything the job has printed: {third}"
+    );
+    assert!(
+        third.contains("that begin in it: 4, numbered from 6."),
+        "the result does not give the count and the first number of the lines it covers: {third}"
+    );
+    assert!(
+        third.contains(&first_ref) && third.contains(&second_ref),
+        "the result does not name the references of the two earlier looks ({first_ref}, {second_ref}): {third}"
+    );
+    let own_ref = first_reference_in(third);
+    assert!(
+        own_ref != first_ref && own_ref != second_ref,
+        "the new look reuses an earlier reference name: {third}"
+    );
+    assert!(
+        !third.contains(&format!("{own_ref},")) && !third.contains(&format!(", {own_ref}")),
+        "the look lists its own reference among the earlier ones: {third}"
+    );
+
+    // The second look lists the first and no other, and the first lists none.
+    assert!(
+        first.contains("that begin in it: 2, numbered from 1."),
+        "the first look does not give its count and first number: {first}"
+    );
+    assert!(
+        !first.contains("Earlier looks"),
+        "the first look names earlier references that do not exist: {first}"
+    );
+    assert!(
+        second.contains("that begin in it: 3, numbered from 3.")
+            && second.contains(&first_ref)
+            && !second.contains(&format!("{second_ref},")),
+        "the second look does not list exactly the first: {second}"
+    );
+}
+
+/// The first look at a job lists no earlier references and the second lists exactly the first, in
+/// the sentence's own words. A list that carried the look's own reference, or one left over from a
+/// longer run of looks, fails the exact match where a check that the first is somewhere in the text
+/// would not.
+#[test]
+fn the_earlier_looks_a_look_lists_are_exactly_the_ones_before_it() {
+    let scratch = Scratch::new("background-exact-earlier-looks");
+    let script = scratch.path.join("bursts");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n\
+         printf 'SENTINEL-ONE-A\\n'\n\
+         sleep 2\n\
+         printf 'SENTINEL-TWO-A\\n'\n\
+         sleep 2\n\
+         printf 'SENTINEL-THREE-A\\n'\n\
+         sleep 30\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./bursts","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":29}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":28}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and look at it three times"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let last = bodies.last().expect("a request after the third look");
+    let first = nth_job_output_result(last, 1);
+    let second = nth_job_output_result(last, 2);
+    let third = nth_job_output_result(last, 3);
+    let first_ref = first_reference_in(first);
+    let second_ref = first_reference_in(second);
+
+    assert!(
+        !first.contains("Earlier looks"),
+        "the first look lists earlier looks: {first}"
+    );
+    assert!(
+        second.contains(&format!("Earlier looks at job:1 are {first_ref};")),
+        "the second look does not list exactly the first ({first_ref}): {second}"
+    );
+    assert!(
+        third.contains(&format!(
+            "Earlier looks at job:1 are {first_ref}, {second_ref};"
+        )),
+        "the third look does not list exactly the first two, in order ({first_ref}, {second_ref}): {third}"
+    );
+}
+
+/// A job that ends between looks is a look too (CMDLINE-14). Its account, after an earlier
+/// `job_output` look handed over two lines, has to say it holds the third and name the reference of
+/// that look, as a `job_output` look would. Without it the account reads as everything the job
+/// printed, and the planner searches it for lines that are in the earlier reference.
+#[test]
+fn the_account_of_an_ended_job_after_an_earlier_look_names_its_range_and_that_look() {
+    let scratch = Scratch::new("background-finish-after-a-look");
+    let script = scratch.path.join("two-parts");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n\
+         printf 'SENTINEL-ONE-A\\nSENTINEL-ONE-B\\n'\n\
+         sleep 3\n\
+         printf 'SENTINEL-TWO-A\\n'\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut step = 0;
+    let mut done = false;
+    let mut looked_again = false;
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        step += 1;
+        match step {
+            1 => Some(Some(tool_request(
+                "run",
+                r#"{"command":"./two-parts","background":true}"#,
+            ))),
+            2 => Some(Some(tool_request(
+                "job_output",
+                r#"{"job":"job:1","wait_seconds":30}"#,
+            ))),
+            _ if done => None,
+            _ if body.contains(JOB_1_FINISHED) && !looked_again => {
+                looked_again = true;
+                Some(Some(tool_request("job_output", r#"{"job":"job:1"}"#)))
+            }
+            _ if looked_again || step > 150 => {
+                done = true;
+                Some(Some(reply_with("done")))
+            }
+            _ => Some(Some(tool_request(
+                "run",
+                &format!(r#"{{"command":"{SOMETHING_ELSE}"}}"#),
+            ))),
+        }
+    });
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it, look once, and wait for it to end"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        bodies.iter().all(|body| !body.contains("SENTINEL-")),
+        "what the job printed reached the planner"
+    );
+    let body = bodies
+        .iter()
+        .find(|body| body.contains(JOB_1_FINISHED))
+        .expect("the turn was never told the job ended");
+    let look = nth_job_output_result(body, 1);
+    let look_ref = first_reference_in(look);
+    let account = body
+        .split(JOB_1_FINISHED)
+        .nth(1)
+        .expect("the account follows its first words");
+    let account_ref = first_reference_in(account);
+
+    assert!(
+        account.contains("printed since the previous look"),
+        "the account does not say it is what the job printed since the previous look: {account}"
+    );
+    assert!(
+        !account.contains("since you last looked"),
+        "the account still reads as a look made by the planner: {account}"
+    );
+    assert!(
+        account.contains("that begin in it: 1, numbered from 3."),
+        "the account does not give the count and first number after the two lines the look handed over: {account}"
+    );
+    assert!(
+        account.contains(&format!("Earlier looks at job:1 are {look_ref};")),
+        "the account does not name the earlier look ({look_ref}): {account}"
+    );
+    assert_ne!(
+        account_ref, look_ref,
+        "the account reuses the reference of the earlier look: {account}"
+    );
+    // The account's own reference is one of the looks too, so a look after it lists both.
+    let last = bodies
+        .last()
+        .expect("a request after the look that followed the end");
+    let after = nth_job_output_result(last, 2);
+    assert!(
+        after.contains(&format!(
+            "Earlier looks at job:1 are {look_ref}, {account_ref};"
+        )),
+        "a look after the account does not list the account's reference ({account_ref}) after the first ({look_ref}): {after}"
+    );
+}
+
+/// Where the output is shown to the planner as text there is no reference to name, so a look lists
+/// no earlier references and states no range. Naming a reference that was never minted would send
+/// the planner to read_output with a name that does not exist.
+#[test]
+fn looks_at_a_job_shown_as_text_list_no_earlier_references() {
+    let scratch = Scratch::new("background-text-looks");
+    let script = scratch.path.join("bursts");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\n\
+         printf 'SENTINEL-ONE-A\\n'\n\
+         sleep 2\n\
+         printf 'SENTINEL-TWO-A\\n'\n\
+         sleep 30\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./bursts","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":29}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    // Vouched for, so what the job prints is readable and each look is text.
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and look at it twice"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let last = bodies.last().expect("a request after the second look");
+    let first = nth_job_output_result(last, 1);
+    let second = nth_job_output_result(last, 2);
+    assert!(
+        first.contains("SENTINEL-ONE-A"),
+        "the first look was not shown as text: {first}"
+    );
+    assert!(
+        second.contains("SENTINEL-TWO-A"),
+        "the second look was not shown as text: {second}"
+    );
+    // The second result runs to the end of the request, so it is cut at the end of its message.
+    let second = second.split('"').next().unwrap_or(second);
+    let first = first.split("Result of job_output").next().unwrap_or(first);
+    for told in [first, second] {
+        for sentence in ["Earlier looks", "that begin in it", "ref:"] {
+            assert!(
+                !told.contains(sentence),
+                "a look shown as text carries {sentence:?}, which names nothing that exists: {told}"
+            );
+        }
+    }
+}
+
+/// RUN-24 after earlier looks: the model looking again after the end is the case the issue
+/// describes, and the empty look then lists the references it can still read. It hands back no new
+/// reference and none of the advice about reading one.
+#[test]
+fn an_empty_look_after_earlier_looks_lists_them_and_hands_back_no_reference() {
+    let scratch = Scratch::new("job-empty-look-after-looks");
+    let script = scratch.path.join("quiet");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf 'SENTINEL-ONE-A\\nSENTINEL-ONE-B\\n'\nsleep 30\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./quiet","background":true}"#),
+        tool_request("job_output", r#"{"job":"job:1","wait_seconds":30}"#),
+        tool_request("job_output", r#"{"job":"job:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("start it and look twice"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert!(
+        bodies.iter().all(|body| !body.contains("SENTINEL-")),
+        "what the job printed reached the planner"
+    );
+    let last = bodies.last().expect("a request after the second look");
+    let first_ref = first_reference_in(nth_job_output_result(last, 1));
+    let empty = nth_job_output_result(last, 2);
+    let empty = empty.split('"').next().unwrap_or(empty);
+
+    assert!(
+        empty.contains("It has printed nothing new."),
+        "the empty look does not say nothing new arrived: {empty}"
+    );
+    assert!(
+        empty.contains(&format!("Earlier looks at job:1 are {first_ref};")),
+        "the empty look does not list the earlier look ({first_ref}): {empty}"
+    );
+    assert!(
+        !empty.contains("[ref:") && empty.matches("ref:").count() == 1,
+        "the empty look hands back a reference of its own: {empty}"
+    );
+    for advice in [
+        "read_output",
+        "spawn_processor",
+        "vet_content",
+        "quarantined",
+    ] {
+        assert!(
+            !empty.contains(advice),
+            "the planner was handed {advice} for output that is not there: {empty}"
+        );
+    }
+}
+
 /// The one sentence the planner gets about a job it waited for has to be about what the job did. A
 /// planner told a build exited 0 reports a red build as green, and where the output is quarantined
 /// there is nothing else for it to go on.
@@ -58386,6 +58895,17 @@ fn a_job_a_session_keeps_is_running_in_the_next_turn_and_ends_with_the_session()
         ),
         "the second turn's first request does not name the job: {last}"
     );
+    let reminder = &last[last
+        .find("Background jobs from earlier in this session")
+        .expect("the reminder is in the request")..];
+    assert!(
+        reminder.contains("since the previous look") && reminder.contains("earlier looks"),
+        "the reminder does not say a look is a slice with earlier output in earlier looks: {reminder}"
+    );
+    assert!(
+        !reminder.contains("since you last looked"),
+        "the reminder still reads as one account of everything since the planner last looked: {reminder}"
+    );
     assert!(
         !bodies[..bodies.len() - 1]
             .iter()
@@ -58863,7 +59383,9 @@ fn a_silent_background_jobs_exit_code_reaches_the_turn_by_itself() {
         "the code a silent job exited with never reached the planner: {told}"
     );
     assert!(
-        told.contains("It printed nothing since you last looked"),
+        told.contains(
+            "It printed nothing since the previous look, or since the job started when there was none."
+        ),
         "a job that printed nothing was not said to have printed nothing: {told}"
     );
 }

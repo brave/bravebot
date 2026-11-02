@@ -803,8 +803,12 @@ The output of a background run obeys every other clause here. Backgrounding chan
 is told, never what it is allowed to read.
 
 **How the turn is told.** The turn asks its jobs between rounds whether any has ended, and puts the
-handle, the exit status and what it printed since anybody last looked into the conversation as a
-message of its own. Asking is polling and costs nothing: a job still running answers immediately,
+handle, the exit status and what it printed since the previous look (since the job started, where nobody
+looked before) into the conversation as a message of its own. Where the output is quarantined, the
+account states how many lines of the job's whole output begin in its reference and the number the
+first of them has, in the words every look uses, and lists the
+references of the earlier looks at the job, as a `job_output` look does ([RUN-17](run.md#RUN-17)),
+and a later look at the job lists the account's reference too. Asking is polling and costs nothing: a job still running answers immediately,
 and nothing waits here, because a background job is for the program meant to keep going and a turn
 that waited would wait out a server. The account is given once, by whichever of the two routes got
 there first: a `job_output` call that already said the job had ended is the account, and the look
@@ -818,6 +822,8 @@ call, visible in the prompt, and impossible to hide inside an argument.
 `verified-by: bravebot_agent::turn::a_silent_background_jobs_exit_code_reaches_the_turn_by_itself`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_quarantined_where_nobody_vouched_for_the_line`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept`
+`verified-by: bravebot_agent::turn::the_account_of_an_ended_job_after_an_earlier_look_names_its_range_and_that_look`
+`verified-by: bravebot_agent::tools::the_account_of_an_ended_job_continues_the_count_of_the_looks_before_it`
 
 <a id="CMDLINE-15"></a>
 ### CMDLINE-15: a program that wants a terminal is refused before it starts
