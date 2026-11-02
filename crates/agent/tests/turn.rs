@@ -69343,6 +69343,22 @@ fn a_run_turn_scanning_in(
     command: &str,
     programs: bravebot_core::programs::TrustedPrograms,
 ) -> (Scratch, bravebot_agent::report::RecordingReporter, String) {
+    let (home, reporter, answered, _work) =
+        a_run_turn_scanning_with_work(workspace, command, programs);
+    (home, reporter, answered)
+}
+
+/// The same, with the work record the turn ends with.
+fn a_run_turn_scanning_with_work(
+    workspace: &Workspace,
+    command: &str,
+    programs: bravebot_core::programs::TrustedPrograms,
+) -> (
+    Scratch,
+    bravebot_agent::report::RecordingReporter,
+    String,
+    bravebot_agent::Work,
+) {
     // Named after the tree it holds the record for, so two tests running at once do not write
     // into one file and read each other's findings back.
     let home = Scratch::new(&format!(
@@ -69359,7 +69375,7 @@ fn a_run_turn_scanning_in(
     ]);
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
     let mut sink = RecordingSink::new();
-    turn::resume(
+    let completed = turn::resume(
         &config_for(&endpoint),
         &bravebot_net::Egress::new(),
         workspace,
@@ -69372,12 +69388,11 @@ fn a_run_turn_scanning_in(
         programs,
         None,
         &bravebot_core::cancel::Cancel::new(),
-    )
-    .outcome
-    .expect("turn runs");
+    );
+    completed.outcome.expect("turn runs");
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
-    (home, reporter, tool_results(&second))
+    (home, reporter, tool_results(&second), completed.work)
 }
 
 /// A vouched entry for the one program a line runs, so what the line prints is content the
@@ -69454,6 +69469,60 @@ fn a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there() {
         !told.contains(DECLARED_KEY),
         "the value itself was put on the screen: {told}"
     );
+}
+
+/// GROUND-1. A line whose redirection a scan refused and the driver took back counts as a write
+/// only where the put-back left the tree different from how the line found it. A destination the
+/// line created is removed again, so the tree is as it was and nothing was written. One that
+/// existed is written back with its old bytes, which leaves the old length and a new modification
+/// time, so the mark reads a change.
+///
+/// Rejects an arm that returns the refusal without the flag, and a comment that says an undone
+/// write is never counted.
+#[test]
+fn a_refused_line_is_a_write_only_where_the_put_back_left_a_file_different() {
+    let work_of = |name: &str, existing: Option<&str>| {
+        let scratch = Scratch::new(name);
+        let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+        std::fs::write(scratch.path.join(".env"), &env).unwrap();
+        if let Some(old) = existing {
+            let path = scratch.path.join(".env.bak");
+            std::fs::write(&path, old).unwrap();
+            // An hour ago, so the put-back's own write cannot land on the same tick.
+            let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(past)
+                .unwrap();
+        }
+        let programs = vouching_for("cat", &[".env"], &scratch.path);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (_home, _reporter, answered, work) =
+            a_run_turn_scanning_with_work(&workspace, "cat .env > .env.bak", programs);
+        assert!(
+            answered.contains("refused"),
+            "the line was not refused, so nothing here was tested: {answered}"
+        );
+        (work, scratch)
+    };
+
+    let (created, scratch) = work_of("refused-new-file-work", None);
+    assert!(!scratch.path.join(".env.bak").exists());
+    assert_eq!(created.writes, 0, "a destination removed again is no write");
+    assert_eq!(created.commands, 1);
+
+    let (rewritten, scratch) = work_of("refused-existing-file-work", Some("old"));
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env.bak")).unwrap(),
+        "old"
+    );
+    assert_eq!(
+        rewritten.writes, 1,
+        "a destination written back with its old bytes has a new modification time"
+    );
+    assert_eq!(rewritten.commands, 1);
 }
 
 /// Putting a destination back is confined the way a write is. The line runs between the moment

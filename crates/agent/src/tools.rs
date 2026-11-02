@@ -9998,8 +9998,9 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             stuck.push(destination.shown.clone());
         }
     }
-    // After a destination a scan refused has been put back, so a write that was undone is not
-    // counted. Whether the line ended well does not enter into it: a line that failed halfway has
+    // After a destination a scan refused has been put back. One the line created is removed again,
+    // so that write is not counted; one that existed is written back with its old bytes and a new
+    // modification time, so the mark reads it as changed and it is counted. Whether the line ended well does not enter into it: a line that failed halfway has
     // still left what it got to.
     let changed_a_file = tree_before.differs_from(&crate::workspace::TreeMark::take(
         tools.workspace.root(),
