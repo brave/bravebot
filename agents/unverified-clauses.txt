@@ -23,8 +23,6 @@ docs/specs/bots.md:BOT-13: a bot's memory is the definition's, and the terminal 
 docs/specs/bots.md:BOT-14: `/undo` in a bot's session is the terminal's `/undo`
 docs/specs/bots.md:BOT-15: the carry-over turn and the consolidation turn are one text in Rust
 docs/specs/bots.md:BOT-16: the terminal sends the consolidation turn after each compaction and after the migrating turn
-docs/specs/bots.md:BOT-17: the terminal has a second layout for bots, chosen by name
-docs/specs/bots.md:BOT-18: the terminal draws a bot's face beside its name and leaves its avatar as it is
 docs/specs/commits.md:COMMIT-1: `commit` is a setting with two values, `off` and `turn`, and only the person's own files set it
 docs/specs/commits.md:COMMIT-2: a turn that ends with a reply makes one commit, in a fixed order, and a turn that does not end with one makes none
 docs/specs/commits.md:COMMIT-3: the paths committed are the turn's own that three conditions leave in, and nothing else

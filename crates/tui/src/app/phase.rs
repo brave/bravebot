@@ -1,5 +1,15 @@
-use super::{Ended, Start, Switch};
+use super::bots_screen;
+use super::{Ended, LayoutChange, Start, Switch};
+use crate::layout::Layout;
+use bravebot_session::sessions::Resumable;
 use std::io;
+
+pub(super) enum Screen {
+    Bots {
+        left: Option<Resumable>,
+        carrying: Option<Box<Carrying>>,
+    },
+}
 
 pub(super) struct Carrying {
     pub workspace: bravebot_agent::Workspace,
@@ -7,6 +17,7 @@ pub(super) struct Carrying {
 }
 
 pub(super) enum Phase {
+    NoSession(Screen),
     Session {
         start: Start,
         carrying: Option<Box<Carrying>>,
@@ -18,7 +29,14 @@ impl Phase {
     /// `--resume` and `--from-pr` begin a session. The Sessions screen opens over it, so they are
     /// not a phase with no session. A manifest record begins none.
     pub(super) fn starting_with(start: Start) -> Self {
-        Self::beginning_unless_a_manifest_run(start)
+        match start {
+            Start::Layout(Layout::Bots) => Self::NoSession(Screen::Bots {
+                left: None,
+                carrying: None,
+            }),
+            Start::Layout(Layout::Default) => Self::beginning_unless_a_manifest_run(Start::Fresh),
+            chosen => Self::beginning_unless_a_manifest_run(chosen),
+        }
     }
 
     pub(super) fn after_a_session(ended: io::Result<Ended>, switch: Option<Switch>) -> Self {
@@ -29,6 +47,41 @@ impl Phase {
                     workspace: next.workspace,
                     sandbox: next.sandbox,
                 })),
+            },
+            (ended, _) => Self::Over(ended),
+        }
+    }
+
+    pub(super) fn after_the_bots_screen(exit: bots_screen::Exit, left: Option<Resumable>) -> Self {
+        match exit {
+            bots_screen::Exit::Quit => Self::Over(Ok(Ended::Left(left))),
+            bots_screen::Exit::Layout(Layout::Default) => Self::Session {
+                start: Start::Fresh,
+                carrying: None,
+            },
+            bots_screen::Exit::Layout(Layout::Bots) => Self::NoSession(Screen::Bots {
+                left,
+                carrying: None,
+            }),
+            bots_screen::Exit::Failed(failure) => Self::Over(Err(failure)),
+        }
+    }
+
+    pub(super) fn after_a_session_chose_a_layout(
+        ended: io::Result<Ended>,
+        change: LayoutChange,
+    ) -> Self {
+        let carrying = Some(Box::new(Carrying {
+            workspace: change.workspace,
+            sandbox: change.sandbox,
+        }));
+        match (ended, change.layout) {
+            (Ok(Ended::Left(left)), Layout::Bots) => {
+                Self::NoSession(Screen::Bots { left, carrying })
+            }
+            (Ok(Ended::Left(_)), Layout::Default) => Self::Session {
+                start: Start::Fresh,
+                carrying,
             },
             (ended, _) => Self::Over(ended),
         }

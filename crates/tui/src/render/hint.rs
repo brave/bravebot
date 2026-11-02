@@ -344,8 +344,11 @@ fn ordinary_parts(
     } else {
         context_reading(session)
     };
-    let info = if !session.panel_open() && crate::panel::fits(area.width) {
-        t!(panel_hint, chord = session.bindings().panel_name())
+    let info = if session.interface_layout().draws_the_info_panel()
+        && !session.panel_open()
+        && crate::panel::fits(area.width)
+    {
+        t!(panel_hint, chord = session.bindings().panel_name()).to_string()
     } else {
         String::new()
     };
@@ -636,6 +639,36 @@ pub(super) fn draw_hint(
     (hints, false)
 }
 
+pub(super) fn draw_line_beside_the_note(
+    frame: &mut Frame,
+    area: Rect,
+    session: &Session,
+    line: &str,
+) {
+    let note = note_at_the_right(session)
+        .filter(|note| note.target.is_none() || note.text.width() <= usize::from(area.width));
+    let reserved = note.as_ref().map_or(0, |note| {
+        u16::try_from(note.text.width()).unwrap_or(u16::MAX)
+    });
+    let room = area.width.saturating_sub(reserved);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            crate::status::cut(line, usize::from(room)),
+            dim(),
+        )),
+        area,
+    );
+    if let Some(note) = note {
+        let mut hints = Vec::new();
+        draw_note(frame, area, note, &mut hints);
+    }
+}
+
+/// The words drawn at the right of the hint row, for a caller that compares one frame with the next.
+pub(crate) fn noted_at_the_right(session: &Session) -> Option<String> {
+    note_at_the_right(session).map(|note| note.text)
+}
+
 /// Draw the note flush right on the row of hints, and record the cells of the hint it names where it
 /// names one.
 fn draw_note(frame: &mut Frame, area: Rect, note: Note, hints: &mut Vec<Target>) {
@@ -745,6 +778,7 @@ fn copied_notice(characters: usize, from: Option<crate::select::Pane>) -> String
         Some(Pane::Status) => t!(copied_from_status, count = characters),
         Some(Pane::Offered) => t!(copied_from_offered, count = characters),
         Some(Pane::Hint) => t!(copied_from_footer, count = characters),
+        Some(Pane::Bots) => t!(copied_from_bots, count = characters),
         Some(Pane::Transcript | Pane::Screen) | None => t!(copied_to_clipboard, count = characters),
     }
 }

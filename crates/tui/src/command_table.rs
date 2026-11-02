@@ -222,6 +222,8 @@ pub(crate) const DIFF_COMMAND: &str = "/diff";
 /// Carried out by the driver from the plan the session holds and starts no turn (CMD-28).
 pub(crate) const TODOS_COMMAND: &str = "/todos";
 
+pub(crate) const LAYOUT_COMMAND: &str = "/layout";
+
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
 
@@ -372,6 +374,14 @@ impl Command {
             EFFORT_COMMAND => format!("[{}]", effort_words().join(" | ")),
             SANDBOX_COMMAND => format!("[{}]", sandbox_words().join(" | ")),
             LIMIT_COMMAND => format!("[<n>[k|m] | <n> credits | {LIMIT_OFF}]"),
+            LAYOUT_COMMAND => format!(
+                "[{}]",
+                crate::layout::Layout::ALL
+                    .iter()
+                    .map(|layout| layout.name())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ),
             REVIEW_COMMAND => {
                 use crate::review_command::{COMMIT, PULL_REQUEST, SINCE, STAGED};
                 format!("[{STAGED} | {SINCE} <ref> | {COMMIT} <ref> | {PULL_REQUEST} <n>] [focus]")
@@ -702,6 +712,12 @@ pub fn commands() -> Vec<Command> {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: LAYOUT_COMMAND,
+            argument: "<name>",
+            description: t!(command_layout),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: CAFFEINATE_COMMAND,
             argument: "",
             description: t!(command_caffeinate),
@@ -894,6 +910,13 @@ pub fn completions(line: &str) -> Vec<Command> {
     // Stable, so the others keep the table's order.
     offered.sort_by_key(|command| command.name != trimmed);
     offered
+}
+
+pub(crate) fn completions_without_a_session(line: &str) -> Vec<Command> {
+    completions(line)
+        .into_iter()
+        .filter(|command| matches!(command.name, LAYOUT_COMMAND | EXIT_COMMAND))
+        .collect()
 }
 
 /// The line `/effort `, `/sandbox ` or `/mode ` plus the start of one of its words becomes, or

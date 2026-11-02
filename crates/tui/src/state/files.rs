@@ -37,6 +37,10 @@ impl Session {
     /// With nothing written, or on a terminal too narrow, a note says so and nothing changes. Neither
     /// opening nor ending it touches the choice the panel key keeps (FILES-3).
     pub fn toggle_files(&mut self) {
+        if !self.interface_layout.draws_the_info_panel() {
+            self.note(t!(layout_draws_no_info_panel));
+            return;
+        }
         if self.files.take().is_some() {
             return;
         }
