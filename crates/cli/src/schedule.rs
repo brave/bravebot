@@ -849,7 +849,7 @@ fn clear(id: &str) -> ExitCode {
 /// The stored entry the running process was fired for, when the variable `run-now` sets names one.
 /// A value that names no stored entry changes nothing.
 pub(crate) fn firing() -> Option<String> {
-    firing::named_by(FIRING_VARIABLE, |value| {
+    firing::named_by(std::env::var(FIRING_VARIABLE).ok(), |value| {
         is_an_id(value)
             && store_to_read()
                 .and_then(|store| entry_named(&store, value))

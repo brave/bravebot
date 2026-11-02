@@ -338,7 +338,7 @@ impl Store {
 /// The trigger the running process was fired for, when the variable `serve` sets names a stored
 /// one. A value that names no stored trigger changes nothing.
 pub(crate) fn firing() -> Option<String> {
-    firing::named_by(FIRING_VARIABLE, |value| {
+    firing::named_by(std::env::var(FIRING_VARIABLE).ok(), |value| {
         home::writable().is_some_and(|state| is_stored(&state, value))
     })
 }

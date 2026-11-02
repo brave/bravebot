@@ -113,11 +113,14 @@ impl Store {
     }
 }
 
-/// The entry a run says it belongs to: the value of `variable` when `is_stored` says it names a
-/// stored entry, and `None` otherwise. The variable is set by `run-now`, and the value is checked
-/// against the store, so one that names nothing changes nothing.
-pub(crate) fn named_by(variable: &str, is_stored: impl FnOnce(&str) -> bool) -> Option<String> {
-    let value = std::env::var(variable).ok()?;
+/// The entry a run says it belongs to: `value` (the variable `run-now` sets, read by the caller)
+/// when `is_stored` says it names a stored entry, and `None` otherwise, so one that names nothing
+/// changes nothing.
+pub(crate) fn named_by(
+    value: Option<String>,
+    is_stored: impl FnOnce(&str) -> bool,
+) -> Option<String> {
+    let value = value?;
     is_stored(&value).then_some(value)
 }
 
@@ -263,12 +266,17 @@ mod tests {
 
     #[test]
     fn an_entry_named_in_the_variable_must_be_stored() {
-        // SAFETY-free: the variable name is unique to this test, so no other test reads it.
-        let name = "BRAVEBOT_TEST_FIRING_VARIABLE_ONLY_HERE";
+        let stored = |value: &str| value == "3";
         assert_eq!(
-            named_by(name, |_| true),
+            named_by(None, |_| true),
             None,
             "an unset variable names nothing"
         );
+        assert_eq!(
+            named_by(Some("9".into()), stored),
+            None,
+            "a value that names no stored entry changes nothing"
+        );
+        assert_eq!(named_by(Some("3".into()), stored), Some("3".into()));
     }
 }
