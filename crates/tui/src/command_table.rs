@@ -86,6 +86,10 @@ pub(crate) const MCP_RECONNECT: &str = "reconnect";
 /// The word after `/mcp` that turns the server named after it off for the session.
 pub(crate) const MCP_DISABLE: &str = "disable";
 
+/// The word after `/mcp` that removes the server named after it: its declaration, its approval and
+/// every request for it, so that no session starts it.
+pub(crate) const MCP_REMOVE: &str = "remove";
+
 /// The line that reports the sandbox mode, or sets it (SANDBOX-22).
 ///
 /// Typed while a turn runs, every word is carried out as typed, and the turn follows the mode from
@@ -766,7 +770,7 @@ pub fn commands() -> Vec<Command> {
         },
         Command {
             name: MCP_COMMAND,
-            argument: "[reconnect | disable] [alias]",
+            argument: "[reconnect | disable | remove]",
             description: t!(command_mcp),
             mid_turn: MidTurn::Waits,
         },

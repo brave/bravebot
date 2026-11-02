@@ -458,7 +458,16 @@ they were started, and is left out where none did. Control characters in an alia
 visible characters, and an alias longer than a row is cut from the left, since the end of an alias
 is what tells two apart.
 
+A server whose tool list the person answered no to ([SERVERS-8](mcp-servers.md#SERVERS-8)) is not
+listed, because the model is offered nothing from it for the rest of the session, and the section
+goes with the last of them. A server whose list nobody has been asked about yet is listed, since the
+list is put to the person before the next turn plans. `/status` and `/mcp` still name a server that
+was declined, with how its tools stand ([SERVERS-14](mcp-servers.md#SERVERS-14),
+[SERVERS-19](mcp-servers.md#SERVERS-19)).
+
 `verified-by: bravebot_tui::panel::an_mcp_alias_is_drawn_pictured_and_cut_from_the_left`
+`verified-by: bravebot_tui::panel::a_server_whose_tools_were_declined_is_not_listed_and_the_section_goes_with_the_last`
+`verified-by: bravebot_tui::state::only_the_servers_whose_tools_were_declined_are_left_out_of_the_offered_ones`
 `verified-by: bravebot_tui::panel::the_sections_come_in_order_and_an_empty_one_leaves_no_heading`
 
 <a id="PANEL-15"></a>

@@ -1310,6 +1310,39 @@ pub struct Servers {
     pub disabled: Vec<String>,
 }
 
+impl Servers {
+    /// The aliases of the started servers whose tools the person has not declined, in the order they
+    /// started (PANEL-14).
+    ///
+    /// A server whose list was put to the person and refused is running and offers the model
+    /// nothing for the rest of the session, so the info panel leaves it out. One nobody has been
+    /// asked about yet is in, since its list is put to the person before the next turn plans.
+    pub fn offered(&self) -> Vec<String> {
+        let offering = self
+            .session
+            .as_ref()
+            .map(bravebot_agent::mcp::Session::offering)
+            .unwrap_or_default();
+        leaving_out_the_declined(&self.started, &offering)
+    }
+}
+
+/// `started`, without the aliases `offering` says the person declined the tools of.
+fn leaving_out_the_declined(
+    started: &[String],
+    offering: &[(String, bravebot_agent::mcp::Offering)],
+) -> Vec<String> {
+    started
+        .iter()
+        .filter(|alias| {
+            !offering.iter().any(|(held, how)| {
+                held == *alias && *how == bravebot_agent::mcp::Offering::Declined
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 impl Session {
     pub fn new(confinement: impl Into<String>) -> Self {
         let sandbox = crate::sandbox_command::Sandboxed::at_start();
@@ -12828,6 +12861,32 @@ mod tests {
             s.queued.len(),
             2,
             "a line was lost behind the one the turn took"
+        );
+    }
+
+    /// PANEL-14. Only the servers whose tools were declined are left out, whichever order they
+    /// started in, and one nobody has been asked about yet stays. Rejects dropping a server because
+    /// it is not offering tools yet, and dropping the wrong one of two.
+    #[test]
+    fn only_the_servers_whose_tools_were_declined_are_left_out_of_the_offered_ones() {
+        use bravebot_agent::mcp::Offering;
+        let started: Vec<String> = ["docs", "maps", "weather", "coins"]
+            .map(String::from)
+            .to_vec();
+        let offering = [
+            ("docs".to_string(), Offering::Unasked),
+            ("maps".to_string(), Offering::Declined),
+            ("weather".to_string(), Offering::Tools(3)),
+            ("coins".to_string(), Offering::Declined),
+        ];
+        assert_eq!(
+            leaving_out_the_declined(&started, &offering),
+            ["docs", "weather"]
+        );
+        assert_eq!(
+            leaving_out_the_declined(&started, &[]),
+            started,
+            "with nothing known every started server is listed"
         );
     }
 

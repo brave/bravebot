@@ -354,7 +354,8 @@ and a click over the scroller or a history search asks for nothing. The heading 
 the servers are not targets, nor is a row cut for want of room, and a language server's row is a
 target of its own ([MOUSE-22](#MOUSE-22)). The command stays the way to do it without a mouse, and
 the listing is the session's own, with nothing a tool returned in it
-([PANEL-11](info-panel.md#PANEL-11)).
+([PANEL-11](info-panel.md#PANEL-11)). It ends with the line that names `/mcp remove`
+([SERVERS-19](mcp-servers.md#SERVERS-19)), which is how a click on a server leads to removing it.
 
 `verified-by: bravebot_tui::app::a_click_on_the_panels_mcp_server_row_lists_the_servers`
 `verified-by: bravebot_tui::app::a_drag_over_an_mcp_server_row_or_a_click_in_the_scroller_lists_nothing`
