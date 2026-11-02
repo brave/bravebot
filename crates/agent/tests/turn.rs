@@ -43279,6 +43279,12 @@ fn a_delegate_uses_the_model_its_definition_selected() {
                     "spawn_agent",
                     r#"{"kind":"plain-reader","task":"CHECK-WITH-PLAIN-MODEL"}"#,
                 ),
+                // The planner is asked again at each wake, and the four delegates end in one
+                // wake or in up to four, depending on when each finishes. A reply for every
+                // possible ask keeps the count of wakes out of what the test depends on.
+                reply_with("nothing to add while it works"),
+                reply_with("nothing to add while it works"),
+                reply_with("nothing to add while it works"),
                 reply_with("nothing to add while it works"),
                 reply_with("delegate finished"),
             ],
@@ -43400,6 +43406,10 @@ fn a_delegate_asks_for_the_effort_its_definition_named() {
                     "spawn_agent",
                     r#"{"kind":"plain-reader","task":"CHECK-WITH-TURN-EFFORT"}"#,
                 ),
+                // The planner is asked again at each wake, and the two delegates end in one
+                // wake or in two. A reply for every possible ask keeps the count of wakes out
+                // of what the test depends on.
+                reply_with("nothing to add while it works"),
                 reply_with("nothing to add while it works"),
                 reply_with("delegates finished"),
             ],
@@ -43502,6 +43512,11 @@ fn a_delegate_answered_by_a_model_other_than_its_definitions_says_so() {
                     "spawn_agent",
                     r#"{"kind":"auto-reader","task":"CHECK-ON-AUTO"}"#,
                 ),
+                // The planner is asked again at each wake, and the three delegates end in one
+                // wake or in up to three. A reply for every possible ask keeps the count of
+                // wakes out of what the test depends on.
+                reply_with("waiting"),
+                reply_with("waiting"),
                 reply_with("waiting"),
                 reply_with("delegates finished"),
             ],
@@ -43592,6 +43607,10 @@ fn a_delegate_on_an_alias_the_reply_resolves_reports_no_substitution() {
                     "spawn_agent",
                     r#"{"kind":"gateway-reader","task":"CHECK-ON-GATEWAY"}"#,
                 ),
+                // The planner is asked again at each wake, and the two delegates end in one
+                // wake or in two. A reply for every possible ask keeps the count of wakes out
+                // of what the test depends on.
+                reply_with("waiting"),
                 reply_with("waiting"),
                 reply_with("delegates finished"),
             ],
@@ -45518,6 +45537,10 @@ fn two_delegates_work_at_the_same_time() {
                 vec![
                     tool_request("spawn_agent", r#"{"kind":"reader","task":"THE-SLOW-ONE"}"#),
                     tool_request("spawn_agent", r#"{"kind":"reader","task":"THE-OTHER-ONE"}"#),
+                    // The planner is asked again at each wake, and the two delegates end in one
+                    // wake or in two. A reply for every possible ask keeps the count of wakes out
+                    // of what the test depends on.
+                    reply_with("waiting for both of them"),
                     reply_with("waiting for both of them"),
                     reply_with("both answered"),
                 ],
@@ -50490,6 +50513,10 @@ fn the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_
                 "SPAWN-AND-WAIT",
                 vec![
                     tool_request("spawn_agent", spawn),
+                    // The planner is asked again at each wake, and the delegates of a fan-out
+                    // end in one wake or in one each. A reply for every possible ask keeps the
+                    // count of wakes out of what the test depends on.
+                    reply_with("waiting"),
                     reply_with("waiting"),
                     reply_with("done"),
                 ],
@@ -51005,6 +51032,10 @@ fn the_session_lists_the_checkout_a_delegate_kept_and_the_rule_copied_for_it() {
                     "spawn_agent",
                     r#"{"kind":"worker","task":"SHARED","each":["ONLY-LOOK","WRITE-AND-KEEP"],"isolation":"checkout"}"#,
                 ),
+                // The planner is asked again at each wake, and the two delegates end in one
+                // wake or in two. A reply for every possible ask keeps the count of wakes out
+                // of what the test depends on.
+                reply_with("waiting"),
                 reply_with("waiting"),
                 reply_with("done"),
             ],
@@ -51758,7 +51789,11 @@ fn a_delegate_in_a_checkout_starts_its_own_delegates_in_that_checkout() {
             vec![
                 tool_request("spawn_agent", r#"{"kind":"reader","task":"INNER-READS"}"#),
                 tool_request("spawn_agent", r#"{"kind":"worker","task":"INNER-WRITES"}"#),
+                // The planner is asked again at each wake, and the two inner delegates end in
+                // one wake or in two. A reply for every possible ask keeps the count of wakes
+                // out of what the test depends on.
                 reply_with("started both"),
+                reply_with("waiting"),
                 reply_with("finished"),
             ],
         ),
@@ -64773,7 +64808,11 @@ fn a_delegate_started_inside_a_checkout_does_not_fire_the_hook_again() {
             vec![
                 tool_request("spawn_agent", r#"{"kind":"reader","task":"INNER-READS"}"#),
                 tool_request("spawn_agent", r#"{"kind":"worker","task":"INNER-WRITES"}"#),
+                // The planner is asked again at each wake, and the two inner delegates end in
+                // one wake or in two. A reply for every possible ask keeps the count of wakes
+                // out of what the test depends on.
                 reply_with("started both"),
+                reply_with("waiting"),
                 reply_with("finished"),
             ],
         ),
@@ -82939,6 +82978,10 @@ fn a_delegate_whose_spawns_names_resolve_to_nothing_is_not_offered_spawn_agent()
                     "spawn_agent",
                     r#"{"kind":"coordinator-mixed","task":"MIXED-TASK"}"#,
                 ),
+                // The planner is asked again at each wake, and the two delegates end in one
+                // wake or in two. A reply for every possible ask keeps the count of wakes out
+                // of what the test depends on.
+                reply_with("waiting"),
                 reply_with("waiting"),
                 reply_with("delegates finished"),
             ],
