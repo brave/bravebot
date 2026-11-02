@@ -44,7 +44,7 @@ pub(crate) use self::transcript::{
     plan_item_row, reply_as_text, rows_of, top_of_view,
 };
 
-use self::beneath::{first_waiting_row, lines_beneath_the_box, offered_picks};
+use self::beneath::{first_waiting_row, fit_to_room, lines_beneath_the_box, offered_picks};
 use self::hint::draw_hint;
 use self::prompt::{draw_input, draw_status, input_height, status_height};
 use self::scroller::draw_scroller;
@@ -998,6 +998,8 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         .saturating_sub(input_height + 1)
         .saturating_sub(1);
     let beneath = lines_beneath_the_box(session, width, &offered);
+    let (beneath, offered_first) =
+        fit_to_room(session, width, &offered, beneath, usize::from(room));
     let offered_height = (beneath.len() as u16).min(room);
 
     // Thumbnails of the pictures the line carries, between the box and the rows that describe
@@ -1024,6 +1026,7 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         .split(left);
 
     let mut laid = draw_transcript(frame, areas[0], session);
+    laid.offered_first = offered_first;
     laid.panes = [
         (
             crate::select::Pane::Transcript,
@@ -1050,8 +1053,13 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         area: hint_row,
         taken,
     });
-    laid.targets
-        .extend(offered_picks(session, width, &offered, areas[4]));
+    laid.targets.extend(offered_picks(
+        session,
+        width,
+        &offered,
+        offered_first,
+        areas[4],
+    ));
     if let Some(panel) = panel {
         laid.targets
             .extend(crate::panel::draw(frame.buffer_mut(), panel, session));

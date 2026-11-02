@@ -376,3 +376,74 @@ fn the_wheel_over_the_list_walks_it_and_elsewhere_scrolls_the_transcript() {
         "the wheel elsewhere did not scroll the transcript"
     );
 }
+
+/// The text of the screen row `row` of the last frame, as the terminal showed it.
+fn screen_row(buffer: &ratatui::buffer::Buffer, row: u16) -> String {
+    (0..buffer.area.width)
+        .map(|x| buffer[(x, row)].symbol())
+        .collect()
+}
+
+/// CMD-6. Rejects: a list longer than the room under the box that is cut off at the bottom, so that
+/// the arrow keys move the cursor onto commands that are never drawn. At every height the item
+/// under the cursor must be drawn, be the row a press picks, and the last command must be reachable
+/// by walking down.
+#[test]
+fn the_list_under_the_box_scrolls_to_keep_the_cursor_drawn() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    for rows in [24u16, 12, 9] {
+        let mut session = typed_into("/");
+        let commands = offered_commands(&session);
+        let mut seen = std::collections::BTreeSet::new();
+        for step in 0..commands.len() {
+            let mut terminal = Terminal::new(TestBackend::new(100, rows)).expect("terminal");
+            let mut laid = crate::state::Laid::default();
+            terminal
+                .draw(|frame| laid = render::draw(frame, &session))
+                .expect("draw");
+            session.note_layout(laid);
+            let buffer = terminal.backend().buffer().clone();
+
+            let drawn_rows = rows_drawn(&session);
+            assert!(
+                rows != 9 || drawn_rows.len() < commands.len(),
+                "9 rows hold the whole list, so the fixture does not test scrolling"
+            );
+            let (cells, _) = drawn_rows
+                .iter()
+                .find(|(_, index)| *index == step)
+                .unwrap_or_else(|| panic!("{rows} rows, cursor {step}: its row is not drawn"));
+            assert!(
+                screen_row(&buffer, cells.y).contains(commands[step]),
+                "{rows} rows, cursor {step}: the row reads {:?}",
+                screen_row(&buffer, cells.y)
+            );
+            seen.insert(step);
+            handle_key(&mut session, key(KeyCode::Down));
+        }
+        assert_eq!(seen.len(), commands.len(), "{rows} rows");
+
+        // Walking back up must pull `offered_first` back to 0, not leave the list
+        // scrolled with the cursor on its top row.
+        for _ in 0..commands.len() {
+            handle_key(&mut session, key(KeyCode::Up));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(100, rows)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, &session))
+            .expect("draw");
+        session.note_layout(laid);
+        let first = rows_drawn(&session)
+            .into_iter()
+            .map(|(_, index)| index)
+            .min();
+        assert_eq!(
+            first,
+            Some(0),
+            "{rows} rows: the list did not return to its start"
+        );
+    }
+}

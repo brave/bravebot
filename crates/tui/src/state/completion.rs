@@ -365,6 +365,13 @@ impl Session {
         }
     }
 
+    /// Where the cursor is among what is offered, which the frame keeps in view when the list is
+    /// longer than the room under the box. Not held to the list's length: the caller clamps it to
+    /// the list it is drawing.
+    pub fn completion_cursor(&self) -> usize {
+        self.completion
+    }
+
     /// Move down what is offered, stopping at the end.
     pub fn next_completion(&mut self) {
         let last = self.offered_count().saturating_sub(1);

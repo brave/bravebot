@@ -276,27 +276,66 @@ fn offered_lines(
     Some(before..before + items)
 }
 
+/// Cut the rows beneath the box to `room` rows, scrolling the list on offer so the item under the
+/// cursor is one of them (CMD-6). Returns the rows to draw and the item the list now starts at.
+///
+/// What is attached, put away and queued keeps the rows nearest the box, and the list gets what is
+/// left. The list starts where the previous frame left it (`Laid::offered_first`) and moves only as
+/// far as the cursor needs, so a press on a row picks that row without the rows sliding under the
+/// pointer (MOUSE-15), and the wheel and the arrow keys walk the list to its last item (MOUSE-46).
+pub(super) fn fit_to_room(
+    session: &Session,
+    width: u16,
+    offered: &crate::state::Offered,
+    mut lines: Vec<Line<'static>>,
+    room: usize,
+) -> (Vec<Line<'static>>, usize) {
+    let Some(rows) = offered_lines(session, width, offered) else {
+        lines.truncate(room);
+        return (lines, 0);
+    };
+    let (before, items) = (rows.start, rows.len());
+    let space = room.saturating_sub(before);
+    if lines.len() <= room || space == 0 || items == 0 {
+        lines.truncate(room);
+        return (lines, 0);
+    }
+    let cursor = session.completion_cursor().min(items - 1);
+    let mut first = session.laid.offered_first;
+    if cursor < first {
+        first = cursor;
+    } else if cursor >= first + space {
+        first = cursor + 1 - space;
+    }
+    first = first.min(items - space);
+    lines.drain(before..before + first);
+    lines.truncate(room);
+    (lines, first)
+}
+
 /// The rows of a list of what could be typed that a press can take (MOUSE-15), each as the cells of
-/// the row and the item it stands for, in `pane`, which is where [`lines_beneath_the_box`] was drawn.
-/// Only the rows the pane had room for are drawn, so only those are there to press.
+/// the row and the item it stands for, in `pane`, which is where [`lines_beneath_the_box`] was drawn
+/// and [`fit_to_room`] cut it, starting at the item `first`. Only the rows the pane had room for are
+/// drawn, so only those are there to press.
 pub(super) fn offered_picks(
     session: &Session,
     width: u16,
     offered: &crate::state::Offered,
+    first: usize,
     pane: ratatui::layout::Rect,
 ) -> Vec<crate::state::Target> {
     let Some(lines) = offered_lines(session, width, offered) else {
         return Vec::new();
     };
-    lines
-        .zip(0..)
-        .filter_map(|(line, index)| {
-            let line = u16::try_from(line)
+    let before = lines.start;
+    (0..lines.len().saturating_sub(first))
+        .filter_map(|shown| {
+            let line = u16::try_from(before + shown)
                 .ok()
                 .filter(|line| *line < pane.height)?;
             Some(crate::state::Target::on_screen(
                 ratatui::layout::Rect::new(pane.x, pane.y + line, pane.width, 1),
-                crate::state::Hit::Item(index),
+                crate::state::Hit::Item(first + shown),
             ))
         })
         .collect()

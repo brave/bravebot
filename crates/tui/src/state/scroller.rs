@@ -47,6 +47,9 @@ pub struct Laid {
     /// line was wider than the transcript and wrapped, each with whether the wrap broke the line
     /// at a blank. A copy joins them without a line break, and with a space where it did.
     pub continued: Vec<(u16, bool)>,
+    /// The item the list offered under the box started at, where the room under the box held fewer
+    /// rows than the list had (CMD-6).
+    pub offered_first: usize,
     /// The regions of the screen a selection can begin in, empty for a view that has none.
     pub panes: Vec<(crate::select::Pane, ratatui::layout::Rect)>,
     /// Where the transcript was drawn and the row of it at the top, where a transcript was drawn

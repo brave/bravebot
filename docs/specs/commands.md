@@ -290,6 +290,10 @@ carry out or queue a command typed mid-turn (CMD-8), so typing `/` lists every c
 does and narrowing, queueing and dispatching all work on one set. The skill rows beneath them read the set a turn would advertise
 (CMD-9), and no key on one dispatches anything.
 
+Where the room under the box holds fewer rows than the list, the list scrolls: the row under the
+cursor is always drawn, the list moves only as far as the cursor needs, and Down reaches the last
+item. The rows drawn are the rows a press can pick, as [mouse.md](mouse.md) describes.
+
 **Why.** A word written down in more than one place is a word that is renamed in one of them,
 leaving the rest advertising something that no longer works, which a person discovers by typing
 it.
@@ -298,6 +302,7 @@ it.
 `verified-by: bravebot_tui::app::the_config_command_is_offered_like_every_other`
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
+`verified-by: bravebot_tui::app::tests::completions::the_list_under_the_box_scrolls_to_keep_the_cursor_drawn`
 
 
 <a id="CMD-7"></a>
