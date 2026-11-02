@@ -10,7 +10,10 @@ description: Pick the model that answers with /model, what the picker lists, and
 /model
 ```
 
-opens a picker on the model currently in use, as a panel in the middle of the screen. The list comes
+opens a picker on the model currently in use, as a panel in the middle of the screen. The panel opens
+at once with a line saying the models are loading, and the rows appear when the endpoints have
+answered. What you type meanwhile narrows them when they arrive, and Enter chooses nothing until
+then. A listing that fails closes the picker, leaves the model as it was and says why. The list comes
 from the endpoint rather than from a set compiled in, so it is whatever the backend actually offers
 today. Google Vertex AI is the exception, having no listing to ask (see [Reaching an
 OpenAI-compatible gateway](providers/openai-compatible.md#google-vertex-ai)). The choice is written to

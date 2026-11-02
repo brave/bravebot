@@ -34,7 +34,7 @@ A resumed session redraws what the earlier turns did: each one keeps the prompt 
 ended, failures and cancellations included, so reading a transcript back does not depend on
 remembering the session. A reply that opened with the model's working leaves that block off when it
 is redrawn, as it was left off the first time. A task list stays on the turn that made it, and a later turn without one
-does not inherit it.
+does not inherit it. On a turn that has ended, a task still pending or in progress is drawn with a hollow marker and dim text, so it does not read as work still going on; finished and cancelled tasks are drawn as before.
 
 **Untrusted content is shown to you on purpose.** You are the one party allowed to read it, and the
 point of quarantine is that the decision comes to you rather than to the model. It is drawn inside a
@@ -63,8 +63,9 @@ desktop application shows the same two rows in the same confined block, under th
 
 **Colour codes in output are counted and not drawn.** A program that colours its output, such as a CI
 log, writes a code before and after each coloured word. Drawn as pictures, those buried the words.
-In the output of a [shell mode](shell-mode.md) command, in a quarantined block's preview, and in the
-lines under a call the model read, the codes are left out and a row under the text says how many,
+In the output of a [shell mode](shell-mode.md) command, in a quarantined block's preview, in the
+lines under a call the model read, and in the quarantined block a [one-shot run](headless.md) writes
+to stderr, the codes are left out and a row under the text says how many,
 for example `14 colour codes not drawn`. Every other control character and escape sequence, such as
 one that moves the cursor or erases a line, is still replaced by a visible picture. A prompt asking
 you to approve text, a block's heading, and a file name draw every byte, colour codes included.
@@ -563,7 +564,7 @@ Parts of the row that only report, such as the context reading and what a copy t
 |---|---|---|
 | a row of the `/effort`, `/config`, `/theme` and `/model` pickers | the first click moves the cursor to it, and `/theme` shows the theme under it. The second takes it, when it is on the same row | Up, Down and Enter |
 | a prompt in the search over earlier prompts | the first click moves the cursor to it and the second puts it in the box, sending nothing | Up, Down and Enter |
-| a session in the lists `--resume`, `/resume` and `bravebot sessions` open | the first click moves the cursor to it and the second resumes it, or attaches to it | Up, Down and Enter |
+| a session in the [Sessions screen](sessions-screen.md#the-mouse) or the list `bravebot sessions` opens | the first click moves the cursor to it and the second opens it as Enter does, or attaches to it. A click on a tab of the Sessions screen chooses it | Up, Down and Enter |
 | outside a picker or the search over earlier prompts | closes it, with nothing changed | Escape |
 | outside the scroller's key list | puts it away | any key |
 | the wheel over a picker, a list or the search | moves the cursor by [`tui.wheelRows`](../customize/configuration.md#tuiwheelrows) rows and stops at the ends | the arrow keys |

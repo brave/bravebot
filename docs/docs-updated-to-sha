@@ -8,8 +8,8 @@
 # (agents/skills/update-docs) to fold it in. The skill rewrites the sha below; nothing
 # else should.
 #
-# sandbox: let a person hold the temporary directory back from every stage (#2681)
-# 2026-10-19
-# https://github.com/brave/bravebot/commit/4f8d49bd01aef96a5c1404a3fccb5e0d37dd773f
+# Add capability groups to the Brave extension, each off until a person grants its browser permissions (#3620)
+# 2026-11-01
+# https://github.com/brave/bravebot/commit/ea82976a155a98b642e89e362eed0b484bbf95a3
 
-4f8d49bd01aef96a5c1404a3fccb5e0d37dd773f
+ea82976a155a98b642e89e362eed0b484bbf95a3

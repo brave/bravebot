@@ -1,7 +1,7 @@
 ---
 sidebar_position: 2.1
 title: Permission modes
-description: What asking, accepting edits, plan mode and bypassing each answer for you, what they stop at, and the two things no mode answers.
+description: What asking, accepting edits, plan mode, auto and bypassing each answer for you, what they stop at, and the two things no mode answers.
 ---
 
 # Permission modes
@@ -73,13 +73,42 @@ than making the turn incapable of changing anything: a command you approve may w
 A [manifest run](../using/manifest-mode.md) is refused from its frozen plan, before the plan is put to you,
 where any step in it writes a file. A plan that writes nothing runs. The plan is where the mode has to
 be answered, because a body the plan carried going to a path you vouched for raises no write prompt at
-all, so a refusal that waited for one would let the whole run through.
+all, so a refusal that waited for one would let the whole run through. A run you move into plan mode
+after approving its plan is refused at the step instead: a write step that has not run yet is refused
+before any prompt, and a step that already ran is not undone.
 
 :::note
 **`defaultMode` in the settings file selects no mode.** The key is parsed so a file carrying it is not
 rejected, and nothing is chosen from it: if you wrote `acceptEdits` there you get the prompts you would
 have got without it. The command line and Shift-Tab are what choose a mode.
 :::
+
+## Auto
+
+Auto answers a write as accepting edits does, with the same two exceptions for a credential and a
+protected path. It also lets a classifier answer two questions that asking puts to you: a `run`
+command the sandbox confines, and the first question about fetching a URL. The classifier is one
+request with no tools, sent to the session's own model. It is given the lines you typed and the
+command, or the URL and its host. It is not given file contents, tool results or what a program
+printed.
+
+Only the single word `allow` answers the question. A reply that says anything else, a failed call
+and a refused model leave the question with you, or refuse it where nobody can be asked. The
+classifier can remove a question and never refuses one. It is not asked about a command that starts
+with no sandbox profile, one that asks for a credential scope, a `loopback` or a toolchain list, or
+one that reads standard input from a reference. It is not asked about `download_url`, a redirect to
+another host, a delegate's questions, or any question once the planner's context holds private
+content or has met something untrusted. The questions that stay with you in every mode, and the other
+questions a mode may not answer, are put to you as in asking.
+
+Shift-Tab reaches auto after plan mode and before bypassing, and a click on the mode under the input
+box passes it by. `--auto` opens a one-shot run in it, and is refused beside
+`--dangerously-skip-permissions` or `--accept-edits`, and where the line starts no one-shot run. No
+settings file selects the mode, `/plan` does not set it, a background session cannot be in it, and a
+resumed session does not restore it. Each question put to the classifier is recorded in the
+[audit trail](audit-trail.md) with the model, whether it was a `run` or a `fetch`, the word and the
+cost, and the question is credited to the mode only where the word answered it. Each question costs
+one model round trip.
 
 ## Bypassing
 
@@ -88,7 +117,7 @@ bravebot --dangerously-skip-permissions
 ```
 
 The flag opens the session in that mode. Without it a session opens asking, and Shift-Tab reaches the
-mode on the third press, after plan mode. Nothing is asked when it gets there: the line under the
+mode on the fourth press, after plan mode and auto. Nothing is asked when it gets there: the line under the
 input box names it in colour, and one more press is back to asking. A settings file that sets
 `permissions.bypassUnreachable` takes the mode off the key and refuses the flag.
 
@@ -179,8 +208,8 @@ number.
 ## In the desktop application
 
 The control beside the model in the composer offers asking, accepting edits and plan mode, and
-`⇧⌘M` (`Ctrl+Shift+M` on Windows and Linux) walks them in that order. Bypassing is not offered: the
-desktop has no command line for the flag to be given on. The mode belongs to the open session and
+`⇧⌘M` (`Ctrl+Shift+M` on Windows and Linux) walks them in that order. Auto is not offered, and
+neither is bypassing: the desktop has no command line for the flag to be given on. The mode belongs to the open session and
 every session opens asking, a resumed one and a fork included. A change made while a turn
 runs applies to the rest of that turn.
 
@@ -190,9 +219,16 @@ A resumed session opens by asking, whatever the session that wrote the record wa
 ended. The mode is not written into the session record. `--resume` with the flag opens in bypass,
 because the flag was given again.
 
+The record does say whether bypass was on at any point of the sitting. Resuming such a session
+without the flag restores neither its trust map nor the directories it opened, because the mode
+answered for them, and the startup trust question is put again. A rule you made by hand in that
+sitting is not kept either. Resuming with the flag again is answered by the mode as before.
+
 A [delegate](../reference/tools.md#spawn_agent) inherits the mode of the turn that spawned it, since
-a delegate is that turn's work done somewhere else. In bypass it has the reach above, its programs are given
-the same writes the session's are under `workspace-write`, and it is asked nothing. A delegate started
+a delegate is that turn's work done somewhere else. In bypass it has the reach above and is asked nothing. Its
+programs are given the same writes the session's are, which holds on macOS and Linux with the sandbox mode `workspace-write` in
+a trusted workspace. Under `strict` and on Windows each path is still requested, a delegate has no way to request one, and
+a program of its that writes outside the session's directories fails. A delegate started
 restricted keeps what it was started with: its kind (a `reader` writes nothing), a `tools:` line, a
 `writes:` limit, a checkout (which keeps it out of the working directory and every other checkout), the
 sandbox mode, and your `denyRead`, `denyWrite` and `permissions.readsStayInWorkspace`.

@@ -31,8 +31,8 @@ export BRAVEBOT_LOCALE=fr         # from now on, in this shell
 `~/.bravebot/settings.json` and from nowhere else, before the command line is read. A project's
 `.bravebot/settings.json`, `.bravebot/settings.local.json` and a file `--settings` names cannot set it,
 and `bravebot doctor` names one that tried. The interface is in one language for a whole session, so a
-change takes effect at the next start. It applies to the terminal client. The desktop window is in
-English only.
+change takes effect at the next start. The desktop window reads the same sources and has its own
+picker, described under [In the desktop app](#in-the-desktop-app).
 
 `/language fr` saves a choice without editing a file, in `~/.bravebot/language`, and `/language auto`
 removes it. A saved choice answers over the settings file, since it is the later act.
@@ -48,6 +48,22 @@ Widening is per message, not per language, so a single message a translation has
 in English inside an otherwise translated screen. A message that **counts** something is pluralised by
 the rules of the language it was written in, which for one falling back is English's, rather than
 having English's rule applied to French text.
+
+## In the desktop app
+
+The desktop window chooses its language once, before it first draws. **Settings ▸ General** has a
+**Display language** row listing Automatic and each shipped language by its own name. A choice is
+saved in `~/.bravebot/language`, the file `/language` writes, and applies when the app next starts.
+**Restart** beside the row relaunches the app. It is unavailable while a turn is running in any
+session, because quitting would end the turn. Automatic removes the saved choice. If
+`BRAVEBOT_LOCALE` is set, the page says it decides the language whatever is chosen. When none of the
+sources above names a language, the window, and only the window, takes the first of the operating
+system's preferred languages that has a translation, since an app opened from a launcher usually has
+no `LANG`.
+
+Only part of the window is translated so far: the General settings page with its title and
+subtitle, and the Settings breadcrumb. The list of settings pages and the rest of the window stay in
+English.
 
 ## What stays in English
 

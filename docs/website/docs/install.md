@@ -221,6 +221,14 @@ reads an answer an ordinary session left, and neither records one nor asks. A la
 write the record of its last check, because there is no home directory or the state directory is not
 writable, does not ask the registry at all.
 
+The desktop app has no command that updates it, so it is told through a link. When the check has
+recorded a newer release, the sidebar shows a notice naming the version you are running, with a
+**Download** link to the latest release page. Dismissing the notice hides it for as long as you run that version. **Help ▸ Update Status…** opens **About**, which says whether you are
+up to date as of the day of the last check, or "Couldn't check recently" with that day when the last
+answer is more than seven days old. A stale answer shows no notice in the sidebar. The same
+[`updateCheck`](customize/configuration.md#updatecheck) setting that turns off the terminal's line turns off the
+check, and a project's settings file cannot.
+
 ## Uninstall
 
 Remove it the way it was installed.

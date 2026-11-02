@@ -374,6 +374,8 @@ decline the repository the command ran in.
 Blame, `--follow` and a diff against the working tree go through `run`. A repository laid out in a
 way that changes what a read means, such as borrowed objects, replace refs, an included
 configuration file, `core.worktree`, or a `.git` that is a file, is declined with the same pointer.
+A revision that names a ref under `worktrees/` or `main-worktree/`, which lives in another
+worktree's directory, is declined the same way.
 So is a status over a split or sparse index, a bare repository, or ignore and attributes files
 named outside the repository. An answer cut by the count, by 2,000 lines, or by the search
 deadline says it was cut.
@@ -425,6 +427,13 @@ the agent names, ending in the extension of the picture's type: `.png`, `.jpg` o
 `.webp` or `.pdf`. Any other name is refused before you are asked. The question names the
 reference, its type, the size of the file and the path, and shows no body. The file is untrusted
 unless the picture came from a file you vouched for.
+
+One write through a `contents_ref` asks nobody and writes nothing: a reference that was filled from the
+very path being written, which puts the file back as it is. The agent is told the path holds what the
+reference holds. It applies only while nothing has written that file since the reference was read and no
+`run` line has started since. A different path, another spelling of the same path, a reference a
+processor's answer about the file filled, or any write after a `run` line, is put to you as usual, even
+where that `run` line wrote nothing.
 
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
@@ -925,10 +934,11 @@ told to run a `git fetch` once rather than have each delegate run one.
 **`isolation: checkout_with_changes` gives the delegate the tree you have.** It is a checkout as
 above, with the changes in your working tree copied in as they are when the checkout is made: the
 files the session wrote, and the paths `git status` lists as changed where the session trusts the
-whole tree. A file you deleted is deleted there. A file a deny rule covers, a link, a file over
+whole tree. Where the status cannot be read, only the files the session wrote are carried. A file you deleted is deleted there. A file a deny rule covers, a link, a file over
 16 MiB and anything past 1,000 files or 64 MiB is left as the commit has it, and the delegate and the
 planner are told which paths were carried, which were not and why. Nothing is written in your working
-tree, and you are not asked, since the copy goes into the checkout bravebot made. Use it for a
+tree, and you are not asked, since the copy goes into the checkout bravebot made. Only a call asks for it: a
+[definition](../customize/agents.md#a-checkout-of-its-own)'s `isolation` line cannot. Use it for a
 `checker` that has to build what the planner just wrote.
 
 The delegate cannot see the conversation the task came from, so a task that leaves something out is a
@@ -1008,7 +1018,17 @@ Puts up to four questions to you and waits. More than four is refused whole rath
 
 Questions are put one at a time. You may choose an option, answer in your own words, or skip. A
 skipped question is an answer to work with rather than a reason to ask again. An answer is remembered
-for the session, question by question.
+for the session, question by question, in the terminal and in the desktop application, and a session
+opened, resumed or forked in the desktop application begins with none. The turn's notices name each
+question it did not put. Only an answer you gave is remembered, so a question that nobody could be asked,
+or that came back with no answer, is put again.
+
+Where there is more than one question, each is put under its place in the series (`the agent is asking
+(2 of 3)`) in the terminal, in a session in lines (`--plain`) and in the desktop window. The window puts one
+question at a time, with **Skip** to move to the next and an answer button that stays shut until
+something is picked or typed, and sends every answer once the last is settled. A series of one has no
+place. The line under the call in the transcript counts the questions asked (`3 questions asked`), not the
+answers, so a skipped question is still counted.
 
 In the terminal, a series of more than one ends in a review that lists each question beside your
 answer. Nothing has been sent until you press Enter there. Left goes back a question, a number
@@ -1045,7 +1065,10 @@ Offered in plan mode only. Shows you the finished plan and asks how to proceed.
 
 You can accept edits, ask before each edit, or keep planning. The first two leave plan mode for that
 mode and the planner starts the work in the same turn. Anything else, including a typed reply, keeps
-plan mode and tells the planner the plan was not approved. Bypassing is never offered. Where nobody
+plan mode and tells the planner the plan was not approved. Bypassing is never offered. The question
+is put every time, and an answer is not remembered the way an answer to
+[`ask_user`](#ask_user) is, so the same plan proposed again after you went back to plan mode is asked
+about again. Where nobody
 can be asked, or the planner's context has met something untrusted, the call is refused.
 
 ## `request_path`
@@ -1059,8 +1082,13 @@ session was opened on is the usual cause.
 | `path` | one absolute path, or one beginning `~/`; it must exist and may not hold `*` or `?` |
 | `write` | `true` to let programs write it as well as read it; defaults to `false` |
 
-You are shown the path, whether it is to be read or written, and the planner's reason, and you
-answer yes or no. A call with no reason, or a blank one, is still put to you. A yes lasts for this session, is not saved, and does **not** mark the directory
+You are shown the path as it resolves, whether it is to be read or written, and the planner's reason, and you
+answer yes or no. The grant and the record of it hold the resolved path, and the result the planner reads
+back, a success as much as a refusal, names the path as the planner typed it, so the name of what a link
+points at does not reach the planner. The path is judged when you answer and not again when a line starts,
+so a `git switch` that changes what is at the path keeps the grant. A path later replaced by a link keeps
+its row, and what the sandbox then does with that row, including whether it widens to the link's target,
+has not been tested on either backend ([#2914](https://github.com/brave/bravebot/issues/2914)). A call with no reason, or a blank one, is still put to you. A yes lasts for this session, is not saved, and does **not** mark the directory
 trusted, as [`/add-dir`](commands.md) does. It does not let `read_file`, `write_file`, `edit_file`,
 `list_files` or `search` reach the path either: those are opened with `/add-dir`, and a refusal from one of them for a path outside the workspace names `/add-dir` alone. `/reach paths` lists what you have allowed and
 `/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
@@ -1071,7 +1099,7 @@ request: every tool that names a path (`read_file`, `write_file`, `edit_file`, `
 outside the workspace wherever your account can, under every sandbox mode, with no directory opened or trusted,
 and it ends when you leave bypass. The paths this page lists as refused here are refused to them too, so are
 your `denyRead` and `denyWrite` paths, `permissions.readsStayInWorkspace`, writes under `read-only` and a workspace you
-have not trusted. `/status` lists the directories reached. On macOS and Linux with the sandbox mode `workspace-write`, the programs
+have not trusted. `/status` lists the directories reached. On macOS and Linux with the sandbox mode `workspace-write`, in a workspace you have trusted, the programs
 every `run` starts, a delegate's included, are also given those paths, minus your home directory as a whole, the credential
 locations and your `denyRead` and `denyWrite` paths, so a sibling of the working directory does not
 fail with `Operation not permitted`. A

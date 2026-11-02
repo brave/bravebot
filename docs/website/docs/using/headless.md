@@ -21,6 +21,11 @@ A one-shot run has nobody to ask, and most of what makes it different follows fr
 and the planner's own questions are declined rather than answered on your behalf. The planner is told
 that a reply came from a person, so inventing one would be worse than not asking at all.
 
+A write, a program, a fetch or a plan that you would have been asked about and nobody could be asked
+about ends the run on status 4 (`BB1004`), as a refusal by a rule does, and the result object under
+`--json` lists each one under `refusals`. A run that was refused something does not exit 0 because the
+agent carried on without it.
+
 So a one-shot run is for reading, explaining and summarising. If you want it to change something, run
 it interactively, or say so on the command line:
 
@@ -29,7 +34,7 @@ bravebot --dangerously-skip-permissions -p "fix the failing test"
 ```
 
 If the run only needs to edit files, `--accept-edits` is the narrower grant: writes go through, and
-commands, fetches and a write that would create a credential are still refused.
+commands, fetches, a write to a [protected path](../security/permission-modes.md) and a write that would create a credential are still refused.
 
 ```sh
 bravebot --accept-edits -p "apply the lint fixes"
@@ -106,8 +111,11 @@ Progress, errors and the audit trail all go to stderr, so a one-shot run is pipe
 bravebot "list the public functions in src/lib.rs" > functions.txt
 ```
 
+Content the run quarantined is shown on stderr too, as a block with each row behind a bar and a heading that names where it came from. Colour codes in it are left out and counted, as [the transcript](transcript.md) describes.
+
 `--trace` puts the audit trail on stderr beside it: which gate checked what, the label every value
-carried, and what was released.
+carried, and what was released. Each line is written as the gate takes the decision rather than after
+the run ends, so a run that is slow or stuck shows what it had decided so far.
 
 ```sh
 bravebot "what does this do?" --file src/main.rs --trace 2> trail.txt

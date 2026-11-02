@@ -183,9 +183,26 @@ asked whether to trust it:
 ╰───────────────────────────────────────────────────────────╯
 ```
 
-Yes writes exactly the rule `@` would have written, so it stays consistent for every later read. It is
+Yes writes exactly the rule `@` would have written, so it stays consistent for every later read. The
+prompt shows the full path the rule will be held under, below the file's name, so a rule wider than the
+name reads as wider. A name that is empty, is only whitespace, has a space at either end of it or of a
+directory in it, or holds a character that draws as nothing (a zero-width character, a bidirectional
+control, a no-break space) or as a blank cell (the blank braille pattern) is drawn in quotes with each such
+character spelled out, so it cannot read as another name. The terminal and the desktop window also spell a
+byte of a path that is not part of a UTF-8 character as `\xNN`, so two paths that differ only in such bytes
+are not drawn alike. The prompts for a write, an overwrite and an edit, for reading a credential, for a path
+programs may reach and about a directory, the names a checkout's removal would delete, and the files a run would write and the directories it is confined to, draw names the
+same way, and so do the line a call about a file draws in the transcript, the lists of files a turn
+wrote, read or changed, and the startup notes about an allow rule a checkout proposed. A search for a
+pattern is drawn as written. The question is
 asked once per path per turn, and only where the read is quarantined. Declining leaves the file as it
 was and the turn carries on with a reference.
+
+The startup trust question an editor, the desktop window or the mobile app shows draws the directory and
+the file a yes is kept in the same way. So do the desktop window's notice that a yes was kept, its
+list of what is kept and its list of the allow rules a checkout proposed, and the mobile app's write,
+run and trust cards. The terminal's trust questions also draw the file a yes is kept in and the file each
+proposed rule came from this way.
 
 **The line above the preview is a [check](vetting.md) reading the whole file**, not the few lines you
 can see, because a yes grants the whole file. It decides nothing: a yes writes the rule whatever the
@@ -202,6 +219,11 @@ Never a directory, and never a path naming nothing: a yes writes a rule covering
 name it was given, so a box titled with one file would hand over every file beneath the name at once,
 over a string the planner chose rather than one you typed.
 
+**A yes is not spent if the file may have changed while you were asked.** If the file changed, or a
+`run` line started while the question was open, the yes is thrown away, the file stays quarantined
+and the read says so. A program can rewrite files its line does not name, so the text you read in the
+preview may no longer be what the file holds.
+
 ### `/add-dir`
 
 ```
@@ -209,13 +231,18 @@ over a string the planner chose rather than one you typed.
 ```
 
 records a rule under that directory's own path that does two things together: the directory becomes
-reachable, since an absolute path is otherwise refused whatever the map says, and it is recorded as
+reachable, since a path outside the project is otherwise refused whatever the map says, and it is recorded as
 trusted. Either half alone is no use. One leaves a rule about files nothing can open, the other a
 directory that prompts on every edit.
 
 It lasts the session, `--resume` carries both halves, and `/clear` closes it. A directory already
 inside the project is refused. A directory a resume cannot open again, because it has moved or gone,
 says so rather than being passed over.
+
+The path may also be relative to the working directory: `/add-dir ../notes` opens the directory
+beside the project and `/add-dir ../` the directory that holds it. A leading `~` is read first. What
+is opened, trusted and named in the note is the directory the path resolves to. A relative path is
+refused where the working directory's name is not text. `/add-dir close` takes the same spellings.
 
 ```
 /add-dir close ~/notes
@@ -295,6 +322,18 @@ Every session is given a directory of its own in the system temporary directory,
 session opens, and it is somewhere to put an intermediate file. A one-shot run has one for as long as
 it runs. A session that cannot be given one runs without one and says so. On macOS and Linux, one
 left behind by a session that was killed rather than closed is removed as the next session opens.
+
+On Unix it is made inside a directory of your account's own in the temporary directory, named
+`bravebot-` and your numeric user id, so opening a session does not wait on how many entries other
+programs have left in the temporary directory. That directory is used only where it is a directory your
+account owns, and is not removed with the session's directory. Where it cannot be used, the session's directory
+is made in the temporary directory itself. The first start that makes it also removes, once, the
+directories of killed sessions that stand directly in the temporary directory.
+
+The session records which directory it made. Every program may write the temporary directory, so the
+name could be made to lead elsewhere. A program is refused when it starts once the name leads to a link
+or a file, and for the rest of the session. A name that leads to nothing, or on Unix to a different directory because
+the directory was removed or made again, is not granted to programs, and the programs after it still start.
 
 `/status` reports it as the session's own, on a line of its own rather than among the rules, because
 it is reachable without any rule covering it.
@@ -427,7 +466,9 @@ permissions show the kept answer, and **Forget** there does the same.
 ```
 
 lists every rule in force, however many there are, so what a line vouched for does not have to be
-remembered. The [session's own directory](#a-directory-of-the-sessions-own) gets a line of its own
+remembered. A rule is listed under its name spelled as the prompts spell one, so a rule about a name made
+of whitespace, or ending in it, is not a row that reads as nothing. The project root is listed as `.` in
+the terminal and as the project root in the desktop window. The [session's own directory](#a-directory-of-the-sessions-own) gets a line of its own
 there, since it holds no rule to list. Where a [kept answer](#remembering-the-answer) will trust the
 working directory in later sessions, the line under it says so, when you gave it, and which file
 holds it.
