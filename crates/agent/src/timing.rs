@@ -171,12 +171,10 @@ pub(crate) struct DelegateWait {
 }
 
 impl DelegateWait {
-    /// The count of typed lines the last wait ended on.
     pub fn typed_seen(&self) -> u64 {
         self.typed_seen
     }
 
-    /// Record the count of typed lines a wait ended on.
     pub fn note_typed(&mut self, typed: u64) {
         self.typed_seen = typed;
     }
