@@ -43706,6 +43706,11 @@ fn a_definition_offers_its_delegate_only_the_skills_it_names() {
                     "spawn_agent",
                     r#"{"kind":"bare-reviewer","task":"REVIEW-WITH-NO-SKILLS"}"#,
                 ),
+                // The planner is asked again at each wake, and the three delegates end in one
+                // wake or in up to three, depending on when each finishes. A reply for every
+                // possible ask keeps the count of wakes out of what the test depends on.
+                reply_with("waiting"),
+                reply_with("waiting"),
                 reply_with("waiting"),
                 reply_with("delegates finished"),
             ],
@@ -65330,6 +65335,37 @@ mod usage {
         fn finish(&self) -> Result<turn::Outcome, turn::TurnError> {
             self.finish_with_snapshot().0
         }
+        /// Answer each request that arrives with `reply` until the turn ends, for a turn whose
+        /// number of asks depends on whether delegates end in the same wake. Returns the outcome
+        /// and how many requests were answered, and fails if more than `most` arrive or the turn
+        /// neither asks nor ends within `WAIT`.
+        fn answer_asks_until_finished(
+            &self,
+            reply: &str,
+            most: usize,
+        ) -> (Result<turn::Outcome, turn::TurnError>, usize) {
+            let deadline = std::time::Instant::now() + WAIT;
+            let mut asks = 0;
+            loop {
+                if let Ok(request) = self.pending.try_recv() {
+                    asks += 1;
+                    assert!(
+                        asks <= most,
+                        "the planner was asked {asks} times, most {most}"
+                    );
+                    request.answer(reply);
+                    continue;
+                }
+                if let Ok((result, _)) = self.finished.try_recv() {
+                    return (result, asks);
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the turn neither asked again nor ended"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
         fn finish_with_snapshot(&self) -> (Result<turn::Outcome, turn::TurnError>, String) {
             let (result, snapshot) = self.finished.recv_timeout(WAIT).expect("turn ended");
             assert!(
@@ -66302,11 +66338,12 @@ mod usage {
         second.answer(&reply_with("second done"));
         thread::sleep(Duration::from_millis(150));
         release.send(()).unwrap();
-        // Each delegate ending asks the planner again. The second ends once the reporter lock the
-        // parent held is free, so it is taken back after the first of these.
-        run.request().answer(&reply_with("one is in"));
-        run.request().answer(&reply_with("done"));
-        let timing = run.finish().unwrap().timing;
+        // The second delegate ends once the reporter lock the parent held is free. It is taken
+        // back by the same collection as the first or by the next wake, so the planner is asked
+        // once or twice, and every ask is answered until the turn ends.
+        let (outcome, asks) = run.answer_asks_until_finished(&reply_with("done"), 2);
+        assert!(asks >= 1, "the planner was not asked after the reports");
+        let timing = outcome.unwrap().timing;
         assert!(
             timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
             "overlapping categories: {timing:?}"
