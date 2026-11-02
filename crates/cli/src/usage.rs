@@ -72,6 +72,21 @@ pub(crate) fn print_help() {
             "bravebot skill eval <name> [options]",
             t!(cli_usage_skill_eval),
         ),
+        (
+            "bravebot trigger add <name> --event <event> [--workspace <dir>] [--max-concurrent <n>] [--max-per-hour <n>] -- <prompt>",
+            t!(cli_usage_trigger_add),
+        ),
+        ("bravebot trigger list [--json]", t!(cli_usage_trigger_list)),
+        (
+            "bravebot trigger remove <name>",
+            t!(cli_usage_trigger_remove),
+        ),
+        ("bravebot trigger pending", t!(cli_usage_trigger_pending)),
+        ("bravebot trigger clear <name>", t!(cli_usage_trigger_clear)),
+        (
+            "bravebot trigger serve [--port <n>]",
+            t!(cli_usage_trigger_serve),
+        ),
         ("bravebot --bg <prompt>", t!(cli_usage_bg)),
         ("bravebot attach <id>", t!(cli_usage_attach)),
         ("bravebot reply <id> <prompt>", t!(cli_usage_reply)),

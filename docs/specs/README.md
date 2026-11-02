@@ -40,7 +40,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [skills.md](skills.md) | `SKILL` | 19 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for, and what a skill kept as a mode adds to every turn |
 | [skill-evals.md](skill-evals.md) | `SKILLEVAL` | 9 | `bravebot skill eval <name>`: a skill's saved cases run with the skill and without it, graded from the driver's own record of each run, and the two scores set side by side |
 | [instructions.md](instructions.md) | `INSTR` | 17 | which instruction files are looked for, where, in what order, and where what they say ends up |
-| [cli.md](cli.md) | `CLI` | 42 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
+| [cli.md](cli.md) | `CLI` | 43 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
 | [schedule.md](schedule.md) | `SCHEDULE` | 6 | what a stored `bravebot schedule` entry does with nobody there: pausing it, stopping at a question, skipping an overlapping firing, and which expressions and flags it may hold |
 | [manifest.md](manifest.md) | `MANIFEST` | 15 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 50 | what the user types into: the box, the keys, and where a terminal's own limits show through |
@@ -65,6 +65,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [import.md](import.md) | `IMPORT` | 12 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama, LM Studio or llama-server serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 19 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 18 | sending a prompt again and again until somebody stops it, or once after a delay |
+| [triggers.md](triggers.md) | `TRIGGER` | 11 | `bravebot trigger`: a prompt registered under a name and an event, the loopback listener that starts it for a signed delivery, and what it is given and allowed |
 | [goal.md](goal.md) | `GOAL` | 20 | one condition a person set, judged after every turn, until it holds |
 | [open-loops.md](open-loops.md) | `OPEN` | 7 | proposed, nothing built: the unfinished business a session leaves, found by fixed rules, shown when it changes, and told to the planner |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |

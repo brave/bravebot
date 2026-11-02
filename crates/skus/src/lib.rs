@@ -66,6 +66,14 @@ pub fn new_request_id() -> String {
     )
 }
 
+/// A secret of 32 random bytes as 64 lowercase hex characters, for a key a person is shown once and
+/// a sender then signs with (`bravebot trigger add`).
+pub fn random_token() -> String {
+    let mut bytes = [0u8; 32];
+    fill_random(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Fill `bytes` from the OS random source.
 ///
 /// A failure is not survivable: a predictable id could collide with another, so there is no

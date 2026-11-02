@@ -21,6 +21,10 @@ machine, and each answer is a fixed status and a fixed page that repeats nothing
 [NET-10](#NET-10) lets a stream to a server on this machine be waited on without a bound, and says
 nothing about a port this process listens on. What the listener accepts is the ChatGPT spec's.
 
+The listener of `bravebot trigger serve` ([TRIGGER-6](triggers.md#TRIGGER-6)) makes no request either,
+so no clause here applies to it. It binds `127.0.0.1`, and each answer is a fixed status and a fixed
+page that repeats nothing from the request. What it accepts is the trigger spec's.
+
 A crate that drives a turn for a surface elsewhere is under these clauses without being named by
 them. It builds no client of its own, so it is not a second egress and needs no clause here; what it
 does instead is [layering.md](layering.md)'s, and it is narrower than "reaches the network through

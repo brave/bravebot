@@ -43,6 +43,7 @@ mod stats;
 mod supervisor;
 #[cfg(test)]
 mod test_support;
+mod trigger;
 mod update;
 mod usage;
 mod workspace;
@@ -633,6 +634,7 @@ fn main() -> ExitCode {
             },
         ),
         Some("skill") => skill_eval::command(&args[1..], skip_permissions.then_some(bypass_flag)),
+        Some("trigger") => trigger::command(&args[1..], skip_permissions),
         Some("--bg") => match carried {
             Some(flag) => stopped_before_the_turn(
                 as_json,
@@ -1563,10 +1565,11 @@ fn run_and_report(
     if let Some(lines) = lines {
         one_shot = one_shot.with_lines(lines.clone());
     }
-    // A run `schedule run-now` started for a stored entry has nobody to ask, and stops at the
-    // first question (SCHEDULE-2).
-    let firing = schedule::firing();
-    if firing.is_some() {
+    // A run `schedule run-now` or `trigger serve` started for a stored entry has nobody to ask, and
+    // stops at the first question (SCHEDULE-2).
+    let scheduled = schedule::firing();
+    let triggered = trigger::firing();
+    if scheduled.is_some() || triggered.is_some() {
         one_shot = one_shot.stopping_at_a_question(cancel.clone());
     }
     // Screening off the task, so the answer the tools fill a verdict in under and the answer that
@@ -1669,9 +1672,13 @@ fn run_and_report(
 
     // Read once the turn is over, which is when the confirmer's borrow ends.
     let declined = one_shot.declined().to_vec();
-    // What the schedule keeps beside its entry: the question this run stopped at, if it did.
-    if let Some(id) = &firing {
+    // What the schedule or the trigger keeps beside its entry: the question this run stopped at, if
+    // it did.
+    if let Some(id) = &scheduled {
         schedule::record_firing(id, one_shot.asked());
+    }
+    if let Some(name) = &triggered {
+        trigger::record_firing(name, one_shot.asked());
     }
 
     let answered = outcome.is_ok();
@@ -2616,6 +2623,7 @@ mod tests {
             "sessions",
             "stats",
             "schedule",
+            "trigger",
             "attach",
             "reply",
             "import-leo-creds",
@@ -4397,6 +4405,7 @@ mod tests {
             "sessions",
             "stats",
             "schedule",
+            "trigger",
             "attach",
             "reply",
             "import-leo-creds",
@@ -4526,6 +4535,7 @@ mod tests {
             "sessions",
             "stats",
             "schedule",
+            "trigger",
             "attach",
             "reply",
             "import-leo-creds",

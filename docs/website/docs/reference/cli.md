@@ -80,6 +80,8 @@ Usage:
 | `bravebot skill eval <name> [--model <model>] [--max-rounds <n>] [--max-tokens <n>] [--trust-workspace]` | run a skill's saved cases with the skill and without it and report both scores ([below](#skill-eval)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
+| `bravebot trigger add <name> --event <event> [--workspace <dir>] -- <prompt>` | store a prompt to run when a delivery signed for that event arrives, and print the secret that signs it once ([below](#trigger)) |
+| `bravebot trigger list [--json]`, `remove <name>`, `pending`, `clear <name>`, `serve [--port <n>]` | list the stored triggers, remove one with its secret, show and clear the question a run stopped at, and listen on `127.0.0.1` for deliveries ([below](#trigger)) |
 | `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
 | `bravebot shell-init <shell>` | print a shell hook that gives `@bravebot` the commands you ran ([below](#shell-init)) |
 | `bravebot acp` | serve an editor over the Agent Client Protocol on standard input and output ([below](#acp)) |
@@ -1278,6 +1280,56 @@ A name that matches no skill, including one only in a project you have not vouch
 you can load, a skill with no accepted case and a case file that is not valid are refused with status
 2. A run that ended on an error other than its limit makes the command end on status 1 after the
 report. Stdout holds the report and nothing else.
+
+## `trigger`
+
+```sh
+bravebot trigger add <name> --event <event> [--workspace <dir>] [--max-concurrent <n>] [--max-per-hour <n>] [--dangerously-skip-permissions] -- <prompt>
+bravebot trigger list [--json]
+bravebot trigger remove <name>
+bravebot trigger pending
+bravebot trigger clear <name>
+bravebot trigger serve [--port <n>]
+```
+
+`add` stores the prompt under a name and an event and prints a secret once. `serve` listens on
+`127.0.0.1` (port 7471 unless `--port` says otherwise, and `0` lets the system choose) and, for a
+`POST /<name>` whose signature verifies, starts the stored prompt as a one-shot `bravebot -p` run in
+the trigger's directory. The body of the delivery is written to the run's standard input, where it
+is untrusted and private as any piped input is, and the prompt is told only that a delivery arrived.
+Nothing of bravebot runs between deliveries unless `serve` is running.
+
+A sender signs `hmac_sha256(secret, event + "\n" + body)` and sends it as
+`X-Bravebot-Signature: sha256=<lowercase hex>`. The event is the one given to `add`, so a delivery
+signed for another event does not verify, and no header selects it. GitHub's `X-Hub-Signature-256`
+signs the body alone, so a GitHub webhook cannot be pointed at `serve` directly.
+
+| Subcommand | What it does |
+|---|---|
+| `add <name>` | check the name, event, limits, prompt and directory, then store the entry and a secret only your account can read. A name in use is refused and keeps its secret |
+| `list [--json]` | print each trigger's name, event, directory, whether a run `can write` or `reads only`, and its prompt, shortened. The secret is never printed |
+| `remove <name>` | delete the entry, its secret and the question it kept |
+| `pending` | print the question each trigger's last run stopped at, with its numbered choices |
+| `clear <name>` | delete the question a trigger stopped at and keep the trigger. It takes no answer |
+| `serve [--port <n>]` | listen and start runs. Every refusal is the same `404` page, so a sender learns neither which names are stored nor what failed. Otherwise `202` started, `413` body over 1 MiB, `429` over the limits, `500` the run could not start |
+
+A name is lowercase letters, digits and hyphens, does not start with a hyphen and is at most 64
+characters. An event is letters, digits and `. _ : -`, at most 64. `--max-concurrent` takes 1 to 4
+(default 1) and `--max-per-hour` takes 1 to 120 (default 6); a delivery over either is answered
+`429` and starts nothing. A prompt that is blank, or one word starting with `-`, is refused.
+`--workspace` defaults to the current directory and must exist. The prompt follows `--`. No option
+selects a delivery by what its body says.
+
+A run reads and reports. It can write only if you typed `--dangerously-skip-permissions` beside
+`add`, which is the only flag an entry stores and is shown by `list`; `add` refuses it where a
+settings layer made that mode unreachable, and every other subcommand refuses it. A run the planner
+asks a question stops at the first one, with or without that flag, exits with status 4 and keeps the
+question for `pending`. Entries and secrets are kept under the state directory. A run started with
+`--sandbox off` can start `bravebot trigger add`, and a confined one cannot.
+
+The listener accepts a connection from any program on this machine, and nothing else. To receive a
+delivery from another machine, forward it to the port yourself. See
+[Running on an event](../using/headless.md#running-on-an-event).
 
 ## `completion`
 

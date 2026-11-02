@@ -29,6 +29,7 @@ governs:
   - crates/cli/src/stats.rs
   - crates/cli/src/schedule.rs
   - crates/cli/src/skill_eval.rs
+  - crates/cli/src/trigger.rs
   - crates/session/src/stats.rs
   - crates/cli/src/update.rs
   - crates/config/src/keys.rs
@@ -2545,7 +2546,7 @@ The `bravebot-acp` program stays, because the tests of the loop start it.
 `verified-by: bravebot_cli::acp::acp_treats_an_option_never_offered_as_a_refusal`
 `verified-by: bravebot_cli::acp::acp_ending_its_input_with_a_question_waiting_writes_nothing_and_exits`
 `verified-by: bravebot_cli::acp::acp_waits_for_the_end_of_an_open_session_before_it_exits`
-`verified-by: bravebot_cli::flags::exactly_the_seventeen_commands_that_start_no_session_are_named`
+`verified-by: bravebot_cli::flags::exactly_the_eighteen_commands_that_start_no_session_are_named`
 
 <a id="CLI-40"></a>
 ### CLI-40: `--issue <url>` and `--pr <url>` give the session the command line opens its links
@@ -2678,3 +2679,26 @@ are not sent anywhere.
 `verified-by: bravebot_cli::schedule::calendar::a_day_and_a_weekday_that_are_both_restricted_run_on_either`
 `verified-by: bravebot_cli::schedule::calendar::a_plist_for_more_times_than_the_limit_is_refused`
 `verified-by: bravebot_cli::schedule::calendar::a_service_quotes_the_program_and_doubles_what_systemd_would_expand`
+`verified-by: bravebot_cli::flags::exactly_the_eighteen_commands_that_start_no_session_are_named`
+
+<a id="CLI-43"></a>
+### CLI-43: `trigger` registers a prompt for an event and runs it when a signed delivery arrives
+
+`bravebot trigger add | list | remove | pending | clear | serve` stores a prompt under a name and an
+event, and `serve` listens on the loopback address and starts the one-shot run (`-p`, CLI-1) for a
+delivery signed with the trigger's secret, giving the run the delivery's body as piped input (CLI-3)
+and no byte of it in the prompt. It starts no session and is one of the commands that start none
+(CLI-39), so the flags that shape a session are refused beside it. Only `add` takes
+`--dangerously-skip-permissions`, and it is the one flag an entry stores. Everything else is
+[triggers.md](triggers.md): the signature, the answers, the caps and why the listener decides on
+nothing the sender wrote. A trigger is not a `schedule` (CLI-42), which the operating system starts
+at a time, and only this command creates one.
+
+**Why.** An event somebody else's service reports should be able to start a prompt without a
+terminal left open, and without that service being able to choose what the prompt is, what it may
+do or what it is told.
+
+`verified-by: bravebot_cli::trigger::add_takes_the_prompt_after_double_dash_and_no_payload_filter`
+`verified-by: bravebot_cli::running::trigger_add_prints_the_secret_once_and_list_and_remove_keep_to_it`
+`verified-by: bravebot_cli::running::a_signed_delivery_starts_the_prompt_and_the_planner_never_sees_the_body`
+`verified-by: bravebot_cli::flags::exactly_the_eighteen_commands_that_start_no_session_are_named`

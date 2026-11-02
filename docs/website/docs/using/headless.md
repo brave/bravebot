@@ -219,6 +219,33 @@ clear <id>` deletes. `schedule pause <id>` keeps an entry and its line and stops
 still running is skipped. `history` lists each run with its exit status, the session it recorded and
 the tokens it spent. [The reference](../reference/cli.md#schedule) has the options.
 
+## Running on an event
+
+```sh
+bravebot trigger add on-push --event push -- "summarise this delivery and say whether it needs a person"
+bravebot trigger list
+bravebot trigger serve
+```
+
+`trigger add` stores the prompt under a name and an event and prints a secret once. `trigger serve`
+listens on `127.0.0.1:7471`. A sender signs the event and the body with the secret and posts them to
+`/on-push` with the header `X-Bravebot-Signature: sha256=<hex>`; `add` prints how. A delivery that
+verifies starts the prompt as a one-shot run in the directory you named. The body of the delivery
+is on the run's standard input, untrusted and private, so the planner is told that a delivery
+arrived and reads the content only through a processor, never as instructions.
+
+Every delivery that does not verify, names a trigger that is not stored, or is malformed gets the
+same `404` page and starts nothing. Each trigger runs one delivery at a time and at most six an
+hour unless `add` was given `--max-concurrent` or `--max-per-hour`, and a delivery over the limit
+is answered `429`. A run has nobody to ask, so it reads and reports, and writes only if you typed
+`--dangerously-skip-permissions` when you ran `add`. A run that the planner asks a question stops at
+the first one, exits with status 4 and keeps the question for `trigger pending`, which `trigger clear
+<name>` deletes.
+
+The listener is on the loopback address only. To receive a delivery from a service on another
+machine, forward a port to it yourself. [The reference](../reference/cli.md#trigger) has the options
+and the answers.
+
 ## Planning the whole run first
 
 `--mode manifest` decides everything first: the planner emits a step list, and a driver walks it

@@ -525,7 +525,7 @@ and the content has no say in it.
 | what such a program printed with no input at all | trusted and private, because it is a function of nothing an attacker influenced, and private because a run is not a release | `verified-by: bravebot_core::policy::a_filter_with_no_input_prints_trusted_private_output` |
 | what a line whose every step is accounted for printed | trusted and private, because the steps were vouched for and the output is a function of what went in | `verified-by: bravebot_core::policy::a_line_that_only_reads_vouched_for_paths_comes_back_trusted` |
 | a line the user ran themselves | trusted and private, because nobody steers a keystroke | `verified-by: bravebot_core::policy::what_a_command_the_user_typed_printed_is_trusted_and_private` |
-| input piped into the process | untrusted and private, because a pipe has no path anyone could vouch for | `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private` |
+| input piped into the process | untrusted and private, because a pipe has no path anyone could vouch for. The body of a delivery to `bravebot trigger serve` is this row: it is written to the standard input of the run it starts and takes no label of its own ([TRIGGER-7](triggers.md#TRIGGER-7)) | `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private` `verified-by: bravebot_cli::running::a_signed_delivery_starts_the_prompt_and_the_planner_never_sees_the_body` |
 | the user's own configuration, and a skill kept beside it | trusted and public, because putting a file there is the grant | `verified-by: bravebot_core::policy::configuration_the_user_placed_is_trusted_from_where_it_came_from` |
 | a fact kept by `remember` or the person | trusted, with the confidentiality its `label` field states, private when missing, because a kept fact is in the user's own memory and is written only by the person or by a save they were shown; a private one makes what the planner writes private once it is read | `verified-by: bravebot_core::policy::a_kept_fact_is_trusted_with_the_confidentiality_it_states` `verified-by: bravebot_core::policy::labelling_a_kept_fact_is_recorded_in_the_audit_trail` `verified-by: bravebot_core::policy::reading_a_private_fact_makes_the_context_private` `verified-by: bravebot_core::policy::reading_a_public_fact_leaves_the_context_as_it_was` |
 | what the planner wrote | the integrity of the context it was written in, and private once private content was let out of quarantine for the planner: a slot `vet_content` let through, output `read_output` read to it, a delegate's report it was given, or a context it resumed that already held one. A workspace file it was shown does not count, because that is the project's own data and counting it would make every call after the first read ask | `verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted` `verified-by: bravebot_core::policy::a_vetted_private_slot_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_vetted_public_slot_leaves_what_the_planner_writes_public` `verified-by: bravebot_core::policy::a_vetted_private_picture_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::output_read_aloud_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_private_report_from_a_delegate_is_held` `verified-by: bravebot_core::policy::a_resumed_context_keeps_what_it_held_and_cannot_be_made_public` |
@@ -648,12 +648,13 @@ arrives at all.
 
 ## Known costs
 
-- **Nine places do look at untrusted bytes in order to decide something.** Three are in the policy
+- **Ten places do look at untrusted bytes in order to decide something.** Three are in the policy
   layer, the fourth is the search, which is in `bravebot-agent`, the fifth is the diagnostics
   sentence, the sixth is `read_git` and the seventh is the text-or-binary sniff and decoding of a
   read, which are in `bravebot-agent` too, the eighth is the choice of which parts of a tool
-  result are taken, which is in `bravebot-mcp`, and the ninth is the read of a processor's answer
-  for one number, which is in `bravebot-choice`. The clauses above say
+  result are taken, which is in `bravebot-mcp`, the ninth is the read of a processor's answer
+  for one number, which is in `bravebot-choice`, and the tenth is the trigger listener's reading
+  of a request's framing and path, which is in `bravebot-cli`. The clauses above say
   nothing may, so these are exceptions, and they are written down rather than left to be found.
 
   The first is splitting a processor's answer. A processor hands back a single piece of text that
@@ -1095,3 +1096,28 @@ arrives at all.
   labelled are pinned under [PROC-16](processors.md#PROC-16), and the claims that the number reaches
   a call only through the gate that carries it, after the person's answer, are pinned under
   [ROUTE-10](routing.md#ROUTE-10) and [MCP-14](mcp.md#MCP-14).
+
+- **The tenth is the trigger listener's reading of a request.** `bravebot trigger serve`
+  ([TRIGGER-10](triggers.md#TRIGGER-10)) answers a request from a sender nobody vouched for, and
+  four of its decisions are taken from bytes the sender wrote. It is in `bravebot-cli`, which is not
+  the driver, and the body is never one of them.
+
+  - **The framing.** `parse_head` in `crates/cli/src/trigger.rs` refuses a request whose method is
+    not `POST`, whose version is not `HTTP/1.x`, that has a `Transfer-Encoding` header, that has no
+    `Content-Length` or more than one, or whose `Content-Length` is not digits, that has no signature
+    header or more than one, and a path that is
+    not a name. Each is decided from the request line and the headers only, and none is decided from
+    the body. The answer to each is the same fixed 404.
+  - **The body length.** The `Content-Length` is compared with the cap to decide whether to read the
+    body or refuse it whole with a fixed page. It says how many bytes to read and nothing about what
+    they say.
+  - **The path.** The path is looked up as a name among the entries the person stored. The sender can
+    only pick among names the person made, each of which the person agreed would start its own
+    prompt.
+  - **The signature.** The signature header is compared with a value computed from the person's
+    secret, and the event it covers is the person's own. A delivery that does not verify starts
+    nothing.
+
+  The listener holds no `declassify`. The body reaches the run's standard input unchanged and is read
+  by nothing here. A header, a path suffix or a byte of the body that selects a trigger, an event, a
+  flag, a directory or a limit is a violation, and not one of these four.
