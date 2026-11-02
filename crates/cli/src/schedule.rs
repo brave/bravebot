@@ -1121,6 +1121,7 @@ mod tests {
         );
         assert_eq!(entry.map(|e| e.cron).as_deref(), Some("* * 0 * *"));
         assert!(read_entry("1", "cron=* * $(x) * *\ndir=/w\nmode=read\n", String::new()).is_none());
+        assert!(read_entry("1", "cron=* * * *\ndir=/w\nmode=read\n", String::new()).is_none());
     }
 
     #[test]
