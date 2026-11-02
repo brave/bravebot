@@ -624,12 +624,22 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// it: a check is a model being shown the content, which is the disclosure the question is
     /// about, so asking one would perform the act it was deciding about.
     fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
-        match self.mode.get() {
-            PermissionMode::Bypass => Decision::Approve,
+        self.confirm_exposing_read_noting_the_mode(request).0
+    }
+
+    /// The answer and the mode that gave it, read from one look at the mode, so the trail credits
+    /// the mode the question was answered in and not a person (MODE-4, MODE-8, TRACE-7).
+    fn confirm_exposing_read_noting_the_mode(
+        &mut self,
+        request: &crate::confirm::ExposureRequest,
+    ) -> (Decision, Option<&'static str>) {
+        let mode = self.mode.get();
+        match mode {
+            PermissionMode::Bypass => (Decision::Approve, Some(mode.name())),
             PermissionMode::Ask
             | PermissionMode::AcceptEdits
             | PermissionMode::Plan
-            | PermissionMode::Auto => self.asking().confirm_exposing_read(request),
+            | PermissionMode::Auto => (self.asking().confirm_exposing_read(request), None),
         }
     }
 
@@ -1351,6 +1361,47 @@ mod tests {
             "a mode that draws no prompt recorded an answer past the session"
         );
         assert_eq!(confining.confirm_manifest(&a_plan()), Decision::Approve);
+    }
+
+    /// MODE-4, TRACE-7: a flagged read bypassing approves comes back with the mode's name, and the
+    /// answer every other mode gives comes back with none, so the trail credits a person only for an
+    /// answer that went to the confirmer. The inner confirmer refuses, so a yes under bypass can only
+    /// be the mode's. The regressions it rejects are a bypass answer that names no mode (the trail
+    /// then records a person agreeing) and a mode that names itself for an answer it asked a person
+    /// for.
+    #[test]
+    fn bypassing_names_itself_for_a_flagged_read_and_no_other_mode_does() {
+        let an_exposure = crate::confirm::ExposureRequest {
+            path: ".env".to_string(),
+            credentials: Vec::new(),
+        };
+        let mut refusing = Unattended;
+        let mut bypassing = Confining::new(&mut refusing, PermissionMode::Bypass, false);
+        assert_eq!(
+            bypassing.confirm_exposing_read_noting_the_mode(&an_exposure),
+            (Decision::Approve, Some("bypass"))
+        );
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+            PermissionMode::Auto,
+        ] {
+            let mut agreeing = crate::confirm::ExposesReads;
+            let mut confining = Confining::new(&mut agreeing, mode, false);
+            assert_eq!(
+                confining.confirm_exposing_read_noting_the_mode(&an_exposure),
+                (Decision::Approve, None),
+                "{mode:?} named itself for an answer the confirmer gave"
+            );
+            let mut refusing = Unattended;
+            let mut confining = Confining::new(&mut refusing, mode, false);
+            assert_eq!(
+                confining.confirm_exposing_read_noting_the_mode(&an_exposure),
+                (Decision::Reject, None),
+                "{mode:?} approved a flagged read its confirmer refused"
+            );
+        }
     }
 
     /// MODE-4, SERVERS-21: bypassing approves a call to a server's tool, and a call to a server

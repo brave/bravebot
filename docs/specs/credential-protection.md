@@ -725,6 +725,20 @@ does a session carrying on in a copy with `/branch` ([SESSION-31](sessions.md#SE
 `verified-by: bravebot_agent::turn::retention::ordinary_endings_retain_live_exposure_answers`
 `verified-by: bravebot_tui::undo_tests::ordinary_tui_endings_keep_exact_approvals_advice_and_exposure`
 
+**What the trail records about the answer.** A yes writes one `approval` entry naming the path, on
+`read_file`, on `edit_file` and on `read_git` alike. Where a person answered, it says the user agreed
+to the planner being given the file. Where the bypassing mode answered in their place
+([MODE-4](permission-modes.md#MODE-4)), it names the mode and says nobody was asked, so a trail
+reader does not take a flag for a person's agreement ([TRACE-7](trace.md#TRACE-7)). A delegate's
+read is answered and recorded the same way ([MODE-9](permission-modes.md#MODE-9)). The entry holds
+the path and the mode's name and no finding.
+
+`verified-by: bravebot_agent::turn::a_flagged_read_bypass_mode_let_through_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::turn::a_flagged_read_a_person_agrees_to_is_recorded_as_the_user_agreeing`
+`verified-by: bravebot_agent::turn::a_flagged_file_bypass_mode_let_through_is_recorded_once_per_session`
+`verified-by: bravebot_agent::turn::a_flagged_read_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_core::policy::the_trail_says_who_answered_for_a_flagged_read`
+
 **Why the person is asked rather than the read refused.** The rarity layer is a guess, and a tree
 holds development passwords, test fixtures and inline manifests as readily as it holds keys. A gate
 that refused every such read with no way to say otherwise would make an ordinary `.env` unreadable

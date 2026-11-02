@@ -911,7 +911,7 @@ pub struct Session {
     /// Separate from [`Session::phase`] because no request is in flight: the turn has nothing to
     /// ask the model until the report arrives, so without it the screen names nothing at all for
     /// the whole wait.
-    waiting_on: Option<bravebot_agent::report::DelegateId>,
+    waiting_on: Vec<bravebot_agent::report::DelegateId>,
     /// The agents this session has started and where each stands, one for each delegate entry of
     /// the transcript and in the same order. The rules for it are
     /// [`bravebot_agent::roster::Roster`]'s, which the desktop bridge uses as well, and
@@ -1453,7 +1453,7 @@ impl Session {
             phase: None,
             checking: None,
             hook: None,
-            waiting_on: None,
+            waiting_on: Vec::new(),
             roster: bravebot_agent::roster::Roster::new(),
             running: None,
             movable: None,
@@ -1616,8 +1616,12 @@ impl Session {
         // The turn has asked for everything it needs from the model and is waiting for a delegate
         // to finish. Nothing else on this row says so, and a screen that names nothing while a
         // delegate works reads as a turn that has stopped (DELEGATE-17).
-        if let Some(id) = self.waiting_on {
-            return Some(t!(indicator_waiting_on_delegate, delegate = id.to_string()));
+        if !self.waiting_on.is_empty() {
+            let named: Vec<String> = self.waiting_on.iter().map(ToString::to_string).collect();
+            return Some(t!(
+                indicator_waiting_on_delegate,
+                delegate = named.join(", ")
+            ));
         }
 
         // Only the phases that say something a person cannot see elsewhere. Planning is the
@@ -1940,7 +1944,7 @@ impl Session {
         // phases while the planner writes and while the turn waits on another, and none of them
         // ends that reply or that wait.
         if self.attributed_to.is_none() {
-            self.waiting_on = None;
+            self.waiting_on.clear();
             self.streaming.clear();
             self.thinking.clear();
         }
@@ -1967,9 +1971,11 @@ impl Session {
         self.checking = Some(checking);
     }
 
-    /// Record that the turn is waiting on this delegate's report.
+    /// Record that the turn is waiting on this delegate's report, beside any it already waits on.
     pub fn waiting_on_delegate(&mut self, id: bravebot_agent::report::DelegateId) {
-        self.waiting_on = Some(id);
+        if !self.waiting_on.contains(&id) {
+            self.waiting_on.push(id);
+        }
     }
 
     /// Record that the check is over.
@@ -4207,7 +4213,7 @@ impl Session {
         self.phase = None;
         self.checking = None;
         self.hook = None;
-        self.waiting_on = None;
+        self.waiting_on.clear();
         self.running = None;
         self.movable = None;
     }
@@ -14102,6 +14108,29 @@ mod tests {
             assert_eq!(s.indicator().expect("working").verb, named_nothing);
         }
 
+        /// DELEGATE-17: the wait ends at whichever delegate ends first, so the row names every
+        /// delegate still working and drops each as its report comes in. A row naming only the
+        /// first would claim the turn waits on a delegate that has already reported, or name one
+        /// of two that are working.
+        #[test]
+        fn a_turn_waiting_on_several_delegates_names_each_until_it_reports() {
+            use bravebot_agent::report::DelegateId;
+            let mut s = working();
+            s.set_phase(Phase::Thinking);
+            let named_nothing = s.indicator().expect("working").verb;
+            s.waiting_on_delegate(DelegateId::nth(1));
+            s.waiting_on_delegate(DelegateId::nth(2));
+            // A delegate named twice is named once.
+            s.waiting_on_delegate(DelegateId::nth(2));
+            assert_eq!(s.indicator().expect("working").verb, "Waiting on d1, d2");
+
+            s.delegate_finished(DelegateId::nth(1), String::new(), false, None);
+            assert_eq!(s.indicator().expect("working").verb, "Waiting on d2");
+
+            s.delegate_finished(DelegateId::nth(2), String::new(), false, None);
+            assert_eq!(s.indicator().expect("working").verb, named_nothing);
+        }
+
         /// The next round starts a request, and a row still naming the delegate would claim the
         /// turn is waiting on one that has reported.
         #[test]
@@ -14110,6 +14139,7 @@ mod tests {
             s.set_phase(Phase::Thinking);
             let named_nothing = s.indicator().expect("working").verb;
             s.waiting_on_delegate(bravebot_agent::report::DelegateId::nth(1));
+            s.waiting_on_delegate(bravebot_agent::report::DelegateId::nth(2));
             s.set_phase(Phase::Thinking);
             assert_eq!(s.indicator().expect("working").verb, named_nothing);
         }

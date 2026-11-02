@@ -234,6 +234,11 @@ in the terminal ([CRED-13](credential-protection.md#CRED-13)). The yes writes no
 neither of the longer answers a person is offered is recorded by the mode. A value that declared
 itself is refused before the mode is reached, here as everywhere.
 
+**A read the credential scan flagged is answered too.** The question put before a flagged file
+reaches the planner ([credential-protection.md](credential-protection.md)) is answered yes here, and
+the trail names this mode as what answered it rather than recording a person's agreement
+([TRACE-7](trace.md#TRACE-7)).
+
 The two prompts that promote one slot's bytes are answered yes unless the run also asked for
 auto-vetting ([CHECK-11](vetting.md#CHECK-11)). Where it did, the check's word is what answers in the
 absent person's place, and a word that is not `safe` refuses: the alternative is promoting content a
@@ -325,6 +330,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_tui::credential_mode_tests::bypassing_writes_a_credential_without_asking`
 `verified-by: bravebot_agent::mcp::screening_asked_for_makes_no_check_of_a_servers_list_under_bypass`
 `verified-by: bravebot_agent::turn::screening_asked_for_makes_no_check_before_a_vouch_under_bypass`
+`verified-by: bravebot_agent::turn::a_flagged_read_bypass_mode_let_through_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::turn::a_flagged_read_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::permission_mode::bypassing_names_itself_for_a_flagged_read_and_no_other_mode_does`
 
 ## Choosing one
 

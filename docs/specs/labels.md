@@ -76,7 +76,7 @@ guards:
       - crates/agent/src/skills.rs: 5
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 25
-      - crates/agent/src/turn.rs: 7
+      - crates/agent/src/turn.rs: 8
       - crates/agent/src/workspace.rs: 16
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1

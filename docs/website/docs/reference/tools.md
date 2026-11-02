@@ -651,8 +651,8 @@ marked as such.
 A `job` naming a [delegate](#spawn_agent) rather than a job is answered as that: `job_output` neither
 reads nor stops a delegate, and its report reaches the planner on its own when it finishes. The refusal
 tells the planner to end the round with one line saying what is outstanding, and the turn asks it again
-once the report arrives. Only a
-name that is neither is reported as no job.
+when the first report is in, while any others keep working. Only a name that is neither is reported as
+no job.
 
 **A finished job reaches the turn without being asked about.** Between rounds the turn checks whether
 any of its jobs has ended, and the handle, the exit codes and whatever was printed since anybody last
@@ -896,6 +896,13 @@ The call answers as soon as the delegate has been approved, so the planner has i
 the work goes on behind it, and what the delegate says arrives on its own later. Several delegates
 can be going at once, each numbered in the order the turn started them, and every report says whose
 work it describes.
+
+When the planner ends a round with delegates still working, the turn asks it again as soon as the first
+one ends, or as soon as you send a line, and puts the reports that have come in in front of it. The
+other delegates keep working. If the planner has nothing to do with a report it ends its round again
+naming what is outstanding, and the turn waits for the next delegate to end. The turn does not end
+until the last delegate has. The call has no argument to wait for a whole batch before the planner is
+asked again.
 
 A name that is neither a kind nor a definition is refused, and the refusal lists the names that would
 have worked.

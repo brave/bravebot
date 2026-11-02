@@ -1543,6 +1543,60 @@ fn take_session_messages<S: Sink, R: Reporter>(
     }
 }
 
+/// How often the turn looks at its delegates, its typed lines and the stop while it waits for one
+/// of them to end.
+const WAKE_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Whether a line the person typed ends a wait for delegates (INPUT-10).
+///
+/// A delegate never wakes on one: the line was aimed at the turn the person is watching, and the
+/// delegate's own conversation is not that turn. A line counts once, by the number typed since the
+/// last wait, and only while the turn is able to take it.
+fn a_typed_line_wakes(task: &Task, arrival: &crate::interjections::Arrival, seen: u64) -> bool {
+    task.delegate.is_none() && arrival.is_waiting() && arrival.typed() > seen
+}
+
+/// Block until the turn has a reason to ask the planner again while its delegates work (DELEGATE-17).
+///
+/// The reasons are a delegate that ended, a line the person typed, or a stop. Each is a count or a
+/// flag the driver holds: how many threads have finished, whether a line is waiting and how many
+/// have been typed since the last wait woke for one, and whether the turn was cancelled. Nothing a
+/// delegate reported is read, so a report that is quarantined wakes the turn exactly as one that
+/// is shown does.
+///
+/// A line that is waiting wakes the wait once. The count keeps a line the turn cannot take from
+/// waking every wait after it and sending the planner a request each time.
+///
+/// A delegate never wakes on a typed line: the line was aimed at the turn the person is watching
+/// ([`take_interjections`]).
+fn wait_for_a_wake<C: Confirmer, R: Reporter>(
+    delegates: &[Working<'_>],
+    task: &Task,
+    cancel: &Cancel,
+    confirmer: &C,
+    reporter: &mut R,
+    waits: &mut crate::timing::DelegateWait,
+) {
+    if delegates.is_empty() {
+        return;
+    }
+    let arrival = confirmer.arrival();
+    // Remembered before anything else runs, so a line typed from here on is one this wait woke for.
+    let seen = waits.typed_seen();
+    // Every delegate still working is named, since the wait ends at whichever of them is first.
+    for working in delegates {
+        reporter.delegate_waiting(working.id);
+    }
+    waits.begin_wait();
+    while !cancel.is_cancelled()
+        && !delegates.iter().any(|working| working.handle.is_finished())
+        && !a_typed_line_wakes(task, &arrival, seen)
+    {
+        std::thread::sleep(WAKE_POLL);
+    }
+    waits.note_typed(arrival.typed());
+}
+
 /// Take back every delegate that has finished, or wait for one where `wait` is set.
 ///
 /// A report reaches the planner as a message of its own rather than as the result of the call
@@ -5731,6 +5785,175 @@ mod tests {
         assert!(
             from_the_clean.contains("It reported:\n\nTHE-SAME-REPORT-WORDS"),
             "a report from a clean context was not shown to the planner: {from_the_clean}"
+        );
+    }
+
+    /// DELEGATE-17 and AGENT-4. The turn wakes on a count of delegates that have ended and takes
+    /// each of them, whatever label its report carries. Two delegates that end together are both
+    /// collected by one wake, and a report from a context that met something untrusted wakes the
+    /// turn exactly as one from a clean context does, though the planner is handed a reference to
+    /// the first and the words of the second.
+    #[test]
+    fn two_delegates_ending_together_are_both_collected_by_one_wake_whatever_their_labels() {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+        );
+        // Returns how many one wake collected and what the planner was told about each.
+        let wake_once = |clean: Vec<bool>| -> (usize, Vec<String>) {
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "wake once for delegates that have ended");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::default(),
+                &mut sink,
+            )
+            .unwrap();
+            let seeded = policy.vouched();
+            let mut conversation = Conversation::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+            let reports: Vec<_> = clean
+                .iter()
+                .map(|clean| {
+                    if *clean {
+                        bravebot_core::Labelled::trusted("REPORT-WORDS".to_string())
+                    } else {
+                        policy.label_piped_input("REPORT-WORDS".to_string())
+                    }
+                })
+                .collect();
+            let mut collected = 0;
+            std::thread::scope(|scope| {
+                let mut delegates: Vec<Working<'_>> = reports
+                    .into_iter()
+                    .enumerate()
+                    .map(|(at, report)| {
+                        let handed = seeded.clone();
+                        let answered = scope.spawn(move || -> Joined {
+                            (
+                                crate::delegate::Ended {
+                                    delegated: Ok(crate::delegate::Delegated {
+                                        report,
+                                        kind: "one-round".to_string(),
+                                        usage: Default::default(),
+                                    }),
+                                    vouched: handed,
+                                    notices: Vec::new(),
+                                    rounds: 1,
+                                    took: Duration::from_millis(5),
+                                    worked: Default::default(),
+                                },
+                                Default::default(),
+                                Vec::new(),
+                            )
+                        });
+                        Working {
+                            join_started: None,
+                            id: DelegateId::nth(1 + at as u32),
+                            seeded: seeded.clone(),
+                            checkout: None,
+                            rounds: 1,
+                            budget: None,
+                            stop: Default::default(),
+                            handle: answered,
+                        }
+                    })
+                    .collect();
+                // Both are over before the turn looks, which is what ending together means.
+                while !delegates.iter().all(|working| working.handle.is_finished()) {
+                    std::thread::yield_now();
+                }
+                let mut waits = crate::timing::DelegateWait::default();
+                wait_for_a_wake(
+                    &delegates,
+                    &Task::new("wake"),
+                    &Cancel::new(),
+                    &crate::confirm::ApproveWrites,
+                    &mut reporter,
+                    &mut waits,
+                );
+                collected = collect_delegates(
+                    &mut delegates,
+                    &mut policy,
+                    &mut conversation,
+                    &mut reporter,
+                    &mut crate::outcome::Spent::default(),
+                    false,
+                    &mut waits,
+                    &mut Elapsed::default(),
+                    &mut Vec::new(),
+                    &mut Worked::default(),
+                    0,
+                )
+                .unwrap();
+                assert!(delegates.is_empty(), "a delegate that had ended was left");
+            });
+            let told = conversation
+                .messages()
+                .iter()
+                .map(|stored| stored.message.content.text())
+                .filter(|text| text.contains("has finished."))
+                .collect();
+            (collected, told)
+        };
+
+        let (together, told) = wake_once(vec![false, true]);
+        assert_eq!(
+            together, 2,
+            "one wake did not take both delegates that had ended"
+        );
+        assert_eq!(told.len(), 2, "the planner was not told of both: {told:?}");
+        assert!(
+            told.iter().any(|text| !text.contains("REPORT-WORDS")),
+            "the untrusted report was shown with the other: {told:?}"
+        );
+        assert!(
+            told.iter()
+                .any(|text| text.contains("It reported:\n\nREPORT-WORDS")),
+            "the clean report was not shown: {told:?}"
+        );
+
+        let (quarantined, _) = wake_once(vec![false]);
+        let (visible, _) = wake_once(vec![true]);
+        assert_eq!(
+            (quarantined, visible),
+            (1, 1),
+            "a report's label changed whether its delegate's ending woke the turn"
+        );
+    }
+
+    /// INPUT-10 and DELEGATE-17: a line waiting for the turn wakes a wait once, and a delegate's
+    /// wait is never woken by it.
+    ///
+    /// Rejects a wake that reads only whether a line is waiting, which would wake the same line
+    /// again at every later wait, and one that leaves out the delegate check, which would end a
+    /// delegate's wait for a line aimed at the person's turn.
+    #[test]
+    fn a_typed_line_wakes_a_persons_wait_once_and_a_delegates_never() {
+        let buffer = crate::interjections::Interjections::new();
+        let arrival = buffer.arrival();
+        let person = Task::new("typed while waiting");
+        let delegate = Task::delegated(a_delegate_spec("reader", CapabilitySet::default()));
+
+        assert!(
+            !a_typed_line_wakes(&person, &arrival, arrival.typed()),
+            "a wait was woken with nothing typed"
+        );
+        assert!(buffer.push("LINE".to_string()), "the line was not accepted");
+        assert!(
+            a_typed_line_wakes(&person, &arrival, 0),
+            "a line typed during the wait did not wake the person's turn"
+        );
+        assert!(
+            !a_typed_line_wakes(&delegate, &arrival, 0),
+            "a line aimed at the person's turn woke a delegate's wait"
+        );
+        assert!(
+            !a_typed_line_wakes(&person, &arrival, arrival.typed()),
+            "a line already woken for woke the next wait again"
         );
     }
 

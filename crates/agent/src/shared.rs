@@ -440,6 +440,16 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn confirm_exposing_read_noting_the_mode(
+        &mut self,
+        request: &crate::confirm::ExposureRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.asked(
+            |held| held.confirm_exposing_read_noting_the_mode(request),
+            |refuse| refuse.confirm_exposing_read_noting_the_mode(request),
+        )
+    }
+
     fn confirm_tool_list(
         &mut self,
         request: &crate::confirm::ToolListRequest,

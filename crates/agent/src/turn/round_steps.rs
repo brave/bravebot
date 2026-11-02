@@ -23,7 +23,7 @@ use super::{
     Worked, Working, adopt_and_say, collect_delegates, collect_jobs, fire_hooks,
     narrate_between_calls, note_rules_added, record_answer, rule_notices, say_prompt_notices,
     show_what_running_jobs_have_printed, stopped_at, take_interjections, take_session_messages,
-    tell_of_kept_jobs, token_limit_reached,
+    tell_of_kept_jobs, token_limit_reached, wait_for_a_wake,
 };
 use crate::backend::BackendError;
 use crate::confirm::Confirmer;
@@ -510,19 +510,26 @@ pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
             // when the next round starts and never reach the transcript.
             narrate_between_calls(policy, reporter, &completion.content);
             record_answer(policy, conversation, &completion.content)?;
+            // Asked again when the first delegate ends or a line is typed, while the others
+            // keep working (DELEGATE-17). A stop falls back to joining every delegate, so the
+            // turn still does not end while one works.
+            wait_for_a_wake(delegates, task, cancel, confirmer, reporter, waits);
             collect_delegates(
                 delegates,
                 policy,
                 conversation,
                 reporter,
                 &mut state.account,
-                true,
+                cancel.is_cancelled(),
                 waits,
                 &mut state.spent,
                 state.hook_notices,
                 &mut state.worked,
                 state.steps,
             )?;
+            // A wake by a typed line collected nobody, and its window still belongs to the
+            // delegates' requests that ran inside it.
+            waits.end_wait();
             // A round the planner spent waiting is still a round, and the wait is when a
             // person watching a turn go somewhere they did not ask for is most likely to
             // say so. This is the boundary their line was aimed at. Reaching the next
