@@ -864,7 +864,54 @@ the backend notice opens Agent settings.
 
 **Agent settings** shows Connection, Hooks and Run settings, one after another. Connection
 shows the bundled agent build, model services, certificate/proxy details and administrator
-pins, with setup instructions for gateways, AWS Bedrock and Brave. Secrets are not shown.
+pins, with setup instructions for gateways and AWS Bedrock. Secrets are not shown.
+
+**Accounts**, after Connection, lists the sign-ins `bravebot auth status` reports: Brave Premium,
+each gateway, OpenRouter wherever a key could be stored for it, AWS Bedrock, ChatGPT and xAI, each
+with its mark and its standing (signed in, key stored, key from the environment, no key needed, not
+signed in, can't be used, or misconfigured) and the reason a sign-in can't be used. No row shows
+who is signed in, a key or a token. A row the agent can forget has **Sign out**, which asks first;
+Cancel and `Esc` forget nothing, and a gateway's question names its host. A ChatGPT or xAI row that
+is not signed in, or can't be used, has **Sign in**, and so does an AWS Bedrock row whose sign-in
+is the remedy. The Brave Premium row and a gateway row whose key can be stored have **Enter key**,
+or **Replace key** where one is stored. Any other row that is not signed in shows the command that
+signs in, with a copy button; a key row shows its button instead. Refresh diagnostics reads the
+rows again, and so does the window coming back, at most every five seconds and not where an AWS
+Bedrock row is listed, since reading it runs the AWS command-line tool. A failure card or picker
+warning that names `bravebot auth login chatgpt` or `bravebot auth login xai` has the same
+**Sign in** button.
+
+Sign in asks in a dialog of the main process's own, with Cancel as the default. A yes starts the
+sign-in and opens a small **Sign in to ChatGPT** or **Sign in to xAI** window. For ChatGPT the
+browser opens at OpenAI, and the window shows the address, with a copy button and **Open browser
+again**, and the local port that waits for it. For xAI the window shows the code to enter, with a
+copy button, how long it lasts, and **Open in browser**. The row shows that it is waiting, until
+when, **Show sign-in window** and **Cancel**; closing the small window cancels too. When the
+sign-in ends the row says it was stored, cancelled or why it failed, and the model list is read
+again.
+
+An AWS Bedrock row signs in to the account it names, its profile or the default chain, with
+`aws sso login`, as `bravebot auth login bedrock` does. The dialog says that the AWS command-line
+tool opens a browser at AWS and keeps the session. The **Sign in to AWS** window shows the profile,
+the code to confirm, with a copy button, once the AWS command-line tool has written it, and
+**Open browser again**. Cancel, closing the window and quitting stop the AWS command-line tool.
+Afterwards the account is checked again, as a turn would, and a sign-in it did not complete says
+so. Signing in to the account the tier variables name records `BRAVEBOT_USE_BEDROCK` in the
+user's settings, as the command does, except in an incognito session, and the row says what
+became of it. Where there is no account to sign in to, or Bedrock is switched or pinned off, the
+row says so and the AWS command-line tool is not run.
+
+Enter key opens a small **Enter the key for** window of the main process's own, once the agent
+says a key can be kept; otherwise the row says why not, such as an incognito session or a key file
+that cannot be read, which is left as it is. The window shows the service's mark, where the key is
+sent, that a known service is named in the settings so sessions send it, that saving replaces the
+key stored and the one replaced still works at its host until it is revoked there, and that a
+variable set in the environment is sent instead of the key while it is set. The key is typed in a
+password field and the page never sees it. **Save key** or **Replace key** stores it and closes
+the window; a refusal is said in the window, which stays open. **Cancel**, or closing the window,
+stores nothing. While it is open the row says to enter the key in its window, with **Show key
+window**. When a key is stored the row says so, and the model list is read again.
+
 Run settings selects a JSON model/connection override for this app run, lists loaded files
 in precedence order, and provides Clear override. Existing turns retain their configuration;
 future turns and model discovery use the selected override. Terminal-only preferences are not

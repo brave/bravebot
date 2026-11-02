@@ -41,6 +41,7 @@ pub use renew::Renewer;
 use crate::oauth::{self, encoding};
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// The destinations of the sign-in. Compiled in: nothing a page, a reply, a model, a settings file
@@ -141,6 +142,8 @@ pub enum SignInError {
     Clock,
     /// The sign-in could not be stored.
     Store(AccountError),
+    /// The caller's stop was set before the sign-in was stored. Nothing was stored.
+    Cancelled,
 }
 
 /// A short name for the step, for a log or a test.
@@ -158,6 +161,7 @@ impl std::fmt::Display for SignInError {
             Self::IdToken => f.write_str("id token"),
             Self::Clock => f.write_str("clock"),
             Self::Store(failure) => write!(f, "store {failure}"),
+            Self::Cancelled => f.write_str("cancelled"),
         }
     }
 }
@@ -179,12 +183,14 @@ pub struct SignedIn {
 /// and before anything waits. It shows the URL and asks for the browser, and the sign-in carries on
 /// whether or not a browser opened. `transport` is what the caller has decided its clients trust and
 /// go through, half-built so the caller can finish it. `pages` is the words the browser is
-/// shown when it returns.
+/// shown when it returns. Setting `stop` ends the sign-in with [`SignInError::Cancelled`] at any
+/// point before it is stored, and does nothing after.
 pub fn sign_in(
     hosts: &Hosts,
     transport: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
     limits: &Limits,
     pages: &Pages<'_>,
+    stop: &AtomicBool,
     announce: impl FnOnce(&Announcement<'_>),
 ) -> Result<SignedIn, SignInError> {
     let destination = path().map_err(SignInError::Store)?;
@@ -195,6 +201,7 @@ pub fn sign_in(
         pages,
         &destination,
         encoding::clock,
+        stop,
         announce,
     )
 }
@@ -205,6 +212,10 @@ pub fn sign_in(
 /// no time would put every expiry after it. So the clock is read before anything is opened or bound,
 /// and again where the reply arrives, which is the instant the expiries are compared at, and a
 /// reading of `None` at either ends the sign-in with nothing stored.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the clock and the destination are passed in only so tests can stand them in"
+)]
 fn run(
     hosts: &Hosts,
     transport: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
@@ -212,6 +223,7 @@ fn run(
     pages: &Pages<'_>,
     destination: &Path,
     clock: impl Fn() -> Option<u64>,
+    stop: &AtomicBool,
     announce: impl FnOnce(&Announcement<'_>),
 ) -> Result<SignedIn, SignInError> {
     clock().ok_or(SignInError::Clock)?;
@@ -232,8 +244,11 @@ fn run(
     });
 
     let callback = listener
-        .wait(request.state(), limits.callback, pages)
-        .map_err(|listener::Waited::TimedOut| SignInError::TimedOut)?;
+        .wait(request.state(), limits.callback, pages, stop)
+        .map_err(|waited| match waited {
+            listener::Waited::TimedOut => SignInError::TimedOut,
+            listener::Waited::Cancelled => SignInError::Cancelled,
+        })?;
     let code = callback.code.ok_or(SignInError::NoCode)?;
     // The client OpenAI issued is used from a first sign-in's callback and from the file after it.
     let client = match (request.client(), callback.client_id) {
@@ -273,6 +288,9 @@ fn run(
         client_id: client,
         host_id: request.host_id().to_string(),
     };
+    if stop.load(Ordering::SeqCst) {
+        return Err(SignInError::Cancelled);
+    }
     account::save_at(destination, &signed_in).map_err(SignInError::Store)?;
     Ok(SignedIn {
         expires: signed_in.expires(),
@@ -413,6 +431,7 @@ mod tests {
             &PAGES,
             path,
             clock,
+            &AtomicBool::new(false),
             |announcement| {
                 announced = Some((announcement.url.to_string(), announcement.port));
                 server.then(replies(named(&parameters(announcement.url), "nonce")));
@@ -755,6 +774,7 @@ mod tests {
             &PAGES,
             &path,
             encoding::clock,
+            &AtomicBool::new(false),
             |announcement| {
                 let state = named(&parameters(announcement.url), "state").to_string();
                 let port = announcement.port;
@@ -1154,6 +1174,7 @@ mod tests {
             &PAGES,
             &path,
             || None,
+            &AtomicBool::new(false),
             |_| announced = true,
         );
 
@@ -1195,6 +1216,82 @@ mod tests {
         assert!(!path.exists(), "an account was stored");
     }
 
+    /// A stop set while the browser is awaited ends the sign-in at once with nothing asked or
+    /// stored, and the port is let go.
+    #[test]
+    fn a_stop_set_while_the_browser_is_awaited_ends_the_sign_in_and_stores_nothing() {
+        let path = scratch("stopped-waiting");
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let server = serve(vec![]);
+        let mut port = None;
+        let started = std::time::Instant::now();
+        let result = run(
+            &Hosts::at(&server.base),
+            transport(),
+            &brief(),
+            &PAGES,
+            &path,
+            encoding::clock,
+            &stop,
+            |announcement| {
+                port = Some(announcement.port);
+                let stop = std::sync::Arc::clone(&stop);
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(50));
+                    stop.store(true, Ordering::SeqCst);
+                });
+            },
+        );
+
+        assert!(matches!(result, Err(SignInError::Cancelled)), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(
+            server.finish().is_empty(),
+            "the server was asked for something"
+        );
+        assert!(!path.exists(), "an account was stored");
+        std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port.expect("a port")))
+            .expect("the port is still held after the sign-in was stopped");
+    }
+
+    /// A stop set after the browser came back and the code was exchanged, but before the account
+    /// is stored, stores nothing: a person who cancelled is not left signed in.
+    #[test]
+    fn a_stop_set_after_the_exchange_and_before_the_store_stores_nothing() {
+        let path = scratch("stopped-before-store");
+        let stop = AtomicBool::new(false);
+        let readings = std::cell::Cell::new(0);
+        let server = serve(vec![]);
+        let result = run(
+            &Hosts::at(&server.base),
+            transport(),
+            &brief(),
+            &PAGES,
+            &path,
+            || {
+                readings.set(readings.get() + 1);
+                // The second reading is where the reply has arrived.
+                if readings.get() == 2 {
+                    stop.store(true, Ordering::SeqCst);
+                }
+                Some(encoding::now())
+            },
+            &stop,
+            |announcement| {
+                server.then(granted(named(&parameters(announcement.url), "nonce")));
+                let state = named(&parameters(announcement.url), "state").to_string();
+                let target = format!("/auth/callback?state={state}&code=c&client_id=issued-client");
+                let port = announcement.port;
+                std::thread::spawn(move || visit(port, &target));
+            },
+        );
+
+        assert!(matches!(result, Err(SignInError::Cancelled)), "{result:?}");
+        assert_eq!(readings.get(), 2);
+        assert!(!path.exists(), "an account was stored after the stop");
+        server.finish();
+    }
+
     /// No sentence of an error holds a value any step handled: the state, the code, a token or the
     /// path of a request. Each is fixed for the step and its class.
     #[test]
@@ -1208,6 +1305,7 @@ mod tests {
             SignInError::NoUseScope,
             SignInError::IdToken,
             SignInError::Clock,
+            SignInError::Cancelled,
             SignInError::KeySet(Class::Refused),
             SignInError::KeySet(Class::Incomplete),
             SignInError::Exchange(Class::Refused),

@@ -21,7 +21,17 @@ try {
     const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', credential: 'not required' }], selected: null, layers: [], overrides: [], managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
     // Figures that are not the agent's real ones, so a placeholder that held its own would not match them.
     const defaultFor = { 'turn-started': 41, 'tool-finished': 42, 'turn-finished': 43, 'prompt-shown': 44, 'checkout-made': 46, 'compacted': 47, 'session-started': 45, 'session-ended': 7 }
-    const state = { report, defaultFor, hooks: { path: '/test/.bravebot/hooks.json', text: '{"hooks":[]}', entire: true, hooks: [] }, watches: [], replies: [], turns: 0, conflict: false, unreadable: false }
+    const accounts = [
+      { way: 'brave', id: null, name: 'Brave Premium', standing: 'signedIn', keyFrom: 'stored', detail: null, command: 'bravebot auth login brave', canSignOut: true, host: null, canEnterKey: true },
+      { way: 'bedrock', id: 'dev', name: 'AWS Bedrock (dev)', standing: 'notSignedIn', keyFrom: null, detail: null, command: 'bravebot auth login bedrock --profile dev', canSignOut: false, host: null, canEnterKey: false },
+      { way: 'gateway', id: 'openrouter', name: 'OpenRouter', standing: 'notSignedIn', keyFrom: null, detail: null, command: 'bravebot auth login gateway openrouter', canSignOut: false, host: 'openrouter.ai', canEnterKey: true },
+      // A gateway the machine-level layer keeps from the key window, so its row shows the command.
+      { way: 'gateway', id: 'corp', name: 'Corp gateway', standing: 'notSignedIn', keyFrom: null, detail: null, command: 'bravebot auth login gateway corp', canSignOut: false, host: 'llm.corp.example', canEnterKey: false },
+      { way: 'gateway', id: 'local', name: 'Local', standing: 'signedIn', keyFrom: 'none', detail: null, command: null, canSignOut: false, host: null, canEnterKey: false },
+      { way: 'chatgpt', id: null, name: 'ChatGPT', standing: 'notSignedIn', keyFrom: null, detail: null, command: 'bravebot auth login chatgpt', canSignOut: false, host: null, canEnterKey: false },
+      { way: 'xai', id: null, name: 'xAI', standing: 'unusable', keyFrom: null, detail: 'The stored xAI sign-in cannot be read. Sign in again.', command: 'bravebot auth login xai', canSignOut: true, host: null, canEnterKey: false },
+    ]
+    const state = { report, defaultFor, accounts, signOuts: [], signIns: [], cancels: [], keys: [], hooks: { path: '/test/.bravebot/hooks.json', text: '{"hooks":[]}', entire: true, hooks: [] }, watches: [], replies: [], turns: 0, conflict: false, unreadable: false }
     const emit = (event, data, session = 's-a') => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', { event, data, session })
     globalThis.agentSettingsFixture = { state, emit }
     const replace = (name, fn) => { ipcMain.removeHandler(name); ipcMain.handle(name, fn) }
@@ -32,6 +42,12 @@ try {
       if (method === 'session.open') return { ok: { session: `s-${params.id}`, model: 'local/test', record: { ...rows.find(r => r.id === params.id), turns: 0, tokens: 0 }, said: [], todos: {}, trust: { known: true, rules: [] }, archived: 0, contextTokens: 0 } }
       if (method === 'models.list') return { ok: { models: [{ id: 'local/test', name: 'Test model', provider: 'Local', premium: false, contextWindow: 32000 }], defaultModel: 'local/test', warnings: [] } }
       if (method === 'settings.inspect') return { ok: report }
+      if (method === 'accounts.list') return { ok: { accounts: state.accounts } }
+      if (method === 'accounts.signOut') {
+        state.signOuts.push(params)
+        state.accounts = state.accounts.map(row => row.way === params.way && row.id === params.id ? { ...row, standing: 'notSignedIn', keyFrom: null, detail: null, canSignOut: false } : row)
+        return { ok: { accounts: state.accounts } }
+      }
       // Stands in for the agent's reader: the panel is told what a hook is rather than deciding.
       if (method === 'hooks.inspect') return state.unreadable ? { error: { code: 'internal', message: 'The hooks file could not be read back.' } } : { ok: { timeoutSeconds: { min: 1, max: 600, defaultFor: state.defaultFor }, ...state.hooks } }
       if (method === 'watches.add') { state.watches.push({ number: 1, path: params.path, state: 'watching', remainingSeconds: 604800, armedBy: 0 }) }
@@ -46,6 +62,19 @@ try {
       if (state.conflict || expected !== state.hooks.text) throw new Error('File changed since this editor opened. Reopen it to review the latest version.')
       state.hooks = { ...state.hooks, text, hooks: JSON.parse(text).hooks.map(hook => ({ tool: null, ...hook, firesForNothing: Boolean(hook.tool) && hook.on !== 'tool-finished' })) }
     })
+    // The gate is the main process's and has unit tests of its own; here the page's side is driven.
+    const notice = n => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:signIn:event', n)
+    globalThis.agentSettingsFixture.notice = notice
+    replace('bravebot:signIn', (_, way, id) => { state.signIns.push(id ? `${way}:${id}` : way); return { attempt: `t${state.signIns.length}` } })
+    replace('bravebot:signIn:current', () => null)
+    replace('bravebot:signIn:show', () => true)
+    replace('bravebot:signIn:cancel', (_, attempt) => { state.cancels.push(attempt); notice({ kind: 'ended', attempt, way: null, id: null, outcome: 'cancelled', sentence: null }) })
+    // The key window is the main process's; the page is only told it opened and how it ended.
+    const keyNotice = n => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:enterKey:event', n)
+    globalThis.agentSettingsFixture.keyNotice = keyNotice
+    replace('bravebot:enterKey', (_, way, id) => { state.keys.push(id ? `${way}:${id}` : way); keyNotice({ kind: 'opened', way, id }); return { opened: true } })
+    replace('bravebot:enterKey:current', () => null)
+    replace('bravebot:enterKey:show', () => true)
     replace('bravebot:files:list', () => ({ path: '', rows: [], truncated: false }))
   }, directory)
   const emit = (event, data, session = 's-a') => app.evaluate((_, args) => globalThis.agentSettingsFixture.emit(args.event, args.data, args.session), { event, data, session })
@@ -62,6 +91,88 @@ try {
   await dialog.getByText('Locked by your administrator: provider', { exact: true }).waitFor()
   await dialog.getByText('proxy.example:8080 · authenticated', { exact: true }).waitFor()
   await snap('01-connection')
+
+  // Accounts: one row per sign-in, what can be done about each, and nothing stored shown.
+  const fixture = () => app.evaluate(() => globalThis.agentSettingsFixture.state)
+  const accounts = dialog.locator('[data-test="accounts"]')
+  const row = name => accounts.locator(`[data-test="account-${name}"]`)
+  await accounts.getByRole('heading', { name: 'Accounts', exact: true }).waitFor()
+  assert.equal(await row('brave:').locator('[data-test="account-standing"]').textContent(), 'Key stored')
+  assert.equal(await row('gateway:local').locator('[data-test="account-standing"]').textContent(), 'No key needed')
+  assert.equal(await row('xai:').locator('[data-test="account-standing"]').textContent(), "Can't be used")
+  await row('xai:').getByText('The stored xAI sign-in cannot be read. Sign in again.').waitFor()
+  assert.equal(await row('gateway:corp').locator('code').textContent(), 'bravebot auth login gateway corp')
+  assert.equal(await row('gateway:openrouter').locator('[data-test="account-command"]').count(), 0, 'a row that takes a key in the window shows no command')
+  await row('gateway:openrouter').locator('[data-test="account-enter-key"]').waitFor()
+  assert.equal(await row('chatgpt:').locator('[data-test="account-command"]').count(), 0, 'ChatGPT signs in from the window, so it shows no command')
+  assert.equal(await row('bedrock:dev').locator('[data-test="account-command"]').count(), 0, 'an AWS account signs in from the window, so it shows no command')
+  assert.equal(await row('gateway:local').locator('[data-test="account-sign-out"]').count(), 0, 'nothing stored, nothing to sign out of')
+  await row('gateway:corp').locator('[data-test="account-copy"]').scrollIntoViewIfNeeded()
+  await snap('01b-accounts')
+  await app.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await row('gateway:corp').locator('[data-test="account-copy"]').click()
+  for (let tries = 0; tries < 50 && (await app.evaluate(({ clipboard }) => clipboard.readText())) === 'before'; tries++) await page.waitForTimeout(100)
+  assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), 'bravebot auth login gateway corp', 'Copy writes the command and nothing else')
+
+  // Enter key only asks the main process, which opens a key window of its own; the key never reaches the page.
+  const keyNotice = n => app.evaluate((_, n) => globalThis.agentSettingsFixture.keyNotice(n), n)
+  await row('gateway:openrouter').locator('[data-test="account-enter-key"]').click()
+  await row('gateway:openrouter').locator('[data-test="account-key-open"]').waitFor()
+  assert.equal(await row('gateway:openrouter').locator('[data-test="account-key-open"]').textContent(), 'Enter the key in its window.')
+  assert.deepEqual((await fixture()).keys, ['gateway:openrouter'])
+  await snap('01b2-key-window-open')
+  await keyNotice({ kind: 'ended', way: 'gateway', id: 'openrouter', outcome: 'stored', sentence: null })
+  await accounts.getByText('Key stored for OpenRouter.', { exact: true }).waitFor()
+  await row('gateway:openrouter').locator('[data-test="account-enter-key"]').waitFor()
+
+  // Sign out asks first; Escape and Cancel forget nothing.
+  await row('brave:').locator('[data-test="account-sign-out"]').click()
+  const confirm = page.locator('.confirm-sign-out')
+  await confirm.getByText('bravebot forgets this sign-in on this computer.', { exact: false }).waitFor()
+  await snap('01c-sign-out')
+  await page.keyboard.press('Escape')
+  await confirm.waitFor({ state: 'detached' })
+  await row('brave:').locator('[data-test="account-sign-out"]').click()
+  await confirm.locator('[data-test="sign-out-cancel"]').click()
+  await confirm.waitFor({ state: 'detached' })
+  assert.deepEqual((await fixture()).signOuts, [], 'nothing is forgotten without a yes')
+  await row('brave:').locator('[data-test="account-sign-out"]').click()
+  await confirm.locator('[data-test="sign-out-confirm"]').click()
+  await accounts.getByText('Signed out of Brave Premium.', { exact: true }).waitFor()
+  assert.deepEqual((await fixture()).signOuts.map(({ way, id }) => ({ way, id })), [{ way: 'brave', id: null }])
+  assert.equal(await row('brave:').locator('[data-test="account-standing"]').textContent(), 'Not signed in')
+
+  // Sign in only asks the main process. The page is told the port and how long it waits, never an address.
+  const notice = n => app.evaluate((_, n) => globalThis.agentSettingsFixture.notice(n), n)
+  await row('chatgpt:').locator('[data-test="account-sign-in"]').click()
+  await row('chatgpt:').locator('[data-test="sign-in-waiting-chatgpt"]').waitFor()
+  assert.deepEqual((await fixture()).signIns, ['chatgpt'])
+  await notice({ kind: 'started', attempt: 't1', way: 'chatgpt', id: null, port: 1455, expiresIn: 600 })
+  await row('chatgpt:').getByText('Port 1455', { exact: true }).waitFor()
+  await row('chatgpt:').locator('[data-test="sign-in-show"]').waitFor()
+  await snap('01d-waiting')
+  await row('chatgpt:').locator('[data-test="sign-in-cancel"]').click()
+  await accounts.getByText('Sign-in cancelled.', { exact: true }).waitFor()
+  assert.deepEqual((await fixture()).cancels, ['t1'])
+  await snap('01e-cancelled')
+
+  await row('xai:').locator('[data-test="account-sign-in"]').click()
+  await row('xai:').getByText('Requesting a code…', { exact: true }).waitFor()
+  await snap('01f-requesting-code')
+  await notice({ kind: 'ended', attempt: 't2', way: 'xai', id: null, outcome: 'failed', sentence: 'xAI refused the sign-in. Try again later.' })
+  await accounts.getByText('xAI refused the sign-in. Try again later.', { exact: true }).waitFor()
+  await row('xai:').locator('[data-test="account-sign-in"]').waitFor()
+  await snap('01g-failed')
+
+  // An AWS account is signed in to by its profile, and waits on its own row.
+  await row('bedrock:dev').locator('[data-test="account-sign-in"]').click()
+  await row('bedrock:dev').locator('[data-test="sign-in-waiting-bedrock"]').waitFor()
+  assert.deepEqual((await fixture()).signIns, ['chatgpt', 'xai', 'bedrock:dev'])
+  await notice({ kind: 'started', attempt: 't3', way: 'bedrock', id: 'dev', port: null, expiresIn: 600 })
+  await row('bedrock:dev').locator('[data-test="sign-in-show"]').waitFor()
+  await snap('01h-aws-waiting')
+  await notice({ kind: 'ended', attempt: 't3', way: 'bedrock', id: 'dev', outcome: 'signedIn', sentence: null })
+  await accounts.getByText('Signed in to AWS Bedrock (dev).', { exact: true }).waitFor()
   await dialog.getByRole('button', { name: 'Choose settings file…' }).click()
   await dialog.getByRole('button', { name: 'Clear override' }).waitFor({ state: 'visible' })
   // Leo draws the button inside a shadow root, so wait on the role query, which pierces it.

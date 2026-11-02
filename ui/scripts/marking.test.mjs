@@ -603,6 +603,8 @@ test('a failure of the ChatGPT account says its sentence with the command drawn 
     /<p>The ChatGPT sign-in has ended, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\.<\/p>/,
     drawn,
   )
+  // The window can start this sign-in itself, so the card offers it beside the command (CHATGPT-15).
+  assert.match(drawn, /<div slot="actions" class="error-actions"><span class="sign-in-ask"><leo-button data-test="sign-in-chatgpt">Sign in<\/leo-button>/, drawn)
   // The category's own advice names a place the account has no credential, so it is not said beside.
   assert.doesNotMatch(drawn, /Agent settings/, drawn)
   assert.doesNotMatch(drawn, /`/, drawn)
@@ -696,7 +698,7 @@ test('a picker warning draws the command it names as code and the rest as text',
   const drawn = draw({ warnings: [named, unnamed], commands: [command, null] })
   assert.match(
     drawn,
-    /<p class="model-status">Could not load models from ChatGPT, so try again, or run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\.<\/p>/,
+    /<p class="model-status">Could not load models from ChatGPT, so try again, or run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\. <span class="sign-in-ask"><leo-button data-test="sign-in-chatgpt">Sign in<\/leo-button><\/span><\/p>/,
     drawn,
   )
   assert.match(drawn, /<p class="model-status">Could not load models from Down Gateway\. Try again\.<\/p>/, drawn)

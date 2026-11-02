@@ -51,6 +51,12 @@ import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
 import { sanitised } from './sanitise'
+import { SIGN_IN_ORIGINS, SignIn, opensExternally } from './sign-in'
+import {
+  closeSignInWindow, handleSignInWindow, showSignInWindow, updateSignInWindow,
+} from './sign-in-window'
+import { KeyEntry } from './key-entry'
+import { closeKeyWindow, handleKeyWindow, showKeyWindow } from './key-window'
 import { SendRefused, forgetDrops, stageDrops, withDrops } from './drops'
 import { clipboardPng, forgetPastes, stagePaste, withPastes } from './pastes'
 import { isSubpath } from '../shared/files'
@@ -164,6 +170,45 @@ function listModels(directory?: string): Promise<unknown> {
   })
   return modelListing
 }
+
+const askAgent = (method: string, params: Record<string, unknown>): Promise<unknown> =>
+  bridge ? bridge.request(method, params) : Promise.reject(new Error('The agent is not running.'))
+
+/**
+ * The window's sign-in to the ChatGPT and xAI accounts and an AWS account. Asked through
+ * `bravebot:signIn` and never through `bravebot:request`: `accounts.signIn` and
+ * `accounts.cancelSignIn` are not in `ALLOWED`.
+ */
+const signIn = new SignIn<BrowserWindow>({
+  ask: askAgent,
+  window: () => window,
+  showMessageBox: (parent, options) => dialog.showMessageBox(parent, options),
+  openExternal: (url) => shell.openExternal(url),
+  tell: (notice) => tell('bravebot:signIn:event', notice),
+  showWindow: (state) => showSignInWindow(state, window, () => void signIn.cancelShown()),
+  updateWindow: updateSignInWindow,
+  closeWindow: closeSignInWindow,
+  // What the pickers were listed is from before the sign-in.
+  changed: () => { modelListing = null },
+  origins: () => SIGN_IN_ORIGINS,
+  otherBusy: (): boolean => keyEntry.busy(),
+  now: () => Date.now(),
+})
+
+/**
+ * The window's entry of a Brave Premium or gateway key. Asked through `bravebot:enterKey` and never
+ * through `bravebot:request`: `accounts.keyBefore` and `accounts.storeKey` are not in `ALLOWED`.
+ */
+const keyEntry = new KeyEntry<BrowserWindow>({
+  ask: askAgent,
+  window: () => window,
+  tell: (notice) => tell('bravebot:enterKey:event', notice),
+  showWindow: (state) => showKeyWindow(state, window, () => keyEntry.cancel()),
+  closeWindow: closeKeyWindow,
+  changed: () => { modelListing = null },
+  otherBusy: (): boolean => signIn.busy(),
+  now: () => Date.now(),
+})
 
 
 /**
@@ -410,7 +455,7 @@ function createWindow(): void {
   // Nothing in this app navigates anywhere. A link opens in the user's browser, and an
   // in-window navigation is refused outright rather than sandboxed.
   window.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    if (opensExternally(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
   window.webContents.on('will-navigate', (event) => event.preventDefault())
@@ -421,6 +466,8 @@ function createWindow(): void {
   bridge = new Bridge((message) => {
     trackTurns(runningHandles, message)
     caffeinate?.setBusy(runningHandles.size > 0)
+    // A sign-in's URL, address and code stay in this process; the page is told a reduced notice.
+    if (signIn.handle(message)) return
     // What this app has to say about the event, held until the event itself has been sent. See
     // the note where it is called.
     let after: (() => void) | null = null
@@ -510,6 +557,8 @@ function createWindow(): void {
   }
 
   window.on('closed', () => {
+    signIn.abandon()
+    keyEntry.abandon()
     bridge?.dispose()
     bridge = null
     runningHandles.clear()
@@ -593,6 +642,9 @@ const ALLOWED = new Set([
   'watches.stop',
   // Whether a newer release is recorded and never which one (UPDATE-12).
   'update.status',
+  // The sign-ins and their standing, and forgetting one. Starting a sign-in is `bravebot:signIn`.
+  'accounts.list',
+  'accounts.signOut',
 ])
 
 /**
@@ -677,6 +729,8 @@ app.whenReady().then(() => {
           // read here, since the window cannot ask the system and the bridge has no other way to.
           ? await bridge.request(method, { system: app.getPreferredSystemLanguages() })
           : await bridge.request(method, sanitised(method, params))
+      // A sign-out changes what the pickers may list.
+      if (method === 'accounts.signOut') modelListing = null
       // The directories the agent reports are folders somebody opened, and the window draws them
       // as group headings it can open a new session under.
       if (method === 'session.list') {
@@ -1039,6 +1093,18 @@ app.whenReady().then(() => {
     modelListing = null
     return report
   })
+  ipcMain.handle('bravebot:signIn', (event, way: unknown, id: unknown, session: unknown) =>
+    signIn.request(event.sender, way, id ?? null, session))
+  ipcMain.handle('bravebot:signIn:current', (event) => signIn.current(event.sender))
+  ipcMain.handle('bravebot:signIn:cancel', (event, attempt: unknown) =>
+    signIn.cancelFrom(event.sender, attempt))
+  ipcMain.handle('bravebot:signIn:show', (event) => signIn.show(event.sender))
+  handleSignInWindow(signIn)
+  ipcMain.handle('bravebot:enterKey', (event, way: unknown, id: unknown, session: unknown) =>
+    keyEntry.request(event.sender, way, id, session))
+  ipcMain.handle('bravebot:enterKey:current', (event) => keyEntry.current(event.sender))
+  ipcMain.handle('bravebot:enterKey:show', (event) => keyEntry.show(event.sender))
+  handleKeyWindow(keyEntry)
   const agentHome = async () => {
     const info = await bridge?.request<{ home: string | null }>('agent.info')
     if (!info?.home) throw new Error('The agent state directory is unavailable.')
@@ -1185,6 +1251,8 @@ app.on('window-all-closed', () => {
  */
 app.on('before-quit', () => {
   caffeinate?.release()
+  signIn.abandon()
+  keyEntry.abandon()
   bridge?.dispose()
   bridge = null
 })

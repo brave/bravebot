@@ -1,0 +1,56 @@
+/* The main process's sign-in window: one column, the address or code first, Cancel beside the action. */
+
+.sign-in {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-l);
+  padding: var(--leo-spacing-3xl);
+  height: 100vh;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+.sign-in h1 {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  margin: 0;
+  font: var(--leo-font-heading-h3);
+  --leo-icon-size: var(--icon-hero);
+}
+.sign-in p {
+  margin: 0;
+  color: var(--ink-secondary);
+}
+.sign-in-field {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  padding: var(--leo-spacing-m);
+  border-radius: var(--leo-radius-m);
+  background: var(--surface-sunken);
+}
+.sign-in-field code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+/* One line from its start, so the origin is what shows; Copy takes the whole address. */
+.sign-in-field code.sign-in-url {
+  font: var(--type-code-body);
+  overflow-wrap: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sign-in-code {
+  font: var(--type-code-body);
+  font-size: 2em;
+  letter-spacing: 0.1em;
+}
+.sign-in-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--leo-spacing-m);
+  margin-top: auto;
+}

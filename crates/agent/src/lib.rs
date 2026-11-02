@@ -10,6 +10,7 @@
     allow(clippy::disallowed_methods, reason = "the test names its program")
 )]
 
+pub mod accounts;
 pub mod advisor;
 pub mod agents;
 pub mod answers;
@@ -45,6 +46,7 @@ pub mod hunks;
 pub mod interjections;
 #[cfg(test)]
 mod kept_answers;
+pub mod key_entry;
 pub mod links;
 mod live_sandbox;
 pub mod lsp;

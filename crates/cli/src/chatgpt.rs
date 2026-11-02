@@ -10,6 +10,7 @@
 
 use crate::exit::{Ending, fail};
 use crate::plain::Prompting;
+use bravebot_agent::accounts;
 use bravebot_agent::chatgpt::AccountModels;
 use bravebot_agent::confirm::Decision;
 use bravebot_config::Config;
@@ -20,6 +21,7 @@ use bravebot_skus::chatgpt::{
 };
 use std::io::IsTerminal;
 use std::process::ExitCode;
+use std::sync::atomic::AtomicBool;
 
 /// The id of the provider block that would be taken for this service's own name.
 const NAME: &str = "chatgpt";
@@ -136,6 +138,7 @@ fn sign_in(config: Option<&Config>) -> ExitCode {
             done: t!(chatgpt_page_done),
             not_found: t!(chatgpt_page_not_found),
         },
+        &AtomicBool::new(false),
         announce,
     );
     let signed_in = match signed_in {
@@ -251,16 +254,19 @@ fn announce_to(
 /// Allowed in an incognito session, since it leaves less behind, and not an error where nothing is
 /// stored. What it removes is the copy: the credential is OpenAI's, and ends there.
 pub(crate) fn logout() -> ExitCode {
-    match Account::forget() {
-        Ok(true) => {
+    match accounts::forget(&accounts::Way::ChatGpt, None) {
+        Ok(forgot) if forgot.was_there => {
             println!("{}", t!(chatgpt_forgotten));
             ExitCode::SUCCESS
         }
-        Ok(false) => {
+        Ok(_) => {
             println!("{}", t!(chatgpt_nothing_to_forget));
             ExitCode::SUCCESS
         }
-        Err(refused) => fail(Ending::Failed, said_of_account(&refused)),
+        Err(accounts::ForgetError::Account(refused)) => {
+            fail(Ending::Failed, said_of_account(&refused))
+        }
+        Err(other) => unreachable!("the ChatGPT account is only ever not removed: {other:?}"),
     }
 }
 
@@ -289,12 +295,13 @@ fn said_of_sign_in(stopped: &SignInError) -> String {
         SignInError::IdToken => t!(chatgpt_failed_id_token).into(),
         SignInError::Clock => t!(chatgpt_failed_clock).into(),
         SignInError::Store(failure) => said_of_account(failure),
+        SignInError::Cancelled => t!(chatgpt_failed_cancelled).into(),
     }
 }
 
 /// The sentence for why the stored sign-in could not be read, written or removed, with the remedy
 /// where signing in again or forgetting it is one.
-fn said_of_account(failure: &AccountError) -> String {
+pub(crate) fn said_of_account(failure: &AccountError) -> String {
     match failure {
         AccountError::Nowhere { detail } => t!(
             chatgpt_account_nowhere,
@@ -340,13 +347,16 @@ pub(crate) fn standing() -> Standing {
 }
 
 fn standing_of(loaded: Result<Option<Account>, AccountError>) -> Standing {
-    match loaded {
-        Ok(Some(account)) => Standing::SignedIn {
-            expires: account.expires(),
-        },
-        Ok(None) => Standing::NotSignedIn,
-        Err(AccountError::Nowhere { .. }) => Standing::Nowhere,
-        Err(other) => Standing::Unusable(said_of_account(&other)),
+    use accounts::{Held, Why};
+    let loaded = loaded.map(|account| account.map(|account| account.expires()));
+    match accounts::account(accounts::Way::ChatGpt, loaded).standing {
+        accounts::Standing::SignedIn(Held::Account { expires }) => Standing::SignedIn { expires },
+        accounts::Standing::NotSignedIn(Why::Nowhere) => Standing::Nowhere,
+        accounts::Standing::Unusable(Why::ChatGpt(failure)) => {
+            Standing::Unusable(said_of_account(&failure))
+        }
+        accounts::Standing::NotSignedIn(Why::NothingStored) => Standing::NotSignedIn,
+        other => unreachable!("a stored account stands in no other way, not {other:?}"),
     }
 }
 
@@ -713,6 +723,7 @@ mod tests {
             SignInError::KeySet(Class::Refused),
             SignInError::KeySet(Class::Transport),
             SignInError::Clock,
+            SignInError::Cancelled,
         ]
         .iter()
         .map(said_of_sign_in)

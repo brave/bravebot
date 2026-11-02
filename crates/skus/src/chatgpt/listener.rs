@@ -76,6 +76,8 @@ pub(super) struct Callback {
 pub(super) enum Waited {
     /// The time bound passed.
     TimedOut,
+    /// The caller's stop was set.
+    Cancelled,
 }
 
 /// The listener, bound to `127.0.0.1` and nothing else.
@@ -110,7 +112,7 @@ impl Listener {
         Ok(self.inner.local_addr()?.port())
     }
 
-    /// Wait for the callback that carries `state`, for at most `within`.
+    /// Wait for the callback that carries `state`, for at most `within` and until `stop` is set.
     ///
     /// The first callback is the only one served, and the listener closes after it. Connections are
     /// served at the same time, so one that sends nothing delays no other.
@@ -119,6 +121,7 @@ impl Listener {
         state: &Secret,
         within: Duration,
         pages: &Pages<'_>,
+        stop: &AtomicBool,
     ) -> Result<Callback, Waited> {
         let until = Instant::now() + within;
         let pages = Arc::new(Rendered {
@@ -133,6 +136,9 @@ impl Listener {
         loop {
             if let Ok(callback) = answer.try_recv() {
                 return Ok(callback);
+            }
+            if stop.load(Ordering::SeqCst) {
+                return Err(Waited::Cancelled);
             }
             if Instant::now() >= until {
                 return Err(Waited::TimedOut);
@@ -371,7 +377,9 @@ mod tests {
         let state = Secret::new(STATE);
         (
             port,
-            std::thread::spawn(move || listener.wait(&state, within, &PAGES)),
+            std::thread::spawn(move || {
+                listener.wait(&state, within, &PAGES, &AtomicBool::new(false))
+            }),
         )
     }
 
@@ -642,6 +650,30 @@ mod tests {
         assert!(!waiter.is_finished());
         get(port, &format!("/auth/callback?code=c&state={STATE}"));
         waiter.join().expect("the waiter").expect("a callback");
+    }
+
+    /// A stop set while the listener waits ends the wait before the bound, and the port is let go.
+    #[test]
+    fn a_stop_set_while_waiting_ends_the_wait_and_lets_the_port_go() {
+        let listener = Listener::bind().expect("a listener");
+        let port = listener.port().expect("a port");
+        let stop = Arc::new(AtomicBool::new(false));
+        let waiter = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                listener.wait(&Secret::new(STATE), Duration::from_secs(30), &PAGES, &stop)
+            })
+        };
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!waiter.is_finished());
+        stop.store(true, Ordering::SeqCst);
+
+        assert_eq!(
+            waiter.join().expect("the waiter").err(),
+            Some(Waited::Cancelled)
+        );
+        std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+            .expect("the port is still held after the wait was stopped");
     }
 
     /// No callback inside the bound is reported as the time passing, and the listener is gone.

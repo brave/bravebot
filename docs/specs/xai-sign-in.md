@@ -97,6 +97,11 @@ gateway's known name. A destination is routing, and routing is never derived fro
 ([ROUTE-2](routing.md#ROUTE-2)). xAI's discovery document lists the same two endpoints of the issuer and a
 revocation endpoint. It is not fetched, and no request goes to the revocation endpoint.
 
+One more origin is a constant: `https://accounts.x.ai`, where xAI's page for entering a code is. It is not a
+destination. Nothing is sent to it, and no request of the flow or of a turn goes there. It is what the desktop
+window compares the address it was given to, exactly by origin, before it opens one in the browser
+([XAI-21](#XAI-21)).
+
 A test points the flow at a server of its own through the seam [chatgpt-sign-in.md](chatgpt-sign-in.md)
 states for the ChatGPT sign-in, with a variable of its own. In a build with the `test-hosts` feature of
 `bravebot-skus` or of `bravebot-config`, debug assertions on and a panic that unwinds, the variable
@@ -283,7 +288,9 @@ not this program's own.
 <a id="XAI-4"></a>
 ### XAI-4: nothing the flow reads from outside reaches the driver or the planner
 
-The sign-in runs as a command before any session, so no planner exists whose context it could enter. The
+The command's sign-in runs before any session, so no planner exists whose context it could enter. The
+window's runs beside open sessions, on its own and apart from any turn, and what it tells the window is a
+closed value and the address and code a person acts on ([XAI-21](#XAI-21)), none of which reaches a turn. The
 renewal of [XAI-6](#XAI-6) runs inside a turn, in the same crate, and its outcome reaches the agent: a token, or
 a value of a closed set. Both read bytes this program did not write, which are the replies of the authorization
 server. The crate compares and parses them and hands none of them to a turn, a trace or a message to the
@@ -471,13 +478,14 @@ not confirmed ([Not observed](#not-observed)), and is the case the claim and the
 `verified-by: bravebot_skus::chatgpt::renew::a_sign_in_another_process_wrote_that_is_due_is_replaced_once_and_not_chased`
 
 <a id="XAI-7"></a>
-### XAI-7: only a command a person types signs in
+### XAI-7: only a person's own action signs in: a command typed at a terminal, or the window's own sign-in
 
 `bravebot auth login xai` is the way in, run by a person at a terminal. It is a sixth way on the list
 `auth login` prints, and `bravebot auth logout xai` and `bravebot auth status xai` are its partners
-([XAI-9](#XAI-9)). The way is named `xai` and takes no word after it. No tool the planner calls, no hook, no
-settings file, no environment variable and no slash command in a session starts the flow, and a line that
-arrives through a quarantined source and reads like the command is not the command. A session starts no
+([XAI-9](#XAI-9)). The way is named `xai` and takes no word after it. The desktop window's own sign-in,
+answered in a dialog the window's main process draws, is the one other way in ([XAI-20](#XAI-20)). No tool
+the planner calls, no hook, no settings file, no environment variable and no slash command in a session
+starts the flow, and a line that arrives through a quarantined source and reads like the command is not the command. A session starts no
 sign-in for it, as [BACKEND-9](backends.md#BACKEND-9) states for the ChatGPT account.
 
 `xai` is also the id a gateway entry for an API key at the same host would have, which draft pull request
@@ -496,8 +504,9 @@ models once a session is open, since the sign-in opens none. It asks the service
 
 **Why.** The flow shows a code a person acts on, holds the terminal for as long as the code lasts, and ends
 with a credential on disk. Each is a decision about a person's machine and account, and a person's own typing
-is the one source for it that no content can author. A session in an editor, a desktop window or a background
-run has nowhere to show the code.
+is the one source for it that no content can author. A session in an editor or a background run has nowhere
+to show the code. The desktop window does have somewhere, and it has a source no content can author in a
+dialog its main process draws, which the page cannot draw or answer, so it is the one other way in.
 
 `verified-by: bravebot_cli::layering::the_xai_sign_in_is_started_by_the_command_and_nothing_else`
 `verified-by: bravebot_cli::layering::the_scan_for_the_xai_sign_in_finds_each_way_to_name_it_and_not_a_read_of_the_file`
@@ -611,7 +620,8 @@ token.
 is refused there ([INCOG-7](incognito.md#INCOG-7)): the sign-in is a write to `~/.bravebot` that the mode exists to decline. It is refused with
 the argument status where stderr is not a terminal, since the address and the code are shown there, and says
 to run it at one. Where both apply, the incognito refusal is the one given. Neither refusal sends a request or
-writes a file. The command asks nothing, so it needs no terminal on stdin.
+writes a file. The command asks nothing, so it needs no terminal on stdin. The window's sign-in has refusals
+of its own ([XAI-20](#XAI-20)); a terminal is not one of them.
 
 **Why.** Refusing the sign-in is the argument [INCOG-7](incognito.md#INCOG-7) makes for every sign-in: doing it
 and discarding the result would leave a session that was signed in once and never again. A code shown where nobody reads it is a code that
@@ -628,6 +638,7 @@ code has arrived and before the token endpoint is asked anything. There are four
 address, the address, the code to enter if the page asks for one, and how long the code lasts, in whole
 minutes rounded up. Each line is flushed as it is written. The command waits for the code to be used in every
 case. It opens no browser and starts no program, so a person opens the address on any device, a phone included.
+The window's sign-in shows the same four things in a window of its own ([XAI-21](#XAI-21)).
 
 The address is the one that holds the code where the reply gives one, and the address the code is entered at
 otherwise. Both are shown as the reply gave them, and only after the check of [XAI-3](#XAI-3).
@@ -1050,7 +1061,7 @@ because the file cannot be read, the token could not be renewed, the request fai
 not a listing, offers nothing for the account, since no list is built in, and the picker says so: the terminal in a
 note, written when the picker opens, that names `bravebot auth login xai` and the two commands that name a model, and
 the window in a warning that names the sign-in command alone, which the window draws as code, since a window has no
-command line. A listing that was read and is empty offers nothing and says nothing, since it is the service's answer.
+command line, and beside which it offers its own sign-in ([XAI-20](#XAI-20)). A listing that was read and is empty offers nothing and says nothing, since it is the service's answer.
 A `provider` entry named `xai` that is a gateway ends the account's rows ([XAI-13](#XAI-13)), and the service is
 asked nothing.
 
@@ -1098,6 +1109,88 @@ a turn on one of the account's models, which is the one place a person has agree
 `verified-by: bravebot_ui_bridge::account_words::the_xai_pickers_warning_is_one_sentence_naming_the_sign_in_and_nothing_is_said_where_nothing_failed`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the picker's warnings and holds that the command a warning names is drawn as code and the rest as text, and ui/scripts/drive-models.mjs opens the real picker against a model list held back, to hold that the menu, the loading line and the focused search field are drawn before the list arrives, that no row but the model in force is drawn until it does, and that the words typed meanwhile narrow the rows that arrive, and then against a model list with one warning and the command it names; the rows are drawn from the fields the bridge sends, grouped by the provider they name, in ui/src/renderer/components/ModelPicker.tsx, which holds no service's name; make check-ui runs them)`
 
+<a id="XAI-20"></a>
+### XAI-20: the window starts a sign-in only on a yes in a dialog its main process draws
+
+The desktop window offers a Sign in on the xAI row of its Accounts settings, on the card of a failure whose
+sentence sends a person to sign in ([XAI-15](#XAI-15)), and beside the picker's warning ([XAI-19](#XAI-19)).
+The page that offers it may only ask. The window's main process answers the ask by showing a native dialog of
+its own, which the page does not draw and cannot answer, and only a yes in it starts the flow. The main process
+sends the bridge no request to sign in that such a yes did not answer, and no client of the bridge but the
+main process may send one.
+
+The dialog names the account, says that a code will be shown to enter at xAI and that the sign-in will be kept
+on this computer, and has Sign in and Cancel. Cancel is the answer a default key press and Escape give.
+Whether a sign-in is already stored is learned by the main process from the bridge, never from the page, and
+where one is, the dialog says it will be replaced. An ask is dropped where the window is not focused, where it
+does not come from the window's own page, where a dialog is already open or a sign-in already runs, and for a
+short while after a no.
+
+The flow is the one the command runs. It is refused, before the code is asked for and with a sentence of the
+window's own, where the state directory cannot be written ([XAI-10](#XAI-10)) and where a gateway entry is
+named `xai` ([XAI-13](#XAI-13)). The condition about a terminal does not apply, since the window shows what the
+terminal would ([XAI-21](#XAI-21)). No tool, hook, settings file, environment variable, slash command, bot,
+background session, deep link or text in a session starts it.
+
+**Why.** [XAI-7](#XAI-7) asks that a sign-in start only from a person's own action. The page draws text from
+replies and from files, so a control the page draws is not proof a person chose it. A native dialog the main
+process draws is outside the page and cannot be drawn or answered by it, which gives it the footing a person's
+typing has at a terminal. A dialog the page could raise at will would be answered by a stray key press sooner
+or later, so the main process decides when one may be shown.
+
+`verified-by: bravebot_ui_bridge::accounts::a_refused_sign_in_ends_without_starting_and_asks_nothing`
+`verified-by: bravebot_ui_bridge::accounts::no_client_of_the_host_is_offered_the_accounts_methods`
+`verified-by: bravebot_ui_bridge::accounts_tests::a_sign_in_is_refused_in_order_before_it_starts`
+`verified-by: bravebot_ui_bridge::accounts_tests::a_sign_in_is_refused_where_a_gateway_has_the_accounts_name`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/sign-in.test.mjs drives its own sign-in gate with a stand-in bridge and dialog: a sign-in is sent only on a yes, Cancel is the default and the answer to Escape, an ask is dropped for an unknown way, a foreign sender, an unfocused window, a second ask while one dialog or attempt is up and in the seconds after a no, and whether to replace comes from the bridge's list and not the page; make check-ui runs the test)`
+
+<a id="XAI-21"></a>
+### XAI-21: the window's sign-in shows the address and the code only in a window its main process owns
+
+Once the reply for the code has arrived and passed the check of [XAI-3](#XAI-3), and before the token endpoint
+is asked anything, the main process shows what [XAI-11](#XAI-11) shows, in a small window of its own that loads
+no session and draws no content: what to do with the address, the address, the code, with a control that
+copies it, and how long the code lasts. The page that asked is told that the sign-in waits and when the code
+stops working, and not the address or the code.
+
+That window offers to open the address in the browser. The main process opens the address the bridge gave it
+for that sign-in, and only where its origin is exactly the one [XAI-1](#XAI-1) compiles in for the page; it
+opens no address the page names. It opens nothing unasked, as the command does not, since a person may enter
+the code on another device.
+
+The page is told the outcome as a closed value: signed in, cancelled, or failed with one sentence of the
+window's own chosen from the value of the failure alone ([XAI-8](#XAI-8)). After a sign-in, the window's
+pickers ask the account's listing ([XAI-19](#XAI-19)).
+
+**Why.** A code entered at xAI signs in whichever account is signed in to the browser it is entered in. A page
+that held the code could hand it to someone else, who could enter it signed in to an account of their own, and
+every turn after would go to that account with nothing on the screen to say so. Kept where the page cannot
+read it, the code reaches only the person. The address comes from the authorization server's reply, so the
+check of its origin is what keeps the opener from being sent anywhere a reply names.
+
+`verified-by: bravebot_ui_bridge::accounts::the_xai_sign_in_runs_to_a_stored_account`
+`verified-by: bravebot_ui_bridge::accounts_tests::every_way_a_sign_in_stops_has_a_sentence_of_its_own_words`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/sign-in.test.mjs drives its own sign-in gate with a stand-in bridge and dialog: the page is told of a sign-in without its address or code, nothing opens unasked, and the browser is sent only to the recorded address at exactly xAI's origin; make check-ui runs the test)`
+
+<a id="XAI-22"></a>
+### XAI-22: a window's sign-in can be cancelled until it is stored
+
+While the window's sign-in waits, its own window and the row that asked show a Cancel. Cancel ends the flow
+before the next poll: nothing more is asked of the token endpoint, nothing is stored, and the row says the
+sign-in was cancelled. Closing the window or quitting the app does the same, and quitting does not wait for the
+flow to notice. Cancel is looked at again just before the sign-in is stored, and a cancel that arrives after
+the store reports the sign-in as made, since it was. The time the code lasts bounds the wait as it does for the
+command.
+
+**Why.** The window, unlike the terminal, has no Ctrl-C, and a code left polling would go on asking the token
+endpoint for up to an hour. A cancel that said "nothing was stored" after the store would leave a sign-in a
+person believes they declined.
+
+`verified-by: bravebot_ui_bridge::accounts::a_cancelled_xai_sign_in_stores_nothing`
+`verified-by: bravebot_skus::xai::a_stop_set_while_waiting_ends_the_sign_in_before_the_next_ask_and_stores_nothing`
+`verified-by: bravebot_skus::xai::a_stop_set_after_the_grant_and_before_the_store_stores_nothing`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/sign-in.test.mjs drives its own sign-in gate with a stand-in bridge and dialog: cancelling sends accounts.cancelSignIn, a bridge that cannot be asked ends the attempt in the window, and closing the window or quitting cancels without waiting; make check-ui runs the test)`
+
 ## What is built
 
 The sign-in is the `xai` module of `bravebot-skus`, and the command is `crates/cli/src/xai.rs`. The file, the
@@ -1112,7 +1205,10 @@ is `crates/agent/src/xai.rs`: the renewer of the process, the rule of [XAI-18](#
 and the sentences for a failure, which the front ends say by the value `AccountFailure::Xai` carries to them.
 The listing and the rule on its ids are `crates/aichat/src/models.rs`.
 
-Built whole: [XAI-1](#XAI-1) to [XAI-19](#XAI-19).
+Built whole: [XAI-1](#XAI-1) to [XAI-22](#XAI-22). The window's sign-in is `crates/ui-bridge/src/accounts.rs`,
+which runs it for the window, and `ui/src/main/sign-in.ts` and `ui/src/main/sign-in-window.ts`, which hold it in
+the main process, open the page at the origin [XAI-1](#XAI-1) compiles in (`SIGN_IN_ORIGINS`) and show the code
+in a window of its own.
 
 ## Decisions
 
@@ -1327,6 +1423,10 @@ other than bravebot and from an account bravebot does not hold, and no clause de
 - **The desktop failure card.** The title of the card for a failure of an account names neither service, since
   one card serves both accounts and the window keeps no table of service names. The sentence under it names the
   service. `ui/src/renderer/failure.ts` and `ui/docs/phase-0-rpc-protocol.md` say so.
+- **The desktop.** [XAI-20](#XAI-20) to [XAI-22](#XAI-22) make `bravebot-ui-bridge` the second caller of
+  the flow, so the layering pin of [XAI-7](#XAI-7) gains its one file and no other.
+  [BACKEND-9](backends.md#BACKEND-9) says a person starts the sign-in by the command or by the window's own
+  sign-in. `ui/docs/security.md` gains the origin the opener compares an address to.
 - **The Agent Client Protocol.** [ACP-8](acp.md#ACP-8) says an editor is told an account's failure in its
   sentence, for either account.
 

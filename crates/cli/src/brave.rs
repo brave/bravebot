@@ -9,8 +9,10 @@
 
 use crate::exit::{Ending, fail};
 use crate::plain::Prompting;
+use bravebot_agent::accounts;
 use bravebot_agent::confirm::Decision;
 use bravebot_agent::home;
+use bravebot_agent::key_entry;
 use bravebot_config::{Secret, brave_key};
 use bravebot_i18n::t;
 use std::io::{BufRead, IsTerminal, Write};
@@ -103,7 +105,7 @@ fn sign_in<R: BufRead, W: Write>(
             );
         }
     };
-    if let Err(error) = store(directory, &key) {
+    if let Err(error) = key_entry::store_brave_key(directory, &key) {
         return refused(
             err,
             Ending::Failed,
@@ -122,98 +124,24 @@ fn sign_in<R: BufRead, W: Write>(
 ///
 /// Allowed in an incognito session, as forgetting any other sign-in is: it leaves less behind.
 pub(crate) fn logout() -> ExitCode {
-    let Some(directory) = home::directory() else {
-        println!("{}", t!(brave_nothing_to_forget));
-        return ExitCode::SUCCESS;
-    };
-    match forget(&directory) {
-        Ok(true) => {
+    match accounts::forget(&accounts::Way::Brave, home::directory().as_deref()) {
+        Ok(forgot) if forgot.was_there => {
             println!("{}", t!(brave_forgotten));
             ExitCode::SUCCESS
         }
-        Ok(false) => {
+        Ok(_) => {
             println!("{}", t!(brave_nothing_to_forget));
             ExitCode::SUCCESS
         }
-        Err(error) => fail(
+        Err(accounts::ForgetError::NotRemoved { path, error }) => fail(
             Ending::Failed,
             t!(
                 brave_not_forgotten,
-                path = brave_key::file(&directory).display(),
+                path = path.display(),
                 error = error.to_string()
             ),
         ),
-    }
-}
-
-/// How the stored key stands, as `bravebot auth status` reports it.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Standing {
-    /// A key is stored.
-    Held,
-    /// Nothing is stored.
-    NotHeld,
-    /// This machine has nowhere to keep one.
-    Nowhere,
-    /// What is stored cannot be read, with the sentence that names the remedy.
-    Unusable(String),
-}
-
-/// Read the stored key and print nothing and probe nothing.
-pub(crate) fn standing() -> Standing {
-    match home::directory() {
-        None => Standing::Nowhere,
-        Some(directory) => standing_in(&directory),
-    }
-}
-
-fn standing_in(directory: &Path) -> Standing {
-    match brave_key::read(directory) {
-        Ok(Some(_)) => Standing::Held,
-        Ok(None) => Standing::NotHeld,
-        Err(brave_key::Unreadable) => Standing::Unusable(
-            t!(
-                brave_key_unreadable,
-                path = brave_key::file(directory).display()
-            )
-            .to_string(),
-        ),
-    }
-}
-
-/// Write the key over the file in `directory`.
-///
-/// Written beside the file and renamed over it, as the sign-ins are, so a write that stops part way
-/// leaves the key that was there. Created by the call that gives the sign-ins their protection, 0600
-/// on Unix and granted to this account alone on Windows (STATE-1), because the key is a bearer
-/// token.
-fn store(directory: &Path, key: &Secret) -> std::io::Result<()> {
-    let path = brave_key::file(directory);
-    home::create_directory(directory)?;
-    let temporary = path.with_file_name(format!("{}.{}.tmp", brave_key::FILE, std::process::id()));
-    // The file is closed at the end of the closure, before the rename, which Windows refuses while
-    // a handle is still open on either name.
-    let written = bravebot_skus::store::create_private(&temporary)
-        .and_then(|mut file| {
-            file.write_all(brave_key::to_text(key).expose().as_bytes())?;
-            // On disk before the rename, or a crash just after it can leave the name on an empty
-            // file where a filesystem orders the rename first.
-            file.sync_all()
-        })
-        .and_then(|()| std::fs::rename(&temporary, &path));
-    if written.is_err() {
-        std::fs::remove_file(&temporary).unwrap_or_default();
-    }
-    written
-}
-
-/// Remove the file. A file that is not there is `Ok(false)` and not an error, because logging out is
-/// repeatable (PREM-16).
-fn forget(directory: &Path) -> std::io::Result<bool> {
-    match std::fs::remove_file(brave_key::file(directory)) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
+        Err(other) => unreachable!("the Brave key is only ever not removed: {other:?}"),
     }
 }
 
@@ -329,7 +257,7 @@ mod tests {
     #[test]
     fn a_yes_and_no_key_typed_leaves_the_stored_key() {
         let scratch = Scratch::new("yes-and-nothing");
-        store(&scratch.0, &Secret::new(THE_KEY)).expect("a first key");
+        key_entry::store_brave_key(&scratch.0, &Secret::new(THE_KEY)).expect("a first key");
 
         let (ending, _, err) = signed_in(&task(Some(&scratch.0)), "y\n", None);
 
@@ -346,7 +274,7 @@ mod tests {
     #[test]
     fn a_stored_key_is_replaced_only_on_a_yes() {
         let scratch = Scratch::new("replace");
-        store(&scratch.0, &Secret::new(THE_KEY)).expect("a first key");
+        key_entry::store_brave_key(&scratch.0, &Secret::new(THE_KEY)).expect("a first key");
 
         for answer in ["n\n", "\n", ""] {
             let (ending, _, err) = signed_in(&task(Some(&scratch.0)), answer, Some("another-key"));
@@ -379,7 +307,10 @@ mod tests {
             std::fs::read_to_string(brave_key::file(&scratch.0)).expect("the file"),
             "not a key"
         );
-        assert!(matches!(standing_in(&scratch.0), Standing::Unusable(_)));
+        assert!(matches!(
+            accounts::brave(Some(&scratch.0)).standing,
+            accounts::Standing::Unusable(_)
+        ));
     }
 
     /// INCOG-7 and CLI-18: an incognito session stores no key, a pipe has nobody to type one, and a
@@ -420,25 +351,5 @@ mod tests {
             assert!(!err.is_empty());
         }
         assert_eq!(the_stored_key(&scratch.0), None);
-    }
-
-    /// CLI-18: forgetting removes the one file, says whether there was one, and can be repeated.
-    #[test]
-    fn forgetting_removes_the_file_and_is_repeatable() {
-        let scratch = Scratch::new("forget");
-        store(&scratch.0, &Secret::new(THE_KEY)).expect("a key");
-
-        assert!(forget(&scratch.0).expect("removed"));
-        assert!(!brave_key::file(&scratch.0).exists());
-        assert!(!forget(&scratch.0).expect("nothing to remove"));
-    }
-
-    /// CLI-23: the standing is read from the file alone, said without the key.
-    #[test]
-    fn the_standing_follows_the_file() {
-        let scratch = Scratch::new("standing");
-        assert_eq!(standing_in(&scratch.0), Standing::NotHeld);
-        store(&scratch.0, &Secret::new(THE_KEY)).expect("a key");
-        assert_eq!(standing_in(&scratch.0), Standing::Held);
     }
 }

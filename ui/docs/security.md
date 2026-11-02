@@ -15,6 +15,47 @@ The main window enables `contextIsolation` and `sandbox`, disables `nodeIntegrat
 and `webviewTag`, and rejects in-window navigation. External links open through the
 system browser. The preload exposes specific IPC operations and subscriptions,
 not general Node or filesystem access. The main process allow-lists agent methods.
+A link the main window opens goes to the system browser only when it is `http` or `https`.
+
+The window may list sign-ins and sign out (`accounts.list`, `accounts.signOut`), but not sign in.
+`accounts.signIn` and `accounts.cancelSignIn` are sent by the main process only. The page asks
+for a sign-in by way, `chatgpt`, `xai` or `bedrock`, and for `bedrock` by the row's id, which must
+be an AWS row `accounts.list` listed with a sign-in. The main process drops an ask from another
+sender, from an unfocused window, naming a session that is not an id, while another ask or
+sign-in is running or a key window is open or asked for, or within three seconds of a no, and
+otherwise asks in its own dialog with Cancel as the default. Whether the sign-in replaces a stored
+one is read from `accounts.list`, in the session the page named, not from the page; that list
+asks the AWS command-line tool only for an AWS ask. The URL, address and code the bridge
+announces stay in the main process: the page is told only that a sign-in started, its port and
+how long it waits, and how it ended. They are shown in a separate sign-in window with its own
+preload, sandboxed and isolated, which loads a fixed local page, cannot navigate or open windows,
+and reaches four channels: read what to show, copy the address or code, open the browser, and
+cancel; the main process also sends it the code once the AWS command-line tool writes it, and
+what to show when it is brought back. The browser is opened only at the address the bridge
+announced, and only where its origin is exactly `https://auth.openai.com` for ChatGPT or
+`https://accounts.x.ai` for xAI, or, for AWS, where it is `https` with no user or port at a
+region's `device.sso.<region>.amazonaws.com` or `oidc.<region>.amazonaws.com`, or an
+organisation's `<name>.awsapps.com`. An AWS sign-in never opens the browser by itself: the AWS
+command-line tool does. Closing the window or quitting cancels the sign-in.
+`scripts/sign-in.test.mjs` holds this.
+
+A Brave Premium or gateway key is typed in a key window the main process owns, never in the page.
+`accounts.keyBefore` and `accounts.storeKey` are sent by the main process only. The page asks for
+a key by way, `brave` or `gateway` with the gateway's id; the main process drops an ask from
+another sender, from an unfocused window, naming a session that is not an id, for a row
+`accounts.list` does not mark as taking a key, while another key window is open or a sign-in is
+asked for or running, or within three seconds of a cancel. The list, `accounts.keyBefore` and
+`accounts.storeKey` are each sent in the session the page named, and the list does not ask the
+AWS command-line tool. It asks the bridge with `accounts.keyBefore` whether a key can be kept
+before anything is typed, and a refusal is said on the page. Whether saving replaces a stored key
+is what the bridge said is stored, not what the page said. The key window has its own preload,
+sandboxed and isolated, which loads a fixed local page, cannot navigate or open windows, and
+reaches four channels: read what to show, save the key, cancel, and say how tall the page is
+drawn, which sizes the window within fixed bounds; it is also told what to show when it is
+brought back. Save hands the key to the main process, which sends it to the bridge over the
+bridge's standard input and keeps no copy; the page is told only that the key window opened and
+how it ended. A refusal is said in the key window, which stays open. Closing it, the main window
+closing or quitting stores nothing. `scripts/key-entry.test.mjs` holds this.
 
 Project-file operations use a session handle and a relative path. Main-process
 code resolves the session root and validates the path. Text previews and memory

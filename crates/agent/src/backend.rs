@@ -21,6 +21,7 @@ use bravebot_aichat::{
     Subscription, XaiFailure,
 };
 pub use bravebot_bedrock::credentials::CredentialError;
+pub use bravebot_bedrock::credentials::{Stop as AwsStop, Stopped as AwsStopped};
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
 use bravebot_config::ModelRefusal;
@@ -1096,6 +1097,20 @@ impl<'a> Backend<'a> {
     ) -> Result<(), BackendError> {
         bravebot_bedrock::credentials::sign_in_if_needed(bedrock.profile.as_deref(), say)
             .map_err(|failure| BedrockError::Credentials(failure).into())
+    }
+
+    /// [`Backend::sign_in_to`], ended early where `stop` is stopped, for a window that has no
+    /// Ctrl-C for the AWS CLI it started.
+    pub fn sign_in_to_until(
+        bedrock: &bravebot_config::bedrock::Bedrock,
+        say: impl FnMut(String),
+        stop: &AwsStop,
+    ) -> Result<(), AwsStopped> {
+        bravebot_bedrock::credentials::sign_in_if_needed_until(
+            bedrock.profile.as_deref(),
+            say,
+            stop,
+        )
     }
 
     /// Whether one AWS account has a usable session, without signing in to it.

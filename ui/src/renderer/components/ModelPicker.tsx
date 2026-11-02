@@ -324,7 +324,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       <div className="model-notices">
         {loading && <p className="model-status" role="status" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Loading available models…</p>}
         {problem && <Alert type="error" size="small" className="model-status" role="alert">{problem}</Alert>}
-        {catalogue && <ModelWarnings warnings={catalogue.warnings} commands={catalogue.warningCommands} />}
+        {catalogue && <ModelWarnings warnings={catalogue.warnings} commands={catalogue.warningCommands} session={session} onSignedIn={() => setRevision((n) => n + 1)} />}
         {!loading && options.length === 0 && <p className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</p>}
       </div>
       <leo-menu-section id={`${id}-list`} aria-label="Models" ref={list}>

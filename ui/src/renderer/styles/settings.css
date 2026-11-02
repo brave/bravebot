@@ -252,3 +252,71 @@ code.connector-summary { font: var(--type-code); overflow: hidden; text-overflow
   .settings-card dl, .settings-row { grid-template-columns: 1fr; }
   .settings-card dd { border-top: 0; padding-top: 0; padding-left: var(--leo-spacing-l); }
 }
+
+/* Accounts: one row per sign-in, its mark, its name and standing, what it says, and its actions at
+   the end, in the same bordered box as the tables. */
+.account-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+}
+/* The mark, the name with its standing and the actions share the first line, centred on it; what
+   the row says sits under the name. */
+.account-row {
+  display: grid;
+  grid-template-columns: var(--icon-hero) minmax(0, 1fr) auto;
+  grid-template-areas: "logo head actions" ". body body";
+  align-items: center;
+  gap: 0 var(--leo-spacing-l);
+  padding: var(--leo-spacing-xl);
+}
+.account-row + .account-row { border-top: 1px solid var(--border-subtle); }
+.account-logo { grid-area: logo; --leo-icon-size: var(--icon-hero); }
+.account-head {
+  grid-area: head;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--leo-spacing-s) var(--leo-spacing-m);
+  min-width: 0;
+}
+.account-name { font: var(--type-body-strong); color: var(--ink-primary); overflow-wrap: anywhere; }
+.account-body {
+  grid-area: body;
+  /* A margin and not a row gap, so a row with nothing under its name has no empty space. */
+  margin-top: var(--leo-spacing-m);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--leo-spacing-m);
+  min-width: 0;
+  font: var(--type-body);
+  color: var(--ink-secondary);
+}
+.account-actions { grid-area: actions; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--leo-spacing-m); }
+.account-command-text { display: inline-flex; align-items: center; gap: var(--leo-spacing-s); max-width: 100%; }
+@media (forced-colors: active) {
+  .account-list, .account-row + .account-row { border-color: CanvasText; }
+}
+@media (max-width: 640px) {
+  .account-row { grid-template-columns: var(--icon-hero) minmax(0, 1fr); grid-template-areas: "logo head" ". body" ". actions"; }
+  .account-actions { justify-content: flex-start; margin-top: var(--leo-spacing-m); }
+}
+.account-command {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+}
+.account-command code { font: var(--type-code-body); color: var(--ink-primary); overflow-wrap: anywhere; }
+.sign-in-waiting,
+.sign-in-ask {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  font: var(--type-body);
+  color: var(--ink-secondary);
+}

@@ -21,5 +21,10 @@ bravebot-signing = { path = "../signing" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+# kill(2) on the process group a cancellable sign-in leads, so a CLI that forked its own worker
+# goes with it. rustix rather than libc so this crate keeps forbidding unsafe code.
+rustix = { workspace = true, features = ["process"] }
+
 [dev-dependencies]
 tempfile = { workspace = true }

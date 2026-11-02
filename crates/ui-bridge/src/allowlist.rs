@@ -159,6 +159,15 @@ pub const DENIED: &[&str] = &[
     // What the desktop window reports about its own page, which a client of the host has none of.
     "window.fault",
     "update.status",
+    // The machine's sign-ins, which are its person's and not a workspace's, and the sign-in the
+    // window starts only after its main process asked that person.
+    "accounts.list",
+    "accounts.signOut",
+    "accounts.signIn",
+    "accounts.cancelSignIn",
+    // A key typed in the window's own key window, which only its main process reads.
+    "accounts.keyBefore",
+    "accounts.storeKey",
     // The host's own person's agreement to keep its computer awake (CMD-12).
     "caffeinate.confirmed",
     "caffeinate.confirm",

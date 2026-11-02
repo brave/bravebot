@@ -168,6 +168,8 @@ pub struct Bridge {
     /// Whether a session's set starts as nobody. A host sets it, so a session it did not mean to
     /// make answerable is not.
     refuse_until_set: bool,
+    /// The ChatGPT or xAI sign-in the window started, while it runs.
+    sign_ins: crate::accounts::SignIns,
 }
 
 impl Bridge {
@@ -182,6 +184,7 @@ impl Bridge {
             closing: Vec::new(),
             answerers: HashMap::new(),
             refuse_until_set: false,
+            sign_ins: crate::accounts::SignIns::default(),
         }
     }
 
@@ -330,13 +333,10 @@ impl Bridge {
             "trust.reply" => self.reply_trust(request),
             "permissions.list" => self.permissions(request, false),
             "permissions.revoke" => self.permissions(request, true),
-            "settings.inspect" => {
-                let project = request
-                    .optional_string("session")
-                    .and_then(|id| self.open.get(&id))
-                    .map(|s| s.project.as_path());
-                Ok(crate::settings::report(project, self.settings.as_deref()))
-            }
+            "settings.inspect" => Ok(crate::settings::report(
+                self.project_of(request),
+                self.settings.as_deref(),
+            )),
             "settings.select" => {
                 let path = request.optional_string("path").map(PathBuf::from);
                 if let Some(path) = &path {
@@ -375,8 +375,46 @@ impl Bridge {
                 self.settings.as_deref(),
             )),
             "window.fault" => crate::window_fault::record(request),
+            "accounts.list" => crate::accounts::list_asked(
+                request,
+                self.project_of(request),
+                self.settings.as_deref(),
+            ),
+            "accounts.signOut" => crate::accounts::sign_out(
+                request,
+                self.project_of(request),
+                self.settings.as_deref(),
+            ),
+            "accounts.signIn" => {
+                let project = self.project_of(request).map(Path::to_path_buf);
+                self.sign_ins.start(
+                    request,
+                    project.as_deref(),
+                    self.settings.as_deref(),
+                    &self.emitter,
+                )
+            }
+            "accounts.cancelSignIn" => self.sign_ins.cancel(request),
+            "accounts.keyBefore" => crate::key_entry::before(
+                request,
+                self.project_of(request),
+                self.settings.as_deref(),
+            ),
+            "accounts.storeKey" => crate::key_entry::store_key(
+                request,
+                self.project_of(request),
+                self.settings.as_deref(),
+            ),
             other => Err(Failure::bad_request(format!("unknown method `{other}`"))),
         }
+    }
+
+    /// The project of the open session a request names, where it names one.
+    fn project_of(&self, request: &Request) -> Option<&Path> {
+        request
+            .optional_string("session")
+            .and_then(|id| self.open.get(&id))
+            .map(|open| open.project.as_path())
     }
 
     /// Whether a newer release than this one is recorded, as a yes or no and never the version
@@ -1264,6 +1302,7 @@ impl Bridge {
     pub fn shut_down(&mut self, limit: Duration) -> bool {
         self.emitter.go_quiet();
         self.stop_all();
+        self.sign_ins.stop_running();
         crate::workers::Workers::all_end_within(&self.closing, limit)
     }
 

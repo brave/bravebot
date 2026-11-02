@@ -1148,7 +1148,7 @@ export function App(): React.JSX.Element {
       {keepAwake.asking && (
         <CaffeinateConfirm onCancel={() => setKeepAwake(KEPT_OFF)} onEnable={() => void enableCaffeinate()} />
       )}
-      {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
+      {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} onSettings={() => { setUnconfigured(null); openSettingsPage('agent') }} />}
       {rewinding && live?.handle === rewinding.handle && (() => {
         const plan = planRewind(live.rewind ?? [], rewinding.steps)
         return plan && <RewindConfirm plan={plan} bot={live.bot !== null} running={live.running} busy={rewinding.busy}

@@ -1127,6 +1127,7 @@ chatgpt-failed-listener =
     impossible d'attendre le navigateur sur l'adresse de boucle locale, donc aucun navigateur n'a été ouvert et rien n'a été modifié
 chatgpt-failed-timed-out =
     le navigateur n'est pas revenu à bravebot à temps, donc la connexion s'est arrêtée et rien n'a été enregistré ; un navigateur sur une autre machine n'atteint le port de boucle locale de celle-ci que si le port nommé ci-dessus lui est redirigé
+chatgpt-failed-cancelled = la connexion a été annulée, donc rien n'a été enregistré
 chatgpt-failed-no-code =
     le navigateur n'a renvoyé aucun code d'autorisation, donc la connexion s'est arrêtée et rien n'a été enregistré ; lancez bravebot auth login chatgpt pour réessayer
 chatgpt-failed-no-client =
@@ -1211,6 +1212,7 @@ xai-failed-expired =
     le code a cessé de fonctionner avant d'être utilisé, donc rien n'a été enregistré ; lancez bravebot auth login xai pour réessayer
 xai-failed-timed-out =
     le code n'a pas été utilisé pendant le temps où bravebot en attend un, donc la connexion s'est arrêtée et rien n'a été enregistré ; lancez bravebot auth login xai pour réessayer
+xai-failed-cancelled = la connexion a été annulée, donc rien n'a été enregistré
 xai-failed-code = xAI n'a pas donné de code pour se connecter : { $reason } ; rien n'a été enregistré
 xai-failed-exchange = la connexion n'a pas pu être terminée : { $reason } ; rien n'a été enregistré
 xai-failed-clock =
@@ -3286,6 +3288,78 @@ desktop-xai-renewal-transport = La connexion xAI n'a pas pu être renouvelée pa
 desktop-xai-fell-back-rate-limited = Ce tour passe de { $from } à { $to } parce que la connexion xAI n'a pas pu être renouvelée pendant que xAI limite les requêtes.
 desktop-xai-fell-back-unavailable = Ce tour passe de { $from } à { $to } parce que la connexion xAI n'a pas pu être renouvelée pendant que xAI est indisponible.
 desktop-xai-fell-back = Ce tour passe de { $from } à { $to } parce que le compte xAI n'a pas pu être utilisé.
+desktop-accounts-name-brave = Service premium de Brave
+desktop-accounts-name-bedrock = Amazon Bedrock
+desktop-accounts-name-bedrock-profile = Amazon Bedrock ({ $profile })
+desktop-accounts-name-gateways = Passerelles
+desktop-accounts-name-chatgpt = Compte ChatGPT
+desktop-accounts-name-xai = Compte xAI
+desktop-accounts-misconfigured = Les réglages n'ont pas pu être lus, donc ceci n'a pas pu être vérifié.
+desktop-accounts-nowhere = Cet ordinateur n'a pas de répertoire d'état bravebot où garder une connexion.
+desktop-accounts-brave-unreadable = La clé premium enregistrée n'a pas pu être lue, donc déconnectez-vous, puis saisissez-la à nouveau.
+desktop-accounts-chatgpt-unreadable = La connexion ChatGPT enregistrée n'a pas pu être lue, donc reconnectez-vous ou déconnectez-vous.
+desktop-accounts-xai-unreadable = La connexion xAI enregistrée n'a pas pu être lue, donc reconnectez-vous ou déconnectez-vous.
+desktop-accounts-bedrock-lapsed = La session AWS a pris fin, donc reconnectez-vous.
+desktop-accounts-bedrock-no-profile = L'AWS CLI n'a pas de profil de ce nom.
+desktop-accounts-bedrock-no-cli = L'AWS CLI n'est pas installée.
+desktop-accounts-bedrock-undecodable = La réponse de l'AWS CLI n'a pas pu être lue.
+desktop-accounts-bedrock-timed-out = L'AWS CLI n'a pas répondu à temps, donc actualisez pour redemander.
+desktop-accounts-gateway-none-configured = Les réglages gérés de cet ordinateur n'autorisent aucune passerelle.
+desktop-accounts-gateway-unrecorded = Une clé est enregistrée pour ce service, mais aucun réglage ne le nomme, donc aucune session ne l'envoie.
+desktop-accounts-gateway-absent = Aucune clé n'est définie pour cette passerelle.
+desktop-accounts-keys-unreadable = Le fichier des clés de passerelle n'a pas pu être lu, donc il a été laissé tel quel.
+desktop-accounts-not-checked = Non vérifié.
+desktop-accounts-not-removed = La connexion n'a pas pu être retirée de cet ordinateur.
+desktop-accounts-sign-in-nowhere = Rien ne peut être enregistré sur cet ordinateur, donc la connexion n'a pas commencé.
+desktop-accounts-sign-in-misconfigured = Les réglages n'ont pas pu être lus, donc la connexion n'a pas commencé.
+desktop-accounts-sign-in-chatgpt-is-a-gateway = Une passerelle des réglages s'appelle chatgpt, donc le compte ChatGPT ne peut pas aussi être connecté.
+desktop-accounts-sign-in-xai-is-a-gateway = Une passerelle des réglages s'appelle xai, donc le compte xAI ne peut pas aussi être connecté.
+desktop-accounts-sign-in-stored = Une connexion est déjà enregistrée, donc elle a été laissée telle quelle.
+desktop-accounts-openai-refused = OpenAI a refusé la connexion, donc rien n'a été enregistré.
+desktop-accounts-openai-rate-limited = OpenAI limite les requêtes, donc rien n'a été enregistré. Réessayez plus tard.
+desktop-accounts-openai-unavailable = Le service de connexion d'OpenAI est indisponible, donc rien n'a été enregistré. Réessayez plus tard.
+desktop-accounts-openai-incomplete = La réponse d'OpenAI était incomplète, donc rien n'a été enregistré.
+desktop-accounts-openai-transport = OpenAI n'a pas pu être joint, donc rien n'a été enregistré. Vérifiez la connexion et réessayez.
+desktop-accounts-chatgpt-listener = Le navigateur n'a pas pu être attendu sur cet ordinateur, donc la connexion n'a pas commencé.
+desktop-accounts-chatgpt-timed-out = Le navigateur n'est pas revenu à temps, donc rien n'a été enregistré.
+desktop-accounts-chatgpt-not-completed = Le navigateur n'a pas terminé la connexion, donc rien n'a été enregistré. Réessayez.
+desktop-accounts-chatgpt-client-changed = Le navigateur a renvoyé un autre client que celui enregistré, donc rien n'a changé. Déconnectez-vous, puis reconnectez-vous.
+desktop-accounts-chatgpt-no-use-scope = La connexion n'a pas autorisé bravebot à utiliser l'abonnement, donc rien n'a été enregistré. Reconnectez-vous et autorisez-le.
+desktop-accounts-xai-refused = xAI a refusé la connexion, donc rien n'a été enregistré.
+desktop-accounts-xai-rate-limited = xAI limite les requêtes, donc rien n'a été enregistré. Réessayez plus tard.
+desktop-accounts-xai-unavailable = xAI est indisponible, donc rien n'a été enregistré. Réessayez plus tard.
+desktop-accounts-xai-incomplete = La réponse de xAI n'a pas pu être lue, donc rien n'a été enregistré.
+desktop-accounts-xai-transport = xAI n'a pas pu être joint, donc rien n'a été enregistré. Vérifiez la connexion et réessayez.
+desktop-accounts-xai-denied = xAI a refusé la connexion, donc rien n'a été enregistré.
+desktop-accounts-xai-expired = Le code n'a pas été utilisé à temps, donc rien n'a été enregistré.
+desktop-accounts-clock = L'horloge de cet ordinateur est réglée avant 1970, donc rien n'a été enregistré. Réglez l'horloge et réessayez.
+desktop-accounts-not-stored = La connexion n'a pas pu être enregistrée sur cet ordinateur.
+desktop-accounts-cancelled = Connexion annulée.
+desktop-accounts-key-incognito = Une session incognito ne garde rien sur le disque, donc aucune clé ne peut être enregistrée.
+desktop-accounts-key-nowhere = Cet ordinateur n'a pas de répertoire d'état bravebot où garder une clé.
+desktop-accounts-key-brave-unreadable = La clé premium enregistrée n'a pas pu être lue, donc elle a été laissée telle quelle. Déconnectez-vous pour la retirer, puis saisissez à nouveau la clé.
+desktop-accounts-key-misconfigured = Les réglages n'ont pas pu être lus, donc aucune clé ne peut être enregistrée.
+desktop-accounts-key-not-offered = Ces réglages ne proposent aucune passerelle de ce nom pour laquelle enregistrer une clé.
+desktop-accounts-key-cannot-record = Une clé pour ce service n'est envoyée qu'une fois que vos réglages le nomment, et ils ne peuvent pas être modifiés pour le nommer, donc aucune clé n'a été demandée.
+desktop-accounts-key-empty = Aucune clé n'a été saisie, donc rien n'a été enregistré.
+desktop-accounts-key-stored-already = Une clé est déjà enregistrée, donc elle a été laissée telle quelle.
+desktop-accounts-key-not-stored = La clé n'a pas pu être enregistrée sur cet ordinateur.
+desktop-accounts-key-not-recorded = La clé est enregistrée, mais vos réglages n'ont pas pu être modifiés pour nommer ce service, donc aucune session ne l'envoie tant qu'ils ne le font pas.
+
+desktop-accounts-sign-in-bedrock-pinned-off = Les réglages gérés de cet ordinateur désactivent Bedrock pour tous les utilisateurs, et aucun bloc de fournisseur amazon-bedrock ne nomme de compte AWS, donc il n'y a rien à quoi se connecter.
+desktop-accounts-sign-in-bedrock-off = { $switch } a une autre valeur que 1, ce qui désactive Bedrock, et aucun bloc de fournisseur amazon-bedrock ne nomme de compte AWS, donc il n'y a rien à quoi se connecter.
+desktop-accounts-sign-in-no-aws-account = Aucun compte AWS n'est configuré pour Bedrock, donc il n'y a rien à quoi se connecter. Définissez { $region } et un modèle dans l'une de { $tiers }.
+desktop-accounts-sign-in-aws-gone = Les réglages ne nomment plus ce compte AWS, donc la connexion n'a pas commencé.
+desktop-accounts-aws-no-cli = L'AWS CLI n'est pas installée, donc la connexion n'a pas commencé.
+desktop-accounts-aws-no-profile = L'AWS CLI n'a pas de profil de ce nom, donc la connexion n'a pas commencé.
+desktop-accounts-aws-not-completed = La connexion à AWS n'a pas abouti.
+desktop-accounts-aws-undecodable = La réponse de l'AWS CLI n'a pas pu être lue, donc la session n'a pas pu être vérifiée.
+desktop-accounts-aws-still-signed-out = L'AWS CLI a terminé la connexion, et le profil ne donne toujours aucun identifiant pour signer une requête.
+desktop-accounts-bedrock-recorded = Vos réglages définissent maintenant { $switch }=1, donc une session utilise Bedrock sans qu'il soit exporté.
+desktop-accounts-bedrock-not-recorded = { $switch }=1 n'a pas pu être écrit dans vos réglages, donc il doit encore être exporté pour qu'une session utilise Bedrock.
+desktop-accounts-bedrock-not-recorded-incognito = Une session incognito n'enregistre rien, donc { $switch }=1 doit encore être exporté pour qu'une session utilise Bedrock.
+desktop-accounts-bedrock-overruled = Un fichier de réglages donne à { $switch } une autre valeur que 1, donc une session utilise Bedrock seulement là où { $switch }=1 est exporté.
+desktop-accounts-bedrock-left = Vos réglages nomment déjà { $switch }, donc ils ont été laissés tels quels, et une session utilise Bedrock seulement là où { $switch }=1 est exporté ou là où les réglages d'un projet le définissent.
 
 
 ## Répéter une consigne
@@ -4434,6 +4508,49 @@ ui-settings-language-unsaved = Impossible d'enregistrer la langue.
 ui-settings-language-unread = Impossible de lire le réglage de langue.
 ui-settings-restart = Redémarrer
 ui-settings-restart-running = Un tour est encore en cours. Redémarrez une fois qu'il est terminé ou arrêté.
+ui-accounts-heading = Comptes
+ui-accounts-signed-in = Connecté
+ui-accounts-key-stored = Clé enregistrée
+ui-accounts-key-from-environment = Clé fournie par l'environnement
+ui-accounts-no-key-needed = Aucune clé nécessaire
+ui-accounts-not-signed-in = Non connecté
+ui-accounts-unusable = Inutilisable
+ui-accounts-misconfigured = La configuration est illisible
+ui-accounts-with-cli = Avec l'outil en ligne de commande bravebot :
+ui-accounts-copy-command = Copier la commande
+ui-accounts-sign-out = Se déconnecter
+ui-accounts-sign-out-title = Se déconnecter de { $name } ?
+ui-accounts-sign-out-body = bravebot oublie cette connexion sur cet ordinateur. Les tours qui l'utilisent s'arrêtent jusqu'à ce que vous vous reconnectiez.
+ui-accounts-sign-out-gateway-body = La clé reste valable chez { $host } tant que vous ne l'y révoquez pas.
+ui-accounts-signed-out = Déconnecté de { $name }.
+ui-accounts-sign-out-failed = Impossible de se déconnecter de { $name }.
+ui-accounts-environment-note = Voici les connexions que cette application voit. Une clé définie seulement dans l'environnement d'un terminal n'est pas vue ici.
+ui-accounts-unread = L'agent n'a pas listé ses connexions. Recompilez ou réinstallez l'application, puis actualisez.
+ui-accounts-sign-in = Se connecter
+ui-accounts-waiting = En attente de la fin de votre connexion…
+ui-accounts-requesting-code = Demande d'un code…
+ui-accounts-port = Port { $port }
+ui-accounts-stops-waiting = L'attente s'arrête à { $time }.
+ui-accounts-show-sign-in-window = Afficher la fenêtre de connexion
+ui-accounts-cancel = Annuler
+ui-accounts-cancelled = Connexion annulée.
+ui-accounts-signed-in-to = Connecté à { $name }.
+ui-accounts-sign-in-failed = Impossible de se connecter à { $name }.
+ui-accounts-sign-in-busy = Une autre connexion est déjà en cours.
+ui-accounts-setup-heading = Se connecter à un service
+ui-accounts-setup-pointer = Connectez-vous à un compte ChatGPT, xAI ou AWS, ou saisissez la clé de Brave Premium, d’OpenRouter ou d’une autre passerelle, sous Comptes, plus bas.
+ui-accounts-enter-key = Saisir la clé
+ui-accounts-replace-key = Remplacer la clé
+ui-accounts-key-window-open = Saisissez la clé dans sa fenêtre.
+ui-accounts-show-key-window = Afficher la fenêtre de la clé
+ui-accounts-key-stored-for = Clé enregistrée pour { $name }.
+ui-accounts-key-not-stored-for = Impossible d'enregistrer la clé pour { $name }.
+ui-unconfigured-title = Connecter un service de modèles
+ui-unconfigured-subtitle = L'agent n'a encore aucun service de modèles utilisable. Vous pouvez continuer à parcourir les conversations et à rédiger des brouillons.
+ui-unconfigured-body = Connectez-vous à un compte, ou configurez une passerelle ou AWS Bedrock, dans les réglages de l'agent.
+ui-unconfigured-open-settings = Ouvrir les réglages de l'agent
+ui-unconfigured-continue = Continuer la navigation
+ui-unconfigured-details = Détails techniques
 gcloud-not-installed = La CLI Google Cloud (`gcloud`) est introuvable. Installez-la et lancez `gcloud auth application-default login`, ou définissez GOOGLE_API_KEY pour utiliser Google Vertex AI avec une clé.
 gcloud-refused = La CLI Google Cloud n'a donné aucun jeton d'accès ({ $detail }). Lancez `gcloud auth application-default login`.
 gcloud-no-token = la réponse n'était pas un jeton

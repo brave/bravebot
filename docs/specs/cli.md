@@ -1079,6 +1079,22 @@ was typed or now names the id as something that configures no service, the key s
 command names the entry to add and the file, and exits with the failure status. A key is never
 repeated, in that message or any other.
 
+**The window's key window.** The desktop window's Accounts settings store a gateway key the same way,
+through the store and the entry this command uses, from a key window its main process owns. The
+rows are the gateways this command offers, with `openrouter` listed even where no block names it.
+The main process asks the bridge, before anything is typed, whether a key can be kept, and the
+refusals are this command's in the same order, with sentences of the window's own that name no
+file: an incognito session, a configuration that cannot be read, an id not offered, nowhere to keep
+a key, a file of keys that cannot be read, which is left as it is, and for a known service no block
+names, a settings file the entry cannot be added to. The key window names the host the key is sent
+to, a variable in the block's `env` that is set and is sent instead, that a known service gets the
+entry, and, where a key is stored, that saving replaces it and the one replaced still works at its
+host until it is revoked there. A stored key is replaced only where the key window said so before it
+was typed, and whether one is stored is learned from the bridge, never from the page. The key goes
+from the key window to the main process and from there to the bridge on its standard input, and is
+never sent to the page. Where the entry cannot be recorded once the key is stored, the key stays
+stored and the row says no session sends it until the settings name the service.
+
 In an incognito session the import way is refused by the check `import-providers` makes, with its
 words. The Brave way is refused before the key is asked for, with the failure status, because a
 premium key is kept on disk ([PREM-16](premium-credentials.md#PREM-16)). The Bedrock way is not
@@ -1247,6 +1263,15 @@ and was told of none.
 `verified-by: bravebot_cli::xai_sign_in::auth_login_xai_is_refused_before_a_code_is_asked_for_where_it_cannot_be_done`
 `verified-by: bravebot_cli::xai_sign_in::auth_logout_xai_forgets_the_sign_in_and_only_that_one`
 `verified-by: bravebot_cli::xai_sign_in::the_list_of_ways_names_xai_and_says_signed_in_only_where_a_sign_in_is_stored`
+`verified-by: bravebot_agent::key_entry::a_gateway_key_is_added_beside_the_others_and_an_unreadable_file_is_left`
+`verified-by: bravebot_agent::key_entry::a_block_is_recorded_once_and_not_over_an_entry_the_person_wrote`
+`verified-by: bravebot_agent::key_entry::only_a_variable_set_to_something_is_in_force`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_known_service_gets_its_block_recorded_with_its_key`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_block_that_cannot_be_recorded_is_refused_before_the_key`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_configured_gateway_says_its_host_and_the_variable_that_wins`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_request_names_brave_or_a_gateway_with_its_id`
+`verified-by: bravebot_ui_bridge::accounts::the_window_stores_a_typed_key_and_says_nothing_of_it`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/key-entry.test.mjs drives its own key gate with a stand-in bridge and key window: an ask is dropped for a way that takes no key, a foreign sender, an unfocused window, a row the bridge does not mark as taking a key, a second ask while a key window is open and in the seconds after a cancel; the bridge is asked before anything is typed; whether to replace comes from the bridge and not the page; the key goes to the bridge alone and the page is told only how the key window ended; a refusal keeps the key window open; and closing it, the main window closing or quitting stores nothing; make check-ui runs the test)`
 
 <a id="CLI-19"></a>
 ### CLI-19: `--system-prompt` and `--append-system-prompt` put a person's own words in the planner's system prompt for one run
@@ -1451,7 +1476,7 @@ particular sign-in worked.
 
 `verified-by: bravebot_cli::running::auth_status_brave_with_no_key_is_not_signed_in_and_exits_nonzero`
 `verified-by: bravebot_cli::running::auth_status_brave_reports_a_stored_key_without_the_key`
-`verified-by: bravebot_cli::brave::the_standing_follows_the_file`
+`verified-by: bravebot_agent::accounts::the_brave_key_stands_as_its_file_does`
 `verified-by: bravebot_cli::running::auth_status_gateway_says_where_a_key_is_found_and_never_what_it_is`
 `verified-by: bravebot_cli::running::auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable`
 `verified-by: bravebot_cli::running::auth_status_gateway_naming_no_credential_is_signed_in`

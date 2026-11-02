@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { SettingsGroup } from './SettingsGroup'
+import { Accounts } from './Accounts'
+import { t } from '../i18n'
 import type { AgentSettings as Report, Hook, HooksDocument, Limits, Refusal } from '../../shared/agent-settings'
 import { composeHooks, unusableTimeout } from '../../shared/agent-settings'
 import { Alert, Button, Collapse, Dropdown, Icon, Input, ProgressRing } from '../nala'
@@ -33,6 +35,13 @@ function LimitsInForce({ limits }: { limits: Limits }): React.JSX.Element {
   </>
 }
 
+/** The ways to a model service: the sign-ins under Accounts first, then the ones made in settings. */
+export function SetupRoutes(): React.JSX.Element {
+  return <div className="setup-routes"><section><h4>{t.uiAccountsSetupHeading()}</h4><p data-test="settings-setup-accounts">{t.uiAccountsSetupPointer()}</p></section>
+    <section><h4>A local model or another service</h4><p>Add a provider to your agent settings, or select a file in Run settings. Credential-free local services need no token.</p><pre>{'{"provider":{"local":{"options":{"baseURL":"http://localhost:11434/v1"},"models":{"your-model":{}}}},"model":"local/your-model"}'}</pre><p data-test="settings-setup-gateway-key">For a service that needs a key, enter it on its row under Accounts, or name the credential environment variable in the provider’s <code>env</code> array.</p></section>
+    <section><h4>AWS Bedrock</h4><p>Name your AWS profile, region and model in your agent settings or environment. Your AWS account must have access to the selected model.</p><pre>AWS_REGION=us-east-1{'\n'}AWS_PROFILE=your-profile{'\n'}ANTHROPIC_DEFAULT_SONNET_MODEL=your-model-id-or-inference-profile-arn</pre><p data-test="settings-setup-bedrock">Then sign in to the profile under Accounts, which turns Bedrock on. Where the profile needs no sign-in, set <code>BRAVEBOT_USE_BEDROCK=1</code> as well.</p></section></div>
+}
+
 /**
  * The agent's configuration, as one page of stacked sections.
  *
@@ -50,6 +59,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const [refresh, setRefresh] = useState(0)
   useEffect(() => { onDirty(dirty) }, [dirty, onDirty])
   const load = async () => {
     setBusy(true); setProblem('')
@@ -121,16 +131,15 @@ export function AgentSettings({ session, onChanged, onDirty }: {
           <dl>
             <dt>Agent build</dt><dd>{report.build}</dd>
             <dt>Default model</dt><dd>{report.model ?? 'Not configured'}</dd>
-            {report.providers.map((p, i) => <div key={i} className="settings-dl-row"><dt>{p.name}</dt><dd>Credential {p.credential}</dd></div>)}
+            {report.providers.length > 0 && <><dt>Providers</dt><dd data-test="settings-providers">{report.providers.map(p => p.name).join(', ')}</dd></>}
             {report.brave && <><dt>Brave service</dt><dd>Brave service enabled</dd></>}
             {report.bedrock && <><dt>AWS Bedrock</dt><dd>AWS Bedrock enabled</dd></>}
           </dl>
           <Collapse title="Set up a model service" isOpen={!report.configured ? true : undefined} data-test="settings-setup">
-            <div className="setup-routes"><section><h4>Gateway or local model</h4><p>Add a provider to your agent settings, or select a file in Run settings. Credential-free local services need no token.</p><pre>{'{"provider":{"local":{"options":{"baseURL":"http://localhost:11434/v1"},"models":{"your-model":{}}}},"model":"local/your-model"}'}</pre><p>For authenticated services, name the credential environment variable in the provider’s <code>env</code> array.</p></section>
-            <section><h4>AWS Bedrock</h4><p>Configure your AWS credentials and enable Bedrock in your agent settings or environment. Your AWS account must have access to the selected model.</p><pre>BRAVEBOT_USE_BEDROCK=1{'\n'}AWS_REGION=us-east-1{'\n'}AWS_PROFILE=your-profile{'\n'}ANTHROPIC_DEFAULT_SONNET_MODEL=your-model-id-or-inference-profile-arn</pre></section>
-            <section><h4>Brave service</h4><p>Use a configured Brave build, or launch from a shell with <code>SERVICES_KEY_AICHAT</code>, <code>BRAVE_SERVICES_KEY_ID</code> and <code>BRAVE_AI_CHAT_ENDPOINT</code> set to your supplied credentials and endpoint. Credentials are not stored in this window.</p></section></div>
+            <SetupRoutes />
           </Collapse>
         </section>
+        <Accounts session={session} refresh={refresh} onChanged={() => { onChanged(); void load() }} />
         <section className="settings-block"><h3>Network</h3>
           <dl><dt>Certificate roots</dt><dd>{report.network.roots.length ? report.network.roots.join(', ') : 'Bundled roots'}</dd><dt>Proxy</dt><dd>{report.network.proxy ?? 'No proxy configured'}{report.network.authenticated ? ' · authenticated' : ''}</dd><dt>Proxy bypass</dt><dd>{report.network.noProxy ?? 'None'}</dd></dl>
           {(report.network.problem || report.network.trustsNothing || report.network.unusableProxy) && <Alert type="warning" role="alert">{report.network.problem || (report.network.trustsNothing ? 'No usable trust roots.' : `Unsupported proxy: ${report.network.unusableProxy}`)}</Alert>}
@@ -138,7 +147,7 @@ export function AgentSettings({ session, onChanged, onDirty }: {
         </section>
         <section className="settings-block"><h3>Diagnostics</h3>
           <p>Read the agent’s configuration again, after changing a file or the environment.</p>
-          <div className="settings-actions"><Button size="small" kind="outline" onClick={() => void load()} isDisabled={busy}><Icon name="refresh" slot="icon-before" />Refresh diagnostics</Button></div>
+          <div className="settings-actions"><Button size="small" kind="outline" onClick={() => { setRefresh(n => n + 1); void load() }} isDisabled={busy}><Icon name="refresh" slot="icon-before" />Refresh diagnostics</Button></div>
         </section>
         <section className="settings-block"><h3>Managed configuration</h3>{report.managed.path ? <><p className="settings-path">{report.managed.path}</p><p>{report.managed.keys.length ? `Locked by your administrator: ${report.managed.keys.join(', ')}` : 'File found; no recognized values are pinned.'}</p></> : <p>No administrator-managed configuration found.</p>}<p>Administrator-pinned destinations take precedence over your settings and environment.</p></section>
       </>}

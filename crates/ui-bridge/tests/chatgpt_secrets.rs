@@ -121,6 +121,7 @@ fn a_child_that_signs_in_to_the_stand_in() {
             done: "You can close this tab.",
             not_found: "Not found.",
         },
+        &std::sync::atomic::AtomicBool::new(false),
         |announcement| {
             std::fs::write(&url_file, announcement.url).expect("the address is written");
             chatgpt_stand_in::browse(announcement.url);

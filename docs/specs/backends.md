@@ -294,12 +294,13 @@ another it will never call.
 
 **The ChatGPT account starts no sign-in.** A model named `chatgpt/<name>` needs no sign-in before work
 starts, and no turn, hook, tool or slash command starts one: `bravebot auth login chatgpt` is typed by a
-person ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)). A turn on that model that finds no usable sign-in ends
+person, or the window's own sign-in is answered in a dialog its main process draws
+([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)). A turn on that model that finds no usable sign-in ends
 before a request is sent, naming the command. Replacing an access token that is about to expire is not a
 sign-in and is done inside the turn ([CHATGPT-7](chatgpt-sign-in.md#CHATGPT-7)).
 
-The xAI sign-in starts none either: `bravebot auth login xai` is typed by a person
-([XAI-7](xai-sign-in.md#XAI-7)). A model named `xai/<name>` needs no sign-in before work starts, and a turn
+The xAI sign-in starts none either: `bravebot auth login xai` is typed by a person, or the window's own
+sign-in is answered in a dialog its main process draws ([XAI-7](xai-sign-in.md#XAI-7)). A model named `xai/<name>` needs no sign-in before work starts, and a turn
 on it that finds no usable sign-in ends before a request is sent, naming the command
 ([XAI-17](xai-sign-in.md#XAI-17)).
 
@@ -4311,6 +4312,68 @@ A cache read the service reports is shown as [BACKEND-31](#BACKEND-31) says; thi
 `verified-by: bravebot_config::provider::only_a_true_set_cache_key_turns_the_key_on`
 `verified-by: bravebot_aichat::lib::a_gateway_that_set_a_cache_key_sends_the_key_and_one_that_did_not_sends_none`
 `verified-by: bravebot_agent::backend::a_cache_key_is_the_identifier_of_the_session_and_only_where_the_block_set_it`
+
+<a id="BACKEND-70"></a>
+### BACKEND-70: the desktop window signs in to an AWS account with `aws sso login`, only on a yes in a dialog its main process draws
+
+The desktop window offers Sign in on an AWS Bedrock row of its Accounts settings where the row is not
+signed in and signing in is the remedy, which is where the row names `bravebot auth login bedrock`: not
+where the AWS CLI is missing or has no profile by the row's name. The row names its account by the
+profile, or by none for the AWS CLI's default chain. The page that offers it may only ask, as it does for
+the ChatGPT account ([CHATGPT-15](chatgpt-sign-in.md#CHATGPT-15)). The main process learns from the bridge that the row
+is listed and may be signed in, shows a native dialog of its own naming the profile, with Cancel as the
+answer to a default key press and to Escape, and only a yes there sends the bridge the request. No client
+of the bridge but the main process may send one.
+
+The bridge runs the sign-in the command runs for that account ([BACKEND-9](#BACKEND-9)): `aws sso login`
+for the row's profile, found and started as every `aws` this program starts is. It is refused, with a
+sentence of the window's own and before the AWS CLI is started, where the settings cannot be read, where
+no AWS account is configured, where managed settings or `BRAVEBOT_USE_BEDROCK` turn Bedrock off and no
+`amazon-bedrock` provider block names an account, and where the settings no longer name the row's account.
+The URL and the code the AWS CLI writes are passed to the main process as they arrive, and shown only in a
+window it owns, with controls that copy each; the page that asked is told that the sign-in waits and how it
+ended, and nothing the AWS CLI wrote. Open browser again opens the URL the bridge gave, where it is `https`
+at a region's `device.sso.<region>.amazonaws.com` or `oidc.<region>.amazonaws.com`, or an organisation's
+`<name>.awsapps.com`, and at no URL the page names. The AWS CLI opens the browser itself, so the main
+process does not open one unasked.
+
+Cancel in either window, closing the sign-in window, closing the main window and quitting each end the
+sign-in, and the AWS CLI is killed with every process in its group, so nothing it started waits on. A
+browser it opened is the person's and is left open.
+
+Where the AWS CLI finishes, the profile is asked again for credentials, as a turn would ask: a sign-in that
+leaves the profile giving none ends failed. A failure is told in a sentence chosen from its kind alone, so
+nothing the AWS CLI wrote, which can name an account or a role, reaches the page. Where the account signed
+in is the one the tier variables name, `BRAVEBOT_USE_BEDROCK=1` is recorded in the user's own settings as
+the command records it, and the outcome says whether it was written, already there, overruled by a
+settings file or left alone; an incognito session records nothing and says so ([INCOG-7](incognito.md#INCOG-7)).
+`bravebot auth login bedrock` and what it prints are unchanged.
+
+**Why.** A session signs in to AWS when it opens because the terminal it holds can show what `aws sso
+login` writes. The window has no terminal, so a person whose Bedrock row said "not signed in" had to leave
+the window for one. The sign-in is the AWS CLI's, and the window asks for nothing the command does not:
+the same program, the same arguments, the same switch recorded. What it adds is a place to show the URL
+and the code. The code is what a person compares in the browser before approving, and a page that held the
+code and the URL could hand both to someone who would approve their own session in the person's name, so
+they stay with the main process, as ChatGPT's URL does ([CHATGPT-16](chatgpt-sign-in.md#CHATGPT-16)). An AWS
+CLI left running after a cancel would hold the device authorization open for someone to approve, so a
+cancel kills it rather than asking it to stop.
+
+`verified-by: bravebot_cli::layering::the_cancellable_aws_sign_in_is_started_by_the_window_and_nothing_else`
+`verified-by: bravebot_bedrock::credentials::a_stop_while_the_cli_waits_kills_it_and_its_worker`
+`verified-by: bravebot_bedrock::credentials::a_stop_before_the_cli_starts_starts_nothing`
+`verified-by: bravebot_bedrock::credentials::a_cli_that_finishes_is_the_answer_whether_or_not_it_succeeded`
+`verified-by: bravebot_ui_bridge::accounts::the_aws_sign_in_streams_the_url_and_code_and_records_the_switch`
+`verified-by: bravebot_ui_bridge::accounts::a_cancelled_aws_sign_in_kills_the_cli_and_records_nothing`
+`verified-by: bravebot_ui_bridge::accounts::quitting_kills_a_waiting_aws_sign_in`
+`verified-by: bravebot_ui_bridge::accounts::an_aws_sign_in_is_checked_again_once_the_cli_finishes`
+`verified-by: bravebot_ui_bridge::accounts::a_refused_aws_sign_in_starts_no_cli`
+`verified-by: bravebot_ui_bridge::accounts_bedrock::a_sign_in_with_no_account_to_sign_in_to_is_refused_with_why`
+`verified-by: bravebot_ui_bridge::accounts_bedrock::only_the_tier_account_is_a_reason_to_record_the_switch`
+`verified-by: bravebot_ui_bridge::accounts_bedrock::signing_in_records_the_switch_except_in_incognito`
+`verified-by: bravebot_ui_bridge::accounts_bedrock::the_url_and_the_code_are_taken_from_what_the_cli_wrote`
+`verified-by: bravebot_ui_bridge::accounts_bedrock::a_failure_is_told_by_its_kind_alone`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/sign-in.test.mjs drives its own sign-in gate with a stand-in bridge and dialog: an AWS sign-in is sent only for a row the bridge lists with its command and names the profile in the dialog, the URL and then the code reach the sign-in window and not the page, the browser is opened only when asked and only at the recorded https URL under the AWS hosts, and closing the window or quitting cancels it; ui/scripts/agent-settings.test.mjs draws Sign in on an AWS row only where the row has its command, asks for the row's own profile, and keeps the rule that coming back to the window reads no AWS row again; make check-ui runs both)`
 
 ## Known costs
 
