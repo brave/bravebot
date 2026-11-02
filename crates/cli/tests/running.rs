@@ -4746,14 +4746,20 @@ fn control_character_in(text: &str) -> Option<char> {
 }
 
 /// LAYER-3, CLI-7: the configuration's complaint about an endpoint is drawn by the sign-in commands
-/// that read the configuration first (`auth login chatgpt`, `auth login xai` and `auth login` for a
-/// gateway), as `doctor` draws it.
+/// that read the configuration first (`auth login chatgpt`, `auth login xai`, `auth login gateway`
+/// and `auth login bedrock`), as `doctor` draws it.
 ///
 /// Rejects handing the complaint to `fail` as it stands, which sent the value's escape sequence to
-/// the terminal.
+/// the terminal. The gateway and bedrock sign-ins reach `drawn_problem` from their own call sites,
+/// so each is run.
 #[test]
 fn the_sign_in_commands_draw_the_endpoint_the_configuration_quotes_as_pictures() {
-    for way in [["auth", "login", "chatgpt"], ["auth", "login", "xai"]] {
+    for way in [
+        ["auth", "login", "chatgpt"],
+        ["auth", "login", "xai"],
+        ["auth", "login", "gateway"],
+        ["auth", "login", "bedrock"],
+    ] {
         let scratch = Scratch::new("cli-running-sign-in-endpoint-escapes");
 
         let output = bravebot(
