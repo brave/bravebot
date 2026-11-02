@@ -85856,6 +85856,60 @@ fn a_delegate_carries_the_nested_file_only_where_it_is_spelled_exactly() {
     }
 }
 
+/// INSTR-14: a delegate started after a read in a package whose `AGENTS.md` repeats the project's
+/// carries the text once, and so does the turn that started it. A delegate composes its own
+/// standing instructions, so each request would otherwise carry every copy.
+#[test]
+fn a_delegate_carries_a_repeated_nested_agents_file_once() {
+    let scratch = Scratch::new("nested-duplicate-delegate");
+    for (path, contents) in [
+        ("AGENTS.md", "REPEATED-CONVENTION"),
+        ("pkg/AGENTS.md", "REPEATED-CONVENTION"),
+        ("pkg/a.txt", "the file body"),
+    ] {
+        let path = scratch.path.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PARENT-START-MARK",
+            vec![
+                two_tool_requests(
+                    ("read_file", r#"{"path":"pkg/a.txt"}"#),
+                    (
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"CHILD-REPORTS-NOW"}"#,
+                    ),
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("CHILD-REPORTS-NOW", vec![reply_with("reported")]),
+    ]);
+
+    run_turn_saying_notices(
+        &config_for(&endpoint),
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        &Task::new("PARENT-START-MARK"),
+    );
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let (parent, delegate): (Vec<&String>, Vec<&String>) = requests
+        .iter()
+        .partition(|request| request.contains("PARENT-START-MARK"));
+    assert_eq!(delegate.len(), 1, "the delegate did not make its one round");
+    let system = system_prompt_of(delegate[0]);
+    assert_eq!(system.matches("REPEATED-CONVENTION").count(), 1, "{system}");
+    for request in parent {
+        let system = system_prompt_of(request);
+        assert_eq!(system.matches("REPEATED-CONVENTION").count(), 1, "{system}");
+    }
+}
+
 /// What a person saved from their editor at a write prompt, as the confirmer answers it.
 fn editing_to(text: &str) -> bravebot_agent::confirm::WriteDecision {
     bravebot_agent::confirm::WriteDecision::edit(text.to_string())

@@ -2178,6 +2178,19 @@ fn composed_under_rules(
     distrusted: &[&str],
     deny: &[&str],
 ) -> preamble::Preamble {
+    composed_with_links(name, files, &[], touched, distrusted, deny)
+}
+
+/// [`composed_under_rules`] with symbolic links made after the files: each `(name, target)` makes
+/// `name` a link to `target`, both relative to the project.
+fn composed_with_links(
+    name: &str,
+    files: &[(&str, &str)],
+    links: &[(&str, &str)],
+    touched: &[&str],
+    distrusted: &[&str],
+    deny: &[&str],
+) -> preamble::Preamble {
     let deny: Vec<String> = deny.iter().map(|rule| rule.to_string()).collect();
     let (permissions, rejected) = bravebot_core::permissions::Permissions::parse(
         &deny,
@@ -2192,6 +2205,12 @@ fn composed_under_rules(
         let path = project.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, contents).unwrap();
+    }
+    for (link, target) in links {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(project.join(target), project.join(link)).unwrap();
+        #[cfg(not(unix))]
+        let _ = (link, target);
     }
     let workspace = Workspace::new(&project).expect("workspace");
     for typed in touched {
@@ -2413,6 +2432,217 @@ fn a_link_in_a_touched_name_is_not_followed_to_where_it_lands() {
     workspace.record_touch("alias/a.rs");
 
     assert_eq!(workspace.touched_directories(), ["alias"]);
+}
+
+/// INSTR-14: a nested file that repeats text already in the prompt is left out, so a monorepo whose
+/// packages carry the same file does not state it once per package.
+#[test]
+fn a_nested_agents_file_repeating_the_prompt_is_left_out() {
+    let files = [
+        ("AGENTS.md", SHARED_RULES),
+        ("pkg/AGENTS.md", SHARED_RULES),
+        ("lib/AGENTS.md", SHARED_RULES),
+    ];
+
+    let preamble =
+        composed_after_touching("nested-duplicate", &files, &["pkg/a.rs", "lib/a.rs"], &[]);
+
+    assert_eq!(
+        preamble.text.matches(SHARED_RULES).count(),
+        1,
+        "{}",
+        preamble.text
+    );
+    assert!(!preamble.text.contains("From pkg/AGENTS.md:"));
+    assert!(!preamble.text.contains("From lib/AGENTS.md:"));
+}
+
+const SHARED_RULES: &str = "SHARED-RULES: run the checks before a commit.";
+
+/// INSTR-14: two nested files with the same text are one source, though neither is the root's.
+#[test]
+fn two_nested_agents_files_with_one_text_are_stated_once() {
+    let files = [
+        ("AGENTS.md", "ROOT-RULES"),
+        ("pkg/AGENTS.md", SHARED_RULES),
+        ("lib/AGENTS.md", SHARED_RULES),
+    ];
+
+    let preamble = composed_after_touching(
+        "nested-duplicate-pair",
+        &files,
+        &["pkg/a.rs", "lib/a.rs"],
+        &[],
+    );
+
+    assert_eq!(preamble.text.matches(SHARED_RULES).count(), 1);
+}
+
+/// INSTR-14: a distinct file after a skipped duplicate still loads, so a file is dropped for its
+/// text and not for where it sits in the order.
+#[test]
+fn a_distinct_nested_file_after_a_skipped_duplicate_still_loads() {
+    let files = [
+        ("AGENTS.md", SHARED_RULES),
+        ("a/AGENTS.md", SHARED_RULES),
+        ("b/AGENTS.md", "B-RULES"),
+        ("c/AGENTS.md", "C-RULES"),
+    ];
+
+    let preamble = composed_after_touching(
+        "nested-distinct",
+        &files,
+        &["c/x.rs", "b/x.rs", "a/x.rs"],
+        &[],
+    );
+
+    assert_eq!(preamble.text.matches(SHARED_RULES).count(), 1);
+    let at = |needle: &str| {
+        preamble
+            .text
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} is not in the prompt: {}", preamble.text))
+    };
+    assert!(at("B-RULES") < at("C-RULES"), "{}", preamble.text);
+}
+
+/// INSTR-14: the project file reached through a link is the same file as the nested one, whatever
+/// the two say after trimming, so it is stated once. The two share their text here, so the import
+/// test below is the one that pins the same-file branch.
+#[cfg(unix)]
+#[test]
+fn a_root_file_linked_to_a_nested_one_is_stated_once() {
+    let preamble = composed_with_links(
+        "nested-linked-root",
+        &[("agents/AGENTS.md", SHARED_RULES)],
+        &[("AGENTS.md", "agents/AGENTS.md")],
+        &["agents/x.md"],
+        &[],
+        &[],
+    );
+
+    assert_eq!(
+        preamble.text.matches(SHARED_RULES).count(),
+        1,
+        "{}",
+        preamble.text
+    );
+    assert!(!preamble.text.contains("From agents/AGENTS.md:"));
+}
+
+/// INSTR-14: the project file reached through a link is the same file as the nested one even when
+/// the project's copy has been expanded for an `@path` import and so no longer equals the raw text.
+#[cfg(unix)]
+#[test]
+fn a_linked_root_file_with_an_import_is_still_the_same_file_as_the_nested_one() {
+    let preamble = composed_with_links(
+        "nested-linked-root-import",
+        &[
+            ("agents/AGENTS.md", "LINKED-RULES\n\n@agents/extra.md"),
+            ("agents/extra.md", "EXTRA-IMPORTED-TEXT"),
+        ],
+        &[("AGENTS.md", "agents/AGENTS.md")],
+        &["agents/x.md"],
+        &[],
+        &[],
+    );
+
+    assert_eq!(
+        preamble.text.matches("LINKED-RULES").count(),
+        1,
+        "{}",
+        preamble.text
+    );
+    assert!(!preamble.text.contains("From agents/AGENTS.md:"));
+}
+
+/// INSTR-15: a skipped duplicate adds nothing to the combined total, so copies of a file under the
+/// combined figure do not trigger the notice. A skipped copy over the per-file figure is not named.
+#[test]
+fn skipped_duplicates_add_nothing_to_the_size_notices() {
+    let big = format!("BIG-RULES {}", "padding ".repeat(1_500));
+    assert!(big.len() > 8_000 && big.len() < 16_384, "{}", big.len());
+    // Five copies are 5 x ~12 KB, over the 32768 combined figure if all were counted.
+    let files = [
+        ("AGENTS.md", big.as_str()),
+        ("a/AGENTS.md", big.as_str()),
+        ("b/AGENTS.md", big.as_str()),
+        ("c/AGENTS.md", big.as_str()),
+        ("d/AGENTS.md", big.as_str()),
+    ];
+
+    let preamble = composed_after_touching(
+        "nested-duplicate-size",
+        &files,
+        &["a/x.rs", "b/x.rs", "c/x.rs", "d/x.rs"],
+        &[],
+    );
+
+    assert_eq!(preamble.text.matches("BIG-RULES").count(), 1);
+    assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
+
+    // A copy over the per-file figure of 16384 bytes is named once, for the file that is kept, and
+    // not again for the copy that is skipped.
+    let huge = format!("HUGE-RULES {}", "padding ".repeat(2_500));
+    assert!(huge.len() > 16_384 && huge.len() < 32_768, "{}", huge.len());
+    let files = [("AGENTS.md", huge.as_str()), ("a/AGENTS.md", huge.as_str())];
+
+    let preamble = composed_after_touching("nested-duplicate-huge", &files, &["a/x.rs"], &[]);
+
+    assert_eq!(preamble.text.matches("HUGE-RULES").count(), 1);
+    let notices = preamble
+        .notices
+        .iter()
+        .map(|notice| notice.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].contains("AGENTS.md") && !notices[0].contains("a/AGENTS.md"));
+}
+
+/// INSTR-14: a nested file is compared with the source admitted just before it, so skipping a
+/// repeat never changes which text comes last. Here the deepest file repeats the root's but not the
+/// one before it, and it stays so that the deepest has the last word (INSTR-4).
+#[test]
+fn a_nested_file_repeating_an_earlier_source_but_not_the_last_is_kept() {
+    let files = [
+        ("AGENTS.md", "use tabs"),
+        ("pkg/AGENTS.md", "use spaces"),
+        ("pkg/sub/AGENTS.md", "use tabs"),
+    ];
+
+    let preamble = composed_after_touching("nested-last-word", &files, &["pkg/sub/a.rs"], &[]);
+
+    assert!(
+        preamble.text.trim_end().ends_with("use tabs"),
+        "{}",
+        preamble.text
+    );
+    assert!(preamble.text.contains("From pkg/sub/AGENTS.md:"));
+    assert_eq!(preamble.text.matches("use tabs").count(), 2);
+}
+
+/// INSTR-14: a distrusted duplicate is refused by the trust gate and says so, as a file with any
+/// other text is; it is not silently reported as a repeat. This guards the order of the trust gate
+/// before the comparison and passes without the skip.
+#[test]
+fn a_distrusted_nested_file_repeating_the_prompt_is_still_reported() {
+    let files = [("AGENTS.md", SHARED_RULES), ("pkg/AGENTS.md", SHARED_RULES)];
+
+    let preamble = composed_after_touching(
+        "nested-duplicate-distrusted",
+        &files,
+        &["pkg/a.rs"],
+        &["pkg"],
+    );
+
+    assert_eq!(
+        preamble
+            .notices
+            .iter()
+            .map(|notice| notice.message.as_str())
+            .collect::<Vec<_>>(),
+        ["pkg/AGENTS.md was not loaded: this directory is not trusted"],
+    );
 }
 
 /// A nested file is taken as it stands. A pointer in it and an `@path` import in it are ordinary
@@ -2675,17 +2905,19 @@ fn a_very_large_instructions_file_still_loads() {
 /// after it. A check written as "the total is over the figure" would say it three times here.
 #[test]
 fn sources_long_together_are_reported_once() {
-    let each = format!("PART-RULES {}", "padding ".repeat(1_500));
-    assert!(each.len() < 16_384, "{}", each.len());
-    assert!(each.len() * 3 > 32_768, "{}", each.len());
+    // Distinct texts: a nested file repeating an earlier one is left out and not measured (INSTR-14).
+    let each = |name: &str| format!("PART-RULES {name} {}", "padding ".repeat(1_500));
+    let (root, pkg, lib, app) = (each("root"), each("pkg"), each("lib"), each("app"));
+    assert!(root.len() < 16_384, "{}", root.len());
+    assert!(root.len() * 3 > 32_768, "{}", root.len());
 
     let preamble = composed_after_touching(
         "size-combined",
         &[
-            ("AGENTS.md", &each),
-            ("pkg/AGENTS.md", &each),
-            ("lib/AGENTS.md", &each),
-            ("app/AGENTS.md", &each),
+            ("AGENTS.md", &root),
+            ("pkg/AGENTS.md", &pkg),
+            ("lib/AGENTS.md", &lib),
+            ("app/AGENTS.md", &app),
         ],
         &["pkg/a.rs", "lib/a.rs", "app/a.rs"],
         &[],
