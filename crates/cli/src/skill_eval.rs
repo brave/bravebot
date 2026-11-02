@@ -561,6 +561,10 @@ mod tests {
         }
     }
 
+    /// SKILLEVAL-5. `eval <name>` takes its four flags and no others, because a flag that lets a
+    /// run write (`--accept-edits`, `--mode auto`) would let a case file's prompt change the
+    /// person's tree. Rejects a reader that passes an unknown word through, or accepts a count of
+    /// zero, a repeated flag or a flag with no value.
     #[test]
     fn the_name_and_the_four_flags_are_read_and_nothing_else() {
         let read_it = |typed: &[&str]| read(&words(typed));
@@ -616,6 +620,10 @@ mod tests {
         }
     }
 
+    /// SKILLEVAL-6. A deterministic grader is decided by what the driver recorded of the run (the
+    /// tools called, whether a call was refused, the rounds, whether the skill loaded), never by
+    /// the model's reply, which the model controls. Rejects a grader that reads the reply, or that
+    /// counts a refused call as made.
     #[test]
     fn a_deterministic_grader_reads_the_record_and_not_the_reply() {
         let record = Record {
@@ -648,6 +656,9 @@ mod tests {
         );
     }
 
+    /// SKILLEVAL-6. Whether the skill loaded is a fact about the catalogue entry a `load_skill`
+    /// call resolved to and was answered for. Rejects a record that counts a refused call, a call
+    /// to another tool, a call for another entry, or a call that resolved to no entry.
     #[test]
     fn a_skill_counts_as_loaded_only_when_the_catalogue_entry_it_resolved_to_was_answered() {
         let loaded =
@@ -684,6 +695,10 @@ mod tests {
         assert!(Record::of(&calls[1..], 1).loaded("demo"));
     }
 
+    /// SKILLEVAL-7. A rubric passes or fails on the verdicts the gate released. Where it released
+    /// too few, the rubric has no result and the run has no grade, because the verdict is over
+    /// content that may be untrusted and a withheld one must not pick the result. Rejects reading a
+    /// withheld rubric as a fail or a pass.
     #[test]
     fn a_rubric_takes_its_result_from_the_released_votes_and_without_one_gives_no_grade() {
         let record = Record::default();
@@ -698,6 +713,8 @@ mod tests {
         assert_eq!(graded(&[]), None, "a rubric with no result was graded");
     }
 
+    /// A person who writes a case file is told why it was refused in words. Rejects a message built
+    /// with `{:?}`, which shows variant names and quoted strings instead of a sentence.
     #[test]
     fn every_case_problem_is_described_in_words_with_no_debug_syntax() {
         for (problem, wanted) in [
@@ -728,6 +745,9 @@ mod tests {
         }
     }
 
+    /// SKILLEVAL-5. A run that stopped at a limit has no score, and the report says so. Rejects
+    /// counting it as 0, which would read as the skill failing and skew the difference between the
+    /// two arms.
     #[test]
     fn an_arm_with_no_score_is_said_and_not_read_as_zero() {
         assert_eq!(difference(Some(1.0), None), t!(skill_eval_no_score));
