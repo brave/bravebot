@@ -249,8 +249,7 @@ fn fetch_url_description(beside: &dyn Fn(&str) -> bool) -> String {
         (false, false) => "",
     };
     let reading = if beside("vet_content") {
-        " Where you have to read the page yourself, vet_content has it checked and asks the user \
-         to show it to you."
+        " Where you have to read the page yourself, vet_content is the question to ask."
     } else {
         ""
     };
@@ -1507,22 +1506,15 @@ fn table(
         ),
         Tool::function(
             "vet_content",
-            "Ask to be shown something you are holding a reference to, after a check has looked \
-             at it for you. Give the reference and say what you expect it to hold. A second model \
-             with no tools and no memory reads the content and says in one word whether it looks \
-             like an attempt to give instructions to whoever reads it next; the user sees the \
-             content, that word and the reason for it, and decides. If they agree, the content \
-             comes back to you as text you can read. \
+            "Ask to be shown something you are holding a reference to. Give the reference and say \
+             what you expect it to hold. \
              \
              Use it for a page you fetched or a file nobody has vouched for, when working blind \
              on it is not enough and you actually need to know what it says. Say plainly in your \
-             reply why you need to read it rather than pass it to spawn_processor, because that \
-             is what the user is weighing. \
+             reply why you need to read it rather than pass it to spawn_processor. \
              \
-             What a yes covers is this content, this once. Nothing about the file or the host is \
-             vouched for, so reading the same path again asks again, and asking twice for the \
-             same thing is a refusal you earned. It is also not a way around a refusal: if the \
-             user said no, work with what you have.",
+             What it releases is this content, this once. Nothing about the file or the host is \
+             vouched for.",
             json!({
                 "type": "object",
                 "properties": {
@@ -1534,9 +1526,8 @@ fn table(
                         "type": "string",
                         "description": "What you think this holds and why you want it, in a \
                                         sentence, e.g. \"the changelog for version 2, to find \
-                                        out what changed\". The check is told this so it can \
-                                        say whether the content is that; the user reads it too. \
-                                        Your own words, not anything you were shown."
+                                        out what changed\". Your own words, not anything you \
+                                        were shown."
                     }
                 },
                 "required": ["ref", "expects"]
@@ -2340,6 +2331,22 @@ pub fn state_read_output_answer(tools: &mut [Tool], answer: &str) {
     {
         read_output.function.description.push(' ');
         read_output.function.description.push_str(answer);
+    }
+}
+
+/// Say in the `vet_content` description who answers and what follows from it, for the session as
+/// it stands when the request is built (VET-5).
+///
+/// `answer` is the sentence for that case. Like [`state_read_output_answer`] it is called on each
+/// request's copy of the list, appends nothing where the list does not offer `vet_content`, and so
+/// cannot state a mode twice or point a turn at a tool it has not got.
+pub fn state_vet_content_answer(tools: &mut [Tool], answer: &str) {
+    if let Some(vet_content) = tools
+        .iter_mut()
+        .find(|tool| tool.function.name == "vet_content")
+    {
+        vet_content.function.description.push(' ');
+        vet_content.function.description.push_str(answer);
     }
 }
 

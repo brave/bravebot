@@ -613,6 +613,11 @@ If you agree, the bytes come back as text the planner may read. If you do not, i
 to work with what it has or to say what it needed, rather than being left to ask again. Nothing the
 check wrote goes back either way.
 
+The planner is told who answers in the tool's description, for the session it is in. Where you are
+asked, it is told that you see the content and decide. Where a check answers, it is told the content
+comes back or is kept back. Where nobody is asked, it is told the content comes back. The description
+names neither the mode nor the check, and the result of a call does not say which answered.
+
 A picture or a PDF is vetted the same way, except that the check is given the file and you are shown a
 copy of it to open. If you let it through, it is attached to the planner's next request and is not
 returned as text. See [A picture or a PDF](../security/vetting.md#a-picture-or-a-pdf).

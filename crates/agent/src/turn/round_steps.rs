@@ -1203,6 +1203,12 @@ pub(super) fn build_request<R: Reporter>(
         // person can change the mode while the turn runs (RUN-14).
         let mut listed = offered.to_vec();
         tools::state_read_output_answer(&mut listed, read_output_is().stated());
+        // Offered on the list or not at all, so the tool being there is the offering. Asked of
+        // the mode again for the same reason as above.
+        tools::state_vet_content_answer(
+            &mut listed,
+            super::setup::read_output_is(task, true).stated_for_vet_content(),
+        );
         request.with_tools(listed)
     } else {
         request

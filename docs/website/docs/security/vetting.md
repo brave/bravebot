@@ -95,7 +95,7 @@ page. The model is handed a reference that names its type and size, and nothing 
 are shown two rows behind the margin, under the label, and not the first lines of its base64:
 
 ```
-  ┃ untrusted · what weather:get_forecast returned · (U,priv)
+  ┃ untrusted · what weather:get_forecast returned with no failure reported · (U,priv)
   ┃ a picture, image/png, 20480 bytes, held as ref:2 and kept from the model
   ┃ Ask the model to write it to a file you can open, or to use vet_content on it, which asks you
   ┃ about a copy of it before the model sees it.

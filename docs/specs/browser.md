@@ -2939,8 +2939,9 @@ and the number forgotten, and it forgets them, so a second call finds none. An i
 blocked site is left out and forgotten ([BROWSER-17](#BROWSER-17)). The reply is a tool result, so
 it is untrusted and private and the session is given a reference and no word of it
 ([MCP-1](mcp.md#MCP-1), [LABEL-3](labels.md#LABEL-3)). A model reads it only through a processor that
-answers a question about it, or after a person has read the exact text at `vet_content`, and the
-description of the tool says so. Holding something out is not vouching for it
+answers a question about it, or at `vet_content`, the question to ask to read the exact text, and the
+description of the tool says so without saying who answers it
+([VET-5](tools/vet-content.md#VET-5)). Holding something out is not vouching for it
 ([LABEL-8](labels.md#LABEL-8)).
 
 **Why.** What a person selects on a page is that page's text. A range includes text the page hides,
@@ -2954,7 +2955,7 @@ returns is what the person chose and no more. Asking about every call would add 
 nothing in it to decide, and a person who wants it can declare the server that way.
 
 **Known costs.** The text of a selection can include text the person did not see, and a long
-selection is long to read, so the person's reading at `vet_content` is the only check on it. A tab
+selection is long to read, so the reading at `vet_content`, by the person or by whatever answers it in that session ([VET-5](tools/vet-content.md#VET-5)), is the only check on it. A tab
 is held as its address, since its title needs the `tabs` permission and the group lists none of the
 permissions that read a tab. Whether the browser cuts a long selection before it gives it to the
 extension, what the entries do on a page that scripts its own menu, in a private window and in a frame,
@@ -2965,6 +2966,7 @@ permission is taken back, and 10 items of 20,000 characters take 323 KB of the 1
 
 `verified-by: bravebot_browser::tools::take_held_is_offered_by_the_server_of_held_alone_and_takes_no_argument`
 `verified-by: bravebot_browser::tools::the_take_held_description_says_the_result_is_page_text_the_model_cannot_read_and_how_it_becomes_readable`
+`verified-by: bravebot_browser::tools::no_description_says_a_person_answers_vet_content`
 `verified-by: bravebot_browser::relay::what_a_person_held_out_is_called_through_its_group_alone_and_arrives_as_one_text_part`
 `verified-by: bravebot_browser::extension::what_a_person_holds_out_is_given_by_the_browser_and_read_from_no_page`
 `verified-by: bravebot_browser::extension::the_design_documents_group_tables_are_the_ones_the_extension_and_the_relay_hold`

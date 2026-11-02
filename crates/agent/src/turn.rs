@@ -150,6 +150,31 @@ impl ReadOutputIs {
             }
         }
     }
+
+    /// What the `vet_content` description says of who answers, and of what follows from it, for
+    /// the session as it stands (VET-5).
+    ///
+    /// The cases are the ones [`ReadOutputIs::stated`] has, because both calls are answered by the
+    /// same thing: nobody where permissions are bypassed with no screening, a check's word where
+    /// screening is asked for, and a person elsewhere. Only the case where a person answers says
+    /// what the user is weighing, that reading the same path again asks again, or that a refusal
+    /// was theirs. No case names the mode or a check, as MODE-3 and CHECK-9 require.
+    fn stated_for_vet_content(self) -> &'static str {
+        match self {
+            ReadOutputIs::Unasked => "The content comes back to you as text you can read.",
+            ReadOutputIs::ByACheck => {
+                "The content comes back to you as text you can read, or you are told it was kept \
+                 back. If it was kept back, work with what you have."
+            }
+            ReadOutputIs::Asked => {
+                "The user sees the content and decides; if they agree, it comes back to you as \
+                 text you can read. Your reason is what the user is weighing. Reading the same \
+                 path again asks again, and asking twice for the same thing is a refusal you \
+                 earned. It is also not a way around a refusal: if the user said no, work with \
+                 what you have."
+            }
+        }
+    }
 }
 
 /// The advice about how to stop being asked, which is true of a result and not of the session: it

@@ -298,3 +298,44 @@ refusal is VET-3's, word for word.
 `verified-by: bravebot_core::policy::a_copy_of_a_picture_is_a_recorded_release`
 `verified-by: bravebot_tui::confirm::vet::a_picture_is_put_to_the_person_as_a_copy_to_open`
 `verified-by: bravebot_tui::app::the_inputs_adopted_are_the_chosen_models_own`
+
+<a id="VET-5"></a>
+### VET-5: the description says who answers for the session, once, and names neither the mode nor the check
+
+The fixed text of the `vet_content` description holds only what is true of every session: what the
+tool asks for, when to use it, and that what it releases is this content, this once. It does not say
+that a check reads the content, since none is made where permissions are bypassed with no screening.
+The `fetch_url` description points at `vet_content` as the question to ask for a page the planner has
+to read, and says nothing of who answers it. Who answers is added to the request's copy of the tool
+list, for each request, from the mode and the auto-vetting setting as they stand when the request is
+built, by the condition that settles who answers
+`read_output` ([RUN-14](run.md#RUN-14)). There are three wordings:
+
+- A person is asked: the user sees the content and decides, and if they agree it comes back as text.
+  Only here does the description say that the reason the planner gives is what the user weighs, that
+  reading the same path again asks again, and that a no is not a way around.
+- A check answers: the content comes back as text, or the planner is told it was kept back.
+- Nobody is asked and no check runs: the content comes back as text.
+
+No wording names the mode or the check ([MODE-3](../permission-modes.md#MODE-3),
+[CHECK-9](../vetting.md#CHECK-9)), and none is added to a list that does not hold `vet_content`, such
+as a delegate's. A mode changed while a turn runs changes the next request's description, and the
+statement is made once in each.
+
+The other text the planner reads that names `vet_content` is the same for every session, so it says
+only that `vet_content` is the question to ask to read a reference, and never who answers it: the
+descriptions of the browser tools whose result is quarantined, and the refusal of a processor in a
+conversation that holds private content.
+
+**Why.** The text was one sentence for every session. Where a safe verdict releases the content with
+no prompt, or permissions are bypassed, a planner told that the user sees the content and decides
+treated a read that cost nothing as one that needed approval. The result of the call stays as
+[VET-3](#VET-3) has it, so who answered is said in the description, which holds the session, and
+never in a result, which a planner could aim at.
+
+`verified-by: bravebot_agent::turn::the_vet_content_description_says_who_answers_for_the_session`
+`verified-by: bravebot_agent::turn::the_vet_content_description_follows_a_mode_changed_between_requests`
+`verified-by: bravebot_agent::tools::a_delegate_is_never_offered_a_way_to_promote_a_slot`
+`verified-by: bravebot_agent::tools::who_answers_vet_content_is_stated_only_on_a_list_that_holds_it`
+`verified-by: bravebot_browser::tools::no_description_says_a_person_answers_vet_content`
+`verified-by: bravebot_core::policy::the_refusal_of_a_processor_in_a_private_context_names_what_still_works`

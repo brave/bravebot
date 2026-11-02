@@ -1500,9 +1500,9 @@ It does not say the bytes can be trusted. A selected range includes text the pag
 opacity, off screen or in the colour of its background, and the address of a link or of a page is
 chosen by the page. So an item has the label of any result of a server, untrusted and private
 ([MCP-1](../specs/mcp.md#MCP-1)), the planner is given a reference to it, and a model reads it only
-through a processor ([PROC-1](../specs/processors.md#PROC-1)) or after a person has read the exact text
-at `vet_content`. The row for it in [LABEL-8](../specs/labels.md#LABEL-8) records that the decision
-is that the gesture gives it no label. The person's reading at `vet_content` is the only check on text
+through a processor ([PROC-1](../specs/processors.md#PROC-1)) or after `vet_content` has been answered for
+it. The row for it in [LABEL-8](../specs/labels.md#LABEL-8) records that the decision
+is that the gesture gives it no label. The reading at `vet_content` is the only check on text
 they did not see.
 
 **The permission.** The browser hands the extension the selection when the entry is used, so the group

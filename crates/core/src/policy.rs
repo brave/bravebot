@@ -4311,7 +4311,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                  rewording changes that and no processor can be started in this conversation; \
                  to narrow a reference that holds text, run a filter such as grep or tail with \
                  stdin_ref set to it and call read_output on what that prints, and vet_content \
-                 asks the user to show you a reference whole"
+                 is the question to ask to read a reference whole"
             } else {
                 "say what to do rather than pasting what was read"
             };
@@ -19589,6 +19589,11 @@ five
                     && err.message.contains("read_output")
                     && err.message.contains("vet_content"),
                 "the refusal names no route that still works: {}",
+                err.message
+            );
+            assert!(
+                !err.message.contains("asks the user"),
+                "the refusal says who answers vet_content, which depends on the session: {}",
                 err.message
             );
             assert!(

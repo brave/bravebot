@@ -27822,6 +27822,16 @@ fn the_read_output_description(
     mode: bravebot_agent::PermissionMode,
     auto_vetting: bool,
 ) -> String {
+    a_tool_description("read_output", scratch_name, mode, auto_vetting)
+}
+
+/// The description of `tool` a first request carried, for a turn run under `mode`.
+fn a_tool_description(
+    tool_name: &str,
+    scratch_name: &str,
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+) -> String {
     let scratch = Scratch::new(scratch_name);
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
@@ -27856,8 +27866,8 @@ fn the_read_output_description(
         .as_array()
         .expect("tools offered")
         .iter()
-        .find(|tool| tool["function"]["name"] == "read_output")
-        .expect("read_output offered")["function"]["description"]
+        .find(|tool| tool["function"]["name"] == tool_name)
+        .unwrap_or_else(|| panic!("{tool_name} offered"))["function"]["description"]
         .as_str()
         .expect("a description")
         .to_string()
@@ -27890,6 +27900,192 @@ fn the_read_output_description_says_who_answers_for_the_session() {
         "a session where a person is asked was not told so: {asked}"
     );
     for description in [&bypassed, &checked, &asked] {
+        assert_eq!(
+            description.matches("text you can read").count(),
+            1,
+            "who answers was stated more than once: {description}"
+        );
+    }
+}
+
+/// VET-5: who answers `vet_content` is said once, in the tool's description, from the session's mode
+/// and auto-vetting. The fixed text claims nothing about a person, so it is not false where nobody
+/// is asked, and the sentences that depend on a person answering are said only there.
+#[test]
+fn the_vet_content_description_says_who_answers_for_the_session() {
+    use bravebot_agent::PermissionMode::{Ask, Bypass};
+    let bypassed = a_tool_description("vet_content", "vc-desc-bypass", Bypass, false);
+    let checked = a_tool_description("vet_content", "vc-desc-checked", Ask, true);
+    let screened_bypass =
+        a_tool_description("vet_content", "vc-desc-screened-bypass", Bypass, true);
+    let asked = a_tool_description("vet_content", "vc-desc-asked", Ask, false);
+
+    assert!(
+        bypassed.contains("The content comes back to you as text you can read.")
+            && !bypassed.contains("The user sees")
+            && !bypassed.contains("kept back"),
+        "a bypassed session was told a user decides, or that content may be kept back: {bypassed}"
+    );
+    for described in [&checked, &screened_bypass] {
+        assert!(
+            described.contains("or you are told it was kept back")
+                && !described.contains("The user sees"),
+            "a session where a check answers was told a user decides, or not that content may be \
+             kept back: {described}"
+        );
+    }
+    assert!(
+        asked.contains("The user sees the content and decides; if they agree, it comes back")
+            && !asked.contains("kept back"),
+        "a session where a person is asked was not told so: {asked}"
+    );
+
+    for (name, described) in [
+        ("bypassed", &bypassed),
+        ("checked", &checked),
+        ("screened bypass", &screened_bypass),
+    ] {
+        for claim in [
+            "the user sees",
+            "The user sees",
+            "weighing",
+            "asks again",
+            "refusal you earned",
+            "If they agree",
+            "if they agree",
+        ] {
+            assert!(
+                !described.contains(claim),
+                "{name}: the description claims a person answers ({claim:?}): {described}"
+            );
+        }
+    }
+    assert!(
+        asked.contains("Your reason is what the user is weighing")
+            && asked.contains("asks again")
+            && asked.contains("refusal you earned"),
+        "a session where a person is asked lost what a person's answer means: {asked}"
+    );
+
+    for (name, described) in [
+        ("bypassed", &bypassed),
+        ("checked", &checked),
+        ("screened bypass", &screened_bypass),
+        ("asked", &asked),
+    ] {
+        for claim in [
+            "after a check",
+            "second model",
+            "one word",
+            "the check is told",
+        ] {
+            assert!(
+                !described.to_lowercase().contains(claim),
+                "{name}: the description says a check reads the content, which is false where \
+                 none is made ({claim:?}): {described}"
+            );
+        }
+    }
+
+    // fetch_url points at vet_content and says nothing of who answers it, so it is true of every
+    // session.
+    let mut fetches = Vec::new();
+    for (name, mode, auto_vetting) in [
+        ("fu-desc-bypass", Bypass, false),
+        ("fu-desc-checked", Ask, true),
+        ("fu-desc-asked", Ask, false),
+    ] {
+        fetches.push(a_tool_description("fetch_url", name, mode, auto_vetting));
+    }
+    for fetch in &fetches {
+        assert!(
+            fetch.contains("vet_content is the question to ask")
+                && !fetch.contains("has it checked")
+                && !fetch.contains("asks the user to show"),
+            "fetch_url claims how vet_content is answered: {fetch}"
+        );
+    }
+    assert!(
+        fetches.iter().all(|fetch| fetch == &fetches[0]),
+        "fetch_url changed with the session: {fetches:?}"
+    );
+
+    for (name, described) in [
+        ("bypassed", &bypassed),
+        ("checked", &checked),
+        ("asked", &asked),
+    ] {
+        for named in ["bypass", "auto-vet", "screen"] {
+            assert!(
+                !described.to_lowercase().contains(named),
+                "{name}: the description names the mode or the check ({named}): {described}"
+            );
+        }
+        assert_eq!(
+            described.matches("text you can read").count(),
+            1,
+            "{name}: who answers was stated more than once: {described}"
+        );
+    }
+}
+
+/// VET-5: the description is rebuilt for each request, so a mode the person changes while the turn
+/// runs shows in the next request, and who answers is stated once. The first request is built under
+/// Ask and the second after the confirmer switched to Bypass over the write's prompt.
+#[test]
+fn the_vet_content_description_follows_a_mode_changed_between_requests() {
+    use bravebot_agent::PermissionMode::{Ask, Bypass};
+    let scratch = Scratch::new("vc-desc-mode-change");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"first"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let live = bravebot_agent::LiveMode::new(Ask);
+    let task = Task::new("write it").with_permission_mode(live.clone());
+    let mut recording = RecordingConfirmer::approving_while_the_mode_changes(&live, Bypass);
+    let mut confirmer = bravebot_agent::Confining::new(&mut recording, live.clone(), false);
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let descriptions: Vec<String> = (0..2)
+        .map(|_| {
+            let request: serde_json::Value =
+                serde_json::from_str(&received.recv().expect("request body")).expect("json");
+            request["tools"]
+                .as_array()
+                .expect("tools offered")
+                .iter()
+                .find(|tool| tool["function"]["name"] == "vet_content")
+                .expect("vet_content offered")["function"]["description"]
+                .as_str()
+                .expect("a description")
+                .to_string()
+        })
+        .collect();
+    assert!(
+        descriptions[0].contains("The user sees the content and decides"),
+        "the first request, built under Ask, did not say a person decides: {}",
+        descriptions[0]
+    );
+    assert!(
+        descriptions[1].contains("The content comes back to you as text you can read.")
+            && !descriptions[1].contains("The user sees")
+            && !descriptions[1].contains("weighing"),
+        "the second request, built after the switch to Bypass, kept the Ask wording: {}",
+        descriptions[1]
+    );
+    for description in &descriptions {
         assert_eq!(
             description.matches("text you can read").count(),
             1,

@@ -58,7 +58,7 @@ pub use offered::{
     Running, Scheduling, available, for_delegate, for_planner, offer_advisor,
     offer_message_session, offer_propose_plan, offer_propose_rule, offer_recall, offer_remember,
     offer_set_link, offer_tool_loader, state_confinement, state_read_output_answer,
-    state_what_is_beside, state_withheld_variables,
+    state_vet_content_answer, state_what_is_beside, state_withheld_variables,
 };
 
 /// The argument every tool takes saying why the call is being made.
@@ -10677,7 +10677,7 @@ fn call_server_tool<S: Sink, C: Confirmer, R: Reporter>(
             output.text,
             output.pictures,
             output.left_out,
-            format!("what {name} returned"),
+            crate::mcp::origin_of_reply(&name, false),
             "answered",
             false,
         ),
@@ -10685,7 +10685,7 @@ fn call_server_tool<S: Sink, C: Confirmer, R: Reporter>(
             text,
             Vec::new(),
             0,
-            format!("what {name} said about its failure"),
+            crate::mcp::origin_of_reply(&name, true),
             "the tool reported a failure",
             true,
         ),
@@ -14522,6 +14522,53 @@ mod tests {
             .clone()
     }
 
+    /// VET-5: the statement of who answers is added to the one tool that is `vet_content`, once
+    /// per call, and a list that lacks the tool is left as it was, with nothing added and no panic.
+    #[test]
+    fn who_answers_vet_content_is_stated_only_on_a_list_that_holds_it() {
+        let sentence = "SENTENCE-OF-THE-SESSION.";
+        let mut whole = the_table_without(&[]);
+        let before: Vec<String> = whole
+            .iter()
+            .map(|tool| tool.function.description.clone())
+            .collect();
+        state_vet_content_answer(&mut whole, sentence);
+        for (tool, was) in whole.iter().zip(&before) {
+            if tool.function.name == "vet_content" {
+                assert!(
+                    tool.function.description.ends_with(&format!(" {sentence}")),
+                    "the statement was not added to vet_content: {}",
+                    tool.function.description
+                );
+                assert_eq!(tool.function.description.matches(sentence).count(), 1);
+            } else {
+                assert_eq!(
+                    &tool.function.description, was,
+                    "{} was changed by a statement about vet_content",
+                    tool.function.name
+                );
+            }
+        }
+
+        let mut without = the_table_without(&["vet_content"]);
+        let kept: Vec<String> = without
+            .iter()
+            .map(|tool| tool.function.description.clone())
+            .collect();
+        state_vet_content_answer(&mut without, sentence);
+        assert!(
+            without
+                .iter()
+                .all(|tool| tool.function.name != "vet_content"),
+            "the statement put vet_content on a list that lacked it"
+        );
+        let after: Vec<String> = without
+            .iter()
+            .map(|tool| tool.function.description.clone())
+            .collect();
+        assert_eq!(kept, after, "a list without vet_content was changed");
+    }
+
     /// The words a description names a tool with: the tool's name as a word of its own.
     fn names_the_tool(description: &str, tool: &str) -> bool {
         description
@@ -14740,9 +14787,8 @@ mod tests {
              What comes back is quarantined, like a file nobody vouched for: you get a reference \
              rather than the text, and you cannot read it or be told what it says. Hand the \
              reference to spawn_processor to have a question answered about it, or to write_file \
-             as contents_ref to save it. Where you have to read the page yourself, vet_content \
-             has it checked and asks the user to show it to you. The user is asked before \
-             anything leaves the machine."
+             as contents_ref to save it. Where you have to read the page yourself, vet_content is \
+             the question to ask. The user is asked before anything leaves the machine."
         );
         assert_eq!(
             description_of(&everything, "job_output"),
@@ -14825,8 +14871,8 @@ mod tests {
         let with = description_of(&the_table_without(&[]), "fetch_url");
         let moves = " Hand the reference to spawn_processor to have a question answered about it, \
                      or to write_file as contents_ref to save it.";
-        let reading = " Where you have to read the page yourself, vet_content has it checked and \
-                       asks the user to show it to you.";
+        let reading = " Where you have to read the page yourself, vet_content is the question to \
+                       ask.";
         assert!(with.contains(moves) && with.contains(reading), "{with}");
 
         for (gone, expected) in [
