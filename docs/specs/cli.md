@@ -27,6 +27,7 @@ governs:
   - crates/cli/src/sessions_list.rs
   - crates/cli/src/session_delete.rs
   - crates/cli/src/stats.rs
+  - crates/cli/src/schedule.rs
   - crates/cli/src/skill_eval.rs
   - crates/session/src/stats.rs
   - crates/cli/src/update.rs
@@ -2540,7 +2541,7 @@ The `bravebot-acp` program stays, because the tests of the loop start it.
 `verified-by: bravebot_cli::acp::acp_treats_an_option_never_offered_as_a_refusal`
 `verified-by: bravebot_cli::acp::acp_ending_its_input_with_a_question_waiting_writes_nothing_and_exits`
 `verified-by: bravebot_cli::acp::acp_waits_for_the_end_of_an_open_session_before_it_exits`
-`verified-by: bravebot_cli::flags::exactly_the_sixteen_commands_that_start_no_session_are_named`
+`verified-by: bravebot_cli::flags::exactly_the_seventeen_commands_that_start_no_session_are_named`
 
 <a id="CLI-40"></a>
 ### CLI-40: `--issue <url>` and `--pr <url>` give the session the command line opens its links
@@ -2588,3 +2589,62 @@ of a skill change the tree it is graded in.
 
 `verified-by: bravebot_cli::skill_eval::the_name_and_the_four_flags_are_read_and_nothing_else`
 `verified-by: bravebot_cli::skill_eval::a_run_that_has_spent_max_tokens_is_stopped_and_has_no_score`
+
+<a id="CLI-42"></a>
+### CLI-42: `schedule` installs a recurring one-shot run in the person's crontab
+
+`bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>]` writes an entry and
+adds one line to the person's crontab that runs `bravebot schedule run-now <id>` at the times the
+expression gives. `list` prints each entry's id, expression, directory, what its run may do and its
+prompt. `remove <id>` takes the line out and deletes the entry. An id is never given to a second entry: a new entry takes
+the id after the highest one the store has a file for, since `remove` keeps the entry's history
+under its id. `run-now <id>` starts the entry's
+run at once, and `history [<id>]` lists the recorded runs, newest first, each with its status, the
+session it recorded and the tokens that session spent ([SESSION-11](sessions.md#SESSION-11)). Any
+other word, a number that names no entry, and a flag that `add` does not read are refused with the
+status for an argument (CLI-6).
+
+An entry holds the expression, the prompt, the directory (this one where `--dir` is not given) and
+the mode. The prompt is the person's own text, fixed when the entry is written, as the line of a
+loop is ([LOOP-1](loop.md#LOOP-1)). A run is the one-shot run of CLI-1, started with `--json` in the
+entry's directory, with the prompt as its task. It writes only where the entry holds
+`--accept-edits` or `--dangerously-skip-permissions`, typed on the `add` line, which are the flags
+CLI-1 describes and which `add` reads in no other way; `--auto`, and the flag that also switches off
+the sandbox, are refused. With neither flag the run reads and reports, and `list` says so in words
+for each entry. No other command accepts either flag.
+
+`add` is refused with the status for an argument unless standard input and standard error are a
+terminal, so a program a turn runs cannot add an entry. An expression is five fields of digits and
+`*`, `/`, `,` and `-` only, so it is never an instruction to the shell, and a prompt is refused when
+it is empty, over 64 KiB or begins with `-`. The crontab is read and replaced through the `crontab`
+program, found as [SANDBOX-30](sandboxing.md#SANDBOX-30) says, and only the line that ends with the
+entry's own marker is ever replaced or removed. An entry is kept only where the line was installed.
+A host with no `crontab` program, and a platform that is not Unix, refuse `add` and `remove`.
+
+The driver reads a run's result for one value, the id of the session it recorded, and accepts it
+only where it is a session name. Nothing a run reads or says reaches an entry or the crontab.
+
+**Why.** A recurring job has nobody to ask, so what it may write has to be decided when a person
+writes it, in words they typed. The operating system's own scheduler needs no daemon of bravebot's.
+Cron runs a job with almost none of the person's environment, so a run that needs a credential
+reads it from the state directory, as any run does.
+
+**Known costs.** Only `crontab` is installed. A job that finds no sign-in in the state directory
+ends with the status of the one-shot run and records no session. Results are kept and listed and
+are not sent anywhere.
+
+`verified-by: bravebot_cli::scheduled_runs::an_entry_cannot_be_added_without_a_terminal`
+`verified-by: bravebot_cli::scheduled_runs::an_added_entry_is_one_crontab_line_and_listed_with_what_it_may_do`
+`verified-by: bravebot_cli::scheduled_runs::a_cron_expression_that_is_not_five_plain_fields_writes_nothing`
+`verified-by: bravebot_cli::scheduled_runs::no_command_but_add_accepts_a_write_flag`
+`verified-by: bravebot_cli::scheduled_runs::removing_an_entry_takes_its_line_and_its_files_and_no_other`
+`verified-by: bravebot_cli::scheduled_runs::a_run_is_recorded_and_listed_by_history`
+`verified-by: bravebot_cli::scheduled_runs::a_removed_entrys_id_is_not_given_to_the_next_entry`
+`verified-by: bravebot_cli::scheduled_runs::history_is_newest_first_and_shows_the_tokens_the_session_spent`
+`verified-by: bravebot_cli::scheduled_runs::an_entry_is_not_kept_where_the_crontab_would_not_take_the_line`
+`verified-by: bravebot_cli::scheduled_runs::a_host_with_no_crontab_refuses_add_and_remove`
+`verified-by: bravebot_cli::schedule::the_mode_is_read_only_unless_a_flag_was_typed`
+`verified-by: bravebot_cli::schedule::a_directory_that_is_not_utf8_is_refused_and_not_written_as_its_lookalike`
+`verified-by: bravebot_cli::schedule::a_cron_expression_is_five_fields_of_digits_and_the_four_operators`
+`verified-by: bravebot_cli::schedule::a_table_keeps_every_other_line_and_replaces_only_its_own`
+`verified-by: bravebot_cli::schedule::the_session_is_found_outside_the_reply_and_never_inside_it`

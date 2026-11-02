@@ -18372,6 +18372,7 @@ fn the_tool_limit_is_refused_beside_each_command_that_starts_no_session_or_task(
         "permissions",
         "sessions",
         "stats",
+        "schedule",
         "attach",
         "reply",
         "import-leo-creds",

@@ -30,6 +30,7 @@ mod progress;
 mod push_identity;
 mod reopen;
 mod sandbox_check;
+mod schedule;
 mod session_delete;
 mod session_import;
 mod session_search;
@@ -448,7 +449,11 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // Refused rather than ignored where there is no one-shot run to open in the mode: a session
     // has the mode key, and a line that asked for a run to write unasked and was started as
     // something that asks would leave its author believing the flag had been honoured.
-    if starts_in.is_some() && !is_a_one_shot(args, continues_with_a_task(args)) {
+    // `schedule add` is the one command that takes the mode of a run it starts later.
+    if starts_in.is_some()
+        && args.first().map(String::as_str) != Some("schedule")
+        && !is_a_one_shot(args, continues_with_a_task(args))
+    {
         return Err(stopped_before_the_turn(
             as_json,
             Ending::Argument,
@@ -619,6 +624,13 @@ fn main() -> ExitCode {
         Some("auth") => auth::command(&args[1..]),
         Some("sessions") => background::sessions(&args[1..]),
         Some("stats") => stats::command(&args[1..]),
+        Some("schedule") => schedule::command(
+            &args[1..],
+            &schedule::Typed {
+                bypass: skip_permissions.then_some(bypass_flag),
+                starts_in,
+            },
+        ),
         Some("skill") => skill_eval::command(&args[1..], skip_permissions.then_some(bypass_flag)),
         Some("--bg") => match carried {
             Some(flag) => stopped_before_the_turn(
@@ -2589,6 +2601,7 @@ mod tests {
             "permissions",
             "sessions",
             "stats",
+            "schedule",
             "attach",
             "reply",
             "import-leo-creds",
@@ -4290,6 +4303,7 @@ mod tests {
             "permissions",
             "sessions",
             "stats",
+            "schedule",
             "attach",
             "reply",
             "import-leo-creds",
@@ -4418,6 +4432,7 @@ mod tests {
             "permissions",
             "sessions",
             "stats",
+            "schedule",
             "attach",
             "reply",
             "import-leo-creds",
