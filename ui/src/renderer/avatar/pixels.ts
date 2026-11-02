@@ -122,12 +122,37 @@ export interface Traits {
   symmetry: 'mirror' | 'lopsided'
 }
 
-export interface Cell { x: number; y: number; fill: string }
+export interface Cell { x: number; y: number; fill: string; part?: Part }
+
+/**
+ * The piece of the figure a cell belongs to, which moves on its own when the figure hops: a crown
+ * and arms trail the body and overshoot it. A cell the lopsided edits added is the body's.
+ */
+export type Part = 'body' | 'crown' | 'arm' | 'legs'
+
+/**
+ * A cell that catches light or falls into shade. The light comes from the upper left, so a cell
+ * open above or to its left is `lit` and one open below or to its right is `shade`; `rim` is a
+ * shaded cell open on both of those sides. Drawn over the cell, so the cell's own colour is kept.
+ */
+export interface Light { x: number; y: number; tone: 'lit' | 'shade' | 'rim' }
+
+/** The cells of one part, with their light and their outline as one path, for the shading over it. */
+export interface Group {
+  part: Part
+  /** For an arm, which side of the figure it is on; the two arms move apart. */
+  side?: 'left' | 'right'
+  cells: Cell[]
+  light: Light[]
+  outline: string
+}
 
 export interface Sprite {
   traits: Traits
   /** Every painted cell, eye cells included, in row order. */
   cells: Cell[]
+  /** The same cells by part, body first, each with the light that falls on it. */
+  groups: Group[]
   /** The white-and-pupil pair of each eye, by its left cell: the bot's left eye first. */
   eyes: [{ x: number; y: number }, { x: number; y: number }]
   /** Which way the pupils sit at rest: 1 is toward the viewer's right. */
@@ -158,27 +183,101 @@ export function stream(seed: string): () => number {
   }
 }
 
+/**
+ * The shape of the eyes. `blink` closes them to a line. `happy` closes them into an upturned arch,
+ * after a finished turn. `wide` whitens both cells around a small pupil, for a startle. `sleepy`
+ * lowers a heavy lid over the top half, for a face that has dozed off.
+ */
+export type EyeShape = 'open' | 'blink' | 'happy' | 'wide' | 'sleepy'
+
 /** How the face is held at one moment. Every move is a whole cell, except the lid. */
 export interface Look {
   gaze: 1 | -1
   /** Eyes moved by whole rows: 1 is down, at the work or at a pointer below; -1 is up. */
   drop: -1 | 0 | 1
-  blink: boolean
+  eyes: EyeShape
   /** The whole figure one row down. */
   nod: boolean
 }
 
-export interface EyePlacement { whiteX: number; pupilX: number; y: number; height: number; closed: boolean }
+/** The rects one eye is drawn with. A part with nothing to show in a shape is hidden in place. */
+export const EYE_PARTS = ['white', 'pupil', 'glint', 'lid', 'foot-0', 'foot-1'] as const
+export type EyePart = (typeof EYE_PARTS)[number]
+export interface Rect { x: number; y: number; width: number; height: number; hidden: boolean }
 
-/** Where each eye's white, pupil and lid go for a look, in grid cells. */
+export interface EyePlacement {
+  whiteX: number
+  pupilX: number
+  y: number
+  height: number
+  closed: boolean
+  rects: Record<EyePart, Rect>
+}
+
+/** A closed eye is a thin dark line across both of its cells, a little below their middle. */
+export const LID = { offset: 0.4, height: 0.3 }
+/** The catch-light in a pupil: a small white square in its upper left, where the light comes from. */
+export const GLINT = { inset: 0.12, size: 0.34 }
+/**
+ * How the light is drawn over the cells: a pale square on a lit cell, a dark one on a shaded cell
+ * and a darker one on a rim, and over each part a darkening toward its lower right that is clear
+ * across its upper left. Nothing here lightens a cell beside an eye, so `EYE_CONTRAST` holds.
+ */
+export const LIGHT = {
+  lit: { fill: EYE_WHITE, opacity: 0.22 },
+  shade: { fill: EYE_PUPIL, opacity: 0.16 },
+  rim: { fill: EYE_PUPIL, opacity: 0.26 },
+  /** The darkening's centre, in the part's own box, and its strength at the far corner. */
+  sheen: { cx: 0.32, cy: 0.28, r: 0.95, clear: 0.45, opacity: 0.22 },
+} as const
+
+/** A happy eye: a bar over the middle of the eye and a foot under each end of it. */
+const ARCH = { inset: 0.3, top: 0.2, foot: 0.35, footTop: 0.45 }
+/** A wide eye's pupil, centred in its cell. */
+const WIDE_PUPIL = 0.6
+/** A sleepy eye: the part left open under the lid, and where the lid's line sits. */
+const SLEEPY = { open: 0.5, lid: 0.3 }
+
+/** Where each eye's white, pupil, glint and lid go for a look, in grid cells. */
 export function placeEyes(sprite: Sprite, look: Look): EyePlacement[] {
-  return sprite.eyes.map((eye) => ({
-    whiteX: look.gaze > 0 ? eye.x : eye.x + 1,
-    pupilX: look.gaze > 0 ? eye.x + 1 : eye.x,
-    y: eye.y,
-    height: 1,
-    closed: look.blink,
-  }))
+  return sprite.eyes.map((eye) => {
+    const whiteX = look.gaze > 0 ? eye.x : eye.x + 1
+    const pupilX = look.gaze > 0 ? eye.x + 1 : eye.x
+    const y = eye.y
+    const shape = look.eyes
+    const rect = (x: number, top: number, width: number, height: number, shown: boolean): Rect =>
+      ({ x, y: top, width, height, hidden: !shown })
+    const open = shape === 'open'
+    const wide = shape === 'wide'
+    const sleepy = shape === 'sleepy'
+    // A sleepy eye shows only its lower half, under the lid.
+    const top = sleepy ? y + 1 - SLEEPY.open : y
+    const tall = sleepy ? SLEEPY.open : 1
+    const pupil = wide
+      ? rect(pupilX + (1 - WIDE_PUPIL) / 2, y + (1 - WIDE_PUPIL) / 2, WIDE_PUPIL, WIDE_PUPIL, true)
+      : rect(pupilX, top, 1, tall, open || sleepy)
+    const happy = shape === 'happy'
+    return {
+      whiteX,
+      pupilX,
+      y,
+      height: 1,
+      closed: !open && !wide && !sleepy,
+      rects: {
+        white: wide ? rect(eye.x, y, 2, 1, true) : rect(whiteX, top, 1, tall, open || sleepy),
+        pupil,
+        glint: rect(pupil.x + GLINT.inset * pupil.width, pupil.y + GLINT.inset * pupil.height,
+          GLINT.size * pupil.width, GLINT.size * pupil.height, open || wide),
+        lid: happy
+          ? rect(eye.x + ARCH.inset, y + ARCH.top, 2 - 2 * ARCH.inset, LID.height, true)
+          : sleepy
+            ? rect(eye.x, top - SLEEPY.lid, 2, SLEEPY.lid, true)
+            : rect(eye.x, y + LID.offset, 2, LID.height, shape === 'blink'),
+        'foot-0': rect(eye.x, y + ARCH.footTop, ARCH.foot, ARCH.foot, happy),
+        'foot-1': rect(eye.x + 2 - ARCH.foot, y + ARCH.footTop, ARCH.foot, ARCH.foot, happy),
+      },
+    }
+  })
 }
 
 /**
@@ -192,9 +291,6 @@ export function eyesToward(dx: number, dy: number, size: number): { side: -1 | 0
   const drop = Math.abs(dy) > size * 0.25 && Math.abs(dy) >= Math.abs(dx) ? (dy > 0 ? 1 : -1) : 0
   return { side, drop }
 }
-
-/** A closed eye is a thin dark line across both of its cells, a little below their middle. */
-export const LID = { offset: 0.4, height: 0.3 }
 
 // --- colour ---------------------------------------------------------------------------------
 
@@ -389,10 +485,10 @@ export function buildSprite(seed: string): Sprite {
   ) eyeIndex--
   const eyeRow = top + eyeIndex
 
-  // The left half, as (row, h) with h counted outward from the centre.
-  const half: [number, number][] = []
+  // The left half, as (row, h, part) with h counted outward from the centre.
+  const half: [number, number, Part][] = []
   widths.forEach((width, i) => {
-    for (let h = 0; h < width; h++) half.push([top + i, h])
+    for (let h = 0; h < width; h++) half.push([top + i, h, 'body'])
   })
   const topWidth = widths[0]!
   const crownCells: Record<Traits['crown'], [number, number][]> = {
@@ -402,7 +498,7 @@ export function buildSprite(seed: string): Sprite {
     tuft: Array.from({ length: Math.ceil(topWidth / 2) }, (_, i) => [-1, i * 2] as [number, number]),
     horns: [[-1, topWidth - 1], [-2, topWidth - 1]],
   }
-  for (const [dr, h] of crownCells[crown]) half.push([top + dr, h])
+  for (const [dr, h] of crownCells[crown]) half.push([top + dr, h, 'crown'])
 
   const edge = HALF - 1
   const armCells: Record<Traits['arms'], [number, number][]> = {
@@ -411,7 +507,7 @@ export function buildSprite(seed: string): Sprite {
     down: [[0, edge], [1, edge], [2, edge]],
     side: [[-1, edge], [0, edge], [1, edge]],
   }
-  for (const [dr, h] of armCells[arms]) half.push([eyeRow + dr, h])
+  for (const [dr, h] of armCells[arms]) half.push([eyeRow + dr, h, 'arm'])
 
   const base = widths[widths.length - 1]!
   const legCells: Record<Traits['legs'], [number, number][]> = {
@@ -422,13 +518,16 @@ export function buildSprite(seed: string): Sprite {
     comb: Array.from({ length: Math.floor(base / 2) }, (_, i) => [[1, i * 2 + 1], [2, i * 2 + 1]] as [number, number][]).flat(),
     feet: [[1, base - 2], [2, base - 2], [2, Math.max(0, base - 3)]],
   }
-  for (const [dr, h] of legCells[legs]) half.push([bottom + dr, h])
+  for (const [dr, h] of legCells[legs]) half.push([bottom + dr, h, 'legs'])
 
   const filled: boolean[][] = Array.from({ length: GRID }, () => Array<boolean>(GRID).fill(false))
-  for (const [row, h] of half) {
+  const parts: Part[][] = Array.from({ length: GRID }, () => Array<Part>(GRID).fill('body'))
+  for (const [row, h, part] of half) {
     if (row < 1 || row > INNER || h < 0 || h >= HALF) continue
     filled[row]![HALF - h]! = true
     filled[row]![HALF + 1 + h]! = true
+    parts[row]![HALF - h]! = part
+    parts[row]![HALF + 1 + h]! = part
   }
 
   const gaze: 1 | -1 = stream(`${seed}/gaze`)() < 0.5 ? -1 : 1
@@ -440,7 +539,7 @@ export function buildSprite(seed: string): Sprite {
   for (const eye of [leftEye, rightEye])
     for (let dx = -1; dx <= 2; dx++) for (let dy = -1; dy <= 1; dy++) guarded.add(`${eye.x + dx},${eye.y + dy}`)
 
-  const symmetry = picked ? 'mirror' : lopsided(seed, filled, guarded)
+  const symmetry = picked ? 'mirror' : lopsided(seed, filled, guarded, parts)
   keepConnected(filled, leftEye)
 
   const paints = picked ? [...picked.colour.paints] : paintsFor(seed).map((p) => p.name)
@@ -450,6 +549,7 @@ export function buildSprite(seed: string): Sprite {
 
   const stops = picked ? stopsOf(picked.colour) : walk(paints, seed.startsWith('v3:') ? RING : EARLIER_RING)
   const cells = paint(seed, filled, traits, stops, flipped(seed), leftEye, rightEye)
+    .map((cell) => ({ ...cell, part: parts[cell.y]![cell.x]! }))
   const xs = cells.map((cell) => cell.x)
   const ys = cells.map((cell) => cell.y)
   const spanX = Math.max(...xs) - Math.min(...xs) + 1
@@ -458,6 +558,7 @@ export function buildSprite(seed: string): Sprite {
   return {
     traits,
     cells,
+    groups: groupsOf(cells, filled, [leftEye, rightEye]),
     eyes: [leftEye, rightEye],
     gaze,
     view: { x: Math.min(...xs) - (size - spanX) / 2, y: Math.min(...ys) - (size - spanY) / 2, size },
@@ -465,8 +566,49 @@ export function buildSprite(seed: string): Sprite {
   }
 }
 
-/** About a third of bots break the mirror with one to three cells on one side. */
-function lopsided(seed: string, filled: boolean[][], guarded: Set<string>): Traits['symmetry'] {
+/** The four sides of a cell, as offsets. */
+const SIDES = { above: [0, -1], left: [-1, 0], below: [0, 1], right: [1, 0] } as const
+
+/**
+ * Whether light from the upper left may brighten a cell. Not near an eye, where a paler cell would
+ * stand out less from the white; this is the same area `paint` keeps dark enough for `EYE_CONTRAST`.
+ */
+const nearEye = (x: number, y: number, eyes: readonly { x: number; y: number }[]) =>
+  eyes.some((eye) => x >= eye.x - 1 && x <= eye.x + 2 && y >= eye.y - 2 && y <= eye.y + 2)
+
+/** The light on each edge cell: lit where more of its open sides face the light than face away. */
+export function lightOf(cell: { x: number; y: number }, filled: boolean[][], eyes: readonly { x: number; y: number }[]): Light | null {
+  const open = (side: keyof typeof SIDES) => !filled[cell.y + SIDES[side][1]]?.[cell.x + SIDES[side][0]]
+  const toward = Number(open('above')) + Number(open('left'))
+  const away = Number(open('below')) + Number(open('right'))
+  if (toward > away) return nearEye(cell.x, cell.y, eyes) ? null : { x: cell.x, y: cell.y, tone: 'lit' }
+  if (away > toward) return { x: cell.x, y: cell.y, tone: away === 2 ? 'rim' : 'shade' }
+  return null
+}
+
+/** The figure's cells by part, body first so the limbs draw over it, arms split by side. */
+function groupsOf(cells: Cell[], filled: boolean[][], eyes: readonly { x: number; y: number }[]): Group[] {
+  const keys: { part: Part; side?: 'left' | 'right' }[] = [
+    { part: 'body' }, { part: 'legs' }, { part: 'arm', side: 'left' }, { part: 'arm', side: 'right' }, { part: 'crown' },
+  ]
+  return keys.flatMap((key) => {
+    const mine = cells.filter((cell) => (cell.part ?? 'body') === key.part &&
+      (!key.side || (cell.x <= HALF) === (key.side === 'left')))
+    if (mine.length === 0) return []
+    return [{
+      ...key,
+      cells: mine,
+      light: mine.flatMap((cell) => lightOf(cell, filled, eyes) ?? []),
+      outline: mine.map((cell) => `M${cell.x} ${cell.y}h1v1h-1z`).join(''),
+    }]
+  })
+}
+
+/**
+ * About a third of bots break the mirror with one to three cells on one side. A cell added belongs
+ * to the part it is joined to, so it moves with that part.
+ */
+function lopsided(seed: string, filled: boolean[][], guarded: Set<string>, parts: Part[][]): Traits['symmetry'] {
   const next = stream(`${seed}/lopsided`)
   if (next() >= 0.34) return 'mirror'
   const side = next() < 0.5 ? 'left' : 'right'
@@ -484,7 +626,11 @@ function lopsided(seed: string, filled: boolean[][], guarded: Set<string>): Trai
           candidates.push([x, y])
       }
     const chosen = candidates[Math.floor(next() * candidates.length)]
-    if (chosen) filled[chosen[1]]![chosen[0]]! = add
+    if (!chosen) continue
+    const [x, y] = chosen
+    filled[y]![x]! = add
+    const joined = [[-1, 0], [1, 0], [0, -1], [0, 1]].find(([dx, dy]) => at(x + dx!, y + dy!))
+    if (add && joined) parts[y]![x]! = parts[y + joined[1]!]![x + joined[0]!]!
   }
   return 'lopsided'
 }

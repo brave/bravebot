@@ -523,6 +523,25 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
 /* The notes under the greeting are centred lines in caption ink, 40px over the box. */
 .transcript.fresh .session-notices { align-items: center; margin-bottom: var(--leo-spacing-4xl); }
 .transcript.fresh .session-notice { justify-content: center; gap: var(--leo-spacing-s); font: var(--type-meta); color: var(--ink-tertiary); }
+
+/* A bot's first screen. The face, the greeting, the notes and the composer are one block
+   centred in the column. The greeting is as tall as what it holds, so it does not scroll on
+   its own. The column scrolls when the block is taller than the space under the header, and
+   the header stays put. */
+.transcript.fresh:has(.bot-first-hero) { overflow-y: auto; }
+.transcript.fresh:has(.bot-first-hero) .transcript-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-panel);
+}
+.transcript.fresh:has(.bot-first-hero) .entries {
+  flex: none;
+  overflow: visible;
+  margin-top: auto;
+}
+.transcript.fresh:has(.bot-first-hero) .composer-dock { margin-bottom: auto; }
+.transcript.fresh:has(.bot-first-hero) .composer-spacer { display: none; }
 /* ---- no session: the welcome */
 
 .empty-body {

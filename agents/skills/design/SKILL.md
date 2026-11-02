@@ -56,6 +56,9 @@ The structure is set in `styles/shell.css` and `columns.ts`. New surfaces fit in
   The minimum window is 900×560, and the column minimums are enforced in `columns.ts`, not in CSS.
 - **Reading column.** Conversation content is centred at `--reading-width` (720px). The composer
   is lined up under it and is as wide as the column.
+- **Bot home, before a chat.** The face, the title, the notes and the composer are one block,
+  centred in the column. The column scrolls when that block is taller than the space under the
+  header, and the header stays where it is.
 - **Settings.** Settings take the whole window: a page list on the app ground where the sidebar
   is, and the page on a raised card. The chat view stays mounted underneath and is inert. The
   pages are General, Connectors and Agent settings; Connectors is a page here and has no entry

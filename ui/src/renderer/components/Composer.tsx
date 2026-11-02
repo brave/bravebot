@@ -11,6 +11,7 @@ import { IconButton } from './IconButton'
 import { MentionList } from './MentionList'
 import { ModelPicker } from './ModelPicker'
 import { SessionControlsMenu } from './SessionControlsMenu'
+import { typing } from '../avatar/clock'
 import type { PermissionMode, SandboxMode } from '../../shared/protocol'
 
 /** The bridge's offer for `line`, or nothing offered when it cannot answer or answers out of shape. */
@@ -365,7 +366,8 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
           )}
           <TextArea ref={input} mode="plain" minRows={1} maxRows={FIELD_MAX_ROWS} value={draft} aria-label="Message the agent"
             placeholder={pending ? 'Draft your next message while you review…' : 'Let’s do something great'}
-            onInput={({ value }) => onDraft(value)}
+            // The open bot's face watches the field while a person types in it.
+            onInput={({ value }) => { onDraft(value); typing() }}
             onKeyDown={({ innerEvent }) => {
               const event = innerEvent as unknown as KeyboardEvent
               const now = latest.current

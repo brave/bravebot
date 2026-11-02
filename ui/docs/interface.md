@@ -309,7 +309,9 @@ A bot has a name, purpose, model choice, avatar, a home folder and persistent me
 folder is made by the app under its own data directory, beside the briefing and never inside it.
 Opening a bot opens its conversation, one that carries on, in its home folder
 ([MEMORY-14](../../docs/specs/definition-memory.md#MEMORY-14)). A bot nobody has talked to yet
-shows its face and **Talk to** its name above the message box. The conversation has no project
+shows its face and **Talk to** its name above the message box. The face, the title, the notes
+and the composer are centred in the column, and the column scrolls when that block is taller
+than the space under the header. The conversation has no project
 picker. The history button in its header opens **Earlier conversations**,
 the bot's other conversations and its details, and the arrow on that page goes back to the
 conversation.
@@ -392,14 +394,41 @@ white cell and a pupil. Avatar colours do not change with appearance. A face has
 rounded frame: it is drawn on the page and cropped to its own cells, so it fills whatever size it
 is given.
 
+Light falls on a face from the upper left. Edge cells facing it are paler, edge cells facing away
+are darker, and each part darkens toward its lower right, all drawn over the cells so their own
+colours are unchanged. No cell beside an eye is lightened. At 32 pixels and over a face also has a
+catch-light in each pupil.
+
 Any stored seed draws a face, so every bot has one, new or old.
 
 Each face is an SVG with one rect per cell. One shared clock moves the animated ones by whole
 cells, writing attributes rather than re-rendering: idle glances swap the pupils, blinks close
 the eyes to a line, a running turn drops the eyes a row, a failed turn looks away for a few
-seconds, and finishing a turn nods the figure once. Reduced-motion preferences stop the clock, and
-a face then changes only when what its bot is doing changes. See `src/renderer/avatar/` and
-`src/renderer/components/BotAvatar.tsx`.
+seconds, and finishing a turn nods the figure once.
+
+A face also says what a turn is doing. While the model writes, its eyes look up and from side to
+side. While a tool runs, they look down. While the turn waits on your answer, it looks straight
+out, and its marker says so.
+
+An animated face of 32 pixels and over moves its body as well, with a weight its body gives it:
+the block, blob, squat and bust bodies are heavy and slow, the round and diamond ones light and
+springy. It breathes, bobs while it works with its arms tapping, and sways while it thinks.
+Starting a turn makes it lean in. Finishing one makes it crouch, jump, land and settle, with its
+eyes closed into happy arches. A failed turn makes it startle with wide eyes, shake, and slump
+while it looks away. Asked a question, it opens its eyes wide and bounces every few seconds until
+it is answered. The crown and arms trail the body and overshoot it.
+
+It answers the pointer too. It perks up when the pointer arrives over it, squashes under a press
+and springs back when let go, and giggles at the third quick press. The open bot's face watches
+the message box while you type. A face glances toward a neighbour that cheers, startles or
+giggles. A face in a list that nothing has happened to for 40 seconds dozes off, with heavy lids
+and a slow breath, and wakes with a stretch when the pointer reaches it. About every half minute
+at rest a face sways, hops or wiggles its antennae. Choosing a new look in the avatar editor pops
+the new face in. Two views of one bot move together.
+
+Reduced-motion preferences stop the clock and all of this, and a face then changes only when what
+its bot is doing changes. See `src/renderer/avatar/`, `src/renderer/components/BotAvatar.tsx` and
+`src/renderer/styles/avatar.css`.
 
 #### How a purpose reaches the model
 

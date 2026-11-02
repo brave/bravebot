@@ -780,6 +780,22 @@ test('settledBy lands each field the bridge settled unchanged, and gives null fo
   )
 })
 
+/** A bot's face shows the model writing apart from a tool at work, from the turn's shape alone. */
+test('a running turn is thinking while the model writes, and not while a tool is written, run or checked', () => {
+  const { thinking } = load('src/renderer/live.ts')
+  const writing = { phase: 'thinking', composing: null, checking: null, hook: null, entries: [{ kind: 'assistant', id: '1', text: '' }] }
+  assert.equal(thinking(writing), true)
+  assert.equal(thinking({ ...writing, phase: 'planning' }), true)
+  assert.equal(thinking({ ...writing, phase: null }), false, 'no round open')
+  assert.equal(thinking({ ...writing, phase: 'compacting' }), false)
+  assert.equal(thinking({ ...writing, composing: 'read' }), false, 'a call being written')
+  assert.equal(thinking({ ...writing, checking: { lines: 3 } }), false)
+  assert.equal(thinking({ ...writing, hook: { moment: 'before', program: 'x' } }), false)
+  const tool = { kind: 'tool', id: '2', activity: { verb: 'read', target: 'a' }, landing: null }
+  assert.equal(thinking({ ...writing, entries: [tool] }), false, 'a tool running')
+  assert.equal(thinking({ ...writing, entries: [{ ...tool, landing: 'context' }] }), true, 'a tool that has landed')
+})
+
 test('a session is keyed by its record id once it has one, and by its draft or handle before', () => {
   const { liveKey, preIdKey } = load('src/renderer/live.ts')
   const key = (id) => JSON.stringify(['/d', id])
@@ -854,4 +870,19 @@ test('the sidebar lists sessions from the record, the open windows and unsent dr
   assert.equal(key('/p', 'quiet') in listing.info, false, 'a row with neither a bot nor a status has no entry')
   assert.equal(listing.attention, 1)
   assert.equal(list({ ...{ sessions: [summary('asks')], opened: [open('asks', { entries: [asking] })] }, currentKey: key('/p', 'asks') }).attention, 0, 'the session on screen does not ask for attention')
+})
+
+test('a bot is thinking only while no tool of the turn is running, whatever follows the tool in the record', () => {
+  const live = load('src/renderer/live.ts')
+  const t = load('src/renderer/transcript.ts')
+  const running = { kind: 'tool', id: 't1', activity: {}, landing: null }
+  const landed = { ...running, landing: {} }
+  const card = { kind: 'decision', id: 'd1' }
+  const at = (entries, phase = 'thinking') => ({ phase, composing: null, checking: null, hook: null, entries })
+  assert.equal(live.thinking(at([t.turnStarted(1), t.narrated('Looking')])), true)
+  assert.equal(live.thinking(at([t.turnStarted(1), running])), false)
+  assert.equal(live.thinking(at([t.turnStarted(1), running, card])), false, 'an approved run is still at work behind its card')
+  assert.equal(live.thinking(at([t.turnStarted(1), landed, card])), true, 'once it lands the model is writing again')
+  assert.equal(live.thinking(at([running, t.turnStarted(2), t.narrated('Next')])), true, 'a tool left from an earlier turn does not count')
+  assert.equal(live.thinking(at([t.turnStarted(1), running], 'working')), false)
 })

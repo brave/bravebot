@@ -164,37 +164,6 @@
 .export-menu { margin-left: auto; flex-grow: 0; }
 .export-format { white-space: nowrap; }
 
-/* ------------------------------------------------------------------ bots
-
-   A bot is a name, a purpose, a memory and a checkout. What a row shows is what tells two of them
-   apart at a glance: the face, the name, and where it works. */
-
-/* The avatar: a pixel figure from `avatar/pixels.ts`, in its own colours, which do not follow the
-   theme. It is drawn straight onto the page, cropped to the figure so it fills its frame. */
-.bot-avatar-frame {
-  position: relative;
-  display: inline-block;
-  flex: none;
-  vertical-align: middle;
-}
-.bot-avatar-status {
-  position: absolute;
-  right: calc(var(--leo-spacing-xs) * -1);
-  bottom: calc(var(--leo-spacing-xs) * -1);
-  display: grid;
-  place-items: center;
-  padding: 1px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-panel);
-  --leo-icon-size: var(--status-size);
-  --leo-icon-color: var(--ink-secondary);
-}
-.bot-avatar-status-failed { --leo-icon-color: var(--status-error); }
-.bot-avatar {
-  flex: none;
-  display: block;
-}
-
 @media (prefers-reduced-motion: reduce) { .entries { scroll-behavior: auto; } }
 
 .app .model-capability, .app .model-footnote { font-size: var(--leo-typography-x-small-regular-font-size); }
