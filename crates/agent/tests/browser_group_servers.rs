@@ -18,6 +18,9 @@
 #[path = "../test-support/turns.rs"]
 mod turns;
 
+#[path = "../test-support/open_files.rs"]
+mod open_files;
+
 use bravebot_agent::confirm::{CallDecision, McpCallRequest, MoveRequest, ToolListRequest};
 use bravebot_agent::mcp::{Connection, Reached, Session};
 use bravebot_agent::turn::{self, Task};
@@ -36,7 +39,6 @@ use bravebot_net::Egress;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -102,7 +104,7 @@ const A_CHECK_ASKING: &str = "prompt-injection classifier";
 /// spawns are two runs asking the one server, and a delegate's requests never hold its parent's
 /// task, so the parent's rule goes first. Every check is answered that it found nothing.
 fn serve_chat(rules: Vec<(&'static str, Vec<String>)>) -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -266,7 +268,7 @@ fn wire(group: &str, tool: &str) -> String {
 /// A mock MCP server for one group, answering by method and listing the tools it was started with.
 /// Every body is reported.
 fn serve_group(tools: &'static [(&'static str, &'static str)]) -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -1152,7 +1154,7 @@ const A_PICTURE: &str =
 /// the server marks as its own, and every other call succeeds, each in a sentence shaped as an
 /// instruction, or with one picture where `acting.pictures` names the tool.
 fn serve_acting(acting: &'static Acting) -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -2362,7 +2364,7 @@ const HELD_TOOLS: &[(&str, &str)] = &[(
 /// [`serve_group`] for `held`: the one tool takes no argument, and a call is answered with
 /// [`the_held_answer`] as one text part.
 fn serve_held() -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -2739,7 +2741,7 @@ fn choosing_tools() -> Value {
 /// A mock MCP server listing `tools`, which are [`choosing_tools`] for the tests that need no
 /// others. A call is answered with a sentence shaped as an instruction. Every body is reported.
 fn serve_listing(tools: Value) -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -4302,4 +4304,21 @@ fn whatever_the_processor_answered_the_driver_makes_the_same_calls() {
             "the trail follows the answer {answer:?}"
         );
     }
+}
+
+/// A test binary that starts many mock servers raises its soft open-file limit when the first one
+/// binds, so a default shell limit of 256 does not fail it with `TooManyOpenFiles`.
+#[cfg(unix)]
+#[test]
+fn the_soft_open_file_limit_is_raised_before_a_server_starts() {
+    let _server = serve_group(&[]);
+    let hard = rustix::process::getrlimit(rustix::process::Resource::Nofile).maximum;
+    let wanted = hard.map_or(open_files::WANTED_OPEN_FILES, |hard| {
+        hard.min(open_files::WANTED_OPEN_FILES)
+    });
+    let soft = open_files::open_file_limit();
+    assert!(
+        soft.is_none_or(|soft| soft >= wanted),
+        "the soft open-file limit is {soft:?}, below the {wanted} the mock servers need"
+    );
 }

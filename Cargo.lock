@@ -280,6 +280,7 @@ dependencies = [
  "bravebot-stamp",
  "bravebot-tui",
  "bravebot-ui-bridge",
+ "rustix 1.1.4",
  "ruzstd",
  "serde_json",
 ]

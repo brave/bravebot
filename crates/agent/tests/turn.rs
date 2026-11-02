@@ -17424,6 +17424,238 @@ fn a_turns_outcome_carries_the_summary_of_its_work() {
     );
 }
 
+/// Drive one turn whose only call is `run` with `command`, answered as `decision`, in a workspace
+/// holding `a.txt`, and hand back the record it ends with.
+fn work_of_one_run(
+    name: &str,
+    command: &str,
+    decision: bravebot_agent::RunDecision,
+) -> (bravebot_agent::Work, Scratch) {
+    work_of_runs(name, &[command], decision)
+}
+
+/// The same, for a turn that asks for each of `commands` in its own round, in order.
+fn work_of_runs(
+    name: &str,
+    commands: &[&str],
+    decision: bravebot_agent::RunDecision,
+) -> (bravebot_agent::Work, Scratch) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("a.txt"), "one").expect("seed file");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies: Vec<_> = commands
+        .iter()
+        .map(|command| {
+            tool_request(
+                "run",
+                &serde_json::json!({ "command": command }).to_string(),
+            )
+        })
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, _received) = serve_sequence(replies);
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("copy a.txt to b.txt"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(decision),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok());
+    (completed.work, scratch)
+}
+
+/// GROUND-1. A `run` line that leaves a file in the workspace different from how it found it is a
+/// write, and it is also a command, with the write coming last.
+///
+/// Rejects the record built from the `changed_a_file` of write tools alone, which says `writes: 0`
+/// and `ran_after_last_write: true` for a turn whose only change was made by `cp`.
+#[test]
+fn a_run_line_that_changes_a_file_is_recorded_as_a_write() {
+    let (work, scratch) = work_of_one_run(
+        "run-writes",
+        "cp a.txt b.txt",
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert!(
+        scratch.path.join("b.txt").exists(),
+        "the line did not run, so nothing here was tested"
+    );
+    assert_eq!(
+        work,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 1,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "one line that wrote a file is one write and one command, not two writes"
+    );
+}
+
+/// GROUND-1. A `run` line that fails halfway has still left what it got to, so a file written by
+/// a part that ran before the failure is a write, however the line ended.
+///
+/// Rejects a record that counts a write only for a line that exited zero.
+#[test]
+fn a_run_line_that_writes_and_then_exits_nonzero_is_recorded_as_a_write() {
+    let (work, scratch) = work_of_one_run(
+        "run-writes-then-fails",
+        "cp a.txt b.txt && false",
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert!(
+        scratch.path.join("b.txt").exists(),
+        "the line did not run, so nothing here was tested"
+    );
+    assert_eq!(
+        work,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 1,
+            ran_after_last_write: false,
+            last_command_failed: true,
+        },
+        "a line that wrote and then failed is one write and one command"
+    );
+}
+
+/// GROUND-1. A `run` line whose later part cannot open its redirection ends in an error of the
+/// pipeline and not in an exit status, after an earlier part has written a file. The file is still
+/// a write.
+///
+/// Rejects an error arm that drops the measurement of the tree, which records `writes: 0` for the
+/// file the earlier part left.
+#[test]
+fn a_run_line_that_writes_and_then_cannot_open_a_redirection_is_recorded_as_a_write() {
+    let (work, scratch) = work_of_one_run(
+        "run-writes-then-error",
+        "cp a.txt b.txt ; echo hi > no-such-directory/out.txt",
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert!(
+        scratch.path.join("b.txt").exists(),
+        "the first part did not run, so nothing here was tested"
+    );
+    assert_eq!(work.writes, 1, "{work:?}");
+}
+
+/// GROUND-1. A `run` line whose only output is in a directory every walk of the tree steps over,
+/// as a build's is, is a command and not a write.
+///
+/// Rejects counting any file a line created, which would make every ordinary build a write and so
+/// make "a command ran after the last write" false after the build that checks the change.
+#[test]
+fn a_run_line_that_writes_only_build_output_is_not_a_write() {
+    let (work, scratch) = work_of_one_run(
+        "run-builds",
+        "mkdir -p target && touch target/out.o",
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert!(
+        scratch.path.join("target/out.o").exists(),
+        "the line did not run, so nothing here was tested"
+    );
+    assert_eq!(
+        work,
+        bravebot_agent::Work {
+            writes: 0,
+            commands: 1,
+            ran_after_last_write: true,
+            last_command_failed: false,
+        },
+        "build output in an ignored directory is not a change to the project"
+    );
+}
+
+/// GROUND-1. A `run` line the person declined ran nothing and changed nothing, so it is neither a
+/// command nor a write.
+///
+/// Rejects deciding from the line the planner asked for instead of from what happened to it.
+#[test]
+fn a_declined_run_line_is_neither_a_write_nor_a_command() {
+    let (work, scratch) = work_of_one_run(
+        "run-declined",
+        "cp a.txt b.txt",
+        bravebot_agent::RunDecision::reject(),
+    );
+    assert!(
+        !scratch.path.join("b.txt").exists(),
+        "the declined line ran, so nothing here was tested"
+    );
+    assert_eq!(work, bravebot_agent::Work::default());
+}
+
+/// GROUND-1. A `run` line that changes nothing, a `cat` or a `grep`, is a command and not a write.
+///
+/// Rejects counting every line that ran as one that wrote.
+#[test]
+fn a_run_line_that_changes_nothing_is_not_a_write() {
+    let (work, _scratch) = work_of_one_run(
+        "run-reads",
+        "cat a.txt",
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert_eq!(
+        work,
+        bravebot_agent::Work {
+            writes: 0,
+            commands: 1,
+            ran_after_last_write: true,
+            last_command_failed: false,
+        }
+    );
+}
+
+/// OPEN-1, TURN-4, GROUND-1. A turn whose only change was made by a `run` line and which ran
+/// nothing after it has unbuilt changes, and a later command clears them, including one whose only
+/// output is in a directory every walk of the tree steps over.
+///
+/// Rejects the record built from write tools alone, which leaves `unbuilt_changes` false for a
+/// turn that only ran `cp`, and counting a skipped directory's contents as a write, which makes the
+/// build after the change a second write and so leaves the change unbuilt.
+#[test]
+fn a_change_made_by_a_run_line_is_an_unbuilt_change_until_a_command_runs_after_it() {
+    use bravebot_agent::open_loops::Loops;
+    let unbuilt = |name: &str, commands: &[&str]| {
+        let (work, scratch) = work_of_runs(name, commands, bravebot_agent::RunDecision::approve());
+        assert!(
+            scratch.path.join("b.txt").exists(),
+            "the copy did not run, so nothing here was tested"
+        );
+        (Loops::from_work(work).unbuilt_changes, work)
+    };
+
+    let (open, work) = unbuilt("open-loops-cp", &["cp a.txt b.txt"]);
+    assert!(open, "a copy that nothing followed is unbuilt: {work:?}");
+
+    let (open, work) = unbuilt(
+        "open-loops-cp-then-build",
+        &["cp a.txt b.txt", "mkdir -p target && touch target/o"],
+    );
+    assert!(
+        !open,
+        "a command that wrote only into a skipped directory ran after the copy: {work:?}"
+    );
+    assert_eq!(
+        work.writes, 1,
+        "the skipped directory's file is not a write"
+    );
+
+    let (open, work) = unbuilt("open-loops-cp-then-read", &["cp a.txt b.txt", "cat a.txt"]);
+    assert!(
+        !open,
+        "a command that changed nothing ran after the copy: {work:?}"
+    );
+}
+
 /// OPEN-1. A turn whose last command exits with a status other than 0 hands back a record that
 /// says so, and one whose last command succeeds after a failure does not.
 #[test]
@@ -19049,6 +19281,160 @@ fn a_program_a_delegate_ran_in_a_checkout_given_none_of_the_changes_leaves_the_c
             .any(|said| said.contains("no command was run")),
         "the person was not told the turn's change was never built: {:?}",
         reporter.narration
+    );
+}
+
+/// GROUND-1, TURN-4. A worker delegate in the turn's own workspace that changes a file through a
+/// `run` line adds that write, and its command, to the turn's record.
+///
+/// Rejects taking a delegate's commands and none of its writes from the turn's workspace, which
+/// leaves a turn whose only change was made by a worker's `cp` with `writes: 0`.
+#[test]
+fn a_file_a_worker_delegate_changed_through_a_run_line_is_a_write_of_the_turn() {
+    let scratch = Scratch::new("delegate-run-line-writes");
+    std::fs::write(scratch.path.join("a.txt"), "one").expect("seed file");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received, held) = serve_a_turn_and_its_delegate(
+        (
+            "HAND-OFF-THE-COPY",
+            writing_then_delegating(
+                tool_request("list_files", r#"{"directory":"."}"#),
+                r#"{"kind":"worker","task":"COPY-THE-FILE"}"#,
+            ),
+        ),
+        (
+            "COPY-THE-FILE",
+            vec![
+                tool_request("run", r#"{"command":"cp a.txt b.txt"}"#),
+                reply_with("copied it"),
+            ],
+        ),
+    );
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HAND-OFF-THE-COPY"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    completed.outcome.as_ref().expect("the turn finishes");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before its parent waited for it, so the rounds this test counts on may not have happened"
+    );
+    assert!(
+        scratch.path.join("b.txt").exists(),
+        "the worker's line did not run, so nothing here was tested"
+    );
+    assert_eq!(
+        completed.work,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 1,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        },
+        "a file a worker in the turn's workspace changed with a run line was not the turn's write"
+    );
+}
+
+/// GROUND-1, TURN-4, CHECKOUT-23. A delegate in a checkout given the turn's changes that changes a
+/// file through a `run` line adds its command to the turn's record and none of its writes, and its
+/// own note says it made the write in its checkout.
+///
+/// The turn writes `notes.txt` itself, so its record has one write before the delegate is taken
+/// back. Rejects adding the delegate's whole record, which makes two writes and puts the write
+/// after the command, and reading the run-line signal from the turn's workspace instead of the
+/// checkout, which leaves the delegate's own note at no writes.
+#[test]
+fn a_file_a_delegate_in_a_checkout_changed_through_a_run_line_is_not_a_write_of_the_turn() {
+    let scratch = Scratch::new("checkout-delegate-run-line-writes");
+    let home = Scratch::new("checkout-delegate-run-line-writes-home");
+    repository::commit_files(&scratch.path, &[("README", "committed\n")], "first");
+    repository::check_out(&scratch.path, &[("README", "committed\n")]);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
+        (
+            "WRITE-THEN-COPY-APART",
+            writing_then_delegating(
+                tool_request(
+                    "write_file",
+                    r#"{"path":"notes.txt","contents":"first slice"}"#,
+                ),
+                r#"{"kind":"worker","task":"COPY-THE-FILE-APART","isolation":"checkout_with_changes"}"#,
+            ),
+        ),
+        (
+            "COPY-THE-FILE-APART",
+            vec![
+                tool_request("run", r#"{"command":"cp README copy.txt"}"#),
+                reply_with("copied it"),
+            ],
+        ),
+    );
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut trust = bravebot_core::trust::TrustStore::new(workspace.root());
+    trust.trust(".");
+    let completed = turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("WRITE-THEN-COPY-APART").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trust,
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    completed.outcome.as_ref().expect("the turn finishes");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before its parent waited for it, so the rounds this test counts on may not have happened"
+    );
+    assert!(
+        every_request(&received).iter().any(|body| {
+            !body.contains("WRITE-THEN-COPY-APART")
+                && body.contains("Carried in: `notes.txt`")
+                && body.contains("It exited 0.")
+        }),
+        "the worker did not run its line in a checkout holding the change, so this is not the case under test"
+    );
+    assert!(
+        !scratch.path.join("copy.txt").exists(),
+        "the line ran in the working directory, so this is not the case under test"
+    );
+    let (_, note, _) = reporter
+        .delegates_finished
+        .first()
+        .expect("no delegate was reported as finishing");
+    assert!(
+        note.contains("it ran 1 command and made 1 write in its own checkout"),
+        "the delegate's own record missed the file its line changed in its checkout: {note}"
+    );
+    assert_eq!(
+        completed.work,
+        bravebot_agent::Work {
+            writes: 1,
+            commands: 1,
+            ran_after_last_write: true,
+            last_command_failed: false,
+        },
+        "a write a delegate made in its checkout was counted as the turn's"
     );
 }
 
@@ -69681,6 +70067,22 @@ fn a_run_turn_scanning_in(
     command: &str,
     programs: bravebot_core::programs::TrustedPrograms,
 ) -> (Scratch, bravebot_agent::report::RecordingReporter, String) {
+    let (home, reporter, answered, _work) =
+        a_run_turn_scanning_with_work(workspace, command, programs);
+    (home, reporter, answered)
+}
+
+/// The same, with the work record the turn ends with.
+fn a_run_turn_scanning_with_work(
+    workspace: &Workspace,
+    command: &str,
+    programs: bravebot_core::programs::TrustedPrograms,
+) -> (
+    Scratch,
+    bravebot_agent::report::RecordingReporter,
+    String,
+    bravebot_agent::Work,
+) {
     // Named after the tree it holds the record for, so two tests running at once do not write
     // into one file and read each other's findings back.
     let home = Scratch::new(&format!(
@@ -69697,7 +70099,7 @@ fn a_run_turn_scanning_in(
     ]);
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
     let mut sink = RecordingSink::new();
-    turn::resume(
+    let completed = turn::resume(
         &config_for(&endpoint),
         &bravebot_net::Egress::new(),
         workspace,
@@ -69710,12 +70112,11 @@ fn a_run_turn_scanning_in(
         programs,
         None,
         &bravebot_core::cancel::Cancel::new(),
-    )
-    .outcome
-    .expect("turn runs");
+    );
+    completed.outcome.expect("turn runs");
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
-    (home, reporter, tool_results(&second))
+    (home, reporter, tool_results(&second), completed.work)
 }
 
 /// A vouched entry for the one program a line runs, so what the line prints is content the
@@ -69792,6 +70193,60 @@ fn a_credential_a_run_line_redirects_into_the_tree_does_not_stay_there() {
         !told.contains(DECLARED_KEY),
         "the value itself was put on the screen: {told}"
     );
+}
+
+/// GROUND-1. A line whose redirection a scan refused and the driver took back counts as a write
+/// only where the put-back left the tree different from how the line found it. A destination the
+/// line created is removed again, so the tree is as it was and nothing was written. One that
+/// existed is written back with its old bytes, which leaves the old length and a new modification
+/// time, so the mark reads a change.
+///
+/// Rejects an arm that returns the refusal without the flag, and a comment that says an undone
+/// write is never counted.
+#[test]
+fn a_refused_line_is_a_write_only_where_the_put_back_left_a_file_different() {
+    let work_of = |name: &str, existing: Option<&str>| {
+        let scratch = Scratch::new(name);
+        let env = format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n");
+        std::fs::write(scratch.path.join(".env"), &env).unwrap();
+        if let Some(old) = existing {
+            let path = scratch.path.join(".env.bak");
+            std::fs::write(&path, old).unwrap();
+            // An hour ago, so the put-back's own write cannot land on the same tick.
+            let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(past)
+                .unwrap();
+        }
+        let programs = vouching_for("cat", &[".env"], &scratch.path);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (_home, _reporter, answered, work) =
+            a_run_turn_scanning_with_work(&workspace, "cat .env > .env.bak", programs);
+        assert!(
+            answered.contains("refused"),
+            "the line was not refused, so nothing here was tested: {answered}"
+        );
+        (work, scratch)
+    };
+
+    let (created, scratch) = work_of("refused-new-file-work", None);
+    assert!(!scratch.path.join(".env.bak").exists());
+    assert_eq!(created.writes, 0, "a destination removed again is no write");
+    assert_eq!(created.commands, 1);
+
+    let (rewritten, scratch) = work_of("refused-existing-file-work", Some("old"));
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join(".env.bak")).unwrap(),
+        "old"
+    );
+    assert_eq!(
+        rewritten.writes, 1,
+        "a destination written back with its old bytes has a new modification time"
+    );
+    assert_eq!(rewritten.commands, 1);
 }
 
 /// Putting a destination back is confined the way a write is. The line runs between the moment

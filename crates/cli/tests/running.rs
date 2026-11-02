@@ -19,13 +19,18 @@
 )]
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+#[allow(
+    dead_code,
+    reason = "open_files.rs is shared by several test binaries, and this one uses only bind_mock_server"
+)]
+#[path = "../../agent/test-support/open_files.rs"]
+mod open_files;
 #[path = "../../aichat/test-support/refusal_codes.rs"]
 mod refusal_codes;
 #[path = "../../skus/test-support/stored_sign_in.rs"]
@@ -538,7 +543,7 @@ fn a_configured_gateway_is_not_refused() {
 /// A proxy on a loopback port that sends back the first line of each request it is given and
 /// answers every one with a 502, so a run that goes through it fails at once.
 fn a_proxy() -> (String, mpsc::Receiver<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let listener = open_files::bind_mock_server();
     let address = format!("http://{}", listener.local_addr().expect("addr"));
     let (sent, lines) = mpsc::channel();
     std::thread::spawn(move || {
@@ -5597,7 +5602,7 @@ fn a_gateway(parameters: &str, answer: impl Fn(&str) -> String + Send + 'static)
     let listing = format!(
         r#"{{"data": [{{"id": "reasons-only", "context_length": 262144, "supported_parameters": {parameters}}}]}}"#
     );
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, asked) = mpsc::channel();
 
@@ -10524,7 +10529,7 @@ fn doctor_fails_on_a_file_of_gateway_keys_it_cannot_read() {
 /// `Authorization` header each one carried.
 fn a_gateway_seeing_bearers() -> (u16, mpsc::Receiver<String>) {
     let listing = r#"{"data": [{"id": "reasons-only", "context_length": 262144}]}"#;
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let (sender, seen) = mpsc::channel();
     std::thread::spawn(move || {
@@ -10746,7 +10751,7 @@ fn a_llama_server() -> (String, Arc<AtomicUsize>) {
 /// A server on loopback answering the request line that starts with `listed` with `listing`, and
 /// a 404 for any other, as `127.0.0.1:<port>`, and a count of the connections it has taken.
 fn a_server_listing(listed: &'static str, listing: &'static str) -> (String, Arc<AtomicUsize>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     let asked = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&asked);
@@ -10818,7 +10823,7 @@ fn a_first_run_with_ollama_running_offers_to_import_it() {
 #[test]
 fn a_first_run_with_nothing_listening_refuses_as_before() {
     let scratch = Scratch::new("cli-running-import-ollama-silent");
-    let closed = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let closed = open_files::bind_mock_server();
     let host = format!("127.0.0.1:{}", closed.local_addr().expect("addr").port());
     drop(closed);
     let environment = [NOTHING_CONFIGURED, &[("OLLAMA_HOST", host.as_str())]].concat();
@@ -16327,7 +16332,7 @@ fn a_one_shot_run_removes_the_checkouts_no_session_holds_and_leaves_a_held_one()
     let held = std::fs::File::open(under.join("c2")).expect("open the held checkout");
     held.lock().expect("lock the held checkout");
 
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let listener = open_files::bind_mock_server();
     let endpoint = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
     let mut child = prepared(
         &scratch.path,
@@ -17717,7 +17722,7 @@ fn closing_the_terminal_runs_the_exit_handler_the_shell_already_had() {
 /// A gateway on loopback that lists one model and answers every chat request with `status` and a
 /// body naming a secret, so a log that kept what the server said would keep it.
 fn a_gateway_answering_with_a_secret(status: u16) -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let listener = open_files::bind_mock_server();
     let port = listener.local_addr().expect("addr").port();
     std::thread::spawn(move || {
         while let Ok((mut stream, _)) = listener.accept() {

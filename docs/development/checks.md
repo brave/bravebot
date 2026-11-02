@@ -154,6 +154,13 @@ For the full run on macOS, start Docker Desktop and run `make check-all` from th
 you plan to submit. The Linux checks run inside Docker, and Windows Clippy cross-compiles there;
 neither needs a separate Linux or Windows machine. Host Rust tests use four threads by
 default; override this with `RUST_TEST_THREADS=8 make check-all` if needed.
+The test binaries that start a mock server per test (`browser_group_servers` and `mcp` in
+`crates/agent/tests`, and `running` in `crates/cli/tests`) raise their own soft open-file limit to
+8192, or to the hard limit where that is lower, through `crates/agent/test-support/open_files.rs`,
+so the 256 a macOS shell starts with does not fail them with `TooManyOpenFiles`. Each binary binds
+its mock servers with `open_files::bind_mock_server()`, which raises the limit once per process
+before the first bind. A new test binary that starts a server per test includes the file with
+`#[path]` and binds through that function rather than `TcpListener::bind`.
 The containers receive current source, including local edits and untracked files,
 but exclude ignored files, build output and nested checkouts. They use Docker's native
 architecture so Apple Silicon does not need to emulate an x86 Linux CPU.
