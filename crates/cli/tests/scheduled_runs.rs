@@ -64,6 +64,12 @@ impl Scratch {
 
     /// The same, with a terminal on stdin and stderr.
     fn run_at_a_terminal(&self, arguments: &[&str]) -> Output {
+        self.at_a_terminal(&self.command(arguments), arguments)
+    }
+
+    /// Runs the bravebot binary with `arguments` and the environment of `prepared`, under
+    /// `script` so it has a terminal.
+    fn at_a_terminal(&self, prepared: &Command, arguments: &[&str]) -> Output {
         let quoted: Vec<String> = std::iter::once(env!("CARGO_BIN_EXE_bravebot").to_string())
             .chain(arguments.iter().map(|a| a.to_string()))
             .map(|word| format!("'{}'", word.replace('\'', "'\\''")))
@@ -77,11 +83,7 @@ impl Scratch {
         command.args(["-qec", &quoted.join(" "), "/dev/null"]);
         command
             .env_clear()
-            .envs(
-                self.command(&[])
-                    .get_envs()
-                    .filter_map(|(k, v)| Some((k, v?))),
-            )
+            .envs(prepared.get_envs().filter_map(|(k, v)| Some((k, v?))))
             .current_dir(self.path.join("work"))
             .stdin(Stdio::null());
         command.output().unwrap()
@@ -327,18 +329,7 @@ fn a_host_with_no_crontab_refuses_add_and_remove() {
         let mut command = scratch.command(arguments);
         command.env("PATH", scratch.path.join("empty"));
         if terminal {
-            let quoted: Vec<String> = std::iter::once(env!("CARGO_BIN_EXE_bravebot").to_string())
-                .chain(arguments.iter().map(|a| a.to_string()))
-                .map(|word| format!("'{}'", word.replace('\'', "'\\''")))
-                .collect();
-            let mut wrapped = Command::new("/usr/bin/script");
-            wrapped
-                .args(["-qec", &quoted.join(" "), "/dev/null"])
-                .env_clear()
-                .envs(command.get_envs().filter_map(|(k, v)| Some((k, v?))))
-                .current_dir(scratch.path.join("work"))
-                .stdin(Stdio::null());
-            wrapped.output().unwrap()
+            scratch.at_a_terminal(&command, arguments)
         } else {
             command.output().unwrap()
         }
