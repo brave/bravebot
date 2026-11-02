@@ -1064,6 +1064,7 @@ mod tests {
         assert!(!no_vetting.contains("vet_content"), "{no_vetting}");
     }
 
+    /// A listing with no entries says nothing: a header would promise lines below that never come.
     #[test]
     fn no_references_are_described_as_nothing() {
         assert_eq!(describe_listing(&[]), "");
