@@ -156,6 +156,9 @@ function browser({
   archived = ARCHIVE,
   // The state the browser reports for a window, by window id.
   windowStates = {},
+  // Whether `bookmarks.search` leaves out the folders at the top of the tree,
+  // as the browser's does.
+  searchOmitsBuiltIn = false,
 } = {}) {
   const calls = [];
   // A copy, so a test that saves settings does not change the next test's.
@@ -650,6 +653,7 @@ function browser({
           return bookmarks;
         }
         return nodes
+          .filter((node) => !searchOmitsBuiltIn || parents.get(node.id) !== undefined)
           .filter((node) => query.title === undefined || node.title === query.title)
           .filter((node) => query.url === undefined || node.url === query.url)
           .filter(
@@ -727,6 +731,19 @@ function browser({
         return (nodes.find((node) => node.id === id)?.children ?? []).map(
           ({ children, ...node }) => node,
         );
+      },
+      // The tree is one root, id 0, holding the folders at the top.
+      async getTree() {
+        calls.push(["bookmarks.getTree"]);
+        return [
+          {
+            id: "0",
+            title: "",
+            children: nodes
+              .filter((node) => parents.get(node.id) === undefined)
+              .map((node) => ({ ...node, parentId: "0" })),
+          },
+        ];
       },
       async getRecent(numberOfItems) {
         calls.push(["bookmarks.getRecent", numberOfItems]);
@@ -3519,7 +3536,12 @@ test("list_bookmark_folder refuses a title that is not exactly one folder", asyn
     assert.match(reply.error?.message, message, folder);
     assert.ok(!reached(chrome, "bookmarks.getChildren"), folder);
   }
-  for (const params of [{}, { folder: "" }, { folder: "  " }, { folder: 7 }]) {
+  for (const params of [
+    { folder: "" },
+    { folder: "  " },
+    { folder: 7 },
+    { folder: ["Work"] },
+  ]) {
     const chrome = browser({ bookmarkTree, stored: bookmarksOn });
     const reply = await handle(
       { id: 1, method: "list_bookmark_folder", params },
@@ -6812,6 +6834,236 @@ test("move_bookmark moves nothing for a folder that is not exactly one, or argum
     }
     assert.ok(!reached(chrome, "bookmarks.move"), label);
   }
+});
+
+// The browser's title search leaves out the folders at the top of the tree, so
+// they are named through the tree. A folder a person made with the same title
+// as one of them makes the title ambiguous.
+const topLevel = [
+  {
+    id: "1",
+    title: "Bookmarks bar",
+    children: [
+      {
+        id: "10",
+        title: "Work",
+        children: [
+          { id: "11", title: "Docs", url: "https://docs.rs/" },
+          { id: "13", title: "Bank", url: `${bank}/login` },
+        ],
+      },
+    ],
+  },
+  {
+    id: "2",
+    title: "Other bookmarks",
+    children: [
+      { id: "21", title: "Loose", url: "https://loose.example/" },
+      { id: "22", title: "Sub", children: [] },
+    ],
+  },
+  { id: "3", title: "Mobile bookmarks", children: [] },
+  { id: "4", title: "Pinned", url: "https://pinned.example/" },
+];
+
+test("list_bookmark_folder lists a built-in folder named by its title, which the browser's title search does not return", async () => {
+  for (const [folder, expected] of [
+    [
+      "Other bookmarks",
+      [
+        { kind: "bookmark", title: "Loose", url: "https://loose.example/" },
+        { kind: "folder", title: "Sub" },
+      ],
+    ],
+    ["Bookmarks bar", [{ kind: "folder", title: "Work" }]],
+    ["Mobile bookmarks", []],
+  ]) {
+    const chrome = browser({
+      bookmarkTree: topLevel,
+      searchOmitsBuiltIn: true,
+      stored: blocking([bank], bookmarksOn),
+    });
+    const reply = await call(chrome, "list_bookmark_folder", { folder });
+    assert.deepEqual(reply.result, expected, folder);
+  }
+  const user = browser({
+    bookmarkTree: topLevel,
+    searchOmitsBuiltIn: true,
+    stored: bookmarksOn,
+  });
+  const inner = await call(user, "list_bookmark_folder", { folder: "Work" });
+  assert.deepEqual(inner.result.map((entry) => entry.title), ["Docs", "Bank"]);
+});
+
+test("a built-in folder is found once whether or not the browser's title search also returns it", async () => {
+  for (const searchOmitsBuiltIn of [true, false]) {
+    const chrome = browser({
+      bookmarkTree: topLevel,
+      searchOmitsBuiltIn,
+      stored: bookmarksOn,
+    });
+    const reply = await call(chrome, "list_bookmark_folder", {
+      folder: "Other bookmarks",
+    });
+    assert.equal(reply.result?.length, 2, String(searchOmitsBuiltIn));
+    assert.deepEqual(
+      chrome.calls.filter(([name]) => name === "bookmarks.getChildren"),
+      [["bookmarks.getChildren", "2"]],
+      String(searchOmitsBuiltIn),
+    );
+  }
+});
+
+test("a built-in folder is named by its exact title only, and a bookmark at the top of the tree is not a folder", async () => {
+  for (const folder of [
+    "other bookmarks",
+    "Other bookmarks ",
+    "Bookmarks",
+    "Bookmarks bar2",
+    "Pinned",
+  ]) {
+    const chrome = browser({
+      bookmarkTree: topLevel,
+      searchOmitsBuiltIn: true,
+      stored: bookmarksOn,
+    });
+    const reply = await call(chrome, "list_bookmark_folder", { folder });
+    assert.equal(
+      reply.error?.message,
+      `no bookmark folder is titled ${folder}`,
+      folder,
+    );
+    assert.ok(!reached(chrome, "bookmarks.getChildren"), folder);
+  }
+});
+
+test("a title shared by a built-in folder and a folder a person made names neither, and nothing is moved", async () => {
+  const doubled = structuredClone(topLevel);
+  doubled[0].children.push({ id: "50", title: "Other bookmarks", children: [] });
+  const list = browser({
+    bookmarkTree: doubled,
+    searchOmitsBuiltIn: true,
+    stored: bookmarksOn,
+  });
+  const listed = await call(list, "list_bookmark_folder", {
+    folder: "Other bookmarks",
+  });
+  assert.match(
+    listed.error?.message,
+    /more than one bookmark folder is titled Other bookmarks$/,
+  );
+  assert.ok(!reached(list, "bookmarks.getChildren"));
+
+  const move = browser({
+    bookmarkTree: doubled,
+    searchOmitsBuiltIn: true,
+    stored: writingOn,
+  });
+  const moved = await call(move, "move_bookmark", {
+    url: "https://docs.rs/",
+    folder: "Other bookmarks",
+  });
+  assert.match(
+    moved.error?.message,
+    /more than one bookmark folder is titled Other bookmarks$/,
+  );
+  assert.ok(!reached(move, "bookmarks.move"));
+});
+
+test("move_bookmark moves a bookmark into a built-in folder and back out of it", async () => {
+  const chrome = browser({
+    bookmarkTree: topLevel,
+    searchOmitsBuiltIn: true,
+    stored: writingOn,
+  });
+  const into = await call(chrome, "move_bookmark", {
+    url: "https://docs.rs/",
+    folder: "Other bookmarks",
+  });
+  assert.deepEqual(into.result, {
+    url: "https://docs.rs/",
+    folder: "Other bookmarks",
+  });
+  const back = await call(chrome, "move_bookmark", {
+    url: "https://docs.rs/",
+    folder: "Work",
+  });
+  assert.deepEqual(back.result, { url: "https://docs.rs/", folder: "Work" });
+  assert.deepEqual(writes(chrome, "bookmarks.move"), [
+    ["bookmarks.move", "11", { parentId: "2" }],
+    ["bookmarks.move", "11", { parentId: "10" }],
+  ]);
+  const bar = await call(chrome, "move_bookmark", {
+    url: "https://docs.rs/",
+    folder: "Bookmarks bar",
+  });
+  assert.equal(bar.result?.folder, "Bookmarks bar");
+  assert.deepEqual(writes(chrome, "bookmarks.move").at(-1), [
+    "bookmarks.move",
+    "11",
+    { parentId: "1" },
+  ]);
+});
+
+test("create_bookmark and create_bookmark_folder take the title of a built-in folder as folder and parent", async () => {
+  const chrome = browser({
+    bookmarkTree: topLevel,
+    searchOmitsBuiltIn: true,
+    stored: writingOn,
+  });
+  const bookmark = await call(chrome, "create_bookmark", {
+    url: "https://new.example/",
+    folder: "Bookmarks bar",
+  });
+  assert.deepEqual(bookmark.result, {
+    url: "https://new.example/",
+    title: "",
+    folder: "Bookmarks bar",
+  });
+  const made = await call(chrome, "create_bookmark_folder", {
+    title: "Recipes",
+    parent: "Mobile bookmarks",
+  });
+  assert.deepEqual(made.result, { title: "Recipes", parent: "Mobile bookmarks" });
+  assert.deepEqual(writes(chrome, "bookmarks.create"), [
+    ["bookmarks.create", { url: "https://new.example/", parentId: "1" }],
+    ["bookmarks.create", { title: "Recipes", parentId: "3" }],
+  ]);
+});
+
+test("list_bookmark_folder with no folder lists the titles of the built-in folders and nothing else, up to the count", async () => {
+  const chrome = browser({
+    bookmarkTree: topLevel,
+    searchOmitsBuiltIn: true,
+    stored: bookmarksOn,
+  });
+  const reply = await call(chrome, "list_bookmark_folder", {});
+  assert.deepEqual(reply.result, [
+    { kind: "folder", title: "Bookmarks bar" },
+    { kind: "folder", title: "Other bookmarks" },
+    { kind: "folder", title: "Mobile bookmarks" },
+  ]);
+  assert.ok(!reached(chrome, "bookmarks.search"));
+  assert.ok(!reached(chrome, "bookmarks.getChildren"));
+
+  const two = await call(
+    browser({ bookmarkTree: topLevel, stored: bookmarksOn }),
+    "list_bookmark_folder",
+    { max_results: 2 },
+  );
+  assert.deepEqual(
+    two.result.map((entry) => entry.title),
+    ["Bookmarks bar", "Other bookmarks"],
+  );
+  const clamped = await call(
+    browser({ bookmarkTree: topLevel, stored: bookmarksOn }),
+    "list_bookmark_folder",
+    { max_results: 0 },
+  );
+  assert.deepEqual(
+    clamped.result.map((entry) => entry.title),
+    ["Bookmarks bar"],
+  );
 });
 
 test("rename_bookmark gives the bookmark at exactly that URL the title asked for and nothing else, and says the title the browser holds", async () => {

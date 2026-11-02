@@ -315,7 +315,9 @@ pub const TOOLS: &[Tool] = &[
         group: "bookmarks-read",
         description: "List the bookmarks and folders directly in the bookmark folder with this \
             exact title: each bookmark's title and URL, and each folder's title. It fails if no \
-            folder, or more than one, has that title.",
+            folder, or more than one, has that title. The built-in folders at the top of the \
+            tree (such as Bookmarks bar and Other bookmarks) are named by the title the browser \
+            shows. With no folder, it lists the titles of those built-in folders.",
         schema: || {
             json!({
                 "type": "object",
@@ -323,7 +325,6 @@ pub const TOOLS: &[Tool] = &[
                     "folder": {"type": "string"},
                     "max_results": {"type": "integer", "minimum": 1, "maximum": 100},
                 },
-                "required": ["folder"],
             })
         },
     },
@@ -3146,7 +3147,7 @@ mod tests {
                 .clone()
         };
         let folder = schema("list_bookmark_folder");
-        assert_eq!(folder["required"], json!(["folder"]));
+        assert!(folder.get("required").is_none());
         assert_eq!(folder["properties"]["folder"]["type"], "string");
         assert_eq!(folder["properties"]["max_results"]["type"], "integer");
         assert_eq!(folder["properties"].as_object().unwrap().len(), 2);

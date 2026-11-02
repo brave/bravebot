@@ -271,7 +271,7 @@ committed or that it failed, and its row says commit events.
 | `history-read` | `list_top_sites` | `topSites.get` |
 | `history-read` | `list_synced_tabs` | `sessions.getDevices` |
 | `bookmarks-read` | `search_bookmarks` | `bookmarks.search` |
-| `bookmarks-read` | `list_bookmark_folder` | `bookmarks.search`, `bookmarks.getChildren` |
+| `bookmarks-read` | `list_bookmark_folder` | `bookmarks.search` and `bookmarks.getTree` for a folder, `bookmarks.getChildren` |
 | `bookmarks-read` | `list_recent_bookmarks` | `bookmarks.getRecent` |
 | `bookmarks-read` | `list_reading_list` | `readingList.query` |
 | `page-read` | `read_page` | `tabs.query`, `scripting.executeScript`, and with a `frame_url` `webNavigation.getAllFrames`, `tabs.get` |
@@ -291,9 +291,9 @@ committed or that it failed, and its row says commit events.
 | `tabs-manage` | `set_zoom` | `tabs.query`, `tabs.setZoom`, `tabs.getZoom` |
 | `tabs-manage` | `focus_window` | `tabs.query`, `windows.update` |
 | `tabs-manage` | `resize_window` | `tabs.query`, `windows.update` |
-| `bookmarks-write` | `create_bookmark` | `bookmarks.search` for a folder, `bookmarks.create`, `bookmarks.get` |
-| `bookmarks-write` | `create_bookmark_folder` | `bookmarks.search` for the parent, `bookmarks.create`, `bookmarks.get` |
-| `bookmarks-write` | `move_bookmark` | `bookmarks.search`, `bookmarks.get`, `bookmarks.move` |
+| `bookmarks-write` | `create_bookmark` | `bookmarks.search` and `bookmarks.getTree` for a folder, `bookmarks.create`, `bookmarks.get` |
+| `bookmarks-write` | `create_bookmark_folder` | `bookmarks.search` and `bookmarks.getTree` for the parent, `bookmarks.create`, `bookmarks.get` |
+| `bookmarks-write` | `move_bookmark` | `bookmarks.search`, `bookmarks.getTree` for the folder, `bookmarks.get`, `bookmarks.move` |
 | `bookmarks-write` | `rename_bookmark` | `bookmarks.search`, `bookmarks.update` |
 | `bookmarks-write` | `add_reading_list_entry` | `readingList.query`, `readingList.addEntry` |
 | `bookmarks-write` | `update_reading_list_entry` | `readingList.query`, `readingList.updateEntry` |
@@ -2429,7 +2429,11 @@ asks to "View and manage your tab groups" for the second
 `bookmarks-read` has `list_bookmark_folder`, `list_recent_bookmarks` and `list_reading_list` as
 well. `list_bookmark_folder` names a folder by its exact title, which a person can judge in the
 question where a bookmark id from an earlier result is not, and fails when no folder or more than one
-has that title.
+has that title. The browser's search by title does not return the built-in folders at the top of the
+tree (Bookmarks bar, Other bookmarks), so the extension reads them with `bookmarks.getTree` and counts
+them with what the search returns, once each; `list_bookmark_folder` and the tools that create or move a bookmark take their titles, and `remove_bookmark_folder` does not, since the browser refuses to remove them.
+With no folder, `list_bookmark_folder` returns the title of each built-in folder. `getTree` belongs to
+the `bookmarks` permission the group already lists.
 
 `bookmarks-write` has six tools that add and change bookmarks and reading list entries and delete
 none: `create_bookmark`, `create_bookmark_folder`, `move_bookmark`, `rename_bookmark`,

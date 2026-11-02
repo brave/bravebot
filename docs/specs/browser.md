@@ -506,13 +506,16 @@ recently closed tabs and windows, `list_top_sites` the sites it counts as most v
 
 `list_bookmark_folder`, `list_recent_bookmarks` and `list_reading_list` are in `bookmarks-read`, and
 `list_requests` is in `network-watch`; each is offered by the server of its group alone and calls
-the extension method of the same name. `list_bookmark_folder` names the folder by its exact title
-and fails where no folder has that title or more than one does. It returns the title and URL of each
-bookmark in the folder and the title of each folder in it. `list_recent_bookmarks` returns the
-newest bookmarks and `list_reading_list` the reading list, each newest first with the time it was
-added, and `list_reading_list` also whether the entry was read. Each of the three takes a count,
-at most 100 and 20 where none is given, and `list_bookmark_folder` also the title of the folder;
-none takes another argument. `list_requests` names a tab by its exact URL and is described in
+the extension method of the same name. `list_bookmark_folder` names the folder by its exact title,
+which may be the title of a built-in folder at the top of the tree such as Bookmarks bar or Other
+bookmarks ([BROWSER-28](#BROWSER-28)), and fails where no folder has that title or more than one
+does. It returns the title and URL of each bookmark in the folder and the title of each folder in
+it. Where no folder is named it returns the title of each built-in folder and nothing else, no id and
+no URL, so a title can be learned in a browser set to another language. `list_recent_bookmarks`
+returns the newest bookmarks and `list_reading_list` the reading list, each newest first with the
+time it was added, and `list_reading_list` also whether the entry was read. Each of the three takes a
+count, at most 100 and 20 where none is given, and `list_bookmark_folder` also the optional title of
+the folder; none takes another argument. `list_requests` names a tab by its exact URL and is described in
 [BROWSER-25](#BROWSER-25).
 
 `get_privacy_settings`, `get_content_settings`, `get_font_settings`, `get_system_info`,
@@ -1735,6 +1738,16 @@ folder the bookmark goes to: the call fails, creating and moving nothing, where 
 title or more than one does. The bookmark and the folder of `move_bookmark` are both found before
 anything is moved.
 
+The built-in folders at the top of the tree, which the browser makes and titles in the person's
+language, are named by their title like any other folder, by `create_bookmark`,
+`create_bookmark_folder`, `move_bookmark` and `list_bookmark_folder`. `remove_bookmark_folder` does not
+take them, since the browser refuses to remove them. The browser's search by title does not return
+them, so the extension reads
+them from the bookmark tree and counts them with what the search returns, once each. A node at the top
+of the tree is a folder only if it has no URL, and its title must be exactly the one asked for. A
+folder a person made with the same title as a built-in folder makes the title name neither. The tree
+is read with the `bookmarks` permission both bookmark groups already hold.
+
 `create_bookmark` takes `url`, an HTTP or HTTPS address, an optional `title` and an optional
 `folder`; where no folder is named the browser puts the bookmark where it puts a new one. Any other
 scheme fails, since a `javascript:` bookmark runs in a page when it is clicked. `create_bookmark_folder`
@@ -1771,7 +1784,7 @@ private.
 `verified-by: bravebot_browser::tools::a_bookmark_is_named_by_its_url_and_a_folder_by_its_title_and_never_by_an_id`
 `verified-by: bravebot_browser::relay::a_bookmark_is_changed_through_its_group_with_the_url_and_title_named`
 `verified-by: bravebot_browser::extension::the_group_table_lists_the_groups_and_each_tool_in_one`
-`verified-by: by-construction (extension/tests/tools.test.mjs asserts that create_bookmark and create_bookmark_folder add the node in the folder with exactly the title asked for or where the browser puts it, send only the fields given, and report the title and folder the browser holds, that an address that is not HTTP or HTTPS, text that is empty or not text and a folder that is no folder or several fail without a node being made, that move_bookmark and rename_bookmark find the bookmark at exactly the URL, fail saying how many for two or three and say nothing of them, fail for none and for a URL that only resembles one, move nothing for a folder that is not exactly one, and report what the browser holds, that add_reading_list_entry adds an unread entry unless told it was read, refuses a duplicate address and an entry the browser did not keep, and that update_reading_list_entry sends only the fields given, including a read of false, and refuses a call that changes nothing and an address with no entry; that a search by URL or title that answers with other nodes or entries makes none of them the bookmark, the folder or the entry changed; and that each tool refuses a URL at a listed site before the browser is asked for anything; extension/tests/activity.test.mjs asserts that these calls are logged with the group, tool, outcome and origin of the address and nothing of the title or folder; extension/tests/switches.test.mjs asserts that bookmarks-read and bookmarks-write keep their permissions for each other and that Off and Look turn the tools of bookmarks-write off; extension/tests/lifetimes.test.mjs asserts that a bookmark is added within the hour of bookmarks-write, refused after it, and that the worker then turns the group off; all run where the test under BROWSER-13 runs)`
+`verified-by: by-construction (extension/tests/tools.test.mjs asserts that create_bookmark and create_bookmark_folder add the node in the folder with exactly the title asked for or where the browser puts it, send only the fields given, and report the title and folder the browser holds, that an address that is not HTTP or HTTPS, text that is empty or not text and a folder that is no folder or several fail without a node being made, that move_bookmark and rename_bookmark find the bookmark at exactly the URL, fail saying how many for two or three and say nothing of them, fail for none and for a URL that only resembles one, move nothing for a folder that is not exactly one, and report what the browser holds, that add_reading_list_entry adds an unread entry unless told it was read, refuses a duplicate address and an entry the browser did not keep, and that update_reading_list_entry sends only the fields given, including a read of false, and refuses a call that changes nothing and an address with no entry; that a search by URL or title that answers with other nodes or entries makes none of them the bookmark, the folder or the entry changed; that a built-in folder at the top of the tree, which a search that leaves it out does not return, is named by its exact title by list_bookmark_folder, move_bookmark, create_bookmark and create_bookmark_folder, is found once when the search returns it too, is not named by another case, spelling or a bookmark at the top of the tree, and with a folder a person made with the same title names neither and moves nothing, and that list_bookmark_folder with no folder returns the title of each built-in folder and nothing else, up to the count; and that each tool refuses a URL at a listed site before the browser is asked for anything; extension/tests/activity.test.mjs asserts that these calls are logged with the group, tool, outcome and origin of the address and nothing of the title or folder; extension/tests/switches.test.mjs asserts that bookmarks-read and bookmarks-write keep their permissions for each other and that Off and Look turn the tools of bookmarks-write off; extension/tests/lifetimes.test.mjs asserts that a bookmark is added within the hour of bookmarks-write, refused after it, and that the worker then turns the group off; all run where the test under BROWSER-13 runs)`
 
 <a id="BROWSER-29"></a>
 ### BROWSER-29: a video of a tab, acting in a frame, dragging by a distance and a processor's choice beyond `element_number` are not built

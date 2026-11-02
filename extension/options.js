@@ -101,7 +101,7 @@ const LABELS = {
   ],
   list_bookmark_folder: [
     "List a bookmark folder",
-    "The bookmarks and folders directly in one folder, named by its exact title, except bookmarks at blocked sites.",
+    "The bookmarks and folders directly in one folder, named by its exact title, except bookmarks at blocked sites. With no folder, the titles of the folders at the top of your bookmarks.",
   ],
   list_recent_bookmarks: [
     "List recently added bookmarks",
