@@ -113,8 +113,8 @@
 .composer-toolbar .model-picker { flex: 0 1 auto; min-width: 0; max-width: 220px; margin: 0; }
 .composer .model-trigger { width: auto; max-width: 100%; --leo-button-color: var(--ink-tertiary); }
 .composer .model-current { max-width: 180px; }
-/* One menu holds the approval mode, the sandbox mode and the run style, and sits beside the model.
-   Asking, Workspace write and Agent are the resting state and are drawn like the model. The trigger
+/* One menu holds the approval mode and the sandbox mode, and sits beside the model.
+   Asking and Workspace write are the resting state and are drawn like the model. The trigger
    names anything else after the approval mode, and tints it for as long as it holds, so the name
    says the same where colour is not drawn. */
 .composer-toolbar .controls-menu { flex: 0 1 auto; min-width: 0; max-width: 280px; }

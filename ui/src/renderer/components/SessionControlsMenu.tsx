@@ -114,8 +114,10 @@ export function SessionControlsMenu({
     button.setAttribute('aria-label', `Session controls: ${label}`)
     button.setAttribute('aria-expanded', String(open))
     button.setAttribute('data-tooltip', tooltip)
-    if (permissionMode) button.setAttribute('data-mode', permissionMode)
-    if (sandboxMode) button.setAttribute('data-sandbox', sandboxMode)
+    for (const [name, value] of [['data-mode', permissionMode], ['data-sandbox', sandboxMode]] as const) {
+      if (value) button.setAttribute(name, value)
+      else button.removeAttribute(name)
+    }
   }, [label, open, tooltip, permissionMode, sandboxMode])
 
   // Leo stamps `role="menuitem"` on every item when the menu opens. These are radio groups.
@@ -128,8 +130,8 @@ export function SessionControlsMenu({
     describe = true,
   ) => (
     <leo-menu-item key={key} data-role="menuitemradio" aria-checked={key === current ? 'true' : 'false'}
-      data-tooltip={describe ? undefined : choices[key].says}
-      data-test={testId} onClick={() => { if (key !== current) { setOpen(false); onChoose(key) } }}>
+      data-tooltip={describe ? undefined : choices[key].says} aria-description={describe ? undefined : choices[key].says}
+      data-test={testId} onClick={() => { if (key !== current) onChoose(key) }}>
       <span className="menu-icon-row controls-option">
         <Icon name={choices[key].icon} />
         <span className="controls-option-text">
@@ -164,9 +166,10 @@ export function SessionControlsMenu({
       onClose={onClose}
       onChange={({ isOpen }) => {
         // The popup grows upward from the button, so the room above it is all it has.
-        if (isOpen && trigger.current?.parentElement) {
+        const host = trigger.current?.closest<HTMLElement>('.controls-menu')
+        if (isOpen && trigger.current && host) {
           const room = Math.floor(trigger.current.getBoundingClientRect().top - MENU_EDGE_GAP)
-          trigger.current.parentElement.style.setProperty('--leo-menu-max-height', `${Math.max(0, Math.min(MENU_MAX_HEIGHT, room))}px`)
+          host.style.setProperty('--leo-menu-max-height', `${Math.max(0, Math.min(MENU_MAX_HEIGHT, room))}px`)
         }
         setOpen(isOpen)
         if (!isOpen) restoreFocus()

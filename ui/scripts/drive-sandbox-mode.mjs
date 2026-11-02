@@ -48,7 +48,7 @@ try {
   const composer = page.locator(COMPOSER_INPUT)
   const stop = page.locator('.composer .stop')
   const replies = page.locator(ASSISTANT_BUBBLE)
-  // One menu holds the approval, sandbox and run controls, so the sandbox mode is read off the
+  // One menu holds the approval and sandbox controls, so the sandbox mode is read off the
   // same trigger under its own attribute.
   const sandbox = page.locator('[data-test="mode-trigger"]')
   // The Leo host has no box of its own, so the mode is read off its attribute, not its visibility.
