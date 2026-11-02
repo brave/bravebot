@@ -1060,6 +1060,8 @@ cancellation stays out of the transcript on resume while that turn's spend and t
 number; whether those words remain available to recall is SESSION-6, and the two are independent of
 each other. None of this is sent to the planner. What the planner is told of a failure is the note
 of [TURN-13](turns.md#TURN-13), which holds no more than the category and the request count.
+A recorded unauthorized failure ends with the commands [BACKEND-37](backends.md#BACKEND-37) names,
+since the reason is the line the interface showed.
 Accepted corrections remain within the cancelled turn through reload, export and later turns.
 
 **Why.** Turn boundaries cannot be recovered from the conversation afterwards, because a
@@ -1080,6 +1082,7 @@ closes.
 `verified-by: bravebot_ui_bridge::history::a_turn_after_a_resume_extends_the_history_the_record_held`
 `verified-by: bravebot_ui_bridge::history::a_failed_turn_is_recorded_with_the_reason_the_interface_composed`
 `verified-by: bravebot_ui_bridge::history::a_stopped_turn_is_recorded_as_cancelled_under_its_own_number`
+`verified-by: bravebot_session::sessions::an_unauthorized_failure_names_the_commands_that_show_the_credential_and_the_endpoint`
 
 <a id="SESSION-24"></a>
 ### SESSION-24: a resumed transcript puts the prompt back where it was sent

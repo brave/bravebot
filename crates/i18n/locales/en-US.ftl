@@ -3909,6 +3909,11 @@ failure-internal = something went wrong here
 # is said the same way whatever went wrong.
 failure-with-status = { $what } (HTTP { $status })
 failure-with-attempts = { $what }, after { $attempts } attempts
+# Said after the status and the count of an unauthorized failure, so the commands come last. The
+# first is for every credential but the premium key, and the second for a request that carried it.
+failure-with-next = { $what }. { $next }
+failure-unauthorized-next = Run `bravebot auth status` to see the sign-in or key in use, and `bravebot doctor` to see the endpoint
+failure-premium-key-next = Run `bravebot auth login brave` to replace the premium key, or `bravebot auth logout brave` to send requests to the free endpoint instead. `bravebot auth status` shows the key in use
 # A failure of a ChatGPT account is said in the sentence of its own step, the one a one-shot run
 # reports for it (CHATGPT-8). No count of tries is added, and a status follows only the sentence of a
 # refusal that came with one.

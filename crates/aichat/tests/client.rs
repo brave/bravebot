@@ -1428,6 +1428,52 @@ fn an_unusable_premium_key_fails_rather_than_downgrading() {
     );
 }
 
+/// BACKEND-37: a client says it presented the premium key only after a request went out with it. A
+/// request to the free endpoint, with a key lent but no premium host, and one that could not get
+/// the key, did not present it. The regressions it rejects are a flag that is always set, one set
+/// by a source being lent, and one set before the key was produced.
+#[test]
+fn a_client_reports_the_premium_key_only_when_a_request_carried_it() {
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+    let request = ChatRequest::new(DEFAULT_MODEL, vec![Message::user("hi")]);
+    let egress = Egress::new();
+
+    let (premium_endpoint, _received) = serve(REPLY);
+    let config = premium_config("http://127.0.0.1:1", &premium_endpoint);
+    let mut subscription = StubSubscription { remaining: 1 };
+    let mut client = AichatClient::new(&config, &egress).with_subscription(&mut subscription);
+    assert!(!client.presented_a_premium_key(), "nothing was sent yet");
+    client.complete(&mut policy, &request).expect("completion");
+    assert!(client.presented_a_premium_key());
+
+    let (base_endpoint, _received) = serve(REPLY);
+    let mut config = config_for(&base_endpoint);
+    config.premium_endpoint = None;
+    let mut subscription = StubSubscription { remaining: 5 };
+    let mut client = AichatClient::new(&config, &egress).with_subscription(&mut subscription);
+    client.complete(&mut policy, &request).expect("completion");
+    assert!(!client.presented_a_premium_key(), "no premium host");
+
+    let (base_endpoint, _received) = serve(REPLY);
+    let config = premium_config(&base_endpoint, &base_endpoint);
+    let mut subscription = StubSubscription { remaining: 0 };
+    let mut client = AichatClient::new(&config, &egress).with_subscription(&mut subscription);
+    client
+        .complete(&mut policy, &request)
+        .expect_err("no key to present");
+    assert!(
+        !client.presented_a_premium_key(),
+        "the key was not produced"
+    );
+}
+
 /// PREM-2: a configuration with no premium host attaches no key even when a source of one is lent,
 /// rather than sending it to an endpoint it was not issued for. The request is the free endpoint's,
 /// signed as it always was. The host is compiled in for every build that reaches Brave, so the case

@@ -544,7 +544,7 @@ fn a_failed_turn_is_recorded_with_the_reason_the_interface_composed() {
     assert_eq!(
         history[0]["outcome"],
         json!({"kind": "failed",
-               "reason": "error: the service would not accept the credentials (HTTP 401)"}),
+               "reason": "error: the service would not accept the credentials (HTTP 401). Run `bravebot auth status` to see the sign-in or key in use, and `bravebot doctor` to see the endpoint"}),
         "{saved}"
     );
     assert!(
