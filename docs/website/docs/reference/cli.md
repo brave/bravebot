@@ -76,6 +76,7 @@ Usage:
 | `bravebot sessions delete <id>` | delete one session recorded for this directory, with its trail and search index ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot sessions purge [--dry-run] [-y]` | delete every session recorded for this directory, asking first unless `-y` is given ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot stats [--days <n>] [--models] [--project [<dir>]]` | total the sessions, turns and tokens, read and written, the recorded sessions spent, for every project or one ([below](#stats)) |
+| `bravebot schedule add\|list\|remove\|run-now\|history` | run a prompt from a cron expression as a one-shot run, started by your crontab ([below](#schedule)) |
 | `bravebot skill eval <name> [--model <model>] [--max-rounds <n>] [--max-tokens <n>] [--trust-workspace]` | run a skill's saved cases with the skill and without it and report both scores ([below](#skill-eval)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
@@ -1190,6 +1191,37 @@ Entries in the sessions directory that cannot be read as a record are counted th
 their names, and add to no figure. Stdout holds the table and nothing else, so
 `bravebot stats | tail -n 1` is the total. A project that is not a directory, a count that is zero,
 too large or not a number, a repeated option and any other word are refused with status 2.
+
+## `schedule`
+
+```sh
+bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>] [--accept-edits | --dangerously-skip-permissions]
+bravebot schedule list
+bravebot schedule remove <id>
+bravebot schedule run-now <id>
+bravebot schedule history [<id>]
+```
+
+Runs a prompt on a repeating schedule with no session open. `add` writes an entry and one line in
+your crontab that runs `bravebot schedule run-now <id>`, which starts the same one-shot run as
+`bravebot -p` in the entry's directory (this one unless `--dir` says otherwise). Nothing of
+bravebot's keeps running between runs.
+
+```
+$ bravebot schedule add --cron "0 9 * * 1-5" --prompt "summarize the pull requests merged yesterday"
+Added schedule 1.
+reads and reports only: every write is refused, because nobody is there to ask
+```
+
+The expression is five fields of digits and `*`, `/`, `,` and `-`: names such as `mon` and
+shortcuts such as `@daily` are not read. A run has nobody to ask, so it can read and report and
+cannot write unless the `add` line carries `--accept-edits` (edits are accepted and nothing else is
+answered) or `--dangerously-skip-permissions` (every question is answered yes). `list` states which
+for each entry. `add` must be typed at a terminal, so a command a session runs cannot add one. Cron
+starts a job with almost none of your environment, so a run that needs a credential reads it from
+the sign-in kept in `~/.bravebot`. `history` lists each recorded run with its exit status, the
+session it recorded and the tokens that session spent. A run that ended before it recorded a
+session shows `-`. Only `crontab` on a Unix system is supported.
 
 ## `skill eval`
 
