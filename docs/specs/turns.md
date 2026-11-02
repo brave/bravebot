@@ -127,10 +127,11 @@ left as the line wrote it, so the names a pattern matched in a directory nobody 
 decide it ([CMDLINE-4](tools/command-line.md#CMDLINE-4)). It is the request and not the outcome, as
 for a write tool: a line the person declined counts, and a line refused before it compiled does not.
 It does not feed [TURN-4](#TURN-4) or the work record's writes ([GROUND-1](grounding.md#GROUND-1)),
-which count only a call that changed a file: a line the table does not prove read-only is often a
-build or a test run, so counting it as a write would leave "a command ran after the last write" false
-for every build. A call that ran a program is already a command for TURN-4, so a turn whose edits all
-go through `run` is not told that files changed and nothing was run. A worker delegate that asked for
+which count a call that changed a file, and a `run` line only when the workspace tree measurably
+differs after it: a line the table does not prove read-only is often a build or a test run, so
+counting the request as a write would leave "a command ran after the last write" false for every
+build. A call that ran a program is already a command for TURN-4, so a turn whose edits all go
+through `run` is not told that files changed and nothing was run. A worker delegate that asked for
 such a line has delivered, and the parent counts it when it takes the delegate back.
 
 **Counted since the last answer, not since the turn began.** A stop is usually not the end of a
@@ -188,10 +189,11 @@ programs have started. A line that ended in any other error does not, since the 
 say whether a program in it had started. This is the opposite of [TURN-3](#TURN-3)'s nudge and for
 the opposite reason:
 that line is about what the planner tried to do, and these two are about what the person is
-about to act on. A `run` line that [TURN-3](#TURN-3) counts as a write tried is not a changed file
-here, and is a program run only when one started, so a line the person declined counts for TURN-3
-and not for this. A turn whose only changes were made by `run` lines has run a program, so it is
-neither asked the question nor told the closing line: both are about a turn that ran no program.
+about to act on. A `run` line that [TURN-3](#TURN-3) counts as a write tried is a changed file here
+only when the workspace tree differs after it ([GROUND-1](grounding.md#GROUND-1)), and is a program
+run only when one started, so a line the person declined counts for TURN-3 and not for this. A turn
+whose only changes were made by `run` lines has run a program, so it is neither asked the question
+nor told the closing line: both are about a turn that ran no program.
 
 **Work a delegate did.** A delegate working in the turn's own workspace writes and runs there, so
 a file it changed and a program it ran count as the turn's from the round the turn takes it back
@@ -219,11 +221,14 @@ In the terminal app the person's line is the open-loops line of [OPEN-3](open-lo
 `verified-by: bravebot_agent::turn::a_turn_offered_no_run_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_stopped_before_any_write_is_not_told_a_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_whose_only_edit_is_a_run_line_is_not_told_nothing_was_run`
+`verified-by: bravebot_agent::turn::a_run_line_that_changes_a_file_is_recorded_as_a_write`
 `verified-by: bravebot_agent::turn::a_turn_stopped_after_a_write_is_told_the_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_after_a_write_is_told_the_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`
 `verified-by: bravebot_agent::turn::a_file_a_delegate_changed_in_the_workspace_is_reported_by_the_turn_as_never_built`
 `verified-by: bravebot_agent::turn::a_file_a_delegate_changed_before_it_failed_is_reported_by_the_turn_as_never_built`
+`verified-by: bravebot_agent::turn::a_file_a_worker_delegate_changed_through_a_run_line_is_a_write_of_the_turn`
+`verified-by: bravebot_agent::turn::a_file_a_delegate_in_a_checkout_changed_through_a_run_line_is_not_a_write_of_the_turn`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_its_own_checkout_leaves_the_change_reported_as_never_built`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_a_checkout_holding_the_changes_counts_as_the_turns_own`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_a_checkout_given_none_of_the_changes_leaves_the_change_reported_as_never_built`

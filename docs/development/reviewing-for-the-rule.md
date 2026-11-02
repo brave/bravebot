@@ -112,6 +112,16 @@ the other shape facts of the result (the cap, the unreadable-directory flag) thr
 name or target in that sentence, or that read the target to decide what to say, would be a violation
 of shape 1 or 3 and is not covered by this paragraph.
 
+A measurement of file names, lengths and modification times that the driver compares and reduces to
+one bool is not a branch on untrusted content, for the same reason an exit status is not. The work
+record's write signal for a `run` line (`crates/agent/src/workspace/tree_mark.rs`) is one: the
+driver opens no file, reads no content or name into a decision (the only name match is against a
+fixed list of skipped directories), and the result is one fact. A program can make that fact true
+or false by what it writes, as it can with its exit status. A reviewer who sees a new measurement of
+this kind checks the same three things: no file is opened, no name or content appears in a
+condition, and one bounded fact comes out. A measurement that fails any of them is a violation of
+shape 1 or 3 and is not covered by this paragraph.
+
 `load_skill` also names the directory a project skill's link lands on inside the workspace. That
 path is file-name content, so the rules and the trust map are asked about it first, and only a path
 they let the planner read is examined further: it is dropped when it equals the name the skill is

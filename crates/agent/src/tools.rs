@@ -9828,6 +9828,14 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // `job_output`.
     let movable =
         !tools.delegated && supplied.is_none() && plan.steps.unrouted_pipeline().is_some();
+    // The tree as the line finds it, for the comparison that says whether it changed a file
+    // (GROUND-1). A measurement of names, lengths and times: no file is read. Taken before the
+    // line starts in every case, since whether it moves to the background is known only after it
+    // has started. The second walk is taken only on the paths that use it: a moved line returns
+    // before it.
+    let tree_before = crate::workspace::TreeMark::take(tools.workspace.root(), &|path| {
+        tools.workspace.in_the_stores(path)
+    });
     let ran = if movable {
         let handoff = bravebot_core::cancel::Handoff::new();
         reporter.movable(handoff.clone());
@@ -9990,6 +9998,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             stuck.push(destination.shown.clone());
         }
     }
+    // After a destination a scan refused has been put back, so a write that was undone is not
+    // counted. Whether the line ended well does not enter into it: a line that failed halfway has
+    // still left what it got to.
+    let changed_a_file = tree_before.differs_from(&crate::workspace::TreeMark::take(
+        tools.workspace.root(),
+        &|path| tools.workspace.in_the_stores(path),
+    ));
     if ran.as_ref().is_ok_and(|ran| {
         ran.ended_well && ran.stopped.is_none() && ran.codes.iter().all(|code| *code == Some(0))
     }) {
@@ -10032,7 +10047,11 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     if !left.scanned.refused().is_empty() {
         // A program in the line put the credential there, so one ran whatever the line ended in
         // (TURN-4).
-        return credential_refusal_after_a_line(&said, &left, &stuck).having_run_a_program();
+        let refusal = credential_refusal_after_a_line(&said, &left, &stuck).having_run_a_program();
+        return match changed_a_file {
+            true => refusal.having_changed_a_file(),
+            false => refusal,
+        };
     }
 
     match ran {
@@ -10121,6 +10140,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             produced.covered_by_record = covered_by_record;
             produced.read_asked = read_asked;
             produced.ran_a_program = true;
+            produced.changed_a_file = changed_a_file;
             produced.command_failed = !ran.succeeded();
             produced.started_a_program = true;
             produced.ran_git_in = plan
@@ -10135,10 +10155,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         // a person endorsed it, so it is not something an attacker chose.
         // A stage may have spawned before the one that failed, so the checkout is marked. A line is
         // stopped only once its stages have been spawned, so one the turn stopped has run (TURN-4).
+        // The file mark is carried in every arm: a line that failed halfway has still left what it
+        // got to (GROUND-1).
         Err(error) => {
             let stopped = matches!(error, crate::exec::ExecError::Cancelled);
             let text = failed_line_text(&said, &error);
-            let produced = Produced::problem(text);
+            let mut produced = Produced::problem(text);
+            produced.changed_a_file = changed_a_file;
             match stopped {
                 true => {
                     let mut produced = produced.having_run_a_program();

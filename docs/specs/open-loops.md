@@ -57,6 +57,7 @@ Each rule reads only bravebot's own records: the work record, exit statuses, the
 **Why these seven.** Each is something bravebot already records and can check cheaply at the end of a turn. Open review comments on a pull request and a failing CI run are left out, since both need a network request and their content is untrusted ([Out of scope](#out-of-scope)).
 
 `verified-by: bravebot_agent::open_loops::a_write_after_the_last_command_is_unbuilt_changes`
+`verified-by: bravebot_agent::turn::a_change_made_by_a_run_line_is_an_unbuilt_change_until_a_command_runs_after_it`
 `verified-by: bravebot_agent::open_loops::a_command_that_exited_non_zero_is_a_failed_command_until_another_runs`
 `verified-by: bravebot_agent::turn::a_turns_record_says_whether_its_last_command_failed`
 `verified-by: bravebot_agent::workspace::a_kept_checkout_is_open_until_applied_or_removed`

@@ -51,6 +51,7 @@ mod reach;
 mod resolve;
 mod results;
 mod touched;
+mod tree_mark;
 mod volume;
 
 use error::{ENDS_CHECKOUTS, io_detail};
@@ -70,6 +71,7 @@ use results::{
 };
 pub use touched::TouchedRecord;
 use touched::{Touched, place_by_spelling};
+pub(crate) use tree_mark::TreeMark;
 pub use volume::{BACKSLASH_SEPARATES, key_of, trust_store, volume_folds_case};
 pub(crate) use volume::{on_disk, one_file};
 
