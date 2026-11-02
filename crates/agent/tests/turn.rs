@@ -17905,6 +17905,128 @@ fn a_turn_that_only_writes_in_the_session_directory_leaves_nothing_unbuilt() {
     }
 }
 
+/// OPEN-1, GROUND-1. An `edit_file`, a `download_url` and a picture written from a reference each
+/// decide whether they changed a file from where the write landed, as `write_file` does. A call
+/// that lands in the session's own directory counts no write, and the same call into the project
+/// counts one, so the call did change a file in both setups. The regression it rejects: any one of
+/// those tools setting the changed-file flag whatever it landed on, which
+/// `a_turn_that_only_writes_in_the_session_directory_leaves_nothing_unbuilt` does not see because it
+/// drives `write_file` alone.
+#[test]
+fn an_edit_a_download_and_a_picture_landing_in_the_session_directory_count_no_write() {
+    let work_of = |tool: &str, in_session: bool| {
+        let name = format!("changed-flag-{tool}-{in_session}");
+        let scratch = Scratch::new(&name);
+        let session = Scratch::new(&format!("{name}-given"));
+        let given = session
+            .path
+            .canonicalize()
+            .expect("the session's own directory");
+        let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+        workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
+        let home = if in_session {
+            given.clone()
+        } else {
+            scratch.path.clone()
+        };
+        let destination = |file: &str| match in_session {
+            true => given.join(file).to_string_lossy().into_owned(),
+            false => file.to_string(),
+        };
+        let (mut replies, trust, landed) = match tool {
+            "edit_file" => {
+                std::fs::write(home.join("target.txt"), "old\n").unwrap();
+                (
+                    vec![tool_request(
+                        "edit_file",
+                        &serde_json::json!({
+                            "path": destination("target.txt"),
+                            "old_text": "old",
+                            "new_text": "new",
+                        })
+                        .to_string(),
+                    )],
+                    trusting_the_workspace(),
+                    "target.txt",
+                )
+            }
+            "download_url" => {
+                let (site, _count) = serve_raw(raw_reply("image/png", b"bytes"));
+                (
+                    vec![tool_request(
+                        "download_url",
+                        &serde_json::json!({
+                            "url": format!("{site}/logo.png"),
+                            "path": destination("logo.png"),
+                        })
+                        .to_string(),
+                    )],
+                    trusting_the_workspace(),
+                    "logo.png",
+                )
+            }
+            _ => {
+                std::fs::write(scratch.path.join("shot.png"), a_png()).unwrap();
+                (
+                    vec![
+                        tool_request("read_file", r#"{"path":"shot.png"}"#),
+                        tool_request(
+                            "write_file",
+                            &serde_json::json!({
+                                "path": destination("copy.png"),
+                                "contents_ref": "ref:1",
+                            })
+                            .to_string(),
+                        ),
+                    ],
+                    bravebot_core::trust::TrustStore::new("/work"),
+                    "copy.png",
+                )
+            }
+        };
+        replies.push(reply_with("done"));
+        let (endpoint, _received) = serve_sequence(replies);
+        let config = config_for(&endpoint);
+        let completed = turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("save it"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut ApprovesFetchesAndWrites::default(),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trust,
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        assert!(completed.outcome.is_ok(), "{tool}: the turn failed");
+        let file = std::fs::read(home.join(landed)).unwrap_or_default();
+        assert!(
+            !file.is_empty() && file != b"old\n",
+            "{tool} in_session={in_session}: the write did not land"
+        );
+        completed.work
+    };
+    for tool in ["edit_file", "download_url", "write_file"] {
+        let label = match tool {
+            "write_file" => "a picture write",
+            other => other,
+        };
+        assert_eq!(
+            work_of(tool, true).writes,
+            0,
+            "{label} into the session directory was counted as a changed file"
+        );
+        assert_eq!(
+            work_of(tool, false).writes,
+            1,
+            "{label} into the project was not counted"
+        );
+    }
+}
+
 /// An authority nothing here holds is recorded where it is spent, and nowhere else.
 ///
 /// The trail is the one record of a session that outlives the process, so a person accounting
