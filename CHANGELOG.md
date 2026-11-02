@@ -15,6 +15,7 @@
  - Fixed `bravebot doctor` saying nothing about a Bedrock region that was refused for the characters it holds, so the AWS account was missing from its output with no reason. It now names the region as written and where it was written: the environment, the `env` block of a settings file and its path, the machine-level file, or the `amazon-bedrock` entry under `provider`. ([#3521](https://github.com/brave/bravebot/issues/3521))
  - Fixed the time you take to answer the question about a server's tool list being left out of the time the turn spent waiting on you. It is now counted as waiting, and a turn stopped at the question keeps it. ([#3662](https://github.com/brave/bravebot/issues/3662))
  - Fixed a line you type while the model waits in `job_output` being held until the wait ends. The wait now ends within a moment, the job keeps running, and the model reads the line at the next round. ([#3663](https://github.com/brave/bravebot/issues/3663))
+ - Fixed a call to a server's tool whose arguments came from content the model had read and a person had not vouched for. It is asked with its own reason, offers no answer that would remember it, and one question now covers the later calls to the same tool in the same round. ([#3664](https://github.com/brave/bravebot/issues/3664))
 
 ## [0.20.0](https://github.com/brave/bravebot/releases/tag/v0.20.0)
 

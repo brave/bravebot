@@ -428,6 +428,15 @@ a rule says, and a resumed session keeps asking. Undoing the turn that let it ou
 the model reads in your project does not start it. A session saved by an earlier version is read as
 having let something private out, so every call in it asks.
 
+A call asked for that reason is drawn without answer 2, which is shown as not offered with the
+reason that no stored answer covers a call whose arguments are private. Typing 2 anyway answers yes
+to that one call and records nothing, so the next call asks again.
+
+When the model makes several calls to the same tool in one round, you are asked once. The question
+for the first call lists the arguments of each later call to that tool under a line saying your
+answer also covers them. Yes makes all of them and no refuses all of them. A call to a server that
+asks every call, and a call that names a choice, are asked on their own and never listed.
+
 ### Servers that ask every call
 
 A server added with `--ask-every-call` is asked about at every call, for tools whose arguments you
@@ -881,6 +890,8 @@ profile directory there is no `~/.bravebot` at all: nothing is declared there, a
 - **An approval does not travel.** It lives in your own directory, so a second machine asks again.
   The same is true of a list you said yes to and a tool you stopped the asking for.
 - **`--plain` cannot stop asking for a tool.** Its call question has room for one answer.
+- **A call with private arguments cannot be stopped from asking.** Answer 2 is not offered for it, because no stored answer covers it.
+- **One answer covers several calls in a round.** Calls to the same tool made in one round are listed in one question, so a yes also makes the later ones.
 - **What the model has read can leave in a URL or a command.** Once you let a result out of
   quarantine, every call to a server is put to you, but a fetch to a host an `allow` rule covers is
   not, and nor is a command a rule allows: a URL and a command line are not held back as private.

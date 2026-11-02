@@ -91,6 +91,11 @@ put to a person and is recorded under `mcp_call` alone. A delegate's call to a s
 under `approval` as well, naming the call the same way and saying the delegate is not asked and the
 server was not called.
 
+A call to a server's tool that an earlier question of the same round already answered, because that
+question listed it ([SERVERS-7](mcp-servers.md#SERVERS-7)), is not recorded as asking. A yes is one
+entry under `approval` naming the call as `alias:tool` and saying an earlier answer covered it and
+nobody was asked, and a no is the refusal above.
+
 Five questions that are not a tool call's own approval are recorded the same way, as a refusal under
 `approval`, when the person does not approve them. Each entry is fixed words and names the question
 only by what the driver called it, never by what it held:
@@ -160,6 +165,8 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_core::policy::an_mcp_call_the_person_did_not_approve_is_a_refusal_under_approval`
 `verified-by: bravebot_core::policy::a_delegates_call_to_a_server_asked_every_call_is_a_refusal_under_approval`
 `verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::mcp::a_call_covered_by_an_earlier_answer_is_not_recorded_as_asking`
+`verified-by: bravebot_core::policy::an_mcp_call_covered_by_an_earlier_answer_is_recorded_as_covered_not_as_asking`
 `verified-by: bravebot_agent::mcp::a_call_a_rule_refuses_is_not_recorded_as_one_the_person_did_not_approve`
 `verified-by: bravebot_core::policy::a_question_the_person_did_not_approve_is_a_refusal_under_approval`
 `verified-by: bravebot_agent::turn::a_read_the_person_does_not_agree_to_is_recorded_as_a_refusal`

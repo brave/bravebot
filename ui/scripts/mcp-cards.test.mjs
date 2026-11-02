@@ -11,6 +11,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildSync } from 'esbuild'
 import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
 
 const require = createRequire(import.meta.url)
 const React = require('react')
@@ -81,6 +82,8 @@ const call = (overrides = {}) =>
     arguments: [{ name: 'city', value: '"Paris"' }],
     description: 'the forecast for a city',
     mayStand: true,
+    askedForPrivateArguments: false,
+    also: [],
     ...overrides,
   })
 
@@ -181,6 +184,36 @@ test('the call card offers to stop asking only where that can be recorded', () =
   const unrecorded = draw(call({ mayStand: false }))
   assert.deepEqual(buttons(unrecorded), ['Don’t call', 'Call once'])
   assert.ok(unrecorded.includes('cannot stop asking'), unrecorded)
+  const priv = draw(call({ mayStand: false, askedForPrivateArguments: true }))
+  assert.deepEqual(buttons(priv), ['Don’t call', 'Call once'])
+  assert.ok(priv.includes('something read earlier was private'), priv)
+  assert.ok(!priv.includes('cannot stop asking'), priv)
+})
+
+test('the call card lists the later calls its answer also covers, and nothing where it covers none', () => {
+  assert.ok(!draw(call()).includes('also covers'))
+  const one = draw(call({ also: [[{ name: 'city', value: '"Lyon"' }]] }))
+  assert.ok(one.includes('Your answer also covers this later call to the same tool in this round:'), one)
+  assert.ok(one.includes('&quot;Lyon&quot;'), one)
+  const two = draw(call({ also: [[{ name: 'city', value: '"Lyon"' }], [{ name: 'city', value: '"Nice"' }]] }))
+  assert.ok(two.includes('also covers these 2 later calls'), two)
+  assert.ok(two.includes('&quot;Nice&quot;'), two)
+})
+
+test('an answered call card says when the answer also covered later calls', () => {
+  assert.ok(draw({ ...call(), decision: 'approve', remember: false }).includes('You allowed this call<'))
+  const later = { also: [[{ name: 'city', value: '"Lyon"' }]] }
+  assert.ok(draw({ ...call(later), decision: 'approve', remember: false }).includes('You allowed this call and the later ones listed with it'))
+  assert.ok(draw({ ...call(later), decision: 'reject', remember: false }).includes('You refused this call and the later ones listed with it'))
+  assert.ok(draw({ ...call(later), decision: 'approve', remember: true }).includes('later ones to this tool in this project'))
+})
+
+test('the later calls an answer covers are drawn as lists of their own inside a marked block', () => {
+  const markup = draw(call({ also: [[{ name: 'city', value: '"Lyon"' }], [{ name: 'city', value: '"Nice"' }]] }))
+  assert.ok(markup.includes('<div class="mcp-also" data-deciding="all">'), markup)
+  assert.equal(markup.split('<dl class="mcp-arguments"').length - 1, 3, markup)
+  const css = readFileSync('src/renderer/styles/cards.css', 'utf8')
+  assert.match(css, /\.mcp-also \{[^}]*flex-direction: column;[^}]*gap: var\(--leo-spacing-m\)/, 'the later calls have no rule that keeps them apart')
 })
 
 test('the move card shows the declaration, the destination and the host a yes reaches', () => {

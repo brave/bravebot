@@ -328,7 +328,7 @@ export const MCP_TOOLS: McpToolsRequest = {
 }
 
 export const MCP_CALL: McpCallRequest = {
-  request: 21, alias: 'weather', tool: 'forecast', name: 'weather:forecast', description: 'Forecast for a place', mayStand: true,
+  request: 21, alias: 'weather', tool: 'forecast', name: 'weather:forecast', description: 'Forecast for a place', mayStand: true, askedForPrivateArguments: false, also: [],
   arguments: [{ name: 'place', value: '"Harbour Lights"' }, { name: 'days', value: '3' }],
 }
 

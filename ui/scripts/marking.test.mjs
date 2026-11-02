@@ -233,7 +233,7 @@ const CARDS = {
     marks: 'class="mcp-tool-description"',
   },
   'mcp-call': {
-    entry: () => t.askedMcpCall({ request: 1, alias: 'weather', tool: 'get_forecast', name: 'weather:get_forecast', arguments: [{ name: 'city', value: FORGED_CHROME }], description: FORGED_CHROME, mayStand: true }),
+    entry: () => t.askedMcpCall({ request: 1, alias: 'weather', tool: 'get_forecast', name: 'weather:get_forecast', arguments: [{ name: 'city', value: FORGED_CHROME }], description: FORGED_CHROME, mayStand: true, askedForPrivateArguments: false, also: [] }),
     marks: 'class="mcp-tool-description"',
   },
   // SERVERS-11: where a redirect pointed is the server's own bytes.

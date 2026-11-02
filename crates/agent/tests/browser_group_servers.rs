@@ -3856,6 +3856,88 @@ fn session_ordinary(scratch: &Scratch) -> (Session, mpsc::Receiver<String>) {
     session_declared(scratch, |reached| reached)
 }
 
+/// SERVERS-7, MCP-14. A call that names a choice a processor made is asked on its own and is never
+/// listed in the question about an earlier call to the same tool in the same round. One reply makes
+/// a click that names no choice and then one that does: the question about the first lists nothing,
+/// the second is put to the person with the number drawn, and a yes to each sends both. The
+/// regression it rejects is listing a later call by its alias and tool alone, which lists the call
+/// with a choice under the first question and covers it by an answer that never showed the number.
+#[test]
+fn a_call_naming_a_choice_is_never_listed_in_an_earlier_question() {
+    let first = call_of("click_element", json!({"url": CART, "element_number": 2}));
+    let second = call_of(
+        "click_element",
+        json!({"url": CART, "element_number_ref": "ref:3"}),
+    );
+    // Both calls in one reply, so they are one round.
+    let together = {
+        let calls = |reply: &str| -> String {
+            let start = reply.find(r#""tool_calls":["#).expect("tool calls") + 14;
+            let end = reply.rfind("]}}]}").expect("end of tool calls");
+            reply[start..end].to_string()
+        };
+        let (one, two) = (
+            calls(&first),
+            calls(&second).replace(r#""id":"c1""#, r#""id":"c2""#),
+        );
+        format!(
+            r#"{{"model":"test-model","choices":[{{"message":{{"role":"assistant","tool_calls":[{one},{two}]}}}}]}}"#
+        )
+    };
+    let mut replies = choosing_replies(&[]);
+    let done = replies.pop().expect("the last reply");
+    replies.push(together);
+    replies.push(done);
+
+    let scratch = Scratch::new("choosing-listed-choice");
+    let (session, bodies) = session_declared(&scratch, |reached| {
+        reached
+            .asking_every_call(false)
+            .choosing(choices_declared())
+    });
+    let mut asked = approving();
+    let (_sent, _trail) = {
+        let mut confirmer = Confining::new(&mut asked, PermissionMode::Ask, false);
+        choosing_run(
+            &scratch,
+            session,
+            "3",
+            replies,
+            |task| {
+                task.with_permissions(allowing(&[]))
+                    .with_permission_mode(PermissionMode::Ask)
+            },
+            &mut confirmer,
+            &mut Conversation::new(),
+        )
+    };
+    let clicks: Vec<&McpCallRequest> = asked
+        .calls
+        .iter()
+        .filter(|call| call.tool == "click_element")
+        .collect();
+    assert_eq!(
+        clicks.len(),
+        2,
+        "the call with a choice was not asked on its own"
+    );
+    assert!(
+        clicks[0].also.is_empty(),
+        "the call with a choice was listed under another: {:?}",
+        clicks[0].also
+    );
+    assert!(clicks[1].also.is_empty());
+    assert!(
+        clicks[1].arguments.iter().any(|(name, shown)| {
+            name == "element_number" && shown.starts_with("3 (chosen by a processor from ref:3;")
+        }),
+        "the question did not draw the number: {:?}",
+        clicks[1]
+    );
+    let heard: Vec<(String, Value)> = heard(&bodies).into_iter().skip(1).collect();
+    assert_eq!(heard, [click_of(2), click_of(3)]);
+}
+
 /// ROUTE-10, MCP-14, SERVERS-21, SERVERS-7. A turn with nobody to ask refuses a call that names a
 /// choice and sends nothing, though an answer 2 was recorded for the tool in this project before the
 /// server was declared to ask every call, which carries through such a turn for a server not

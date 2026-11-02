@@ -675,7 +675,8 @@ per [SERVERS-8](#SERVERS-8).
 Answer 2 records the alias, the tool and the project path. It reaches that one tool of that one
 server in that one project, and says nothing about the same tool elsewhere, another tool of the same
 server, or the arguments a later call carries. A server whose declaration says every call is asked
-about is offered no answer 2 ([SERVERS-21](#SERVERS-21)).
+about is offered no answer 2 ([SERVERS-21](#SERVERS-21)), and neither is a call asked because its
+arguments are private (the paragraph on labelled arguments below).
 
 A permission rule decides first, exactly as it does for a command line
 ([PERM-2](permissions.md#PERM-2)): a standing answer removes the default prompt and does not overrule
@@ -768,7 +769,39 @@ on ([LABEL-8](labels.md#LABEL-8)), so every later call asks whatever a rule or a
 says, and a one-shot run refuses it. A resumed session keeps this, and undoing the turn that let
 the content out ends it. A workspace file the planner reads does not reach it.
 
+A call asked for this reason is offered no answer 2, as in [PROMPT-6](prompting.md#PROMPT-6), because
+no stored answer covers it: the terminal draws answer 2 as not offered, saying the call is asked
+because something read earlier was private and no stored answer covers it, and binds no key for it.
+The plain interface, the desktop card and the editor prompt say the same, from
+`askedForPrivateArguments` on `mcp-call.request`, which the agent sets from the label of the
+arguments and from nothing in them. An answer 2 that arrives anyway is a yes to that call, and
+nothing is written to `mcp-tools`. A call that is also to a server declared to ask every call gives
+the declaration's reason, which holds for every later call ([SERVERS-21](#SERVERS-21)). Bypassing
+answers such a call as it answers any other, with answer 1 ([SERVERS-13](#SERVERS-13)).
+
+**Calls to one tool in one round are asked once.** When the planner makes several calls to the same
+tool in one round, the question about the first lists the arguments of each later call to that tool,
+as the planner wrote them, under a line saying the answer also covers them. A yes makes each of
+them and a no refuses each of them, in the words of a refusal the person made. Each call shows what
+it would show if asked alone, and the person reads every argument before answering. A later call is
+found by its position in the round and the alias and tool it names, and never by comparing its
+arguments with anything, since the planner's arguments may derive from private content
+([LABEL-5](labels.md#LABEL-5)). A later call is covered only by an answer given under the same
+label of arguments, so a call that is private asks again when the answer was given for public ones.
+A call covered by an earlier answer is recorded as covered by that answer, with nobody asked, and
+not as asking ([TRACE-1](trace.md#TRACE-1)); a refusal by that answer is recorded as the refusal it
+is.
+A call to a server declared to ask every call ([SERVERS-21](#SERVERS-21)) and a call that names a
+choice a processor made ([MCP-14](mcp.md#MCP-14)) are asked on their own and are never listed. An
+answer 2 given to the first question is recorded as for any call and covers later calls to the tool
+as a stored answer does. The terminal, the plain interface, the editor and the desktop card draw
+the list from `also` on `mcp-call.request`.
+
 `verified-by: bravebot_agent::mcp::a_vouched_list_offers_its_tool_and_a_call_answers_quarantined`
+`verified-by: bravebot_agent::mcp::answer_two_is_not_offered_or_recorded_for_a_call_asked_for_private_arguments`
+`verified-by: bravebot_tui::confirm::mcp::a_call_asked_for_private_arguments_is_drawn_with_its_own_reason_for_offering_no_lasting_answer`
+`verified-by: bravebot_approval::lib::a_call_asked_for_private_arguments_says_so_and_a_declaration_wins`
+`verified-by: bravebot_ui_bridge::acp::a_call_asked_for_private_arguments_reads_to_the_editor_with_its_reason`
 `verified-by: bravebot_agent::mcp::a_refused_call_reaches_no_server`
 `verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::mcp::answer_two_stops_asking_for_the_one_tool_in_the_one_project`
@@ -776,6 +809,16 @@ the content out ends it. A workspace file the planner reads does not reach it.
 `verified-by: bravebot_agent::mcp::a_rule_decides_a_call_before_the_prompt`
 `verified-by: bravebot_agent::mcp::a_session_that_writes_nothing_records_neither_answer`
 `verified-by: bravebot_agent::mcp::a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it`
+`verified-by: bravebot_agent::mcp::one_yes_covers_the_later_calls_to_the_same_tool_listed_in_its_question`
+`verified-by: bravebot_agent::mcp::one_no_refuses_the_later_calls_listed_in_its_question`
+`verified-by: bravebot_agent::mcp::a_call_covered_by_an_earlier_answer_is_not_recorded_as_asking`
+`verified-by: bravebot_core::policy::an_mcp_call_covered_by_an_earlier_answer_is_recorded_as_covered_not_as_asking`
+`verified-by: bravebot_agent::mcp::a_private_call_is_asked_again_after_an_answer_given_for_public_arguments`
+`verified-by: bravebot_agent::mcp::answer_two_to_a_question_that_listed_later_calls_is_recorded_for_the_tool`
+`verified-by: bravebot_agent::mcp::bypassing_answers_every_call_of_a_round_unasked`
+`verified-by: bravebot_agent::browser_group_servers::a_call_naming_a_choice_is_never_listed_in_an_earlier_question`
+`verified-by: bravebot_agent::mcp::a_server_asked_every_call_is_asked_about_each_call_of_a_round_on_its_own`
+`verified-by: bravebot_approval::lib::a_call_lists_the_later_calls_its_answer_also_covers`
 `verified-by: bravebot_agent::mcp::reading_workspace_files_leaves_a_call_a_rule_allows_unasked`
 `verified-by: bravebot_agent::mcp::a_record_that_cannot_be_read_is_not_written_over`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
@@ -1829,7 +1872,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
 | [backends.md](backends.md) | [BACKEND-38](backends.md#BACKEND-38), the managed file pins the names that decide where a request goes, and "every other name in the file decides nothing" | Extended by two names that are not destinations, `mcp.allow` and `mcp.deny`, which keep a server from starting and add none, for [SERVERS-12](#SERVERS-12)'s reason. **Applied**. |
 | [backends.md](backends.md) | [BACKEND-24](backends.md#BACKEND-24), settings layers resolve a name at a time | Extended. `mcp.request` is a list, and joins the row where every layer's entries are kept, for that row's reason: an entry only ever names something that then has to be approved separately. **Applied** with the session that reads the key. |
 | [permissions.md](permissions.md) | [PERM-1](permissions.md#PERM-1), a rule names a family of tools and matches on routing only, and "four families exist" | Amended. A fifth family, `Mcp`, with `Mcp(weather)` covering a server and `Mcp(weather:get_current_conditions)` one tool of it. The routing field is the alias and the tool name; the arguments are payload and no specifier matches them, which is [SERVERS-7](#SERVERS-7). **Applied**: `Mcp(weather:*)` is `Mcp(weather)`, and a name is matched whole, so `Mcp(weather)` does not cover `weather2`. |
-| [permissions.md](permissions.md) | [PERM-9](permissions.md#PERM-9), three prompts no rule can answer | Extended to four. A call carrying the person's private data asks whatever the rules say, for that clause's own confidentiality reason. A server is further from the person than a local program is, not closer. **Applied** in the policy, and not reached: nothing labels a planner's arguments private yet. |
+| [permissions.md](permissions.md) | [PERM-9](permissions.md#PERM-9), three prompts no rule can answer | Extended to four. A call carrying the person's private data asks whatever the rules say, for that clause's own confidentiality reason. A server is further from the person than a local program is, not closer. **Applied** in the policy and reached once the planner has been shown content let out of quarantine ([SERVERS-7](#SERVERS-7)); a call asked for that reason is offered no answer 2. |
 | [permission-modes.md](permission-modes.md) | [MODE-4](permission-modes.md#MODE-4)'s list of what bypassing answers | Extended by three prompts, a server, its list and a call, and by nothing else, and told of the fourth it refuses, whether a server moved. **Applied**. [SERVERS-13](#SERVERS-13) is the list of what the mode does not reach, which is [MODE-7](permission-modes.md#MODE-7) applied here. That spec's own rule, that nothing approved this way is recorded, covers the new records by its own argument. |
 | [permission-modes.md](permission-modes.md) | [MODE-4](permission-modes.md#MODE-4)'s list of what bypassing answers, once more | Narrowed by one call: a call to a server whose declaration says every call is asked about ([SERVERS-21](#SERVERS-21)) is not answered. **Applied** in `Confining::confirm_mcp_call`. |
 | [delegation.md](delegation.md) | [DELEGATE-10](delegation.md#DELEGATE-10), a delegate's call to a server's tool is put to the person | Narrowed by one call: a delegate's call to a server declared to ask every call is refused with nobody asked ([SERVERS-21](#SERVERS-21)). **Applied**. |
@@ -1931,9 +1974,11 @@ This spec cannot land without these. Each is named by what the clause says rathe
   [CHECK-10](vetting.md#CHECK-10)'s check of a list nobody vouched for, then refuses the list.
   Nothing tells the turn that its questions will be refused rather than asked, so the check is a
   model call whose word nobody reads.
-- **A call carrying private data is not told apart yet.** The policy asks about one whatever is
-  standing, and nothing labels a planner's arguments private, so a standing answer or an `allow`
-  rule answers every call today ([SERVERS-7](#SERVERS-7)).
+- **A call carrying private data is asked only after content left quarantine.** The policy asks
+  about one whatever is standing, and the arguments are labelled private only once the planner has
+  been shown content let out of quarantine, such as a vetted answer. A workspace file it read does
+  not label them, so a standing answer or an `allow` rule answers a call after that read
+  ([SERVERS-7](#SERVERS-7)).
 - **The full-screen interface asks before it asks about the directory.** The server question is put
   on the plain terminal before that interface takes the screen, and the question about trusting the
   directory is asked inside it. A server can therefore start for a session whose directory is then
@@ -2126,7 +2171,7 @@ A call to a tool of such a server is put to the person before a rule or an earli
   not read, and neither is an answer 2 recorded for the tool in this project, whether it was given
   before the declaration said so or not. An `ask` rule asks as it does for any call. A `deny` rule
   still refuses the call before anybody is asked, and private arguments ask as
-  [SERVERS-7](#SERVERS-7) says.
+  [SERVERS-7](#SERVERS-7) says, and the declaration's reason is the one drawn where both apply.
 - **No answer to it lasts.** The terminal draws answer 2 as not offered, saying every call to this
   server is asked about, and binds no key for it. The plain interface says so under the call. An
   answer 2 that arrives anyway is a yes to that call, and nothing is written to `mcp-tools`.

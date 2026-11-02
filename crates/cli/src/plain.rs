@@ -1686,6 +1686,8 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             description: request.description.as_deref(),
             offers_remember: false,
             asked_every_call: request.asked_every_call,
+            asked_for_private_arguments: request.asked_for_private_arguments,
+            also: &request.also,
         });
         self.about(Held::Tools);
         match self.ask(&lines, t!(mcp_call_question)) {
@@ -3988,6 +3990,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         for (asked_every_call, said) in [(true, true), (false, false)] {
             for (typed, expected) in [
@@ -4037,6 +4041,8 @@ mod tests {
                 description: None,
                 may_stand: false,
                 asked_every_call: true,
+                asked_for_private_arguments: false,
+                also: Vec::new(),
             };
             for (typed, expected) in [
                 ("y\n", CallDecision::approve()),
@@ -4083,6 +4089,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let mut asking = Prompting::new(
             std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
@@ -4128,6 +4136,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let mut asking = Prompting::new(
             std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
@@ -4316,6 +4326,8 @@ mod tests {
                     description: None,
                     may_stand: false,
                     asked_every_call: false,
+                    asked_for_private_arguments: false,
+                    also: Vec::new(),
                 });
             }),
             held(Held::Tools)

@@ -1830,6 +1830,14 @@ mcp-call-stand = Yes, and stop asking for { $tool } in this project
 mcp-call-cannot-stand = not offered: nothing answered in this session can be recorded
 mcp-call-cannot-stand-asked-every-time = not offered: every call to this server is asked about
 mcp-call-asked-every-time = Every call to this server is asked about, and no answer to one is remembered.
+# Under the arguments of a call. The calls that follow are the later calls of the same round to the
+# same tool, and the answer to this question is the answer to each of them.
+mcp-call-also = { $count ->
+    [one] Your answer also covers this later call to the same tool in this round:
+   *[other] Your answer also covers these { $count } later calls to the same tool in this round:
+     }
+mcp-call-cannot-stand-private-arguments = not offered: this call is asked because something read earlier was private, and no stored answer covers it
+mcp-call-asked-for-private-arguments = This call is asked because something read earlier was private, and no stored answer covers it.
 mcp-call-cannot-be-asked-here = { $tool } was not called: every call to its server is asked about, and this client cannot ask. Run it from the terminal, which can.
 mcp-call-allow-and-remember-explained = Allow and remember records { $tool } in this project: every later call to it, with any arguments, is allowed without asking again.
 # The value of an argument of a call that a processor's choice will fill, as the question draws it.

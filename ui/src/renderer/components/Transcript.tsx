@@ -2737,7 +2737,11 @@ function Card({
           subject={request.name}
           decided={decision === null ? null : {
             tone: decision,
-            text: decision === 'reject' ? 'You refused this call' : remember ? 'You allowed this call and later ones to this tool in this project' : 'You allowed this call',
+            text: decision === 'reject'
+              ? (request.also.length > 0 ? 'You refused this call and the later ones listed with it' : 'You refused this call')
+              : remember
+                ? 'You allowed this call and later ones to this tool in this project'
+                : request.also.length > 0 ? 'You allowed this call and the later ones listed with it' : 'You allowed this call',
           }}
           head={<CardHead icon="plug" intent="Call tool" deciding
             subject={<code className="path">{request.name}</code>}
@@ -2780,8 +2784,33 @@ function Card({
           <p className="permission-scope">
             The call sends these arguments to the server. What it returns is confined: it is not
             put in the model’s context.
-            {!request.mayStand && ' Nothing answered in this conversation can be recorded, so it cannot stop asking.'}
+            {!request.mayStand && (request.askedForPrivateArguments
+              ? ' This call is asked because something read earlier was private, and no stored answer covers it.'
+              : ' Nothing answered in this conversation can be recorded, so it cannot stop asking.')}
           </p>
+          {request.also.length > 0 && (
+            <div className="mcp-also" data-deciding="all">
+              <p className="permission-scope">
+                {request.also.length === 1
+                  ? 'Your answer also covers this later call to the same tool in this round:'
+                  : `Your answer also covers these ${request.also.length} later calls to the same tool in this round:`}
+              </p>
+              {request.also.map((later, at) => (
+                <dl className="mcp-arguments" key={at}>
+                  {later.map((argument) => (
+                    <div key={argument.name}>
+                      <dt>
+                        <code>{argument.name}</code>
+                      </dt>
+                      <dd>
+                        <pre className="mcp-argument">{argument.value}</pre>
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              ))}
+            </div>
+          )}
         </DecisionCard>
       )
     }

@@ -3709,6 +3709,21 @@ where
         // Reads that already ran beside each other, by the call they answer (TURN-10).
         let mut ahead: Vec<Option<tools::Ahead>> = completion.calls.iter().map(|_| None).collect();
         let mut examined = 0;
+        // The round's calls to servers' tools, so one question about one call can list the later
+        // calls to the same tool and cover them (SERVERS-7).
+        if let Some((offer, _)) = &state.mcp {
+            offer.begin_round(
+                completion
+                    .calls
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(at, call)| {
+                        call.arguments().ok().map(|arguments| {
+                            (at, tools::strip_namespace(&call.function.name), arguments)
+                        })
+                    }),
+            );
+        }
         for (index, call) in completion.calls.iter().enumerate() {
             // Checked per call, because a tool may write. Stopping here means the remaining
             // calls in this round never run.
@@ -3804,6 +3819,9 @@ where
             let read = ahead[index]
                 .take()
                 .and_then(|read| read.if_still_current(policy));
+            if let Some((offer, _)) = &state.mcp {
+                offer.dispatching(Some(index));
+            }
             let mut output = match refused {
                 Some(refused) => refused,
                 None => tools::dispatch_with(
@@ -3824,6 +3842,9 @@ where
                     read,
                 ),
             };
+            if let Some((offer, _)) = &state.mcp {
+                offer.dispatching(None);
+            }
             policy.call_ended(&call.function.name);
             let took = ran_at.elapsed();
             let cancellation = output.cancelled;

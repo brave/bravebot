@@ -39,6 +39,9 @@ fr:lsp-none-started
 fr:lsp-server-running
 fr:lsp-started
 fr:mcp-call-allow-and-remember-explained
+fr:mcp-call-also
+fr:mcp-call-asked-for-private-arguments
+fr:mcp-call-cannot-stand-private-arguments
 fr:memory-fact
 fr:memory-label-private
 fr:memory-label-public
