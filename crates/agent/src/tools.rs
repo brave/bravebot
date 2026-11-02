@@ -372,6 +372,13 @@ pub struct Tools<'a> {
     pub chat: Chat<'a>,
     /// The turn's stop token, so a slow program does not have to be waited out.
     pub cancel: &'a bravebot_core::cancel::Cancel,
+    /// Whether a line the person typed is waiting for the turn to take (INPUT-10).
+    ///
+    /// Read by a `job_output` wait, which ends when it reports a line, so that the line reaches the
+    /// planner at the round's boundary and not when the wait's bound runs out (RUN-17). It is a fact
+    /// about the queue and never about the words. A delegate gets [`Arrival::never`], since it takes
+    /// no lines.
+    pub arrival: crate::interjections::Arrival,
     /// What this turn may say about when it runs again.
     ///
     /// Read by dispatch as well as by the tool table, so a call to a tool this turn was not
@@ -1694,7 +1701,7 @@ pub(crate) fn offer_writes(offered: &[Tool]) -> bool {
 ///
 /// Only the one prefix, and only where something is left after it: this is for a name that means
 /// one of ours, not a general invitation to guess.
-fn strip_namespace(name: &str) -> &str {
+pub(crate) fn strip_namespace(name: &str) -> &str {
     for prefix in ["functions.", "functions_"] {
         if let Some(rest) = name.strip_prefix(prefix)
             && !rest.is_empty()
@@ -7217,35 +7224,104 @@ fn page_of(text: &str, slot: &SlotId, offset: usize, cap: usize) -> String {
     )
 }
 
+/// What [`read_in_the_result`] produced: the released text where there is one, and what the check
+/// it made cost, so the turn reports a check made here as it reports one `read_output` makes.
+pub(crate) struct ReadInTheResult {
+    /// The slot's bytes at the label `read_output` gives them, or `None` where the slot stays
+    /// quarantined.
+    pub text: Option<Labelled<String>>,
+    /// What the check spent. Zero where none was made.
+    pub usage: Usage,
+    /// How long the turn waited on the check. `None` where none was made.
+    pub waited: Option<crate::timing::Interval>,
+}
+
 /// What a run that asked to read what it printed is handed in the same result, where the answer
-/// `read_output` would get is already given: bypassing permissions with no screening asked for.
+/// `read_output` would get does not need a person: bypassing permissions with no screening asked
+/// for, or a check whose word is `safe` where screening was asked for.
 ///
-/// The release is `read_output`'s own, down to the confirmer the mode answers and the trail entry
-/// crediting the mode, so the label and the record cannot differ between the two routes and only
-/// the round between them is gone. Only for that mode: in any other this would put a prompt or a
-/// check to somebody about output nobody called `read_output` for. `None` where the release was
-/// refused, which leaves the slot quarantined, as it would have been had the planner not asked.
-pub(crate) fn read_in_the_result<S: Sink, C: Confirmer>(
+/// The release is `read_output`'s own, down to the check that precedes it, the confirmer the mode
+/// answers and the trail entry crediting whoever released, so the label and the record cannot
+/// differ between the two routes and only the round between them is gone. The planner's flag
+/// decides whether this is called, and it was set before the output existed.
+///
+/// Where screening was asked for, any word other than `safe` leaves the slot quarantined and
+/// draws no prompt: the planner has not seen the size or the shape of what was printed, and the
+/// person is asked when it calls `read_output`, as it would have been without the flag. The same
+/// holds where the check could not be made. `text` is `None` for each of those, and for a release
+/// the kernel or the confirmer refused, which leaves the slot as it would have been had the
+/// planner not asked.
+///
+/// The only branch on the check is on its word, the one `release_output` already makes. Nothing
+/// here reads a byte of the output or the reason the check wrote.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy, confirmer, chat and reporter are `&mut` borrows of the turn while the rest is read-only state of one read, so bundling them would split one borrow across two values"
+)]
+pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     slots: &SlotStore,
     mode: crate::PermissionMode,
     auto_vetting: bool,
     confirmer: &mut C,
+    chat: &mut Chat<'_>,
+    reporter: &mut R,
     slot: &SlotId,
-) -> Option<Labelled<String>> {
-    release_output(
-        policy,
-        slots,
-        mode,
-        auto_vetting,
-        confirmer,
-        slot,
-        Verdict::Inconclusive("the check was not made"),
-        (None, None),
-        0,
-    )
-    .ok()
-    .map(|(text, _, _)| text)
+) -> ReadInTheResult {
+    let nothing = |text| ReadInTheResult {
+        text,
+        usage: Usage::default(),
+        waited: None,
+    };
+    if !mode.checks_before_promoting(auto_vetting) {
+        return nothing(
+            release_output(
+                policy,
+                slots,
+                mode,
+                auto_vetting,
+                confirmer,
+                slot,
+                Verdict::Inconclusive("the check was not made"),
+                (None, None),
+                0,
+            )
+            .ok()
+            .map(|(text, _, _)| text),
+        );
+    }
+
+    let Ok(spec) = policy.before_vetting(slot, None, slots) else {
+        return nothing(None);
+    };
+    let asked_at = std::time::Instant::now();
+    let checked = crate::vet::run(policy, chat, reporter, &spec);
+    let waited = Some(crate::timing::Interval::since(asked_at));
+    let usage = checked.usage;
+    // Before `release_output`, which would put anything but `safe` to the person: nobody is
+    // shown this output here.
+    let text = if checked.verdict.is_safe() {
+        release_output(
+            policy,
+            slots,
+            mode,
+            auto_vetting,
+            confirmer,
+            slot,
+            checked.verdict,
+            (None, None),
+            spec.lines(),
+        )
+        .ok()
+        .map(|(text, _, _)| text)
+    } else {
+        None
+    };
+    ReadInTheResult {
+        text,
+        usage,
+        waited,
+    }
 }
 
 /// What a check said about content, released for the screen an approval is read on, with the label
@@ -10781,10 +10857,11 @@ fn job_output<S: Sink, R: Reporter>(
             // bound, and the difference is the whole of what a caller learns from silence.
             let began = std::time::Instant::now();
             if until_exit {
-                job.running.wait_for_exit(bound, tools.cancel, &stops);
+                job.running
+                    .wait_for_exit(bound, tools.cancel, &stops, &tools.arrival);
             } else {
                 job.running
-                    .wait_for_more(&job.seen, bound, tools.cancel, &stops);
+                    .wait_for_more(&job.seen, bound, tools.cancel, &stops, &tools.arrival);
             }
             began.elapsed()
         });
@@ -14801,12 +14878,13 @@ mod tests {
              to wait for the job rather than asking it again and again. Without it a wait costs \
              a whole turn per look: you call, are told nothing has happened, and answer only to \
              be asked the same question. A wait ends at the job's next output, so a job that \
-             prints a line every second ends it every second. When what you need is the end of \
-             the job and not its output as it arrives, add until_exit: true, which waits for the \
-             job to end or for wait_seconds to run out and returns what it printed since your \
-             last look in one answer. It is still a wait inside this turn, so it cannot tell you \
-             about anything that happens after the turn ends, and the account of the job's start \
-             says whether it is killed then or kept."
+             prints a line every second ends it every second. A line the user types while you \
+             wait also ends the wait, with the job still running, so you can answer it. When \
+             what you need is the end of the job and not its output as it arrives, add \
+             until_exit: true, which waits for the job to end or for wait_seconds to run out and \
+             returns what it printed since your last look in one answer. It is still a wait \
+             inside this turn, so it cannot tell you about anything that happens after the turn \
+             ends, and the account of the job's start says whether it is killed then or kept."
         );
         let run = description_of(&everything, "run");
         assert!(
@@ -16577,6 +16655,10 @@ mod tests {
             "wait_seconds does not say a long wait is free when the thing happens early: {said}"
         );
         assert!(
+            said.contains("the user types a line"),
+            "wait_seconds does not say a typed line ends the wait: {said}"
+        );
+        assert!(
             tool.function.description.contains("wait_seconds"),
             "job_output's description never names the argument: {}",
             tool.function.description
@@ -16821,8 +16903,8 @@ mod tests {
             .as_str()
             .expect("wait_seconds is described");
         assert!(
-            wait.contains("until_exit"),
-            "wait_seconds says output ends it and not that until_exit changes that: {wait}"
+            wait.contains("until_exit") && wait.contains("user types a line"),
+            "wait_seconds says output ends it, that until_exit changes that and that a line the user types ends it: {wait}"
         );
     }
 
@@ -23805,6 +23887,7 @@ mod tests {
                 reads: &mut reads,
                 chat: Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin()),
                 cancel: &cancel,
+                arrival: crate::interjections::Arrival::never(),
                 scheduling: Scheduling::ArrangingALook,
                 arming: Arming::Allowed { free: 1 },
                 running: Running::Offered,

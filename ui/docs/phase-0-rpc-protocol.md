@@ -1079,7 +1079,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `mcp-server.request` | `{ request, alias, transport, command, url, program, variables, reads, directory, digest, requestedBy, changed, fetching }` | use an MCP server (SERVERS-4) |
 | `mcp.started` | `{ servers, confined, notes }` | what started, and a line for each request that did not |
 | `mcp-tools.request` | `{ request, alias, tools, refused, changed, vetting }` | offer a server's tools to the model (SERVERS-8) |
-| `mcp-call.request` | `{ request, alias, tool, name, arguments, description, mayStand }` | call a server's tool (SERVERS-7) |
+| `mcp-call.request` | `{ request, alias, tool, name, arguments, description, mayStand, askedForPrivateArguments, also }` | call a server's tool (SERVERS-7) |
 | `mcp-move.request` | `{ request, alias, declared, destination, authority, mayRecord }` | a remote server's reply pointed elsewhere (SERVERS-11) |
 | `host.request` | `{ request, hosts }` | let programs reach hosts `sandbox.network.allowedHosts` does not list (SANDBOX-24) |
 | `ask.request` | `{ request, prompts }` | user questions |
@@ -1697,8 +1697,11 @@ Still open:
   `arguments` (one line each) and `description`, which is the server's own text. `refused`
   counts the tools that could not be offered. `vetting` is shaped as on `vet.request`.
 - `mcp-call.request` carries `arguments` as `{ name, value }` with the value as JSON, and
-  `mayStand`, which says whether the third answer can be recorded. A `remember: true` sent
-  where it is false is read as a yes to the one call.
+  `mayStand`, which says whether the third answer can be recorded, and `askedForPrivateArguments`,
+  which says the call is asked because its arguments are private, so `mayStand` is false and the
+  card says no stored answer covers it. `also` lists, as `arguments` does, each later call of the
+  same round to the same tool that the answer covers, and is empty where the call is asked on its
+  own. A `remember: true` sent where `mayStand` is false is read as a yes to the one call.
 - `session.new`, `session.open`, `session.fork` and `permissions.list` carry `settingsRules`:
   `{ deny, ask, allow, unreadable, proposed, directories, filesystem, filesystemIgnored }`. The first three are the rules in
   force, as the files spelled them, and `shownDeny`, `shownAsk` and `shownAllow` are the same

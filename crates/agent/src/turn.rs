@@ -119,11 +119,13 @@ const TOOL_BUDGET_SPENT: &str = "(from the system, not the user)";
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReadOutputIs {
     /// Bypassing with no screening asked for, in a turn offered `read_output`: the answer is yes, with
-    /// nobody asked and no check made.
+    /// nobody asked and no check made. A `read` on a run's result is answered in that result.
     Unasked,
     /// Screening asked for, in a turn offered `read_output`: a check's word answers whenever it is
     /// `safe`, and any other word keeps the output back where nobody is asked or puts it to the person
-    /// where somebody is. Said the same in every mode, so it does not name one.
+    /// where somebody is. Said the same in every mode, so it does not name one. A `read` on a run's
+    /// result makes the check there and releases on a `safe` word; any other word leaves the output
+    /// behind its reference with nobody asked.
     ByACheck,
     /// Everything else, and any turn not offered `read_output`: the advice is that a person is shown
     /// the output and decides.
@@ -588,6 +590,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             reads: &mut reads,
             chat: crate::processor::Chat::new(config, egress, task.account_session()),
             cancel: &cancel,
+            arrival: crate::interjections::Arrival::never(),
             scheduling: tools::Scheduling::NoLaterLook,
             arming: crate::watch::Arming::Unavailable,
             running: tools::Running::Offered,
@@ -3137,15 +3140,45 @@ where
     let mut subscription = premium_key.map(crate::shared::Spending::new);
 
     // The lists of the servers this session reached, settled for this turn (SERVERS-8).
+    //
+    // The questions this puts to the person are waiting on them, so they are timed and charged
+    // to the stalled figure the way a plan run charges the same wait (MANIFEST-15). A run holding
+    // no server puts none and adds nothing. A delegate holding a server is offered a list already
+    // settled, so it puts none either, and its figure is the usage alone.
+    let mut waiting = crate::confirm::Timed::new(confirmer);
     let mcp = setup::settle_servers(
         inputs,
         addressed.as_ref(),
         policy,
-        confirmer,
+        &mut waiting,
         reporter,
         &mut subscription,
         &mut notices,
     );
+    let settled_wait = waiting.waited();
+    // What checking the servers' lists spent is this turn's, since this turn is what asked.
+    let mut account = crate::outcome::Spent {
+        context_tokens: conversation.last_request_tokens(),
+        ..Default::default()
+    };
+    if let Some((_, usage)) = &mcp {
+        account.add_usage(*usage);
+    }
+    // Reported before the rounds begin, so a turn stopped or failed at the question, before any
+    // round closes, still carries the wait in its record.
+    let mut spent = Elapsed {
+        stalled: settled_wait,
+        ..Elapsed::default()
+    };
+    spent.wall = began.elapsed();
+    // Only a turn that waited on the person or checked a server's list has anything to report
+    // here. The condition is a duration and whether a list was held, never a server's bytes.
+    if !settled_wait.is_zero() || mcp.is_some() {
+        reporter.spent(crate::outcome::Spent {
+            timing: spent.finish(),
+            ..account
+        });
+    }
     if let Some((offer, _)) = &mcp {
         offered.extend(offer.functions());
         if offer.is_deferred() {
@@ -3218,17 +3251,7 @@ where
         // conversation growing inside a single long turn: fifty short turns would fill the context
         // with nothing watching.
         //
-        // What checking the servers' lists spent is this turn's, since this turn is what asked.
-        account: {
-            let mut account = crate::outcome::Spent {
-                context_tokens: conversation.last_request_tokens(),
-                ..Default::default()
-            };
-            if let Some((_, usage)) = &mcp {
-                account.add_usage(*usage);
-            }
-            account
-        },
+        account,
         // What the indicator last said the turn had written, which the next round counts on from.
         shown_before: 0,
         // Cleared only by a failure. A summary that could not be made once will not be made on the
@@ -3265,7 +3288,8 @@ where
         // the change that gives a session somewhere to keep one.
         run_directory: workspace.root().to_path_buf(),
         confined_failures: tools::ConfinedFailures::default(),
-        spent: Elapsed::default(),
+        // Seeded with the time the lists' questions kept the turn waiting on the person.
+        spent,
         told_mode: started_in,
         told_sandbox: sandbox_at_start,
         turn_model,
@@ -3738,6 +3762,21 @@ where
         // Reads that already ran beside each other, by the call they answer (TURN-10).
         let mut ahead: Vec<Option<tools::Ahead>> = completion.calls.iter().map(|_| None).collect();
         let mut examined = 0;
+        // The round's calls to servers' tools, so one question about one call can list the later
+        // calls to the same tool and cover them (SERVERS-7).
+        if let Some((offer, _)) = &state.mcp {
+            offer.begin_round(
+                completion
+                    .calls
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(at, call)| {
+                        call.arguments().ok().map(|arguments| {
+                            (at, tools::strip_namespace(&call.function.name), arguments)
+                        })
+                    }),
+            );
+        }
         for (index, call) in completion.calls.iter().enumerate() {
             // Checked per call, because a tool may write. Stopping here means the remaining
             // calls in this round never run.
@@ -3833,6 +3872,9 @@ where
             let read = ahead[index]
                 .take()
                 .and_then(|read| read.if_still_current(policy));
+            if let Some((offer, _)) = &state.mcp {
+                offer.dispatching(Some(index));
+            }
             let mut output = match refused {
                 Some(refused) => refused,
                 None => tools::dispatch_with(
@@ -3845,6 +3887,7 @@ where
                         reads,
                         &request.messages,
                         &typed,
+                        &arrival,
                     ),
                     &mut asking,
                     reporter,
@@ -3852,6 +3895,9 @@ where
                     read,
                 ),
             };
+            if let Some((offer, _)) = &state.mcp {
+                offer.dispatching(None);
+            }
             policy.call_ended(&call.function.name);
             let took = ran_at.elapsed();
             let cancellation = output.cancelled;
@@ -4170,30 +4216,50 @@ where
                 let read_from = match &presented {
                     Presentation::Quarantined(reference)
                         if output.read_asked
-                            && read_output_is() == ReadOutputIs::Unasked
+                            && read_output_is() != ReadOutputIs::Asked
                             && reference.bytes.is_some_and(|bytes| bytes <= output_cap) =>
                     {
-                        tools::read_in_the_result(
+                        let mut chat =
+                            crate::processor::Chat::new(config, egress, task.account_session())
+                                .spending(state.subscription.as_mut())
+                                .on(state.turn_model.as_deref())
+                                .stoppable_by(cancel);
+                        let released = tools::read_in_the_result(
                             policy,
                             conversation.quarantine(),
                             task.permission_mode.get(),
                             task.auto_vetting,
                             confirmer,
+                            &mut chat,
+                            reporter,
                             &reference.slot,
-                        )
-                        .map(|released| {
-                            policy
-                                .present(
-                                    "tool_result",
-                                    reference.slot.clone(),
-                                    &origin,
-                                    &released,
-                                    conversation.quarantine(),
-                                )
-                                .map(|shown| (shown, reference.slot.clone()))
-                        })
-                        .transpose()
-                        .map_err(|d| TurnError::Precommit(d.to_string()))?
+                        );
+                        // A check made here is a model call like the one read_output makes, so
+                        // its tokens and the time spent waiting on it are the turn's.
+                        if let Some(interval) = released.waited {
+                            reporter.inference_interval(interval);
+                            state.spent.inference += interval.duration();
+                        }
+                        state.account.add_usage(released.usage);
+                        reporter.spent(crate::outcome::Spent {
+                            timing: state.spent.finish(),
+                            ..state.account
+                        });
+                        released
+                            .text
+                            .map(|released| {
+                                policy
+                                    .present(
+                                        "tool_result",
+                                        reference.slot.clone(),
+                                        &origin,
+                                        &released,
+                                        conversation.quarantine(),
+                                    )
+                                    .map(|shown| (shown, reference.slot.clone()))
+                            })
+                            .transpose()
+                            .map_err(|d| TurnError::Precommit(d.to_string()))?
                     }
                     _ => None,
                 };

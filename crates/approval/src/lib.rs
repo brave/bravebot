@@ -626,6 +626,12 @@ pub struct Call<'a> {
     /// Whether the server's declaration says every call to it is asked about, so `call_lines`
     /// says no answer to this one lasts (SERVERS-21).
     pub asked_every_call: bool,
+    /// Whether the call is asked because its arguments are private, so `call_lines` says no
+    /// stored answer covers it (SERVERS-7). Ignored where `asked_every_call` is set.
+    pub asked_for_private_arguments: bool,
+    /// The arguments of the later calls of the same round to the same tool that the answer also
+    /// covers (SERVERS-7). Empty where the call is asked on its own.
+    pub also: &'a [Vec<(String, String)>],
 }
 
 /// The lines a call to an MCP server's tool is read before approving.
@@ -641,6 +647,23 @@ pub fn call_lines(call: &Call<'_>) -> Vec<String> {
             }
         }
     }
+    if !call.also.is_empty() {
+        lines.push(t!(mcp_call_also, count = call.also.len()).to_string());
+        for arguments in call.also {
+            match arguments.is_empty() {
+                true => lines.push(format!("  {}", t!(mcp_call_no_arguments))),
+                false => {
+                    for (name, value) in arguments {
+                        let shown = shown_argument(value);
+                        lines.push(format!("  {}: {}", printable(name), printable(&shown.head)));
+                        lines.extend(shown.rows.iter().map(|row| format!("    {row}")));
+                    }
+                }
+            }
+            lines.push(String::new());
+        }
+        lines.pop();
+    }
     if let Some(description) = call.description {
         lines.extend(quarantined(description));
     }
@@ -649,6 +672,8 @@ pub fn call_lines(call: &Call<'_>) -> Vec<String> {
     }
     if call.asked_every_call {
         lines.push(t!(mcp_call_asked_every_time).to_string());
+    } else if call.asked_for_private_arguments {
+        lines.push(t!(mcp_call_asked_for_private_arguments).to_string());
     }
     lines
 }
@@ -954,6 +979,8 @@ mod tests {
                 description: None,
                 offers_remember,
                 asked_every_call: false,
+                asked_for_private_arguments: false,
+                also: &[],
             })
             .join("\n")
         };
@@ -990,6 +1017,8 @@ mod tests {
             description: None,
             offers_remember: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: &[],
         });
         assert_eq!(
             &drawn[..8],
@@ -1008,6 +1037,72 @@ mod tests {
         assert!(drawn[8].contains("asked about"), "{drawn:?}");
     }
 
+    /// SERVERS-7: a call asked for private arguments says so under the call, and the declaration's
+    /// reason wins where both hold. The regression it rejects is a line builder that ignores the
+    /// reason, so the plain interface and the editor draw a call with no reason at all.
+    #[test]
+    fn a_call_asked_for_private_arguments_says_so_and_a_declaration_wins() {
+        let lines = |every, private| {
+            call_lines(&Call {
+                name: "weather:get_forecast",
+                arguments: &[],
+                description: None,
+                offers_remember: false,
+                asked_every_call: every,
+                asked_for_private_arguments: private,
+                also: &[],
+            })
+            .join("\n")
+        };
+        assert!(lines(false, true).contains("something read earlier was private"));
+        assert!(!lines(false, false).contains("something read earlier was private"));
+        let both = lines(true, true);
+        assert!(
+            both.contains("Every call to this server is asked about"),
+            "{both}"
+        );
+        assert!(
+            !both.contains("something read earlier was private"),
+            "{both}"
+        );
+    }
+
+    /// SERVERS-7: a call whose answer also covers later calls of the round lists each of them
+    /// under the first, with the count, and says nothing where there are none. The regression it
+    /// rejects is a question that carries the later calls to the front end and draws only the
+    /// first, so one yes approves calls a person never read.
+    #[test]
+    fn a_call_lists_the_later_calls_its_answer_also_covers() {
+        let first = [("city".to_string(), "\"Paris\"".to_string())];
+        let also = [
+            vec![("city".to_string(), "\"Rome\"".to_string())],
+            vec![("city".to_string(), "\"Oslo\"".to_string())],
+        ];
+        let lines = |also: &[Vec<(String, String)>]| {
+            call_lines(&Call {
+                name: "weather:get_forecast",
+                arguments: &first,
+                description: None,
+                offers_remember: false,
+                asked_every_call: false,
+                asked_for_private_arguments: false,
+                also,
+            })
+        };
+        assert_eq!(
+            lines(&also),
+            [
+                "weather:get_forecast (MCP)",
+                "  city: \"Paris\"",
+                "Your answer also covers these 2 later calls to the same tool in this round:",
+                "  city: \"Rome\"",
+                "",
+                "  city: \"Oslo\"",
+            ]
+        );
+        assert!(!lines(&[]).join("\n").contains("also covers"));
+    }
+
     /// ROUTE-11, PROMPT-13: the lines of a call write out the characters the confirmation window
     /// marks that the list of characters that draw as nothing does not hold, so an editor and
     /// every front end that draws these lines show a no-break space, a private use character and a
@@ -1023,6 +1118,8 @@ mod tests {
             description: None,
             offers_remember: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: &[],
         });
         assert_eq!(
             &drawn[1..6],

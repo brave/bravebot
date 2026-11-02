@@ -417,7 +417,10 @@ Every turn's wall clock is written down split four ways: what was spent waiting 
 was spent running tools, what was spent waiting for the person to answer a prompt, and what is left
 over. The four are a partition rather than four independent measures, so the parts account for the
 whole and the remainder is meaningful. An approval prompt is drawn from inside a tool call, so what
-was spent waiting for a person is taken off the tool figure rather than counted in both.
+was spent waiting for a person is taken off the tool figure rather than counted in both. The
+question about a server's tool list ([SERVERS-8](mcp-servers.md#SERVERS-8)) is put before any tool
+runs, and the time it waits is charged to the same figure and reported as soon as the question is
+settled, so a turn stopped at it keeps that time.
 
 Delegate inference contributes only where requests overlap the parent's actual collection waits,
 with overlapping requests counted once (see [delegation.md](delegation.md)). The resulting
@@ -456,6 +459,10 @@ harness's own overhead.
 `verified-by: bravebot_agent::timing::the_remainder_is_what_nothing_else_accounts_for`
 `verified-by: bravebot_agent::timing::parts_exceeding_the_whole_do_not_wrap`
 `verified-by: bravebot_agent::turn::time_spent_waiting_for_an_approval_is_not_charged_to_the_tool`
+`verified-by: bravebot_agent::mcp::the_time_taken_to_answer_the_list_is_charged_to_the_person`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_keeps_the_time_it_waited`
+`verified-by: bravebot_agent::mcp::a_turn_with_no_server_charges_nothing_to_the_person`
+`verified-by: bravebot_agent::manifest_server_calls::the_time_taken_to_answer_a_list_before_a_plan_is_charged_to_the_person`
 
 <a id="SESSION-13"></a>
 ### SESSION-13: a session that changes directory is recorded where it moved to

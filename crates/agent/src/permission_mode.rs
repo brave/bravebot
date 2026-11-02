@@ -1367,6 +1367,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         for mode in [
             PermissionMode::Bypass,
@@ -2250,6 +2252,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let an_exposure = crate::confirm::ExposureRequest {
             path: ".env".to_string(),

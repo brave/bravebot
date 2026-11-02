@@ -25972,6 +25972,9 @@ struct AskedAboutRuns {
     /// Done once while the first run is being asked about, for a change to the tree that an
     /// approval which waits for hours leaves time for.
     while_asked: Option<Box<dyn FnOnce() + Send>>,
+    /// The lines a person types into the turn, for a test whose subject is what a line does to a
+    /// wait. None means nobody is typing.
+    typing: Option<bravebot_agent::interjections::Interjections>,
 }
 
 impl AskedAboutRuns {
@@ -25979,6 +25982,7 @@ impl AskedAboutRuns {
         Self {
             removing: None,
             while_asked: None,
+            typing: None,
             answer,
             answers: std::collections::VecDeque::new(),
             writes: bravebot_agent::WriteDecision::reject(),
@@ -26000,6 +26004,12 @@ impl AskedAboutRuns {
     #[cfg(unix)]
     fn doing_while_asked(mut self, act: impl FnOnce() + Send + 'static) -> Self {
         self.while_asked = Some(Box::new(act));
+        self
+    }
+
+    /// Lets the turn take lines from `buffer` at its boundaries and see them arrive.
+    fn typing_into(mut self, buffer: &bravebot_agent::interjections::Interjections) -> Self {
+        self.typing = Some(buffer.clone());
         self
     }
 
@@ -26149,9 +26159,16 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         Vec::new()
     }
 
-    /// Nobody is typing: no interface, and no queue to type into.
+    /// Nobody is typing unless a test gave a buffer: then the turn takes its lines at a boundary.
     fn interjection(&mut self) -> Option<String> {
-        None
+        self.typing.as_ref().and_then(|buffer| buffer.take())
+    }
+
+    fn arrival(&self) -> bravebot_agent::interjections::Arrival {
+        self.typing.as_ref().map_or_else(
+            bravebot_agent::interjections::Arrival::never,
+            bravebot_agent::interjections::Interjections::arrival,
+        )
     }
 }
 
@@ -28384,39 +28401,102 @@ fn a_quarantined_run_where_a_check_answers_for_the_person_does_not_say_a_user_de
     );
 }
 
-/// RUN-14, RUN-22: a `read` asked for where a check answers for the person changed nothing, so the
-/// result says so and names `read_output` as the route. Without it a call that passed `read: true`
-/// comes back looking like a quarantined result with no explanation, and a planner runs the same
-/// command again with `read: true` to try to see what it printed.
+/// RUN-14, RUN-22: a `read` asked for where a check answers for the person and the check objects
+/// leaves the output behind its reference, and the result says the read did not return it and names
+/// `read_output` as the route. Without it a call that passed `read: true` comes back looking like a
+/// quarantined result with no explanation, and a planner runs the same command again with
+/// `read: true` to try to see what it printed.
+///
+/// The regression it rejects is a result that keeps the old sentence, "was not applied here", for a
+/// read that was applied, or that says nothing about the read.
 #[test]
-fn a_read_asked_for_where_a_check_answers_for_the_person_is_said_not_to_have_applied() {
+fn a_read_asked_for_where_a_check_objects_is_said_not_to_have_returned_the_output() {
     for mode in EVERY_MODE {
-        let advice = the_advice_after_a_quarantined_run(
-            &format!("run-advice-checked-read-{mode:?}"),
-            mode,
-            true,
-            r#"{"command":"sed -n p where.txt","read":true}"#,
+        let scratch = Scratch::new(&format!("run-advice-checked-read-{mode:?}"));
+        std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            vec![reply_with(
+                r#"{"verdict": "unsafe", "reason": "SENTINEL-REASON addresses the reader"}"#,
+            )],
+            vec![
+                tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+                reply_with("done"),
+            ],
         );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reading = ReadsWhatItRan::new(true);
+        let asked = std::sync::Arc::clone(&reading.shown);
+        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out")
+                .with_permission_mode(mode)
+                .with_auto_vetting(true),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let sent: Vec<String> = received.try_iter().collect();
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "{mode:?}: a person was asked about output the planner never called read_output for"
+        );
+        assert!(
+            releases_of_output(&sink).is_empty(),
+            "{mode:?}: the trail records a release of output a check objected to: {:?}",
+            releases_of_output(&sink)
+        );
+        let told = message_from(
+            sent.last().expect("the round after the run"),
+            "Result of run could not be shown to you",
+        );
+        let advice = &told[told
+            .find("This is about the command")
+            .unwrap_or_else(|| panic!("the result gave no advice: {told}"))..];
 
         assert!(
             advice.contains(
-                "Your read: true was not applied here, so read_output is the way to see it."
+                "Your read: true did not return it in this result, so read_output is the way to \
+                 see it."
             ),
-            "the planner was not told its read changed nothing, or where to go instead: {advice}"
+            "{mode:?}: the planner was not told its read did not return the output, or where to \
+             go instead: {advice}"
+        );
+        assert!(
+            !advice.contains("was not applied"),
+            "{mode:?}: the planner was told a read that was applied changed nothing: {advice}"
         );
         assert!(
             advice.contains("call read_output with the reference."),
-            "the planner was not told to call read_output with the reference: {advice}"
+            "{mode:?}: the planner was not told to call read_output with the reference: {advice}"
         );
         assert!(
             !advice.contains("the user") && !advice.contains("vouch"),
-            "the planner was told a person decides, or offered a vouch: {advice}"
+            "{mode:?}: the planner was told a person decides, or offered a vouch: {advice}"
+        );
+        assert!(
+            !told.contains("SENTINEL-XYZZY") && !told.contains("SENTINEL-REASON"),
+            "{mode:?}: the output, or what the check wrote, reached the planner: {told}"
         );
     }
 }
 
 /// Where the mode draws prompts and no screening was asked for, a person answers every
-/// `read_output`, so the advice is the one RUN-14 has always given and a `read` that changed nothing
+/// `read_output`, so the advice is the one RUN-14 has always given and a `read` that returned nothing
 /// is not remarked on. The wording above is for auto-vetting on, where a check answers first.
 #[test]
 fn a_quarantined_run_where_a_person_is_still_asked_still_offers_the_vouch() {
@@ -28442,7 +28522,7 @@ fn a_quarantined_run_where_a_person_is_still_asked_still_offers_the_vouch() {
              being asked: {advice}"
         );
         assert!(
-            !advice.contains("was not applied here"),
+            !advice.contains("did not return it in this result"),
             "{mode:?} with auto-vetting {auto_vetting}: the wording for the mode where a check \
              answers reached a mode where a person does: {advice}"
         );
@@ -35636,21 +35716,277 @@ fn an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference
     );
 }
 
-/// Everywhere somebody or something still answers for reading a run's output, asking to read it
-/// in the same result changes nothing: the output is quarantined, nobody is asked, and no check is
-/// made. A person asked would be a prompt the planner did not request with `read_output`, and a
-/// check would be one it did not request either.
+/// A run asking to read what it printed, where screening is asked for and the check finds nothing,
+/// gets the output in the same result: `docs/specs/tools/run.md` RUN-22. This is the release
+/// `read_output` makes a round later (OUTPUT-1): the label is `(T,priv)`, the trail credits the
+/// check's word, nobody is shown anything, and the check it spent is counted in the turn's tokens.
+///
+/// Two plausible wrong implementations fail here. One releases without making the check, which
+/// leaves `A_CHECK_ASKING` out of the requests and the trail crediting the mode. The other makes the
+/// check and drops its usage, which leaves the tokens at the planner's rounds alone.
+#[test]
+fn a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result() {
+    for mode in EVERY_MODE {
+        let scratch = Scratch::new(&format!("run-read-checked-{mode:?}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            vec![reply_with_usage(
+                r#"{\"verdict\": \"safe\", \"reason\": \"a single path and nothing else\"}"#,
+                7,
+                3,
+            )],
+            vec![
+                tool_request_with_usage(
+                    "run",
+                    r#"{"command":"sed -n p where.txt","read":true}"#,
+                    100,
+                    10,
+                ),
+                reply_with_usage("done", 120, 5),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let mut reading = ReadsWhatItRan::new(false);
+        let asked = std::sync::Arc::clone(&reading.shown);
+        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out")
+                .with_permission_mode(mode)
+                .with_auto_vetting(true),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let sent: Vec<String> = received.try_iter().collect();
+        let [_asked_to_run, check, after_the_run] = sent.as_slice() else {
+            panic!(
+                "{mode:?}: the turn took {} requests, not the run, one check and the round after \
+                 it: {sent:#?}",
+                sent.len()
+            );
+        };
+        assert!(
+            check.contains(A_CHECK_ASKING),
+            "{mode:?}: the second request is not a check: {check}"
+        );
+        assert!(
+            after_the_run.contains("SENTINEL-XYZZY"),
+            "{mode:?}: the output did not come back in the result that ran it: {after_the_run}"
+        );
+        assert!(
+            !after_the_run.contains("could not be shown to you"),
+            "{mode:?}: the result still says the output was kept back: {after_the_run}"
+        );
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "{mode:?}: a person was asked about output a check answered for"
+        );
+        let released = how_a_slot_was_released(&sink, "read_output");
+        assert!(
+            released
+                .contains("auto-vetting is on and the check found nothing, so nobody was asked"),
+            "{mode:?}: the trail does not credit the check's word: {released}"
+        );
+        assert!(
+            released.contains("so the planner is given (T,priv)"),
+            "{mode:?}: the output reached the planner at a label read_output would not give it: \
+             {released}"
+        );
+        assert_eq!(
+            reporter.checks.len(),
+            1,
+            "{mode:?}: the check was not announced exactly once"
+        );
+        assert_eq!(
+            reporter.spent.last().expect("a spend was reported").tokens,
+            110 + 10 + 125,
+            "{mode:?}: the check's tokens are not in the turn's total"
+        );
+        // The time spent waiting on the check (turn.rs, `released.waited` charged to
+        // `state.spent.inference` and reported through `inference_interval`) is not asserted:
+        // `RecordingReporter` does not record intervals, and the check double answers at once, so
+        // the wait is too short to tell from the planner's own rounds without a timing flake.
+    }
+}
+
+/// Where screening is asked for and the check cannot be made, the read gives nothing back: the
+/// output stays quarantined, nobody is asked, and nothing is released. The person is asked only if
+/// the planner calls `read_output`, as it would have been without the flag.
+///
+/// A wrong implementation releases on any word but a refusal, or asks the person on a word that is
+/// not `safe`, which a counted prompt or a release in the trail shows.
+#[test]
+fn a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined() {
+    for mode in EVERY_MODE {
+        let scratch = Scratch::new(&format!("run-read-lost-check-{mode:?}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+        let (endpoint, received) = serve_sequence_losing_every_check(vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reading = ReadsWhatItRan::new(true);
+        let asked = std::sync::Arc::clone(&reading.shown);
+        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out")
+                .with_permission_mode(mode)
+                .with_auto_vetting(true),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let sent: Vec<String> = received.try_iter().collect();
+        let after_the_run = sent.last().expect("the round after the run");
+        assert!(
+            !after_the_run.contains("SENTINEL-XYZZY"),
+            "{mode:?}: output reached the planner though no check cleared it: {after_the_run}"
+        );
+        assert!(
+            after_the_run.contains("could not be shown to you"),
+            "{mode:?}: the result does not say the output is behind a reference: {after_the_run}"
+        );
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "{mode:?}: a person was asked about output the planner never called read_output for"
+        );
+        assert!(
+            releases_of_output(&sink).is_empty(),
+            "{mode:?}: the trail records a release: {:?}",
+            releases_of_output(&sink)
+        );
+    }
+}
+
+/// Where screening is asked for and the output is longer than the cap, the size is tested before
+/// the check: no model call is spent on output that cannot be returned, nothing is released and
+/// nobody is asked, and the result says where the rest is.
+///
+/// A wrong implementation makes the check first and tests the size after. The check double answers
+/// `safe`, so that implementation shows as a request carrying `A_CHECK_ASKING`, and one that also
+/// released regardless of size shows as the sentinel in the next round or a release in the trail.
+#[test]
+fn a_screened_run_that_asks_to_read_more_than_one_result_may_hold_makes_no_check() {
+    for mode in EVERY_MODE {
+        let scratch = Scratch::new(&format!("run-read-checked-capped-{mode:?}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::write(
+            scratch.path.join("where.txt"),
+            format!("SENTINEL-XYZZY {}\n", "x".repeat(200)),
+        )
+        .unwrap();
+
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            vec![reply_with(
+                r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+            )],
+            vec![
+                tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reading = ReadsWhatItRan::new(true);
+        let asked = std::sync::Arc::clone(&reading.shown);
+        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out")
+                .with_permission_mode(mode)
+                .with_auto_vetting(true)
+                .with_output_cap(Some(64)),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+
+        let sent: Vec<String> = received.try_iter().collect();
+        assert!(
+            !sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+            "{mode:?}: a check was made on output too long to be returned"
+        );
+        let after_the_run = sent.last().expect("the round after the run");
+        assert!(
+            !after_the_run.contains("SENTINEL-XYZZY"),
+            "{mode:?}: output past the cap came back in the result: {after_the_run}"
+        );
+        let result = tool_results(after_the_run);
+        assert!(
+            result.contains("longer than a run's result may hold")
+                && result.contains("stdin_ref set to the reference"),
+            "{mode:?}: the result does not say the output was too long and where the rest is: \
+             {result}"
+        );
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "{mode:?}: somebody was asked about output the planner never called read_output for"
+        );
+        assert!(
+            releases_of_output(&sink).is_empty(),
+            "{mode:?}: the trail records a release past the cap: {:?}",
+            releases_of_output(&sink)
+        );
+    }
+}
+
+/// Everywhere a person still answers for reading a run's output, asking to read it in the same
+/// result changes nothing: the output is quarantined, nobody is asked, and no check is made. A
+/// person asked would be a prompt the planner did not request with `read_output`.
 ///
 /// The double would let every read through, so a release made in any of these modes shows up as
-/// the output reaching the planner rather than being refused on the way.
+/// the output reaching the planner rather than being refused on the way. Where screening is asked
+/// for, a check's word answers instead, which the tests below pin.
 #[test]
-fn asking_to_read_a_runs_output_changes_nothing_where_anybody_still_answers_for_it() {
+fn asking_to_read_a_runs_output_changes_nothing_where_a_person_still_answers_for_it() {
     for (mode, auto_vetting) in [
         (bravebot_agent::PermissionMode::Ask, false),
         (bravebot_agent::PermissionMode::AcceptEdits, false),
         (bravebot_agent::PermissionMode::Plan, false),
-        (bravebot_agent::PermissionMode::Ask, true),
-        (bravebot_agent::PermissionMode::Bypass, true),
     ] {
         let scratch = Scratch::new("run-read-elsewhere");
         let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -56146,6 +56482,221 @@ fn a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_pr
     assert!(
         after.contains("tick-"),
         "what the job printed during the wait was not handed over: {after}"
+    );
+}
+
+/// RUN-17, INPUT-10, through the whole path: a line typed while the planner waits in `job_output`
+/// for a job that is still running ends the wait within a moment, the job keeps running, the
+/// answer says how long the wait lasted and that the job is still running, and the planner's next
+/// request holds the line.
+///
+/// The job sleeps for thirty seconds and the wait is allowed six hundred. Rejects a wait that
+/// ignores the queue (the next request would arrive after thirty seconds or never, and the elapsed
+/// time below would show it), a wait that kills the job or stops the turn (the answer would not say
+/// it is still running), and a turn that ends the wait but does not take the line at the boundary
+/// (the request would not hold it).
+#[test]
+fn a_line_typed_during_a_job_output_wait_ends_it_and_reaches_the_planner_in_the_next_request() {
+    let scratch = Scratch::new("background-wait-line");
+
+    let quiet = scratch.path.join("quiet");
+    std::fs::write(&quiet, "#!/bin/sh\nsleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&quiet, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./quiet","background":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":600,"until_exit":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let buffer = bravebot_agent::interjections::Interjections::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always())
+        .typing_into(&buffer);
+    let line = "which step is done?";
+
+    let (outcome, third, waited, _received) = thread::scope(|scope| {
+        let typed = buffer.clone();
+        let typist = scope.spawn(move || {
+            // The second request is the one the planner answers with the wait, so once it has gone
+            // out the wait begins within a moment, and a line typed after a short pause is typed
+            // during it.
+            let _ = received
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .expect("the first request never arrived");
+            let _ = received
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .expect("the second request never arrived");
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let typed_at = std::time::Instant::now();
+            assert!(typed.push(line.to_string()));
+            let third = received.recv_timeout(std::time::Duration::from_secs(20));
+            (third, typed_at.elapsed(), received)
+        });
+        let outcome = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("start it and wait for it"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome;
+        let (third, waited, received) = typist.join().expect("the typist");
+        (outcome, third, waited, received)
+    });
+
+    outcome.expect("the turn runs");
+    let third = third.expect("the planner was not asked again while the job was still running");
+    assert!(
+        waited < std::time::Duration::from_secs(10),
+        "the line waited {waited:?} for the wait to end"
+    );
+    assert!(
+        third.contains(line),
+        "the line did not reach the planner in the request after the wait: {third}"
+    );
+    assert!(
+        third.contains("It is still running"),
+        "the answer does not say the job is still running: {third}"
+    );
+    assert!(
+        third.contains("This look waited "),
+        "the answer does not say how long the wait lasted: {third}"
+    );
+    assert!(
+        buffer.drain().is_empty(),
+        "the line was left in the queue as well as sent"
+    );
+}
+
+/// INPUT-10, RUN-17: a line typed while a delegate waits in `job_output` does not end the
+/// delegate's wait. A delegate takes no line, so the wait it is in would come back with nothing
+/// for it to do with the line, and the turn on the screen is the one the line is aimed at.
+///
+/// The delegate waits four seconds for a job with thirty to run, and a line is pushed about a
+/// second into it. Rejects handing every task the turn's arrival handle (the delegate's look would
+/// say it waited one or two seconds). The line is not asserted to reach any planner: the parent
+/// takes it at its own boundary, which is the other test's subject.
+#[test]
+fn a_line_typed_during_a_delegates_job_output_wait_does_not_end_it() {
+    let scratch = Scratch::new("background-wait-delegate-line");
+
+    let quiet = scratch.path.join("quiet");
+    std::fs::write(&quiet, "#!/bin/sh\nsleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&quiet, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PARENT-HANDS-OFF-THE-WAIT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"DELEGATE-WAITS-FOR-A-JOB"}"#,
+                ),
+                reply_with("waiting on the delegate"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DELEGATE-WAITS-FOR-A-JOB",
+            vec![
+                tool_request("run", r#"{"command":"./quiet","background":true}"#),
+                tool_request(
+                    "job_output",
+                    r#"{"job":"job:1","wait_seconds":4,"until_exit":true}"#,
+                ),
+                reply_with("waited"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let buffer = bravebot_agent::interjections::Interjections::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always())
+        .typing_into(&buffer);
+
+    let (outcome, seen, received) = thread::scope(|scope| {
+        let typed = buffer.clone();
+        let typist = scope.spawn(move || {
+            let mut seen = Vec::new();
+            // The delegate's own request that carries the run's answer names the job, and the
+            // wait it makes next begins within a moment of that request going out.
+            while let Ok(body) = received.recv_timeout(std::time::Duration::from_secs(20)) {
+                let delegates_own = !body.contains("PARENT-HANDS-OFF-THE-WAIT");
+                let named = body.contains("job:1");
+                seen.push(body);
+                if delegates_own && named {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            assert!(typed.push("which step is done?".to_string()));
+            (seen, received)
+        });
+        let outcome = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("PARENT-HANDS-OFF-THE-WAIT"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome;
+        let (seen, received) = typist.join().expect("the typist");
+        (outcome, seen, received)
+    });
+
+    outcome.expect("the turn runs");
+    let mut asked = seen;
+    asked.extend(every_request(&received));
+    let after_the_wait = asked
+        .iter()
+        .find(|body| {
+            !body.contains("PARENT-HANDS-OFF-THE-WAIT") && body.contains("This look waited ")
+        })
+        .unwrap_or_else(|| panic!("the delegate was never told how long its wait lasted"));
+    let window: u64 = after_the_wait
+        .split("This look waited ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|figure| figure.parse().ok())
+        .unwrap_or_else(|| {
+            panic!("the answer does not say which window it watched: {after_the_wait}")
+        });
+    assert!(
+        window >= 3,
+        "the delegate's wait came back after {window} seconds, ended by a line it could not take: \
+         {after_the_wait}"
     );
 }
 

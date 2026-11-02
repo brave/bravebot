@@ -1465,11 +1465,19 @@ pub struct McpCallRequest {
     pub tool: String,
     /// Each argument the planner wrote, as its name and its value in JSON.
     pub arguments: Vec<(String, String)>,
+    /// The arguments of the later calls of the same round to the same tool that this question also
+    /// covers, each as the planner wrote it (SERVERS-7). Empty where the call is asked on its own.
+    pub also: Vec<Vec<(String, String)>>,
     /// The description of the tool on the list the person vouched for.
     pub description: Option<String>,
     /// Whether answer 2 can be recorded, which it cannot where there is no state directory to
-    /// write it into, the session writes nothing, or the server is declared to ask every call.
+    /// write it into, the session writes nothing, the server is declared to ask every call, or the
+    /// call is asked because its arguments are private.
     pub may_stand: bool,
+    /// Whether the call is asked because its arguments are private, which no stored answer and no
+    /// rule covers (SERVERS-7). The prompt says so and offers no answer that lasts. False where
+    /// the server's declaration asks every call, since that reason holds for every later call.
+    pub asked_for_private_arguments: bool,
     /// Whether the server's declaration says every call is asked about (SERVERS-21). The prompt
     /// says so and offers no answer that lasts, and the permission mode that answers every other
     /// call unasked does not answer this one.
@@ -2218,8 +2226,9 @@ pub trait Confirmer {
     ///
     /// For a turn that is waiting on a model and so cannot poll between rounds. It is how a line
     /// typed during the wait ends the wait early when the reply is no more than thinking or a call
-    /// being written (INPUT-10). The answer is only about whether a line is there: reading it
-    /// changes nothing, and the line itself still comes from [`Confirmer::interjection`].
+    /// being written (INPUT-10), and it ends a `job_output` wait the same way (RUN-17). The answer
+    /// is only about whether a line is there: reading it changes nothing, and the line itself still
+    /// comes from [`Confirmer::interjection`].
     ///
     /// A confirmer nobody types into has none, which is what the default says.
     fn arrival(&self) -> crate::interjections::Arrival {

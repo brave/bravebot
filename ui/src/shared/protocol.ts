@@ -813,6 +813,10 @@ export interface McpToolsRequest {
  * One call to an MCP server's tool (SERVERS-7). `name` is `alias:tool`. Each argument's value is
  * JSON, as the model wrote it. Three answers: no, yes, and yes without asking again about this
  * tool in this project, which is `remember` on the reply and offered only where `mayStand`.
+ * `askedForPrivateArguments` says the call is asked because its arguments are private, which is
+ * why `mayStand` is false for it: no stored answer covers such a call. `also` is the arguments of
+ * each later call of the same round to the same tool that the answer covers, empty where the call
+ * is asked on its own.
  */
 export interface McpCallRequest {
   request: number
@@ -822,6 +826,8 @@ export interface McpCallRequest {
   arguments: { name: string; value: string }[]
   description: string | null
   mayStand: boolean
+  askedForPrivateArguments: boolean
+  also: { name: string; value: string }[][]
 }
 
 /**

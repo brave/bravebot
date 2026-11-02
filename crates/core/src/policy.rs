@@ -1301,6 +1301,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
     }
 
+    /// Record that a call to `tool` of `alias` was answered by the question about an earlier call of
+    /// the same round, which listed it (SERVERS-7), so nobody was asked about this one.
+    ///
+    /// Only a yes is a passed gate here: a no is recorded by [`Self::refuse_unapproved_call`].
+    pub fn record_covered_mcp_call(&mut self, alias: &str, tool: &str, approved: bool) {
+        if approved {
+            self.allow(
+                "approval",
+                format!(
+                    "the answer to the question about an earlier call to {alias}:{tool} in this \
+                     round covered this call, so nobody was asked"
+                ),
+            );
+        }
+    }
+
     /// Record that this call to `tool` of `alias` was approved, or needed no approval.
     ///
     /// Bound to the tool, so an approval cannot be spent on another one.
@@ -21367,6 +21383,34 @@ five
                     ),
                 ]
             );
+        }
+
+        /// TRACE-1, SERVERS-7: a call an earlier answer of its round covered is recorded as covered
+        /// with the call named as the alias and the tool, and a covered no records nothing here,
+        /// since the refusal is recorded by `refuse_unapproved_call`. The regression it rejects is a
+        /// covered call recorded as asking, or a no recorded as a pass.
+        #[test]
+        fn an_mcp_call_covered_by_an_earlier_answer_is_recorded_as_covered_not_as_asking() {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.record_covered_mcp_call("weather", "get_forecast", true);
+            turn.record_covered_mcp_call("notes", "append", false);
+            assert!(turn.finish(), "a covered call ended the turn unclean");
+            let passed: Vec<String> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GatePassed {
+                        gate: "approval",
+                        detail,
+                    } => Some(detail.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(passed.len(), 1, "{passed:?}");
+            assert!(passed[0].contains("weather:get_forecast"), "{passed:?}");
+            assert!(passed[0].contains("covered this call, so nobody was asked"));
+            assert!(!passed[0].contains("asking"));
         }
 
         /// TRACE-1, SERVERS-21: a delegate's call to a server declared to ask every call is a

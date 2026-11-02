@@ -2118,6 +2118,8 @@ fn the_mcp_questions_carry_what_a_card_draws() {
             description: None,
             may_stand: false,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         },
     );
     assert_eq!(call["name"], "weather:get_forecast");
@@ -2126,6 +2128,33 @@ fn the_mcp_questions_carry_what_a_card_draws() {
         json!([{"name": "city", "value": "\"Paris\""}])
     );
     assert_eq!(call["mayStand"], false);
+    assert_eq!(call["askedForPrivateArguments"], false);
+    assert_eq!(call["also"], json!([]));
+
+    let batched = wire::mcp_call_request(
+        4,
+        &McpCallRequest {
+            alias: "weather".into(),
+            tool: "get_forecast".into(),
+            arguments: vec![("city".into(), "\"Paris\"".into())],
+            description: None,
+            may_stand: false,
+            asked_every_call: false,
+            asked_for_private_arguments: true,
+            also: vec![
+                vec![("city".into(), "\"Lyon\"".into())],
+                vec![("city".into(), "\"Nice\"".into())],
+            ],
+        },
+    );
+    assert_eq!(batched["askedForPrivateArguments"], true);
+    assert_eq!(
+        batched["also"],
+        json!([
+            [{"name": "city", "value": "\"Lyon\""}],
+            [{"name": "city", "value": "\"Nice\""}]
+        ])
+    );
 
     let moved = wire::mcp_move_request(
         3,

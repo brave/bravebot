@@ -1075,16 +1075,25 @@ fn tools_text(data: &Value) -> String {
 }
 
 fn call_text(data: &Value) -> String {
-    let arguments: Vec<(String, String)> = data["arguments"]
+    let listed = |arguments: &Value| -> Vec<(String, String)> {
+        arguments
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|argument| {
+                (
+                    text_of(argument, "name").to_string(),
+                    text_of(argument, "value").to_string(),
+                )
+            })
+            .collect()
+    };
+    let arguments = listed(&data["arguments"]);
+    let also: Vec<Vec<(String, String)>> = data["also"]
         .as_array()
         .into_iter()
         .flatten()
-        .map(|argument| {
-            (
-                text_of(argument, "name").to_string(),
-                text_of(argument, "value").to_string(),
-            )
-        })
+        .map(listed)
         .collect();
     bravebot_approval::call_lines(&bravebot_approval::Call {
         name: text_of(data, "name"),
@@ -1093,6 +1102,8 @@ fn call_text(data: &Value) -> String {
         offers_remember: data["mayStand"].as_bool() == Some(true),
         // The bridge refuses such a call before a question is sent (SERVERS-21).
         asked_every_call: false,
+        asked_for_private_arguments: data["askedForPrivateArguments"].as_bool() == Some(true),
+        also: &also,
     })
     .join("\n")
 }
@@ -1547,6 +1558,8 @@ mod tests {
             description: Some("does it".into()),
             may_stand: false,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let (_, _, text) = shown("mcp-call", crate::wire::mcp_call_request(4, &call));
         assert_eq!(
@@ -1557,6 +1570,8 @@ mod tests {
                 description: call.description.as_deref(),
                 offers_remember: false,
                 asked_every_call: false,
+                asked_for_private_arguments: false,
+                also: &[],
             })
             .join("\n")
         );
@@ -1612,6 +1627,8 @@ mod tests {
                 description: None,
                 may_stand: false,
                 asked_every_call: false,
+                asked_for_private_arguments: false,
+                also: Vec::new(),
             };
             let (title, _, text) = shown("mcp-call", crate::wire::mcp_call_request(1, &call));
             assert_eq!(title, "call brave-input:click_element");
@@ -1631,6 +1648,8 @@ mod tests {
                     description: None,
                     offers_remember: false,
                     asked_every_call: false,
+                    asked_for_private_arguments: false,
+                    also: &[],
                 })
                 .join("\n"),
                 "{number}"
@@ -1680,6 +1699,8 @@ mod tests {
             description: None,
             may_stand: true,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let standing_text = call_text(&crate::wire::mcp_call_request(3, &standing));
         assert!(
@@ -1697,6 +1718,66 @@ mod tests {
             !once_text.contains("Allow and remember"),
             "a call that offers no standing answer got a sentence about one anyway: {once_text}"
         );
+    }
+
+    /// SERVERS-7: a call asked for private arguments reads to the editor with the reason, from the
+    /// wire field. The regression it rejects is a bridge that drops the field, so the editor draws
+    /// the call with no reason for the missing remember option.
+    #[test]
+    fn a_call_asked_for_private_arguments_reads_to_the_editor_with_its_reason() {
+        use bravebot_agent::confirm::McpCallRequest;
+        let call = McpCallRequest {
+            alias: "weather".into(),
+            tool: "forecast".into(),
+            arguments: Vec::new(),
+            description: None,
+            may_stand: false,
+            asked_every_call: false,
+            asked_for_private_arguments: true,
+            also: Vec::new(),
+        };
+        let text = call_text(&crate::wire::mcp_call_request(7, &call));
+        assert!(
+            text.contains("something read earlier was private"),
+            "{text}"
+        );
+        let other = McpCallRequest {
+            asked_for_private_arguments: false,
+            also: Vec::new(),
+            ..call
+        };
+        let text = call_text(&crate::wire::mcp_call_request(8, &other));
+        assert!(
+            !text.contains("something read earlier was private"),
+            "{text}"
+        );
+    }
+
+    /// SERVERS-7: the later calls a question also covers read to the editor under the line saying
+    /// so, from the wire field. The regression it rejects is a bridge that drops `also`, so the
+    /// editor shows one call and a yes makes several.
+    #[test]
+    fn the_later_calls_a_question_also_covers_read_to_the_editor() {
+        use bravebot_agent::confirm::McpCallRequest;
+        let call = McpCallRequest {
+            alias: "weather".into(),
+            tool: "forecast".into(),
+            arguments: vec![("city".into(), "\"Paris\"".into())],
+            description: None,
+            may_stand: true,
+            asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: vec![vec![("city".into(), "\"Lyon\"".into())]],
+        };
+        let text = call_text(&crate::wire::mcp_call_request(7, &call));
+        assert!(text.contains("also covers this later call"), "{text}");
+        assert!(text.contains("Lyon"), "{text}");
+        let alone = McpCallRequest {
+            also: Vec::new(),
+            ..call
+        };
+        let text = call_text(&crate::wire::mcp_call_request(8, &alone));
+        assert!(!text.contains("also covers"), "{text}");
     }
 
     /// SERVERS-7, PROMPT-13: a call that carries code reads to the editor with each line of the
@@ -1718,6 +1799,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let text = call_text(&crate::wire::mcp_call_request(5, &call));
         assert!(
@@ -1747,6 +1830,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let text = call_text(&crate::wire::mcp_call_request(6, &call));
         assert!(

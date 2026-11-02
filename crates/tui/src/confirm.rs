@@ -989,6 +989,8 @@ mod tests {
             description: description.map(str::to_string),
             may_stand,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         }
     }
 
@@ -1619,6 +1621,8 @@ mod tests {
             description: Some("Replace what the one text field holds with this text.".into()),
             may_stand: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let mut deciding = vec![
             "https://shop.example/cart".to_string(),
@@ -1672,6 +1676,8 @@ mod tests {
                     description: None,
                     may_stand: false,
                     asked_every_call: true,
+                    asked_for_private_arguments: false,
+                    also: Vec::new(),
                 };
                 let mut deciding = pieces.clone();
                 deciding.extend(text.clone());

@@ -340,6 +340,8 @@ struct Calls {
     /// The answer to a server's list, which a person nobody asked would not give.
     list_answer: Decision,
     lists: Vec<ToolListRequest>,
+    /// How long the person takes to answer a list.
+    list_delay: std::time::Duration,
     /// What was put to the person, in order: `list`, `plan` and `call`.
     order: Vec<&'static str>,
     /// Stopped by the person's answer to a list, where a test says so.
@@ -355,6 +357,7 @@ impl Calls {
             plans: Vec::new(),
             list_answer: Decision::Reject,
             lists: Vec::new(),
+            list_delay: std::time::Duration::ZERO,
             order: Vec::new(),
             stopping: None,
         }
@@ -420,6 +423,7 @@ impl Confirmer for Calls {
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.order.push("list");
         self.lists.push(request.clone());
+        std::thread::sleep(self.list_delay);
         if let Some(stop) = &self.stopping {
             stop.cancel();
         }
@@ -1258,6 +1262,45 @@ fn a_plan_started_in_a_fresh_session_puts_the_lists_to_the_person_before_it_plan
         steps,
     );
     assert_eq!(fresh.asked.plans, earlier.asked.plans);
+}
+
+/// The time a person takes to answer a list at the start of a plan run is time spent waiting on
+/// them (SESSION-12, MANIFEST-15): the figures the run reports carry it as stalled.
+///
+/// Rejects an implementation that settles the lists with the person's wait left out of the run's
+/// stalled figure, which /status then draws as unaccounted for.
+#[test]
+fn the_time_taken_to_answer_a_list_before_a_plan_is_charged_to_the_person() {
+    let scratch = Scratch::new("list-wait");
+    let (url, mcp) = serve_browser();
+    let reading_for = std::time::Duration::from_millis(300);
+    let mut asked =
+        Calls::answering(vec![CallDecision::approve()]).answering_lists(Decision::Approve);
+    asked.list_delay = reading_for;
+    let ran = walk(Walk {
+        session: session(&url, &scratch, false, false),
+        mode: PermissionMode::Ask,
+        task: Task::new("open the page and read it"),
+        replies: vec![
+            safe(),
+            shape(),
+            plan(vec![call(
+                "open_tab",
+                json!({"url": "https://example.com"}),
+            )]),
+        ],
+        mcp: &mcp,
+        confirmer: asked,
+        grants: None,
+    });
+    assert!(ran.outcome.is_ok(), "{:?}", ran.outcome.err());
+    assert_eq!(ran.asked.lists.len(), 1);
+    let last = ran.reporter.spent.last().expect("a figure was reported");
+    assert!(
+        last.timing.stalled_ms >= reading_for.as_millis() as u64,
+        "the wait on the list is not in the stalled figure: {:?}",
+        last.timing
+    );
 }
 
 /// Bypassing answers a list's question yes and makes no check, at the start of a plan as in a turn.

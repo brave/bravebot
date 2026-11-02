@@ -541,7 +541,7 @@ Runs a command line. **You approve the compiled plan before anything runs.** The
 | `deadline_seconds` | how long to wait, defaulting to 300 seconds ([details](run-tool.md#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([details](run-tool.md#leaving-a-pipeline-running)) |
 | `stdin_ref` | a reference whose contents are fed to the first program ([details](run-tool.md#filtering-something-the-agent-may-not-read)); a program that sends text, such as a summary a processor wrote, takes its body this way |
-| `read` | ask for the output in this result; honoured only when [bypassing with no screening](run-tool.md#reading-the-output-in-the-same-result) |
+| `read` | ask for the output in this result; honoured when [bypassing with no screening](run-tool.md#reading-the-output-in-the-same-result), and where screening is asked for when the check finds nothing |
 
 The line is compiled by bravebot's own grammar and never handed to a shell. The prompt shows the
 plan: each step, the binary that will run, the directory, and every file the line would create or
@@ -664,14 +664,15 @@ vouching for every stage of the exact command for the next.
 ### A look may wait
 
 `wait_seconds` makes one look sit and watch instead of taking a snapshot. It comes back at the first of
-four things: output arriving that the planner has not been handed, the job ending, the wait running
-out, or the turn being cancelled.
+five things: output arriving that the planner has not been handed, the job ending, the wait running
+out, the turn being cancelled, or a line you typed that the turn is waiting to take.
 
 A job that prints more often than a round takes ends that wait at its next line, so waiting for a build
 that prints a line per crate costs a look per line. `until_exit: true`, given with `wait_seconds`, waits
 for the job to end instead. Output arriving does not end it, including output already waiting when the
 call is made. It comes back when the job ends, when `wait_seconds` runs out, when the turn is
-cancelled, or when you stop a job of the turn, with what the job printed since the last look in one
+cancelled, when you stop a job of the turn, or when a line you typed is waiting for the turn, with
+what the job printed since the last look in one
 answer: where the output is quarantined, that is one reference to all of it. `until_exit` with no
 `wait_seconds`, with `kill`, or with anything but `true` or `false`, is refused.
 

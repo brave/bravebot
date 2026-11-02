@@ -178,10 +178,11 @@ export const CASES = {
     kind: 'mcp-call',
     event: 'mcp-call.request',
     request: {
-      request: 113, alias: 'files', tool: 'read', name: 'files:zqk31', description: 'Reads a file.', mayStand: true,
+      request: 113, alias: 'files', tool: 'read', name: 'files:zqk31', description: 'Reads a file.', mayStand: true, askedForPrivateArguments: false,
+      also: [[{ name: 'later', value: JSON.stringify('zqk32') }], [{ name: 'later', value: JSON.stringify('zqk33') }]],
       arguments: range(30).map((n) => ({ name: `arg${n}`, value: JSON.stringify(n === 0 ? 'zqk01' : n === 29 ? 'zqk30' : `value ${n}`) })),
     },
-    tokens: ['zqk01', 'zqk30', 'zqk31'],
+    tokens: ['zqk01', 'zqk30', 'zqk31', 'zqk32', 'zqk33'],
     standing: [],
   },
   'mcp-move': {

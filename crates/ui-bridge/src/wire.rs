@@ -905,13 +905,20 @@ pub fn mcp_tools_request(id: u64, request: &ToolListRequest) -> Value {
 ///
 /// `name` is `alias:tool`, the name a person reads and a rule matches. Each argument is its name
 /// and its value as JSON, as the planner wrote it. `mayStand` says whether answer 2 can be
-/// recorded; where it cannot, a front end does not offer it.
+/// recorded; where it cannot, a front end does not offer it. `askedForPrivateArguments` says the
+/// call is asked because its arguments are private, which is why a front end that does not offer
+/// answer 2 says no stored answer covers the call. `also` is the arguments of each later call of
+/// the same round to the same tool that the answer covers, in the same shape as `arguments`, and
+/// is empty where the call is asked on its own.
 pub fn mcp_call_request(id: u64, request: &McpCallRequest) -> Value {
-    let arguments: Vec<Value> = request
-        .arguments
-        .iter()
-        .map(|(name, value)| json!({ "name": name, "value": value }))
-        .collect();
+    let listed = |arguments: &[(String, String)]| -> Vec<Value> {
+        arguments
+            .iter()
+            .map(|(name, value)| json!({ "name": name, "value": value }))
+            .collect()
+    };
+    let arguments = listed(&request.arguments);
+    let also: Vec<Vec<Value>> = request.also.iter().map(|call| listed(call)).collect();
     json!({
         "request": id,
         "alias": request.alias,
@@ -920,6 +927,8 @@ pub fn mcp_call_request(id: u64, request: &McpCallRequest) -> Value {
         "arguments": arguments,
         "description": request.description,
         "mayStand": request.may_stand,
+        "askedForPrivateArguments": request.asked_for_private_arguments,
+        "also": also,
     })
 }
 

@@ -3677,6 +3677,8 @@ mod tests {
             description: None,
             may_stand: true,
             asked_every_call: false,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         });
         assert_eq!(answer.decision, Decision::Reject);
 

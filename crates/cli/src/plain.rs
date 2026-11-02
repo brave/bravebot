@@ -1686,6 +1686,8 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             description: request.description.as_deref(),
             offers_remember: false,
             asked_every_call: request.asked_every_call,
+            asked_for_private_arguments: request.asked_for_private_arguments,
+            also: &request.also,
         });
         self.about(Held::Tools);
         match self.ask(&lines, t!(mcp_call_question)) {
@@ -3988,6 +3990,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         for (asked_every_call, said) in [(true, true), (false, false)] {
             for (typed, expected) in [
@@ -4015,6 +4019,34 @@ mod tests {
         }
     }
 
+    /// SERVERS-7: a call whose answer also covers later calls is asked in lines that hold each
+    /// later call's arguments, and a call asked for private arguments says so. The regression it
+    /// rejects is a plain interface that drops either field, so a yes covers calls never drawn.
+    #[test]
+    fn a_call_draws_the_later_calls_it_also_covers_and_the_private_arguments_sentence() {
+        let request = McpCallRequest {
+            alias: "weather".to_string(),
+            tool: "get_forecast".to_string(),
+            arguments: vec![("city".to_string(), "\"Paris\"".to_string())],
+            description: None,
+            may_stand: false,
+            asked_every_call: false,
+            asked_for_private_arguments: true,
+            also: vec![vec![("city".to_string(), "\"Rome\"".to_string())]],
+        };
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+            Vec::new(),
+        );
+        assert_eq!(asking.confirm_mcp_call(&request), CallDecision::approve());
+        let drawn = String::from_utf8(asking.output).expect("text");
+        assert!(drawn.contains("\"Rome\""), "{drawn}");
+        assert!(
+            drawn.contains(t!(mcp_call_asked_for_private_arguments)),
+            "{drawn}"
+        );
+    }
+
     /// MCP-14, ROUTE-10, SERVERS-7: a call a choice fills is asked in lines that name the argument
     /// and give the number and which reference it came from, for 0 and 99 as for any other, before
     /// the question is put. A yes is the one call. The regression it rejects is a question that
@@ -4037,6 +4069,8 @@ mod tests {
                 description: None,
                 may_stand: false,
                 asked_every_call: true,
+                asked_for_private_arguments: false,
+                also: Vec::new(),
             };
             for (typed, expected) in [
                 ("y\n", CallDecision::approve()),
@@ -4083,6 +4117,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let mut asking = Prompting::new(
             std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
@@ -4128,6 +4164,8 @@ mod tests {
             description: None,
             may_stand: false,
             asked_every_call: true,
+            asked_for_private_arguments: false,
+            also: Vec::new(),
         };
         let mut asking = Prompting::new(
             std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
@@ -4316,6 +4354,8 @@ mod tests {
                     description: None,
                     may_stand: false,
                     asked_every_call: false,
+                    asked_for_private_arguments: false,
+                    also: Vec::new(),
                 });
             }),
             held(Held::Tools)

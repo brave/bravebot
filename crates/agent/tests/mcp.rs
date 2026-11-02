@@ -377,6 +377,8 @@ struct Answering {
     vetted_requests: Vec<bravebot_agent::confirm::VetRequest>,
     asked: usize,
     stop: Option<Cancel>,
+    /// How long the person takes to answer the list question.
+    list_delay: std::time::Duration,
 }
 
 impl Answering {
@@ -395,6 +397,7 @@ impl Answering {
             vetted_requests: Vec::new(),
             asked: 0,
             stop: None,
+            list_delay: std::time::Duration::ZERO,
         }
     }
 }
@@ -453,6 +456,7 @@ impl Confirmer for Answering {
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.lists.push(request.clone());
+        std::thread::sleep(self.list_delay);
         if let Some(stop) = &self.stop {
             stop.cancel();
         }
@@ -1802,6 +1806,138 @@ fn answer_two_stops_asking_for_the_one_tool_in_the_one_project() {
     assert!(called[1].contains(r#""city":"Lyon""#), "{}", called[1]);
 }
 
+/// How long the person takes to answer the list question in the timing tests. The remainder is
+/// held to half of it, so a wait left in the remainder fails by a wide margin and a slow machine's
+/// own overhead does not.
+const THE_PERSON_READS_FOR: std::time::Duration = std::time::Duration::from_millis(800);
+
+/// One turn with `confirmer` and `cancel`, whatever way it ended, with every figure it reported.
+fn timed_turn<C: Confirmer + Send>(
+    endpoint: &str,
+    project: &Path,
+    task: Task,
+    confirmer: &mut C,
+    cancel: &Cancel,
+) -> (
+    Result<bravebot_agent::Outcome, turn::TurnError>,
+    bravebot_agent::report::RecordingReporter,
+) {
+    let workspace = Workspace::new(project).expect("workspace");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let result = turns::run_cancellable(
+        &config_for(endpoint),
+        &Egress::new(),
+        &workspace,
+        &task,
+        confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_agent::workspace::trust_store(workspace.root()),
+        cancel,
+    );
+    (result, reporter)
+}
+
+/// The time a person takes to answer the list question is time spent waiting on them (SESSION-12):
+/// it is in the stalled figure, so the remainder nobody is charged with does not hold it.
+#[test]
+fn the_time_taken_to_answer_the_list_is_charged_to_the_person() {
+    let scratch = Scratch::new("list-wait");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![reply_with("done")]);
+    let mut reading = Answering::new(Decision::Approve, CallDecision::reject());
+    reading.list_delay = THE_PERSON_READS_FOR;
+    let (result, reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut reading,
+        &Cancel::new(),
+    );
+    let timing = result.expect("the turn runs").timing;
+    let waited = THE_PERSON_READS_FOR.as_millis() as u64;
+    assert_eq!(reading.lists.len(), 1, "the list was not put to the person");
+    assert!(
+        timing.stalled_ms >= waited,
+        "the wait on the list was not charged to the person: {timing:?}"
+    );
+    assert!(
+        timing.overhead_ms() < waited / 2,
+        "the wait on the list is in the remainder: {timing:?}"
+    );
+    assert!(
+        timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
+        "the parts exceed the whole: {timing:?}"
+    );
+    let last = reporter
+        .spent
+        .last()
+        .expect("the turn reported what it spent");
+    assert_eq!(last.timing.stalled_ms, timing.stalled_ms);
+}
+
+/// A turn stopped at the list keeps the time it waited: the figure is reported when the list is
+/// settled, so a turn that ends before a round does has it too.
+#[test]
+fn a_turn_stopped_at_the_list_keeps_the_time_it_waited() {
+    let scratch = Scratch::new("list-wait-stopped");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![reply_with("stopped")]);
+    let cancel = Cancel::new();
+    let mut stopping = Answering::new(Decision::Reject, CallDecision::reject());
+    stopping.stop = Some(cancel.clone());
+    stopping.list_delay = THE_PERSON_READS_FOR;
+    let (_, reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut stopping,
+        &cancel,
+    );
+    let waited = THE_PERSON_READS_FOR.as_millis() as u64;
+    assert_eq!(
+        stopping.lists.len(),
+        1,
+        "the list was not put to the person"
+    );
+    let last = reporter.spent.last().expect("the stopped turn reported");
+    assert!(
+        last.timing.stalled_ms >= waited,
+        "a turn stopped at the list lost the time it waited: {:?}",
+        last.timing
+    );
+    assert!(
+        last.timing.overhead_ms() < waited / 2,
+        "the wait on the list is in the remainder: {:?}",
+        last.timing
+    );
+}
+
+/// A turn holding no server puts no list to anybody, so nothing is charged to the person.
+#[test]
+fn a_turn_with_no_server_charges_nothing_to_the_person() {
+    let scratch = Scratch::new("list-wait-none");
+    let (endpoint, _chat) = serve_chat(vec![reply_with("done")]);
+    let mut reading = Answering::new(Decision::Approve, CallDecision::reject());
+    reading.list_delay = THE_PERSON_READS_FOR;
+    let (result, _) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("hello"),
+        &mut reading,
+        &Cancel::new(),
+    );
+    let timing = result.expect("the turn runs").timing;
+    assert!(reading.lists.is_empty());
+    assert_eq!(timing.stalled_ms, 0, "{timing:?}");
+}
+
 /// One turn in `project`, as [`run_turn`] runs it, with every call it announced recorded.
 fn reported_turn<C: Confirmer + Send>(
     endpoint: &str,
@@ -2813,6 +2949,453 @@ fn a_call_after_a_servers_answer_was_vetted_asks_though_a_rule_allows_it() {
     );
     let called: Vec<String> = methods(&server);
     assert_eq!(called.len(), 3, "the server was sent {called:?}");
+}
+
+/// SERVERS-7, PROMPT-6. A call asked because its arguments are private is drawn with answer 2 not
+/// offered, and an answer 2 that arrives anyway is a yes to that call and records nothing, so the
+/// next call asks again. The regression it rejects is a prompt that offers "stop asking" for a call
+/// no stored answer covers, and a turn that writes it to `mcp-tools` when pressed.
+#[test]
+fn answer_two_is_not_offered_or_recorded_for_a_call_asked_for_private_arguments() {
+    let scratch = Scratch::new("private-stand");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        tool_request(
+            "vet_content",
+            r#"{"ref":"ref:1","expects":"the forecast for Paris"}"#,
+        ),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        tool_request(FORECAST, r#"{"city":"Nice"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    confirmer.vetted = Decision::Approve;
+    trusted_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session))
+            .with_permissions(allowing_the_weather()),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+    );
+
+    let cities: Vec<&str> = confirmer
+        .calls
+        .iter()
+        .map(|call| call.arguments[0].1.as_str())
+        .collect();
+    assert_eq!(
+        cities,
+        ["\"Lyon\"", "\"Nice\""],
+        "the second call after the vet was not asked as well"
+    );
+    for call in &confirmer.calls {
+        assert!(call.asked_for_private_arguments, "the prompt was not told");
+        assert!(!call.asked_every_call, "the server is not declared so");
+        assert!(!call.may_stand, "answer 2 was offered");
+    }
+    assert!(
+        !tools_file(&scratch.state()).exists(),
+        "an answer 2 was written for a call asked for private arguments"
+    );
+}
+
+/// One reply from the planner that makes every call in `calls`, a tool and its arguments each.
+fn tool_requests(calls: &[(&str, &str)]) -> String {
+    let made: Vec<String> = calls
+        .iter()
+        .enumerate()
+        .map(|(at, (tool, arguments))| {
+            let escaped = arguments.replace('"', "\\\"");
+            format!(
+                r#"{{"id":"c{at}","type":"function","function":{{"name":"{tool}","arguments":"{escaped}"}}}}"#
+            )
+        })
+        .collect();
+    format!(
+        r#"{{"model":"test-model","choices":[{{"message":{{"role":"assistant","tool_calls":[{}]}}}}]}}"#,
+        made.join(",")
+    )
+}
+
+/// One turn in which the planner makes `calls` to the weather server in one round, with `session`
+/// the servers and `confirmer` the one asked. Returns what the planner was told in the next round
+/// and the MCP methods the server was sent for the calls.
+fn calls_in_one_round<C: Confirmer + Send>(
+    name: &str,
+    session_for: impl FnOnce(&str, &Scratch) -> Session,
+    calls: &[(&str, &str)],
+    confirmer: &mut C,
+) -> (Vec<String>, Vec<String>) {
+    let scratch = Scratch::new(name);
+    let (url, server) = serve_weather();
+    let session = session_for(&url, &scratch);
+    let _ = methods(&server);
+    let (endpoint, chat) = serve_chat(vec![tool_requests(calls), reply_with("done")]);
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast").with_mcp(Some(session)),
+        confirmer,
+    );
+    let told = rounds(&chat)
+        .last()
+        .map(|request| tool_results(request))
+        .unwrap_or_default();
+    (told, methods(&server))
+}
+
+/// SERVERS-7. Calls to one tool made in one round are put to the person as one question that lists
+/// the later calls, and a yes covers each of them: the server is sent every call and the person is
+/// asked once. The regression it rejects is one question per call, which the first assertion
+/// counts.
+#[test]
+fn one_yes_covers_the_later_calls_to_the_same_tool_listed_in_its_question() {
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    let (_told, called) = calls_in_one_round(
+        "round-yes",
+        |url, scratch| session(url, scratch, true),
+        &[
+            (FORECAST, r#"{"city":"Paris"}"#),
+            (FORECAST, r#"{"city":"Lyon"}"#),
+            (FORECAST, r#"{"city":"Nice"}"#),
+        ],
+        &mut confirmer,
+    );
+    assert_eq!(confirmer.calls.len(), 1, "the calls were asked one by one");
+    let asked = &confirmer.calls[0];
+    assert_eq!(asked.arguments[0].1, "\"Paris\"");
+    let listed: Vec<&str> = asked.also.iter().map(|call| call[0].1.as_str()).collect();
+    assert_eq!(listed, ["\"Lyon\"", "\"Nice\""], "the question hid a call");
+    let made = called
+        .iter()
+        .filter(|method| *method == "tools/call")
+        .count();
+    assert_eq!(made, 3, "the covered calls were not made: {called:?}");
+}
+
+/// SERVERS-7. Calls to one tool with identical arguments at different positions of a round are
+/// each listed under their own position: the question lists every later call, a repeated one
+/// included, and its yes covers each of them, so the server is sent every call after one question.
+/// No three identical calls are adjacent, since the third in a row is held (TURN-9). The
+/// regression it rejects is matching a covered call by its argument value, which lists a repeated
+/// call once or covers the wrong positions, so the list or the number of calls made differs.
+#[test]
+fn the_calls_a_question_covers_are_matched_by_position_not_by_argument() {
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    let (_told, called) = calls_in_one_round(
+        "round-identical",
+        |url, scratch| session(url, scratch, true),
+        &[
+            (FORECAST, r#"{"city":"Paris"}"#),
+            (FORECAST, r#"{"city":"Paris"}"#),
+            (FORECAST, r#"{"city":"Lyon"}"#),
+            (FORECAST, r#"{"city":"Paris"}"#),
+            (FORECAST, r#"{"city":"Paris"}"#),
+        ],
+        &mut confirmer,
+    );
+    assert_eq!(
+        confirmer.calls.len(),
+        1,
+        "a repeated call was asked about again"
+    );
+    let listed: Vec<&str> = confirmer.calls[0]
+        .also
+        .iter()
+        .map(|call| call[0].1.as_str())
+        .collect();
+    assert_eq!(
+        listed,
+        ["\"Paris\"", "\"Lyon\"", "\"Paris\"", "\"Paris\""],
+        "the question did not list each later call at its own position"
+    );
+    let made = called
+        .iter()
+        .filter(|method| *method == "tools/call")
+        .count();
+    assert_eq!(made, 5, "a covered call was not made: {called:?}");
+}
+
+/// SERVERS-7. A no to that question refuses every call it listed, in the words of a refusal the
+/// person made, and the server is sent none. The regression it rejects is a no that refuses only
+/// the first call and lets the listed ones through unasked.
+#[test]
+fn one_no_refuses_the_later_calls_listed_in_its_question() {
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+    let (told, called) = calls_in_one_round(
+        "round-no",
+        |url, scratch| session(url, scratch, true),
+        &[
+            (FORECAST, r#"{"city":"Paris"}"#),
+            (FORECAST, r#"{"city":"Lyon"}"#),
+        ],
+        &mut confirmer,
+    );
+    assert_eq!(
+        confirmer.calls.len(),
+        1,
+        "the refused calls were asked again"
+    );
+    assert_eq!(told.len(), 2, "{told:?}");
+    for result in &told {
+        assert!(
+            result.contains("the user did not approve calling weather:get_forecast"),
+            "{result}"
+        );
+    }
+    assert!(
+        !called.iter().any(|method| method == "tools/call"),
+        "a refused call reached the server: {called:?}"
+    );
+}
+
+/// SERVERS-7, SERVERS-21. A server declared to ask every call is asked about each call on its own,
+/// and its questions list nothing. The regression it rejects is a yes that covers the later calls
+/// of a server whose declaration says each call is asked.
+#[test]
+fn a_server_asked_every_call_is_asked_about_each_call_of_a_round_on_its_own() {
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    let (_told, called) = calls_in_one_round(
+        "round-every-call",
+        |url, scratch| session_asking_every_call(url, scratch, true),
+        &[
+            (FORECAST, r#"{"city":"Paris"}"#),
+            (FORECAST, r#"{"city":"Lyon"}"#),
+        ],
+        &mut confirmer,
+    );
+    assert_eq!(
+        confirmer.calls.len(),
+        2,
+        "a yes covered a call that is asked every time"
+    );
+    assert!(confirmer.calls.iter().all(|call| call.also.is_empty()));
+    let made = called
+        .iter()
+        .filter(|method| *method == "tools/call")
+        .count();
+    assert_eq!(made, 2, "{called:?}");
+}
+
+/// What `trail` recorded as passed under `approval`, in order.
+fn passed_under_approval(trail: &RecordingSink) -> Vec<String> {
+    trail
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "approval",
+                detail,
+            } => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// TRACE-1, SERVERS-7. Of two calls to one tool in a round, the first is put to the person and the
+/// second is answered by that question. The trail says "asking" once, for the first call, and
+/// says for the second that the earlier answer covered it and nobody was asked; a no leaves the
+/// second as one refusal under `approval` and no line saying it was asked. The regression it
+/// rejects is deciding that a call needs approval before the answer of the round is read, which
+/// records "asking" for a call nobody was asked about.
+#[test]
+fn a_call_covered_by_an_earlier_answer_is_not_recorded_as_asking() {
+    for (case, answer, covered, refused) in [
+        ("yes", CallDecision::approve(), 1, 0),
+        ("no", CallDecision::reject(), 0, 2),
+    ] {
+        let scratch = Scratch::new(&format!("covered-trail-{case}"));
+        let (url, server) = serve_weather();
+        let session = session(&url, &scratch, true);
+        let _ = methods(&server);
+        let (endpoint, _chat) = serve_chat(vec![
+            tool_requests(&[
+                (FORECAST, r#"{"city":"Paris"}"#),
+                (FORECAST, r#"{"city":"Lyon"}"#),
+            ]),
+            reply_with("done"),
+        ]);
+        let mut confirmer = Answering::new(Decision::Approve, answer);
+        let mut trail = RecordingSink::new();
+        run_turn_recording(
+            &endpoint,
+            &scratch.project(),
+            Task::new("the forecast").with_mcp(Some(session)),
+            &mut confirmer,
+            &mut trail,
+        );
+        assert_eq!(
+            confirmer.calls.len(),
+            1,
+            "{case}: the calls were asked one by one"
+        );
+        let passed = passed_under_approval(&trail);
+        let asking = passed
+            .iter()
+            .filter(|detail| detail.contains("weather:get_forecast, asking"))
+            .count();
+        assert_eq!(
+            asking, 1,
+            "{case}: a covered call was recorded as asking: {passed:?}"
+        );
+        let said_covered = passed
+            .iter()
+            .filter(|detail| detail.contains("covered this call, so nobody was asked"))
+            .count();
+        assert_eq!(said_covered, covered, "{case}: {passed:?}");
+        assert_eq!(
+            refused_under(&trail, "approval").len(),
+            refused,
+            "{case}: the refusals were not recorded once per call"
+        );
+    }
+}
+
+/// SERVERS-7, LABEL-5. A later call is covered only by an answer given under its own label. The
+/// first call of the round is public and the vet between the calls lets a private result out, so
+/// the second call is private: it is asked again, with its own reason and no answer 2, though the
+/// question about the first listed it. The regression it rejects is covering a call by position
+/// alone, which makes a call with private arguments on a yes given for public ones.
+#[test]
+fn a_private_call_is_asked_again_after_an_answer_given_for_public_arguments() {
+    let scratch = Scratch::new("covered-label");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        tool_requests(&[
+            (FORECAST, r#"{"city":"Lyon"}"#),
+            (
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the forecast for Paris"}"#,
+            ),
+            (FORECAST, r#"{"city":"Nice"}"#),
+        ]),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.vetted = Decision::Approve;
+    trusted_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast").with_mcp(Some(session)),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+    );
+    let asked: Vec<(&str, bool)> = confirmer
+        .calls
+        .iter()
+        .map(|call| {
+            (
+                call.arguments[0].1.as_str(),
+                call.asked_for_private_arguments,
+            )
+        })
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            ("\"Paris\"", false),
+            ("\"Lyon\"", false),
+            ("\"Nice\"", true)
+        ],
+        "the private call was not asked on its own after the public answer"
+    );
+    assert_eq!(
+        confirmer.calls[1].also.len(),
+        1,
+        "the question about the public call did not list the later one"
+    );
+    assert!(!confirmer.calls[2].may_stand, "answer 2 was offered");
+}
+
+/// SERVERS-7. Answer 2 given to the question about the first call of a round is recorded for the
+/// tool as for any call, so it covers the listed call, and the next turn asks nothing for the
+/// tool. The regression it rejects is a round that answers the later calls and drops the standing
+/// answer, or one that asks the later call again after an answer 2.
+#[test]
+fn answer_two_to_a_question_that_listed_later_calls_is_recorded_for_the_tool() {
+    let scratch = Scratch::new("covered-stand");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_requests(&[
+            (FORECAST, r#"{"city":"Paris"}"#),
+            (FORECAST, r#"{"city":"Lyon"}"#),
+        ]),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Nice"}"#),
+        reply_with("done again"),
+    ]);
+    let mut standing = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast").with_mcp(Some(session.clone())),
+        &mut standing,
+    );
+    assert_eq!(standing.calls.len(), 1, "the listed call was asked again");
+    assert_eq!(standing.calls[0].also.len(), 1);
+    assert!(Standing::read(&scratch.state()).covers("weather", "get_forecast", &scratch.project()));
+    let mut refusing = Answering::new(Decision::Reject, CallDecision::reject());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Nice").with_mcp(Some(session)),
+        &mut refusing,
+    );
+    assert!(
+        refusing.calls.is_empty(),
+        "a tool answer 2 stands for was asked about again"
+    );
+    let made = methods(&server)
+        .iter()
+        .filter(|method| *method == "tools/call")
+        .count();
+    assert_eq!(made, 3, "the calls were not all made");
+}
+
+/// SERVERS-7, SERVERS-13. Bypassing answers the calls of a round as it answers a single call: the
+/// person is asked about none of them and the server is sent each. The regression it rejects is a
+/// bypass that gives the answer of a call with a list differently from one without, so a call is
+/// held back or put to the person.
+#[test]
+fn bypassing_answers_every_call_of_a_round_unasked() {
+    let scratch = Scratch::new("round-bypass");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_requests(&[
+            (FORECAST, r#"{"city":"Paris"}"#),
+            (FORECAST, r#"{"city":"Lyon"}"#),
+        ]),
+        reply_with("done"),
+    ]);
+    let mut inner = Answering::new(Decision::Reject, CallDecision::reject());
+    let mut confirmer = bravebot_agent::Confining::new(&mut inner, PermissionMode::Bypass, false);
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast")
+            .with_mcp(Some(session))
+            .with_permission_mode(PermissionMode::Bypass),
+        &mut confirmer,
+    );
+    assert!(inner.calls.is_empty(), "bypassing put a call to the person");
+    let made = methods(&server)
+        .iter()
+        .filter(|method| *method == "tools/call")
+        .count();
+    assert_eq!(made, 2, "a call of the round was not made");
 }
 
 /// The workspace is private as a matter of course, and reading it does not make the planner's

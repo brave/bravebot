@@ -782,6 +782,7 @@ impl Session {
         Offer {
             session: self.clone(),
             tools,
+            round: Round::default(),
             deferred: false,
             loaded: Vec::new(),
         }
@@ -1370,11 +1371,125 @@ pub struct CallableArgument {
     pub required: bool,
 }
 
+/// The calls to a server's tool that the round now running holds, and the answers one question
+/// already gave about them (SERVERS-7).
+///
+/// The calls are the planner's own words, taken from the round before the first of them runs, each
+/// under its position in the round. A question about one lists the later calls to the same tool,
+/// and a yes or a no to it covers those calls and only those: a later call is covered when its
+/// position is one the person was shown and the label of its arguments is the one they were asked
+/// under. Nothing here compares an argument's value with anything, since a value the planner wrote
+/// may derive from private content (LABEL-5). A clone starts empty, so a delegate's turn never
+/// reads the round of the turn that started it.
+#[derive(Debug, Default)]
+pub struct Round(Mutex<RoundCalls>);
+
+#[derive(Debug, Default)]
+struct RoundCalls {
+    /// The position in the round of the call now being dispatched, where it is a call to a tool of
+    /// a server.
+    current: Option<usize>,
+    upcoming: Vec<Upcoming>,
+    covered: Vec<Covered>,
+}
+
+#[derive(Debug)]
+struct Upcoming {
+    index: usize,
+    alias: String,
+    tool: String,
+    arguments: Value,
+}
+
+#[derive(Debug)]
+struct Covered {
+    index: usize,
+    private: bool,
+    approved: bool,
+}
+
+impl Clone for Round {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl Round {
+    /// The calls this round holds to a server's tool, in order, replacing whatever the last round
+    /// held.
+    fn begin(&self, calls: Vec<(usize, String, String, Value)>) {
+        let mut held = held(&self.0);
+        held.current = None;
+        held.covered.clear();
+        held.upcoming = calls
+            .into_iter()
+            .map(|(index, alias, tool, arguments)| Upcoming {
+                index,
+                alias,
+                tool,
+                arguments,
+            })
+            .collect();
+    }
+
+    /// Names the position in the round of the call about to be dispatched, or none once it has
+    /// been.
+    fn at(&self, index: Option<usize>) {
+        held(&self.0).current = index;
+    }
+
+    /// The positions and arguments of the later calls of the round to the same tool as the call
+    /// being dispatched. Found by position and by the alias and word of the tool, never by an
+    /// argument.
+    fn later(&self, alias: &str, tool: &str) -> Vec<(usize, Value)> {
+        let held = held(&self.0);
+        let Some(now) = held.current else {
+            return Vec::new();
+        };
+        let here = held
+            .upcoming
+            .iter()
+            .any(|call| call.index == now && call.alias == alias && call.tool == tool);
+        if !here {
+            return Vec::new();
+        }
+        held.upcoming
+            .iter()
+            .filter(|call| call.index > now && call.alias == alias && call.tool == tool)
+            .map(|call| (call.index, call.arguments.clone()))
+            .collect()
+    }
+
+    /// Records the answer to a question that listed the calls at these positions.
+    fn cover(&self, listed: &[usize], private: bool, approved: bool) {
+        held(&self.0)
+            .covered
+            .extend(listed.iter().map(|index| Covered {
+                index: *index,
+                private,
+                approved,
+            }));
+    }
+
+    /// What an earlier question in this round answered for the call being dispatched, once.
+    fn answered(&self, private: bool) -> Option<bool> {
+        let mut held = held(&self.0);
+        let now = held.current?;
+        let at = held
+            .covered
+            .iter()
+            .position(|call| call.index == now && call.private == private)?;
+        Some(held.covered.remove(at).approved)
+    }
+}
+
 /// The tools one turn offers, and the session they are called through.
 #[derive(Debug, Clone)]
 pub struct Offer {
     session: Session,
     tools: Vec<Offered>,
+    /// What the round now running holds for the tools of servers.
+    round: Round,
     /// Whether the tools are offered by name only until one is loaded (SERVERS-16).
     deferred: bool,
     /// The wire names loaded so far this turn, in the order they were loaded. Always names this
@@ -1498,6 +1613,28 @@ impl Offer {
             .map(|tool| (tool.wire.as_str(), self.loaded.contains(&tool.wire)))
     }
 
+    /// Takes the calls of the round about to run, by their position in the round, the wire name and
+    /// the arguments the planner wrote, so a question about one call can list the later calls to
+    /// the same tool.
+    pub fn begin_round<'c>(&self, calls: impl IntoIterator<Item = (usize, &'c str, Value)>) {
+        self.round.begin(
+            calls
+                .into_iter()
+                .filter_map(|(index, wire, arguments)| {
+                    self.find(wire).map(|(alias, tool)| {
+                        (index, alias.to_string(), tool.to_string(), arguments)
+                    })
+                })
+                .collect(),
+        );
+    }
+
+    /// Names the position in the round of the call about to be dispatched, and none once it has
+    /// been, so the call is found by its position and not by what it says.
+    pub fn dispatching(&self, index: Option<usize>) {
+        self.round.at(index);
+    }
+
     /// Whether a deferred offer holds the tool under this wire name without having loaded it.
     pub fn is_unloaded(&self, wire: &str) -> bool {
         self.deferred
@@ -1617,6 +1754,7 @@ pub(crate) fn offer_for_test(entries: &[(&str, &str, &str)]) -> Offer {
                 },
             })
             .collect(),
+        round: Round::default(),
         deferred: false,
         loaded: Vec::new(),
     }
@@ -1786,6 +1924,8 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
             "error: the arguments to {name} must be a JSON object"
         ));
     };
+    // The later calls of this round to this tool, listed in the one question about this call.
+    let later = offer.round.later(alias, tool);
 
     // The planner's own words, read as such: shown to the person and sent to the server, and
     // refused both where the context they were written in has met untrusted content.
@@ -1813,7 +1953,32 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
     } else {
         McpStanding::Nothing
     };
-    if policy.mcp_call_needs_approval(alias, tool, labelled.label(), standing) {
+    // The label of the arguments and nothing of their bytes. A call asked because they are
+    // private is not covered by any stored answer, so answer 2 would never stop the questions.
+    let private = !labelled.label().is_public();
+    // A call that names a choice, or that is asked whatever was said, is asked on its own.
+    let batched = filling.is_none() && !every_call;
+    // An earlier question of this round listed this call and was answered for it (SERVERS-7).
+    // That is read first so the trail does not say a call was asked that nobody was asked about.
+    let covered = match batched {
+        true => offer.round.answered(private),
+        false => None,
+    };
+    let asked = match covered {
+        Some(approved) => {
+            policy.record_covered_mcp_call(alias, tool, approved);
+            true
+        }
+        None => policy.mcp_call_needs_approval(alias, tool, labelled.label(), standing),
+    };
+    if covered == Some(false) {
+        policy.refuse_unapproved_call(alias, tool);
+        return Called::Problem(format!(
+            "refused: the user did not approve calling {name}. Do not retry the same \
+             call; ask what they would prefer."
+        ));
+    }
+    if asked && covered.is_none() {
         let mut shown: Vec<(String, String)> = pairs
             .iter()
             .map(|(key, value)| (key.clone(), value.to_string()))
@@ -1827,15 +1992,50 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
                 Err(refusal) => return Called::Problem(refusal),
             }
         }
+        // The later calls of this round to this tool that this question also covers.
+        let listed: Vec<(usize, &Value)> = match batched {
+            true => later
+                .iter()
+                .filter(|(_, other)| {
+                    other.as_object().is_some_and(|object| {
+                        !offer
+                            .choosable(alias, tool)
+                            .iter()
+                            .any(|argument| object.contains_key(&choice_key(argument)))
+                    })
+                })
+                .map(|(index, other)| (*index, other))
+                .collect(),
+            false => Vec::new(),
+        };
+        let also: Vec<Vec<(String, String)>> = listed
+            .iter()
+            .filter_map(|(_, other)| other.as_object())
+            .map(|object| {
+                object
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.to_string()))
+                    .collect()
+            })
+            .collect();
         let request = McpCallRequest {
             alias: alias.to_string(),
             tool: tool.to_string(),
             arguments: shown,
+            also,
             description: offer.description(alias, tool),
-            may_stand: session.may_stand() && !every_call,
+            may_stand: session.may_stand() && !every_call && !private,
+            asked_for_private_arguments: private && !every_call,
             asked_every_call: every_call,
         };
         let answer = confirmer.confirm_mcp_call(&request);
+        if !answer.unasked {
+            offer.round.cover(
+                &listed.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+                private,
+                answer.decision == Decision::Approve,
+            );
+        }
         crate::tools::keep_the_note(
             policy,
             "call_server_tool",

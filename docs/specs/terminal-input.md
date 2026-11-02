@@ -509,6 +509,13 @@ for a correction that is not coming. Cut short, the words could say the same wro
 stopping at "into this". The key outranks them on the last row because it is the one way to hurry
 what is waiting, and the rows above it still say where theirs are going.
 
+**The mark does not say that a wait is running.** While a `job_output` wait runs, a line sent is
+marked like any other behind a turn that will take it, into this turn at its next round, because
+that is what happens: the wait comes back within a tick of the line and the turn takes it at the
+boundary after. A mark saying a wait was running would describe something that lasts a tick after
+Enter, and it would need the interface to be told which call is in flight so as to draw it. The mark
+answers whether the line is about to be read, and during a wait it is.
+
 **The turn in flight is the one on the screen.** Work handed out to a delegate is a turn of its own,
 and the person typing may not know one is running at all, so what they send waits for the turn they
 are watching rather than going to the delegate. A delegate does not ask for one either: the queue is
@@ -522,6 +529,15 @@ of it.
 Not mid-round. Every call the planner asked for in a round runs, because a round is a set of calls
 asked for together and answering some while abandoning others leaves calls unanswered. Stopping in
 the middle of one is what the keys in INPUT-4 are for.
+
+**A `job_output` wait ends for a line.** A wait the planner asked for in `job_output` is a call that
+can last ten minutes, so the boundary after it can be that far off. The wait comes back within one
+tick of a line arriving that the turn may take, with the job still running and the turn not stopped,
+and the call is answered as any wait is, so the round is whole and the line is taken at its boundary
+([RUN-17](tools/run.md#RUN-17)). The call is not abandoned. A line that is a command, or is held
+behind one, is not one the turn may take and does not end the wait. A delegate's wait is not ended,
+since a delegate takes no line. The wait reads the same arrival handle that cuts a request, which says
+whether a line is there and nothing of what it says.
 
 **A reply that is only thinking, or a call being written, is cut for it.** While a request is out,
 a prompt sent ends the request when the reply so far is thinking or an open call, and the request
@@ -667,6 +683,7 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::render::a_prompt_stops_waiting_once_its_turn_begins`
 `verified-by: bravebot_tui::render::a_prompt_stops_waiting_once_the_running_turn_takes_it`
 `verified-by: bravebot_tui::render::a_prompt_waiting_on_a_running_turn_is_said_to_go_into_it`
+`verified-by: bravebot_tui::render::a_prompt_waiting_on_a_job_output_wait_is_said_to_go_into_the_turn`
 `verified-by: bravebot_tui::render::a_prompt_waiting_on_an_aside_is_said_to_go_as_its_own_turn`
 `verified-by: bravebot_tui::render::a_prompt_waiting_on_a_turn_being_stopped_is_said_to_go_as_its_own_turn`
 `verified-by: bravebot_tui::render::a_prompt_waiting_on_the_turn_after_a_stop_is_said_to_go_into_it`
@@ -707,6 +724,12 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_agent::interjections::the_arrival_handle_follows_every_way_a_line_enters_or_leaves`
 `verified-by: bravebot_agent::interjections::a_held_line_does_not_read_as_waiting`
 `verified-by: bravebot_agent::interjections::the_handle_is_shared_by_every_clone`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_comes_back_when_a_line_arrives_for_the_turn`
+`verified-by: bravebot_agent::exec::a_wait_for_more_comes_back_when_a_line_arrives_for_the_turn`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_is_not_ended_by_a_line_the_turn_may_not_take`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_lasts_its_bound_again_after_the_line_was_taken`
+`verified-by: bravebot_agent::turn::a_line_typed_during_a_job_output_wait_ends_it_and_reaches_the_planner_in_the_next_request`
+`verified-by: bravebot_agent::turn::a_line_typed_during_a_delegates_job_output_wait_does_not_end_it`
 `verified-by: bravebot_core::cancel::a_child_reads_as_cancelled_once_its_parent_is`
 `verified-by: bravebot_core::cancel::cancelling_a_child_leaves_its_parent_alone`
 `verified-by: bravebot_tui::remote_confirm::the_turns_confirmer_sees_a_line_as_the_terminal_adds_it`
