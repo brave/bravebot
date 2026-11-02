@@ -113,10 +113,9 @@
 .composer-toolbar .model-picker { flex: 0 1 auto; min-width: 0; max-width: 220px; margin: 0; }
 .composer .model-trigger { width: auto; max-width: 100%; --leo-button-color: var(--ink-tertiary); }
 .composer .model-current { max-width: 180px; }
-/* One menu holds the approval mode and the sandbox mode, and sits beside the model.
-   Asking and Workspace write are the resting state and are drawn like the model. The trigger
-   names anything else after the approval mode, and tints it for as long as it holds, so the name
-   says the same where colour is not drawn. */
+/* One menu holds the approval mode and the sandbox mode, and sits beside the model. The trigger is
+   drawn in the hue of the approval mode, and names a sandbox mode that is not Workspace write after
+   it, so the name says the same where colour is not drawn. */
 .composer-toolbar .controls-menu { flex: 0 1 auto; min-width: 0; max-width: 280px; }
 /* The popup scrolls when there is not room above the button to hold it, rather than running past the
    window's edge. The component sets the limit from the space above the button each time it opens. */
@@ -131,16 +130,25 @@
   white-space: nowrap;
 }
 .composer .controls-current { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.composer .controls-trigger.permission-acceptEdits,
-.composer .controls-trigger.permission-auto {
-  --leo-button-color: var(--ink-primary);
-  --leo-icon-color: var(--status-warning);
-  background: var(--status-warning-bg);
+.composer .controls-trigger.permission-ask {
+  --leo-button-color: var(--mode-ask-ink);
+  --leo-icon-color: var(--mode-ask-ink);
+  background: var(--mode-ask-bg);
+}
+.composer .controls-trigger.permission-acceptEdits {
+  --leo-button-color: var(--mode-accept-ink);
+  --leo-icon-color: var(--mode-accept-ink);
+  background: var(--mode-accept-bg);
 }
 .composer .controls-trigger.permission-plan {
-  --leo-button-color: var(--ink-primary);
-  --leo-icon-color: var(--status-info);
-  background: var(--status-info-bg);
+  --leo-button-color: var(--mode-plan-ink);
+  --leo-icon-color: var(--mode-plan-ink);
+  background: var(--mode-plan-bg);
+}
+.composer .controls-trigger.permission-auto {
+  --leo-button-color: var(--mode-auto-ink);
+  --leo-icon-color: var(--mode-auto-ink);
+  background: var(--mode-auto-bg);
 }
 .composer .controls-trigger.sandbox-strict:not(.permission-acceptEdits, .permission-plan, .permission-auto) {
   --leo-button-color: var(--ink-primary);
@@ -166,6 +174,18 @@
 }
 .controls-menu leo-menu-item[aria-checked='true']:not([aria-disabled='true']) .menu-icon-row { --leo-icon-color: var(--ink-accent); }
 .controls-menu leo-menu-item[aria-checked='true']:not([aria-disabled='true']) .menu-detail { color: var(--ink-link); }
+/* The chosen approval is drawn in its own hue, its background, text, subtitle, icon and tick. */
+.controls-menu leo-menu-item[data-test='mode-option-ask'] { --mode-bg: var(--mode-ask-bg); --mode-ink: var(--mode-ask-ink); }
+.controls-menu leo-menu-item[data-test='mode-option-acceptEdits'] { --mode-bg: var(--mode-accept-bg); --mode-ink: var(--mode-accept-ink); }
+.controls-menu leo-menu-item[data-test='mode-option-plan'] { --mode-bg: var(--mode-plan-bg); --mode-ink: var(--mode-plan-ink); }
+.controls-menu leo-menu-item[data-test='mode-option-auto'] { --mode-bg: var(--mode-auto-bg); --mode-ink: var(--mode-auto-ink); }
+.controls-menu leo-menu-item[data-test^='mode-option-'][aria-checked='true']:not([aria-disabled='true']) {
+  background: var(--mode-bg);
+  color: var(--mode-ink);
+}
+.controls-menu leo-menu-item[data-test^='mode-option-'][aria-checked='true']:not([aria-disabled='true']) .menu-icon-row,
+.controls-menu leo-menu-item[data-test^='mode-option-'][aria-checked='true']:not([aria-disabled='true']) .menu-check { --leo-icon-color: var(--mode-ink); }
+.controls-menu leo-menu-item[data-test^='mode-option-'][aria-checked='true']:not([aria-disabled='true']) .menu-detail { color: var(--mode-ink); }
 .controls-option { width: min(320px, calc(100vw - 24px)); }
 .controls-option-text { display: flex; flex-direction: column; min-width: 0; white-space: normal; }
 .controls-option-text .menu-detail { font: var(--type-meta); }
@@ -548,11 +568,12 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
   .composer-tray,
   .attention-pill,
   .composer-box:focus-within { outline: 2px solid Highlight; }
+  .composer .controls-trigger.permission-ask,
   .composer .controls-trigger.permission-acceptEdits,
+  .composer .controls-trigger.permission-auto,
   .composer .controls-trigger.permission-plan,
   .composer .controls-trigger.sandbox-strict { outline: 1px solid CanvasText; }
   .mention-list { border: 1px solid CanvasText; }
   .mention-option.active { outline: 2px solid Highlight; outline-offset: -2px; }
 }
 
-  .composer .controls-trigger.permission-auto,

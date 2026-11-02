@@ -159,6 +159,60 @@ try {
   assert.equal(await changeState('later.md'), 'refused', 'a write the person refused is listed as refused')
   await page.screenshot({ path: join(output, 'mode-ask-refused.png') })
 
+  // The chosen approval is drawn in its own hue: the hue's 10 as the background and its 60 as the text and
+  // the icon, both of which Leo flips between light and dark.
+  const expanded = () => mode.getAttribute('aria-expanded')
+  const openMenu = async () => {
+    if ((await expanded()) !== 'true') await mode.click()
+    await page.waitForFunction(() => document.querySelector('[data-test="mode-trigger"]')?.getAttribute('aria-expanded') === 'true')
+  }
+  const closeMenu = async () => {
+    if ((await expanded()) === 'true') await mode.click()
+    await page.waitForFunction(() => document.querySelector('[data-test="mode-trigger"]')?.getAttribute('aria-expanded') === 'false')
+  }
+  await closeMenu()
+  for (const [wanted, id, hue] of [['ask', 'mode-option-ask', 'yellow'], ['acceptEdits', 'mode-option-acceptEdits', 'green'], ['plan', 'mode-option-plan', 'blue'], ['auto', 'mode-option-auto', 'pink']]) {
+    await openMenu()
+    if ((await page.locator(`[data-test="${id}"]`).getAttribute('aria-checked')) !== 'true') {
+      await page.locator(`[data-test="${id}"]`).click()
+      await inMode(wanted)
+      await closeMenu()
+      await openMenu()
+    }
+    await page.mouse.move(5, 5)
+    await page.waitForTimeout(1500)
+    const drawn = await page.evaluate(({ id, hue }) => {
+      const probe = document.createElement('i')
+      document.body.append(probe)
+      const resolve = (value, property) => { probe.style[property] = ''; probe.style[property] = value; return getComputedStyle(probe)[property] }
+      const row = document.querySelector(`[data-test="${id}"]`)
+      const style = getComputedStyle(row)
+      const result = {
+        background: style.backgroundColor, wantBackground: resolve(`var(--leo-color-${hue}-10)`, 'backgroundColor'),
+        text: style.color, wantInk: resolve(`var(--leo-color-${hue}-60)`, 'color'),
+        icon: resolve(getComputedStyle(row.querySelector('.menu-icon-row')).getPropertyValue('--leo-icon-color'), 'color'),
+        tick: resolve(getComputedStyle(row.querySelector('.menu-check')).getPropertyValue('--leo-icon-color'), 'color'),
+        subtitle: getComputedStyle(row.querySelector('.menu-detail')).color,
+      }
+      probe.remove()
+      return result
+    }, { id, hue })
+    assert.equal(drawn.background, drawn.wantBackground, `${wanted}: the chosen row is on the ${hue}-10 background: ${JSON.stringify(drawn)}`)
+    for (const part of ['text', 'icon', 'tick', 'subtitle']) assert.equal(drawn[part], drawn.wantInk, `${wanted}: the chosen row's ${part} is ${hue}-60: ${JSON.stringify(drawn)}`)
+    await page.screenshot({ path: join(output, `mode-colours-${wanted}.png`) })
+    await closeMenu()
+    // The button is drawn in the same hue.
+    const button = await page.evaluate((hue) => {
+      const probe = document.createElement('i')
+      document.body.append(probe)
+      probe.style.backgroundColor = `var(--leo-color-${hue}-10)`
+      const wantBackground = getComputedStyle(probe).backgroundColor
+      probe.remove()
+      return { background: getComputedStyle(document.querySelector('[data-test="mode-trigger"]')).backgroundColor, wantBackground }
+    }, hue)
+    assert.equal(button.background, button.wantBackground, `${wanted}: the button is on the ${hue}-10 background: ${JSON.stringify(button)}`)
+  }
+
   // The model picker is the last control before Send, and its selected row is drawn on the selected background.
   await page.keyboard.press('Escape')
   const order = await page.locator('.composer-toolbar [data-test="mode-trigger"], .composer-toolbar [data-test="model-trigger"], .composer-toolbar [data-test="send-message"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-test')))
