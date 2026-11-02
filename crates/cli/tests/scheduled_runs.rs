@@ -155,6 +155,28 @@ fn an_added_entry_is_one_crontab_line_and_listed_with_what_it_may_do() {
 }
 
 #[test]
+fn no_command_but_add_accepts_a_write_flag() {
+    let scratch = Scratch::new("schedule-flags-elsewhere");
+    assert!(out(&added(&scratch, &[])).contains("Added schedule 1."));
+    let before = scratch.table();
+    for flag in ["--accept-edits", "--dangerously-skip-permissions"] {
+        for words in [
+            vec!["schedule", "list"],
+            vec!["schedule", "remove", "1"],
+            vec!["schedule", "run-now", "1"],
+            vec!["schedule", "history"],
+            vec!["schedule", "history", "1"],
+        ] {
+            let mut arguments = words.clone();
+            arguments.push(flag);
+            let output = scratch.run(&arguments);
+            assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        }
+    }
+    assert_eq!(scratch.table(), before);
+}
+
+#[test]
 fn a_cron_expression_that_is_not_five_plain_fields_writes_nothing() {
     let scratch = Scratch::new("schedule-bad-cron");
     for bad in ["0 9 * *", "0 9 * * 1;2", "@daily"] {

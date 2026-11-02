@@ -206,7 +206,7 @@ fn is_an_id(id: &str) -> bool {
 
 /// What an entry's file holds.
 fn entry_text(cron: &str, directory: &Path, mode: Mode) -> Option<String> {
-    let directory = directory.to_str()?;
+    let directory = &*directory.to_string_lossy();
     if directory.contains('\n') {
         return None;
     }
@@ -746,6 +746,14 @@ mod tests {
         assert_eq!(entry_text("0 9 * * *", Path::new("a\nb"), Mode::Read), None);
         // A mode the program did not write reads as no entry, and never as read-only.
         assert!(read_entry("3", "cron=0 9 * * *\ndir=/x\nmode=root\n", String::new()).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_is_not_utf8_is_refused_and_not_written_as_its_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let directory = Path::new(std::ffi::OsStr::from_bytes(b"/work/\xff"));
+        assert_eq!(entry_text("0 9 * * *", directory, Mode::Read), None);
     }
 
     #[test]
