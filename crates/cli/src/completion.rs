@@ -54,7 +54,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 52] = [
+const FLAGS: [Flag; 53] = [
     flag("interactive", Some('i'), true),
     flag("plain", None, false),
     flag("bg", None, false),
@@ -74,6 +74,7 @@ const FLAGS: [Flag; 52] = [
     flag("sandbox-deny-write", None, true),
     flag("log-level", None, true),
     flag("agent", None, true),
+    flag("layout", None, true),
     flag("issue", None, true),
     flag("pr", None, true),
     flag("system-prompt", None, true),

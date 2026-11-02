@@ -182,6 +182,7 @@ pub enum Action {
     /// the audit, which the loop owns, and carries the argument unparsed for the same reason as
     /// `Rewind`.
     Hunks(String),
+    Layout(crate::layout::Layout),
     Quit,
 }
 
@@ -350,7 +351,7 @@ pub(super) fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
         && !session.searching_history()
         && !session.files_open()
         && session.picking().is_none()
-        && (is_ctrl_c(key) || is_escape(session, key))
+        && (is_ctrl_c(key) || (is_escape(session, key) && !session.panes_have_the_keys()))
 }
 
 /// Whether a press is Escape, in either spelling the box's style answers.
@@ -1185,6 +1186,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.note(t!(return_not_pressed));
             Action::Redraw
         }
+        KeyCode::Enter if session.without_a_session() => answer_without_a_session(session),
         // The brief `/handoff` wrote, as the person left it. Before the command arm, since a brief
         // that happens to begin with a slash is still the brief, and after the arm that refuses a
         // return that arrived with other keys. Shell mode is off whenever the brief is in the box.
@@ -1268,6 +1270,20 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         },
         _ => navigate(session, key),
     }
+}
+
+fn answer_without_a_session(session: &mut Session) -> Action {
+    if session.completion_would_change_the_line() {
+        session.accept_completion();
+        return Action::Redraw;
+    }
+    if !session.shell && command_typed(session.input()).is_some() {
+        let commanded = session.take_command();
+        return dispatch_command(session, commanded);
+    }
+    session.clear_input();
+    session.note(t!(bots_choose_a_bot_first));
+    Action::Redraw
 }
 
 /// The keys that mean the same thing whether or not a turn is running.
@@ -1886,6 +1902,6 @@ pub(super) fn is_ctrl_c(key: KeyEvent) -> bool {
 /// Ctrl-C and Ctrl-D are the chords that stop and leave (INPUT-4). Ctrl-Alt-C and Ctrl-Alt-D are
 /// different chords that a settings file may give to an action (INPUT-32), so the handlers for the
 /// first two must not answer the second two.
-fn holds_ctrl_without_alt(modifiers: KeyModifiers) -> bool {
+pub(crate) fn holds_ctrl_without_alt(modifiers: KeyModifiers) -> bool {
     modifiers.contains(KeyModifiers::CONTROL) && !modifiers.contains(KeyModifiers::ALT)
 }

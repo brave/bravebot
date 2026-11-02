@@ -149,6 +149,14 @@ pub(crate) fn print_help() {
         ),
         ("--log-level <error|info|debug>", t!(cli_option_log_level)),
         ("--agent <name>", t!(cli_option_agent)),
+        (
+            "--layout <name>",
+            t!(
+                cli_option_layout,
+                names = bravebot_tui::layout::Layout::names()
+            )
+            .as_str(),
+        ),
         ("--issue <url>", t!(cli_option_issue)),
         ("--pr <url>", t!(cli_option_pr)),
         ("--system-prompt <prompt>", t!(cli_option_system_prompt)),

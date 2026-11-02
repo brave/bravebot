@@ -238,9 +238,12 @@ pub(super) fn lines_beneath_the_box(
             slash_lines(session, commands, skills, width)
         }
         crate::state::Offered::Files(entries) => entry_lines(session, entries),
-        crate::state::Offered::Shortcuts => {
-            shortcut_lines(session.editing(), session.bindings(), width)
-        }
+        crate::state::Offered::Shortcuts => shortcut_lines_in(
+            session.editing(),
+            session.bindings(),
+            width,
+            audience_of(session, width),
+        ),
     });
     lines
 }
@@ -400,12 +403,55 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The thirteen the file can move
+/// list names the key that answers rather than the key that used to. The fourteen the file can move
 /// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
+#[cfg(test)]
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
 ) -> Vec<(String, &'static str)> {
+    shortcuts_in(editing, bindings, Audience::Session { names_panes: false })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Audience {
+    Session { names_panes: bool },
+    WithoutASession { names_panes: bool },
+}
+
+fn audience_of(session: &Session, width: u16) -> Audience {
+    if session.without_a_session() {
+        return Audience::WithoutASession {
+            names_panes: crate::bots_pane::drawn(width),
+        };
+    }
+    Audience::Session {
+        names_panes: session.interface_layout() == crate::layout::Layout::Bots,
+    }
+}
+
+fn shortcuts_in(
+    editing: crate::vim::Editing,
+    bindings: &Keybindings,
+    audience: Audience,
+) -> Vec<(String, &'static str)> {
+    let names_panes = match audience {
+        Audience::WithoutASession { names_panes } => {
+            let mut listed = vec![
+                ("/".to_string(), "switch layout, or leave"),
+                ("?".to_string(), "this list"),
+                ("ctrl-c".to_string(), "clear, then exit"),
+                ("ctrl-d".to_string(), "exit"),
+            ];
+            if names_panes {
+                listed.push((bindings.panes_name(), "move between prompt and panes"));
+            }
+            #[cfg(unix)]
+            listed.push((bindings.suspend_name(), "suspend to the shell"));
+            return listed;
+        }
+        Audience::Session { names_panes } => names_panes,
+    };
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
@@ -441,6 +487,9 @@ pub(super) fn shortcuts(
         (bindings.undo_name(), "undo the last edit"),
         (bindings.enhance_name(), "make the line more specific"),
     ];
+    if names_panes {
+        listed.push((bindings.panes_name(), "move between prompt and panes"));
+    }
     // Where the session can be suspended, which is every platform but Windows (INPUT-47).
     #[cfg(unix)]
     listed.push((bindings.suspend_name(), "suspend to the shell"));
@@ -458,10 +507,25 @@ pub(super) fn shortcuts(
 /// to be. One column when nothing else fits, and the meanings are cut to the width there rather
 /// than drawn past the edge, where the terminal would wrap them under the keys and put the list one
 /// row over the height the layout reserved for it.
+#[cfg(test)]
 pub(super) fn shortcut_lines(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
     width: u16,
+) -> Vec<Line<'static>> {
+    shortcut_lines_in(
+        editing,
+        bindings,
+        width,
+        Audience::Session { names_panes: false },
+    )
+}
+
+fn shortcut_lines_in(
+    editing: crate::vim::Editing,
+    bindings: &Keybindings,
+    width: u16,
+    audience: Audience,
 ) -> Vec<Line<'static>> {
     /// Blank columns between one column of the list and the next.
     const GUTTER: usize = 3;
@@ -475,7 +539,7 @@ pub(super) fn shortcut_lines(
         return Vec::new();
     }
 
-    let listed = shortcuts(editing, bindings);
+    let listed = shortcuts_in(editing, bindings, audience);
     let key_column = listed
         .iter()
         .map(|(key, _)| key.chars().count())

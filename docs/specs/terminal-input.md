@@ -315,6 +315,21 @@ the exit. One way out, and it is the one people already reach for.
 `verified-by: bravebot_tui::state::the_stopping_mark_ends_with_the_turn`
 `verified-by: bravebot_tui::state::a_stopping_turn_says_how_many_delegates_it_waits_on`
 `verified-by: bravebot_tui::render::a_stopping_turn_draws_the_delegates_it_waits_on`
+`verified-by: bravebot_tui::app::layout_tests::the_prompt_box_follows_the_ladder_of_the_input_spec`
+`verified-by: bravebot_tui::app::layout_tests::escape_clears_a_typed_line_without_quitting`
+`verified-by: bravebot_tui::app::layout_tests::escape_on_an_empty_line_does_nothing_and_twice_clears_and_stays`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_c_on_a_line_takes_it_and_offers_and_the_second_press_leaves`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_c_on_an_empty_box_offers_without_claiming_a_line_went`
+`verified-by: bravebot_tui::app::layout_tests::a_key_between_the_two_presses_withdraws_the_offer`
+`verified-by: bravebot_tui::app::layout_tests::input_that_is_not_a_key_withdraws_the_offer`
+`verified-by: bravebot_tui::app::layout_tests::two_interrupts_in_one_read_do_not_leave_and_arm_nothing`
+`verified-by: bravebot_tui::app::layout_tests::two_end_of_transmissions_in_one_read_do_not_leave`
+`verified-by: bravebot_tui::app::layout_tests::a_refused_way_out_says_so_in_the_message_of_the_screen`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_d_leaves_only_from_an_empty_box_and_on_the_second_press`
+`verified-by: bravebot_tui::app::layout_tests::a_press_on_its_own_after_a_run_still_leaves`
+`verified-by: bravebot_tui::app::layout_tests::letting_go_of_the_keys_in_either_order_still_leaves`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_c_and_ctrl_d_reach_the_ladder_from_the_list`
+`verified-by: bravebot_tui::app::layout_tests::the_first_ctrl_c_says_the_next_one_leaves_at_every_width`
 
 
 <a id="INPUT-5"></a>
@@ -2134,13 +2149,13 @@ one carries to the other.
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move thirteen chords, and nothing else
+### INPUT-32: a settings file can move fourteen chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
 action's key says nothing about the others. There is no second file and no other spelling of the
-block, so one place answers what a key does. Thirteen actions can be moved on a platform that can
-suspend the session, twelve on one that cannot (INPUT-47), and nothing else can be moved:
+block, so one place answers what a key does. Fourteen actions can be moved on a platform that can
+suspend the session, thirteen on one that cannot (INPUT-47), and nothing else can be moved:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
@@ -2158,6 +2173,9 @@ suspend the session, twelve on one that cannot (INPUT-47), and nothing else can 
 - `suspend` (default: `ctrl-z`): stop the session and give the terminal to the shell (INPUT-47). Not
   an action on Windows, so a settings file naming it there names nothing.
 - `enhance` (default: `ctrl-p`): rewrite the line in the box to be more specific (INPUT-48).
+- `panes` (default: `alt-p`): move focus between the prompt and the panes of the bots layout
+  ([BOT-17](bots.md#BOT-17)). In the default layout the key does what it did before the action
+  existed.
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is
 typed into the line, Enter sends, Escape clears it, Tab takes what is offered, and the arrows walk
@@ -2234,6 +2252,9 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::the_suspend_chord_is_ctrl_z_and_can_be_moved`
 `verified-by: bravebot_tui::keybindings::a_chord_contested_with_suspend_is_given_up_by_the_request`
 `verified-by: bravebot_tui::keybindings::the_enhance_chord_is_ctrl_p_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::the_panes_chord_is_alt_p_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::the_panes_chord_is_contested_like_every_other`
+`verified-by: bravebot_tui::app::layout_tests::the_shortcut_list_names_the_panes_chord_in_the_bots_layout`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
 `verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
 `verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`

@@ -10,7 +10,10 @@ evidence, and this file is updated when a change materially moves the status bel
 The design is proposed and waits for a design pull request. Slice 1 is built on the branch
 `bots/slice-1-rows-module`, stacked on the design branch, and waits for a pull request. Slice 2a is
 built on the branch `bots/slice-2a-layouts`, stacked on `bots/slice-1-rows-module`, and waits for a
-pull request together with slice 1. Neither branch is pushed. No other slice exists. The design is
+pull request together with slice 1. Slice 2b is built on the branch `bots/slice-2b-layout`, stacked on
+`bots/slice-2a-layouts`, and waits for a pull request together with them. The branches of the design,
+slice 1 and slice 2a are pushed and equal the local ones. The branch of slice 2b is not pushed. No
+other slice exists. The design is
 [design/bots-layer.md](design/bots-layer.md) and the clauses are [specs/bots.md](specs/bots.md),
 which is `proposed`. The clauses and the slices below agree with the design.
 
@@ -57,6 +60,104 @@ whose face differs on each run, including between two runs of the base, so the s
 answer is not byte-identical. Every cell that differs from the base's lies in the mascot's rows and
 columns, and no other cell differs. The `run` loop has no unit test. The real-terminal run and the
 tests of the pure transitions cover it.
+
+Slice 2b adds the second layout, `Layout::Bots`, and the pane of `crates/tui/src/bots_pane.rs` that
+lists the bots. The pane reads them with `bravebot_agent::bots::list` and never through the bridge. It
+draws each bot's face with `avatar::rows`, as the opening screen does, and draws the bot's name and
+purpose after `render::printable` replaces control characters. A seed with a control character draws a
+face and no text. The empty list, a file that does not parse and a file with dropped entries each draw
+one line under the list. `--layout <name>` is `Start::Layout` and `/layout <name>` is
+`Action::Layout`. A session ends into the phase with no session through `Held::leave_for_layout`, which
+hands the workspace and sandbox on in `LayoutChange`, and `Phase::after_a_session_chose_a_layout`
+returns `Screen::Bots` carrying the session left behind, so the interface's exit line and `--resume`
+find it. `/layout default` from that screen begins a fresh session. The screen is a `Session` with
+`without_a_session` set, drawn by `render::draw_without_a_session` and driven by
+`app/bots_screen.rs`, so the prompt box, its editor and the Ctrl-C ladder of
+[INPUT-4](specs/terminal-input.md#INPUT-4) are the ones a session has. The cases of that ladder that
+concern an idle prompt box run on this box: Esc on a typed line and on an empty one, the first Ctrl-C
+with and without a line, the second press, a key or other input between the two presses, two interrupts
+or two end-of-transmission bytes in one read, a refused way out, a release of the keys, and Ctrl-D. The
+cases about a turn, a summary, an aside, a goal check or a running command do not apply, because the
+screen has none of them. The hooks `session-started` and `session-ended` fire on the session path only,
+so a bots layout opened and left with no session fires neither.
+
+The slice differs from its text in these places:
+
+- `Phase` carries no layout and `event_loop` does not return one. `event_loop` takes a second
+  out-parameter, `layout_change`, beside `switch`, because `Switch` and `Phase::Session` are matched
+  by existing tests whose shape does not change. The layout is on `Screen::Bots`, the only screen of
+  the bots layout, and `Phase::Session` always begins the default layout. A session in the bots
+  layout begins in slice 7.
+- The slice is one commit and ships alone, with `/layout` in the slash menu and the line about a later
+  release on Enter. The owner decided this on 2026-10-29.
+- In the phase with no session the `?` list and the slash menu offer only what the phase takes:
+  `/layout`, leaving, the help and, at 100 columns or wider, the panes chord. The owner decided this on
+  2026-10-29.
+- `/layout` is refused in a session addressed to a definition the next session would not keep, as
+  `--layout` is refused with `--agent`. The owner decided on 2026-10-29 to refuse it in an `--agent`
+  session. The check is the session's standing definition, which a recorded definition also sets, and the
+  session does not tell those two apart, so `/layout` is refused for both. A definition chosen by the
+  `agent` setting is kept by the next session, so `/layout` is carried out there.
+- `/layout` is carried out as it is typed so that it can refuse mid-turn, and is never queued. That
+  adds it to the list of commands that skip the queue, so the one existing test
+  `only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue` gained one entry,
+  with the owner's approval on 2026-10-27. No other existing test changed.
+- `/layout` keeps the sandbox mode and the Model Context Protocol (MCP) servers the earlier session started, as `/resume` and
+  `/clear` keep them, and drops the transcript, what the session read and the workspace's session
+  grants and answers. [BOT-17](specs/bots.md#BOT-17) is reworded to say so. The owner decided this on
+  2026-10-27.
+- `--layout bots` runs the same startup as a bare start before the screen opens: it reads the
+  settings of the directory, builds the workspace, asks about the MCP servers that checkout requests
+  and starts the approved ones. [BOT-9](specs/bots.md#BOT-9) says opening the bots layout asks nothing
+  about the current directory, which holds for the trust question and not for this one. The owner
+  decided on 2026-10-27 to accept it and record it. Starting no server for `--layout bots` needs
+  startup to move to the point a session begins, and the design pull request settles it.
+- The plan's text listed four conditions that refuse `/layout`. [BOT-17](specs/bots.md#BOT-17) lists
+  six. The slice refuses on a turn running, a question waiting, lines queued, a `/loop`, `/goal` or
+  `/after` pending, and an incognito run. The two that need slice 4, an open form and an open
+  confirmation, are added in that slice.
+- `--layout` is refused with every flag and command BOT-17 lists, including `--layout default`, which
+  is accepted only on a bare start of the interface. The shell completion scripts name `--layout`.
+- Enter on a bot says "Starting a session as a bot arrives in a later release." under the list and
+  begins no session. The pane moves a selection through the list, and Enter confirms it with that
+  line. Tab moves nothing while one pane is drawn.
+- The action `panes` moves focus between the prompt and the panes. Its default chord is `alt-p` and a
+  settings file can move it ([INPUT-32](specs/terminal-input.md#INPUT-32), which now says fourteen
+  chords). The panel chord is taken and does nothing in the bots layout: it opens and closes nothing
+  and saves nothing. `/panel` and `/files` are refused with a line, and the hint line does not name
+  the panel chord. The owner decided both on 2026-10-27, after `alt-l` was found to contest an
+  existing test that moves the `watch` action to it. Any person whose settings file already gives
+  `alt-p` to another action gets that action back on its default, as every contested chord does.
+- A layout's claim is consulted last in `claimed_by_a_mode`, so a picker, a delegate view, the
+  scroller or a history search that is open keeps its keys. Tests pin this through `handle_key` and
+  `handle_key_while_working`. Esc no longer stops a turn while the panes hold focus.
+- The pane draws the rows in the order the module returns them, which is file order, and marks no
+  archived row. [BOT-3](specs/bots.md#BOT-3) and [BOT-17](specs/bots.md#BOT-17) say the layout lists
+  archived bots after the bots in use, most recently archived first. That order depends on each
+  row's `retired` field in a file any process can write, so the slice does not apply it. The owner
+  decided on 2026-10-27 to draw as the module returns and to record the gap. The design pull request
+  settles the sentence or the pane changes.
+- The text of the empty line, "No bots yet. Make one in the desktop app, and it is listed here.", and
+  of the line about width are the slice's own wording, since BOT-17 fixes only what each says.
+
+What slice 2a left for 2b is done. The layout carries a phase through `Screen::Bots`,
+`Session::toggle_panel`, `Session::toggle_files` and the panel hint ask the layout, and the order of
+the claim is pinned.
+
+What later slices do. Slice 3 changes nothing in the terminal. Slice 4 inherits a pane that lists rows
+read once when the screen opens, so it has to reread them after a write. The `y` that agrees to an
+archive and the line under the list for a failed write are slice 4. Tab between panes needs a second
+pane. The session that Enter on a bot begins is slice 7. The `bots-none` line names the desktop app and
+changes when the terminal can make a bot.
+
+Before a pull request. The stack is 141 commits behind `origin/main` and conflicts with it in most
+files slice 2b touches, so the whole stack is rebased and the gates run again. The rebase changes
+these things beyond text: `MOVABLE` in `keybindings.rs` is already 15 and 14 upstream (the actions
+`todos` on `alt-a` and `outputs` on `alt-l` exist there), so adding `panes` makes it 16 and 15 and every
+document and test that says fourteen changes; `Start` has a `Prefilling` variant that `begin_session` and
+`beginning_of` match beside `Start::Layout`; the view over what commands printed may claim keys, so
+the order of the claim and the test that lists the open modes are checked again; and the array lengths
+in `commands()` (56 here, 58 upstream) and in the `FLAGS` of `completion.rs` (53 here) change.
 
 The order of the remaining work:
 
@@ -227,8 +328,9 @@ for bots, so each terminal function is in the bots layout.
      face and no text.
      `/layout bots` ends the default session and `/layout default` returns to a fresh one, the ended
      session is found by `--resume`, and nothing the ended session read is in the new one. `/layout`
-     is refused while a turn runs, while a question waits, while lines are queued and in an
-     `--incognito` run (and, from slice 4, with a form or a confirmation open), and ends nothing when refused. `--layout` is refused, naming both flags, with
+     is refused while a turn runs, while a question waits, while lines are queued, while a `/loop`,
+     `/goal` or `/after` is pending, in a session addressed to a definition from `--agent` or a record and in an `--incognito` run (and, from slice 4, with a form or a
+     confirmation open), and ends nothing when refused. `--layout` is refused, naming both flags, with
      each flag and command [BOT-17](specs/bots.md#BOT-17) lists, in a test that reads the command
      line's own lists of one-shot flags and of commands that start no session, and `--layout default`
      is the same as no flag. In the bots layout `/branch`, `/resume`, `/manifest`, `/panel` and `/files` are
@@ -290,6 +392,11 @@ for bots, so each terminal function is in the bots layout.
      search of `ui/src/main` finds no write of the rows outside the bridge, and a test pins that the
      methods are absent from the window's list.
 4. **The terminal makes, edits, archives, restores and deletes a bot.**
+   - Slice 2b's pane reads the rows once, when the phase with no session opens
+     (`bots_pane::State::read`). Reread them after each write of this slice. Slice 2b leaves out the
+     refusal of `/layout` with a form or a confirmation open, so add it here.
+   - `State::press` in `bots_pane.rs` swallows every key that carries Ctrl or Alt, so the list never types
+     one. Revisit that when this slice binds a chord in the list.
    - Add the form that makes and edits a bot to the layout, with a model field in the edit form and no
      folder field, and the actions that archive, restore and delete. Archive and delete ask for a
      confirmation that names the bot, answered with `y`, and delete is offered only for an archived bot.
@@ -335,6 +442,15 @@ for bots, so each terminal function is in the bots layout.
    run today, and `drive-bot-memory.mjs` stops at its first check of the briefing file, so its later checks
    do not run.
 7. **The terminal talks to a bot.**
+   - Enter on a bot in slice 2b's pane says that starting a session as a bot comes in a later release,
+     and begins none (`bots-pick-later` in `en-US.ftl`). Replace that line with the session this slice
+     begins, and give `Phase::Session` the bots layout, which slice 2b leaves as the default.
+   - Slice 2b draws the line about width only in the phase with no session. A session in the bots
+     layout below 100 columns draws the chat alone with that line ([BOT-17](specs/bots.md#BOT-17)),
+     which nothing draws yet. The in-session paths of the layout (`Layout::refuses`, the panes column
+     of `RightColumn`, the refusals of `/panel` and `/files`, the hint and the claim) are reached only
+     through tests in slice 2b, since no production path begins a session in the bots layout. Run them
+     in a real terminal here.
    - Draw the layout's chat and prompt input panes. A session started as a bot addresses every turn to
      the row's definition ([BOT-10](specs/bots.md#BOT-10)), runs in the home folder, a folder the
      person moved to with `/cd` in this run or a folder the row records, and shows a line naming the
@@ -427,4 +543,22 @@ Questions slice 1 raised for the owner:
 - Whether a clause that a later slice completes may name tests for the part an earlier slice
   builds. [BOT-2](specs/bots.md#BOT-2) to [BOT-5](specs/bots.md#BOT-5) do, and neither
   [specs/README.md](specs/README.md) nor
-  [development/spec-enforced-development.md](development/spec-enforced-development.md) says.
+  [development/spec-enforced-development.md](development/spec-enforced-development.md) says. Answered
+  yes by the owner on 2026-10-29: [BOT-17](specs/bots.md#BOT-17) and [BOT-18](specs/bots.md#BOT-18)
+  name the tests of slice 2b, and the files it adds are governed by `docs/specs/bots.md`.
+
+Questions slice 2b raised for the owner:
+
+- The order and mark of archived rows in the bots list, described above under the differences of slice
+  2b. The pane draws file order with no mark until the design says how archived rows are placed
+  without an order that depends on the file's `retired` values.
+- MCP server startup and its approval question happen at launch for `--layout bots`, as the previous
+  deviation says. Whether BOT-9 or the startup changes is not decided.
+- `/layout bots` then `/layout default` drops the record of the session left before the new one, so the
+  exit line of the new session names only its own record and says nothing when it recorded nothing.
+  The earlier session stays findable with `--resume`. Whether the exit line should name both is not
+  decided.
+- With focus in the list the prompt box shows its cursor although it drops typing. A cue for which
+  of the two has focus is not specified.
+- With focus in the list, which is where the phase starts, typed text is dropped until Esc or the
+  panes chord returns focus to the prompt, as [BOT-17](specs/bots.md#BOT-17) says.

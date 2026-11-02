@@ -156,6 +156,8 @@ pub(crate) const PANEL_COMMAND: &str = "/panel";
 /// The line that puts the info panel in its files state, or ends it.
 pub(crate) const FILES_COMMAND: &str = "/files";
 
+pub(crate) const LAYOUT_COMMAND: &str = "/layout";
+
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
 
@@ -298,6 +300,14 @@ impl Command {
                 format!("[{}]", modes.join(" | "))
             }
             LIMIT_COMMAND => format!("[<n>[k|m] | <n> credits | {LIMIT_OFF}]"),
+            LAYOUT_COMMAND => format!(
+                "[{}]",
+                crate::layout::Layout::ALL
+                    .iter()
+                    .map(|layout| layout.name())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ),
             REVIEW_COMMAND => {
                 use crate::review_command::{COMMIT, PULL_REQUEST, SINCE, STAGED};
                 format!("[{STAGED} | {SINCE} <ref> | {COMMIT} <ref> | {PULL_REQUEST} <n>] [focus]")
@@ -364,7 +374,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 55] {
+pub fn commands() -> [Command; 56] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -577,6 +587,12 @@ pub fn commands() -> [Command; 55] {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: LAYOUT_COMMAND,
+            argument: "<name>",
+            description: t!(command_layout),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: CAFFEINATE_COMMAND,
             argument: "",
             description: t!(command_caffeinate),
@@ -713,6 +729,13 @@ pub fn completions(line: &str) -> Vec<Command> {
         .iter()
         .filter(|command| command.name.starts_with(trimmed))
         .copied()
+        .collect()
+}
+
+pub(crate) fn completions_without_a_session(line: &str) -> Vec<Command> {
+    completions(line)
+        .into_iter()
+        .filter(|command| matches!(command.name, LAYOUT_COMMAND | EXIT_COMMAND))
         .collect()
 }
 

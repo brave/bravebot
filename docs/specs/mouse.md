@@ -21,11 +21,11 @@ scrolling and copying a selection longer than the screen are proposed in
 ### MOUSE-1: a selection belongs to the pane it began in
 
 The screen is recorded each frame as panes: the transcript, the status line, the prompt box, what is
-offered beneath it, the footer and, when it is drawn, the info panel. A press inside a pane starts a
+offered beneath it, the footer and, when they are drawn, the info panel or the bots layout's list of bots. A press inside a pane starts a
 selection that belongs to that pane. The pointer is held inside the pane's rectangle, so a drag past
 its right edge stops at its last column and a drag past its bottom edge stops at its last row, and
 the copy and the highlight read only that pane's cells. A drag from the transcript across the info
-panel copies no panel text, and the reverse. A view that records no panes, such as the scroller,
+panel copies no panel text, and the reverse. The same holds for the list of bots. A view that records no panes, such as the scroller,
 treats the whole screen as one pane.
 
 `verified-by: bravebot_tui::app::a_drag_from_the_transcript_never_copies_the_panel`
@@ -34,6 +34,8 @@ treats the whole screen as one pane.
 `verified-by: bravebot_tui::select::rows_between_the_ends_are_cut_to_the_pane`
 `verified-by: bravebot_tui::select::a_highlight_stays_inside_its_pane`
 `verified-by: bravebot_tui::app::a_drag_past_the_bottom_stops_at_the_last_row_of_the_pane`
+`verified-by: bravebot_tui::app::layout_tests::a_drag_in_one_pane_never_copies_the_other`
+`verified-by: bravebot_tui::app::layout_tests::a_drag_in_the_list_never_copies_the_prompt_box_and_the_reverse`
 
 <a id="MOUSE-2"></a>
 ### MOUSE-2: a press between panes starts nothing
@@ -56,6 +58,8 @@ the cells it named then hold other text.
 `verified-by: bravebot_tui::app::closing_the_panel_drops_a_selection_inside_it`
 `verified-by: bravebot_tui::app::a_width_change_drops_the_selection`
 `verified-by: bravebot_tui::app::a_height_change_drops_the_selection`
+`verified-by: bravebot_tui::app::layout_tests::a_selection_in_the_pane_is_dropped_when_the_pane_stops_being_drawn`
+`verified-by: bravebot_tui::app::layout_tests::a_selection_in_the_list_is_dropped_when_a_resize_below_100_columns_stops_drawing_it`
 
 <a id="MOUSE-4"></a>
 ### MOUSE-4: mouse capture can be turned off

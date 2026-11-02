@@ -139,6 +139,13 @@ impl Session {
             .clone()
     }
 
+    fn completed_commands(&self) -> Vec<crate::command_table::Command> {
+        if self.without_a_session() {
+            return crate::command_table::completions_without_a_session(&self.input);
+        }
+        crate::command_table::completions(&self.input)
+    }
+
     /// Worked out afresh, reading whatever it has to from the disk.
     ///
     /// One of the two at most. Both are the last word, and a word opens with a slash or with an
@@ -161,7 +168,7 @@ impl Session {
             let commands = if self.shell {
                 Vec::new()
             } else {
-                crate::command_table::completions(&self.input)
+                self.completed_commands()
             };
             return if commands.is_empty() {
                 Offered::Nothing
@@ -178,10 +185,12 @@ impl Session {
         if self.shell {
             return Offered::Nothing;
         }
-        let commands = crate::command_table::completions(&self.input);
+        let commands = self.completed_commands();
         let skills = match &self.skills {
-            Some(held) => crate::skills::offered_for(held, &self.input),
-            None => Vec::new(),
+            Some(held) if !self.without_a_session() => {
+                crate::skills::offered_for(held, &self.input)
+            }
+            _ => Vec::new(),
         };
         if !commands.is_empty() || !skills.is_empty() {
             return Offered::Slash { commands, skills };

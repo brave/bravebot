@@ -27,6 +27,7 @@ growing further. It keeps growing while a turn runs.
 | Escape | discard a half-typed prompt, keeping it for Up, or stop a running turn (with vi editing, from NORMAL mode) |
 | Ctrl-C | stop the nearest thing there is to stop, and leave when there is nothing left |
 | Ctrl-Z | [suspend to the shell](#suspending-to-the-shell), and `fg` brings the session back. Not on Windows |
+| Alt-P | in the bots layout (`bravebot --layout bots`), move focus between the prompt and the list of bots |
 | Up / Down | walk back through every prompt you have sent in any session, starting with a line you cleared |
 | Ctrl-N | on a prompt recalled with Up, cycle between every prompt, this project's and this session's. It stays where you put it, and a scope with nothing in it is skipped |
 | Ctrl-R | search every prompt you have sent |
@@ -34,7 +35,7 @@ growing further. It keeps growing while a turn runs.
 | Ctrl-U, Ctrl-K, Ctrl-W, Alt-D | delete to the line start, to the line end, the word before, the word after; the text is kept |
 | Ctrl-Y | put back the text the last of those deleted. Deletes in one direction in a row join, and vi's `p` puts back the same text |
 | Shift-Tab | choose how much the session asks before it acts |
-| `?` | on an empty line, list every key |
+| `?` | on an empty line, list every key. In the bots layout before a bot is chosen, it lists only the few keys the prompt takes |
 
 Enter on an empty line does nothing. An Enter that arrives in the same read as other keys, as when a
 program writes a line and its return into the terminal, does not send: the line stays in the box and
@@ -45,7 +46,7 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Thirteen of these chords can be [moved to keys of your own](#moving-a-key), twelve on Windows. Every chord named on this
+Fourteen of these chords can be [moved to keys of your own](#moving-a-key), thirteen on Windows. Every chord named on this
 page, and every one the interface names on your screen, is the default.
 
 ## Undoing an edit
@@ -137,7 +138,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Thirteen actions can be moved, and nothing else can** (twelve on Windows, which has no `suspend`):
+**Fourteen actions can be moved, and nothing else can** (thirteen on Windows, which has no `suspend`):
 
 | Action | Default | What it does |
 |---|---|---|
@@ -154,6 +155,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `suspend` | `ctrl-z` | [suspend the session to the shell](#suspending-to-the-shell) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([below](#undoing-an-edit)) |
 | `enhance` | `ctrl-p` | rewrite the line to be more specific ([below](#enhancing-a-prompt)) |
+| `panes` | `alt-p` | move focus between the prompt and the panes of the bots layout, which `--layout bots` and `/layout bots` open |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is answered already: a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, and the arrows walk the caret and the history.

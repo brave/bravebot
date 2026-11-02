@@ -43,7 +43,7 @@ pub(crate) const TASK_FLAGS: [&str; 20] = [
 
 /// The commands that start neither a session nor a task, so a flag that shapes one is refused
 /// beside them rather than taken and ignored, for the reason CLI-13 gives about a settings file.
-const NON_SESSION_COMMANDS: [&str; 14] = [
+pub(crate) const NON_SESSION_COMMANDS: [&str; 14] = [
     "doctor",
     "update",
     "bug-report",
@@ -66,6 +66,61 @@ pub(crate) fn starts_neither_a_session_nor_a_task(first: &str) -> Option<&'stati
         .iter()
         .copied()
         .find(|command| *command == first)
+}
+
+pub(crate) const LAYOUT: &str = "--layout";
+
+const OTHER_STARTS: [&str; 10] = [
+    "--resume",
+    "-r",
+    "--continue",
+    "-c",
+    "--fork",
+    "-f",
+    "--from-pr",
+    "-i",
+    "--interactive",
+    "--plain",
+];
+
+pub(crate) struct TakenOut<'a> {
+    pub incognito: bool,
+    pub agent: bool,
+    pub issue: bool,
+    pub pull_request: bool,
+    pub system_prompt: Option<&'a str>,
+}
+
+impl TakenOut<'_> {
+    fn first_named(&self) -> Option<&str> {
+        [
+            (self.incognito, INCOGNITO),
+            (self.agent, "--agent"),
+            (self.issue, "--issue"),
+            (self.pull_request, "--pr"),
+        ]
+        .into_iter()
+        .find_map(|(given, flag)| given.then_some(flag))
+        .or(self.system_prompt)
+    }
+}
+
+pub(crate) fn what_layout_does_not_go_with(
+    first: Option<&str>,
+    taken: &TakenOut<'_>,
+) -> Option<String> {
+    if let Some(flag) = taken.first_named() {
+        return Some(flag.to_string());
+    }
+    let first = first?;
+    if OTHER_STARTS.contains(&first)
+        || first == "--bg"
+        || TASK_FLAGS.contains(&first)
+        || starts_neither_a_session_nor_a_task(first).is_some()
+    {
+        return Some(first.to_string());
+    }
+    (!first.starts_with('-')).then(|| "a task".to_string())
 }
 
 /// Whether the arguments left after the flags are taken start a one-shot run, which is what
@@ -205,3 +260,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod layout_tests;

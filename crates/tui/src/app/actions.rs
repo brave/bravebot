@@ -19,13 +19,13 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use super::{
-    Answers, BACKGROUND_LOSES, Beginning, Changed, Continued, Ended, RunSettings, Suggesting,
-    Switch, Wrote, add_directory, branch_session, carry_out_hunks, change_directory, clear_session,
-    close_directory, compact_animated, goal_check_animated, handed_to_the_background,
-    handoff_answered, handoff_refusal, left_behind, list_rewind_points, next_after_a_turn,
-    opened_scratch, opening_trust, record_to_resume, removal_trail, remove_checkout, rewind,
-    rewind_point, run_command, run_turn_animated, save_compacted, status_report, suggest_next,
-    switch_session, with_standing,
+    Answers, BACKGROUND_LOSES, Beginning, Changed, Continued, Ended, LayoutChange, RunSettings,
+    Suggesting, Switch, Wrote, add_directory, branch_session, carry_out_hunks, change_directory,
+    clear_session, close_directory, compact_animated, goal_check_animated,
+    handed_to_the_background, handoff_answered, handoff_refusal, left_behind, list_rewind_points,
+    next_after_a_turn, opened_scratch, opening_trust, record_to_resume, removal_trail,
+    remove_checkout, rewind, rewind_point, run_command, run_turn_animated, save_compacted,
+    status_report, suggest_next, switch_session, with_standing,
 };
 use crate::state::{Attached, AttachedImage, Servers, Session};
 
@@ -279,6 +279,21 @@ impl Held<'_> {
             record,
         ));
         Some(left_behind(self.stored))
+    }
+
+    pub(super) fn leave_for_layout(
+        &mut self,
+        servers: &mut Servers,
+        layout: crate::layout::Layout,
+    ) -> (LayoutChange, Ended) {
+        self.workspace.end_session();
+        *servers = std::mem::take(&mut self.session.servers);
+        let change = LayoutChange {
+            layout,
+            workspace: self.workspace.clone(),
+            sandbox: self.session.sandbox().clone(),
+        };
+        (change, left_behind(self.stored))
     }
 
     pub(super) fn status(&mut self, config: &Config) {

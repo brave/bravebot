@@ -688,8 +688,12 @@ enum OldRows {
     Unconvertible(Problem),
 }
 
+pub fn old_file(data_folder: &Path) -> PathBuf {
+    data_folder.join(OLD_FILE)
+}
+
 fn old_rows(data_folder: &Path) -> OldRows {
-    let path = data_folder.join(OLD_FILE);
+    let path = old_file(data_folder);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return OldRows::Nothing,

@@ -109,6 +109,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
 | `--log-level <error\|info\|debug>` | how much of a failure's shape goes to the [diagnostic log](#--log-level-errorinfodebug) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
+| `--layout <name>` | open the interface in this layout, `default` or `bots`, with no session begun in `bots` ([below](#--layout-name)) |
 | `--issue <url>`, `--pr <url>` | give the session it opens its issue and pull request links, as `/issue` and `/pr` do ([below](#--issue-url-and---pr-url)) |
 | `--system-prompt <prompt>` | replace the opening of the system prompt for this run; the rest of it stays ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--append-system-prompt <prompt>` | add your own words to the system prompt for this run, after the project's `AGENTS.md` ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
@@ -373,6 +374,26 @@ Given twice, the last of a kind is used. On `--resume`, `--continue` and `--fork
 the one the record held, and a link the line does not give is left alone. A line that opens no
 interactive session (a one-shot run, `--plain`, `--bg` or a command such as `doctor`) refuses them
 rather than dropping them.
+
+## `--layout <name>`
+
+```sh
+bravebot --layout bots
+```
+
+Opens the interface in the layout named. `default` is the chat and is what you get with no flag. `bots`
+lists your bots with their faces and begins no session. The interface starts as it does with no flag:
+it reads your settings, including the project and local settings of the directory you started in,
+makes the workspace for that directory, starts the Model Context Protocol servers those settings
+request, asking about a project's first, and reads the hooks. The screen draws the bots from the bots
+file. Leave it with `/layout default` to begin a session. `/layout <name>` does the same from inside
+the interface.
+
+It goes only with a bare start of the interface, and is refused, naming both flags, with `--resume`,
+`--continue`, `--fork`, `--from-pr`, `-i`, `--incognito`, `--agent`, `--issue`, `--pr`,
+`--system-prompt`, `--append-system-prompt`, `--plain`, `--bg`, a task, any flag that begins a one-shot
+run, and each command that starts neither a session nor a task. A name that is not a layout is
+refused, and the refusal lists the names that exist.
 
 ## `--agent <name>`
 

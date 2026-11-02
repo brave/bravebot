@@ -315,7 +315,10 @@ fn ordinary_parts(
     } else {
         context_reading(session)
     };
-    let info = if !session.panel_open() && crate::panel::fits(area.width) {
+    let info = if session.interface_layout().draws_the_info_panel()
+        && !session.panel_open()
+        && crate::panel::fits(area.width)
+    {
         t!(panel_hint, chord = session.bindings().panel_name()).to_string()
     } else {
         String::new()
@@ -493,14 +496,42 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // note then writes over the middle of, which is the half a word that dropping a part whole
     // exists to avoid.
     let note = note_at_the_right(session);
-    let reserved = note.as_deref().map_or(0, |note| {
-        u16::try_from(note.chars().count()).unwrap_or(u16::MAX)
-    });
-    let kept = fitted(&parts, expendable, area.width.saturating_sub(reserved));
+    let kept = fitted(
+        &parts,
+        expendable,
+        area.width.saturating_sub(room_taken_by(note.as_deref())),
+    );
 
     let spans = hint_spans(&parts, &kept, ordinary::MODES);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    draw_note(frame, area, note);
+}
 
+pub(super) fn draw_line_beside_the_note(
+    frame: &mut Frame,
+    area: Rect,
+    session: &Session,
+    line: &str,
+) {
+    let note = note_at_the_right(session);
+    let room = area.width.saturating_sub(room_taken_by(note.as_deref()));
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            crate::status::cut(line, usize::from(room)),
+            dim(),
+        )),
+        area,
+    );
+    draw_note(frame, area, note);
+}
+
+fn room_taken_by(note: Option<&str>) -> u16 {
+    note.map_or(0, |note| {
+        u16::try_from(note.chars().count()).unwrap_or(u16::MAX)
+    })
+}
+
+fn draw_note(frame: &mut Frame, area: Rect, note: Option<String>) {
     if let Some(note) = note {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
@@ -517,7 +548,7 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
 ///
 /// One note at a time, in this order, since they share the room: the parts of the line are fitted
 /// against the width this leaves.
-fn note_at_the_right(session: &Session) -> Option<String> {
+pub(crate) fn note_at_the_right(session: &Session) -> Option<String> {
     // The word went to the model as the prompt it is, and a person who typed it to leave is looking
     // at a turn starting. Nothing else on the screen says the line was a prompt or what stops it and
     // leaves, and the turn is when they are looking for one (CMD-2).

@@ -47,6 +47,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
 | `/panel` | | Show or hide the info panel beside the transcript |
 | `/files` | | List the files the session wrote and show every edit to the highlighted one |
+| `/layout` | `<name>` | End this session and open another layout of the interface |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
 | `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
@@ -739,6 +740,25 @@ Escape or `/files` again leave the state and put the panel back as it was. It ne
 least 100 columns wide, and says so on a narrower one. With no file written it says so and changes
 nothing. [Telling sessions apart](../using/sessions.md#telling-sessions-apart) has the keys.
 
+## `/layout <name>`
+
+Ends this session and opens the layout named. The layouts are `default`, which is the chat, and `bots`,
+which lists your bots with their faces and begins with no session. `/layout bots` leaves the session
+where it is recorded, so `--resume` finds it. `/layout default` from the bots layout begins a fresh
+session, and nothing the earlier one read or was allowed carries into it. `bravebot --layout bots`
+opens the bots layout from the start.
+
+It is refused, with a line saying why and nothing ended, while a turn runs, while lines wait to be
+sent, while a `/loop`, `/goal` or `/after` is pending, in a run started with `--incognito`, and in a
+session that works under an agent definition given by `--agent` or by a record, since the next
+session would not keep it. A definition chosen by the `agent` setting does not refuse it, since the
+next session is addressed to it too. It does not wait for a turn to end. A name that is not a layout is refused, and the refusal lists the
+names that exist. In
+the bots layout `/branch`, `/resume`, `/manifest`, `/panel` and `/files` are refused, since the layout
+holds only bots and draws no info panel. Before a bot is chosen the prompt takes `/layout`, `?` and
+leaving, and a line sent to a model is refused with a line saying to choose a bot first. The `?` list
+and the slash menu there show only those.
+
 ## `/mcp [list | reconnect [alias] | disable <alias>]`
 
 Bare or as `list`, it names each [MCP server](../customize/mcp-servers.md) the session runs and how its
@@ -1395,7 +1415,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/panel`, `/files`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/panel`, `/files`, `/layout`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so

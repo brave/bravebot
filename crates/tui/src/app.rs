@@ -54,6 +54,7 @@ use actions::Held;
 mod keys;
 // The glob for what this file and its tests call. The four `pub` ones stay public as
 // `bravebot_tui::app::..`, the path `tests/references.rs` names them by.
+pub(crate) use keys::holds_ctrl_without_alt;
 use keys::*;
 pub use keys::{Action, handle_key, handle_key_while_working, handle_mouse};
 
@@ -61,6 +62,8 @@ mod models;
 use models::*;
 // Public for the CLI, which names them as `bravebot_tui::app::..`.
 pub use models::{adopt_listing_for_model, reads_structured_output};
+
+mod bots_screen;
 
 mod phase;
 use phase::{Phase, Screen};
@@ -404,9 +407,19 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     };
     let line = line.as_str();
 
+    if session.without_a_session() {
+        return dispatch_without_a_session(session, line);
+    }
+    if let Some(refused) = session.interface_layout().refuses(line) {
+        session.note(refused);
+        return Action::Redraw;
+    }
     if line.trim() == EXIT_COMMAND {
         session.quit();
         return Action::Quit;
+    }
+    if let Some(name) = argument_to(line, LAYOUT_COMMAND) {
+        return layout_command(session, name);
     }
     if line.trim() == MODEL_COMMAND {
         // Every turn asks for the definition's model, so a pick would change what `/status` says
@@ -746,6 +759,57 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         };
     }
     Action::None
+}
+
+fn dispatch_without_a_session(session: &mut Session, line: &str) -> Action {
+    if line.trim() == EXIT_COMMAND {
+        session.quit();
+        return Action::Quit;
+    }
+    if let Some(name) = argument_to(line, LAYOUT_COMMAND) {
+        return layout_command(session, name);
+    }
+    session.note(t!(bots_choose_a_bot_first));
+    Action::Redraw
+}
+
+fn layout_command(session: &mut Session, name: &str) -> Action {
+    let Some(layout) = crate::layout::Layout::from_name(name) else {
+        let names = crate::layout::Layout::names();
+        session.note(match name.is_empty() {
+            true => t!(layout_needs_a_name, names = names),
+            false => t!(layout_unknown, name = name, names = names),
+        });
+        return Action::Redraw;
+    };
+    if let Some(refused) = layout_refusal(session, bravebot_core::incognito::engaged()) {
+        session.note(refused);
+        return Action::Redraw;
+    }
+    if layout == session.interface_layout() {
+        session.note(t!(layout_already_open, name = layout.name()));
+        return Action::Redraw;
+    }
+    Action::Layout(layout)
+}
+
+fn layout_refusal(session: &Session, incognito: bool) -> Option<String> {
+    if session.status != Status::Idle {
+        return Some(t!(layout_refused_running).to_string());
+    }
+    if !session.queued.is_empty() {
+        return Some(t!(layout_refused_queued).to_string());
+    }
+    if !session.loops().is_empty() || session.goal().is_some() {
+        return Some(t!(layout_refused_pending).to_string());
+    }
+    if incognito {
+        return Some(t!(layout_refused_incognito).to_string());
+    }
+    if session.standing_definition().is_some() && !session.standing_is_by_setting() {
+        return Some(t!(layout_refused_agent).to_string());
+    }
+    None
 }
 
 /// The next thing the queue is holding for the loop, if the session is free to take it.
@@ -1159,6 +1223,7 @@ fn paste_into_box(session: &mut Session, text: &str) -> Action {
         || session.picking().is_some()
         || session.searching_history()
         || session.files_open()
+        || session.panes_have_the_keys()
     {
         return Action::None;
     }
@@ -1187,6 +1252,10 @@ fn paste_into_box(session: &mut Session, text: &str) -> Action {
 fn take_from_clipboard(session: &mut Session, pasted: crate::clipboard::Pasted) {
     use crate::clipboard::Pasted;
     use bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES;
+
+    if session.panes_have_the_keys() {
+        return;
+    }
 
     // Whatever the answer was, it is the current one, so the hint has served its purpose. It comes
     // back at the next focus change if the picture is still there and still wanted.
@@ -1454,6 +1523,7 @@ pub enum Start {
     Sending(String, AskedFor),
     /// Ask which of this directory's sessions to pick up, if there are any.
     Choose,
+    Layout(crate::layout::Layout),
     /// The same, opened for the sessions linked to one pull request, given by number or address.
     ChooseFromPr(String),
     /// A session read back off disk, continuing where it left off.
@@ -1484,6 +1554,12 @@ struct Switch {
     workspace: Workspace,
     /// The sandbox mode as the session left it, so `/sandbox` lasts until the process ends and a
     /// `/resume` does not put back the mode start-up chose.
+    sandbox: crate::sandbox_command::Sandboxed,
+}
+
+struct LayoutChange {
+    layout: crate::layout::Layout,
+    workspace: Workspace,
     sandbox: crate::sandbox_command::Sandboxed,
 }
 
@@ -1546,12 +1622,26 @@ pub fn run(
             Phase::NoSession(Screen::ResumePicker { from_pr }) => Phase::after_the_picker(
                 crate::resume::choose(&mut terminal, workspace.root(), from_pr.as_deref()),
             ),
+            Phase::NoSession(Screen::Bots { left, carrying }) => {
+                if let Some(carried) = carrying {
+                    workspace = carried.workspace;
+                    sandbox = carried.sandbox;
+                }
+                let exit = bots_screen::run(
+                    &mut terminal,
+                    confinement.clone(),
+                    sockets_with_a_path_reachable,
+                    sandbox.clone(),
+                );
+                Phase::after_the_bots_screen(exit, left)
+            }
             Phase::Session { start, carrying } => {
                 if let Some(carried) = carrying {
                     workspace = carried.workspace;
                     sandbox = carried.sandbox;
                 }
                 let mut switch = None;
+                let mut layout_change = None;
                 let ended = event_loop(
                     &mut terminal,
                     config,
@@ -1568,8 +1658,12 @@ pub fn run(
                     prompts.clone(),
                     moments,
                     &mut switch,
+                    &mut layout_change,
                 );
-                Phase::after_a_session(ended, switch)
+                match layout_change {
+                    Some(change) => Phase::after_a_session_chose_a_layout(ended, change),
+                    None => Phase::after_a_session(ended, switch),
+                }
             }
             Phase::Over(ended) => break ended,
         };
@@ -2383,7 +2477,11 @@ fn begin_session(
     // session begins with an exchange that outlived the process it happened in.
     let (conversation, mut stored, programs) = match start {
         // Already answered before the loop was entered: the picker runs once, in `run`.
-        Start::Fresh | Start::Sending(..) | Start::Choose | Start::ChooseFromPr(_) => (
+        Start::Fresh
+        | Start::Sending(..)
+        | Start::Choose
+        | Start::ChooseFromPr(_)
+        | Start::Layout(_) => (
             Conversation::new(),
             bravebot_session::sessions::Handle::begin(
                 workspace.root(),
@@ -2594,6 +2692,7 @@ fn event_loop(
     prompts: bravebot_agent::turn::SystemPrompts,
     moments: &mut bravebot_agent::hooks::SessionMoments,
     switch: &mut Option<Switch>,
+    layout_change: &mut Option<LayoutChange>,
 ) -> io::Result<Ended> {
     let Begun {
         mut workspace,
@@ -2868,6 +2967,11 @@ fn event_loop(
                 if let Some(ended) = held.resume(terminal, servers, switch, &typed) {
                     return Ok(ended);
                 }
+            }
+            Action::Layout(layout) => {
+                let (change, ended) = held.leave_for_layout(servers, layout);
+                *layout_change = Some(change);
+                return Ok(ended);
             }
             Action::Link(kind, argument) => {
                 link_session(held.session, held.stored, kind, &argument)
@@ -3939,9 +4043,11 @@ fn settle_under(
 fn beginning_of(start: &Start, root: &std::path::Path) -> Beginning {
     match start {
         // Choosing has already resolved into one of the other two by the time this runs.
-        Start::Fresh | Start::Sending(..) | Start::Choose | Start::ChooseFromPr(_) => {
-            Beginning::New
-        }
+        Start::Fresh
+        | Start::Sending(..)
+        | Start::Choose
+        | Start::ChooseFromPr(_)
+        | Start::Layout(_) => Beginning::New,
         // Read under the directory being resumed into rather than the one recorded, so a project
         // that was moved or renamed since resumes with its rules about the same files.
         Start::Resuming(record) => Beginning::Resumed(record.trust_map(root)),
@@ -7073,6 +7179,9 @@ fn fold_outcome(
     session.watch_turn_ended();
     carried
 }
+
+#[cfg(test)]
+mod layout_tests;
 
 #[cfg(test)]
 mod tests {
@@ -22224,6 +22333,7 @@ mod tests {
                 ISSUE_COMMAND,
                 JOBS_COMMAND,
                 LANGUAGE_COMMAND,
+                LAYOUT_COMMAND,
                 LIMIT_COMMAND,
                 LOOP_COMMAND,
                 MODEL_COMMAND,

@@ -22,8 +22,6 @@ docs/specs/bots.md:BOT-13: a bot's memory is the definition's, and the terminal 
 docs/specs/bots.md:BOT-14: `/undo` in a bot's session is the terminal's `/undo`
 docs/specs/bots.md:BOT-15: the carry-over turn and the consolidation turn are one text in Rust
 docs/specs/bots.md:BOT-16: the terminal sends the consolidation turn after each compaction and after the migrating turn
-docs/specs/bots.md:BOT-17: the terminal has a second layout for bots, chosen by name
-docs/specs/bots.md:BOT-18: the terminal draws a bot's face beside its name and leaves its avatar as it is
 docs/specs/chatgpt-sign-in.md:CHATGPT-1: only a command a person types signs in
 docs/specs/chatgpt-sign-in.md:CHATGPT-2: a token reaches only the hosts compiled in for it
 docs/specs/chatgpt-sign-in.md:CHATGPT-3: the values the request depends on are generated here, for one sign-in

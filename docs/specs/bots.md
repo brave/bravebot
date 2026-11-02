@@ -6,7 +6,14 @@ governs:
   - crates/agent/src/agents.rs
   - crates/agent/src/bots.rs
   - crates/agent/src/memory.rs
+  - crates/cli/src/flags.rs
+  - crates/cli/src/main.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/bots_screen.rs
+  - crates/tui/src/app/phase.rs
+  - crates/tui/src/bots_pane.rs
+  - crates/tui/src/layout.rs
+  - crates/tui/src/state/bots.rs
   - crates/ui-files/src/main.rs
   - crates/ui-bridge/src/bots.rs
   - crates/ui-bridge/src/bridge.rs
@@ -34,7 +41,10 @@ presents them. It does not change what a bot is. [definition-memory.md](definiti
 what a bot is, how its memory is kept and what the GUI does with it today, and this file takes
 that as given.
 
-Nothing here is built. The reasoning and the trust analysis are in
+Built so far are the module that reads and writes the rows and the bridge methods the GUI calls
+it through (slice 1), the layout seam and the phase with no session (slice 2a), and the bots layout
+that lists the bots, opened by `--layout bots` and `/layout bots` (slice 2b). Not built is everything
+that needs a session as a bot, the forms and the memory. The reasoning and the trust analysis are in
 [../design/bots-layer.md](../design/bots-layer.md). Where each clause is built, and in what order,
 is in [../PLAN.md](../PLAN.md).
 
@@ -777,14 +787,21 @@ A layout decides which panes are drawn around the chat and which keys reach them
 session, the transcript, the approvals or the margin drawn around untrusted content, which are one
 implementation shared by every layout.
 
-`/layout <name>` ends the current session and opens the named layout with no carried session, so nothing a
-session read, was granted or holds carries into the next one. The ended session is already recorded
+`/layout <name>` ends the current session and opens the named layout with no carried session. The
+transcript, what the session read, the directories it added, the paths and hosts it was let reach and
+the answers it was given, and the file watches its hooks began do not carry into the next one. The sandbox mode
+and the Model Context Protocol servers the session started do carry, as they do across `/resume` and
+`/clear`, so a mode typed with `/sandbox` and a server the person approved last until the process
+ends. The ended session is already recorded
 and is found by `--resume`, and a bot's conversation is already recorded in its row
 ([BOT-11](#BOT-11)). The command is refused, with a line saying why and nothing ended, while a turn is
 running, while a question is waiting for an answer, while lines are queued, while a form or a
 confirmation is open, drawn or not, with a line saying to save or cancel it first, while a `/loop`,
 `/goal` or `/after` is pending, and in a run started with
-`--incognito`, whose session writes no record to find again. It does not wait for the turn to end, as
+`--incognito`, whose session writes no record to find again, and in a session that works under an
+agent definition that `--agent` or a record gave, since the next session would not keep it. A
+definition the `agent` setting chose does not refuse it, since the next session is addressed to the
+same definition. It does not wait for the turn to end, as
 `/branch` does ([SESSION-31](sessions.md#SESSION-31)), because the screen would change later with
 nothing typed.
 
@@ -795,13 +812,25 @@ conversations begins a session in the bots layout, after the folder startup ques
 ([BOT-9](#BOT-9)). `/layout default` begins a fresh session in the default layout. Archiving the bot
 whose session is open ends the session and returns to the phase with none. The phase with no session
 draws the prompt box, which takes only `/layout`, the key help and quitting, and any other line is
-refused with a line saying to choose a bot first. The prompt box follows
+refused with a line saying to choose a bot first. The key list and the slash menu offer only what the
+box takes. The prompt box follows
 [INPUT-4](terminal-input.md#INPUT-4): Esc on it discards a half-typed line and does nothing on an empty
 one, and Ctrl-C leaves only on the last rung of its ladder, so one press never ends the interface. In the
 panes Esc goes back one level, and at the top level of a pane it returns focus to the prompt, as it does
 in a session. The phase starts with focus in the bots list, so a person can choose a bot without a
 chord. A person leaves the phase for a default session with `/layout default`, and leaves the interface
 by the ladder, which Ctrl-C follows in the panes as it does in the prompt box.
+
+The first Ctrl-C of the ladder says on screen that a second one leaves, at the right of the hint line
+and at every width, as the default layout does. The hint line names the chord that moves between the
+list and the prompt only where the list is drawn, since the chord does nothing below 100 columns.
+
+Below 100 columns the phase always draws the line about width, and draws a refusal or any other
+message on the rows under it, so a message never replaces that line. A message goes at the next key
+that reaches the screen, whichever pane has the focus. While the list has the focus a paste and a drop
+reach no prompt box, and Ctrl-C, Ctrl-D and the suspend chord ([INPUT-47](terminal-input.md#INPUT-47))
+reach their handlers from the list. When rows still sit in `bravebot-ui.json` because they could not
+be moved ([BOT-4](#BOT-4)), the list does not say there are no bots and draws a line naming that file.
 
 `--layout <name>` goes only with a bare start of the interactive interface. It is refused, naming
 both flags, with `--resume`/`-r`, `--continue`/`-c`, `--fork`/`-f` and `--from-pr`; with
@@ -823,10 +852,13 @@ refused and not ignored, for the reason [CLI-13](cli.md#CLI-13) gives about a se
 
 **Keys and focus.** The bots layout is a mode over the session, as the delegate view is and as the
 info panel's files state is ([FILES-3](files-mode.md#FILES-3)). The prompt
-and the chat keep the keys they have in any session. A chord moves focus from the prompt to the panes,
-and Esc returns to the prompt. The chord is not one the input spec takes already
-([INPUT-32](terminal-input.md#INPUT-32), [INPUT-47](terminal-input.md#INPUT-47) and
-[INPUT-48](terminal-input.md#INPUT-48)), and the slice's pull request adds it to the table of keys. In a pane, Up and Down or `j` and `k` move through a list, Enter picks,
+and the chat keep the keys they have in any session. The action `panes` moves focus from the prompt to
+the panes, and pressed again it moves focus back. Its default chord is `alt-p`, and a settings file
+can move it as it moves the other actions ([INPUT-32](terminal-input.md#INPUT-32)). Esc at the top
+level of a pane also returns focus to the prompt. In the default layout the key does what it did
+before the action existed. The panel chord ([PANEL-5](info-panel.md#PANEL-5)) is taken and does
+nothing in the bots layout: it does not open or close the info panel, which the layout does not draw,
+and it does not write the saved choice of whether the panel is open. In a pane, Up and Down or `j` and `k` move through a list, Enter picks,
 Tab moves to the next pane, and Esc goes back one level. A list is drawn as the `--resume` picker is
 drawn, and a refusal or a failed write that names its path is a line under the list, as that picker
 draws one. Archive and delete ask as that picker's delete asks, with a question naming the bot: `y`
@@ -852,7 +884,8 @@ In the bots layout, `/branch` and `/resume` are refused with a line naming `--fo
 since either would leave a session with no bot in a layout that holds only bots
 ([BOT-11](#BOT-11)). `/manifest` is refused in a bot's session, as `--mode manifest` is refused with
 an addressed run ([CLI-17](cli.md#CLI-17)). `/panel` and `/files` are refused, since the layout draws no info
-panel. `/rewind` follows the rule `/undo` does ([BOT-14](#BOT-14)). `/clear` and `/handoff` open a new
+panel, and they leave the panel's open state and its saved choice as they were. The hint line does
+not name the panel chord in the bots layout. `/rewind` follows the rule `/undo` does ([BOT-14](#BOT-14)). `/clear` and `/handoff` open a new
 session of the same bot, which is added to the row after its first turn and whose record names no
 definition ([BOT-10](#BOT-10), [BOT-11](#BOT-11)). `/memory`, `/mcp` and every other command work as
 in any session.
@@ -883,7 +916,114 @@ definition) is unchanged. It does not open the bots layout and does not read the
 session it starts is not recorded in a row. `--layout bots` given with `--agent` is refused, since a
 bot's session is addressed to the definition of its row and the flag would name a second one.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::layout_tests::no_bots_draws_one_line_saying_how_to_make_one`
+`verified-by: bravebot_tui::app::layout_tests::a_file_that_does_not_parse_shows_no_rows_and_names_its_path`
+`verified-by: bravebot_tui::app::layout_tests::a_row_reads_a_bounded_prefix_of_a_purpose_with_no_length_bound`
+`verified-by: bravebot_tui::app::layout_tests::a_row_with_a_multi_megabyte_purpose_draws_the_same_row_as_its_first_screenful`
+`verified-by: bravebot_tui::app::layout_tests::rows_still_in_the_desktops_file_are_not_called_no_bots`
+`verified-by: bravebot_tui::app::layout_tests::an_unreadable_file_is_named_and_the_old_rows_line_is_not_drawn_beside_it`
+`verified-by: bravebot_tui::app::layout_tests::dropped_entries_are_a_line_naming_the_file`
+`verified-by: bravebot_tui::app::layout_tests::the_panes_need_100_columns_and_the_prompt_box_is_drawn_at_any_width`
+`verified-by: bravebot_tui::app::layout_tests::a_session_in_the_bots_layout_draws_the_panes_and_no_info_panel`
+`verified-by: bravebot_tui::app::layout_tests::a_drag_in_one_pane_never_copies_the_other`
+`verified-by: bravebot_tui::app::layout_tests::a_selection_in_the_pane_is_dropped_when_the_pane_stops_being_drawn`
+`verified-by: bravebot_tui::app::layout_tests::the_arrows_and_j_and_k_move_through_the_list_and_stop_at_its_ends`
+`verified-by: bravebot_tui::app::layout_tests::the_marker_is_drawn_on_the_selected_bot`
+`verified-by: bravebot_tui::app::layout_tests::enter_on_a_bot_says_so_and_begins_no_session`
+`verified-by: bravebot_tui::app::layout_tests::tab_with_one_pane_drawn_moves_nothing`
+`verified-by: bravebot_tui::app::layout_tests::escape_returns_focus_to_the_prompt`
+`verified-by: bravebot_tui::app::layout_tests::the_chord_moves_focus_both_ways_and_nothing_where_no_pane_is_drawn`
+`verified-by: bravebot_tui::app::layout_tests::narrowing_the_terminal_returns_focus_to_the_prompt`
+`verified-by: bravebot_tui::app::layout_tests::the_shortcut_list_names_the_panes_chord_in_the_bots_layout`
+`verified-by: bravebot_tui::app::layout_tests::the_shortcut_list_of_the_default_layout_does_not_name_the_panes_chord`
+`verified-by: bravebot_tui::app::layout_tests::in_the_default_layout_the_chord_types_its_letter_as_before`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_c_in_the_panes_follows_the_ladder`
+`verified-by: bravebot_tui::app::layout_tests::the_panel_chord_does_nothing_in_the_bots_layout`
+`verified-by: bravebot_tui::app::layout_tests::the_prompt_box_follows_the_ladder_of_the_input_spec`
+`verified-by: bravebot_tui::app::layout_tests::a_line_other_than_a_layout_help_or_quitting_is_refused`
+`verified-by: bravebot_tui::app::layout_tests::layout_quitting_and_the_key_list_are_taken_at_any_width`
+`verified-by: bravebot_tui::app::layout_tests::layout_names_the_layouts_that_exist_when_it_is_refused`
+`verified-by: bravebot_tui::app::layout_tests::the_chords_of_actions_that_need_a_session_do_nothing`
+`verified-by: bravebot_tui::app::layout_tests::no_key_and_no_enter_hands_the_loop_an_action_the_screen_does_not_carry_out`
+`verified-by: bravebot_tui::app::layout_tests::a_frame_is_drawn_after_an_event_that_changes_the_screen_and_not_after_a_timeout`
+`verified-by: bravebot_tui::app::layout_tests::a_refusal_below_100_columns_is_drawn_under_the_line_about_width_and_the_next_key_clears_it`
+`verified-by: bravebot_tui::app::layout_tests::the_message_of_a_refused_line_goes_with_the_next_key_wherever_the_focus_is`
+`verified-by: bravebot_tui::app::layout_tests::a_key_that_takes_a_message_away_in_the_loop_owes_the_frame_that_removes_it`
+`verified-by: bravebot_tui::app::layout_tests::a_paste_or_a_drop_while_the_list_has_the_keys_reaches_no_box`
+`verified-by: bravebot_tui::app::layout_tests::a_picture_pasted_while_the_list_has_the_keys_names_no_chord`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_c_and_ctrl_d_reach_the_ladder_from_the_list`
+`verified-by: bravebot_tui::app::layout_tests::the_suspend_chord_reaches_its_handler_from_the_list`
+`verified-by: bravebot_tui::app::layout_tests::a_chord_moved_onto_ctrl_alt_c_or_d_does_not_reach_the_prompt_from_the_list`
+`verified-by: bravebot_tui::app::layout_tests::a_drag_in_the_list_never_copies_the_prompt_box_and_the_reverse`
+`verified-by: bravebot_tui::app::layout_tests::a_selection_in_the_list_is_dropped_when_a_resize_below_100_columns_stops_drawing_it`
+`verified-by: bravebot_tui::app::layout_tests::the_first_ctrl_c_says_the_next_one_leaves_at_every_width`
+`verified-by: bravebot_tui::app::layout_tests::a_key_that_takes_the_offer_back_takes_its_line_off_the_screen`
+`verified-by: bravebot_tui::app::layout_tests::the_panel_chord_and_the_chords_that_need_a_session_take_the_offer_back_and_say_so`
+`verified-by: bravebot_tui::app::layout_tests::the_panes_chord_takes_the_offer_back_and_says_so_where_no_list_is_drawn`
+`verified-by: bravebot_tui::app::layout_tests::a_chord_takes_back_the_note_of_a_cleared_line_that_offered_no_exit`
+`verified-by: bravebot_tui::app::layout_tests::the_panes_chord_takes_the_offer_back_and_says_so_where_the_list_is_drawn`
+`verified-by: bravebot_tui::app::layout_tests::a_chord_with_no_offer_to_take_back_owes_no_frame`
+`verified-by: bravebot_tui::app::layout_tests::a_chord_that_takes_the_offer_back_in_the_loop_owes_the_frame_that_removes_it`
+`verified-by: bravebot_tui::app::layout_tests::a_chord_with_no_offer_standing_owes_no_frame_in_the_loop`
+`verified-by: bravebot_tui::app::layout_tests::the_hint_names_the_panes_chord_only_where_the_panes_are_drawn`
+`verified-by: bravebot_tui::app::layout_tests::a_step_quits_changes_layout_or_stays`
+`verified-by: bravebot_tui::app::layout_tests::the_key_list_holds_only_what_the_phase_takes`
+`verified-by: bravebot_tui::app::layout_tests::the_key_list_names_the_suspend_chord_the_phase_takes`
+`verified-by: bravebot_tui::app::layout_tests::the_slash_menu_holds_only_what_the_phase_takes`
+`verified-by: bravebot_tui::app::layout_tests::a_session_in_the_default_layout_still_offers_everything`
+`verified-by: bravebot_tui::app::layout_tests::the_screen_takes_the_name_off_the_title_of_the_session_it_follows`
+`verified-by: bravebot_tui::app::layout_tests::branch_resume_and_manifest_are_refused`
+`verified-by: bravebot_tui::app::layout_tests::the_panel_commands_and_chord_change_neither_the_flag_nor_the_saved_choice`
+`verified-by: bravebot_tui::app::layout_tests::files_is_refused_with_its_own_line_where_a_file_was_written`
+`verified-by: bravebot_tui::app::layout_tests::the_default_layout_given_the_same_keys_opens_the_panel_and_saves_the_choice`
+`verified-by: bravebot_tui::app::layout_tests::the_pane_reads_the_bots_file_through_the_module`
+`verified-by: bravebot_tui::app::layout_tests::an_idle_session_ends_into_the_layout_named`
+`verified-by: bravebot_tui::app::layout_tests::it_is_refused_with_a_line_while_a_turn_runs_lines_wait_or_a_loop_goal_or_after_is_pending`
+`verified-by: bravebot_tui::app::layout_tests::typed_mid_turn_it_is_refused_at_once_and_never_waits`
+`verified-by: bravebot_tui::app::layout_tests::the_layout_already_open_is_said_and_ends_nothing`
+`verified-by: bravebot_tui::app::layout_tests::a_session_working_under_an_agent_definition_is_refused_and_ends_nothing`
+`verified-by: bravebot_tui::app::layout_tests::a_definition_the_agent_setting_chose_does_not_refuse_the_layout`
+`verified-by: bravebot_tui::app::layout_tests::the_command_is_in_the_table_and_spells_the_layouts`
+`verified-by: bravebot_tui::app::layout_tests::an_open_mode_keeps_its_keys_through_both_handlers`
+`verified-by: bravebot_tui::app::layout_tests::escape_in_the_panes_does_not_stop_a_turn_and_ctrl_c_does`
+`verified-by: bravebot_tui::app::layout_tests::the_bots_layout_starts_with_no_session_and_the_default_begins_one`
+`verified-by: bravebot_tui::app::layout_tests::a_session_that_chose_the_bots_layout_ends_into_its_screen_with_what_it_left`
+`verified-by: bravebot_tui::app::layout_tests::leaving_the_screen_begins_a_fresh_session_or_ends_the_interface`
+`verified-by: bravebot_tui::app::layout_tests::the_first_session_fires_the_moment_once_and_a_session_begun_by_layout_does_not_fire_it_again`
+`verified-by: bravebot_tui::app::layout_tests::leaving_ends_what_the_session_was_granted_and_carries_what_resume_carries`
+`verified-by: bravebot_tui::app::layout_tests::the_window_moves_only_when_the_selection_leaves_it`
+`verified-by: bravebot_tui::app::layout_tests::the_last_page_keeps_the_marker_moving_up_the_screen`
+`verified-by: bravebot_tui::app::layout_tests::a_window_that_changes_height_keeps_the_selection_in_view`
+`verified-by: bravebot_tui::app::layout_tests::the_list_is_drawn_before_the_notes_under_it_where_both_cannot_fit`
+`verified-by: bravebot_tui::app::layout_tests::escape_clears_a_typed_line_without_quitting`
+`verified-by: bravebot_tui::app::layout_tests::escape_on_an_empty_line_does_nothing_and_twice_clears_and_stays`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_c_on_a_line_takes_it_and_offers_and_the_second_press_leaves`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_c_on_an_empty_box_offers_without_claiming_a_line_went`
+`verified-by: bravebot_tui::app::layout_tests::a_key_between_the_two_presses_withdraws_the_offer`
+`verified-by: bravebot_tui::app::layout_tests::input_that_is_not_a_key_withdraws_the_offer`
+`verified-by: bravebot_tui::app::layout_tests::two_interrupts_in_one_read_do_not_leave_and_arm_nothing`
+`verified-by: bravebot_tui::app::layout_tests::two_end_of_transmissions_in_one_read_do_not_leave`
+`verified-by: bravebot_tui::app::layout_tests::a_refused_way_out_says_so_in_the_message_of_the_screen`
+`verified-by: bravebot_tui::app::layout_tests::ctrl_d_leaves_only_from_an_empty_box_and_on_the_second_press`
+`verified-by: bravebot_tui::app::layout_tests::a_press_on_its_own_after_a_run_still_leaves`
+`verified-by: bravebot_tui::app::layout_tests::letting_go_of_the_keys_in_either_order_still_leaves`
+`verified-by: bravebot_tui::layout_incognito::layout_is_refused_with_a_line_and_ends_nothing`
+`verified-by: bravebot_cli::flags::layout_tests::every_entry_of_the_commands_own_lists_is_refused`
+`verified-by: bravebot_cli::flags::layout_tests::every_flag_and_command_the_spec_lists_is_refused`
+`verified-by: bravebot_cli::flags::layout_tests::a_flag_taken_out_earlier_and_a_bare_task_are_refused_by_name`
+`verified-by: bravebot_cli::flags::layout_tests::a_bare_start_is_accepted`
+`verified-by: bravebot_cli::layout_flag_tests::a_name_no_layout_answers_to_is_refused_naming_the_layouts`
+`verified-by: bravebot_cli::layout_flag_tests::an_empty_name_is_refused_as_a_missing_one_is`
+`verified-by: bravebot_cli::layout_flag_tests::a_parsed_layout_opens_that_layout_and_default_is_a_fresh_session`
+`verified-by: bravebot_cli::layout_flag_tests::a_missing_name_is_refused`
+`verified-by: bravebot_cli::layout_flag_tests::default_is_accepted_and_the_last_name_wins`
+`verified-by: bravebot_cli::layout_flag::a_name_no_layout_answers_to_is_refused_with_the_names_that_exist`
+`verified-by: bravebot_cli::layout_flag::a_line_that_is_not_a_bare_start_is_refused_naming_both_flags`
+`verified-by: bravebot_cli::layout_flag::the_order_of_the_arguments_does_not_change_the_refusal`
+`verified-by: bravebot_cli::layout_flag::the_version_and_the_help_win_over_the_layout_wherever_it_is_given`
+`verified-by: bravebot_cli::layout_flag::the_usage_text_lists_every_layout_name`
+`verified-by: bravebot_tui::keybindings::the_panes_chord_is_alt_p_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::the_panes_chord_is_contested_like_every_other`
 
 <a id="BOT-18"></a>
 ### BOT-18: the terminal draws a bot's face beside its name and leaves its avatar as it is
@@ -901,7 +1041,9 @@ seed, and the seed of every other bot is left as it is.
 already has the drawing. Five rows to a bot makes a long list, and the face can be taken out of the
 list later if the list looks too packed.
 
-`verified-by: none`
+`verified-by: bravebot_tui::app::layout_tests::each_bot_is_drawn_with_the_face_its_seed_describes_and_is_as_tall_as_the_face`
+`verified-by: bravebot_tui::app::layout_tests::the_bots_are_drawn_in_the_order_the_module_returned_them`
+`verified-by: bravebot_tui::app::layout_tests::control_characters_are_replaced_and_a_seed_is_never_drawn_as_text`
 
 ## Known costs
 

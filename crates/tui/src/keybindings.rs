@@ -199,6 +199,7 @@ pub struct Keybindings {
     #[cfg(unix)]
     pub suspend: KeyChord,
     pub enhance: KeyChord,
+    pub panes: KeyChord,
 }
 
 impl Default for Keybindings {
@@ -218,14 +219,15 @@ impl Default for Keybindings {
             #[cfg(unix)]
             suspend: KeyChord::ctrl('z'),
             enhance: KeyChord::ctrl('p'),
+            panes: KeyChord::alt('p'),
         }
     }
 }
 
-/// How many actions a settings file can move. Thirteen where the session can be suspended, and
-/// twelve where it cannot, since an action that does nothing has no chord to be moved off of
+/// How many actions a settings file can move. Fourteen where the session can be suspended, and
+/// thirteen where it cannot, since an action that does nothing has no chord to be moved off of
 /// (INPUT-47).
-const MOVABLE: usize = if cfg!(unix) { 13 } else { 12 };
+const MOVABLE: usize = if cfg!(unix) { 14 } else { 13 };
 
 /// The spellings a terminal reports for the byte Ctrl-_ sends, which is 0x1f.
 ///
@@ -263,6 +265,7 @@ impl Keybindings {
             ("enhance", &mut self.enhance),
             ("history", &mut self.history),
             ("panel", &mut self.panel),
+            ("panes", &mut self.panes),
             ("paste", &mut self.paste),
             ("scope", &mut self.scope),
             ("scroller", &mut self.scroller),
@@ -361,6 +364,10 @@ impl Keybindings {
         self.scope.matches(key)
     }
 
+    pub fn is_panes(&self, key: &KeyEvent) -> bool {
+        self.panes.matches(key)
+    }
+
     /// Whether this press asks for the session to be suspended to the shell (INPUT-47).
     #[cfg(unix)]
     pub fn is_suspend(&self, key: &KeyEvent) -> bool {
@@ -381,6 +388,7 @@ impl Keybindings {
             self.enhance,
             self.history,
             self.panel,
+            self.panes,
             self.paste,
             self.scope,
             self.scroller,
@@ -453,6 +461,10 @@ impl Keybindings {
         self.scope.display()
     }
 
+    pub fn panes_name(&self) -> String {
+        self.panes.display()
+    }
+
     pub fn undo_name(&self) -> String {
         self.undo.display()
     }
@@ -478,6 +490,7 @@ impl Keybindings {
             || self.is_paste(key)
             || self.is_panel(key)
             || self.is_scope(key)
+            || self.is_panes(key)
             || self.is_undo(key)
             || self.is_enhance(key);
         #[cfg(unix)]
@@ -936,5 +949,34 @@ mod tests {
             !bindings.is_undo(&pressed),
             "undo answered a chord moved to enhance"
         );
+    }
+
+    /// INPUT-32.
+    #[test]
+    fn the_panes_chord_is_alt_p_and_can_be_moved() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.panes, KeyChord::alt('p'));
+        assert_eq!(defaults.panes_name(), "alt-p");
+        assert_eq!(MOVABLE, if cfg!(unix) { 14 } else { 13 });
+        assert_eq!(Keybindings::default().slots().len(), MOVABLE);
+
+        let mut map = BTreeMap::new();
+        map.insert("panes".to_string(), "alt-k".to_string());
+        let bindings = Keybindings::from_map(&map);
+        let moved = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::ALT);
+        let vacated = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT);
+        assert!(bindings.is_panes(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_panes(&vacated) && !bindings.claims(&vacated));
+    }
+
+    #[test]
+    fn the_panes_chord_is_contested_like_every_other() {
+        let mut map = BTreeMap::new();
+        map.insert("watch".to_string(), "alt-p".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+
+        let mut map = BTreeMap::new();
+        map.insert("panes".to_string(), "ctrl-l".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
     }
 }
