@@ -62,6 +62,12 @@ written to, so later sessions started in that directory are not asked. Where a y
 option reads **Trust for this session** and the question says the answer cannot be kept here. A
 refusal is never kept. See [Remembering the answer](../security/trust.md#remembering-the-answer).
 
+Where the editor offers **Allow and remember** beside a command or an MCP tool call, the question
+says what it grants. For a command, it trusts that exact command with those exact arguments in this
+directory: it runs again without asking, side effects included, now and in later sessions, and what
+it prints is trusted so the model reads it. For a tool call, every later call to that tool in this
+project is allowed without asking again, with any arguments.
+
 A host that a sandboxed `run` line reaches and that [`sandbox.network`](../security/sandbox.md#sandboxnetwork)
 does not list is also asked about in the editor. An allow there is labelled as lasting the session and
 writes no rule.

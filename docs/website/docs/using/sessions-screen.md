@@ -142,6 +142,12 @@ leave the turn running, and no other key answers it. The session you are already
 leaving the screen, with no question. A manifest run, a session open in another terminal and a
 directory that is gone are refused at once, before the turn is touched.
 
+Only a turn is asked about. While a compaction, an aside, a commit message, a handoff, a goal check, a
+plan run or a command for the shell is running, those keys put no question, because none of them can
+be stopped part-way and left as it was. The list says in one line what is running and that opening,
+copying or beginning a session ends this one, so it can be done once that has ended. Opening the
+session this terminal is in only leaves the screen.
+
 A session open in this terminal, or in another one, is never archived or deleted from here.
 
 ## The mouse

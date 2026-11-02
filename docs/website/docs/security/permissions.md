@@ -61,6 +61,11 @@ and the tag characters, which write ASCII letters that a model reads. Those two 
 one out as `‹U+XXXX›`, and a tag character also with the letter it stands for. A sentence above the
 text says how many there are. The planner receives the text itself.
 
+The write question does the same for the lines a write adds or removes, and it shows every row of the
+change, kept lines included. The sentence over the rows counts the characters in the added and removed
+lines and says the file is written with them as they are, and a yes is not taken before that sentence
+has been drawn. The file keeps the bytes it was given.
+
 A check's **verdict word** sits outside the margin, because it is the system's own. The **sentence**
 the check wrote about the content sits inside it, because that is free text about bytes somebody else
 may own, and it is the one line on such a screen you might otherwise read as the program's.
@@ -251,7 +256,10 @@ decides a label; `r` is the key that decides a lifetime. If you want a command's
 **It covers one line, not a family**, apart from the `s` answer described [below](#when-a-lines-arguments-change-every-time). A later line is covered when the program's name, the binary that
 name resolved to, every argument, every variable the line set, and where its output went are all the
 same. Sending the errors somewhere else makes a different line. A pipeline is covered only where every
-stage is.
+stage is. Steps you remembered one at a time are not covered when a later line joins them with `|` or
+`&&`, because the record compares the whole line. In the session where you pressed `a` or `r`, each step
+of that line also goes on the session's vouched list, and the vouched list covers any pipeline, order or
+join that holds only vouched steps. A line with one step you did not vouch for is still asked about.
 
 **Where `r` is not offered**, because those lines are asked about whatever is recorded and the key would
 stop no prompt:
@@ -281,7 +289,8 @@ staying.
 
 A covered line is also only as good as the tree it runs in. `make check` runs whatever the makefile in
 that tree has come to say, and `npm test` whatever its `package.json` says, so pressing `r` is a
-decision about the tree as much as about the command. A vouch has the same property and the session
+decision about the tree as much as about the command. A binary replaced in place at the recorded path,
+and a `git switch` that rewrites a file the line takes its work from, are covered without asking. A vouch has the same property and the session
 bounds it; this record is bounded only by your deleting the line.
 :::
 

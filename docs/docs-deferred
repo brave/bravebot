@@ -17,3 +17,4 @@ bf261766f1e2515c07c825c8015959dc19c0c091 credential-protection.md is status: pro
 bde5d3328608ff42b409ed65f927df490d9d6135 desktop bot behaviour: no page describes a desktop or bridge front end; fold in when one exists
 ef30af9290f7c64519440a1417db260b9dc7653a desktop bot behaviour: no page describes a desktop or bridge front end; fold in when one exists
 fae7fdfdce5a7096d638fb2eb50ccfabaaec48cb MEMORY-11 is not built per its spec (definition-memory.md); fold in when the migration ships
+128df4ef5889060593646eabed57ca9890f09c1f Connector definitions (manifest runs fetching and acting through installed connector definitions) have no page: docs/specs/connectors.md says documented-by none. Write a page on installing a connector definition and the authority it carries, then resolve.

@@ -323,6 +323,32 @@ variables above: a second statement by the same person, on the same machine, tha
 on it is held to as well. A proxy nobody stated sees nothing, and one somebody stated sees what they
 already let it see.
 
+**A client certificate.** A gateway or proxy that requires mutual TLS is reached by naming a
+certificate and its private key: `BRAVEBOT_CLIENT_CERT` is a file holding the certificate, with its
+chain where there is one, and `BRAVEBOT_CLIENT_KEY` is a file holding the key. The key may be
+unencrypted or an encrypted PKCS#8 key (`BEGIN ENCRYPTED PRIVATE KEY`), which is opened with the
+passphrase in `BRAVEBOT_CLIENT_KEY_PASSPHRASE`. The two paths and the passphrase are read from the
+environment only, not from a settings file. The pair is offered to a server that asks for a
+certificate during the handshake, on a request to a model provider or its gateway and only at that
+request's own scheme, host and port. A redirect to another host or port, and every other request,
+including the ChatGPT and xAI sign-ins, goes out without it.
+
+Naming only one of the two, a file that cannot be read, a file with no certificate or no key in it,
+an encrypted key with no passphrase or with one that does not open it, and a key that does not belong
+to the certificate are each reported by path, all of them rather than the first. A key in OpenSSL's
+legacy encrypted form (`Proc-Type: 4,ENCRYPTED`) is reported as that form and is not opened: convert
+it with `openssl pkcs8 -topk8`. While any of these is reported, every TLS handshake is refused, so a
+request never goes out without the certificate to a server that would have been given it.
+`bravebot doctor` names the two paths in
+its `network` section and says they loaded, says whether a passphrase was given and where it is read
+from, or names each path that did not and ends on a configuration error. It never prints the key or
+the passphrase.
+
+After a connection failure on the first hop of such a request, both files are read again together,
+and the request is sent once more only if that pair differs from the one in use. A certificate
+rotated under a running process is picked up without a restart, and a reading that cannot be used
+keeps the pair in use.
+
 ## Confinement
 
 `bravebot doctor` reports the operating-system confinement available on your platform and whether
@@ -418,7 +444,11 @@ therefore cannot run `git config --global`. The locations are fixed paths, so a 
 `~/.local/bin` stays writable.
 
 **On macOS a stage reaches only a fixed list of system services.** The pasteboard and LaunchServices
-(opening a file or URL in another application) are refused. A program that needs another service,
+(opening a file or URL in another application) are refused. So `open` and `osascript` fail under
+the sandbox. Where the session would accept a request to run a line with no sandbox, a failed step
+that ran one of them carries a sentence from Brave Bot saying so, and that launching an application,
+opening a URL in one or scripting one needs the line run again with `unconfined`, with the refusal
+given in `why`. A program that needs another service,
 such as a file watcher built on FSEvents or Spotlight, loses that feature. The certificate trust
 services are in the list only for a stage allowed to reach the network. A stage held to a host list
 has them, and macOS fetches a certificate's issuer from its own process, so the host list does not
@@ -451,7 +481,9 @@ inside a credential location is left out.
 
 **A program Brave Bot starts itself is never one a stage wrote.** The AWS CLI, the clipboard tools,
 `osascript` and the inhibitor `/caffeinate` start outside the sandbox, so each is looked up only in
-absolute `PATH` entries that lie outside every directory a stage may write. Someone whose only `aws`
+absolute `PATH` entries that lie outside every directory a stage may write. On Unix an entry is compared with those directories by device and inode, so a spelling
+the volume opens as the same directory (a macOS firmlink, a Linux bind mount, a case-folded name) is left
+out as well. Someone whose only `aws`
 is in an activated virtualenv, or in the session's own directory, is told it is not installed until
 it is installed elsewhere. In bypass mode in a trusted directory, a stage may write every path your
 account can write, so an `aws` in a directory your account owns (a Homebrew prefix, say) is found
@@ -613,7 +645,9 @@ variable.
 When bravebot panics it writes one small file to `~/.bravebot/crash-reports`, and the next launch
 sends it to a Backtrace project Brave owns and deletes it. The process that panics sends nothing: it
 may be holding a lock or out of memory, and a request made there could hang the process you are
-watching fail.
+watching fail. A launch sends the waiting reports, oldest first, only after it has run for three
+seconds, so a command that ends sooner such as `--version` makes no request. At most five reports wait,
+the oldest being deleted first, and one older than two weeks is deleted unsent.
 
 A report is numbers, words fixed in the source and one source location, by what each field can be
 rather than by each call site's care. It holds the version and build, the operating system and

@@ -27,7 +27,11 @@ denied file is refused, and an `ask` rule still asks for a write that comes thro
 file with more than one hard link is also checked under each other name the open directories hold for
 it, so a hard link to a denied file is refused in a read and in a write. If that search hits its cap or
 cannot list a directory while a `Read` or `Edit` deny rule is in force, the call is refused. The second
-name can add a refusal or a question and never removes one. A `deny` or `ask` rule written through a
+name can add a refusal or a question and never removes one. A listing, a search and a repository map hold
+their entries to the same rules: an entry is left out when a rule covers any name its file has, so a hard
+link to a denied file is not reported, and neither is an entry whose name beneath a second path to an
+open tree a rule covers. Where the search for the other names cannot finish while a `Read` deny rule is
+in force, an entry with more than one name is left out. A `deny` or `ask` rule written through a
 link covers the place the link reaches: with `linked` a link to `real`, `Read(linked/**)` refuses
 `real/secret.txt`. A `deny` or `ask` rule written as a full path, or from `~/`, that lies inside the
 project also covers the file under the relative name the file tools ask by, so in a session opened in
@@ -99,7 +103,10 @@ entries, one box lists every one of them and the file each came from. Saying yes
 rules; saying no grants none and the session carries on asking about each action as it would have.
 The answer is kept per project, in `~/.bravebot/granted/`, so the next session there does not ask
 again, and a project that edits a rule after you granted it asks about the new one. Delete the file,
-or the line in it, to take a grant back.
+or the line in it, to take a grant back. A rule that holds a character that draws as nothing, such as
+a zero-width character or a bidirectional control, is drawn in quotes with that character spelled out,
+so it cannot read as a rule without it. A space in a rule is never marked. A rule with no such
+character is drawn as it was written.
 
 A grant stays with the project it was given in. `/cd` into another checkout reads that checkout's
 rules and puts its own box where it proposes something, so a rule you granted for the first one

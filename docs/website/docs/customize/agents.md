@@ -25,13 +25,36 @@ including the one the app sends after a compaction and the one a watch you armed
 addressed to that definition, as if you had typed `/agent <name>` for it. The bot's memory is the
 definition's own, `.bravebot/memory/<name>.md` in the bot's folder.
 
+A bot's face is chosen in a popover that the edit button on the face opens, in the create dialog and
+in the bot's details panel. It offers eight shapes and eight colours, and **Randomize** picks both.
+Each choice is saved as soon as you make it. A click outside the popover or Escape closes it and
+keeps the choice.
+
+Opening a bot opens its newest conversation in its own folder, or a new one
+when it has none. A bot is sent into a project by summoning it there, as described next, and not by
+choosing a project for its conversation. The bot's earlier conversations, in its own folder and in
+projects, are listed on a page of their own, reached from the conversation's header.
+
 A bot is brought into another chat by typing `@` and picking it from the list, where bots come
-before files. That one message is addressed to the bot's definition and runs in the chat's folder,
+before files. The list leaves out archived bots and the bot whose conversation is open. That one message is addressed to the bot's definition and runs in the chat's folder,
 a project or another bot's, so its memory there is `.bravebot/memory/<name>.md` in that folder. The
 next message is answered as before. The reply is labelled with the bot's face and name, and the
-bot's own conversation shows a **Replied to** card that opens it. If the file is removed or no
+bot's own conversation shows a **Replied to** card that opens it. The card is drawn beside the bot's conversation and nothing on it reaches the bot's turns. If the file is removed or no
 longer loads, the bot runs nothing and says which definition it could not find. Editing the file by
-hand is how you narrow the bot's tools. Bots made before definitions existed keep working as they
+hand is how you narrow the bot's tools.
+
+The bot's details panel has a **Servers** choice for which of your [MCP servers](mcp-servers.md) the
+bot may use. **Every connected server** removes the `mcpServers` line from the definition. **Only
+these** writes a line naming the servers you tick, and a line with none ticked selects none. It
+rewrites that line and leaves every other line as it was. The choice is read from the file each time
+the panel opens, so a line you wrote by hand shows, and it applies from the bot's next turn, in a
+conversation already open too. A server the line names that is not set up is shown ticked, so saving
+keeps it. The choice cannot be changed here for a definition whose kind is not `worker`, or whose line
+declares a server inline: the panel says so, and you edit the file. Where the definition has a `tools`
+line, **Every connected server** is not offered, since removing the `mcpServers` line would leave the
+bot no server. When your servers cannot be listed, the panel says so and offers no change.
+
+Bots made before definitions existed keep working as they
 did until they are opened. Opening one gives it a definition, and when its first turn ends the app
 asks it to carry what still holds of its old notes, `.bravebot-ui/bots/<slug>.md`, into its new
 memory. Those notes count as untrusted, so you are asked before the bot reads them.
@@ -64,6 +87,11 @@ and `/goal` rounds, and `/agent other <task>` still addresses another definition
 `bravebot --agent rule-reviewer -p "check this branch"` does the same for one run. A one-shot run
 does not ask whether to trust the checkout, so it reads only the definitions in
 `~/.bravebot/agents`.
+
+A terminal session that works under a definition notes, when it opens or resumes, the three newest
+turns in the project's other sessions that were addressed to that definition for one turn alone. Each
+note gives the session's title, how long ago it was asked and the start of the reply, and one more
+note counts the rest. A fork does not list the turns it copied.
 
 ## The keys
 
@@ -253,7 +281,7 @@ withheld, without reading any of them.
 A `checker` or `worker` definition with `isolation: checkout` has each of its delegates work in a
 checkout bravebot makes for it under `~/.bravebot/checkouts`, holding the last commit of the
 repository the session is in. Its writes land there and not in your working tree, and changes you
-have not committed are not in it. `worktree`, the value Claude Code reads, asks for the same thing.
+have not committed are not in it unless the planner's call carries them in, as described below. `worktree`, the value Claude Code reads, asks for the same thing.
 The planner cannot start the delegate without one. Where the session is in bypass, a delegate in a checkout
 is given the reach the session has outside the workspace, except the working directory and every other
 checkout, which no path of its reaches and its programs are given no write in.
@@ -276,8 +304,13 @@ Any other value loads the definition working in your working tree, and the turn 
 The planner can also ask for the changes in your working tree to be carried in, with
 `isolation: checkout_with_changes` on the call, so a `checker` builds and tests what the planner
 just wrote and not the last commit. A definition cannot ask for that: the call is what knows which
-tree the session has. The delegate is told which files were carried, and the planner is told in the
-answer to the call, along with any file that was left and why.
+tree the session has. The files carried are the ones the session wrote and, where the session trusts
+the whole working tree, the paths `git status` lists as changed. A file you deleted is deleted in the
+checkout. A file a deny rule covers, a link, a file over 16 MiB and anything past 1,000 files or 64 MiB
+is left as the commit has it. The delegate is told which files were carried, and the planner is told in
+the answer to the call, along with any file that was left and why. Git in the checkout reports each
+carried file as changed, so `apply_checkout` without `paths` and `/checkouts apply` ask about each of
+them as well, whether or not the delegate changed it.
 
 A `reader` is never given one, since it writes nothing, and the turn says that too. Where a
 checkout cannot be made, as when the delegate starting it already works in one, the session keeps

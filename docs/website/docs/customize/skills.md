@@ -105,7 +105,8 @@ count of how many are, never which ones.
 Type `/` and the skills this session has are listed beneath the commands, each with its description
 and where it was found: `(project)`, `(user)` or `(built-in)`. After other words, as in
 `this is /release-no`, the list holds skills alone. Tab takes the highlighted one and writes
-`/release-notes ` into the line. A word that is already a command in full still lists the skills
+`/release-notes ` into the line. Enter on a half-typed name does the same. Enter on a name typed in full
+sends the line, unless you moved onto another row with the arrows first. A word that is already a command in full still lists the skills
 whose names extend it, so `/pr` shows `pr-fix` as well as the `/pr` command.
 
 A name typed in full is drawn in the prompt's colour, so you can see it was recognised. With a space

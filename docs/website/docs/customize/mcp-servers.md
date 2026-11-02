@@ -66,6 +66,7 @@ argument, and a flag of bravebot's own among them, such as `--settings`, is the 
 | `--http <url>` | a service at this url; takes neither `-e` nor `--dir` |
 | `--bearer-env <name>` | with `--http`: send `Authorization: Bearer` followed by the value of this variable in your environment |
 | `--header-env <header>=<name>...` | with `--http`: send this header with the value of that variable in your environment; repeatable |
+| `--allowed-hosts <list>` | with a program: the only hosts it may reach, host names or `*.` domains separated by commas; see [Limiting the hosts a program reaches](#limiting-the-hosts-a-program-reaches) |
 | `--tools <list>` | offer only these tools of the server; names separated by commas, or by spaces up to the next flag. `--tools=a,b` also works |
 | `--exclude-tools <list>` | never offer these tools, written the same way |
 | `--ask-every-call` | put every call to this server to you, whatever a rule, an earlier answer or `--dangerously-skip-permissions` says, and keep no answer to one; see [Servers that ask every call](#servers-that-ask-every-call) |
@@ -86,6 +87,26 @@ A tool on the `--exclude-tools` list is withheld, and so is a tool missing from 
 `--tools` list. When both name a tool, the exclusion wins. A withheld tool is not offered to the
 model and cannot be called, and the model is told there is no such tool. In `mcp.json` the lists are
 the keys `tools` and `exclude_tools`; a value that is not a list of tool names is refused.
+
+### Limiting the hosts a program reaches
+
+`--allowed-hosts` gives a program its own list of hosts, such as `api.example.com,*.cdn.example.com`,
+where `--allowed-hosts=a,b` also works. The server is held to the proxy that applies the list, as
+`sandbox.network.allowedHosts` holds it, and reaches no other host. An entry that is not a host name
+or a `*.` domain is refused, and so is a list with no entry. A service declared with `--http` takes
+no list. In `mcp.json` the key is `allowed_hosts`.
+
+```sh
+bravebot mcp add weather --allowed-hosts api.weather.example -- npx -y @dangahagan/weather-mcp@latest
+```
+
+The list can narrow what the session allows and never widen it. Where `sandbox.network.allowedHosts`
+is set, an entry of the server's that the session's list does not cover is dropped. A `*.` wildcard
+is covered only by a wildcard on the same domain or on a domain above it. The session's denied hosts
+still apply. The list is part of what your approval binds to, so adding, changing or emptying it asks
+again, and the question shows it as `may reach only:` followed by the hosts, or `may reach no host`
+for an empty list in `mcp.json`. A platform that cannot hold a program to the proxy does not start
+the server, and the note names `allowed_hosts`.
 
 ### Headers for a service
 
@@ -125,7 +146,8 @@ A word `-e` cannot read is refused by its place and not repeated, since it may b
 `-e WEATHER_TOKEN sk-live` stores nothing, and the refusal says a name alone is read from your
 environment only as the one word its `-e` takes. So is an `-e` before the alias, a `NAME=value`
 typed where the alias, `-s` or `--dir` expects its word, and a name given twice. A url carrying a
-user or a password is refused as well.
+user or a password is refused as well, and so is one with a `:` after the host that is not followed by a
+port, which is a number up to 65535.
 
 ## Approving one
 
@@ -582,7 +604,7 @@ files are not started. It gets:
   unconfined the next time you run git there. On macOS the server cannot write a `.git` anywhere;
 - the network by IP address, unless the session closes the network or limits it to a list of hosts.
   Where the sandbox network is closed (the `read-only` mode, for one), the server gets no network at
-  all, a runner's fetch of its own package included. Where `sandbox.network.allowedHosts` is set, the
+  all, a runner's fetch of its own package included. Where `sandbox.network.allowedHosts` is set, or the server's declaration has an `allowed_hosts` list, the
   server is held to the proxy that applies the list, plus the registry hosts of its toolchain. A
   platform that can apply neither does not start the server, and the note names the setting. The
   server also gets the machine's own system directories. A local socket, such as
@@ -599,8 +621,13 @@ session names the server and each path left out. A program named without a path 
 only in the `PATH` you gave: without `-e PATH` it is not found, and the session says to name it
 or give the program's full path.
 
+A program kept in a directory a local server may write, such as the one you gave with `--dir`, is not
+found when bravebot looks a program up by name for something else, such as an editor, a hook or a
+clipboard tool. A program named by its full path is started as before.
+
 A service server is reached through the same network gate as everything else the session sends. A
-redirect off the host and port you declared is not followed. Nothing is sent there, and you are
+redirect off the scheme, host and port you declared is not followed, so a redirect from `http` to
+`https` on the same port is asked about too. Nothing is sent there, and you are
 asked whether the server moved:
 
 ```
@@ -703,7 +730,9 @@ for a session at a terminal. Where nobody can be asked, a server that would be a
 started. A server a file here asks for and nobody declared is a row of its own, ending with the
 command that declares it. An entry that cannot be used, because it was edited by hand into
 something a declaration cannot be, is listed with what is wrong with it, and the list then fails so
-that a script notices.
+that a script notices. A url with a `:` and no port, written into the file by an earlier version, is
+treated the same way: it is kept as it was written and listed as unusable, and editing the url in the
+file is the way to fix it.
 
 `bravebot doctor` prints the same rows and fails where `list` does.
 

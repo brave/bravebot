@@ -111,8 +111,13 @@ and bypass mode and a session nobody is at refuse as `refuse` does. `/clear`, `/
 begin a session that asks about those hosts again. A stage with the network points its proxy settings at a local proxy that applies the list, and
 on macOS and Linux it may connect only to that proxy, so a program that ignores the proxy settings
 is still held to the list. On Linux that needs the same kernel support as `run.network`, and a stage
-is refused, naming this setting, where the kernel lacks it. On Windows a stage is refused while a list
-is set, naming this setting. On macOS a `run` that asks for `loopback` is then given the right to
+is refused, naming this setting, where the kernel lacks it. On Linux the proxy listens on a unix socket
+under your runtime directory (`XDG_RUNTIME_DIR`) where that is an absolute path outside the temporary
+directory that can be written, and under the temporary directory otherwise. The forwarder that carries a
+stage's connections to it relays only to the proxy's own listener. The system removes the runtime
+directory when your last login session ends and nothing lingers, and a session that outlives it has no
+socket for its proxies: a stage held to a list then reaches nothing, and the proxy is not made again.
+On Windows a stage is refused while a list is set, naming this setting. On macOS a `run` that asks for `loopback` is then given the right to
 listen, and a step with network access still connects to the proxy's port alone. A step with no
 network access is not held to the proxy, so `loopback` lets it connect to a port of this machine as
 it does without a list. On Linux the request changes nothing. A list that is set, even an empty one,

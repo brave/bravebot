@@ -15,7 +15,7 @@ Runs a command line. **You approve the compiled plan before anything runs.**
 | `deadline_seconds` | how long to wait, defaulting to 300 seconds ([below](#a-line-has-a-deadline)) |
 | `background` | start the line and hand back a job name instead of waiting ([below](#leaving-a-pipeline-running)) |
 | `stdin_ref` | a reference whose contents are fed to the first program ([below](#filtering-something-the-agent-may-not-read)) |
-| `scopes` | credential scopes (`remote`, `aws`, `kubernetes`, `docker`, `signing`), toolchain lists, `loopback` and `ssh-key` to add to every stage, by name; accepted in `strict`, `read-only` and `workspace-write` modes (`standard` is the old name of the last), not in `off`, and asked about every time. Under `read-only` the network stays closed and the `remote` scope lends nothing, so `git push` and `gh pr create` fail. `signing`, `loopback` and `ssh-key` are never remembered. On macOS `loopback` lends listening on a port of this machine, which a `cargo test` over tests that bind a port and a build through `sccache` need, and a connect to a port of this machine from a line that has no network access. It adds nothing to a connect from a line that has network access: a line with an open network connects to a port of this machine without it, and a line held to a host list connects to the list's proxy port alone with or without it, so asking for it there only costs you a question. Linux and Windows read no such request, so it changes nothing there, and you are still asked. `ssh-key` lends nothing: it only has you choose again which ssh key a `git push` offers its owner ([details](../customize/configuration.md#gitidentities)) |
+| `scopes` | credential scopes (`remote`, `aws`, `kubernetes`, `docker`, `signing`), toolchain lists, `loopback` and `ssh-key` to add to every stage, by name; accepted in `strict`, `read-only` and `workspace-write` modes (`standard` is the old name of the last), and asked about every time. Under `off`, and in a turn that confines none of its runs, the line already starts with no sandbox, so the request is checked for its shape and then ignored, and the line is put to you as any other line is. In a workspace you have not trusted it is refused in every mode. Under `read-only` the network stays closed and the `remote` scope lends nothing, so `git push` and `gh pr create` fail. `signing`, `loopback` and `ssh-key` are never remembered. On macOS `loopback` lends listening on a port of this machine, which a `cargo test` over tests that bind a port and a build through `sccache` need, and a connect to a port of this machine from a line that has no network access. It adds nothing to a connect from a line that has network access: a line with an open network connects to a port of this machine without it, and a line held to a host list connects to the list's proxy port alone with or without it, so asking for it there only costs you a question. Linux and Windows read no such request, so it changes nothing there, and you are still asked. `ssh-key` lends nothing: it only has you choose again which ssh key a `git push` offers its owner ([details](../customize/configuration.md#gitidentities)) |
 | `read` | ask for the output in this result; honoured only when [bypassing with no screening](#reading-the-output-in-the-same-result) |
 
 ```
@@ -40,11 +40,20 @@ names each place taken this way, with the variable that named it.
 **A program is started by the path its name was found by**, and a link on that path is not followed
 first. That keeps `venv/bin/python` finding its virtual environment. The prompt shows the path and
 the file it leads to, and your answer covers the file only when it is started by that same path.
-A run's result, a job's line and a remembered line name such a step the same way, as
+A job's line as you see it and a remembered line name such a step the same way, as
 `/home/me/.cargo/bin/cargo -> /home/me/.cargo/bin/rustup test`, so a `cargo` served by `rustup` does not
-read as `rustup test`. A program started by its own file is shown by that file alone.
+read as `rustup test`. A run's result, the account of a job that ended and the sentence for a job that
+did not start name the program by the path alone, which is the path the planner typed. A program started
+by its own file is shown by that file alone.
 Just before the pipeline starts, each path is resolved again, and one that no longer leads to the
 file you approved refuses the whole pipeline before any step runs.
+
+An argument, an environment value or a redirection path that holds a control character, white space
+other than a space, a character that draws as nothing or the blank braille pattern is drawn in single
+quotes with each such character written as `\u{..}`, its code point in hex, and a backslash written
+`\\`. Two lines that differ only in such a character therefore look different in the prompt, and an
+argument made only of them still shows as an argument. Your answer applies to the arguments as they
+are.
 
 Every step's program is found when the line is compiled, before anything runs. A line therefore
 cannot run a program an earlier step in it creates: `python3 -m venv v && v/bin/python x.py` is
@@ -69,7 +78,11 @@ is refused wherever it stands, before anything is asked or run, and the refusal 
 
 A directory that is not the workspace root **is asked about**, and what the line prints is quarantined,
 unless something you answered names that exact tree. A directory that does not exist is an error and
-moves nothing, and a refused directory does not become the one the next line runs in.
+moves nothing, and a refused directory does not become the one the next line runs in. This holds for a
+directory carried from the previous call as well as one named in the call: it is refused before the line
+is compiled and before anyone is asked, and the carried directory goes back to the workspace root. The
+directory is checked again just before the first stage starts, so one removed while the question waited is
+reported as removed rather than as a program that could not be started.
 
 ## What the grammar takes
 
@@ -268,13 +281,17 @@ A line runs unasked only where all of these hold:
 - no stage is `git`, and the line asks for no scope, toolchain list or `unconfined`, reads no private
   input, redirects nothing and starts with no `NAME=value`;
 - no stage starts a file under a directory the session may write, and no stage is handed one as an
-  argument where it is executable or the stage is a shell or interpreter (`sh`, `python3`, `node`, `env`
-  and the like), including inside a `sh -c` string or an option's value.
+  argument where it is executable or the stage is an interpreter or wrapper (`sh`, `python3`, `node`, `env`
+  and the like), including inside a `sh -c` string or an option's value. An argument is looked up whole,
+  so a file name holding a space is found, and also as the words in it, read with the quoting a shell
+  applies, so `sh "run script.sh"` and `sh -c "'run script.sh'"` name the file they run.
 
 Its output is untrusted and private, as for any line nobody vouched for. Such a line runs with the network
 closed for that line, even where the session's network is open, which is the default: a plain command that needs
 the network fails, and you are asked when it runs with `unconfined`. A program that finds its own files, such as `make` or
-`cargo`, still runs whatever a stage wrote, held to the same sandbox.
+`cargo`, still runs whatever a stage wrote, held to the same sandbox. A command string is read for its
+quoting and not expanded, so a name written with `$'...'`, a variable, a glob or a nested command string,
+or an option's value that holds an `=` and is followed by another `=`, is not found, and the file it names runs unasked under the same sandbox.
 
 A resumed session keeps the answer its own record holds, in the directory it was given in and no other: a record
 resumed in a directory the project has moved to asks again.
@@ -389,6 +406,7 @@ step that reads it gets nothing rather than the terminal.
 | standard input | may be untrusted; a person approves when it is private |
 | standard output and error | `(U,priv)`, quarantined |
 | …for a line every step of which a person vouched for, fed nothing untrusted | `(T,priv)` |
+| …for a line that asked for `unconfined` or `scopes` and was accepted | `(U,priv)`, whatever vouched for the same line without the request; the [audit trail](../security/audit-trail.md) states it |
 | …for a line that [proves what it read](#a-line-that-only-reads-what-you-vouched-for-does-not-ask) | the trust map's answer about what it read, private |
 
 **Output nobody vouched for is not shown to the planner.** It comes back as a reference, like a file
@@ -499,12 +517,14 @@ run and nobody is asked.
 ## What a program is handed
 
 A step gets the environment bravebot is running in, **less the credentials bravebot authenticates to
-its own backend with**: `SERVICES_KEY_AICHAT` and `BRAVE_SERVICES_KEY_ID`. Every step, not only the
+its own backend with**: `SERVICES_KEY_AICHAT` and `BRAVE_SERVICES_KEY_ID`, and the crash report address, `BACKTRACE_SUBMIT_URL`. Every step, not only the
 first, and removed rather than blanked, so a program that tells an unset variable from an empty one
-sees what a machine that never held the credential sees. You approve the plan, the resolved binaries
+sees what a machine that never held the credential sees. A `NAME=value` written in front of a program
+does not bring one of the removed credentials back: the removal is applied again after the line's own
+assignments. You approve the plan, the resolved binaries
 and the directory. The environment is not among them.
 
-The description of `run` tells the planner that these two are removed, and that the variables your
+The description of `run` tells the planner that these three are removed, and that the variables your
 settings name as a gateway's token or in `run.scrubEnv` are removed too, without listing those. It
 also says that a program reporting one of them unset says nothing about whether you have set it, so a
 build that fails for want of one is not reported to you as a gap in your setup.
@@ -541,10 +561,18 @@ where your build takes longer than five minutes, so a line the agent did not thi
 on is not stopped partway through. The agent is told whichever figures are in force, so a ceiling you
 raise is one it knows it may ask for.
 
-When the deadline runs out the steps are killed, and **what they printed before that comes back exactly
+When the deadline runs out the steps are stopped, and **what they printed before that comes back exactly
 as it would from a line that ended on its own**, under the same label. Reaching the deadline ends a run
 rather than failing it, so a program that never exits, like a server told to serve a page, still gives
 you everything it printed. The result says it was stopped, which is how you tell the two apart.
+
+On Linux and macOS each step leads a process group of its own. A stop asks the group to end first, so
+the programs the step started are asked with it, and gives it two seconds to finish what it holds, such
+as removing a `.git/index.lock`. Whatever is left after that is killed. A stop at the deadline or by you
+can still leave lock files or partly written output behind, and the result says so, so check what the
+line started. The step is not in the session's own process group: Ctrl-C at a one-shot run, a closed
+terminal or a `SIGTERM` to a background session does not reach it, and a session ended that way leaves
+the steps it was running.
 
 Being cut short neither raises nor lowers the label on the output. Finishing inside the deadline says
 nothing about what a program did.
@@ -575,7 +603,11 @@ Both are refused rather than half-honoured.
 **In the terminal interface a job outlives its turn.** The session owns the pipeline: a server
 started in one turn is still running when you ask the next question, and the model is told at the
 start of each turn which jobs are still going and under which names. A job ends when it exits, when
-you or the model stops it, when you `/clear` the conversation, or when the session ends. A job that
+you or the model stops it, when you `/clear` the conversation, or when the session ends. `/branch` does
+not end one: the copy is the same process, so the job keeps running under the sandbox profile it started
+with and is listed and stopped from the copy. The copy forgets the path and host answers the job started
+with, so a `run` started in the copy asks about them again, while the programs you vouched for come
+across and are not asked about. A job that
 finishes between turns is reported at the next turn's first round. `/jobs stop` between turns stops
 the job at once, since no turn is there to read it. A stop still waiting when a turn ends is carried
 out as the turn finishes, and repeating `/jobs stop` on a row that still reads `being stopped`, with no

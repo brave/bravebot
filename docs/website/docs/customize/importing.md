@@ -112,7 +112,10 @@ yourself.
 named. An opencode `provider` entry reached through an OpenAI-compatible SDK, with only the fields
 bravebot reads, and an `auth.json` API key for a gateway whose endpoint bravebot knows. An `openai` entry that names
 no SDK, or an `auth.json` key for `openai`, imports, and so does one naming `@ai-sdk/openai` that states no
-`baseURL` or OpenAI's. One naming it that states another host is left as another SDK's. The
+`baseURL` or OpenAI's. One naming it that states another host is left as another SDK's. A `google-vertex`
+entry imports when it states `options.project`, and when it states an `options.apiKey` and no project
+(Vertex AI express mode); an `auth.json` key for the id imports where no entry states a project. One stating
+neither a project nor a key, or a `baseURL` and no project, is left. The
 `ANTHROPIC_API_KEY` in Claude Code's settings file imports as an `anthropic` entry,
 unless a Claude Code `ANTHROPIC_BASE_URL` is stated beside it or exported. opencode's
 `disabled_providers` and `enabled_providers` are honoured, and a name already set in your settings file,

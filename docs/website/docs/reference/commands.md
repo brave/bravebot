@@ -107,6 +107,14 @@ Reports everything the session knows about itself:
 - the confinement available here, and under `workspace-write` on a Linux kernel older
   than Landlock ABI 9 a `Programs' unix sockets` row saying that every socket with a path is
   reachable (D-Bus, `SSH_AUTH_SOCK`, `docker.sock`);
+- under [bypass](../security/permission-modes.md#bypassing), where programs are given the writes a
+  `request_path` would be granted, a `Programs write` line saying so and what it leaves out (a
+  credential location, your `denyWrite` paths, and a new entry directly in your home directory or
+  beside a credential location);
+- for each local [MCP server](../customize/mcp-servers.md#seeing-what-a-session-started) the session
+  started, a `Server policy` heading at the end of the report with what its confinement grants: the
+  network, whether it may start subprocesses, where it starts, and one line for each path it may read
+  or write;
 - turns and tokens spent, and **where the time went**: how much was spent waiting on the model,
   running tools, and waiting for you to answer a prompt;
 - each [background job](run-tool.md#leaving-a-pipeline-running) of the last turn: its name, and the
@@ -371,11 +379,16 @@ read in, and for `BRAVEBOT_LOCALE`, which answers over this choice.
 ## `/add-dir <path>`
 
 Makes a directory both reachable and trusted, for this session. `--resume` carries both halves and
-`/clear` closes it. A directory already inside the project is refused. See
+`/clear` closes it. The path is absolute, starts with `~`, or is relative to the working directory,
+so `/add-dir ../notes` opens the directory beside the project. Where the working directory's name is
+not text, a relative path is refused and the full path is asked for. A directory already inside the
+project is refused. See
 [Trusted directories](../security/trust.md#add-dir).
 
 `/add-dir close <path>` closes that one directory and keeps the conversation. A file only it reached
-is refused again, and the directory is no longer trusted. Every other open directory stays open.
+is refused again, and the directory is no longer trusted. Every other open directory stays open. It
+takes the same spellings as `/add-dir`, a relative one included. The session says a directory was
+added or closed in the colour for finished and a refusal in the colour for failed.
 `/status` lists what is open, under the names `close` takes.
 
 An added directory contributes **no** standing instructions and no skills, whatever it contains.
@@ -438,7 +451,10 @@ only there: after `/cd` into another checkout, or in a new session started in on
 in force, and `always` means always in that directory. The exception is a credential scope for a
 program that scope belongs to (`git` and `gh` for `remote`, `aws`, `kubectl`, `docker`), which
 applies everywhere. `/reach aws -- make check` is not that, so it is for this directory. Each program of the line gets it, on its own: a grant for `git push` is not
-one for `git pull`, and a grant for one `make` is not one for another. A program started with a
+one for `git pull`, and a grant for one `make` is not one for another. A remembered scope for a program
+such as `git`, `gh`, `aws`, `kubectl` or `docker` is attached only to a program whose whole arguments that scope
+applies to, so `git push --receive-pack=<file> origin` or `kubectl get pods --kubeconfig=<file>` carries
+neither the scope nor the network access it keeps, whatever you remembered for the program. A program started with a
 `NAME=value` in front of it gets none.
 
 The reach is shown with the command in the plan you are asked to approve, with the day you
@@ -477,7 +493,10 @@ Bare, it says the sandbox mode programs `run` starts are held to and what chose 
 settings file, the managed file, `--sandbox`, or an earlier `/sandbox`. With a word it sets the mode
 for the rest of the session. Typed while a turn runs with nothing waiting, a mode is set at once,
 `off` included, and the turn running uses it for each program it starts from then on and tells the
-model the mode changed. A program already started keeps the profile it started under. The mode is
+model the mode changed. A program already started keeps the profile it started under, and so does a
+[background job](run-tool.md#leaving-a-pipeline-running): a move to `read-only` while jobs are running names
+each one that keeps the earlier mode, by the names `/jobs` lists, and says that `/jobs stop` ends them. With
+none running it says nothing of jobs. The mode is
 not written to the session, so a resumed session takes the mode the process started with, and `/resume`
 inside a session keeps the one you set.
 
@@ -882,6 +901,8 @@ device policy allows that. The first `/caffeinate` says this and turns nothing o
 it on and records your answer in `~/.bravebot/caffeinate`, so later sessions turn it on at once. An
 incognito session asks every time.
 
+The desktop app has the same setting as **Brave Bot › Keep Computer Awake During Turns**. It is off at every launch, it holds the computer awake while any chat has a turn running, and the first time you turn it on a dialog says what it does and nothing is held until you press Enable. Enable writes the same `~/.bravebot/caffeinate`, so agreeing in the terminal or the app is agreeing in both.
+
 It runs `/usr/bin/caffeinate` on macOS, `systemd-inhibit` on Linux and PowerShell on Windows. On Linux
 `systemd-inhibit` is given the full path of `cat`, found only in directories a confined command cannot
 write. If there is no such `cat`, or the program cannot be started, or stops by itself, the transcript
@@ -1099,6 +1120,9 @@ the commits after a release shows them under that version's number.
 Only that one release is shown, and it is drawn in the transcript, so a release longer than the screen
 shows its end and the heading is above it. The word takes no argument: `/changelog` followed by words is a
 prompt. It touches nothing a running turn holds, so typed while a turn runs it is carried out at once.
+
+The desktop app shows the same notes from **Help › Release Notes…** as plain text, and says when they are the newest release's rather than the running version's.
+
 A prompt file or skill named `changelog` is shadowed by the command.
 
 ## `/agent <name> <task>`
@@ -1141,8 +1165,9 @@ there is no definition called auditor; this session resolved reader, checker, wo
 ```
 
 A definition in a project you did not vouch for is not in that list, and no spelling of its name
-reaches it. The names are never offered as completions: you type the whole name every time, because
-a completion row is one keystroke from being sent and a name is text somebody else may have written.
+reaches it. After `/agent` the names are not offered as completions, so you type the whole name.
+Typing `@` lists the definitions instead, each with its description, above the files
+([Adding context](../using/context.md)).
 
 **A definition naming a model you have not signed in to does not run**, and says which definition
 asked for which model, rather than running on the session's model instead:
@@ -1153,8 +1178,9 @@ rule-reviewer asked for haiku, which needs a sign-in first, so it did not run
 
 A reply answered by a different model than the one named says that too. The reply is drawn under
 the definition's name (`rule-reviewer answered`), taken from the name that matched and never from
-anything the reply says about itself. The name is not written into the session record, so a
-resumed session draws the same reply without it.
+anything the reply says about itself. The name is recorded beside the prompt in the session record,
+so a resumed session draws the reply under the same name. A record written before that has none and
+is drawn as it was.
 
 Only a line you typed into the box addresses a definition. `/agent` in a reply, in a file, or in a
 line this program wrote is text.
@@ -1176,13 +1202,15 @@ moves, and nothing a turn sends to the model includes it. `/undo` is not affecte
 with nothing waiting, it is carried out at once. `/session-review` reads the notes of a session it
 reviews as leads from you. See [Sessions](../using/sessions.md#noting-something-on-a-session).
 
+The desktop app adds a note from **Chat › Add Note…** or the Notes section of the context panel, which lists the chat's notes as plain text. The note goes on the last finished turn, so the app waits for a running turn to end, and a chat with no record yet, before its first turn, asks you to send a message first.
+
 ## `/issue` and `/pr`
 
 `/issue <url>` and `/pr <url>` say which issue and which pull request the session is for, and the
 [info panel](../using/sessions.md#telling-sessions-apart) shows both. Each takes one `http` or `https`
 link with a host: a value with a space, a line break, an escape, a character outside ASCII or
 another scheme sets nothing and is not repeated back. Alone, each says what is set, and `clear` removes that one. The session record is
-rewritten at once, so a resume brings the links back, and nothing a turn reads includes them. Typed
+rewritten at once, so a resume brings the links back, and nothing a turn reads includes them. In the desktop app a chat whose pull request link points at a `/pull/<number>` path shows `PR #<number>` beside its branch on its sidebar row and in a bot's conversation list. Clicking it opens the address in your browser, and typing `PR #<number>` in the row search finds the chat. Typed
 while a turn runs with nothing waiting, each is carried out at once, as `/rename` is. [`--issue` and `--pr`](cli.md#--issue-url-and---pr-url) set the same links when a session opens.
 
 ## `/compact [focus]`
@@ -1284,9 +1312,10 @@ the turn, and emptying the box ends the handoff.
 
 ## `/resume [id]`
 
-Leaves this session for another one recorded in this directory, and carries on from it. With no id
-it opens the [Sessions screen](../using/sessions-screen.md) that `bravebot --resume` opens, and Enter picks
-the one under the cursor. Escape, or Ctrl-C, returns to the session you were in. With an id it picks up that
+Leaves this session for another one, and carries on from it. With no id
+it opens the [Sessions screen](../using/sessions-screen.md) that `bravebot --resume` opens, which lists
+the sessions of every project, and Enter picks the one under the cursor. A session of another
+directory is carried on by `bravebot --resume` started in that directory. Escape, or Ctrl-C, returns to the session you were in. With an id it picks up that
 record, so `/resume <id>` is `bravebot --resume <id>` without leaving the program.
 
 The session picked up is restored as the flag restores it: its transcript, its spend, and the
@@ -1581,8 +1610,8 @@ it and the picture or file goes with it.
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so
-`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme` and `/config` change only how the screen
-is drawn and what the box edits in, so they are carried out as you type them whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme`, `/config` and `/language` change only how the screen
+is drawn, what the box edits in or what a later start reads, so they are carried out as you type them whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model`, `/effort`, `/advisor`, `/style` and `/sandbox` change what the session keeps, and are carried out as you
 type them unless a line waiting ahead of them could change what they act on. Behind such a line they wait too, so `/rename` typed after a
 waiting `/clear` names the new session, and the line they wait behind is named under the turn and on their mark under the box (`after /clear`).
