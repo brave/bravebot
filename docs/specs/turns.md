@@ -589,7 +589,7 @@ used, so nothing untrusted a tool returned reaches the decision ([LABEL-8](label
 `verified-by: bravebot_tui::app::a_refusal_a_later_call_got_past_is_not_drawn_and_one_left_standing_is_counted_and_named`
 
 <a id="TURN-12"></a>
-### TURN-12: a turn that answers with tasks still open asks about the list once
+### TURN-12: a turn that answers with tasks still open asks about the list
 
 Where `todo_write` is offered, the latest accepted list leaves at least one task pending or in
 progress, and the planner answers without calling a tool, the driver puts that answer into the
@@ -608,14 +608,18 @@ kept for a list whichever way its result went back to the planner. Pending and i
 finished and dropped are not, and a status the driver does not recognise reads as pending
 ([TODO-2](tools/todo-write.md#TODO-2)).
 
-**Asked once for each list.** A list the planner writes after the question, in the turn that put
-it, is its answer to the question and is not asked about, whatever it holds. A planner that
-answers with the list as it was, or sends it again with a task still open, is not asked again, in
-that turn or in the turns after it. A list written in a later turn is a new list. A task may be open
-for a reason the driver cannot read, such as a question the planner put to the person, and a request
-spent each turn on a list nothing in that turn touched would be the cost of asking every time. The
-count is read once, whether or not it leads to the question, so a list with nothing open is not read
-again at the end of every turn after it.
+**Asked once for each list, and again after work.** A list the planner writes after the question,
+in the turn that put it, or after the reminder of [TURN-15](#TURN-15), is its answer and is not
+asked about, whatever it holds. A planner that answers with the list as it was, or sends it again
+with a task still open, is not asked again in that turn. A later turn asks about the same list again
+only if it did work after the list: it went [`ROUNDS_BEFORE_LIST_REMINDER`](../../crates/agent/src/turn.rs)
+rounds, or a call changed a file, or a call ran a program. Each is the driver's own count, never
+what a call returned. A later turn that did none of these is not asked, and a turn is asked at most
+once. A list written in a later turn is a new list. A task may be open for a reason the driver
+cannot read, such as a question the planner put to the person, and a request spent each turn on a
+list nothing in that turn touched would be the cost of asking every time. The reminder reads the
+count without using it up, so a planner that was reminded and did not rewrite the list is still
+asked at the end.
 
 **Conditional in its wording, not in its firing.** The driver cannot tell a list the planner
 finished from one it left open on purpose, and must not try. It knows how many tasks are open, and
@@ -655,6 +659,13 @@ carries a list forward only from the next `todo_write`.
 `verified-by: bravebot_agent::turn::a_list_the_planner_was_asked_about_is_not_asked_about_by_the_next_turn`
 `verified-by: bravebot_agent::turn::a_list_written_after_the_planner_was_asked_is_asked_about_afresh`
 `verified-by: bravebot_agent::turn::a_list_the_planner_sends_again_when_asked_is_not_asked_about_by_the_next_turn`
+`verified-by: bravebot_agent::turn::a_list_is_asked_about_again_at_the_end_of_a_later_turn_of_many_rounds`
+`verified-by: bravebot_agent::turn::a_list_is_asked_about_again_at_the_end_of_a_later_turn_that_wrote_a_file`
+`verified-by: bravebot_agent::turn::a_list_is_asked_about_again_at_the_end_of_a_later_turn_that_ran_a_program`
+`verified-by: bravebot_agent::turn::a_list_is_not_asked_about_again_at_the_end_of_a_later_turn_that_only_read`
+`verified-by: bravebot_agent::turn::a_planner_that_rewrote_its_list_when_reminded_is_not_asked_at_the_end`
+`verified-by: bravebot_agent::turn::an_untrusted_count_of_open_tasks_is_refused_by_the_gate`
+`verified-by: bravebot_agent::turn::a_trusted_count_of_open_tasks_is_acted_on`
 `verified-by: bravebot_agent::turn::a_list_the_planner_was_not_shown_ends_the_question_about_the_list_before_it`
 `verified-by: bravebot_agent::turn::a_list_written_in_a_round_with_no_call_ids_is_asked_about`
 `verified-by: bravebot_agent::turn::a_line_typed_as_the_planner_answers_reaches_it_with_the_question_about_the_list`
@@ -779,3 +790,42 @@ usage never reaches a limit in tokens. A run that ends on a limit writes no sess
 `verified-by: bravebot_agent::turn::a_task_with_no_limit_of_its_own_is_not_stopped_by_one`
 `verified-by: bravebot_agent::turn::a_limit_is_a_stop_and_says_which_limit_it_was`
 `verified-by: bravebot_cli::running::the_trail_of_a_run_stopped_at_its_limit_says_which_limit_it_was`
+
+<a id="TURN-15"></a>
+### TURN-15: a turn whose task list has gone unwritten for a long run of rounds says it may be behind
+
+Where `todo_write` is offered, the latest accepted list leaves at least one task pending or in
+progress, and the turn has made [`ROUNDS_BEFORE_LIST_REMINDER`](../../crates/agent/src/turn.rs)
+rounds since that list was accepted, the driver adds a line to the next request. The line gives the
+number of rounds and the number of open tasks, says the list may be behind the work, asks for the
+whole list again with a task marked completed where it is done and cancelled where it was dropped,
+and says to carry on if the list is accurate. The planner decides whether it is.
+
+**Counted from the list.** The rounds are counted from the round that accepted the latest list, so
+a list written part way through the turn restarts the count. A list an earlier turn wrote is counted
+from the start of the turn that reads it.
+
+**Said once for each list.** The line is not repeated for the same list, however much longer the
+turn goes on. A list written after it is a new list and can be reminded about in its turn.
+
+**The count is the one TURN-12 reads, and is left in place.** It is read through
+`Policy::read_trusted_content` ([LABEL-6](labels.md#LABEL-6)), so a session that has met something
+untrusted keeps no count and is not reminded. The line carries the count and the rounds and nothing
+the tasks said. Reading the count does not take it, so the question of [TURN-12](#TURN-12) is still
+put when the planner answers.
+
+**Not where it cannot be acted on.** A turn not offered `todo_write`, and a request that carries no
+tools ([TURN-1](#TURN-1)), get no line.
+
+**Known costs.** Ten rounds is chosen and not measured. A task may be open for a reason the driver
+cannot read, and the line is then a request spent on a list that was right.
+
+`verified-by: bravebot_agent::turn::a_planner_that_does_not_update_its_list_is_reminded_after_enough_rounds`
+`verified-by: bravebot_agent::turn::the_list_reminder_counts_from_the_last_accepted_list`
+`verified-by: bravebot_agent::turn::a_list_with_nothing_open_is_not_reminded_about`
+`verified-by: bravebot_agent::turn::the_list_reminder_names_no_task`
+`verified-by: bravebot_agent::turn::a_session_that_has_met_something_untrusted_is_not_reminded_about_the_list`
+`verified-by: bravebot_agent::turn::a_turn_not_offered_the_task_list_tool_is_not_reminded_about_the_list`
+`verified-by: bravebot_agent::turn::a_turn_with_no_tools_left_is_not_reminded_about_the_list`
+`verified-by: bravebot_agent::turn::a_turn_many_times_the_threshold_long_gets_one_reminder_for_its_list`
+`verified-by: bravebot_agent::turn::a_list_left_open_by_an_earlier_turn_is_reminded_about_in_a_later_turn_of_many_rounds`

@@ -315,6 +315,10 @@ impl Stored {
 /// Not `Clone`: the quarantine holds the only copy of content nobody may read, and a second
 /// store would be a second place for a reference to resolve differently.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about what the session has already said or been asked, set and read on its own"
+)]
 pub struct Conversation {
     /// The exchange so far, oldest first, without the system prompt.
     ///
@@ -372,15 +376,18 @@ pub struct Conversation {
     /// `todo_write` was accepted at this message and never looks inside it to decide anything.
     /// Not part of a [`Snapshot`], for the reason `reads` is not.
     task_list: Option<usize>,
-    /// How many tasks the planner's latest accepted list leaves open, while the planner has not been
-    /// asked about them (TURN-12).
+    /// How many tasks the planner's latest accepted list leaves open (TURN-12).
     ///
     /// Counted by the kernel and labelled as the list is, so the driver holds a number it cannot
-    /// read: [`Conversation::take_open_tasks`] hands it over for `Policy::read_trusted_content`,
-    /// which refuses it where the list is not trusted. Replaced with the list, so a list the
-    /// planner has since written is asked about afresh. Not part of a [`Snapshot`], for the reason
-    /// `task_list` is not.
+    /// read: [`Conversation::open_tasks`] hands it over for `Policy::read_trusted_content`, which
+    /// refuses it where the list is not trusted. Replaced with the list, so a list the planner has
+    /// since written is asked about afresh. Not part of a [`Snapshot`], for the reason `task_list`
+    /// is not.
     open_tasks: Option<Labelled<usize>>,
+    /// Whether the planner has been asked about the list `open_tasks` counts, or wrote it in answer
+    /// to being asked or reminded. A list asked about is asked about again only by a turn that did
+    /// work since it (TURN-12).
+    open_tasks_asked: bool,
     /// The latest task list, once a compaction took the message holding it out of the request.
     ///
     /// Carried word for word and put back after the summary (COMPACT-16). Model output the
@@ -494,6 +501,7 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
+            open_tasks_asked: false,
             carried_task_list: None,
             opening_end: None,
             masked_before: 0,
@@ -749,18 +757,32 @@ impl Conversation {
     /// (TURN-12). Called for every accepted list, and with `None` where the planner was not shown
     /// that list, so that the count of an earlier list is not taken for the panel's.
     ///
-    /// A list written after the turn put the question was written in answer to it, and nothing more
-    /// is asked about it, whether or not it still has tasks open.
-    pub fn open_tasks_counted(&mut self, open: Option<Labelled<usize>>, asked_this_turn: bool) {
-        self.open_tasks = open.filter(|_| !asked_this_turn);
+    /// A list written after the turn put the question or the reminder was written in answer to it
+    /// (`in_answer`), and is not asked about unless a turn does work after it, whether or not it
+    /// still has tasks open.
+    pub fn open_tasks_counted(&mut self, open: Option<Labelled<usize>>, in_answer: bool) {
+        self.open_tasks = open;
+        self.open_tasks_asked = in_answer;
     }
 
-    /// Take the count of open tasks the planner has not been asked about, which is then not asked
-    /// about again until it writes another list.
+    /// The count of open tasks in the planner's latest list, left in place.
     ///
-    /// Labelled as the list is: the caller reads it with `Policy::read_trusted_content`.
-    pub fn take_open_tasks(&mut self) -> Option<Labelled<usize>> {
-        self.open_tasks.take()
+    /// Read by the reminder that a list may be behind the work and by the question put when the
+    /// planner answers, neither of which uses up the other. Labelled as the list is: the caller reads
+    /// it with `Policy::read_trusted_content`.
+    pub fn open_tasks(&self) -> Option<&Labelled<usize>> {
+        self.open_tasks.as_ref()
+    }
+
+    /// Whether the planner has been asked about the list `open_tasks` counts, or wrote it in
+    /// answer to being asked or reminded.
+    pub fn open_tasks_asked(&self) -> bool {
+        self.open_tasks_asked
+    }
+
+    /// Record that the planner has been asked about the list `open_tasks` counts.
+    pub fn open_tasks_were_asked_about(&mut self) {
+        self.open_tasks_asked = true;
     }
 
     /// Record what the last request built from this conversation came to.
@@ -1514,6 +1536,7 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
+            open_tasks_asked: false,
             carried_task_list: None,
             opening_end: None,
             masked_before: 0,

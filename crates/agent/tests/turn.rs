@@ -24,8 +24,8 @@ mod turns;
 
 use bravebot_agent::Workspace;
 use bravebot_agent::turn::{
-    self, MAX_TOOL_ROUNDS, PastedImage, ROUNDS_AFTER_WRITING_BEFORE_RUNNING, ROUNDS_BEFORE_WRITING,
-    Task,
+    self, MAX_TOOL_ROUNDS, PastedImage, ROUNDS_AFTER_WRITING_BEFORE_RUNNING,
+    ROUNDS_BEFORE_LIST_REMINDER, ROUNDS_BEFORE_WRITING, Task,
 };
 use bravebot_config::Config;
 use bravebot_config::DEFAULT_MODEL;
@@ -19921,6 +19921,678 @@ fn a_session_that_has_met_something_untrusted_is_not_asked_about_the_list() {
     assert!(
         bodies.iter().all(|body| !body.contains(OPEN_TASKS_NOTICE)),
         "the driver asked about a list it was not shown: {bodies:#?}"
+    );
+}
+
+/// The sentence the driver puts to the planner mid-turn when its list may be behind the work, as
+/// far as the count that precedes it.
+const LIST_REMINDER: &str = "so the list may be behind the work";
+
+/// `rounds` requests for a listing, each a round of work that does not touch the task list.
+fn rounds_of_work(rounds: usize) -> Vec<String> {
+    (0..rounds)
+        .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+        .collect()
+}
+
+/// Run `task` once against a stand-in that sends `replies`, and return the request bodies.
+fn bodies_of_a_turn(
+    name: &str,
+    replies: Vec<String>,
+    conversation: &mut bravebot_agent::Conversation,
+) -> Vec<String> {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        conversation,
+        Task::new("work through the steps"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+    received.try_iter().collect()
+}
+
+/// TURN-15: a planner that writes a list with tasks open and then goes `ROUNDS_BEFORE_LIST_REMINDER`
+/// rounds without writing another is told, in the request after that round, how many tasks are open
+/// and that the list may be behind. Said once, however much longer the turn goes on, and not a round
+/// early.
+#[test]
+fn a_planner_that_does_not_update_its_list_is_reminded_after_enough_rounds() {
+    let mut replies = vec![writing_a_task_list(&["in_progress", "pending"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER + 3));
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    // Request 0 precedes the list, and request n precedes round n + 1, so the list is round 1 and
+    // the threshold round is ROUNDS_BEFORE_LIST_REMINDER + 1.
+    let first = ROUNDS_BEFORE_LIST_REMINDER + 1;
+    assert!(
+        bodies[..first]
+            .iter()
+            .all(|body| !body.contains(LIST_REMINDER)),
+        "the reminder came before {ROUNDS_BEFORE_LIST_REMINDER} rounds since the list"
+    );
+    assert!(
+        bodies[first].contains("which has 2 tasks not marked completed"),
+        "the reminder did not come on the threshold round with the open count: {}",
+        bodies[first]
+    );
+    assert!(bodies[first].contains(LIST_REMINDER), "{}", bodies[first]);
+    assert!(
+        bodies[first].contains("Send the whole list again with todo_write"),
+        "the reminder did not ask for the whole list: {}",
+        bodies[first]
+    );
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(LIST_REMINDER).count(),
+        1,
+        "the reminder was said more than once for one list: {last}"
+    );
+}
+
+/// TURN-15: the rounds are counted from the last accepted list. A list written part way through
+/// restarts the count, so the reminder does not come at the round it would have for the first.
+#[test]
+fn the_list_reminder_counts_from_the_last_accepted_list() {
+    let mut replies = vec![writing_a_task_list(&["in_progress", "pending"])];
+    replies.extend(rounds_of_work(5));
+    replies.push(writing_a_task_list(&["completed", "in_progress"]));
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER - 1));
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder-resets",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    assert!(
+        bodies.iter().all(|body| !body.contains(LIST_REMINDER)),
+        "the reminder counted from the first list and not the latest: {bodies:#?}"
+    );
+}
+
+/// TURN-15: a list that leaves nothing open is not reminded about, however long the turn goes on.
+#[test]
+fn a_list_with_nothing_open_is_not_reminded_about() {
+    let mut replies = vec![writing_a_task_list(&["completed", "cancelled"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER + 2));
+    replies.push(reply_with("all the work is done"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder-nothing-open",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    assert!(
+        bodies.iter().all(|body| !body.contains(LIST_REMINDER)),
+        "a list with no task open was reminded about: {bodies:#?}"
+    );
+}
+
+/// TURN-15: the line carries the number of open tasks and nothing the tasks said.
+#[test]
+fn the_list_reminder_names_no_task() {
+    let list = tool_request(
+        "todo_write",
+        &json!({ "todos": [
+            {"content": "zebra-marker-one", "status": "in_progress"},
+            {"content": "zebra-marker-two", "status": "pending"},
+        ] })
+        .to_string(),
+    );
+    let mut replies = vec![list];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER));
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder-no-task-text",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    let body = &bodies[ROUNDS_BEFORE_LIST_REMINDER + 1];
+    let start = body
+        .find("It has been ")
+        .expect("the reminder was not sent");
+    let end = body[start..]
+        .find("carry on.")
+        .expect("the reminder has no end");
+    let reminder = &body[start..start + end];
+    assert!(
+        !reminder.contains("zebra-marker"),
+        "the reminder repeated a task: {reminder}"
+    );
+    // The whole sentence is fixed wording and the two figures the driver counted, so any text added
+    // to it, from the list or from anywhere else, changes it.
+    assert_eq!(
+        reminder,
+        format!(
+            "It has been {ROUNDS_BEFORE_LIST_REMINDER} rounds since you last wrote your task list, \
+             which has 2 tasks not marked completed or cancelled, so the list may be behind the \
+             work. Send the whole list again with todo_write, marking a task completed where it is \
+             done and cancelled where it was dropped. If the list is accurate, "
+        )
+    );
+}
+
+/// Request bodies of a turn that does `ROUNDS_BEFORE_LIST_REMINDER` rounds of work and then answers,
+/// in a conversation whose latest list was counted as `count` with nothing written this turn. The
+/// count is set on the conversation directly, so the only thing that can stop the driver acting on
+/// it is the gate it is read through.
+fn bodies_with_a_count_of_open_tasks(
+    name: &str,
+    count: bravebot_core::value::Labelled<usize>,
+) -> Vec<String> {
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.open_tasks_counted(Some(count), false);
+    let mut replies = rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER);
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+    bodies_of_a_turn(name, replies, &mut conversation)
+}
+
+/// TURN-12, TURN-15: a count of open tasks at a trusted label is acted on, in the reminder and in
+/// the question put when the planner answers. The control for the test below, which differs from it
+/// only in the label.
+#[test]
+fn a_trusted_count_of_open_tasks_is_acted_on() {
+    let bodies = bodies_with_a_count_of_open_tasks(
+        "count-trusted",
+        bravebot_core::value::Labelled::trusted(2usize),
+    );
+
+    assert!(
+        bodies[ROUNDS_BEFORE_LIST_REMINDER].contains(LIST_REMINDER),
+        "the reminder did not come for a trusted count: {bodies:#?}"
+    );
+    assert!(
+        bodies
+            .last()
+            .expect("a last request")
+            .contains(&format!("{OPEN_TASKS_NOTICE} 2 tasks")),
+        "the question was not put for a trusted count"
+    );
+}
+
+/// TURN-12, TURN-15: a count of open tasks that is not trusted is refused by
+/// `Policy::read_trusted_content`, so neither the reminder nor the question is put. The conversation
+/// here has met nothing untrusted and the count is set directly, so the turn takes the same path as
+/// the control above and the label on the count is the only difference.
+///
+/// Rejects reading the count some other way than through the gate (acting on it whatever its label).
+#[test]
+fn an_untrusted_count_of_open_tasks_is_refused_by_the_gate() {
+    let bodies = bodies_with_a_count_of_open_tasks(
+        "count-untrusted",
+        bravebot_core::value::Labelled::new(2usize, Label::untrusted_public()),
+    );
+
+    assert!(
+        bodies
+            .iter()
+            .all(|body| !body.contains(LIST_REMINDER) && !body.contains(OPEN_TASKS_NOTICE)),
+        "the driver acted on a count that was not trusted: {bodies:#?}"
+    );
+    assert_eq!(
+        bodies.len(),
+        ROUNDS_BEFORE_LIST_REMINDER + 1,
+        "the turn did not end on its first answer"
+    );
+}
+
+/// TURN-15: a conversation that has met something untrusted writes every list at that label, no
+/// count is kept, and the driver does not remind the planner about a list it was not shown.
+#[test]
+fn a_session_that_has_met_something_untrusted_is_not_reminded_about_the_list() {
+    let mut replies = vec![writing_a_task_list(&["in_progress", "pending"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER + 2));
+    replies.push(reply_with("all the work is done"));
+
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.observed(bravebot_core::label::Label::untrusted_public());
+    let bodies = bodies_of_a_turn("list-reminder-untrusted", replies, &mut conversation);
+
+    assert!(
+        bodies.iter().all(|body| !body.contains(LIST_REMINDER)),
+        "the driver reminded the planner about a list it was not shown: {bodies:#?}"
+    );
+}
+
+/// TURN-15: a turn that is not offered `todo_write` cannot send a list, so the list an earlier turn
+/// wrote is not reminded about however many rounds it goes.
+#[test]
+fn a_turn_not_offered_the_task_list_tool_is_not_reminded_about_the_list() {
+    let scratch = Scratch::new("list-reminder-not-offered");
+    let home = Scratch::new("list-reminder-not-offered-home");
+    define(
+        &home,
+        "reader-only",
+        "kind: reader\ntools: read_file\n",
+        "REVIEW",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut replies = vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("the plan is written"),
+    ];
+    replies.extend((0..ROUNDS_BEFORE_LIST_REMINDER + 2).map(|n| {
+        tool_request(
+            "read_file",
+            &json!({ "path": format!("f{n}.txt") }).to_string(),
+        )
+    }));
+    replies.push(reply_with("reviewed"));
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |task: Task| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            task,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask(Task::new("plan the work").with_rounds(Some(1)));
+    ask(addressed("review the plan", &home, "reader-only"));
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_LIST_REMINDER + 2,
+        "the second turn did not go the rounds the test needs: {}",
+        bodies.len()
+    );
+    assert!(
+        bodies.iter().all(|body| !body.contains(LIST_REMINDER)),
+        "a turn that cannot send a list was asked to bring it up to date: {bodies:#?}"
+    );
+}
+
+/// TURN-15: the reminder is not said in a turn whose next request carries no tools, since the
+/// planner could not act on it. The round limit takes the tools away at the round the reminder would
+/// have come in.
+///
+/// Rejects saying it without checking `may_call_tools`.
+#[test]
+fn a_turn_with_no_tools_left_is_not_reminded_about_the_list() {
+    let scratch = Scratch::new("list-reminder-no-tools");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.open_tasks_counted(Some(bravebot_core::value::Labelled::trusted(2usize)), false);
+    let mut replies = rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER);
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+    let (endpoint, received) = serve_sequence(replies);
+
+    take_a_turn_reporting(
+        &config_for(&endpoint),
+        &workspace,
+        &mut conversation,
+        Task::new("work through the steps").with_rounds(Some(ROUNDS_BEFORE_LIST_REMINDER)),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_LIST_REMINDER,
+        "the turn did not go the rounds the test needs"
+    );
+    assert!(
+        bodies[ROUNDS_BEFORE_LIST_REMINDER].contains("no more tool calls")
+            || bodies[ROUNDS_BEFORE_LIST_REMINDER].contains("have no more"),
+        "the round limit did not take the tools away where the test needs it"
+    );
+    assert!(
+        bodies.iter().all(|body| !body.contains(LIST_REMINDER)),
+        "a turn with no tools left was told to rewrite its list: {bodies:#?}"
+    );
+}
+
+/// TURN-15: a turn that goes several times the threshold without rewriting its one list is
+/// reminded once. The last request holds the whole turn, so it holds every reminder that was said.
+///
+/// Rejects a reminder repeated every `ROUNDS_BEFORE_LIST_REMINDER` rounds, or every round after the
+/// threshold.
+#[test]
+fn a_turn_many_times_the_threshold_long_gets_one_reminder_for_its_list() {
+    let mut replies = vec![writing_a_task_list(&["in_progress", "pending"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER * 3 + 2));
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder-once-in-a-long-turn",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(LIST_REMINDER).count(),
+        1,
+        "the reminder was not said exactly once in a turn of {} requests: {last}",
+        bodies.len()
+    );
+}
+
+/// TURN-15: a list an earlier turn left open is reminded about in a later turn that goes
+/// `ROUNDS_BEFORE_LIST_REMINDER` rounds without writing one, counted from the start of that turn.
+/// The earlier turn's own rounds do not count, so no request before the threshold holds the line.
+///
+/// Rejects dropping the count of the list between turns, and counting the rounds of the earlier turn.
+#[test]
+fn a_list_left_open_by_an_earlier_turn_is_reminded_about_in_a_later_turn_of_many_rounds() {
+    let mut second = rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER + 2);
+    second.push(reply_with("the work is done"));
+    second.push(reply_with("the list is still as it was"));
+
+    let bodies = bodies_of_a_second_turn(
+        "reminded-in-a-later-turn",
+        second,
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+
+    assert!(
+        bodies[..FIRST_TURN_REQUESTS + ROUNDS_BEFORE_LIST_REMINDER]
+            .iter()
+            .all(|body| !body.contains(LIST_REMINDER)),
+        "the reminder came before the later turn had gone {ROUNDS_BEFORE_LIST_REMINDER} rounds"
+    );
+    assert!(
+        bodies[FIRST_TURN_REQUESTS + ROUNDS_BEFORE_LIST_REMINDER].contains(LIST_REMINDER),
+        "the later turn was not reminded about the list it carried: {bodies:#?}"
+    );
+}
+
+/// The requests a first turn makes when it writes a list with two tasks open, is asked about it as
+/// it answers, and answers with the list as it was.
+fn a_first_turn_that_left_a_list_open() -> Vec<String> {
+    vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("the rest waits for your answer"),
+    ]
+}
+
+/// How many requests [`a_first_turn_that_left_a_list_open`] makes.
+const FIRST_TURN_REQUESTS: usize = 3;
+
+/// Request bodies of two turns in one conversation. The first is
+/// [`a_first_turn_that_left_a_list_open`]; the second is given `second` to be answered with and
+/// `confirmer` to ask.
+fn bodies_of_a_second_turn<C: bravebot_agent::confirm::Confirmer + Send>(
+    name: &str,
+    second: Vec<String>,
+    confirmer: &mut C,
+) -> Vec<String> {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = a_first_turn_that_left_a_list_open();
+    replies.extend(second);
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("do the first part, then ask me about the rest"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the first turn finishes");
+    turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("keep going"),
+        &mut conversation,
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+    received.try_iter().collect()
+}
+
+/// TURN-12: a list the planner was asked about is asked about again at the end of a later turn that
+/// went `ROUNDS_BEFORE_LIST_REMINDER` rounds without rewriting it, once. The reminder said on the way
+/// does not use up the question.
+///
+/// Rejects keeping the question to once for the life of a list, and a reminder that takes the count
+/// the question reads.
+#[test]
+fn a_list_is_asked_about_again_at_the_end_of_a_later_turn_of_many_rounds() {
+    let mut second = rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER);
+    second.push(reply_with("the work is done"));
+    second.push(reply_with("the list is still as it was"));
+    second.push(reply_with("never asked for"));
+
+    let bodies = bodies_of_a_second_turn(
+        "asked-again-many-rounds",
+        second,
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+
+    assert_eq!(
+        bodies.len(),
+        FIRST_TURN_REQUESTS + ROUNDS_BEFORE_LIST_REMINDER + 2,
+        "the turn was not asked once at its end: {bodies:#?}"
+    );
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(OPEN_TASKS_NOTICE).count(),
+        2,
+        "the later turn was not asked about the list at its end: {last}"
+    );
+    assert_eq!(
+        last.matches(LIST_REMINDER).count(),
+        1,
+        "the reminder was not said once on the way: {last}"
+    );
+}
+
+/// TURN-12: a later turn that wrote a file without rewriting the list is asked about it at its
+/// end, however few rounds it took.
+///
+/// Rejects an end-of-turn rule that counts rounds only.
+#[test]
+fn a_list_is_asked_about_again_at_the_end_of_a_later_turn_that_wrote_a_file() {
+    let second = vec![
+        tool_request("write_file", r#"{"path":"a.txt","contents":"x"}"#),
+        reply_with("the work is done"),
+        reply_with("the list is still as it was"),
+        reply_with("never asked for"),
+    ];
+
+    let bodies = bodies_of_a_second_turn(
+        "asked-again-wrote",
+        second,
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+
+    assert_eq!(bodies.len(), FIRST_TURN_REQUESTS + 3, "{bodies:#?}");
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(OPEN_TASKS_NOTICE).count(),
+        2,
+        "a turn that wrote a file was not asked about the list at its end: {last}"
+    );
+}
+
+/// TURN-12: a later turn that ran a program without rewriting the list is asked about it at its
+/// end, however few rounds it took.
+///
+/// Rejects an end-of-turn rule that counts rounds and writes only.
+#[test]
+fn a_list_is_asked_about_again_at_the_end_of_a_later_turn_that_ran_a_program() {
+    let second = vec![
+        tool_request("run", r#"{"command":"echo built"}"#),
+        reply_with("the work is done"),
+        reply_with("the list is still as it was"),
+        reply_with("never asked for"),
+    ];
+
+    let bodies = bodies_of_a_second_turn(
+        "asked-again-ran",
+        second,
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+    );
+
+    assert_eq!(bodies.len(), FIRST_TURN_REQUESTS + 3, "{bodies:#?}");
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(OPEN_TASKS_NOTICE).count(),
+        2,
+        "a turn that ran a program was not asked about the list at its end: {last}"
+    );
+}
+
+/// TURN-12: a later turn that only read a few files is not asked about the list again, since it did
+/// none of the work that would have left the list behind.
+///
+/// Rejects asking at the end of every turn.
+#[test]
+fn a_list_is_not_asked_about_again_at_the_end_of_a_later_turn_that_only_read() {
+    let mut second = rounds_of_work(3);
+    second.push(reply_with("here is what is there"));
+    second.push(reply_with("never asked for"));
+
+    let bodies = bodies_of_a_second_turn(
+        "not-asked-again-read-only",
+        second,
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+
+    assert_eq!(bodies.len(), FIRST_TURN_REQUESTS + 4, "{bodies:#?}");
+    assert_eq!(
+        bodies
+            .last()
+            .expect("a last request")
+            .matches(OPEN_TASKS_NOTICE)
+            .count(),
+        1,
+        "a turn that did no work was asked about the list again"
+    );
+}
+
+/// TURN-12, TURN-15: a planner that was reminded and rewrote its list is not asked about it at the
+/// end of the turn, since the list is then the planner's answer to the reminder.
+///
+/// Rejects a question that stacks on a reminder the planner acted on.
+#[test]
+fn a_planner_that_rewrote_its_list_when_reminded_is_not_asked_at_the_end() {
+    let mut second = rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER);
+    second.push(writing_a_task_list(&["completed", "in_progress"]));
+    second.push(reply_with("the work is done"));
+    second.push(reply_with("never asked for"));
+
+    let bodies = bodies_of_a_second_turn(
+        "rewrote-when-reminded",
+        second,
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+
+    assert_eq!(
+        bodies.len(),
+        FIRST_TURN_REQUESTS + ROUNDS_BEFORE_LIST_REMINDER + 2,
+        "{bodies:#?}"
+    );
+    let last = bodies.last().expect("a last request");
+    assert!(last.contains(LIST_REMINDER), "no reminder was said: {last}");
+    assert_eq!(
+        last.matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the planner was asked at the end after it rewrote the list: {last}"
+    );
+}
+
+/// TURN-12, TURN-15: one turn in which the planner writes a list with two tasks open, goes on doing
+/// other work past the threshold without rewriting it, is reminded once on the way, and is still
+/// asked about the list when it answers. The reminder is the first and the question the second of
+/// two separate lines, each said exactly once.
+///
+/// Rejects a reminder that is never said, one that repeats, and a reminder that uses up the question
+/// at the end of the turn.
+#[test]
+fn a_long_turn_with_a_stale_list_is_reminded_once_and_asked_once_at_its_end() {
+    let extra_rounds = 3;
+    let mut replies = vec![writing_a_task_list(&["in_progress", "pending"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER + extra_rounds));
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+    replies.push(reply_with("never asked for"));
+
+    let bodies = bodies_of_a_turn(
+        "stale-list-reminded-and-asked",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    // The list, the rounds of work, the answer, and the answer given again after the question.
+    assert_eq!(
+        bodies.len(),
+        1 + ROUNDS_BEFORE_LIST_REMINDER + extra_rounds + 2,
+        "the turn was not asked once at its end: {bodies:#?}"
+    );
+    let reminded_at = ROUNDS_BEFORE_LIST_REMINDER + 1;
+    assert!(
+        bodies[..reminded_at]
+            .iter()
+            .all(|body| !body.contains(LIST_REMINDER)),
+        "the reminder came before the threshold"
+    );
+    assert!(
+        bodies[reminded_at].contains(LIST_REMINDER),
+        "the reminder did not come at the threshold: {}",
+        bodies[reminded_at]
+    );
+    assert!(
+        bodies[..bodies.len() - 1]
+            .iter()
+            .all(|body| !body.contains(OPEN_TASKS_NOTICE)),
+        "the question was put before the planner answered"
+    );
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(LIST_REMINDER).count(),
+        1,
+        "the reminder was not said exactly once in the turn: {last}"
+    );
+    assert_eq!(
+        last.matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the turn was not asked about its open tasks exactly once at its end: {last}"
     );
 }
 

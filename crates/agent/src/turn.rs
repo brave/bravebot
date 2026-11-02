@@ -98,6 +98,16 @@ pub const ROUNDS_BEFORE_WRITING: usize = 8;
 /// the planner is the only party that can.
 pub const ROUNDS_AFTER_WRITING_BEFORE_RUNNING: usize = 6;
 
+/// How many rounds a turn may go on after the planner last wrote its task list, while that list
+/// leaves a task open, before the driver says the list may be behind the work.
+///
+/// Counted from the round that accepted the list, or from the start of the turn where the list
+/// is an earlier turn's. Ten is chosen, not measured. The turn this was built for went about thirty
+/// rounds without rewriting a list that still showed its first task in progress. Ten is past the
+/// rounds in which a list is still accurate for the step it names, and it stays clear of
+/// [`ROUNDS_BEFORE_WRITING`], so the two reminders land on different rounds.
+pub const ROUNDS_BEFORE_LIST_REMINDER: usize = 10;
+
 /// How the driver introduces itself when it takes the tools away.
 ///
 /// Marked so the message reads as the system speaking rather than as the user changing their
@@ -4519,8 +4529,9 @@ where
             // conversation. Kept only where the planner was shown the list: a list it was not shown
             // is still the panel's, and the count of the one before it no longer describes that.
             if let Some(open) = output.task_list.take() {
-                conversation
-                    .open_tasks_counted(shown_window.then_some(open), state.reminded.open_tasks);
+                let in_answer = state.reminded.list_answers_a_question();
+                state.reminded.list_accepted(state.steps, state.worked.work);
+                conversation.open_tasks_counted(shown_window.then_some(open), in_answer);
             }
             if let Some(cancelled) = cancellation {
                 attach_vetted_pictures(policy, conversation, &mut attached);
@@ -4555,10 +4566,13 @@ where
         }
 
         round_steps::nudges(
+            policy,
             conversation,
+            &state.offered,
             task,
             may_write,
             may_run,
+            state.may_call_tools,
             state.steps,
             &state.worked,
             delegates,
