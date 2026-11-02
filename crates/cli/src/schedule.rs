@@ -206,7 +206,7 @@ fn is_an_id(id: &str) -> bool {
 
 /// What an entry's file holds.
 fn entry_text(cron: &str, directory: &Path, mode: Mode) -> Option<String> {
-    let directory = &*directory.to_string_lossy();
+    let directory = directory.to_str()?;
     if directory.contains('\n') {
         return None;
     }
@@ -754,6 +754,10 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let directory = Path::new(std::ffi::OsStr::from_bytes(b"/work/\xff"));
         assert_eq!(entry_text("0 9 * * *", directory, Mode::Read), None);
+        // The lookalike a lossy conversion would write is itself a valid directory name.
+        let lookalike = Path::new("/work/\u{FFFD}");
+        let text = entry_text("0 9 * * *", lookalike, Mode::Read).expect("an entry");
+        assert!(text.contains("dir=/work/\u{FFFD}\n"));
     }
 
     #[test]
