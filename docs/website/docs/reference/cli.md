@@ -76,7 +76,7 @@ Usage:
 | `bravebot sessions delete <id>` | delete one session recorded for this directory, with its trail and search index ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot sessions purge [--dry-run] [-y]` | delete every session recorded for this directory, asking first unless `-y` is given ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot stats [--days <n>] [--models] [--project [<dir>]]` | total the sessions, turns and tokens, read and written, the recorded sessions spent, for every project or one ([below](#stats)) |
-| `bravebot schedule add\|list\|remove\|run-now\|history` | run a prompt from a cron expression as a one-shot run, started by your crontab ([below](#schedule)) |
+| `bravebot schedule add\|list\|remove\|run-now\|history` | run a prompt from a cron expression as a one-shot run, started by your crontab, a launchd job or a systemd timer ([below](#schedule)) |
 | `bravebot skill eval <name> [--model <model>] [--max-rounds <n>] [--max-tokens <n>] [--trust-workspace]` | run a skill's saved cases with the skill and without it and report both scores ([below](#skill-eval)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
@@ -1202,15 +1202,15 @@ too large or not a number, a repeated option and any other word are refused with
 ## `schedule`
 
 ```sh
-bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>] [--accept-edits | --dangerously-skip-permissions]
+bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>] [--scheduler crontab|launchd|systemd] [--accept-edits | --dangerously-skip-permissions]
 bravebot schedule list
 bravebot schedule remove <id>
 bravebot schedule run-now <id>
 bravebot schedule history [<id>]
 ```
 
-Runs a prompt on a repeating schedule with no session open. `add` writes an entry and one line in
-your crontab that runs `bravebot schedule run-now <id>`, which starts the same one-shot run as
+Runs a prompt on a repeating schedule with no session open. `add` writes an entry and has your
+operating system's scheduler run `bravebot schedule run-now <id>`, which starts the same one-shot run as
 `bravebot -p` in the entry's directory (this one unless `--dir` says otherwise). Nothing of
 bravebot's keeps running between runs.
 
@@ -1228,7 +1228,16 @@ for each entry. `add` must be typed at a terminal, so a command a session runs c
 starts a job with almost none of your environment, so a run that needs a credential reads it from
 the sign-in kept in `~/.bravebot`. `history` lists each recorded run with its exit status, the
 session it recorded and the tokens that session spent. A run that ended before it recorded a
-session shows `-`. Only `crontab` on a Unix system is supported.
+session shows `-`.
+
+`--scheduler` chooses what starts the runs: `crontab` (one line of your crontab, the default except
+on macOS), `launchd` (a job in `~/Library/LaunchAgents`, loaded with `launchctl`, the default on
+macOS) or `systemd` (a timer and a service in `~/.config/systemd/user`, enabled with `systemctl
+--user`). `list` names the one each entry uses, and `remove` takes the job out of that one. A
+launchd job or systemd timer holds each time the expression gives, so an expression that gives more
+than a launchd job can hold is refused for those two. Where both the day of the month and the day of
+the week are given, a run starts on a day that matches either, as cron does. Only Unix systems are
+supported: there is no Windows scheduler yet.
 
 ## `skill eval`
 
