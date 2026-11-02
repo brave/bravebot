@@ -202,9 +202,7 @@ impl Session {
         if self.attributed_to == Some(id) {
             self.attributed_to = None;
         }
-        if self.waiting_on == Some(id) {
-            self.waiting_on = None;
-        }
+        self.waiting_on.retain(|waiting| *waiting != id);
         // The roster says which delegate this ends: the latest with that number still working.
         if let Some(place) = self.roster.finish(id, failed) {
             self.sync_delegates();

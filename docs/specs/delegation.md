@@ -713,16 +713,34 @@ nobody watched.
 ### DELEGATE-17: a delegate does not outlive the turn that spawned it
 
 A turn does not answer while something it started is still working. Where the planner answers
-first, the reports are waited for, put in front of it, and it answers again knowing what came
-back. A turn that has run out of tool calls waits too, and answers without being asked again.
+first, the turn waits until a delegate ends, a line the person typed is waiting, or the turn is
+stopped. It then puts the reports of every delegate that has ended in front of the planner, and the
+planner answers again while the others keep working, knowing what came back. A planner with
+nothing to do with one report ends its round again naming what is outstanding, and the turn waits
+for the next delegate to end. The turn does not end until the last one has. A turn that has run out
+of tool calls waits for every delegate, and answers without being asked again.
+
+What wakes the turn is a count and a flag the driver holds: how many delegates have ended, and
+whether a line is waiting to be read. It does not depend on what a report says, so a report held
+out as a reference wakes the turn exactly as one in words does. A delegate ending wakes the turn
+once, because its report is taken when it wakes the turn and it is not outstanding after that. A
+line wakes the turn once, and a line the turn does not take does not wake the waits after it. A
+delegate is never woken by a typed line, which was aimed at the turn the person is watching
+([INPUT-10](terminal-input.md#INPUT-10)). Stopping the turn waits for every delegate to end, as
+the turn that has run out of tool calls does. A wake is not a round: the rounds a limit counts are
+the ones that asked for tool calls, so a planner answering a wake with a line naming what is
+outstanding spends none of them ([TURN-14](turns.md#TURN-14)). Each of those lines stays in the
+transcript, including one that repeats the line before it.
 
 Answering is how a planner waits when a delegate is all that is left, so the result of
 `spawn_agent` and the refusal `job_output` gives for a delegate's number both say so: end the round
 with one line naming what is outstanding, and the turn waits and asks again. The answer given
 while a delegate works is reported to the interface as text between calls, as the text that comes
 with a tool call is, so it stays in the transcript when the next round starts. Only the answer that
-ends the turn is the reply. While the turn joins a delegate the interface is told which one, and
-the terminal client names it beside the spinner.
+ends the turn is the reply. While the turn waits for a delegate the interface is told which one,
+and the terminal client names it beside the spinner. Every delegate still working is named, since
+the wait ends at whichever of them is first. There is no option on `spawn_agent` to wait for all of
+a batch before the planner is asked again, so no argument for a person to approve.
 
 [background-sessions.md](background-sessions.md) proposes a session whose process outlives the
 terminal, which nothing yet builds. It changes nothing here: the turn in such a session still does
@@ -734,8 +752,16 @@ written any more. A delegate still running is still doing both, and can still pu
 front of them for a turn they were told had finished.
 
 `verified-by: bravebot_agent::turn::a_turn_does_not_answer_while_a_delegate_is_still_working`
+`verified-by: bravebot_agent::turn::the_planner_is_asked_again_when_the_first_delegate_ends_and_the_turn_then_waits_for_the_rest`
 `verified-by: bravebot_agent::turn::two_delegates_work_at_the_same_time`
 `verified-by: bravebot_agent::turn::a_turn_out_of_tool_calls_waits_for_its_delegate_and_is_not_asked_again`
+`verified-by: bravebot_agent::turn::a_line_typed_while_the_delegates_work_reaches_the_planner_before_any_of_them_ends`
+`verified-by: bravebot_agent::turn::two_delegates_ending_together_are_both_collected_by_one_wake_whatever_their_labels`
+`verified-by: bravebot_agent::turn::a_typed_line_wakes_a_persons_wait_once_and_a_delegates_never`
+`verified-by: bravebot_agent::turn::a_wake_is_not_a_round_against_the_rounds_limit`
+`verified-by: bravebot_agent::turn::each_waiting_answer_stays_in_the_transcript_even_when_it_repeats`
+`verified-by: bravebot_agent::turn::a_stop_during_the_wait_ends_the_turn_after_its_delegates_and_leaves_a_later_line`
+`verified-by: bravebot_tui::state::a_turn_waiting_on_several_delegates_names_each_until_it_reports`
 `verified-by: bravebot_tui::state::a_turn_waiting_on_a_delegate_names_it_until_its_report_is_in`
 `verified-by: bravebot_tui::state::a_new_round_ends_the_wait_the_indicator_names`
 

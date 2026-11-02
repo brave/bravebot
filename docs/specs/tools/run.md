@@ -998,8 +998,9 @@ asked for, before the turn answers ([DELEGATE-17](../delegation.md#DELEGATE-17))
 neither reads one nor stops one. A name that is no job but is the number of a delegate this run
 started is answered as that: the planner is told it named a delegate, and that a message saying the
 delegate has finished or did not finish reaches it on its own. It is also told that with only
-delegates left it ends the round with one line naming what is outstanding, since the turn waits
-and asks it again ([DELEGATE-17](../delegation.md#DELEGATE-17)). The answer is the same whether that
+delegates left it ends the round with one line naming what is outstanding, since the turn asks it
+again when the first report is in, while the other delegates keep working
+([DELEGATE-17](../delegation.md#DELEGATE-17)). The answer is the same whether that
 message has come yet or not, since nothing the tool can see says which. "No such job" would read as
 a fact about the delegate. The name is compared with the numbers the kernel minted, as it is with
 the job names the driver minted.

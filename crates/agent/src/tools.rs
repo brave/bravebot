@@ -10838,8 +10838,8 @@ fn job_output<S: Sink, R: Reporter>(
                 "error: '{name}' is a delegate, not a background job, so job_output neither reads \
                  it nor stops it. How it ended reaches you on its own, in a message saying {name} \
                  has finished or did not finish. When a delegate is all that is left, end the round \
-                 with one line naming what is outstanding: the turn waits for the report and \
-                 asks you again."
+                 with one line naming what is outstanding: the turn asks you again when the \
+                 first report is in, while any others keep working."
             ));
         }
         return Produced::problem(format!(
@@ -11597,14 +11597,15 @@ fn spawn_agent<S: Sink, R: Reporter>(
             "the {kind_name} delegate {named} has started. Its report will reach you when it is \
              ready, and you do not have to wait for it: carry on, or spawn another. When it is all \
              that is left, end the round with one line naming what is outstanding: the turn \
-             waits for the report and asks you again."
+             asks you again when the report is in."
         )
     } else {
         format!(
             "{} {kind_name} delegates have started: {named}. Each reports on its own and you do \
              not have to wait for any of them: carry on, or spawn another. When they are \
              all that is left, end the round with one line naming what is outstanding: the turn \
-             waits for the reports and asks you again.",
+             asks you again when the first report is in, while the others keep working, and \
+             again as each of the rest reports.",
             started.len()
         )
     };

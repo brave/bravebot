@@ -1363,6 +1363,9 @@ enum Order {
         after: &'static str,
         asked: usize,
     },
+    /// Several of the above at once, as `(held, after, asked)`. This is how a test says that one
+    /// delegate is back at the planner's third request and another only at its fourth.
+    Staged(&'static [(&'static str, &'static str, usize)]),
 }
 
 /// As [`serve_by_marker`], answering in `order`. The flag says whether the order was kept, since
@@ -1381,7 +1384,7 @@ fn serve_by_marker_in(
     let (meet, kept): (&'static [&'static str], bool) = match order {
         Order::Any => (&[], true),
         Order::Meeting(meet) => (meet, meet.is_empty()),
-        Order::After { .. } => (&[], false),
+        Order::After { .. } | Order::Staged(_) => (&[], false),
     };
     let met = Arc::new(AtomicBool::new(kept));
     let arrived: Arc<(Mutex<BTreeSet<&'static str>>, Condvar)> =
@@ -1468,12 +1471,12 @@ fn serve_by_marker_in(
                         told.notify_all();
                     }
 
-                    if let Order::After {
-                        held,
-                        after,
-                        asked: times,
-                    } = order
-                        && marker == held
+                    let stages: Vec<(&str, &str, usize)> = match order {
+                        Order::After { held, after, asked } => vec![(held, after, asked)],
+                        Order::Staged(stages) => stages.to_vec(),
+                        _ => Vec::new(),
+                    };
+                    for (_, after, times) in stages.into_iter().filter(|(held, ..)| *held == marker)
                     {
                         let (counts, told) = &*asked;
                         let bound = std::time::Duration::from_secs(10);
@@ -7791,6 +7794,8 @@ fn what_the_model_says_between_tool_calls_reaches_the_interface() {
 struct SaysOnce {
     said: Option<String>,
     held_back: Option<String>,
+    /// A buffer a person types into while the turn runs, as the terminal's confirmer holds one.
+    typed: Option<bravebot_agent::interjections::Interjections>,
 }
 
 impl SaysOnce {
@@ -7798,6 +7803,17 @@ impl SaysOnce {
         Self {
             said: Some(said.to_string()),
             held_back: None,
+            typed: None,
+        }
+    }
+
+    /// A person typing into `buffer` at moments the test chooses, with the buffer's own signal that
+    /// a line has arrived, so a turn that is waiting rather than asking can see it.
+    fn typing_into(buffer: &bravebot_agent::interjections::Interjections) -> Self {
+        Self {
+            said: None,
+            held_back: None,
+            typed: Some(buffer.clone()),
         }
     }
 
@@ -7810,6 +7826,7 @@ impl SaysOnce {
         Self {
             said: None,
             held_back: Some(said.to_string()),
+            typed: None,
         }
     }
 }
@@ -7932,12 +7949,22 @@ impl bravebot_agent::Confirmer for SaysOnce {
     }
 
     fn interjection(&mut self) -> Option<String> {
+        if let Some(buffer) = &self.typed {
+            return buffer.take();
+        }
         match self.said.take() {
             said @ Some(_) => said,
             None => {
                 self.said = self.held_back.take();
                 None
             }
+        }
+    }
+
+    fn arrival(&self) -> bravebot_agent::interjections::Arrival {
+        match &self.typed {
+            Some(buffer) => buffer.arrival(),
+            None => bravebot_agent::interjections::Arrival::never(),
         }
     }
 }
@@ -45062,6 +45089,16 @@ struct Watched {
     from: Option<bravebot_agent::report::DelegateId>,
     narrated: Vec<String>,
     waited_on: Vec<bravebot_agent::report::DelegateId>,
+    /// A line to type, and where, at the moment the turn starts waiting on a delegate. This is how
+    /// a test says "typed while the delegates work" without a sleep: the wait is where the turn is.
+    types_when_waiting: Option<(bravebot_agent::interjections::Interjections, String)>,
+    /// The stop, and a line typed just after it, at the moment the turn starts waiting on a
+    /// delegate. This is how a test says "stopped, then typed" while the delegates work.
+    stops_when_waiting: Option<(
+        bravebot_core::cancel::Cancel,
+        bravebot_agent::interjections::Interjections,
+        String,
+    )>,
 }
 
 impl Watched {
@@ -45095,6 +45132,13 @@ impl bravebot_agent::report::Reporter for Watched {
 
     fn delegate_waiting(&mut self, delegate: bravebot_agent::report::DelegateId) {
         self.waited_on.push(delegate);
+        if let Some((buffer, line)) = self.types_when_waiting.take() {
+            assert!(buffer.push(line), "the line was not accepted");
+        }
+        if let Some((cancel, buffer, line)) = self.stops_when_waiting.take() {
+            cancel.cancel();
+            assert!(buffer.push(line), "the line was not accepted");
+        }
     }
 
     fn reporting_for(&mut self, delegate: Option<bravebot_agent::report::DelegateId>) {
@@ -45361,6 +45405,7 @@ fn each_delegate_a_turn_spawns_is_numbered_and_its_work_reported_under_that_numb
                 ),
                 reply_with("waiting for both"),
                 reply_with("both of them reported back"),
+                reply_with("both of them reported back"),
             ],
         ),
         (
@@ -45511,6 +45556,390 @@ fn two_delegates_work_at_the_same_time() {
                 .is_some(),
         "a delegate the turn started was never collected: {:?}",
         reporter.lines()
+    );
+}
+
+/// DELEGATE-17: the planner is asked again as soon as the first delegate it is waiting on ends,
+/// with that delegate's report, while the others keep working.
+///
+/// The fast delegate is held until the planner's third request has arrived and the slow one until
+/// its fourth, so the slow one cannot be back before a request carrying the fast report has gone
+/// out. A turn that joined the delegates in the order it started them would hold the planner's
+/// fourth request until the slow delegate ended, and the slow delegate is waiting for that request:
+/// the order is never kept and the fast report is in no request until the end.
+///
+/// The planner answers the wake with a line naming what is outstanding. The request count is
+/// exact, so a turn that asked again on a timer, or woke again for a delegate it had already
+/// reported, would send more than five.
+#[test]
+fn the_planner_is_asked_again_when_the_first_delegate_ends_and_the_turn_then_waits_for_the_rest() {
+    let scratch = Scratch::new("delegates-wake-on-first");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, kept) = serve_by_marker_in(
+        vec![
+            (
+                "ASK-TWO",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"FAST-ONE"}"#),
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"SLOW-ONE"}"#),
+                    reply_with("waiting on both"),
+                    reply_with("still waiting on the slow one"),
+                    reply_with("both are in"),
+                ],
+            ),
+            ("FAST-ONE", vec![reply_with("THE-FAST-REPORT")]),
+            ("SLOW-ONE", vec![reply_with("THE-SLOW-REPORT")]),
+        ],
+        Order::Staged(&[("FAST-ONE", "ASK-TWO", 3), ("SLOW-ONE", "ASK-TWO", 4)]),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("ASK-TWO"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        kept.load(Ordering::SeqCst),
+        "the slow delegate was never held for the planner's fourth request, so this proves \
+         nothing: {:?}",
+        reporter.lines()
+    );
+    let requests = every_request(&received);
+    let planner: Vec<&String> = requests
+        .iter()
+        .filter(|body| body.contains("ASK-TWO"))
+        .collect();
+    let with_fast = planner
+        .iter()
+        .position(|body| body.contains("THE-FAST-REPORT"))
+        .expect("the fast report never reached the planner");
+    let with_slow = planner
+        .iter()
+        .position(|body| body.contains("THE-SLOW-REPORT"))
+        .expect("the slow report never reached the planner");
+    assert!(
+        with_fast < with_slow,
+        "the fast report waited for the slow delegate: it was in request {with_fast} and the slow \
+         report in request {with_slow}"
+    );
+    assert!(
+        !planner[with_fast].contains("THE-SLOW-REPORT"),
+        "the request carrying the fast report already held the slow one, so nothing was woken early"
+    );
+    assert_eq!(
+        planner.len(),
+        5,
+        "the planner was asked again for something other than a delegate ending"
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "both are in",
+        "the turn ended before the slow delegate reported"
+    );
+    assert!(
+        reporter
+            .position("delegate d1 finished")
+            .unwrap_or(usize::MAX)
+            < reporter.position("delegate d2 finished").unwrap_or(0),
+        "the delegates were not collected one at a time as they ended: {:?}",
+        reporter.lines()
+    );
+}
+
+/// DELEGATE-17 and INPUT-10: a line typed while the turn waits on its delegates is in front of the
+/// planner while they are still working, and the person does not wait for the slowest to end.
+///
+/// Both delegates are held until the planner's fourth request has arrived. That request is the one
+/// the typed line wakes the turn for: a turn that read the line only after the delegates were
+/// joined would never send it, because the delegates are waiting for it, and the held replies
+/// would time out instead.
+///
+/// The line is typed by the reporter at the moment the turn begins to wait, so no sleep decides
+/// when it arrives.
+#[test]
+fn a_line_typed_while_the_delegates_work_reaches_the_planner_before_any_of_them_ends() {
+    let scratch = Scratch::new("delegates-wake-on-line");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received, kept) = serve_by_marker_in(
+        vec![
+            (
+                "ASK-LINE",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"SLOW-A"}"#),
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"SLOW-B"}"#),
+                    reply_with("waiting on both"),
+                    reply_with("noted, still waiting"),
+                    reply_with("both are in"),
+                    reply_with("both are in"),
+                ],
+            ),
+            ("SLOW-A", vec![reply_with("THE-A-REPORT")]),
+            ("SLOW-B", vec![reply_with("THE-B-REPORT")]),
+        ],
+        Order::Staged(&[("SLOW-A", "ASK-LINE", 4), ("SLOW-B", "ASK-LINE", 4)]),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let buffer = bravebot_agent::interjections::Interjections::new();
+    let mut reporter = Watched {
+        types_when_waiting: Some((buffer.clone(), "TYPED-WHILE-THEY-WORK".to_string())),
+        ..Watched::default()
+    };
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("ASK-LINE"),
+        &mut SaysOnce::typing_into(&buffer),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        kept.load(Ordering::SeqCst),
+        "the delegates were held for the planner's fourth request and it never came, so the line \
+         was not read until they ended: {:?}",
+        reporter.lines()
+    );
+    let requests = every_request(&received);
+    let planner: Vec<&String> = requests
+        .iter()
+        .filter(|body| body.contains("ASK-LINE"))
+        .collect();
+    let with_line = planner
+        .iter()
+        .position(|body| body.contains("TYPED-WHILE-THEY-WORK"))
+        .expect("the typed line never reached the planner");
+    assert_eq!(
+        with_line, 3,
+        "the line was not in the request the typed line woke the turn for"
+    );
+    assert!(
+        !planner[with_line].contains("THE-A-REPORT")
+            && !planner[with_line].contains("THE-B-REPORT"),
+        "a delegate had already ended when the line reached the planner, so nothing was woken early"
+    );
+    assert_eq!(
+        outcome.reply_for_display(),
+        "both are in",
+        "the turn ended before the delegates reported"
+    );
+    assert_eq!(
+        planner
+            .iter()
+            .filter(|body| body.contains("TYPED-WHILE-THEY-WORK"))
+            .count(),
+        planner.len() - 3,
+        "the line was taken more than once or woke the turn again"
+    );
+}
+
+/// A planner that waits on two delegates, writes a file after the first reports, and waits again.
+///
+/// The two waiting answers are the same words. Every request the planner makes carries `marker`,
+/// which is how the mock server tells the planner from the delegates. Returns what the turn came
+/// to, the reporter that watched it, the file the planner's one tool round wrote and the number of
+/// requests the planner made.
+fn waits_twice_around_one_tool_round(
+    name: &str,
+    marker: &'static str,
+    limit: Option<usize>,
+) -> (
+    Result<bravebot_agent::turn::Outcome, bravebot_agent::TurnError>,
+    Watched,
+    String,
+    usize,
+) {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("marker.txt"), "before").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let fast: &'static str = "WAKEFAST";
+    let slow: &'static str = "WAKESLOW";
+    let (endpoint, received, _kept) = serve_by_marker_in(
+        vec![
+            (
+                marker,
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        &format!(r#"{{"kind":"reader","task":"{fast}"}}"#),
+                    ),
+                    tool_request(
+                        "spawn_agent",
+                        &format!(r#"{{"kind":"reader","task":"{slow}"}}"#),
+                    ),
+                    reply_with("STILL-WAITING-ON-THE-REST"),
+                    tool_request(
+                        "write_file",
+                        r#"{"path":"marker.txt","contents":"written after a wake"}"#,
+                    ),
+                    reply_with("STILL-WAITING-ON-THE-REST"),
+                    reply_with("all done"),
+                ],
+            ),
+            (fast, vec![reply_with("THE-FAST-REPORT")]),
+            (slow, vec![reply_with("THE-SLOW-REPORT")]),
+        ],
+        Order::Staged(Box::leak(
+            vec![(fast, marker, 3), (slow, marker, 5)].into_boxed_slice(),
+        )),
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = Watched::default();
+    let task = Task::new(marker).with_run_limits(bravebot_agent::turn::RunLimits {
+        rounds: limit,
+        tokens: None,
+    });
+    let ended = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    let asked = every_request(&received)
+        .iter()
+        .filter(|body| body.contains(marker))
+        .count();
+    let written = std::fs::read_to_string(scratch.path.join("marker.txt")).unwrap();
+    (ended, reporter, written, asked)
+}
+
+/// DELEGATE-17 and TURN-14: a wake is not a round. The planner answers each wake without asking
+/// for a tool call, so the rounds it has made are the three that asked for one, and a limit of
+/// three lets the write after the first wake run.
+///
+/// A turn that counted each wake as a round would have used up the limit before the write and
+/// ended with the limit reached, leaving the file as it was.
+#[test]
+fn a_wake_is_not_a_round_against_the_rounds_limit() {
+    let (ended, reporter, written, asked) =
+        waits_twice_around_one_tool_round("wake-rounds-limit", "ASK-WAKE-LIMIT", Some(3));
+    let outcome = ended
+        .unwrap_or_else(|error| panic!("the turn ended early: {error:?}, {:?}", reporter.lines()));
+    assert_eq!(outcome.reply_for_display(), "all done");
+    assert_eq!(
+        written, "written after a wake",
+        "the round after the first wake was not run"
+    );
+    assert_eq!(
+        asked, 6,
+        "the planner was asked a different number of times"
+    );
+}
+
+/// DELEGATE-17: each time the planner answers a wake with a line naming what is outstanding, the
+/// line stays in the transcript, including when it repeats the line before it. Repeated waiting
+/// lines are not collapsed, since each one marks a point at which the planner was asked again.
+#[test]
+fn each_waiting_answer_stays_in_the_transcript_even_when_it_repeats() {
+    let (ended, reporter, _, _) =
+        waits_twice_around_one_tool_round("wake-narration", "ASK-WAKE-NARRATE", None);
+    ended.expect("the turn runs");
+    assert_eq!(
+        reporter
+            .narrated
+            .iter()
+            .filter(|said| said.contains("STILL-WAITING-ON-THE-REST"))
+            .count(),
+        2,
+        "a repeated waiting line was dropped or merged: {:?}",
+        reporter.narrated
+    );
+}
+
+/// INPUT-10 and DELEGATE-17: a stop during the wait still ends the turn after its delegates have
+/// ended, and a line typed after the stop is left for the next turn.
+///
+/// The reporter stops the turn and types the line as the wait begins. A turn that took the line
+/// after the stop would have emptied the buffer, and one that ended at the stop would leave a
+/// delegate unreported.
+#[test]
+fn a_stop_during_the_wait_ends_the_turn_after_its_delegates_and_leaves_a_later_line() {
+    let scratch = Scratch::new("delegates-stop-then-type");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received, _kept) = serve_by_marker_in(
+        vec![
+            (
+                "ASK-STOP",
+                vec![
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"STOP-A"}"#),
+                    tool_request("spawn_agent", r#"{"kind":"reader","task":"STOP-B"}"#),
+                    reply_with("waiting on both"),
+                    reply_with("never asked for"),
+                ],
+            ),
+            ("STOP-A", vec![reply_with("THE-A-REPORT")]),
+            ("STOP-B", vec![reply_with("THE-B-REPORT")]),
+        ],
+        Order::Any,
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let buffer = bravebot_agent::interjections::Interjections::new();
+    let mut reporter = Watched {
+        stops_when_waiting: Some((
+            cancel.clone(),
+            buffer.clone(),
+            "TYPED-AFTER-THE-STOP".to_string(),
+        )),
+        ..Watched::default()
+    };
+
+    let ended = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("ASK-STOP"),
+        &mut SaysOnce::typing_into(&buffer),
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &cancel,
+    );
+
+    assert!(
+        matches!(ended, Err(bravebot_agent::TurnError::Cancelled { .. })),
+        "the turn ended some other way, so this says nothing about a stop: {:?}",
+        ended.err()
+    );
+    assert!(
+        reporter.position("delegate d1 finished").is_some()
+            && reporter.position("delegate d2 finished").is_some(),
+        "the turn ended while a delegate was still working: {:?}",
+        reporter.lines()
+    );
+    assert_eq!(
+        buffer.take().as_deref(),
+        Some("TYPED-AFTER-THE-STOP"),
+        "the line typed after the stop was taken by the turn it was stopped in"
     );
 }
 
@@ -46882,6 +47311,7 @@ fn stopping_one_delegate_leaves_the_other_and_the_turn_going() {
                     r#"{"kind":"reader","task":"THE-UNTOUCHED-ONE"}"#,
                 ),
                 reply_with("waiting for both"),
+                reply_with("the turn answered"),
                 reply_with("the turn answered"),
             ],
         ),
@@ -50263,6 +50693,7 @@ fn a_delegate_in_a_checkout_is_offered_no_lsp() {
                 ),
                 reply_with("waiting"),
                 reply_with("done"),
+                reply_with("done"),
             ],
         ),
         ("WORK-IN-A-CHECKOUT", vec![reply_with("looked")]),
@@ -51756,6 +52187,7 @@ fn one_trail_records_the_delegate_and_the_turn_that_spawned_it() {
                 ),
                 reply_with("waiting"),
                 reply_with("relayed"),
+                reply_with("relayed"),
             ],
         ),
         (
@@ -51848,6 +52280,8 @@ fn one_call_can_fan_a_task_out_over_several_delegates() {
                     r#"{"kind":"reader","task":"SHARED-INSTRUCTION","each":["ENTRY-ALPHA","ENTRY-BETA","ENTRY-GAMMA"]}"#,
                 ),
                 reply_with("waiting for the three of them"),
+                reply_with("all three answered"),
+                reply_with("all three answered"),
                 reply_with("all three answered"),
             ],
         ),
@@ -52025,6 +52459,11 @@ fn a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not
         fan_out(4),
         fan_out(4),
         reply_with("waiting"),
+        reply_with("done"),
+        reply_with("done"),
+        reply_with("done"),
+        reply_with("done"),
+        reply_with("done"),
         reply_with("done"),
     ];
 
@@ -58462,8 +58901,8 @@ fn a_job_output_call_naming_a_delegate_says_its_report_arrives_on_its_own() {
     let answer = "'d1' is a delegate, not a background job, so job_output neither reads it nor \
                   stops it. How it ended reaches you on its own, in a message saying d1 has \
                   finished or did not finish. When a delegate is all that is left, end the round \
-                  with one line naming what is outstanding: the turn waits for the report and \
-                  asks you again.";
+                  with one line naming what is outstanding: the turn asks you again when the \
+                  first report is in, while any others keep working.";
     let last = every_request(&received)
         .into_iter()
         .rfind(|body| body.contains("WAIT-ON-THE-DELEGATE"))
@@ -64255,6 +64694,7 @@ fn a_fan_out_into_checkouts_fires_the_hook_once_for_each_checkout_and_in_that_on
                     r#"{"kind":"worker","task":"SHARED","each":["LOOK-ONE","LOOK-TWO"],"isolation":"checkout"}"#,
                 ),
                 reply_with("waiting"),
+                reply_with("one is in"),
                 reply_with("both looked"),
             ],
         ),
@@ -65740,11 +66180,14 @@ mod usage {
         wait_for_collection(&run);
         thread::sleep(Duration::from_millis(120));
         first_child.answer(&reply_with_cache("first done", 40, 4, 5));
+        // The first child ending asks the planner again while the second still works.
+        run.request()
+            .answer(&reply_with_cache("one is in", 0, 0, 0));
         let deadline = std::time::Instant::now() + WAIT;
         while run.reports.lock().unwrap().waits < 2 {
             assert!(
                 std::time::Instant::now() < deadline,
-                "second join not reached"
+                "second wait not reached"
             );
             thread::sleep(Duration::from_millis(1));
         }
@@ -65756,7 +66199,7 @@ mod usage {
         assert_eq!(outcome.tokens, 231);
         assert_usage(run.progress(), 231, 21, 27);
         let reports = run.reports.lock().unwrap();
-        assert_eq!(reports.parent_requests.len(), 4);
+        assert_eq!(reports.parent_requests.len(), 5);
         assert_eq!(reports.child_requests.len(), 2);
         drop(reports);
         assert!(
@@ -65856,7 +66299,11 @@ mod usage {
         // The second request is still pending, but the parent is inside its reporter, not join.
         thread::sleep(Duration::from_millis(150));
         second.answer(&reply_with("second done"));
+        thread::sleep(Duration::from_millis(150));
         release.send(()).unwrap();
+        // Each delegate ending asks the planner again. The second ends once the reporter lock the
+        // parent held is free, so it is taken back after the first of these.
+        run.request().answer(&reply_with("one is in"));
         run.request().answer(&reply_with("done"));
         let timing = run.finish().unwrap().timing;
         assert!(
@@ -83872,6 +84319,7 @@ fn a_delegate_is_given_no_skill_that_is_kept_from_the_planner() {
                     r#"{"kind":"plain-reviewer","task":"REVIEW-WHERE-THE-DEFINITION-NAMES-NONE, then /ship-it"}"#,
                 ),
                 reply_with("waiting"),
+                reply_with("delegates finished"),
                 reply_with("delegates finished"),
             ],
         ),

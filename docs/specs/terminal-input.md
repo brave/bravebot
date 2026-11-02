@@ -521,10 +521,13 @@ and the person typing may not know one is running at all, so what they send wait
 are watching rather than going to the delegate. A delegate does not ask for one either: the queue is
 shared and asking is taking, so a delegate that asked and then declined what it was handed would
 throw the line away, leaving the turn it was aimed at to find nothing waiting. A round a turn spends
-waiting for a delegate is a round of that turn, and the boundary it reaches when the delegate is back
-asks like any other: a turn that answered with nothing in order to wait and then went straight on to
-its next request would put the delegate's report to the planner and nothing of what the person made
-of it.
+waiting for a delegate is a round of that turn, and the boundary it reaches when a delegate is back,
+or when the person's line is waiting, asks like any other. The turn waits for the first delegate to
+end or for a line, whichever comes first ([DELEGATE-17](delegation.md#DELEGATE-17)), so a line
+typed during the wait is read at that wake, while the other delegates still work, and not after
+the last of them has ended. A turn that answered with nothing in order to wait and then went
+straight on to its next request would put the delegate's report to the planner and nothing of what
+the person made of it.
 
 Not mid-round. Every call the planner asked for in a round runs, because a round is a set of calls
 asked for together and answering some while abandoning others leaves calls unanswered. Stopping in
@@ -666,6 +669,7 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_reaches_the_planner_on_the_next_round`
 `verified-by: bravebot_agent::turn::a_prompt_typed_mid_turn_is_recorded_as_the_users_own_input`
 `verified-by: bravebot_agent::turn::a_prompt_typed_while_a_delegate_runs_still_reaches_the_turn_that_spawned_it`
+`verified-by: bravebot_agent::turn::a_line_typed_while_the_delegates_work_reaches_the_planner_before_any_of_them_ends`
 `verified-by: bravebot_tui::state::a_prompt_sent_while_a_turn_runs_waits_for_it`
 `verified-by: bravebot_tui::state::a_picture_pasted_into_a_line_sent_mid_turn_reaches_the_planner_as_a_sentence`
 `verified-by: bravebot_tui::state::a_folded_paste_in_a_line_sent_mid_turn_reaches_the_planner_as_its_words`

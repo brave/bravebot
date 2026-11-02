@@ -5,7 +5,7 @@
 //! state. None reads a report, which is why they can live apart from the presentation of one in
 //! `collect_delegates`.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bravebot_core::delegate::{DelegateId, Finish};
 use bravebot_core::event::Sink;
@@ -272,12 +272,16 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
     round: usize,
 ) -> Joined {
     let id = working.id;
-    reporter.delegate_waiting(id);
+    // A wake that took the turn here already named the delegate it waited on, and naming it again
+    // would show a wait that is not happening.
+    if !waits.wake_announced() {
+        reporter.delegate_waiting(id);
+    }
     // After the report above, not before it: what a delegate's requests are clipped to is the
     // wait itself, and a reporter that draws a screen or blocks on the lock another delegate
     // holds is the parent's own overhead. Starting the window first would charge whatever a
     // request happened to overlap of it as inference the parent never spent waiting.
-    let joined_at = Instant::now();
+    let joined_at = waits.join_window_start();
     #[cfg(test)]
     if let Some(started) = working.join_started {
         // A closed receiver means the test observer has already exited.

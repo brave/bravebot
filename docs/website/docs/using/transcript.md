@@ -20,9 +20,12 @@ arguments arrive, so a long file being written reads as work and not as a stall.
 the call starts, the round ends, or the request has to be sent again.
 
 **While the turn waits for a delegate's report, the working indicator reads "Waiting on d1"**, with the
-delegate's number. A planner that has only delegates left ends its round with one line saying what is
-outstanding, and that line stays in the transcript. The turn then waits and asks the planner again once
-the report arrives.
+delegate's number, or "Waiting on d1, d2" with the numbers of every delegate still working. A planner
+that has only delegates left ends its round with one line saying what is outstanding, and that line
+stays in the transcript. The turn asks the planner again as soon as the first report arrives, or as
+soon as you send a line, while the other delegates keep working. The planner then ends its round again
+with a line naming what is still outstanding, and each of those lines stays in the transcript. The
+turn does not end while a delegate is working.
 
 **In the desktop window, the sidebar's Agents entry counts the agents the open conversation has
 started.** While any is working, the entry also says how many. Choosing it opens a list with one row

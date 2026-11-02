@@ -935,7 +935,8 @@ pub trait Reporter {
     /// turn runs. Not sent for a delegate, whose conversation is not the session's.
     fn exchange_forked(&mut self, _fork: crate::aside::Fork) {}
 
-    /// The parent is about to join a delegate, which may already have finished.
+    /// The parent is about to wait for delegates, or to join this one, which may already have
+    /// finished. Called once for each delegate the wait covers.
     fn delegate_waiting(&mut self, _delegate: DelegateId) {}
 
     /// The submitted prompt was appended at this position in the recounted conversation.

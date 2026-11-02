@@ -163,9 +163,49 @@ pub(crate) struct DelegateWait {
     requests: Vec<Interval>,
     waits: Vec<Interval>,
     charged: Duration,
+    /// When the turn began waiting for a delegate to end, until the first join after it takes it.
+    window_from: Option<Instant>,
+    /// How many typed lines the buffer had counted when the last wait ended, so a wait wakes for a
+    /// line added after it and not again for one it already woke for.
+    typed_seen: u64,
 }
 
 impl DelegateWait {
+    /// The count of typed lines the last wait ended on.
+    pub fn typed_seen(&self) -> u64 {
+        self.typed_seen
+    }
+
+    /// Record the count of typed lines a wait ended on.
+    pub fn note_typed(&mut self, typed: u64) {
+        self.typed_seen = typed;
+    }
+
+    /// Whether a wake has announced the delegate it waits on and no join has taken its window yet.
+    pub fn wake_announced(&self) -> bool {
+        self.window_from.is_some()
+    }
+
+    /// Note that the turn begins waiting now, so the next join's window starts here and covers the
+    /// whole wait rather than only the instant of the join.
+    pub fn begin_wait(&mut self) {
+        self.window_from = Some(Instant::now());
+    }
+
+    /// Where the window of a join starting now begins: the start of the wait noted by
+    /// [`DelegateWait::begin_wait`] for the first join after it, and now for any other.
+    pub fn join_window_start(&mut self) -> Instant {
+        self.window_from.take().unwrap_or_else(Instant::now)
+    }
+
+    /// Close a wait that ended with nothing joined, so requests a later collection returns are
+    /// still charged for the part of it they covered.
+    pub fn end_wait(&mut self) {
+        if let Some(from) = self.window_from.take() {
+            self.waits.push(Interval::since(from));
+        }
+    }
+
     pub fn collected(&mut self, wait: Interval, requests: Vec<Interval>) -> Duration {
         self.waits.push(wait);
         self.requests.extend(requests);

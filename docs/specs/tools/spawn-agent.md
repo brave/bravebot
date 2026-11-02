@@ -57,7 +57,14 @@ anything to say the call it came from was answered rounds earlier. A call that w
 report would hold the turn still until the delegate finished, so a turn could have one delegate
 working and no more.
 
+When the planner ends a round with a delegate working, the turn asks it again as soon as the first
+delegate ends, with that report, and does not hold the report for the others
+([DELEGATE-17](../delegation.md#DELEGATE-17)). The call has no field choosing between that and
+waiting for every delegate of a batch, so nothing about it is for a person to approve.
+
 `verified-by: bravebot_agent::turn::two_delegates_work_at_the_same_time`
+`verified-by: bravebot_agent::turn::the_planner_is_asked_again_when_the_first_delegate_ends_and_the_turn_then_waits_for_the_rest`
+`verified-by: bravebot_agent::turn::two_delegates_ending_together_are_both_collected_by_one_wake_whatever_their_labels`
 `verified-by: bravebot_agent::turn::a_delegates_report_reaches_the_planner_that_asked_for_it`
 
 <a id="AGENT-4"></a>
