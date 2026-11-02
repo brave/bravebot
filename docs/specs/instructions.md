@@ -836,8 +836,8 @@ without wanting this program to offer them. Naming a directory is the person cho
 Accepted deliberately. Do not "fix" one without changing this spec first.
 
 - **Each recorded directory costs two directory listings every turn**, up to the 64 the record
-  keeps: the one it already cost, and the listing that checks the directory holds an entry spelled
-  exactly `AGENTS.md` ([INSTR-1](#INSTR-1)), which replaces the existence check of that file. The
+  keeps: one for what the directory holds, and one that checks it has an entry spelled exactly
+  `AGENTS.md` ([INSTR-1](#INSTR-1)). The
   project's file lists the root once for each name tried, and `.claude` once, and
   `~/.bravebot/AGENTS.md` lists the home directory once. There is no cache, because one would
   have to be invalidated when a file appears or changes mid-session. A directory only listed,
