@@ -377,6 +377,8 @@ struct Answering {
     vetted_requests: Vec<bravebot_agent::confirm::VetRequest>,
     asked: usize,
     stop: Option<Cancel>,
+    /// How long the person takes to answer the list question.
+    list_delay: std::time::Duration,
 }
 
 impl Answering {
@@ -395,6 +397,7 @@ impl Answering {
             vetted_requests: Vec::new(),
             asked: 0,
             stop: None,
+            list_delay: std::time::Duration::ZERO,
         }
     }
 }
@@ -453,6 +456,7 @@ impl Confirmer for Answering {
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {
         self.lists.push(request.clone());
+        std::thread::sleep(self.list_delay);
         if let Some(stop) = &self.stop {
             stop.cancel();
         }
@@ -1796,6 +1800,138 @@ fn answer_two_stops_asking_for_the_one_tool_in_the_one_project() {
     let called: Vec<String> = server.try_iter().collect();
     assert_eq!(called.len(), 2, "the server was sent {called:?}");
     assert!(called[1].contains(r#""city":"Lyon""#), "{}", called[1]);
+}
+
+/// How long the person takes to answer the list question in the timing tests. The remainder is
+/// held to half of it, so a wait left in the remainder fails by a wide margin and a slow machine's
+/// own overhead does not.
+const THE_PERSON_READS_FOR: std::time::Duration = std::time::Duration::from_millis(800);
+
+/// One turn with `confirmer` and `cancel`, whatever way it ended, with every figure it reported.
+fn timed_turn<C: Confirmer + Send>(
+    endpoint: &str,
+    project: &Path,
+    task: Task,
+    confirmer: &mut C,
+    cancel: &Cancel,
+) -> (
+    Result<bravebot_agent::Outcome, turn::TurnError>,
+    bravebot_agent::report::RecordingReporter,
+) {
+    let workspace = Workspace::new(project).expect("workspace");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let result = turns::run_cancellable(
+        &config_for(endpoint),
+        &Egress::new(),
+        &workspace,
+        &task,
+        confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_agent::workspace::trust_store(workspace.root()),
+        cancel,
+    );
+    (result, reporter)
+}
+
+/// The time a person takes to answer the list question is time spent waiting on them (SESSION-12):
+/// it is in the stalled figure, so the remainder nobody is charged with does not hold it.
+#[test]
+fn the_time_taken_to_answer_the_list_is_charged_to_the_person() {
+    let scratch = Scratch::new("list-wait");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![reply_with("done")]);
+    let mut reading = Answering::new(Decision::Approve, CallDecision::reject());
+    reading.list_delay = THE_PERSON_READS_FOR;
+    let (result, reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut reading,
+        &Cancel::new(),
+    );
+    let timing = result.expect("the turn runs").timing;
+    let waited = THE_PERSON_READS_FOR.as_millis() as u64;
+    assert_eq!(reading.lists.len(), 1, "the list was not put to the person");
+    assert!(
+        timing.stalled_ms >= waited,
+        "the wait on the list was not charged to the person: {timing:?}"
+    );
+    assert!(
+        timing.overhead_ms() < waited / 2,
+        "the wait on the list is in the remainder: {timing:?}"
+    );
+    assert!(
+        timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
+        "the parts exceed the whole: {timing:?}"
+    );
+    let last = reporter
+        .spent
+        .last()
+        .expect("the turn reported what it spent");
+    assert_eq!(last.timing.stalled_ms, timing.stalled_ms);
+}
+
+/// A turn stopped at the list keeps the time it waited: the figure is reported when the list is
+/// settled, so a turn that ends before a round does has it too.
+#[test]
+fn a_turn_stopped_at_the_list_keeps_the_time_it_waited() {
+    let scratch = Scratch::new("list-wait-stopped");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![reply_with("stopped")]);
+    let cancel = Cancel::new();
+    let mut stopping = Answering::new(Decision::Reject, CallDecision::reject());
+    stopping.stop = Some(cancel.clone());
+    stopping.list_delay = THE_PERSON_READS_FOR;
+    let (_, reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut stopping,
+        &cancel,
+    );
+    let waited = THE_PERSON_READS_FOR.as_millis() as u64;
+    assert_eq!(
+        stopping.lists.len(),
+        1,
+        "the list was not put to the person"
+    );
+    let last = reporter.spent.last().expect("the stopped turn reported");
+    assert!(
+        last.timing.stalled_ms >= waited,
+        "a turn stopped at the list lost the time it waited: {:?}",
+        last.timing
+    );
+    assert!(
+        last.timing.overhead_ms() < waited / 2,
+        "the wait on the list is in the remainder: {:?}",
+        last.timing
+    );
+}
+
+/// A turn holding no server puts no list to anybody, so nothing is charged to the person.
+#[test]
+fn a_turn_with_no_server_charges_nothing_to_the_person() {
+    let scratch = Scratch::new("list-wait-none");
+    let (endpoint, _chat) = serve_chat(vec![reply_with("done")]);
+    let mut reading = Answering::new(Decision::Approve, CallDecision::reject());
+    reading.list_delay = THE_PERSON_READS_FOR;
+    let (result, _) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("hello"),
+        &mut reading,
+        &Cancel::new(),
+    );
+    let timing = result.expect("the turn runs").timing;
+    assert!(reading.lists.is_empty());
+    assert_eq!(timing.stalled_ms, 0, "{timing:?}");
 }
 
 /// One turn in `project`, as [`run_turn`] runs it, with every call it announced recorded.

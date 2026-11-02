@@ -3086,15 +3086,45 @@ where
     let mut subscription = premium_key.map(crate::shared::Spending::new);
 
     // The lists of the servers this session reached, settled for this turn (SERVERS-8).
+    //
+    // The questions this puts to the person are waiting on them, so they are timed and charged
+    // to the stalled figure the way a plan run charges the same wait (MANIFEST-15). A run holding
+    // no server puts none and adds nothing. A delegate holding a server is offered a list already
+    // settled, so it puts none either, and its figure is the usage alone.
+    let mut waiting = crate::confirm::Timed::new(confirmer);
     let mcp = setup::settle_servers(
         inputs,
         addressed.as_ref(),
         policy,
-        confirmer,
+        &mut waiting,
         reporter,
         &mut subscription,
         &mut notices,
     );
+    let settled_wait = waiting.waited();
+    // What checking the servers' lists spent is this turn's, since this turn is what asked.
+    let mut account = crate::outcome::Spent {
+        context_tokens: conversation.last_request_tokens(),
+        ..Default::default()
+    };
+    if let Some((_, usage)) = &mcp {
+        account.add_usage(*usage);
+    }
+    // Reported before the rounds begin, so a turn stopped or failed at the question, before any
+    // round closes, still carries the wait in its record.
+    let mut spent = Elapsed {
+        stalled: settled_wait,
+        ..Elapsed::default()
+    };
+    spent.wall = began.elapsed();
+    // Only a turn that waited on the person or checked a server's list has anything to report
+    // here. The condition is a duration and whether a list was held, never a server's bytes.
+    if !settled_wait.is_zero() || mcp.is_some() {
+        reporter.spent(crate::outcome::Spent {
+            timing: spent.finish(),
+            ..account
+        });
+    }
     if let Some((offer, _)) = &mcp {
         offered.extend(offer.functions());
         if offer.is_deferred() {
@@ -3167,17 +3197,7 @@ where
         // conversation growing inside a single long turn: fifty short turns would fill the context
         // with nothing watching.
         //
-        // What checking the servers' lists spent is this turn's, since this turn is what asked.
-        account: {
-            let mut account = crate::outcome::Spent {
-                context_tokens: conversation.last_request_tokens(),
-                ..Default::default()
-            };
-            if let Some((_, usage)) = &mcp {
-                account.add_usage(*usage);
-            }
-            account
-        },
+        account,
         // What the indicator last said the turn had written, which the next round counts on from.
         shown_before: 0,
         // Cleared only by a failure. A summary that could not be made once will not be made on the
@@ -3214,7 +3234,8 @@ where
         // the change that gives a session somewhere to keep one.
         run_directory: workspace.root().to_path_buf(),
         confined_failures: tools::ConfinedFailures::default(),
-        spent: Elapsed::default(),
+        // Seeded with the time the lists' questions kept the turn waiting on the person.
+        spent,
         told_mode: started_in,
         told_sandbox: sandbox_at_start,
         turn_model,

@@ -868,11 +868,16 @@ drawn above the list.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
-asked again, unless the server announces that its tools changed ([MCP-12](mcp.md#MCP-12)). A turn stopped at the question has not answered it, so the next turn asks again. Nothing is recorded, so a later process asks again about a list that is the
-same: the driver has no way to tell that it is, short of deciding from the server's bytes, and a
-decision taken from them is the one thing the driver may not do ([LABEL-8](labels.md#LABEL-8)). A
-`tools` line in `mcp-approved` is passed over and dropped the next time the file is written. The answer, a yes or a no, belongs to the MCP session the process started, so
-the terminal's `/clear`, `/branch` and `/resume` keep it and the conversation after them is
+asked again, unless the server announces that its tools changed ([MCP-12](mcp.md#MCP-12)). A turn
+stopped at the question has not answered it, so the next turn asks again. The time the question
+keeps the turn waiting is charged as time spent waiting on the person and is reported once the
+question is settled, so a turn stopped at it keeps that time
+([SESSION-12](sessions.md#SESSION-12)). Nothing is recorded, so a later process asks again about a
+list that is the same: the driver has no way to tell that it is, short of deciding from the
+server's bytes, and a decision taken from them is the one thing the driver may not do
+([LABEL-8](labels.md#LABEL-8)). A `tools` line in `mcp-approved` is passed over and dropped the next
+time the file is written. The answer, a yes or a no, belongs to the MCP session the process started,
+so the terminal's `/clear`, `/branch` and `/resume` keep it and the conversation after them is
 offered the list that was vouched for without the question again ([CMD-14](commands.md#CMD-14));
 only a new process asks. A project path that [SERVERS-4](#SERVERS-4)'s answer 2 recorded answers for a
 server and not for its list.
@@ -902,6 +907,8 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_mcp::protocol::a_list_in_pages_is_read_to_its_last_page_and_no_further_than_the_bound`
 `verified-by: bravebot_mcp::stdio::a_list_in_pages_is_offered_whole`
 `verified-by: bravebot_mcp::protocol::printing_a_listing_does_not_print_what_the_server_said`
+`verified-by: bravebot_agent::mcp::the_time_taken_to_answer_the_list_is_charged_to_the_person`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_keeps_the_time_it_waited`
 `verified-by: bravebot_mcp::stdio::a_confined_server_completes_the_handshake_and_lists_tools`
 `verified-by: bravebot_mcp::http::a_handshake_and_tool_list_round_trip`
 `verified-by: bravebot_config::mcp::a_tool_word_is_what_a_function_name_may_be`
