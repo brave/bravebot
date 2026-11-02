@@ -69,8 +69,13 @@ impl Scratch {
             .map(|word| format!("'{}'", word.replace('\'', "'\\''")))
             .collect();
         let mut command = Command::new("/usr/bin/script");
+        // util-linux takes the command as `-c` and the typescript last; BSD (macOS) takes the
+        // typescript first and then the command's words.
+        #[cfg(target_os = "macos")]
+        command.args(["-q", "/dev/null", "/bin/sh", "-c", &quoted.join(" ")]);
+        #[cfg(not(target_os = "macos"))]
+        command.args(["-qec", &quoted.join(" "), "/dev/null"]);
         command
-            .args(["-qec", &quoted.join(" "), "/dev/null"])
             .env_clear()
             .envs(
                 self.command(&[])
