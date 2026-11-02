@@ -24633,14 +24633,18 @@ mod tests {
             r.insert_trusted("task", "ask a tool for something");
             r
         }
-
+        /// Every capability these tools need, so a capability gate is never what answers:
         /// Every capability these three tools need, so a capability gate is never what answers:
         /// the question each test asks is about the argument.
         fn policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
             Policy::begin(
                 routing(),
                 ReleasePlan::new(),
-                CapabilitySet::from_iter([Capability::ShellExec, Capability::WebFetch]),
+                CapabilitySet::from_iter([
+                    Capability::ShellExec,
+                    Capability::WebFetch,
+                    Capability::FileWrite,
+                ]),
                 sink,
             )
             .expect("policy")
