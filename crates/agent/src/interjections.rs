@@ -62,6 +62,10 @@ pub struct Interjections(Arc<Mutex<Lines>>, Arrival);
 /// Cheap to clone and to read from any thread. Every change to the buffer moves it, so it never
 /// says a line is waiting that the turn could not take. One that comes from no buffer reports
 /// nothing, ever, and says so through [`Arrival::is_listening`].
+///
+/// A model request in flight reads it to decide whether to be cut (INPUT-10), and a `job_output`
+/// wait reads it to decide whether to end (RUN-17). Both read whether a line is there and never
+/// the line.
 #[derive(Debug, Clone)]
 pub struct Arrival(Option<Arc<Seen>>);
 

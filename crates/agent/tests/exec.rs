@@ -7,6 +7,7 @@
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use bravebot_agent::exec::{self, ExecError};
+use bravebot_agent::interjections::{Arrival, Interjections};
 use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::{Pipeline, Stage};
 use std::path::PathBuf;
@@ -2243,6 +2244,7 @@ fn waiting_for_more_returns_when_the_job_prints_rather_than_at_the_bound() {
         std::time::Duration::from_secs(30),
         &Cancel::new(),
         &[],
+        &Arrival::never(),
     );
     let waited = began.elapsed();
 
@@ -2304,6 +2306,7 @@ fn waiting_for_more_returns_at_once_on_output_that_landed_since_the_last_look() 
         std::time::Duration::from_secs(20),
         &Cancel::new(),
         &[],
+        &Arrival::never(),
     );
     let waited = began.elapsed();
 
@@ -2353,7 +2356,7 @@ fn waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_fu
 
     let bound = std::time::Duration::from_secs(2);
     let began = std::time::Instant::now();
-    job.wait_for_more(&seen, bound, &Cancel::new(), &[]);
+    job.wait_for_more(&seen, bound, &Cancel::new(), &[], &Arrival::never());
     let waited = began.elapsed();
 
     assert!(
@@ -2382,6 +2385,7 @@ fn waiting_for_more_returns_when_the_job_ends_without_printing() {
         std::time::Duration::from_secs(60),
         &Cancel::new(),
         &[],
+        &Arrival::never(),
     );
     let waited = began.elapsed();
 
@@ -2502,6 +2506,7 @@ fn a_character_split_across_two_pipe_reads_is_handed_over_whole() {
         std::time::Duration::from_secs(30),
         &Cancel::new(),
         &[],
+        &Arrival::never(),
     );
     let whole = job.since(&mut seen);
     assert!(
@@ -2533,6 +2538,7 @@ fn a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound() {
         std::time::Duration::from_secs(600),
         &cancel,
         &[],
+        &Arrival::never(),
     );
     let waited = began.elapsed();
 
@@ -2566,6 +2572,7 @@ fn a_wait_for_more_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn()
         std::time::Duration::from_secs(600),
         &Cancel::new(),
         &[JobStop::new(), stop],
+        &Arrival::never(),
     );
     let waited = began.elapsed();
     asker.join().expect("the request was made");
@@ -2607,7 +2614,12 @@ fn waiting_for_exit_is_not_ended_by_the_output_of_a_job_that_keeps_printing() {
     );
 
     let began = std::time::Instant::now();
-    job.wait_for_exit(std::time::Duration::from_secs(60), &Cancel::new(), &[]);
+    job.wait_for_exit(
+        std::time::Duration::from_secs(60),
+        &Cancel::new(),
+        &[],
+        &Arrival::never(),
+    );
     let waited = began.elapsed();
 
     // Whether the job had exited when the wait returned, which no host's load changes: a wait
@@ -2646,7 +2658,7 @@ fn waiting_for_exit_lasts_its_bound_where_the_job_keeps_running_and_printing() {
 
     let bound = std::time::Duration::from_secs(2);
     let began = std::time::Instant::now();
-    job.wait_for_exit(bound, &Cancel::new(), &[]);
+    job.wait_for_exit(bound, &Cancel::new(), &[], &Arrival::never());
     let waited = began.elapsed();
 
     assert!(
@@ -2676,7 +2688,12 @@ fn a_cancelled_wait_for_exit_comes_back_without_waiting_out_its_bound() {
     let cancel = Cancel::new();
     cancel.cancel();
     let began = std::time::Instant::now();
-    job.wait_for_exit(std::time::Duration::from_secs(600), &cancel, &[]);
+    job.wait_for_exit(
+        std::time::Duration::from_secs(600),
+        &cancel,
+        &[],
+        &Arrival::never(),
+    );
     let waited = began.elapsed();
 
     assert!(
@@ -2706,6 +2723,7 @@ fn a_wait_for_exit_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn()
         std::time::Duration::from_secs(600),
         &Cancel::new(),
         &[JobStop::new(), stop],
+        &Arrival::never(),
     );
     let waited = began.elapsed();
     asker.join().expect("the request was made");
@@ -2713,6 +2731,176 @@ fn a_wait_for_exit_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn()
     assert!(
         waited < std::time::Duration::from_secs(5),
         "a wait for the exit went on after the person asked to stop a job: {waited:?}"
+    );
+}
+
+/// RUN-17, INPUT-10: a line the person types while the planner waits for a job to end is heard
+/// within a tick, not when the wait's bound runs out. A loop that does not read the arrival handle
+/// waits the whole bound on a job that keeps running.
+#[test]
+fn a_wait_for_exit_comes_back_when_a_line_arrives_for_the_turn() {
+    let scratch = Scratch::new("wait-for-exit-line-arrives");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let buffer = Interjections::new();
+    let typing = buffer.clone();
+    let typist = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        typing.push("which step is done?".to_string());
+    });
+    let began = std::time::Instant::now();
+    job.wait_for_exit(
+        std::time::Duration::from_secs(600),
+        &Cancel::new(),
+        &[],
+        &buffer.arrival(),
+    );
+    let waited = began.elapsed();
+    typist.join().expect("the line was typed");
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a wait for the exit went on after a line arrived for the turn: {waited:?}"
+    );
+    assert!(
+        !job.ended(),
+        "the job was ended by the line, so nothing here shows the wait alone came back"
+    );
+    assert_eq!(
+        buffer.take().as_deref(),
+        Some("which step is done?"),
+        "the wait took the line, which belongs to the turn's boundary"
+    );
+}
+
+/// The same ending for the wait that output also ends, on a job that stays quiet.
+#[test]
+fn a_wait_for_more_comes_back_when_a_line_arrives_for_the_turn() {
+    let scratch = Scratch::new("wait-for-more-line-arrives");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let buffer = Interjections::new();
+    let typing = buffer.clone();
+    let typist = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        typing.push("which step is done?".to_string());
+    });
+    let began = std::time::Instant::now();
+    job.wait_for_more(
+        &exec::Seen::default(),
+        std::time::Duration::from_secs(600),
+        &Cancel::new(),
+        &[],
+        &buffer.arrival(),
+    );
+    let waited = began.elapsed();
+    typist.join().expect("the line was typed");
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a wait for more output went on after a line arrived for the turn: {waited:?}"
+    );
+    assert!(
+        !job.ended(),
+        "the job ended, so the wait was not ended by the line"
+    );
+}
+
+/// A line already in the queue when the wait begins ends it at once, so several `job_output` calls
+/// in one round all come back. A loop that only notices a change after it starts would wait.
+#[test]
+fn a_wait_for_exit_begun_with_a_line_already_waiting_comes_back_at_once() {
+    let scratch = Scratch::new("wait-for-exit-line-already-there");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let buffer = Interjections::new();
+    buffer.push("already typed".to_string());
+    for _ in 0..3 {
+        let began = std::time::Instant::now();
+        job.wait_for_exit(
+            std::time::Duration::from_secs(600),
+            &Cancel::new(),
+            &[],
+            &buffer.arrival(),
+        );
+        let waited = began.elapsed();
+        assert!(
+            waited < std::time::Duration::from_secs(2),
+            "a wait begun with a line waiting did not come back at once: {waited:?}"
+        );
+    }
+}
+
+/// INPUT-10: a line held behind a command belongs to a later turn, so it does not end the wait. A
+/// loop that watched for any line in the buffer, held or not, would come back here.
+#[test]
+fn a_wait_for_exit_is_not_ended_by_a_line_the_turn_may_not_take() {
+    let scratch = Scratch::new("wait-for-exit-held-line");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let buffer = Interjections::new();
+    buffer.push("a command".to_string());
+    buffer.begin_turn(0, true);
+    assert!(
+        buffer.push_behind("behind it".to_string()),
+        "the line was not added, so nothing below is a test of a held line"
+    );
+    assert_eq!(
+        buffer.held(),
+        2,
+        "the lines are not held, so nothing below is a test of a held line"
+    );
+    assert!(!buffer.arrival().is_waiting());
+
+    let bound = std::time::Duration::from_secs(2);
+    let began = std::time::Instant::now();
+    job.wait_for_exit(bound, &Cancel::new(), &[], &buffer.arrival());
+    let waited = began.elapsed();
+
+    assert!(
+        waited >= bound,
+        "a held line ended the wait for the exit: {waited:?}"
+    );
+}
+
+/// RUN-17, INPUT-10: a line taken is no longer a reason to end a wait. A wait begun after the
+/// turn took the line lasts its bound.
+///
+/// Rejects a handle that latches (a wait that ends on `Arrival::typed() > 0`, or a flag that is
+/// never cleared by `take`), which passes every test above and ends every later wait at once.
+#[test]
+fn a_wait_for_exit_lasts_its_bound_again_after_the_line_was_taken() {
+    let scratch = Scratch::new("wait-for-exit-line-taken");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let buffer = Interjections::new();
+    buffer.push("already read".to_string());
+    assert_eq!(buffer.take().as_deref(), Some("already read"));
+    assert!(!buffer.arrival().is_waiting());
+
+    let bound = std::time::Duration::from_secs(2);
+    let began = std::time::Instant::now();
+    job.wait_for_exit(bound, &Cancel::new(), &[], &buffer.arrival());
+    let waited = began.elapsed();
+
+    assert!(
+        waited >= bound,
+        "a line already taken still ended the wait: {waited:?}"
     );
 }
 

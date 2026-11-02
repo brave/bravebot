@@ -58,6 +58,7 @@
 //! attempted: what holds is narrow and exact rather than broad and approximate.
 
 use crate::confine::Confinement;
+use crate::interjections::Arrival;
 use bravebot_core::cancel::{Cancel, Handoff, JobStop};
 use bravebot_core::command::{Joiner, Plan, Route, Step, Steps, is_the_null_device};
 use std::fmt;
@@ -1464,13 +1465,14 @@ impl Background {
         );
     }
 
-    /// Wait for something to happen, and return at the first of five things.
+    /// Wait for something to happen, and return at the first of six things.
     ///
     /// Output past `seen` being there, every step having exited, `bound` running out, `cancel`
-    /// being set, and one of `stops` being set. `seen` is where the caller's last look left off, so output
-    /// that arrived after that look and before this call ends the wait at once. Which it was is not
-    /// reported, because the caller then takes the account [`Background::ended`] and
-    /// [`Background::printed`] give and that account says it.
+    /// being set, one of `stops` being set, and `arrival` reporting a line the turn may take.
+    /// `seen` is where the caller's last look left off, so output that arrived after that look and
+    /// before this call ends the wait at once. Which it was is not reported, because the caller
+    /// then takes the account [`Background::ended`] and [`Background::printed`] give and that
+    /// account says it.
     ///
     /// **Nothing of the output is read.** Both conditions are counts this struct kept about a
     /// pipeline it started: how many bytes each pipe has delivered against how many the caller has
@@ -1494,32 +1496,54 @@ impl Background {
         bound: Duration,
         cancel: &Cancel,
         stops: &[JobStop],
+        arrival: &Arrival,
     ) {
-        self.wait(Some(seen), bound, cancel, stops);
+        self.wait(Some(seen), bound, cancel, stops, arrival);
     }
 
-    /// Wait for the job to end, and return at the first of four things.
+    /// Wait for the job to end, and return at the first of five things.
     ///
-    /// Every step having exited, `bound` running out, `cancel` being set, and one of `stops` being
-    /// set. Output arriving ends none of it, whether it arrives during the wait or was already
-    /// there, unseen, when the wait began: that is the difference from [`Background::wait_for_more`],
-    /// whose caller gets back at the next line from a job that prints more often than a round takes.
+    /// Every step having exited, `bound` running out, `cancel` being set, one of `stops` being
+    /// set, and `arrival` reporting a line the turn may take. Output arriving ends none of it,
+    /// whether it arrives during the wait or was already there, unseen, when the wait began: that is
+    /// the difference from [`Background::wait_for_more`], whose caller gets back at the next line
+    /// from a job that prints more often than a round takes.
     ///
     /// Of the output this asks for nothing at all, not even a byte count, so it decides on which
     /// steps have exited and on the clock alone. What was printed is taken by the caller afterwards,
     /// the same way [`Background::wait_for_more`]'s is, and is all of what the job printed since the
     /// caller's last look.
-    pub fn wait_for_exit(&mut self, bound: Duration, cancel: &Cancel, stops: &[JobStop]) {
-        self.wait(None, bound, cancel, stops);
+    pub fn wait_for_exit(
+        &mut self,
+        bound: Duration,
+        cancel: &Cancel,
+        stops: &[JobStop],
+        arrival: &Arrival,
+    ) {
+        self.wait(None, bound, cancel, stops, arrival);
     }
 
     /// The loop both waits share. `seen` is where the caller's last look left off for a wait that
-    /// output ends, and `None` for one that only an exit, the bound, the token or a stop does.
-    fn wait(&mut self, seen: Option<&Seen>, bound: Duration, cancel: &Cancel, stops: &[JobStop]) {
+    /// output ends, and `None` for one that only an exit, the bound, the token, a stop or a line
+    /// does.
+    ///
+    /// `arrival` is read the way a stop is: a flag the buffer keeps about whether it holds a line
+    /// the turn may take, never the line. A line already waiting when the wait begins ends it at
+    /// the first pass. A held line, which the turn may not take, does not count, and a handle from
+    /// no buffer ([`Arrival::never`]) never ends it.
+    fn wait(
+        &mut self,
+        seen: Option<&Seen>,
+        bound: Duration,
+        cancel: &Cancel,
+        stops: &[JobStop],
+        arrival: &Arrival,
+    ) {
         let until = Instant::now() + bound;
         loop {
             if cancel.is_cancelled()
                 || stops.iter().any(JobStop::is_requested)
+                || arrival.is_waiting()
                 || seen.is_some_and(|seen| self.has_more(seen))
                 || self.steps_exited()
             {

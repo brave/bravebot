@@ -384,6 +384,10 @@ you typed it. So "no, the other file" reaches the planner while the work it is a
 happening, instead of arriving after the thing it was meant to prevent. A prompt still waiting when
 the turn ends becomes a turn of its own.
 
+While the model waits in `job_output` for a job, a line you send ends the wait within a moment, with
+the job still running, and the turn reads the line at the boundary after it. You do not need to stop
+the turn to be heard. A line that is a command, or that waits behind one, does not end the wait.
+
 When the model is still thinking, or is partway through writing a tool call, the prompt does not
 wait for the round to finish: the request is ended, what the model had written so far is dropped,
 and the request goes out again with your prompt in it. When the model is writing text, the text is

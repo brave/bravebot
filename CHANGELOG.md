@@ -14,6 +14,7 @@
  - Fixed the agent asking you to approve `loopback` for a line that only connects to a port of this machine. It is now told that `loopback` is for listening on a port, and for connecting only from a line that has no network access, and that it adds nothing to a connect from a line with network access. ([#3616](https://github.com/brave/bravebot/issues/3616))
  - Fixed `bravebot doctor` saying nothing about a Bedrock region that was refused for the characters it holds, so the AWS account was missing from its output with no reason. It now names the region as written and where it was written: the environment, the `env` block of a settings file and its path, the machine-level file, or the `amazon-bedrock` entry under `provider`. ([#3521](https://github.com/brave/bravebot/issues/3521))
  - Fixed the time you take to answer the question about a server's tool list being left out of the time the turn spent waiting on you. It is now counted as waiting, and a turn stopped at the question keeps it. ([#3662](https://github.com/brave/bravebot/issues/3662))
+ - Fixed a line you type while the model waits in `job_output` being held until the wait ends. The wait now ends within a moment, the job keeps running, and the model reads the line at the next round. ([#3663](https://github.com/brave/bravebot/issues/3663))
 
 ## [0.20.0](https://github.com/brave/bravebot/releases/tag/v0.20.0)
 

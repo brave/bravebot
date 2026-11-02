@@ -1039,16 +1039,31 @@ what was printed: nothing here reads a byte of it.
 <a id="RUN-17"></a>
 ### RUN-17: a look at a job may wait for it, inside the turn that owns it
 
-`job_output` takes `wait_seconds`, and a call that gives it comes back at the first of four things:
-output arriving that the caller has not been handed, the job ending, the wait running out, or the
-turn being cancelled. Which of the four it was is not reported separately, because the answer already
-says it: how many new lines there are, whether the job has ended, and how long the wait actually
-lasted.
+`job_output` takes `wait_seconds`, and a call that gives it comes back at the first of five things:
+output arriving that the caller has not been handed, the job ending, the wait running out, the turn
+being cancelled, or a line the person typed that the turn is waiting to take. Which of the five it was
+is not reported separately. The answer says how many new lines there are, whether the job has ended,
+and how long the wait actually lasted, so a wait that a line ended reads like a short wait that ran
+out: the job is still running and the time waited is under what was asked for.
+
+**A line the person typed ends a wait.** Every wait `job_output` makes ends within one tick of a line
+being in the turn's queue that the turn may take ([INPUT-10](../terminal-input.md#INPUT-10)), with the
+job left running and the turn not stopped. The round then reaches its boundary, the turn takes the
+line there as it takes any, and the planner's next request holds it. Without this a line typed during
+a ten-minute wait is held for the whole of it and the person has to stop the turn to be heard, which
+ends the wait and the turn together. A line already waiting when the call is made ends the wait at
+its first pass, so each `job_output` call of a round that has a line waiting comes back at once. A
+line that is a command, and every line behind a command, is held back from the turn and does not end
+it. A delegate takes no line, so a line the person types does not end a delegate's wait. The turn
+asks its confirmer once for a handle that says whether such a line is there, as it does to cut a
+request, and the wait reads that flag the way it reads a stop. It is a fact about the queue and never
+about the words typed, which the wait does not see.
 
 **A wait that output does not end.** `job_output` also takes `until_exit`, a boolean that is only
 accepted with `wait_seconds` beside it, which then bounds the wait. A call that gives both comes
-back at the first of four things: the job ending, the wait running out, the turn being cancelled, or
-a stop the person asks for on any job of the turn ([RUN-27](#RUN-27)). Output arriving does not end
+back at the first of five things: the job ending, the wait running out, the turn being cancelled, a
+stop the person asks for on any job of the turn ([RUN-27](#RUN-27)), or a line the person typed, as
+above. Output arriving does not end
 it, including output that is already there, unseen, when the call is made. What it hands back is
 what the job printed since the last look, in one answer, under the label the job has and cut to the
 output cap as any look's is, so output that is quarantined comes back as one reference to all of it.
@@ -1109,7 +1124,8 @@ itself. A program does therefore decide when a wait returns by choosing when to 
 exactly what a caller asking to be told about new output asked for, and the bytes themselves still
 reach anybody only under the label the plan was given. A wait with `until_exit` does not compare a
 byte count either: it asks which steps have exited and what the clock says, so a program cannot
-end it by printing.
+end it by printing. The flag for a typed line is kept by the queue that holds the lines, and the wait
+reads only whether it is set.
 
 **What is new is counted per pipe.** A pipeline has one pipe for its standard output and one for each
 stage's standard error, and what a look hands back composes them with the output first. A single
@@ -1146,6 +1162,13 @@ the window.
 `verified-by: bravebot_agent::exec::waiting_for_exit_lasts_its_bound_where_the_job_keeps_running_and_printing`
 `verified-by: bravebot_agent::exec::a_cancelled_wait_for_exit_comes_back_without_waiting_out_its_bound`
 `verified-by: bravebot_agent::exec::a_wait_for_exit_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_comes_back_when_a_line_arrives_for_the_turn`
+`verified-by: bravebot_agent::exec::a_wait_for_more_comes_back_when_a_line_arrives_for_the_turn`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_begun_with_a_line_already_waiting_comes_back_at_once`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_is_not_ended_by_a_line_the_turn_may_not_take`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_lasts_its_bound_again_after_the_line_was_taken`
+`verified-by: bravebot_agent::turn::a_line_typed_during_a_job_output_wait_ends_it_and_reaches_the_planner_in_the_next_request`
+`verified-by: bravebot_agent::turn::a_line_typed_during_a_delegates_job_output_wait_does_not_end_it`
 `verified-by: bravebot_agent::exec::what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other`
 `verified-by: bravebot_agent::exec::a_character_split_across_two_pipe_reads_is_handed_over_whole`
 `verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`

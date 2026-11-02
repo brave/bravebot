@@ -1398,6 +1398,10 @@ pub(super) fn note_substituted_models<R: Reporter>(
 ///
 /// Every field comes from the turn's own settings, plan and state. `messages` is the request the
 /// advisor is shown. No result is read.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the turn's inputs, plan and state, the conversation's two stores, the request, the lines typed and the arrival handle are each a separate borrow of a separate owner"
+)]
 pub(super) fn tools_for_a_call<'a>(
     inputs: Inputs<'a>,
     plan: &'a Plan<'_>,
@@ -1406,6 +1410,7 @@ pub(super) fn tools_for_a_call<'a>(
     reads: &'a mut crate::conversation::ShownReads,
     messages: &'a [Message],
     typed: &'a [String],
+    arrival: &crate::interjections::Arrival,
 ) -> tools::Tools<'a> {
     let Inputs {
         config,
@@ -1429,6 +1434,13 @@ pub(super) fn tools_for_a_call<'a>(
             .on(state.turn_model.as_deref())
             .stoppable_by(cancel),
         cancel,
+        // A delegate takes no lines, so a line the person typed is not one its wait could end for
+        // (INPUT-10).
+        arrival: if task.delegate.is_none() {
+            arrival.clone()
+        } else {
+            crate::interjections::Arrival::never()
+        },
         scheduling: plan.scheduling,
         arming: plan.arming,
         running: plan.running,

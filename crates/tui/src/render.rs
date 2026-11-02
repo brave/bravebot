@@ -4432,6 +4432,26 @@ mod tests {
             assert!(!output.contains(ITS_OWN_TURN), "{output}");
         }
 
+        /// INPUT-10, RUN-17. A `job_output` wait ends within a tick of a line the turn may take, and
+        /// the turn reads the line at the boundary after it, so the mark is the ordinary one while the
+        /// wait runs. A mark that treated a call in flight as a turn that will not read the line would
+        /// tell the person to stop a turn that is about to answer them.
+        #[test]
+        fn a_prompt_waiting_on_a_job_output_wait_is_said_to_go_into_the_turn() {
+            let mut session = working();
+            session.start_activity(
+                Activity::running("Wait", "job:1")
+                    .of_tool("job_output")
+                    .saying_why("waiting for the build"),
+            );
+            let session = queued_behind(session, "which step is done?");
+
+            let output = rendered(&session);
+            assert!(output.contains("which step is done?"), "{output}");
+            assert!(output.contains(INTO_THIS_TURN), "{output}");
+            assert!(!output.contains(ITS_OWN_TURN), "{output}");
+        }
+
         /// An aside such as `/compact` is handed a queue of its own and reads nothing sent behind
         /// it, so the prompt starts a turn when the aside ends. Said to go into what is running, it
         /// would be a promise that the thing drawing the spinner is about to read it.

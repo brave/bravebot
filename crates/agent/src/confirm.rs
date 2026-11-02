@@ -2218,8 +2218,9 @@ pub trait Confirmer {
     ///
     /// For a turn that is waiting on a model and so cannot poll between rounds. It is how a line
     /// typed during the wait ends the wait early when the reply is no more than thinking or a call
-    /// being written (INPUT-10). The answer is only about whether a line is there: reading it
-    /// changes nothing, and the line itself still comes from [`Confirmer::interjection`].
+    /// being written (INPUT-10), and it ends a `job_output` wait the same way (RUN-17). The answer
+    /// is only about whether a line is there: reading it changes nothing, and the line itself still
+    /// comes from [`Confirmer::interjection`].
     ///
     /// A confirmer nobody types into has none, which is what the default says.
     fn arrival(&self) -> crate::interjections::Arrival {

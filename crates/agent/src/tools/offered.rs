@@ -284,12 +284,13 @@ fn job_output_description(beside: &dyn Fn(&str) -> bool) -> String {
          wait_seconds to wait for the job rather than asking it again and again. Without it a \
          wait costs a whole turn per look: you call, are told nothing has happened, and answer \
          only to be asked the same question. A wait ends at the job's next output, so a job that \
-         prints a line every second ends it every second. When what you need is the end of the \
-         job and not its output as it arrives, add until_exit: true, which waits for the job to \
-         end or for wait_seconds to run out and returns what it printed since your last look in \
-         one answer. It is still a wait inside this turn, so it cannot tell you about anything \
-         that happens after the turn ends, and the account of the job's start says whether it is \
-         killed then or kept."
+         prints a line every second ends it every second. A line the user types while you wait \
+         also ends the wait, with the job still running, so you can answer it. When what you need \
+         is the end of the job and not its output as it arrives, add until_exit: true, which \
+         waits for the job to end or for wait_seconds to run out and returns what it printed \
+         since your last look in one answer. It is still a wait inside this turn, so it cannot \
+         tell you about anything that happens after the turn ends, and the account of the job's \
+         start says whether it is killed then or kept."
     )
 }
 
@@ -1450,14 +1451,15 @@ fn table(
                         "type": "integer",
                         "description": "Wait up to this many seconds instead of answering at \
                                         once. Returns as soon as the job prints something you \
-                                        have not been shown or the job ends, and at the bound if \
-                                        it stays silent, so a long wait costs nothing when the \
+                                        have not been shown, the job ends or the user types \
+                                        a line, and at the bound if it stays silent, so a \
+                                        long wait costs nothing when the \
                                         thing you are waiting for happens early. Between 1 and \
                                         600. A value outside that is refused rather than \
                                         adjusted, so the wait you get is the wait you asked for. \
                                         Omit it to look and answer straight away. With \
-                                        until_exit it returns only when the job ends or at the \
-                                        bound."
+                                        until_exit it returns only when the job ends, the user \
+                                        types a line or the bound is reached."
                     },
                     "until_exit": {
                         "type": "boolean",

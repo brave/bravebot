@@ -24825,6 +24825,9 @@ struct AskedAboutRuns {
     /// Done once while the first run is being asked about, for a change to the tree that an
     /// approval which waits for hours leaves time for.
     while_asked: Option<Box<dyn FnOnce() + Send>>,
+    /// The lines a person types into the turn, for a test whose subject is what a line does to a
+    /// wait. None means nobody is typing.
+    typing: Option<bravebot_agent::interjections::Interjections>,
 }
 
 impl AskedAboutRuns {
@@ -24832,6 +24835,7 @@ impl AskedAboutRuns {
         Self {
             removing: None,
             while_asked: None,
+            typing: None,
             answer,
             answers: std::collections::VecDeque::new(),
             writes: bravebot_agent::WriteDecision::reject(),
@@ -24853,6 +24857,12 @@ impl AskedAboutRuns {
     #[cfg(unix)]
     fn doing_while_asked(mut self, act: impl FnOnce() + Send + 'static) -> Self {
         self.while_asked = Some(Box::new(act));
+        self
+    }
+
+    /// Lets the turn take lines from `buffer` at its boundaries and see them arrive.
+    fn typing_into(mut self, buffer: &bravebot_agent::interjections::Interjections) -> Self {
+        self.typing = Some(buffer.clone());
         self
     }
 
@@ -25002,9 +25012,16 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         Vec::new()
     }
 
-    /// Nobody is typing: no interface, and no queue to type into.
+    /// Nobody is typing unless a test gave a buffer: then the turn takes its lines at a boundary.
     fn interjection(&mut self) -> Option<String> {
-        None
+        self.typing.as_ref().and_then(|buffer| buffer.take())
+    }
+
+    fn arrival(&self) -> bravebot_agent::interjections::Arrival {
+        self.typing.as_ref().map_or_else(
+            bravebot_agent::interjections::Arrival::never,
+            bravebot_agent::interjections::Interjections::arrival,
+        )
     }
 }
 
@@ -54744,6 +54761,221 @@ fn a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_pr
     assert!(
         after.contains("tick-"),
         "what the job printed during the wait was not handed over: {after}"
+    );
+}
+
+/// RUN-17, INPUT-10, through the whole path: a line typed while the planner waits in `job_output`
+/// for a job that is still running ends the wait within a moment, the job keeps running, the
+/// answer says how long the wait lasted and that the job is still running, and the planner's next
+/// request holds the line.
+///
+/// The job sleeps for thirty seconds and the wait is allowed six hundred. Rejects a wait that
+/// ignores the queue (the next request would arrive after thirty seconds or never, and the elapsed
+/// time below would show it), a wait that kills the job or stops the turn (the answer would not say
+/// it is still running), and a turn that ends the wait but does not take the line at the boundary
+/// (the request would not hold it).
+#[test]
+fn a_line_typed_during_a_job_output_wait_ends_it_and_reaches_the_planner_in_the_next_request() {
+    let scratch = Scratch::new("background-wait-line");
+
+    let quiet = scratch.path.join("quiet");
+    std::fs::write(&quiet, "#!/bin/sh\nsleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&quiet, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"./quiet","background":true}"#),
+        tool_request(
+            "job_output",
+            r#"{"job":"job:1","wait_seconds":600,"until_exit":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let buffer = bravebot_agent::interjections::Interjections::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always())
+        .typing_into(&buffer);
+    let line = "which step is done?";
+
+    let (outcome, third, waited, _received) = thread::scope(|scope| {
+        let typed = buffer.clone();
+        let typist = scope.spawn(move || {
+            // The second request is the one the planner answers with the wait, so once it has gone
+            // out the wait begins within a moment, and a line typed after a short pause is typed
+            // during it.
+            let _ = received
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .expect("the first request never arrived");
+            let _ = received
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .expect("the second request never arrived");
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let typed_at = std::time::Instant::now();
+            assert!(typed.push(line.to_string()));
+            let third = received.recv_timeout(std::time::Duration::from_secs(20));
+            (third, typed_at.elapsed(), received)
+        });
+        let outcome = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("start it and wait for it"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome;
+        let (third, waited, received) = typist.join().expect("the typist");
+        (outcome, third, waited, received)
+    });
+
+    outcome.expect("the turn runs");
+    let third = third.expect("the planner was not asked again while the job was still running");
+    assert!(
+        waited < std::time::Duration::from_secs(10),
+        "the line waited {waited:?} for the wait to end"
+    );
+    assert!(
+        third.contains(line),
+        "the line did not reach the planner in the request after the wait: {third}"
+    );
+    assert!(
+        third.contains("It is still running"),
+        "the answer does not say the job is still running: {third}"
+    );
+    assert!(
+        third.contains("This look waited "),
+        "the answer does not say how long the wait lasted: {third}"
+    );
+    assert!(
+        buffer.drain().is_empty(),
+        "the line was left in the queue as well as sent"
+    );
+}
+
+/// INPUT-10, RUN-17: a line typed while a delegate waits in `job_output` does not end the
+/// delegate's wait. A delegate takes no line, so the wait it is in would come back with nothing
+/// for it to do with the line, and the turn on the screen is the one the line is aimed at.
+///
+/// The delegate waits four seconds for a job with thirty to run, and a line is pushed about a
+/// second into it. Rejects handing every task the turn's arrival handle (the delegate's look would
+/// say it waited one or two seconds). The line is not asserted to reach any planner: the parent
+/// takes it at its own boundary, which is the other test's subject.
+#[test]
+fn a_line_typed_during_a_delegates_job_output_wait_does_not_end_it() {
+    let scratch = Scratch::new("background-wait-delegate-line");
+
+    let quiet = scratch.path.join("quiet");
+    std::fs::write(&quiet, "#!/bin/sh\nsleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&quiet, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PARENT-HANDS-OFF-THE-WAIT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"DELEGATE-WAITS-FOR-A-JOB"}"#,
+                ),
+                reply_with("waiting on the delegate"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DELEGATE-WAITS-FOR-A-JOB",
+            vec![
+                tool_request("run", r#"{"command":"./quiet","background":true}"#),
+                tool_request(
+                    "job_output",
+                    r#"{"job":"job:1","wait_seconds":4,"until_exit":true}"#,
+                ),
+                reply_with("waited"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let buffer = bravebot_agent::interjections::Interjections::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always())
+        .typing_into(&buffer);
+
+    let (outcome, seen, received) = thread::scope(|scope| {
+        let typed = buffer.clone();
+        let typist = scope.spawn(move || {
+            let mut seen = Vec::new();
+            // The delegate's own request that carries the run's answer names the job, and the
+            // wait it makes next begins within a moment of that request going out.
+            while let Ok(body) = received.recv_timeout(std::time::Duration::from_secs(20)) {
+                let delegates_own = !body.contains("PARENT-HANDS-OFF-THE-WAIT");
+                let named = body.contains("job:1");
+                seen.push(body);
+                if delegates_own && named {
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            assert!(typed.push("which step is done?".to_string()));
+            (seen, received)
+        });
+        let outcome = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("PARENT-HANDS-OFF-THE-WAIT"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome;
+        let (seen, received) = typist.join().expect("the typist");
+        (outcome, seen, received)
+    });
+
+    outcome.expect("the turn runs");
+    let mut asked = seen;
+    asked.extend(every_request(&received));
+    let after_the_wait = asked
+        .iter()
+        .find(|body| {
+            !body.contains("PARENT-HANDS-OFF-THE-WAIT") && body.contains("This look waited ")
+        })
+        .unwrap_or_else(|| panic!("the delegate was never told how long its wait lasted"));
+    let window: u64 = after_the_wait
+        .split("This look waited ")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|figure| figure.parse().ok())
+        .unwrap_or_else(|| {
+            panic!("the answer does not say which window it watched: {after_the_wait}")
+        });
+    assert!(
+        window >= 3,
+        "the delegate's wait came back after {window} seconds, ended by a line it could not take: \
+         {after_the_wait}"
     );
 }
 

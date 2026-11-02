@@ -365,6 +365,13 @@ pub struct Tools<'a> {
     pub chat: Chat<'a>,
     /// The turn's stop token, so a slow program does not have to be waited out.
     pub cancel: &'a bravebot_core::cancel::Cancel,
+    /// Whether a line the person typed is waiting for the turn to take (INPUT-10).
+    ///
+    /// Read by a `job_output` wait, which ends when it reports a line, so that the line reaches the
+    /// planner at the round's boundary and not when the wait's bound runs out (RUN-17). It is a fact
+    /// about the queue and never about the words. A delegate gets [`Arrival::never`], since it takes
+    /// no lines.
+    pub arrival: crate::interjections::Arrival,
     /// What this turn may say about when it runs again.
     ///
     /// Read by dispatch as well as by the tool table, so a call to a tool this turn was not
@@ -10740,10 +10747,11 @@ fn job_output<S: Sink, R: Reporter>(
             // bound, and the difference is the whole of what a caller learns from silence.
             let began = std::time::Instant::now();
             if until_exit {
-                job.running.wait_for_exit(bound, tools.cancel, &stops);
+                job.running
+                    .wait_for_exit(bound, tools.cancel, &stops, &tools.arrival);
             } else {
                 job.running
-                    .wait_for_more(&job.seen, bound, tools.cancel, &stops);
+                    .wait_for_more(&job.seen, bound, tools.cancel, &stops, &tools.arrival);
             }
             began.elapsed()
         });
@@ -14714,12 +14722,13 @@ mod tests {
              to wait for the job rather than asking it again and again. Without it a wait costs \
              a whole turn per look: you call, are told nothing has happened, and answer only to \
              be asked the same question. A wait ends at the job's next output, so a job that \
-             prints a line every second ends it every second. When what you need is the end of \
-             the job and not its output as it arrives, add until_exit: true, which waits for the \
-             job to end or for wait_seconds to run out and returns what it printed since your \
-             last look in one answer. It is still a wait inside this turn, so it cannot tell you \
-             about anything that happens after the turn ends, and the account of the job's start \
-             says whether it is killed then or kept."
+             prints a line every second ends it every second. A line the user types while you \
+             wait also ends the wait, with the job still running, so you can answer it. When \
+             what you need is the end of the job and not its output as it arrives, add \
+             until_exit: true, which waits for the job to end or for wait_seconds to run out and \
+             returns what it printed since your last look in one answer. It is still a wait \
+             inside this turn, so it cannot tell you about anything that happens after the turn \
+             ends, and the account of the job's start says whether it is killed then or kept."
         );
         let run = description_of(&everything, "run");
         assert!(
@@ -16490,6 +16499,10 @@ mod tests {
             "wait_seconds does not say a long wait is free when the thing happens early: {said}"
         );
         assert!(
+            said.contains("the user types a line"),
+            "wait_seconds does not say a typed line ends the wait: {said}"
+        );
+        assert!(
             tool.function.description.contains("wait_seconds"),
             "job_output's description never names the argument: {}",
             tool.function.description
@@ -16734,8 +16747,8 @@ mod tests {
             .as_str()
             .expect("wait_seconds is described");
         assert!(
-            wait.contains("until_exit"),
-            "wait_seconds says output ends it and not that until_exit changes that: {wait}"
+            wait.contains("until_exit") && wait.contains("user types a line"),
+            "wait_seconds says output ends it, that until_exit changes that and that a line the user types ends it: {wait}"
         );
     }
 
@@ -23718,6 +23731,7 @@ mod tests {
                 reads: &mut reads,
                 chat: Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin()),
                 cancel: &cancel,
+                arrival: crate::interjections::Arrival::never(),
                 scheduling: Scheduling::ArrangingALook,
                 arming: Arming::Allowed { free: 1 },
                 running: Running::Offered,
