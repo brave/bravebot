@@ -3133,9 +3133,9 @@ update-available =
     mettre à jour : { $command }
 update-how = pour mettre à jour : { $command }
 update-not-installed-by-us =
-    cette copie n'a été installée ni par le paquet npm ni par le script d'installation ; il n'y a
-    donc pas de commande de mise à jour pour elle. Une version compilée depuis les sources se met
-    à jour en récupérant les sources et en recompilant.
+    il n'y a pas de commande de mise à jour pour cette copie : elle n'a été installée ni par le
+    paquet npm, ni par le script d'installation, ni par Homebrew, WinGet, apt ou dnf. Une version
+    compilée depuis les sources se met à jour en récupérant les sources et en recompilant.
 crash-reports-notice =
     si bravebot plante, un rapport est envoyé à Brave au lancement suivant. Il contient la version,
     votre système d'exploitation et la ligne du code source de bravebot qui a échoué, jamais vos

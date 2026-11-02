@@ -1715,8 +1715,10 @@ a regular-expression `pattern` would need one the dependency policy bans.
 `bravebot update` prints the command for the way this copy was installed: the npm package's line
 for one the npm launcher started, the install script's own line for the binary that script
 recorded putting there, the PowerShell install script's own line for the binary that script
-recorded, and `brew upgrade --cask bravebot` or `winget upgrade Brave.Bravebot` for one that
-Homebrew or WinGet unpacked. A copy none of those put here, a build from source above all, is told
+recorded, `brew upgrade --cask bravebot` or `winget upgrade Brave.Bravebot` for one that
+Homebrew or WinGet unpacked, and `sudo apt update && sudo apt upgrade bravebot` or
+`sudo dnf upgrade bravebot` for the binary at `/usr/bin/bravebot` that apt or dnf owns
+([UPDATE-2](updates.md#UPDATE-2)). A copy none of those put here, a build from source above all, is told
 there is no update command for it and that a build is updated by building again; that is a success
 rather than a failure, since nothing about the machine is wrong. It takes no argument, and a word
 after it is refused with the status for an argument (CLI-6).
@@ -1726,8 +1728,8 @@ and the output never names a version. The command is a literal per installation 
 comes from a file, an environment variable or a response.
 
 **Why.** How to update is a question with an answer the program already holds and the person does
-not: which of the five installers put this binary here is not something somebody can read off their
-own machine, and the five commands are not interchangeable. The npm line installs a package
+not: which of the seven installers put this binary here is not something somebody can read off their
+own machine, and the seven commands are not interchangeable. The npm line installs a package
 manager's copy, so sent to a script install it leaves the running binary untouched and a second one
 elsewhere; the script's line writes over the path the script recorded, so sent to a build from
 source it would replace a binary this program did not install.
@@ -1741,6 +1743,8 @@ the startup notice already follows by saying nothing to such a copy
 `verified-by: bravebot_cli::running::update_says_the_command_for_the_way_this_copy_was_installed`
 `verified-by: bravebot_cli::running::update_says_there_is_no_command_for_a_build_from_source`
 `verified-by: bravebot_cli::running::update_takes_no_argument`
+`verified-by: bravebot_cli::update::a_copy_apt_or_dnf_installed_is_told_that_managers_upgrade_line`
+`verified-by: bravebot_cli::update::a_copy_nothing_recognised_is_told_there_is_no_command`
 `verified-by: bravebot_config::install::each_installation_is_updated_the_way_it_was_installed`
 
 <a id="CLI-30"></a>

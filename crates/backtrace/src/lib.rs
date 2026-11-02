@@ -71,6 +71,8 @@ fn install_word(how: Option<Install>) -> &'static str {
         Some(Install::PowerShell) => "powershell",
         Some(Install::Homebrew) => "homebrew",
         Some(Install::Winget) => "winget",
+        Some(Install::Apt) => "apt",
+        Some(Install::Dnf) => "dnf",
         None => "other",
     }
 }
@@ -255,6 +257,8 @@ mod tests {
             Some(Install::PowerShell),
             Some(Install::Homebrew),
             Some(Install::Winget),
+            Some(Install::Apt),
+            Some(Install::Dnf),
             None,
         ]
         .map(install_word);
@@ -263,6 +267,8 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted.len(), installs.len());
         assert_eq!(install_word(None), "other");
+        assert_eq!(install_word(Some(Install::Apt)), "apt");
+        assert_eq!(install_word(Some(Install::Dnf)), "dnf");
     }
 
     fn here() -> PathBuf {
