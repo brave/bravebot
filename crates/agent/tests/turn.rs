@@ -2123,6 +2123,101 @@ fn a_read_naming_the_working_directory_in_full_is_told_to_name_it_relative() {
     }
 }
 
+/// A planner that types a `..` which comes back into the working directory, relative or from the
+/// top of the file system, reads and writes by a path inside the workspace. The refusal it reads and
+/// the trail say the path contains `..` and is inside, and say to name it relative to the root
+/// without the `..`, instead of that it leaves the workspace. A write is not pointed at the
+/// unconfined line (SANDBOX-29), and the plain spelling then reads the file.
+#[test]
+fn a_climb_back_into_the_working_directory_is_told_to_drop_the_climb() {
+    let scratch = Scratch::new("climb-inside-remedy");
+    std::fs::create_dir_all(scratch.path.join("src/a")).unwrap();
+    std::fs::create_dir_all(scratch.path.join("src/b")).unwrap();
+    std::fs::write(scratch.path.join("src/b/x.txt"), "buy milk").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let in_full = workspace
+        .root()
+        .join("src/a/../b/x.txt")
+        .display()
+        .to_string();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"src/a/../b/x.txt"}"#),
+        tool_request(
+            "read_file",
+            &serde_json::json!({ "path": in_full }).to_string(),
+        ),
+        tool_request_2(
+            "write_file",
+            &serde_json::json!({ "path": "src/a/../b/new.txt", "contents": "howdy\n" }).to_string(),
+        ),
+        tool_request("read_file", r#"{"path":"src/b/x.txt"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the notes"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let last = bodies.last().expect("the last request");
+    assert_eq!(
+        last.matches("contains '..' and lands inside the workspace")
+            .count(),
+        3,
+        "the two reads and the write were not all told the climb is inside: {last}"
+    );
+    assert!(
+        last.contains("Name it relative to the workspace root, without the '..'"),
+        "the refusal did not say how to name the path: {last}"
+    );
+    assert!(
+        !last.contains("resolves outside the workspace"),
+        "a path inside the workspace was said to leave it: {last}"
+    );
+    // The tool definitions and the system prompt name the argument, so the count is compared
+    // with the first request, which holds no refusal.
+    assert_eq!(
+        last.matches("unconfined").count(),
+        bodies[0].matches("unconfined").count(),
+        "a refused write was pointed at the line with no sandbox: {last}"
+    );
+    assert!(
+        last.contains("buy milk"),
+        "the spelling without the climb did not read the file: {last}"
+    );
+    assert!(
+        !scratch.path.join("src/b/new.txt").exists(),
+        "a refused write landed"
+    );
+
+    let refused = confinement_refusals(&sink);
+    assert_eq!(refused.len(), 3, "{:?}", sink.events());
+    for line in &refused {
+        assert!(
+            line.contains("is inside the workspace but not named relative to its root")
+                && line.ends_with(
+                    "remedy offered: name it relative to the workspace root, without the '..'"
+                ),
+            "the trail does not record what the planner was told: {line}"
+        );
+        assert!(
+            !line.contains("resolves outside the workspace"),
+            "the trail says a path inside the workspace leaves it: {line}"
+        );
+    }
+}
+
 /// Once the person has opened the worktree beside the working directory, the planner's `../<name>/..`
 /// path reaches it, and a failure names the absolute path the call was made on rather than the
 /// spelling that was typed, so the planner and the trail say the same file (TRUST-10).
@@ -29844,10 +29939,16 @@ fn a_refused_write_inside_the_workspace_is_not_pointed_at_the_unconfined_line() 
         let in_full = std::env::temp_dir()
             .join(format!("bravebot-turn-{}-{name}", std::process::id()))
             .join("fresh.txt");
-        let call = [(
-            "write_file",
-            serde_json::json!({ "path": in_full.display().to_string(), "contents": "howdy\n" }),
-        )];
+        let call = [
+            (
+                "write_file",
+                serde_json::json!({ "path": in_full.display().to_string(), "contents": "howdy\n" }),
+            ),
+            (
+                "write_file",
+                serde_json::json!({ "path": "dir/../fresh.txt", "contents": "howdy\n" }),
+            ),
+        ];
         let mut asked =
             AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_writes();
         let turn = path_turn(
@@ -29866,6 +29967,21 @@ fn a_refused_write_inside_the_workspace_is_not_pointed_at_the_unconfined_line() 
         assert!(
             !said.contains("unconfined") && !said.contains("outside the workspace"),
             "{} (front end asks: {front_end_asks}): {said}",
+            mode.name()
+        );
+        // Each request replays the results before it, so the newest is the last one in the body.
+        let newest = turn.results[1]
+            .rfind("Result of write_file")
+            .expect("the second call's result");
+        let climbing = message_from(&turn.results[1][newest..], "Result of write_file");
+        assert!(
+            climbing.contains("lands inside the workspace"),
+            "{} (front end asks: {front_end_asks}): {climbing}",
+            mode.name()
+        );
+        assert!(
+            !climbing.contains("unconfined") && !climbing.contains("outside the workspace"),
+            "{} (front end asks: {front_end_asks}): a write that climbs back into the workspace was pointed at the line with no sandbox: {climbing}",
             mode.name()
         );
     }

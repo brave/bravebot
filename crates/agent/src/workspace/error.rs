@@ -101,6 +101,14 @@ impl WorkspaceError {
                  workspace root; refusing to touch it as typed. Name it without the workspace's \
                  own directory in front, or as '.' for the root itself"
             ),
+            Self::Escapes {
+                remedy: Remedy::InsideClimb,
+                ..
+            } => format!(
+                "'{named}' contains '..' and lands inside the workspace, where a path is named \
+                 relative to the workspace root; refusing to touch it as typed. Name it relative \
+                 to the workspace root, without the '..'"
+            ),
             // What the person can do is part of the sentence, since the planner cannot do it and has
             // otherwise been seen to reach the same file through `run` instead.
             Self::Escapes {
@@ -274,14 +282,19 @@ pub(super) const ENDS_CHECKOUTS: &str = "while one is open no delegate is given 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Remedy {
     /// None is offered: the path climbs with `..` through a link, off the top of the file system
-    /// or to a place inside the root; a link carries it out; it names a credential location, which
-    /// cannot be opened; or what was refused is a command's redirection or a rewind.
+    /// or onto a name that is not UTF-8; a link carries it out; it names a credential location,
+    /// which cannot be opened; or what was refused is a command's redirection or a rewind.
     Nothing,
     /// The path lands inside the root and in no opened directory, where a directory cannot be
     /// opened. It is named in some other way than relative to the root: from the top of the file
     /// system, through a link to the root or through `~`. The relative spelling reaches the file,
     /// so the planner is told that and not that the path leaves the workspace, which it does not.
     Inside,
+    /// The path has a `..` and lands inside the root. It does not leave the workspace, and the
+    /// relative spelling without the `..` reaches the file, so the planner is told that. No
+    /// directory is offered, since none can be opened inside the root, and the `..` is the fault,
+    /// which [`Remedy::Inside`] does not say.
+    InsideClimb,
     /// Opening the directory a file is in, or a name nothing is at yet would be created in, makes
     /// the same path reach it, for whatever the call does to it.
     Open,
@@ -321,6 +334,7 @@ impl Remedy {
         match self {
             Self::Nothing => "none",
             Self::Inside => "name it relative to the workspace root",
+            Self::InsideClimb => "name it relative to the workspace root, without the '..'",
             Self::Open => "open its directory",
             Self::OpenOrDrop => "open its directory, or drop the file",
             Self::OpenEndsCheckouts => {

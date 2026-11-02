@@ -31,8 +31,9 @@ first. A promotion records the label it decided and nothing about where the path
 tool tells the planner that a path resolves outside the workspace, the trail records that refusal
 as well, with the remedy offered and the path named as the planner was told it: `ref:N` for a
 reference, the path otherwise. A path inside the workspace that is refused for not being named
-relative to its root is recorded with the remedy of naming it relative to the workspace root
-([TRUST-10](trust-map.md#TRUST-10)). A write call the permission mode refuses before the tool runs
+relative to its root, or for a `..` that lands inside it, is recorded with the remedy of naming it
+relative to the workspace root, without the `..` for a climb ([TRUST-10](trust-map.md#TRUST-10)). A
+write call the permission mode refuses before the tool runs
 ([MODE-3](permission-modes.md#MODE-3)), and a planned run it refuses from its plan, are recorded as
 refusals under `permission_mode`, naming the tool, or the step and its tool, and the mode. The
 sandbox mode `read-only` ([SANDBOX-22](sandboxing.md#SANDBOX-22)) is recorded the same way, under

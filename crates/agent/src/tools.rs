@@ -4050,7 +4050,7 @@ fn record_confinement_refusal<S: Sink>(
     remedy: crate::workspace::Remedy,
 ) {
     match remedy {
-        crate::workspace::Remedy::Inside => {
+        crate::workspace::Remedy::Inside | crate::workspace::Remedy::InsideClimb => {
             policy.refuse_path_inside_workspace(call, named, remedy.offered());
         }
         _ => policy.refuse_outside_workspace(call, named, remedy.offered()),
@@ -4097,7 +4097,7 @@ fn write_refused<S: Sink>(
     use crate::workspace::{Remedy, WorkspaceError};
     let way_out = match e {
         WorkspaceError::Escapes {
-            remedy: Remedy::Inside,
+            remedy: Remedy::Inside | Remedy::InsideClimb,
             ..
         } => "",
         WorkspaceError::Escapes { .. } => unconfined_way_out(policy, tools),

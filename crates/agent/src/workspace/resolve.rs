@@ -427,7 +427,7 @@ impl Workspace {
         for component in candidate.components() {
             match component {
                 Component::ParentDir => {
-                    return Err(Self::refuse_climb(relative));
+                    return Err(self.refuse_climb(candidate, relative));
                 }
                 Component::Prefix(_) | Component::RootDir => {
                     return Err(WorkspaceError::Invalid {
@@ -502,7 +502,7 @@ impl Workspace {
             .components()
             .any(|c| matches!(c, Component::ParentDir))
         {
-            return Err(Self::refuse_climb(named));
+            return Err(self.refuse_climb(candidate, named));
         }
 
         refuse_misleading_names(candidate, named, true, cfg!(windows))?;
@@ -691,11 +691,23 @@ impl Workspace {
     }
 
     /// The refusal of a path with a `..` that [`Workspace::climb_lands`] does not take out.
-    /// Nothing is offered, since no directory a person opens makes such a path reach its file.
-    fn refuse_climb(named: &str) -> WorkspaceError {
+    ///
+    /// A path whose `..` is taken out of the text and lands inside the root does not leave the
+    /// workspace, and the relative spelling without the `..` reaches its file, so the planner is
+    /// told that ([`Remedy::InsideClimb`]). Any other is offered nothing, since no directory a
+    /// person opens makes such a path reach its file.
+    fn refuse_climb(&self, candidate: &Path, named: &str) -> WorkspaceError {
+        let remedy = if self
+            .climbed(candidate)
+            .is_some_and(|lands| lands.starts_with(&self.root))
+        {
+            Remedy::InsideClimb
+        } else {
+            Remedy::Nothing
+        };
         WorkspaceError::Escapes {
             path: named.to_string(),
-            remedy: Remedy::Nothing,
+            remedy,
         }
     }
 }

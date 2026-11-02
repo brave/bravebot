@@ -828,14 +828,20 @@ approve with the file shown ([SANDBOX-29](sandboxing.md#SANDBOX-29)). It names i
 session would accept that request and the front end can ask about it. A path that climbs out with `..` into a directory that is not open is refused the same
 way, and once that directory is opened the same path, as typed, reaches the file. Every other
 refusal for leaving the workspace offers nothing, since opening a directory would not make that
-path work: a climb that lands inside the root, off the top of the file system or on a name that is
-not UTF-8, and one a link carries out. So does a path whose directory is, or lies inside, a
+path work: a climb off the top of the file system or onto a name that is not UTF-8, and one a link
+carries out. So does a path whose directory is, or lies inside, a
 credential location, since `/add-dir` refuses to open one ([SANDBOX-18](sandboxing.md#SANDBOX-18))
 and `request_path` refuses to lend one ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). A read of a
 file there is offered the drop alone, a write is offered the unconfined line alone where the
 session accepts one, and a name for the directory itself is offered nothing.
 A climb that lands inside the root stays refused even where a directory holding the root is open,
-since the relative spelling reaches the file.
+since the relative spelling reaches the file. It does not leave the workspace, and the refusal does
+not say it does, whether the path is typed relative or from the top of the file system. It says the
+path contains `..` and lands inside the workspace, and that it is named relative to the workspace
+root without the `..`. Like the refusal of an absolute path that lands inside the root below, it
+names no directory to open and no file to drop, a call that writes is not pointed at a `run` line
+with no sandbox ([SANDBOX-29](sandboxing.md#SANDBOX-29)), and the sentence carries the name the
+planner was told and not the path the call was made on.
 
 An absolute path that lands inside the root and in no opened directory is refused too, since a
 relative path means the project. It does not leave the workspace, and the refusal does not say it
@@ -903,6 +909,8 @@ tree makes of it then, and a pull in between can turn a directory on it into a l
 `verified-by: bravebot_agent::turn::a_checkout_file_that_cannot_land_does_not_stop_the_files_after_it`
 `verified-by: bravebot_agent::workspace::a_climb_is_reported_as_the_absolute_path_only_where_it_is_taken_out_and_admitted`
 `verified-by: bravebot_agent::workspace::a_climb_through_a_link_or_back_into_the_working_directory_is_not_taken_out`
+`verified-by: bravebot_agent::workspace::a_climb_back_into_the_working_directory_is_told_to_drop_the_climb`
+`verified-by: bravebot_agent::turn::a_climb_back_into_the_working_directory_is_told_to_drop_the_climb`
 `verified-by: bravebot_agent::workspace::a_climb_onto_a_name_that_is_not_text_is_not_taken_as_its_lookalike`
 `verified-by: bravebot_agent::turn::a_read_climbing_into_an_opened_sibling_directory_reads_it_and_names_the_absolute_path`
 `verified-by: bravebot_agent::turn::a_search_climbing_into_an_opened_sibling_directory_searches_it_and_names_the_absolute_path`

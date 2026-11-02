@@ -3438,6 +3438,10 @@ fn a_failure_is_worded_about_the_name_the_caller_may_say() {
         },
         WorkspaceError::Escapes {
             path: carried.to_string(),
+            remedy: Remedy::InsideClimb,
+        },
+        WorkspaceError::Escapes {
+            path: carried.to_string(),
             remedy: Remedy::Open,
         },
         WorkspaceError::Escapes {
