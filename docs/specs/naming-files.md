@@ -331,9 +331,9 @@ asks it for each name. The driver uses only the verdict and does not read the co
 the verdict never reach the planner. The person's screen, the session record and the trust map's
 vouching depend on them.
 
-**Why.** A missing name used to leave a trusted rule for a path that does not exist and end the
-turn on a workspace failure after the prompt was recorded, losing a pasted request the person could
-not get back.
+**Why.** A send that is not refused leaves a trusted rule for a path that does not exist, and ends
+the turn on a workspace failure after the prompt is recorded. A pasted request in it cannot be got
+back.
 
 `verified-by: bravebot_tui::references::enter_refuses_a_name_that_is_not_a_file_and_keeps_the_line`
 `verified-by: bravebot_tui::references::enter_refuses_a_directory_a_binary_file_and_a_path_outside_the_project`
@@ -375,8 +375,8 @@ the kind to a sentence, and the driver does not read the contents. The name and 
 reach the planner. The name is made printable where the line is drawn, since it is text the person
 typed or pasted.
 
-**Why.** The failure line said only that the workspace could not be used, which did not say which
-of several files, or what was wrong with it.
+**Why.** A failure line that says only that the workspace could not be used does not say which of
+several files failed, or what is wrong with it.
 
 `verified-by: bravebot_tui::sessions::a_named_file_that_cannot_be_read_is_named_with_its_reason_in_the_failure_line`
 `verified-by: bravebot_tui::sessions::the_failure_line_names_the_file_that_failed_among_several`
