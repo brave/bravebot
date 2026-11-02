@@ -78,7 +78,11 @@ try {
     replace('bravebot:files:list', () => ({ path: '', rows: [], truncated: false }))
   }, directory)
   const emit = (event, data, session = 's-a') => app.evaluate((_, args) => globalThis.agentSettingsFixture.emit(args.event, args.data, args.session), { event, data, session })
-  const snap = name => page.screenshot({ path: join(output, name + '.png'), scale: 'css' })
+  const snap = async name => {
+    // Leo's buttons fade between disabled and enabled; let that finish so a shot isn't caught halfway.
+    await page.waitForTimeout(500)
+    await page.screenshot({ path: join(output, name + '.png'), scale: 'css' })
+  }
   await page.reload()
   // Settings is a page that takes the window, not a dialog. It opens on General, and the agent's
   // configuration is the page beside it, with Connection, Hooks and Run settings stacked.
