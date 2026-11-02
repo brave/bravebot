@@ -2452,6 +2452,169 @@ fn a_nested_agents_file_is_not_followed_to_a_pointer_or_expanded_for_an_import()
     );
 }
 
+/// INSTR-1, INSTR-14: `docs/agents.md` is an ordinary file whatever the volume folds, so a docs
+/// page does not become a source, is not measured by INSTR-15 and is not read for the trail. A
+/// lookup that opens `docs/AGENTS.md` and asks `is_file` is answered yes on a volume that folds
+/// case, and would load the page.
+#[test]
+fn a_nested_file_spelled_in_another_case_is_an_ordinary_file() {
+    let page = format!("PAGE-MARKER {}", "prose ".repeat(3_000));
+    assert!(page.len() > 16_384, "{}", page.len());
+    let scratch = Scratch::new("nested-other-case");
+    let project = scratch.directory("project");
+    std::fs::create_dir_all(project.join("docs")).unwrap();
+    std::fs::write(project.join("docs/agents.md"), &page).unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+    workspace.record_touch("docs/other.md");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose_in(
+            &mut policy,
+            &workspace,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+            None,
+        )
+    };
+
+    // A delegate is handed the same text: both come from `compose_in`.
+    assert!(!preamble.text.contains("PAGE-MARKER"), "{}", preamble.text);
+    assert!(
+        !preamble.text.contains("From docs/AGENTS.md"),
+        "{}",
+        preamble.text
+    );
+    assert!(preamble.notices.is_empty(), "{:?}", preamble.notices);
+    let trail = format!("{:?}", sink.events());
+    assert!(
+        !trail.contains("docs/AGENTS.md") && !trail.contains("docs/agents.md"),
+        "the page was read: {trail}"
+    );
+
+    // The trail names a nested file that is read, so its absence above is a finding.
+    let spelled = scratch.directory("spelled");
+    std::fs::create_dir_all(spelled.join("docs")).unwrap();
+    std::fs::write(spelled.join("docs/AGENTS.md"), "REAL-RULES").unwrap();
+    let workspace = Workspace::new(&spelled).expect("workspace");
+    workspace.record_touch("docs/other.md");
+    let mut sink = RecordingSink::new();
+    {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        );
+    }
+    let trail = format!("{:?}", sink.events());
+    assert!(
+        trail.contains("docs/AGENTS.md"),
+        "a nested file that is read leaves no mark in the trail: {trail}"
+    );
+}
+
+/// INSTR-14: where the directory holds `AGENTS.md` spelled exactly, it loads, and a lowercase file
+/// beside it (on a volume that keeps both) is not what loads. A lookup by the lowercase name
+/// would put the page in the prompt.
+#[test]
+fn only_the_exactly_spelled_nested_file_loads_beside_a_differently_spelled_one() {
+    let scratch = Scratch::new("nested-both-cases");
+    let project = scratch.directory("project");
+    std::fs::create_dir_all(project.join("docs")).unwrap();
+    std::fs::write(project.join("docs/AGENTS.md"), "REAL-RULES").unwrap();
+    let lower = project.join("docs/agents.md");
+    std::fs::write(&lower, "PAGE-MARKER").unwrap();
+    // A volume that folds case holds one file under both names, and the second write replaced the
+    // first. The check needs a volume that keeps both.
+    if std::fs::read_to_string(project.join("docs/AGENTS.md")).unwrap() != "REAL-RULES" {
+        return;
+    }
+    let workspace = Workspace::new(&project).expect("workspace");
+    workspace.record_touch("docs/other.md");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            None,
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    assert!(preamble.text.contains("REAL-RULES"), "{}", preamble.text);
+    assert!(!preamble.text.contains("PAGE-MARKER"), "{}", preamble.text);
+}
+
+/// INSTR-1: the project's file is found by its exact name at the root as well. `agents.md` and
+/// `claude.md` at the root are ordinary files, so a lookup that opens the fixed name and asks
+/// `is_file` would read them on a volume that folds case. The `.claude` directory component is
+/// held to the same spelling.
+#[test]
+fn a_root_file_spelled_in_another_case_is_not_the_projects_file() {
+    for (name, files) in [
+        ("lower-agents", vec![("agents.md", "LOWER-MARKER")]),
+        ("lower-claude", vec![("claude.md", "LOWER-MARKER")]),
+        ("upper-dir", vec![(".CLAUDE/CLAUDE.md", "LOWER-MARKER")]),
+        ("lower-inner", vec![(".claude/claude.md", "LOWER-MARKER")]),
+    ] {
+        let preamble = composed_after_touching(&format!("root-case-{name}"), &files, &[], &[]);
+        assert!(
+            !preamble.text.contains("LOWER-MARKER"),
+            "{name} was read: {}",
+            preamble.text
+        );
+        assert!(
+            preamble.notices.is_empty(),
+            "{name}: {:?}",
+            preamble.notices
+        );
+    }
+}
+
+/// INSTR-1: `~/.bravebot/agents.md` is not the person's `AGENTS.md`.
+#[test]
+fn a_home_file_spelled_in_another_case_is_not_the_persons_agents_file() {
+    let scratch = Scratch::new("home-other-case");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    std::fs::write(home.join("agents.md"), "LOWER-MARKER").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let mut sink = RecordingSink::new();
+    let preamble = {
+        let mut policy = policy(&mut sink, &["."]);
+        preamble::compose(
+            &mut policy,
+            &workspace,
+            Some(&home),
+            &Catalogue::default(),
+            None,
+            None,
+            &Attribution::default(),
+        )
+    };
+
+    assert!(!preamble.text.contains("LOWER-MARKER"), "{}", preamble.text);
+    assert!(
+        preamble::state_rule_files(&[&workspace], &home, &project_id(&project, false)).is_empty()
+    );
+}
+
 /// INSTR-15: a file past the warning length is still a source. Dropping it, or truncating it,
 /// would change what the planner is working under because of its size, and the person who wrote
 /// that much meant to. The notice is what the rule adds.

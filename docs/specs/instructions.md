@@ -77,6 +77,14 @@ There is no search of parent directories. A nested file is a source only under
 [INSTR-14](#INSTR-14). A file at any other path is an ordinary file, read only when something asks for it by name, or when the source names it,
 which is [INSTR-8](#INSTR-8).
 
+A name in the table counts only when the directory's own entry is spelled exactly that way, on every
+volume. On a volume that folds case, `docs/agents.md` opens as `docs/AGENTS.md`, so a lookup that
+only tries to open the name would make an ordinary page in a docs directory standing instructions.
+The lookup lists the directory and compares entry names byte for byte, for the project's file
+(each component of `.claude/CLAUDE.md` included), for `~/.bravebot/AGENTS.md` and for a nested
+file. A differently spelled file is an ordinary file. Only entry names are compared and nothing a
+file holds is consulted.
+
 A definition's memory, `<workspace>/.bravebot/memory/<name>.md`, is one of those ordinary files.
 [MEMORY-4](definition-memory.md#MEMORY-4) has the driver tell a run under the definition where it
 is, and puts none of it in the prompt.
@@ -88,6 +96,8 @@ next machine.
 `verified-by: bravebot_agent::preamble::the_home_agents_file_is_read_before_the_project_one`
 `verified-by: bravebot_agent::preamble::the_project_file_may_be_named_claude_md`
 `verified-by: bravebot_agent::preamble::only_the_first_project_file_that_exists_is_read`
+`verified-by: bravebot_agent::preamble::a_root_file_spelled_in_another_case_is_not_the_projects_file`
+`verified-by: bravebot_agent::preamble::a_home_file_spelled_in_another_case_is_not_the_persons_agents_file`
 `verified-by: bravebot_agent::skills::a_workspace_skill_shadows_a_home_skill_of_the_same_name`
 `verified-by: bravebot_agent::skills::a_skill_in_a_foreign_project_directory_is_offered`
 `verified-by: bravebot_agent::agents::a_definition_in_the_users_own_directory_is_selectable`
@@ -541,6 +551,13 @@ writing tools, placed by spelling alone, so a link is not followed to where it l
 file holds is consulted. A name outside the root records nothing, and the record keeps at most 64
 directories. What is recorded is the planner's choice of paths and is never read out of a file.
 
+The `AGENTS.md` of a recorded directory is a source only where that directory has an entry spelled
+exactly `AGENTS.md` ([INSTR-1](#INSTR-1)), whatever the volume folds. A directory holding only
+`agents.md` has no nested file: nothing of it reaches the prompt, no notice measures it
+([INSTR-15](#INSTR-15)) and the trail records no read of it. The spelling of the directory is the
+planner's, as recorded; only the final name is compared, in the listing of the directory the
+volume resolves it to.
+
 Each file is read through the trust map and the `deny` rules as the project's `AGENTS.md` and
 `.bravebot/skills` are, so a distrusted one never reaches the prompt and the person is told which
 file, or which skills directory with a count, and never what it holds ([SKILL-4](skills.md#SKILL-4),
@@ -571,6 +588,9 @@ which file is read.
 `verified-by: bravebot_agent::preamble::the_directories_worked_in_stop_at_sixty_four`
 `verified-by: bravebot_agent::preamble::a_link_in_a_touched_name_is_not_followed_to_where_it_lands`
 `verified-by: bravebot_agent::preamble::a_nested_agents_file_is_not_followed_to_a_pointer_or_expanded_for_an_import`
+`verified-by: bravebot_agent::preamble::a_nested_file_spelled_in_another_case_is_an_ordinary_file`
+`verified-by: bravebot_agent::preamble::only_the_exactly_spelled_nested_file_loads_beside_a_differently_spelled_one`
+`verified-by: bravebot_agent::preamble::a_listed_name_matches_only_in_the_same_case`
 `verified-by: bravebot_agent::skills::a_nested_skill_is_offered_after_the_session_works_in_its_directory`
 `verified-by: bravebot_agent::skills::a_deeper_nested_skill_shadows_a_shallower_one_of_its_name`
 `verified-by: bravebot_agent::skills::a_foreign_skills_directory_under_a_touched_directory_is_not_a_source`
@@ -815,10 +835,13 @@ without wanting this program to offer them. Naming a directory is the person cho
 
 Accepted deliberately. Do not "fix" one without changing this spec first.
 
-- **Each recorded directory costs one existence check and one directory listing every turn**, up
-  to the 64 the record keeps. There is no cache, because one would have to be invalidated when a
-  file appears or changes mid-session. A directory only listed, searched or named in a shell
-  command is not recorded: only a read or a write is.
+- **Each recorded directory costs two directory listings every turn**, up to the 64 the record
+  keeps: the one it already cost, and the listing that checks the directory holds an entry spelled
+  exactly `AGENTS.md` ([INSTR-1](#INSTR-1)), which replaces the existence check of that file. The
+  project's file lists the root once for each name tried, and `.claude` once, and
+  `~/.bravebot/AGENTS.md` lists the home directory once. There is no cache, because one would
+  have to be invalidated when a file appears or changes mid-session. A directory only listed,
+  searched or named in a shell command is not recorded: only a read or a write is.
 - **Every rule file is read and gated on every turn, whether it applies to every turn or is held
   for a path.** Its `paths` are in the file, so there is no knowing which to read without reading
   them all, and a cache would have to be invalidated by a write nobody tells this about

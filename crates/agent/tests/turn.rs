@@ -83520,6 +83520,68 @@ fn a_delegate_started_after_a_read_carries_the_rule_and_leaves_the_telling_to_th
     );
 }
 
+/// INSTR-14: a delegate started after the session read a file in `docs/` carries `docs/AGENTS.md`
+/// only where the directory's entry is spelled exactly that. A delegate composed from a lookup that
+/// opens the fixed name would carry the page `docs/agents.md` on a volume that folds case.
+#[test]
+fn a_delegate_carries_the_nested_file_only_where_it_is_spelled_exactly() {
+    for (file, loads) in [("AGENTS.md", true), ("agents.md", false)] {
+        let scratch = Scratch::new(&format!("nested-delegate-{file}"));
+        let page = format!("NESTED-MARKER {}", "prose ".repeat(3_000));
+        for (path, contents) in [
+            (format!("docs/{file}"), page.as_str()),
+            ("docs/other.md".to_string(), "an ordinary page\n"),
+        ] {
+            let path = scratch.path.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "PARENT-START-MARK",
+                vec![
+                    two_tool_requests(
+                        ("read_file", r#"{"path":"docs/other.md"}"#),
+                        (
+                            "spawn_agent",
+                            r#"{"kind":"reader","task":"CHILD-REPORTS-NOW"}"#,
+                        ),
+                    ),
+                    reply_with("waiting"),
+                    reply_with("relayed"),
+                ],
+            ),
+            ("CHILD-REPORTS-NOW", vec![reply_with("reported")]),
+        ]);
+
+        let said = run_turn_saying_notices(
+            &config_for(&endpoint),
+            &workspace,
+            &mut bravebot_agent::Conversation::new(),
+            &Task::new("PARENT-START-MARK"),
+        );
+
+        let requests: Vec<String> = received.try_iter().collect();
+        let delegate: Vec<&String> = requests
+            .iter()
+            .filter(|request| !request.contains("PARENT-START-MARK"))
+            .collect();
+        assert_eq!(delegate.len(), 1, "{file}: the delegate made no one round");
+        let system = system_prompt_of(delegate[0]);
+        assert_eq!(system.contains("NESTED-MARKER"), loads, "{file}: {system}");
+        assert_eq!(
+            system.contains("From docs/AGENTS.md"),
+            loads,
+            "{file}: {system}"
+        );
+        assert!(
+            loads || said.iter().all(|notice| !notice.contains("docs/")),
+            "{file}: {said:?}"
+        );
+    }
+}
+
 /// What a person saved from their editor at a write prompt, as the confirmer answers it.
 fn editing_to(text: &str) -> bravebot_agent::confirm::WriteDecision {
     bravebot_agent::confirm::WriteDecision::edit(text.to_string())

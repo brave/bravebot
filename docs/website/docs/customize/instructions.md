@@ -44,6 +44,13 @@ that walked upwards would pick up instructions from whatever happened to be abov
 machine, which is a different set of instructions on the next machine. A file at any other path is an
 ordinary file, read only when something asks for it by name, or when the source points at it.
 
+**A name counts only when the file is spelled exactly as shown.** `AGENTS.md`, `CLAUDE.md` and
+`.claude/CLAUDE.md` are matched letter for letter, including the `.claude` directory, on every
+system. On a volume that does not tell upper and lower case apart, such as the default one on macOS
+and Windows, a page called `docs/agents.md` can be opened as `docs/AGENTS.md`, but it is still an
+ordinary file: it is not loaded, it adds nothing to the system prompt, and you are not told it is
+large. Rename it to `AGENTS.md` to make it instructions.
+
 **A project's skills are read from three directories, at the project root only.**
 `.agents/skills`, then `.claude/skills`, then `.bravebot/skills`, so a skill in `.bravebot/skills`
 wins a name clash with either of the others. Skills you wrote for another agent work here without
