@@ -264,6 +264,7 @@ fr:trigger-bad-limit
 fr:trigger-bad-name
 fr:trigger-bad-port
 fr:trigger-bad-prompt
+fr:trigger-bad-workspace
 fr:trigger-bypass-only-when-adding
 fr:trigger-cleared
 fr:trigger-event-arrived

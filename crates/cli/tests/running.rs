@@ -18699,6 +18699,29 @@ fn trigger_add_refusals_store_nothing() {
     assert!(said(&port).1.contains("is not a port"), "{}", said(&port).1);
 }
 
+/// A workspace whose path is not text is refused at `trigger add` and nothing is stored, where a
+/// lossy copy of it (`dir-\u{FFFD}`) is a different directory the run would start in.
+#[cfg(unix)]
+#[test]
+fn trigger_add_refuses_a_workspace_that_is_not_text() {
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new("cli-running-trigger-add-non-text");
+    let odd = scratch.path.join(std::ffi::OsStr::from_bytes(b"dir-\xff"));
+    let lookalike = scratch.path.join("dir-\u{FFFD}");
+    std::fs::create_dir(&odd).expect("made the directory");
+    std::fs::create_dir(&lookalike).expect("made the lookalike");
+    let output = bravebot_started_in(
+        &scratch.path,
+        &odd,
+        &[],
+        &["trigger", "add", "ok", "--event", "push", "--", "go on"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains("is not text"), "{stderr}");
+    assert!(!scratch.path.join(".bravebot/triggers").exists());
+}
+
 /// TRIGGER-5, MODE-5. A settings layer that made the bypass mode unreachable refuses the flag at
 /// `trigger add`, names the key and stores nothing. The fault it rejects: a trigger that stores the
 /// bypass flag where the person's own file forbade it.

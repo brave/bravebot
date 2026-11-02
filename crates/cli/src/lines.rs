@@ -1498,6 +1498,28 @@ mod tests {
         );
     }
 
+    /// A permission is answered by a position alone: words on a vouched channel are refused by
+    /// name and leave the permission waiting for a position.
+    #[test]
+    fn a_permission_refuses_words_and_is_approved_only_by_its_position() {
+        let (vouched, said) = channel(true);
+        let asked = std::thread::spawn({
+            let channel = vouched.clone();
+            move || channel.ask_permission("write", &[])
+        });
+        while said.lines().is_empty() {
+            std::thread::yield_now();
+        }
+        deliver(&vouched, r#"{"type":"answer","id":1,"text":"approve"}"#);
+        assert!(
+            said.lines().last().unwrap().contains("no_such_question"),
+            "{:?}",
+            said.lines()
+        );
+        deliver(&vouched, r#"{"type":"answer","id":1,"choices":[[0]]}"#);
+        assert!(!asked.join().expect("the permission returned"));
+    }
+
     /// Each question has an id of its own, so an answer meant for the first cannot settle the
     /// second.
     #[test]

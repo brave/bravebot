@@ -485,6 +485,9 @@ fn add_entry(
         Ok(path) => path,
         Err(code) => return code,
     };
+    if workspace.to_str().is_none() {
+        return fail(Ending::Argument, t!(trigger_bad_workspace));
+    }
     let Some(state) = home::writable() else {
         return fail(Ending::Configuration, t!(trigger_no_state_directory));
     };

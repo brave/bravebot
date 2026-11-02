@@ -265,6 +265,21 @@ fn checked_cron(expression: &str) -> Option<String> {
         .then(|| fields.join(" "))
 }
 
+/// The expression with its fields separated by one space, or `None` where it is not five fields
+/// of digits and `* / , -`. The reading side of an entry: an entry stored before ranges were
+/// checked still loads, and the alphabet still keeps anything but a cron field out of the
+/// crontab line (COMPAT-001).
+fn stored_cron(expression: &str) -> Option<String> {
+    let fields: Vec<&str> = expression.split_whitespace().collect();
+    let plain = |field: &&str| {
+        !field.is_empty()
+            && field
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, '*' | '/' | ',' | '-'))
+    };
+    (fields.len() == FIELD_RANGES.len() && fields.iter().all(plain)).then(|| fields.join(" "))
+}
+
 /// A prompt an entry may hold: not empty, not so long that it is a file, and not one a one-shot
 /// run would read as a flag.
 fn usable_prompt(prompt: &str) -> bool {
@@ -310,7 +325,7 @@ fn read_entry(id: &str, text: &str, prompt: String) -> Option<Entry> {
     for line in text.lines() {
         let (key, value) = line.split_once('=')?;
         match key {
-            "cron" => cron = checked_cron(value),
+            "cron" => cron = stored_cron(value),
             "dir" => directory = Some(PathBuf::from(value)),
             "mode" => mode = Mode::named(value),
             "scheduler" => scheduler = Scheduler::named(value),
@@ -1095,6 +1110,17 @@ mod tests {
         ] {
             assert_eq!(checked_cron(refused), None, "{refused}");
         }
+    }
+
+    #[test]
+    fn an_entry_stored_with_a_field_outside_its_range_still_reads() {
+        let entry = read_entry(
+            "1",
+            "cron=* * 0 * *\ndir=/work\nmode=read\n",
+            "hello".to_string(),
+        );
+        assert_eq!(entry.map(|e| e.cron).as_deref(), Some("* * 0 * *"));
+        assert!(read_entry("1", "cron=* * $(x) * *\ndir=/w\nmode=read\n", String::new()).is_none());
     }
 
     #[test]

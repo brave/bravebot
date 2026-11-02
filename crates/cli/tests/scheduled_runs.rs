@@ -226,7 +226,7 @@ fn a_cron_expression_that_is_not_five_plain_fields_writes_nothing() {
             "--scheduler",
             "crontab",
         ]);
-        assert!(!output.status.success(), "{bad}");
+        assert_eq!(output.status.code(), Some(2), "{bad}");
         assert_eq!(scratch.table(), "", "{bad}");
     }
 }
@@ -300,7 +300,7 @@ fn a_cron_field_outside_its_range_writes_nothing() {
     ] {
         let output =
             scratch.run_at_a_terminal(&["schedule", "add", "--cron", bad, "--prompt", "hello"]);
-        assert!(!output.status.success(), "{bad}");
+        assert_eq!(output.status.code(), Some(2), "{bad}");
         assert_eq!(scratch.table(), "", "{bad}");
         assert!(!scratch.state().join("1.entry").exists(), "{bad}");
     }
@@ -340,7 +340,7 @@ fn a_paused_entry_keeps_its_line_and_its_firing_is_skipped_until_it_is_resumed()
     );
 
     let skipped = scratch.run(&["schedule", "run-now", "1"]);
-    assert!(!skipped.status.success());
+    assert_eq!(skipped.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&skipped.stderr).contains("paused"));
     assert!(
         !scratch.state().join("1.history").exists(),

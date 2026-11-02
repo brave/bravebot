@@ -4907,6 +4907,7 @@ trigger-bypass-only-when-adding = --dangerously-skip-permissions is taken by tri
 trigger-bad-name = "{ $name }" is not a trigger name. A name is lowercase letters, digits and hyphens, does not start with a hyphen, and is at most { $most } characters.
 trigger-bad-event = "{ $event }" is not an event name. An event name is letters, digits and the characters . _ : -, and is at most { $most } characters.
 trigger-bad-prompt = A trigger prompt cannot be a single word that starts with a hyphen, because the run would read it as an option.
+trigger-bad-workspace = The workspace path is not text, so a trigger could not keep it exactly. Name a workspace whose path is text, and nothing was changed.
 trigger-bad-limit = --max-concurrent takes a whole number from 1 to { $concurrent } and --max-per-hour takes a whole number from 1 to { $hourly }.
 trigger-bad-port = "{ $port }" is not a port. Give a whole number from 0 to 65535, where 0 lets the system choose.
 trigger-no-state-directory = Triggers are kept in the state directory, and this run has none it may write to, so nothing was changed.
