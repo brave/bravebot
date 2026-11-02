@@ -168,6 +168,15 @@ if (typeof matchMedia === 'function') {
   stillness = query.matches
   query.addEventListener('change', () => {
     stillness = query.matches
+    // A gesture already playing is a Web Animation, which `animation: none` does not stop, and a
+    // held press would stay squashed because the release that ends it is refused under stillness.
+    if (stillness) {
+      for (const entry of registered.values()) {
+        for (const running of entry.playing ?? []) running.cancel()
+        entry.playing = undefined
+        entry.pressed = false
+      }
+    }
     for (const entry of registered.values()) paint(entry, performance.now() / 1000)
     schedule()
   })

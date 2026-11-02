@@ -27,6 +27,12 @@ function load(path) {
   return module.exports
 }
 
+// The clock reads the preference when it loads, so the test holds the query it listens to.
+const reduced = { matches: false, listeners: [] }
+globalThis.matchMedia = () => ({
+  get matches() { return reduced.matches },
+  addEventListener: (_, listener) => reduced.listeners.push(listener),
+})
 const { lookAt, show, tell, press, letGo, pop, dozing, SLEEP_AFTER, lookFor } = load('../src/renderer/avatar/clock.ts')
 const { GESTURES, ARM_LAG, WEIGHTS, NOT_FROM_REST, HELD, gestureFor, fidgetFor, choreographyOf, weightOf } = load('../src/renderer/avatar/gestures.ts')
 
@@ -380,4 +386,25 @@ test('telling a face what its bot is doing changes how it is held', () => {
   stop()
   tell(svg, 'working')
   assert.equal(parts.eyes.attributes.transform, undefined, 'a face that was stopped is not written to')
+})
+
+test('asking for reduced motion mid-gesture cancels what plays and lets a held press go', () => {
+  globalThis.requestAnimationFrame = () => 1
+  const { svg, played } = stage()
+  const stop = show(svg, SEED, 'open', true)
+  press(svg)
+  const figure = played.filter(each => each.name === 'figure').at(-1)
+  assert.equal(figure.cancelled, false)
+  try {
+    reduced.matches = true
+    for (const listener of reduced.listeners) listener()
+    assert.ok(played.every(each => each.cancelled), 'a Web Animation is not stopped by a style rule')
+    const before = played.length
+    letGo(svg)
+    assert.equal(played.length, before, 'the press is already let go, so nothing is played on release')
+  } finally {
+    reduced.matches = false
+    for (const listener of reduced.listeners) listener()
+    stop()
+  }
 })
