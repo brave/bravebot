@@ -16757,6 +16757,32 @@ mod tests {
         );
     }
 
+    /// The planner learns which forms are refused only from this description, and a `$?` written to
+    /// report an exit status is refused for a reason it cannot guess: the run result already says how
+    /// each step ended. A description that names only `$VAR` leaves it writing `echo "exit=$?"`.
+    #[test]
+    fn the_run_description_names_the_special_parameters_and_the_dollar_quote_as_refused() {
+        let described = run_description();
+        for form in [
+            "`$?`", "`$$`", "`$@`", "`$*`", "`$#`", "`$-`", "`$!`", "`$'...'`",
+        ] {
+            assert!(
+                described.contains(form),
+                "the description does not name {form} as refused: {described}"
+            );
+        }
+        assert!(
+            described.contains("result of a run already says how each step ended")
+                && described.contains("a newline comes from a file or from standard input"),
+            "the description does not say what to do instead: {described}"
+        );
+        assert!(
+            described.contains("Double quotes do not")
+                && described.contains("no name, brace, parenthesis, special parameter or quote"),
+            "the description does not say what quoting settles or when a `$` is ordinary: {described}"
+        );
+    }
+
     /// The planner learns which spelling is safe only from this description, so it gives both
     /// cases: a pattern given to `find -name` is quoted, since a file matching it would replace
     /// it, and a pattern after an option's `=` is not.

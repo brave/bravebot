@@ -108,6 +108,9 @@ runs nothing**. There is no falling back to a shell and no running the prefix th
 |---|---|
 | `$(…)`, backticks | a command whose text is computed is a destination nobody saw; inside double quotes it is still one |
 | `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line |
+| `$?` | the exit status of an earlier step is not in the line; the result of a run already says how each step ended |
+| `$$`, `$@`, `$*`, `$#`, `$-`, `$!` | no shell holds parameters between the steps of a line, so there is no value for them to stand for |
+| `$'…'`, `$"…"` | escapes after a `$` quote are not read; a newline comes from a file or from standard input |
 | `$((…))` | arithmetic needs an interpreter; inside double quotes it is still one |
 | `<(…)`, `>(…)` | the same, plus a file descriptor nobody named |
 | `&` | backgrounding is a parameter of a call, not a token in a line |
@@ -120,9 +123,10 @@ runs nothing**. There is no falling back to a shell and no running the prefix th
 | a pattern in program position | a program worked out from what is on disk changes when the tree does |
 | anything that would open `/dev/tty` | the terminal is not this program's to hand over |
 
-Quoted, every one of them is an ordinary argument: `'$HOME'` is six characters that reach the program
-as one word. A `$` followed by no name, brace or parenthesis is an ordinary character even unquoted, so
-the end anchor in `grep -E "x$" file` reaches `grep` as written. To pass a literal `$` that comes
+In single quotes, every one of them is an ordinary argument: `'$HOME'` is six characters that reach the
+program as one word. Double quotes settle none of the `$` forms, so `"$HOME"` and `"$?"` are refused. A
+`$` followed by no name, brace, parenthesis, special parameter or quote is an ordinary character even
+unquoted, so the end anchor in `grep -E "x$" file` reaches `grep` as written. To pass a literal `$` that comes
 before a name, put it in single quotes or write `\$`.
 
 ## Your answer binds to the plan, not to the line

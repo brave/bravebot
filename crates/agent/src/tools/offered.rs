@@ -1253,12 +1253,17 @@ fn table(
              globs and {a,b} all work in the operands. There is no shell: the line is compiled \
              here into the programs and arguments it names, and anything that cannot be worked \
              out from the line itself is refused rather than guessed at. $(...), backticks, $VAR \
-             and ${...} are refused for that reason: write the value out. Name the program \
+             and ${...} are refused for that reason: write the value out. `$?`, `$$`, `$@`, \
+             `$*`, `$#`, `$-`, `$!` and `$'...'` are refused too: the result of a run already says \
+             how each step ended, no shell keeps parameters between steps, and escapes in \
+             `$'...'` are not read, so a newline comes from a file or from standard input. Name \
+             the program \
              outright for the same reason, since a pattern there stands for whichever file it \
-             matches today: `./scr*.sh` is refused where `./script.sh` runs. Quoting settles all \
-             of them, so '$HOME' is six characters and reaches the program as one argument. A \
-             `$` followed by no name, brace or parenthesis, as the end anchor in `grep -E \"x$\"`, is \
-             an ordinary character. \
+             matches today: `./scr*.sh` is refused where `./script.sh` runs. Single quotes settle \
+             all of them, so '$HOME' is six characters and reaches the program as one \
+             argument. Double quotes do not: \"$HOME\", \"$?\" and \"$(ls)\" are refused too. A \
+             `$` followed by no name, brace, parenthesis, special parameter or quote, as the end \
+             anchor in `grep -E \"x$\"`, is an ordinary character. \
              A \
              pattern the program should match itself is quoted for the same reason, so write \
              `find . -name '*.md'`: unquoted, `*.md` is replaced by the files it matches here, \

@@ -265,15 +265,17 @@ with `'…'`, `"…"` and `\`; redirection with `>`, `>>`, `<`, `2>`, `2>>`, `2>
 `*`, `?`, `[…]` and `**`; brace expansion `{a,b}` and `{1..9}`; a leading `~`; and
 `NAME=literal cmd`.
 
-**Refused**: `$(...)` and backticks, `$VAR` and `${...}`, `$((...))`, `<(...)` and `>(...)`,
+**Refused**: `$(...)` and backticks, `$VAR` and `${...}`, the special parameters `$?`, `$$`,
+`$@`, `$*`, `$#`, `$-` and `$!`, `$'...'` and `$"..."`, `$((...))`, `<(...)` and `>(...)`,
 heredocs (`<<` and `<<<`), a bare `&`, an unquoted `!`, a `(` or `)` written onto the end of an
 argument, `eval`, `source`, `.`, `exec`, `trap`, `if`, `while`, `for`, `case`, `function`, a
 descriptor duplication other than `2>&1`, a numbered redirection other than `2>`, a `~` naming
 somebody else's home, an assignment whose value is not literal, and a newline.
 
-The pattern: **anything whose value isn't visible in the line is refused.** Quoting settles every
-one of them. `'$HOME'` is six characters and arrives as one argument, because the refusals are
-about what a construct stands for and never about which characters are in it.
+The pattern: **anything whose value isn't visible in the line is refused.** Single quotes settle
+every one of them. `'$HOME'` is six characters and arrives as one argument, because the refusals are
+about what a construct stands for and never about which characters are in it. Double quotes settle
+none of the `$` forms, so `"$HOME"` and `"$?"` are refused.
 
 Why is `$VAR` refused when bash obviously supports it? Because of the approval prompt. If you
 show a human `rm -rf "$D/build"`, they cannot approve it: they don't know what `D` is. And if
