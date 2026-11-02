@@ -1727,7 +1727,7 @@ fn run_step<S: Sink, C: Confirmer, R: Reporter>(
             let rendered = policy.render_in_place("search", &hits, |hits| {
                 hits.matches
                     .iter()
-                    .map(|m| format!("{}:{}: {}", m.path, m.line, m.text))
+                    .map(|m| format!("{}:{}:{}", m.path, m.line, m.text))
                     .collect::<Vec<_>>()
                     .join("\n")
             });

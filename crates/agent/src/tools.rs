@@ -12993,9 +12993,10 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
     }
 }
 
-/// The lines a search matched, one `path:line: text` each and nothing of the driver's.
+/// The lines a search matched, one `path:line:text` each and nothing of the driver's. The text
+/// follows the separator byte for byte, as `grep -n` prints it.
 ///
-/// With context, the lines around them follow grep's shape: `path-line- text` for a line that did
+/// With context, the lines around them follow grep's shape: `path-line-text` for a line that did
 /// not match, and a `--` line between groups that are not adjacent in the file, so a gap is not
 /// read as the lines having been next to each other.
 fn match_lines(found: &crate::workspace::Matches) -> String {
@@ -13030,7 +13031,7 @@ fn match_lines(found: &crate::workspace::Matches) -> String {
         return found
             .matches
             .iter()
-            .map(|m| format!("{}:{}: {}", m.path, m.line, m.text))
+            .map(|m| format!("{}:{}:{}", m.path, m.line, m.text))
             .collect::<Vec<_>>()
             .join("\n");
     }
@@ -13042,14 +13043,14 @@ fn match_lines(found: &crate::workspace::Matches) -> String {
             (
                 m.path.as_str(),
                 m.line,
-                format!("{}:{}: {}", m.path, m.line, m.text),
+                format!("{}:{}:{}", m.path, m.line, m.text),
             )
         })
         .chain(found.context.iter().map(|c| {
             (
                 c.path.as_str(),
                 c.line,
-                format!("{}-{}- {}", c.path, c.line, c.text),
+                format!("{}-{}-{}", c.path, c.line, c.text),
             )
         }))
         .collect();

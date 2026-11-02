@@ -10509,11 +10509,11 @@ fn the_model_can_ask_for_a_later_page_of_matches() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        second.contains("a.txt:300: needle 299"),
+        second.contains("a.txt:300:needle 299"),
         "the last match was out of reach at an offset past the cap: {second}"
     );
     assert!(
-        !second.contains("a.txt:1: needle 0"),
+        !second.contains("a.txt:1:needle 0"),
         "the offset was ignored and the first page came back again: {second}"
     );
 }
@@ -10551,7 +10551,7 @@ fn a_quarantined_capped_search_says_where_to_continue() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        !second.contains("a.txt:1: needle"),
+        !second.contains("a.txt:1:needle"),
         "the matches reached the model, so this is not the quarantined case: {second}"
     );
     assert!(
@@ -10599,7 +10599,7 @@ fn a_search_with_context_shows_the_lines_around_each_hit() {
     let second = received.recv().expect("second request");
     assert!(
         second.contains(
-            "a.txt-2- two\\na.txt:3: needle\\na.txt-4- four\\n--\\na.txt-7- seven\\na.txt:8: needle\\na.txt-9- nine"
+            "a.txt-2-two\\na.txt:3:needle\\na.txt-4-four\\n--\\na.txt-7-seven\\na.txt:8:needle\\na.txt-9-nine"
         ),
         "the context was not laid out as grep lays it out: {second}"
     );
@@ -10645,7 +10645,7 @@ fn a_quarantined_search_cut_short_of_its_context_still_says_it_is_incomplete() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        !second.contains("a.txt:1: needle"),
+        !second.contains("a.txt:1:needle"),
         "the matches reached the model, so this is not the quarantined case: {second}"
     );
     assert!(
@@ -10873,6 +10873,52 @@ fn a_search_whose_pattern_cannot_be_compiled_says_why() {
     );
 }
 
+/// The text after a search's separator is the file's line byte for byte, so indentation copied from
+/// a result is the indentation `read_file` shows. The file's entries start with one space; a search
+/// that adds a space of its own after the `:` or `-` shows two, for a match and for a context line.
+#[test]
+fn a_search_result_keeps_a_lines_indentation_as_read_file_shows_it() {
+    let scratch = Scratch::new("search-indentation");
+    std::fs::write(
+        scratch.path.join("list.md"),
+        "# list\n - alpha item\n - beta item\n - gamma item\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let requests = run_calls_under(
+        &workspace,
+        rules(&[], &[], &[]),
+        trusting_the_workspace(),
+        &[
+            (
+                "search",
+                r#"{"pattern":"beta","directory":".","context":1}"#,
+            ),
+            ("read_file", r#"{"path":"list.md"}"#),
+        ],
+    );
+    let found = newest_tool_result_text(&requests[1]);
+    let read = newest_tool_result_text(&requests[2]);
+
+    assert!(
+        found.contains("list.md-2- - alpha item\nlist.md:3: - beta item\nlist.md-4- - gamma item"),
+        "the text after the separator is not the file's line: {found}"
+    );
+    let beta_line = read
+        .lines()
+        .find(|line| line.ends_with(" - beta item"))
+        .unwrap_or_else(|| panic!("read_file does not show the beta line: {read}"));
+    assert_eq!(
+        beta_line, " - beta item",
+        "read_file does not show the file's line with its one space of indentation: {read}"
+    );
+    assert!(
+        !found.contains("list.md:3:  -") && !found.contains("list.md-2-  -"),
+        "the search added a space of its own after the separator: {found}"
+    );
+}
+
 /// The request that carries the result of one `search` call over `scratch`, with the workspace
 /// vouched for so the planner is shown the result's text.
 fn what_the_planner_is_told_of_a_search(scratch: &Scratch, arguments: &str) -> String {
@@ -10955,7 +11001,7 @@ fn an_empty_search_says_whether_the_glob_or_the_pattern_is_why() {
 fn the_search_tool_matches_case_exactly_unless_it_is_asked_not_to() {
     let scratch = Scratch::new("search-tool-case");
     std::fs::write(scratch.path.join("a.txt"), "EmailAliasesEnabled\n").unwrap();
-    let line = "a.txt:1: EmailAliasesEnabled";
+    let line = "a.txt:1:EmailAliasesEnabled";
 
     for (arguments, finds) in [
         (r#"{"pattern":"emailaliases","directory":"."}"#, false),
@@ -11009,7 +11055,7 @@ fn a_quarantined_search_still_tells_the_model_it_is_incomplete() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        !second.contains("a.txt:1: needle"),
+        !second.contains("a.txt:1:needle"),
         "the matches reached the model, so this is not the quarantined case: {second}"
     );
     assert!(
@@ -11147,7 +11193,7 @@ fn a_complete_search_makes_no_truncation_claim() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        second.contains("a.txt:1: needle"),
+        second.contains("a.txt:1:needle"),
         "the model was not shown the search body, so the assertion below proves nothing: {second}"
     );
     assert!(
@@ -16078,8 +16124,8 @@ fn a_search_that_found_nothing_glimpses_no_sentence_of_the_drivers() {
             &[][..],
             &[][..],
             &[
-                "notes.md:1: alpha one".to_string(),
-                "notes.md:3: alpha two".to_string()
+                "notes.md:1:alpha one".to_string(),
+                "notes.md:3:alpha two".to_string()
             ][..],
         ],
         "a sentence the driver wrote was glimpsed, or the matches were not: {:?}",
@@ -74012,7 +74058,7 @@ fn read_git_searches_the_files_at_a_revision_and_pages_the_lines() {
     let _first = received.recv().expect("first request");
     let first = newest_tool_result(received.recv().expect("second request"));
     assert!(
-        first.contains("README:1: hello NEEDLE") && !first.contains("src/lib.rs"),
+        first.contains("README:1:hello NEEDLE") && !first.contains("src/lib.rs"),
         "the first page was not the first matching line alone: {first}"
     );
     assert!(
@@ -74023,7 +74069,7 @@ fn read_git_searches_the_files_at_a_revision_and_pages_the_lines() {
     );
     let second = newest_tool_result(received.recv().expect("third request"));
     assert!(
-        second.contains("src/lib.rs:2: let NEEDLE = 1;")
+        second.contains("src/lib.rs:2:let NEEDLE = 1;")
             && !second.contains("README")
             && !second.contains("ask again with skip"),
         "the skip did not move the search on to the next line: {second}"
@@ -74087,7 +74133,7 @@ fn a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not() {
     let _first = received.recv().expect("first request");
     let whole = newest_tool_result(received.recv().expect("second request"));
     assert!(
-        !whole.contains(&format!("README:1: {OURS}")),
+        !whole.contains(&format!("README:1:{OURS}")),
         "a search that read a distrusted file reached the planner: {whole}"
     );
     assert!(
@@ -74096,7 +74142,7 @@ fn a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not() {
     );
     let narrowed = newest_tool_result(received.recv().expect("third request"));
     assert!(
-        narrowed.contains(&format!("README:1: {OURS}")),
+        narrowed.contains(&format!("README:1:{OURS}")),
         "the search narrowed to a trusted path was not shown: {narrowed}"
     );
 }
@@ -74146,7 +74192,7 @@ fn a_search_that_met_a_distrusted_file_past_the_size_cap_is_quarantined() {
         r#"{"query":"search","pattern":"ours"}"#,
     );
     assert!(
-        whole.contains("could not be shown to you") && !whole.contains("README:1: ours"),
+        whole.contains("could not be shown to you") && !whole.contains("README:1:ours"),
         "a search that met a distrusted file past the cap reached the planner: {whole}"
     );
     let narrowed = read_git_over_a_distrusted_file(
@@ -74155,7 +74201,7 @@ fn a_search_that_met_a_distrusted_file_past_the_size_cap_is_quarantined() {
         r#"{"query":"search","pattern":"ours","path":"README"}"#,
     );
     assert!(
-        narrowed.contains("README:1: ours"),
+        narrowed.contains("README:1:ours"),
         "the search narrowed to a trusted path was not shown: {narrowed}"
     );
 }

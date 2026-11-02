@@ -295,8 +295,8 @@ a page to be continued: narrow the pattern or point at a subdirectory instead.
 
 ### Lines around a match
 
-With `context`, each match comes with the lines either side of it, written `path-line- text` where a
-match is `path:line: text`, and a `--` line between groups that are not adjacent. Those lines are not
+With `context`, each match comes with the lines either side of it, written `path-line-text` where a
+match is `path:line:text`, and a `--` line between groups that are not adjacent. Those lines are not
 matches: they count toward neither the match cap nor the offset. A separate cap bounds how many are
 returned, and a search that reached it says it is incomplete.
 

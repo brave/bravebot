@@ -174,6 +174,10 @@ fetch that chose it, not a routing field. That fetch has to be of the same conne
 the act, or the plan is refused, so an act cannot reach an item from anywhere its own locked place
 does not cover.
 
+A search step prints each hit as `path:line:text` and each line of context as `path-line-text`, with
+the text following the separator byte for byte, as the search tool does
+([SEARCH-10](tools/search.md#SEARCH-10)).
+
 `verified-by: bravebot_core::manifest::every_effect_destination_is_named_for_the_routing_lock`
 `verified-by: bravebot_core::manifest::an_omitted_search_directory_is_locked_as_the_workspace`
 `verified-by: bravebot_core::manifest::an_omitted_list_pattern_is_locked_as_no_filter`
@@ -183,6 +187,7 @@ does not cover.
 `verified-by: bravebot_agent::manifest::a_plan_whose_routing_field_is_not_text_is_refused`
 `verified-by: bravebot_agent::manifest::a_write_lands_where_the_plan_said_and_carries_what_it_never_read`
 `verified-by: bravebot_agent::manifest::a_listing_with_no_pattern_lists_the_tree`
+`verified-by: bravebot_agent::manifest::a_search_step_prints_the_line_unchanged_after_path_and_line_number`
 `verified-by: bravebot_core::manifest::a_connector_fetch_locks_every_routing_field_and_an_omitted_one_as_no_value`
 `verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
 `verified-by: bravebot_core::manifest::a_connector_plan_locks_every_routing_field_and_not_its_target_slot`

@@ -804,7 +804,9 @@ fn table(
         ),
         Tool::function(
             "search",
-            "Find regular expressions in workspace files. Returns matching lines. Give every \
+            "Find regular expressions in workspace files. Returns matching lines as \
+             path:line:text, with the text exactly as the file has it, including leading \
+             whitespace. Give every \
              spelling you would otherwise search for one at a time: a list of patterns costs \
              one call and matches a line matching any of them. A search does not enter a \
              symbolic link, to a file or to a directory: it says how many it did not enter, \
@@ -857,7 +859,8 @@ fn table(
                     "context": {
                         "type": "integer",
                         "description": "Lines to show before and after each match, as grep -C \
-                                        does. Defaults to 0, at most 10. Use it to read a hit \
+                                        does, written path-line-text. Defaults to 0, at most \
+                                        10. Use it to read a hit \
                                         without a second call. Lines of context are not \
                                         matches and do not count toward the match cap or the \
                                         offset."
@@ -887,7 +890,8 @@ fn table(
              untracked paths as git status --short does. tags lists tags newest version first, \
              as git tag --sort=-v:refname does, and with a revision only those it reaches, as \
              --merged does; search finds the lines matching a regular expression in the files \
-             at a revision, as git grep does. Works only where the whole of .git is \
+             at a revision, as git grep -n does, one path:line:text per line. Works only \
+             where the whole of .git is \
              trusted, and for status the whole working tree, and where .git is a directory: it \
              declines the .git file a linked worktree or a submodule has, except at the root of \
              a checkout you were started in; {git_elsewhere}. Nothing git's \

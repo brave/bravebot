@@ -3383,6 +3383,40 @@ fn a_listing_with_no_pattern_lists_the_tree() {
     assert!(shown.contains("b.md"), "b.md was omitted: {shown}");
 }
 
+/// A search step prints a hit as `path:line:text` with the text unchanged, as the search tool does
+/// (SEARCH-10), so the one space that indents the line stays after the colon.
+#[test]
+fn a_search_step_prints_the_line_unchanged_after_path_and_line_number() {
+    let scratch = Scratch::new("search-step-format");
+    std::fs::write(
+        scratch.path.join("notes.md"),
+        "alpha\n - beta item\ngamma\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_SEARCH", "args": {"pattern": "beta", "out_slot": "hits"}},
+            {"capability": "ANSWER", "args": {"from_slot": "hits"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = run(&config, &workspace, "find beta", &mut sink).expect("runs");
+    let shown = outcome.reply_for_display();
+    assert!(
+        shown.contains("notes.md:2: - beta item"),
+        "the line was not printed as path:line:text: {shown}"
+    );
+    assert!(
+        !shown.contains("notes.md:2:  - beta item"),
+        "the indentation gained a space: {shown}"
+    );
+}
+
 /// A plan that parsed but failed the schema is the case where the goal and the proposal
 /// together say whether the model misunderstood the task or misunderstood the tool set.
 #[test]

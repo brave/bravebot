@@ -133,7 +133,7 @@ impl Repository {
                 Place::Next(next) => return Ok(Some(next)),
                 Place::Here => {}
             }
-            let hit = format!("{path}:{}: {line}", index + 1);
+            let hit = format!("{path}:{}:{line}", index + 1);
             let start = hit.len() - line.len();
             let Some(end) = out.text.add(&hit, true) else {
                 return Ok(None);

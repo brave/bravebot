@@ -484,11 +484,12 @@ widen a tool nobody asked to widen.
 ### GIT-14: a search is labelled by every file it read, matched or not
 
 `search` prints the lines of the files at one revision, HEAD unless another is named, that
-`pattern` matches, as `git grep -n` prints them: `path:line: text`, in the order git lists the tree,
-with a binary file that matches named rather than printed and a file past the size cap described by
-its size. A path narrows it to that file or the files beneath it. A symbolic link and a submodule
-are not searched, as `git grep` over a tree searches neither. The pattern is written as
-`file_grep`'s is ([SEARCH-1](search.md#SEARCH-1)).
+`pattern` matches, as `git grep -n` prints them: `path:line:text`, with the text following the
+colon byte for byte, in the order git lists the tree, with a binary file that matches named
+rather than printed and a file past the size cap described by its size. A path narrows it to
+that file or the files beneath it. A symbolic link and a submodule are not searched, as
+`git grep` over a tree searches neither. The pattern is written as `file_grep`'s is
+([SEARCH-1](search.md#SEARCH-1)).
 
 Every file the search read is a path it showed ([GIT-3](#GIT-3)), whether or not a line in it
 matched, so one file the map distrusts makes the whole answer a reference. A file the trust map
@@ -507,6 +508,7 @@ in anything other than the lines it printed would repeat or skip one on the next
 `verified-by: bravebot_agent::turn::the_skip_a_cut_read_git_search_offers_stays_inside_a_distrusted_blobs_body`
 `verified-by: bravebot_agent::workspace::a_search_pattern_is_held_to_trusted_public_before_anything_is_read`
 `verified-by: bravebot_agent::git::search_lists_the_lines_a_pattern_matches_at_a_revision_as_git_grep_does`
+`verified-by: bravebot_agent::git::a_search_prints_an_indented_line_with_exactly_the_indentation_the_file_has`
 `verified-by: bravebot_agent::git::a_search_shows_every_file_it_read_whether_or_not_it_matched`
 `verified-by: bravebot_agent::git::a_search_leaves_out_a_withheld_file_and_says_so`
 `verified-by: bravebot_agent::git::a_search_pages_by_the_lines_it_prints`
