@@ -935,8 +935,10 @@ with its own three wordings ([VET-5](vet-content.md#VET-5)).
 
 `background: true` starts the line and does not wait for it, handing back a job name. The name is
 the driver's own, minted here and looked up in this module's own map, so it is trusted and public
-and the planner may use it as routing. `job_output` reports what the job has printed since the last
-look, whether it has ended, and kills it on request.
+and the planner may use it as routing. `job_output` hands back a slice of what the job printed since
+the previous look, with the number of lines of the job's output that begin in the slice, the number the
+first of them has, and the references of the earlier looks,
+says whether the job has ended, and kills it on request.
 
 Every gate is the one a foreground run passes, at the same point and in the same order: the rules,
 the person's approval, and the label the output will carry are all settled before anything starts.
@@ -971,7 +973,18 @@ under which names: names the driver minted and a count of seconds read off a clo
 printed. A job that ended between turns is told as any finish is ([CMDLINE-14](command-line.md#CMDLINE-14)),
 at that same first round. A job's name is never reused within a session. What the planner is told
 when a job starts says which of the two rules holds, so it does not promise a later look it will
-not get.
+not get. It also says that each look returns what arrived since the previous look and that the
+output before it stays in the references of the earlier looks, and the reminder of the jobs still
+running says the same. Lines are counted for the whole life of the job, across every look and the
+account of its end, so the numbering a result states does not restart at each look. A line is counted
+once, by the look that holds its first byte, whatever byte a look happens to cut at: the next look
+begins with the rest of a line the previous one cut and counts no line for it. A result states this
+in the same words for every look and inserts the count of lines that begin in the slice and the number
+the first of them has, so no sentence is chosen by a count or by where a look cut. A last line with no
+newline counts as soon as its first byte
+arrives. Lines are counted in each pipe's own bytes, so the `standard error:` label and the newline
+that joins the two streams are not lines of the job. The count is of lines handed over, and the
+screen's own view of unread output does not move it.
 
 **Known cost: a signal skips the cleanup.** A job is killed by dropping its handle, so a session
 that ends by returning ends its jobs, and one that is killed by a signal does not run the drop. A
@@ -1025,18 +1038,26 @@ the job names the driver minted.
 `verified-by: bravebot_agent::turn::asking_about_a_job_that_does_not_exist_says_so`
 `verified-by: bravebot_agent::turn::a_job_output_call_naming_a_delegate_says_its_report_arrives_on_its_own`
 `verified-by: bravebot_core::policy::the_delegates_a_run_started_are_the_numbers_it_minted`
+`verified-by: bravebot_agent::tools::a_look_counts_the_lines_the_job_has_handed_over_across_looks`
+`verified-by: bravebot_agent::tools::a_line_cut_between_two_looks_is_counted_once`
+`verified-by: bravebot_agent::tools::the_sentence_beside_a_look_is_the_same_words_for_every_count`
+`verified-by: bravebot_agent::tools::a_look_with_no_trailing_newline_counts_its_last_line_and_the_next_look_does_not_again`
+`verified-by: bravebot_agent::tools::standard_error_between_looks_does_not_shift_the_next_start`
+`verified-by: bravebot_agent::tools::the_notes_that_start_a_job_say_each_look_is_a_slice`
+`verified-by: bravebot_agent::tools::a_look_recorded_against_a_job_that_is_not_held_is_dropped`
 
 <a id="RUN-16"></a>
 ### RUN-16: what a background job printed keeps the label its plan was given
 
 The label is fixed by [RUN-4](#RUN-4) when the job starts and kept with it, rather than worked out
-again when the output is read. Each look reports what is new since the last one, counted in bytes.
+again when the output is read. Each look reports a slice: the bytes the job printed since the
+previous look, with the count of lines that begin in it.
 
 **Why the label is kept rather than recomputed.** What a person has vouched for can change during a
 turn, and a pipeline started before that must not have its output relabelled because of it. A second
 derivation of the same thing is a second answer waiting to disagree with the one the trail recorded.
 
-Reporting only what is new is bookkeeping about how much has been handed over, never a comparison of
+Reporting a slice is bookkeeping about how much has been handed over, never a comparison of
 what was printed: nothing here reads a byte of it.
 
 `verified-by: bravebot_agent::turn::what_a_background_job_printed_is_quarantined_like_any_other_output`
@@ -1072,8 +1093,19 @@ back at the first of five things: the job ending, the wait running out, the turn
 stop the person asks for on any job of the turn ([RUN-27](#RUN-27)), or a line the person typed, as
 above. Output arriving does not end
 it, including output that is already there, unseen, when the call is made. What it hands back is
-what the job printed since the last look, in one answer, under the label the job has and cut to the
-output cap as any look's is, so output that is quarantined comes back as one reference to all of it.
+what the job printed since the previous look, in one answer, under the label the job has and cut to
+the output cap as any look's is, so output that is quarantined comes back as one reference to that
+slice and not to all the job has printed. The result says the reference holds what the job printed
+since the previous look (since the job started, for the first look), states how many lines of the
+job's whole output begin in the slice and the number the first of them has, says that a line a look
+cuts is counted by the look that holds its first byte and that the next look begins with the rest of
+it (RUN-15 gives the counting rule), and lists every earlier look at the job by its reference, in the
+order they were made, so a line printed before the slice is in one of those. The list is not capped:
+it holds one reference for each earlier look that was kept apart. The first look lists
+none, and a look never lists its own reference. Where the output is shown to the planner as text
+there is no reference to name, so the result lists none. The count, the first number and the list are
+counts and names the driver minted, and nothing the job printed is in them. The words of the sentence
+are the same for every look; only the count, the number of the first line and the references change.
 `until_exit` given as anything but a boolean, as `true` with no `wait_seconds`, or as `true` beside
 `kill` is refused. A flag that is quietly ignored hands back the output-ended wait the caller did
 not ask for, a flag that quietly chose its own bound would hand back a window nobody asked about,
@@ -1187,6 +1219,9 @@ the window.
 `verified-by: bravebot_agent::tools::job_output_says_its_wait_stays_inside_the_turn`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_for_the_exit_is_handed_all_that_a_chatty_job_printed`
+`verified-by: bravebot_agent::turn::a_look_at_a_job_says_it_is_a_slice_with_its_line_range_and_names_the_earlier_looks`
+`verified-by: bravebot_agent::turn::the_earlier_looks_a_look_lists_are_exactly_the_ones_before_it`
+`verified-by: bravebot_agent::turn::looks_at_a_job_shown_as_text_list_no_earlier_references`
 `verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing`
 `verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_in_a_way_it_cannot_honour_is_refused_without_waiting`
 `verified-by: bravebot_agent::turn::a_job_output_call_reports_the_code_a_finished_job_exited_with`
@@ -1957,7 +1992,9 @@ stop being theirs because the work moved ([DELEGATE-1](../delegation.md)).
 Where what a command printed is quarantined and its slot holds no bytes, the planner is told how
 the run ended ([RUN-13](#RUN-13)) and that it printed nothing, and is handed no reference and none
 of [RUN-14](#RUN-14)'s advice. A look at a job that has printed nothing since it was last looked at
-says it has printed nothing new. The person watching is not told the result was kept from the
+says it has printed nothing new, and lists the references of the earlier looks at the job, since the
+planner has no other way to learn their names. Those are the only references the result names: it
+hands back no reference of its own and none of that advice. The person watching is not told the result was kept from the
 planner, and no quarantined block is drawn for it. The slot is still made and keeps its label, so
 the output view says the planner has not read it, which is true.
 
@@ -1973,6 +2010,7 @@ program choosing to print nothing chose what the planner is told no more than it
 
 `verified-by: bravebot_agent::turn::a_run_that_printed_nothing_says_so_and_hands_back_no_reference`
 `verified-by: bravebot_agent::turn::a_look_at_a_job_that_printed_nothing_new_says_so_and_hands_back_no_reference`
+`verified-by: bravebot_agent::turn::an_empty_look_after_earlier_looks_lists_them_and_hands_back_no_reference`
 
 <a id="RUN-25"></a>
 ### RUN-25: a person may move a running line to the background, and the turn goes on

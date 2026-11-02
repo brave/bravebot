@@ -1846,7 +1846,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
         });
     }
     for ended in finished {
-        let origin = format!("what `{}` printed", ended.said);
+        let origin = ended.look.origin(&ended.said);
         // Whichever way the label went: it is their directory, and a person who let a program run
         // in it is entitled to read what it printed and to be told how it ended. "12 lines,
         // quarantined" says neither.
@@ -1910,7 +1910,10 @@ fn collect_jobs<S: Sink, R: Reporter>(
         );
 
         let body = match &presented {
-            None => format!("{told} It printed nothing since you last looked."),
+            None => {
+                let earlier = ended.look.note_for_nothing_new(&ended.name);
+                format!("{told} It printed nothing {}.{earlier}", tools::Look::SINCE)
+            }
             Some(Presentation::Visible(text)) => {
                 // A cap bounds what the conversation holds and not what the program printed, so
                 // the whole of it goes into a slot of its own. Without it the one case where the
@@ -1945,10 +1948,17 @@ fn collect_jobs<S: Sink, R: Reporter>(
                     }
                     _ => String::new(),
                 };
-                format!("{told} What it printed since you last looked:\n\n{text}{rest}")
+                format!(
+                    "{told} What it printed {}:\n\n{text}{rest}",
+                    tools::Look::SINCE
+                )
             }
             Some(Presentation::Quarantined(reference)) => {
                 policy.came_from_command(&reference.slot, &ended.line, conversation.quarantine());
+                // The reference is this look's, so a later look at the job lists it. Counts and
+                // names the driver minted; `record_look` drops it if the job is no longer held.
+                jobs.record_look(&ended.name, reference.slot.to_string());
+                let looked = ended.look.note(&ended.name);
                 // Where nobody is asked, nobody is shown it either, and the mode goes unnamed for
                 // the reason a run's result leaves it out. Where a check's word answers in the
                 // person's place the output may be kept back, which is said without saying what
@@ -1961,7 +1971,7 @@ fn collect_jobs<S: Sink, R: Reporter>(
                     _ => String::new(),
                 };
                 format!(
-                    "{told} What it printed could not be shown to you: {}\n\nThis is about who \
+                    "{told} What it printed could not be shown to you: {}{looked}\n\nThis is about who \
                      answered for the command rather than about what it printed. To see it, call \
                      read_output with the reference.{then} To read a file, use read_file.",
                     reference.describe()
@@ -2001,8 +2011,10 @@ fn tell_of_kept_jobs(jobs: &mut tools::Jobs, conversation: &mut Conversation) {
     conversation.push_composed_from(
         Message::user(format!(
             "{TOOL_BUDGET_SPENT} Background jobs from earlier in this session are still running: \
-             {list}. Call job_output with a name to see what it has printed since you last looked, \
-             or with kill set to stop it. Do not start one again that is already running."
+             {list}. Call job_output with a name to see what it has printed since the previous \
+             look, which holds only what arrived after it: the output before that stays in the \
+             references of the earlier looks. Call it with kill set to stop it. Do not start one \
+             again that is already running."
         )),
         Composed::Notice,
         Provenance::Driver,
@@ -4268,6 +4280,16 @@ where
                         &command.line,
                         conversation.quarantine(),
                     );
+                    // A look at a job that handed something over: remember the name the slot got,
+                    // so the next result for the job can list it. A name the driver minted; the
+                    // look is counted in lines by `Jobs`, and one that held no byte has no
+                    // reference to name: its slot states `0 bytes`, the same figure that decides
+                    // `printed_nothing` below.
+                    if let (Some(job), Some(_)) = (&command.job, &output.look)
+                        && reference.bytes != Some(0)
+                    {
+                        state.jobs.record_look(job, reference.slot.to_string());
+                    }
                 }
 
                 // A run that asked to read what it printed, where the answer read_output
@@ -4525,9 +4547,20 @@ where
                     // do with nothing.
                     Presentation::Quarantined(_) if printed_nothing => {
                         let nothing = if output.tool == "run" {
-                            "It printed nothing."
+                            "It printed nothing.".to_string()
                         } else {
-                            "It has printed nothing new."
+                            // The references of the earlier looks stay readable after a look
+                            // that added nothing, and the planner has no other way to learn their
+                            // names. No reference of its own and none of the advice: there is
+                            // nothing in this one to read.
+                            let earlier = match (&output.printed_by, &output.look) {
+                                (
+                                    Some(crate::report::Command { job: Some(job), .. }),
+                                    Some(look),
+                                ) => look.note_for_nothing_new(job),
+                                _ => String::new(),
+                            };
+                            format!("It has printed nothing new.{earlier}")
                         };
                         format!("{TOOL_RESULT_PREFIX}{}:\n\n{ended}{nothing}", output.tool)
                     }
@@ -4630,8 +4663,16 @@ where
                                 .any(|directory| workspace.read_git_opens(policy, directory)),
                         );
                         let left_out = sentences::left_out_note(output.left_out);
+                        // Which lines of the job's whole output this reference holds and which
+                        // references the earlier looks became: counts and names the driver minted.
+                        let looked = match (&output.printed_by, &output.look) {
+                            (Some(crate::report::Command { job: Some(job), .. }), Some(look)) => {
+                                look.note(job)
+                            }
+                            _ => String::new(),
+                        };
                         format!(
-                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{linked}{left_out}{advice}{history}",
+                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{looked}{capped}{linked}{left_out}{advice}{history}",
                             output.tool,
                             reference.describe()
                         )

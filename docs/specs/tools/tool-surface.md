@@ -8,7 +8,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 255
+      - crates/agent/src/tools.rs: 256
       - crates/agent/src/tools/message.rs: 14
       - crates/agent/src/tools/link.rs: 6
       - crates/agent/src/tools/recall.rs: 25
@@ -47,7 +47,7 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`run`](run.md) | every stage's program and arguments, `directory`, `background`, `deadline_seconds`, `stdin_ref` | standard input | a reference |
 | [`read_output`](read-output.md) | the reference naming the result, `offset`, `pattern` | none | the bytes, if a person allows it |
 | [`vet_content`](vet-content.md) | the reference naming the slot | none | the bytes, if a person allows it |
-| [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds`, `until_exit` | none | what it has printed since the last look |
+| [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds`, `until_exit` | none | a slice of what it has printed since the previous look, with the count of lines that begin in it, the number of the first, and the references of the earlier looks |
 | [`fetch_url`](fetch-url.md) | `url` | none | a reference |
 | [`download_url`](download-url.md) | `url`, `path` | none | the path and the byte count |
 | [`load_skill`](load-skill.md) | `name` | none | the skill's text |
@@ -202,6 +202,12 @@ turn settles its list once and writes these from it ([VET-2](vet-content.md#VET-
 a definition's tools line and the command line's `--tools` all give the same result. A run offered
 every tool is told every one of these names, in each of these texts.
 
+The description of `job_output` says that a call hands back a slice of what the job printed since the
+planner's previous look, that the result gives how many lines begin in the slice and the number the
+first has, and that the
+earlier slices are in the earlier references the result lists. It names no tool in saying so, so the
+wording is the same for every list.
+
 **Why.** A turn told to use a tool nobody offered it spends a round calling a name that is not there
 and is refused for a reason it cannot act on, and then has a question to report back on unanswered.
 It was also told in its own prompt what it cannot do, so it holds both answers at once and the one in
@@ -232,6 +238,7 @@ is not offered.
 `verified-by: bravebot_agent::tools::a_list_holding_every_tool_gets_the_fetch_job_and_run_texts_it_always_had`
 `verified-by: bravebot_agent::tools::the_fetch_description_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_job_output_description_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::the_job_output_description_says_a_look_is_a_slice_and_earlier_slices_are_earlier_references`
 `verified-by: bravebot_agent::tools::the_run_description_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::turn::the_descriptions_of_fetch_job_output_and_run_follow_the_tools_a_turn_is_offered`
 `verified-by: bravebot_agent::turn::reading_a_reference_to_a_file_names_spawn_processor_and_write_file_only_if_offered`

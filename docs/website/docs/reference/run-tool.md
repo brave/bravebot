@@ -605,6 +605,10 @@ Anything a job wrote to standard error is marked as such wherever it is reported
 is not read as though the program had printed it as output. [`/jobs`](commands.md#jobs-stop-name-delegate)
 lists the jobs a turn has started and stops one.
 
+Each look at a job with [`job_output`](tools.md#job_output) is a slice: the bytes the job printed since the
+previous look, with the count of lines that begin in it. Earlier slices are in the earlier references the
+result lists, which is every earlier look at the job, so a line printed before a slice is in one of those and not in the latest.
+
 **One pipeline, and no redirection.** A line with `&&` or `||` decides where to go next by waiting on
 the part before it, and nothing waits here; a redirection names a destination nothing is reading.
 Both are refused rather than half-honoured.
@@ -635,8 +639,7 @@ In the terminal client, a message sent while the line runs also moves it once th
 The command is not stopped or started again. It becomes a job exactly as if it had been started with
 `background: true`, and the agent's result for the call says the user moved it, after how many
 seconds, and under which job name. Nothing it printed is in that result, including what it printed
-before the move: [`job_output`](tools.md#job_output) reads all of it, under the label the line was
-always going to carry.
+before the move: [`job_output`](tools.md#job_output) returns it, in the first look at the job.
 
 **Only a line a job can hold is offered.** That is one pipeline with no redirection, the same lines
 `background: true` accepts. A line that reads its input from an earlier result and one a delegate is
