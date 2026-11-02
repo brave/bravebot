@@ -57391,9 +57391,14 @@ fn the_account_of_an_ended_job_after_an_earlier_look_names_its_range_and_that_lo
                 done = true;
                 Some(Some(reply_with("done")))
             }
+            // Alternating spellings: the same call over and over is refused as a repetition
+            // without running, and then no time passes for the job to end.
             _ => Some(Some(tool_request(
                 "run",
-                &format!(r#"{{"command":"{SOMETHING_ELSE}"}}"#),
+                &format!(
+                    r#"{{"command":"{SOMETHING_ELSE}{}"}}"#,
+                    if step % 2 == 0 { "" } else { "0" }
+                ),
             ))),
         }
     });
