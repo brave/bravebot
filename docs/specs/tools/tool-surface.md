@@ -235,6 +235,7 @@ is not offered.
 `verified-by: bravebot_agent::tools::the_read_output_description_names_vet_content_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::turn::the_descriptions_of_the_processor_and_read_output_follow_the_tools_a_turn_is_offered`
 `verified-by: bravebot_agent::turn::a_delegate_is_not_told_to_use_a_tool_it_is_not_offered`
+`verified-by: bravebot_agent::turn::the_refusal_to_edit_an_untrusted_file_names_only_the_tools_the_turn_is_offered`
 `verified-by: bravebot_agent::tools::a_list_holding_every_tool_gets_the_fetch_job_and_run_texts_it_always_had`
 `verified-by: bravebot_agent::tools::the_fetch_description_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_job_output_description_names_only_the_tools_the_list_holds`

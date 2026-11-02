@@ -585,6 +585,9 @@ pub struct Policy<'sink, S: Sink> {
     spawning_offered: bool,
     /// Whether the run is offered `write_file`, which a reference it is handed says to use.
     writing_offered: bool,
+    /// Whether the run is offered `run`, which a refusal that sends the planner to edit through a
+    /// program names.
+    running_offered: bool,
     /// Whether the run is offered `read_output`, which a reference to output kept whole says to use.
     reading_offered: bool,
     /// The names this run's definition, and every one above it, allowed it to start, where any
@@ -764,6 +767,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             vetting_offered: true,
             spawning_offered: true,
             writing_offered: true,
+            running_offered: true,
             reading_offered: true,
             spawns: None,
             write_limits: Vec::new(),
@@ -1656,6 +1660,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             vetting_offered: self.vetting_offered,
             spawning_offered: self.spawning_offered,
             writing_offered: self.writing_offered,
+            running_offered: self.running_offered,
             reading_offered: self.reading_offered,
             spawns: self.spawns.clone(),
             write_limits: self.write_limits.clone(),
@@ -2308,6 +2313,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.writing_offered = false;
     }
 
+    /// Say that the run is not offered `run`, so a refusal worded from here on does not send the
+    /// planner to it. Told by the turn when its list is settled, as [`Policy::without_vetting`]
+    /// is.
+    pub fn without_running(&mut self) {
+        self.running_offered = false;
+    }
+
     /// Say that the run is not offered `read_output`, so a reference made from here on to output
     /// kept whole does not tell it to call that. Told by the turn when its list is settled, as
     /// [`Policy::without_vetting`] is.
@@ -2326,6 +2338,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// `path_ref`.
     pub fn writing_is_offered(&self) -> bool {
         self.writing_offered
+    }
+
+    /// Whether the run is offered `run`, which a refusal may send the planner to.
+    pub fn running_is_offered(&self) -> bool {
+        self.running_offered
     }
 
     /// A reference made now, marked as closed to processors where none can be started and as
@@ -3076,17 +3093,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn read_trusted_content<T: Clone>(&mut self, tool: &str, value: &Labelled<T>) -> Gated<T> {
         self.refuse_untrusted("trusted-read", tool, value.label())?;
         let label = value.label();
-        if !label.is_trusted() {
-            return Err(self.deny(
-                "trusted-read",
-                Principle::IntegrityGate,
-                format!(
-                    "{tool} needs to examine content to decide what to do, and this content is \
-                     {label}. Untrusted content must not influence a decision. Vouch for the \
-                     path if this is your own work"
-                ),
-            ));
-        }
 
         self.allow(
             "trusted-read",
@@ -9598,12 +9604,14 @@ mod tests {
                 policy.without_vetting();
                 policy.without_spawning();
                 policy.without_writing();
+                policy.without_running();
                 policy.without_reading();
             }
             let mut record = RecordingSink::new();
             let mut branch = policy.branch(&mut record);
             assert_eq!(branch.processors_offered(), !cut);
             assert_eq!(branch.writing_is_offered(), !cut);
+            assert_eq!(branch.running_is_offered(), !cut);
 
             let mut slots = SlotStore::new();
             let described: Vec<String> = a_reference_of_each_kind(&mut branch, &mut slots)
@@ -9629,7 +9637,8 @@ mod tests {
 
     /// Text written by hand about a reference asks the policy what the reference may be given to:
     /// a processor only where the run is offered one and its context holds nothing private, and a
-    /// file only where it is offered `write_file`.
+    /// file only where it is offered `write_file`. A policy that withdrew `run` reports it, and one
+    /// that never did still reports it offered.
     #[test]
     fn the_policy_says_what_a_reference_may_be_given_to() {
         for (spawning, writing, held) in [
@@ -9647,6 +9656,7 @@ mod tests {
             }
             if !writing {
                 policy.without_writing();
+                policy.without_running();
             }
             assert_eq!(
                 policy.processors_offered(),
@@ -9657,6 +9667,11 @@ mod tests {
                 policy.writing_is_offered(),
                 writing,
                 "write_file {writing}, holding {held:?}"
+            );
+            assert_eq!(
+                policy.running_is_offered(),
+                writing,
+                "run {writing}, holding {held:?}"
             );
         }
     }

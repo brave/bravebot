@@ -40,10 +40,23 @@ actually happens.
 
 Locating a passage means comparing text, and a comparison is a decision. On a file nobody vouched
 for that decision would be taken from bytes an attacker may have written, so it is refused rather
-than performed. The route for such a file is a processor and a whole-file write, where nothing is
-located and the body is shown to a person in full.
+than performed. A file a program wrote is in the same state: a `run` line that copied over it or
+redirected into it leaves it labelled as written by a program ([trust-map.md](../trust-map.md)).
+
+The refusal says the file is closed to `edit_file`, prints the label the driver assigned, and says
+that the file is not vouched for or untrusted content was written to it. It then names the routes
+the same turn is offered ([TOOL-6](tool-surface.md#TOOL-6)): a whole-file write with `write_file`,
+where nothing is located and the body is shown to a person in full; an edit through `run`; and
+asking the person to vouch for the path. `write_file` and `run` are named only where the turn is
+offered them, and a turn offered neither is told that only the person can open the file, by
+vouching for the path. The vouch route is named on every turn, a delegate's included, because
+nothing on the turn says it cannot ask a person. The sentence is fixed text about the path's state
+and holds no byte of the file. It does not tell the planner to use a reference, because `edit_file`
+takes none.
 
 `verified-by: bravebot_agent::turn::editing_an_untrusted_file_is_refused`
+`verified-by: bravebot_agent::turn::editing_a_file_a_program_wrote_is_refused`
+`verified-by: bravebot_agent::turn::the_refusal_to_edit_an_untrusted_file_names_only_the_tools_the_turn_is_offered`
 
 <a id="EDIT-3"></a>
 ### EDIT-3: an edit is approved as a diff, and cannot leave the workspace

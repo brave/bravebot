@@ -1494,10 +1494,11 @@ def refuses_before_releasing(body):
 def gate_refuses_untrusted(gate, sources):
     """Whether every definition of a gate turns untrusted content away before releasing any.
 
-    `Policy::read_trusted_content` refuses twice over, so every closure it can reach runs on bytes
-    the driver was already allowed to read and a spec naming it catches the only thing left, a
-    rename. `Policy::render_in_place` has no refusal on the label at all, because releasing
-    untrusted content to a closure is what it is for, so for that one a name is not enough.
+    `Policy::read_trusted_content` refuses untrusted content before it releases a byte, so every
+    closure it can reach runs on bytes the driver was already allowed to read and a spec naming it
+    catches the only thing left, a rename. `Policy::render_in_place` has no refusal on the label at
+    all, because releasing untrusted content to a closure is what it is for, so for that one a name
+    is not enough.
 
     Every definition rather than any, since a second function of the name in another module is a
     second way in, and a gate is only as refusing as the one a caller reaches.

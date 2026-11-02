@@ -134,7 +134,10 @@ directory. See [Trusted directories](security/trust.md).
 
 **An edit was refused on a file the agent could clearly see.** `edit_file` requires a *trusted* file,
 because locating a passage to replace is a comparison and a comparison is a decision. For a
-quarantined file the route is a processor plus a write, which you approve from the diff.
+file that is not vouched for, or that untrusted content was written to, the refusal says the file
+is closed to `edit_file` and names what is open: a whole-file `write_file`, which you approve from
+the diff, an edit through `run`, or your vouching for the path. It names `write_file` and `run` only
+when the session offers them.
 
 **`AGENTS.md was not loaded: this directory is not trusted`**. Exactly what it says. A project's own
 instructions are read through the trust map, so they load when you vouched for the directory. Your own

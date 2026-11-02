@@ -497,8 +497,10 @@ looks for and in what it puts there, so the file keeps one terminator throughout
 `line endings: CRLF kept`. A file that mixes `\n` and `\r\n` is matched exactly as given.
 
 An edit requires a **trusted** file, because locating a passage to replace is a decision and a
-decision may be taken only from trusted content. To change a file the agent may not read, the route
-is `spawn_processor` plus `write_file`.
+decision may be taken only from trusted content. A file that is not vouched for, or that untrusted
+content was written to, is refused with a sentence saying the file is closed to `edit_file`. The
+sentence names the routes that are open: the whole file with `write_file`, an edit through `run`, or
+your vouching for the path. It names `write_file` and `run` only when the session offers them.
 
 ### Notebook cells
 

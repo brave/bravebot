@@ -12184,9 +12184,160 @@ fn editing_an_untrusted_file_is_refused() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        second.contains("refusing to expose untrusted content"),
-        "the model was not told why: {second}"
+        second.contains(
+            "this file is closed to edit_file, label (U,priv): it is not vouched for, or \
+             untrusted content was written to it, and an edit has to compare its text."
+        ),
+        "the model was not told why the file is closed to edit_file: {second}"
     );
+    assert!(
+        second.contains(
+            "Write the whole file with write_file, edit it through run, or ask the person to \
+             vouch for the path"
+        ),
+        "the model was not told what is open: {second}"
+    );
+    assert!(
+        !second.contains("Use a reference"),
+        "the model was sent to a reference that edit_file cannot take: {second}"
+    );
+}
+
+/// EDIT-2. A file a person vouched for that a program then wrote into is untrusted too, and the
+/// refusal says so in the same words as for a file nobody vouched for. The file keeps the text the
+/// program wrote.
+#[test]
+fn editing_a_file_a_program_wrote_is_refused() {
+    let scratch = Scratch::new("edit-program-written");
+    std::fs::write(scratch.path.join("a.txt"), "keep\nold\n").unwrap();
+    std::fs::write(scratch.path.join("saved.txt"), "keep\nold\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat saved.txt > a.txt"}"#),
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"old","new_text":"new"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("edit a.txt"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        !outcome.trust.is_trusted("a.txt"),
+        "a file a program wrote into reads back trusted, so the edit below says nothing"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        "keep\nold\n",
+        "the file was edited"
+    );
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [_first, _second, third] = requests.as_slice() else {
+        panic!("three requests, for three rounds: {requests:?}");
+    };
+    assert!(
+        third.contains(
+            "this file is closed to edit_file, label (U,priv): it is not vouched for, or \
+             untrusted content was written to it, and an edit has to compare its text."
+        ),
+        "the model was not told why the file is closed to edit_file: {third}"
+    );
+    assert!(
+        !third.contains("Use a reference"),
+        "the model was sent to a reference that edit_file cannot take: {third}"
+    );
+}
+
+/// TOOL-6. The refusal of an untrusted file names `write_file` and `run` only where the turn is
+/// offered them, and says that only the person can open the file where it is offered neither.
+#[test]
+fn the_refusal_to_edit_an_untrusted_file_names_only_the_tools_the_turn_is_offered() {
+    let cases = [
+        (
+            "kind: worker\ntools: read_file, edit_file, write_file, run\n",
+            "Write the whole file with write_file, edit it through run, or ask the person to \
+             vouch for the path",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file, write_file\n",
+            "Write the whole file with write_file, or ask the person to vouch for the path",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file, run\n",
+            "Edit it through run, or ask the person to vouch for the path",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file\n",
+            "Only the person can open it, by vouching for the path",
+        ),
+    ];
+    for (index, (fields, routes)) in cases.into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("edit-untrusted-offered-{index}"));
+        let home = Scratch::new(&format!("edit-untrusted-offered-{index}-home"));
+        std::fs::write(scratch.path.join("a.txt"), "keep\nold\n").unwrap();
+        define(&home, "editor", fields, "EDIT-IT");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_by_marker(vec![(
+            "ADDRESSED-EDIT",
+            vec![
+                tool_request_2(
+                    "edit_file",
+                    r#"{"path":"a.txt","old_text":"old","new_text":"new"}"#,
+                ),
+                reply_with("understood"),
+            ],
+        )]);
+        let config = config_for(&endpoint);
+
+        turns::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &addressed("ADDRESSED-EDIT", &home, "editor"),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+
+        let requests: Vec<String> = received.try_iter().collect();
+        let [_first, second] = requests.as_slice() else {
+            panic!("two requests, for two rounds: {requests:?}");
+        };
+        assert!(
+            second.contains(&format!("and an edit has to compare its text. {routes}")),
+            "case {index} ({fields:?}) was not told {routes:?}: {second}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+            "keep\nold\n",
+            "case {index}: the file was edited"
+        );
+    }
 }
 
 /// A notebook the workspace vouched for reads as numbered cells with their source only, and its

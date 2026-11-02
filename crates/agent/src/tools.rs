@@ -4327,6 +4327,30 @@ fn record_confinement_refusal<S: Sink>(
     }
 }
 
+/// What `edit_file` says of a file it will not edit because the file is not trusted: it is not
+/// vouched for, or untrusted content was written to it (EDIT-2). Fixed text about the path's
+/// state. It holds no byte of the file and no name, and the label is the one the driver assigned.
+/// It names `write_file` and `run` only where the turn is offered them (TOOL-6), and always the
+/// vouch, which is the person's to give. The vouch is named on every turn, a delegate's included,
+/// because nothing on the turn says it cannot ask a person.
+fn closed_to_editing<S: Sink>(policy: &Policy<'_, S>, label: Label) -> String {
+    let routes = match (policy.writing_is_offered(), policy.running_is_offered()) {
+        (true, true) => {
+            "Write the whole file with write_file, edit it through run, or ask the person to \
+             vouch for the path"
+        }
+        (true, false) => {
+            "Write the whole file with write_file, or ask the person to vouch for the path"
+        }
+        (false, true) => "Edit it through run, or ask the person to vouch for the path",
+        (false, false) => "Only the person can open it, by vouching for the path",
+    };
+    format!(
+        "refused: this file is closed to edit_file, label {label}: it is not vouched for, or \
+         untrusted content was written to it, and an edit has to compare its text. {routes}"
+    )
+}
+
 /// [`workspace_failure`] as the `error:` result a file tool returns, so each tool's refusal of a
 /// path the workspace turned away is worded and recorded in one place.
 fn file_tool_problem<S: Sink>(
@@ -6480,9 +6504,8 @@ fn edit_file<S: Sink, C: Confirmer>(
     // Confidentiality is not the question here. Workspace content is private, and staying
     // inside the process to locate a passage releases nothing; only integrity decides whether
     // this comparison is safe to make.
-    let current = match policy.read_trusted_content("edit_file", &source) {
-        Ok(text) => text,
-        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    let Ok(current) = policy.read_trusted_content("edit_file", &source) else {
+        return Produced::problem(closed_to_editing(policy, source.label()));
     };
 
     // In order, each on the text the one before it left (EDIT-6). Nothing is kept until every pair
