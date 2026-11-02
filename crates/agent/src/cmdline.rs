@@ -2337,12 +2337,21 @@ fn names_a_terminal(path: &Path) -> bool {
 }
 
 /// Whether a `git commit` was given its message rather than left to ask for one.
+///
+/// A plain `--fixup=<commit>` or `--fixup <commit>` supplies its own message, `fixup! <subject>`,
+/// and opens no editor. `--fixup=amend:<commit>` and `--fixup=reword:<commit>` (and the same
+/// values after a separate `--fixup`) open an editor on the commit's message, so they carry a
+/// message only when another source is given. `--squash` opens an editor and is not counted.
 fn carries_a_message(args: &[String]) -> bool {
-    args.iter().any(|arg| {
+    let plain_fixup =
+        |commit: &str| !commit.starts_with("amend:") && !commit.starts_with("reword:");
+    args.iter().enumerate().any(|(at, arg)| {
         arg == "--no-edit"
             || arg.starts_with("--message")
             || arg.starts_with("--file")
             || arg.starts_with("--reuse-message")
+            || arg.strip_prefix("--fixup=").is_some_and(plain_fixup)
+            || (arg == "--fixup" && args.get(at + 1).is_some_and(|commit| plain_fixup(commit)))
             // A bundled short flag carries its letters, so `-am` is a message as surely as `-m`.
             || (arg.starts_with('-')
                 && !arg.starts_with("--")
@@ -3762,6 +3771,14 @@ mod tests {
             "git rebase -i HEAD~3",
             "git add -p",
             "git commit",
+            // `amend:` and `reword:` open an editor on the commit's message, and `--squash` does too.
+            "git commit --fixup=amend:HEAD",
+            "git commit --fixup=reword:HEAD",
+            "git commit --fixup amend:HEAD",
+            "git commit --fixup reword:HEAD",
+            "git commit --squash=HEAD",
+            // Nothing follows `--fixup`, so it names no commit and supplies no message.
+            "git commit --fixup",
         ] {
             assert!(
                 matches!(
@@ -3826,7 +3843,20 @@ mod tests {
     #[test]
     fn the_same_program_without_the_interactive_part_is_not_refused() {
         let tree = Tree::new("noninteractive");
-        for line in ["git rebase --continue", "git add .", "git commit -m done"] {
+        for line in [
+            "git rebase --continue",
+            "git add .",
+            "git commit -m done",
+            // A plain fixup commit gets the message `fixup! <subject>` from git, in either spelling.
+            "git commit -a --fixup=HEAD",
+            "git commit --fixup HEAD",
+            "git commit -a --fixup=0a1b2c3d",
+            // `amend:` and `reword:` open an editor unless a message source is also given.
+            "git commit --fixup=amend:HEAD -m x",
+            "git commit --fixup=reword:HEAD --no-edit",
+            "git commit --fixup amend:HEAD -m x",
+            "git commit --fixup reword:HEAD --no-edit",
+        ] {
             let refusal = compile(line, &tree.root, None, &mut without_rules);
             let interactive = matches!(
                 refusal.as_ref().err(),

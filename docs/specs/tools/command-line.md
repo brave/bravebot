@@ -827,6 +827,13 @@ terminal. Beyond that, invocations known to require interaction are refused at c
 message naming the alternative: `git rebase -i`, `git add -i`, an editor, a pager without
 `--no-pager`, anything that would open `/dev/tty`.
 
+`git commit` is refused when it supplies no message, because git then opens an editor. A message
+source lets it through: `-m`, `-F`, `-C`, `--message`, `--file`, `--reuse-message` or `--no-edit`. A
+plain `--fixup=<commit>` or `--fixup <commit>` is not refused either, because git writes the
+`fixup! <subject>` message itself. `--fixup=amend:<commit>` and `--fixup=reword:<commit>`, and their
+two-word spellings, open an editor and are refused unless a message source is also given.
+`--squash=<commit>` and a bare `git commit` are refused.
+
 The list is a convenience rather than a guarantee. Something interactive that is not on it hits the
 deadline and returns what it printed, which is the same outcome by a slower road.
 
