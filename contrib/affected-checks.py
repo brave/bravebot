@@ -183,9 +183,9 @@ def classify_by_area(path, desktop, fuzz):
     if path == "Cargo.toml":
         # Every crate the fuzz package builds takes its version and dependencies from here, so
         # its lockfile goes stale with this one. Cargo.lock below is not read by that build.
-        return frozenset({"rust", "ui", "build", "deps", "fuzz"})
+        return frozenset({"rust", "ui", "build", "deps", "fuzz", "sdk"})
     if path == "Cargo.lock":
-        return frozenset({"rust", "ui", "build", "deps"})
+        return frozenset({"rust", "ui", "build", "deps", "sdk"})
     if path in (".config/deny.toml", "contrib/check-deny-reasons.py"):
         return frozenset({"deps"})
     if path == "contrib/check-pnpm-lockfiles.py":
@@ -435,8 +435,8 @@ CASES = (
     (".github/actions/setup/action.yml", EVERYTHING),
     ("crates/README.md", EVERYTHING),
     ("somewhere-new/file.txt", EVERYTHING),
-    ("Cargo.lock", {"rust", "ui", "build", "deps"}),
-    ("Cargo.toml", {"rust", "ui", "build", "deps", "fuzz"}),
+    ("Cargo.lock", {"rust", "ui", "build", "deps", "sdk"}),
+    ("Cargo.toml", {"rust", "ui", "build", "deps", "fuzz", "sdk"}),
     (".config/deny.toml", {"deps", "rust"}),
     ("contrib/check-deny-reasons.py", {"deps"}),
     ("contrib/Dockerfile.cross", {"build", "rust"}),
