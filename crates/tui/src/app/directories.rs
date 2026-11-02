@@ -34,21 +34,23 @@ pub(super) fn remove_checkout(
 ) {
     use bravebot_agent::workspace::Unremoved;
     let Some(listed) = kept.into_iter().find(|listed| listed.id == id) else {
-        session.note(t!(checkouts_no_such, id = id));
+        session.note_refused(t!(checkouts_no_such, id = id));
         return;
     };
     if listed.worked_in && ask(&listed) != crate::confirm::Answer::Approve {
-        session.note(t!(checkouts_kept, id = id));
+        session.note_refused(t!(checkouts_kept, id = id));
         return;
     }
     let path = listed.path.display().to_string();
     match remove(id) {
-        Ok(()) => session.note(t!(checkouts_removed, id = id, path = &path)),
-        Err(Unremoved::NoSuch) => session.note(t!(checkouts_no_such, id = id)),
+        Ok(()) => session.note_done(t!(checkouts_removed, id = id, path = &path)),
+        Err(Unremoved::NoSuch) => session.note_refused(t!(checkouts_no_such, id = id)),
         Err(Unremoved::WorkedFrom) => {
-            session.note(t!(checkouts_worked_from, id = id, path = &path))
+            session.note_refused(t!(checkouts_worked_from, id = id, path = &path))
         }
-        Err(Unremoved::Stuck) => session.note(t!(checkouts_not_removed, id = id, path = &path)),
+        Err(Unremoved::Stuck) => {
+            session.note_refused(t!(checkouts_not_removed, id = id, path = &path))
+        }
     }
 }
 
@@ -177,7 +179,7 @@ pub(super) fn change_directory(
     ask: impl FnOnce(&[bravebot_agent::granted::Proposed], &mut String) -> Option<bool>,
 ) -> Changed {
     if directory.is_empty() {
-        session.note(t!(session_cd_needs_a_path));
+        session.note_refused(t!(session_cd_needs_a_path));
         return Changed::Stayed;
     }
 
@@ -189,7 +191,7 @@ pub(super) fn change_directory(
     {
         Ok(moved) => moved,
         Err(problem) => {
-            session.note(t!(
+            session.note_refused(t!(
                 session_directory_not_changed,
                 directory = directory,
                 problem = problem
@@ -228,7 +230,7 @@ pub(super) fn change_directory(
     if let Some(mcp) = &session.servers.session {
         mcp.now_in_workspace(&moved.root);
     }
-    session.note(t!(
+    session.note_done(t!(
         session_directory_changed,
         directory = moved.root.display().to_string()
     ));
