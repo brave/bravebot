@@ -74,6 +74,11 @@ and an editor say the sentence alone.
 | a gate here would not let the request out | a gate refused it before it left, so it never went |
 | the workspace could not be used | the working directory could not be read or written |
 
+A file named with `@` that cannot be read ends the turn with a line that names it and says why, for
+example `@missing.md is not a file in this project`, `@blob.bin is not a text file` or
+`@notes.txt is text in an encoding other than UTF-8`, each followed by what to do about it. The
+model is told only that the workspace failed, not the name.
+
 For the network cases, `bravebot doctor` has a `network` section naming the trust roots in force, the
 proxy, and the hosts it is not used for.
 

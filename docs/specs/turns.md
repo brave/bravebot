@@ -700,7 +700,9 @@ of the diagnosis ([BACKEND-37](backends.md#BACKEND-37)). The category is a fixed
 is the driver's own, so nothing the service sent is in the note: not its reply, its headers, its
 URL, its error text or the status of its reply. The category is what the driver made of that
 status, and it is all the planner is given of any other failure ([BACKEND-37](backends.md#BACKEND-37)
-says the same of a processor's). A background session started again after an interrupted turn is
+says the same of a processor's). A failure that ended on the read of a file the person named with
+`@` is also given the category alone: the name the person is shown ([NAME-13](naming-files.md#NAME-13))
+is not in the note or in the saved conversation. A background session started again after an interrupted turn is
 told in the same way, in the driver's own words, that the turn ended without finishing
 ([BG-12](background-sessions.md#BG-12)).
 
@@ -726,6 +728,7 @@ for a note to refer to.
 it, so a session that fails repeatedly holds one for each failure. A note is about fifty tokens.
 
 `verified-by: bravebot_agent::turn::a_turn_that_ends_on_a_failed_request_leaves_the_planner_a_note_of_it`
+`verified-by: bravebot_agent::turn::the_note_and_the_conversation_of_a_turn_that_failed_on_a_named_file_hold_no_name`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_before_adding_anything_leaves_no_note_and_one_that_added_its_prompt_does`
 `verified-by: bravebot_agent::turn::a_turn_that_answered_or_was_stopped_leaves_no_note_of_a_failure`
 `verified-by: bravebot_agent::turn::a_turn_that_compacted_and_then_failed_leaves_the_note_of_the_failure`

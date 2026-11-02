@@ -1923,6 +1923,8 @@ mcp-prompt-quote = the value of { $name } has a double quote that does not close
 named-path-not-text = @{ $name } is under a reference directory whose path is not text, so it cannot be sent. Remove the @ to send it as text.
 named-not-text = @{ $name } is not a text file, so it cannot be sent. Remove the @ to send it as text.
 named-not-a-file = @{ $name } is not a file in this project. Remove the @ to send it as text.
+named-unreadable = @{ $name } could not be read, so it cannot be sent. Check that you may read it.
+named-not-utf8 = @{ $name } is text in an encoding other than UTF-8, so it cannot be sent. Convert it to UTF-8 to send it.
 
 ## Programs asking for one more path for the session
 

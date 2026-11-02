@@ -208,51 +208,6 @@ the terminal would send a file nobody chose or drop one somebody did.
 `verified-by: bravebot_ui_bridge::mentions_running_tests::naming_a_file_does_not_wait_for_a_turn_holding_the_session`
 `verified-by: by-construction (the window's half is not a crate this workspace compiles, so ui/scripts/drive-at-mentions.mjs drives the real app and bridge against a stub model and asserts the list, a fragment finding a file in a directory below with Tab writing its whole path, its keys, Tab into a directory, Enter completing a half-typed name, a directory holding a space completed to the escaped text and Enter completing a name already holding an escaped space (ui/scripts/mentions.test.mjs pins the splice), the file's contents in the model request, the Read row, the refusal of @../outside.txt at send, and that a bot's conversation with no project lists and reads the bot's home folder and refuses a project file)`
 
-<a id="NAME-12"></a>
-### NAME-12: a name that cannot be sent is refused where Enter is pressed
-
-Before a line is sent or queued, the terminal surveys each `@name` it holds, in the line the person
-wrote with a folded paste unfolded, and the desktop app does the same at `turn.send` (NAME-9). A
-name under a reference directory's alias is surveyed in the directory it resolves to. A name that
-is not a text file in the project (missing, a directory written without its slash, binary, outside
-the workspace, or under a reference directory whose path has no text spelling) refuses the send.
-The refusal is one line for each such name, naming the `@name` and saying to remove the `@` to send
-it as text, and the line stays in the box as typed, with its paste markers and attachments. Both
-front ends take the sentences from the same catalog entries through `bravebot_agent::named`.
-
-A line that names only text files, a directory with its slash, a bare `@` or an address in a
-sentence is sent as before (NAME-6). A line this program composed names no file and is never
-refused (NAME-1). A rule is recorded for a named file only when the survey passes, so a name the
-read refuses leaves nothing in the trust map (NAME-2).
-
-Whether a name is refused depends on the verdict of the survey: the path, the kind of file, and
-whether the first 8 KiB of the file is text or binary under `decode_text`, which honours a byte
-order mark and decodes UTF-8. [labels.md](labels.md) lists that check as the seventh place that
-looks at untrusted bytes. `Workspace::survey` takes the verdict and `bravebot_agent::named::surveyed`
-asks it for each name. The driver uses only the verdict and does not read the contents. The name and
-the verdict never reach the planner. The person's screen, the session record and the trust map's
-vouching depend on them.
-
-**Why.** A missing name used to leave a trusted rule for a path that does not exist and end the
-turn on a workspace failure after the prompt was recorded, losing a pasted request the person could
-not get back.
-
-`verified-by: bravebot_tui::references::enter_refuses_a_name_that_is_not_a_file_and_keeps_the_line`
-`verified-by: bravebot_tui::references::enter_refuses_a_directory_a_binary_file_and_a_path_outside_the_project`
-`verified-by: bravebot_tui::references::the_refusal_names_each_bad_name_and_not_the_good_one`
-`verified-by: bravebot_tui::references::a_refused_line_keeps_its_folded_paste`
-`verified-by: bravebot_tui::references::a_handle_inside_a_folded_paste_is_refused_and_the_marker_stays`
-`verified-by: bravebot_tui::references::a_refused_line_keeps_its_attachments`
-`verified-by: bravebot_tui::references::a_name_under_a_reference_alias_is_surveyed_in_its_directory`
-`verified-by: bravebot_tui::references::a_prompt_the_driver_composed_is_never_surveyed`
-`verified-by: bravebot_tui::references::enter_still_sends_lines_that_name_real_files_or_nothing`
-`verified-by: bravebot_tui::references::a_session_with_no_workspace_surveys_nothing`
-`verified-by: bravebot_tui::references::while_a_turn_works_a_bad_name_is_refused_and_not_queued`
-`verified-by: bravebot_agent::workspace::surveying_a_lines_names_answers_each_in_order_through_the_resolver`
-`verified-by: bravebot_tui::render::transcript::a_refusal_note_quoting_a_name_with_an_escape_is_drawn_with_the_escape_made_visible`
-`verified-by: bravebot_agent::turn::a_missing_named_file_leaves_no_rule_in_the_trust_map`
-`verified-by: bravebot_ui_bridge::mentions::a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn`
-
 <a id="NAME-10"></a>
 ### NAME-10: `@session:<id>` adds the newest part of an earlier session to the message
 
@@ -348,6 +303,88 @@ letters in the path of most of a large tree, and the terminal draws every row un
 `verified-by: bravebot_tui::references::a_fragment_finds_a_file_below_and_tab_writes_the_whole_path`
 `verified-by: bravebot_tui::references::enter_completes_a_fragment_to_the_file_found_below_and_names_that_file`
 `verified-by: bravebot_ui_bridge::mentions::a_fragment_is_offered_the_file_below_it_and_enter_completes_it`
+
+<a id="NAME-12"></a>
+### NAME-12: a name that cannot be sent is refused where Enter is pressed
+
+Before a line is sent or queued, the terminal surveys each `@name` it holds, in the line the person
+wrote with a folded paste unfolded, and the desktop app does the same at `turn.send` (NAME-9). A
+name under a reference directory's alias is surveyed in the directory it resolves to. A name that
+is not a text file in the project (missing, a directory written without its slash, binary, outside
+the workspace, or under a reference directory whose path has no text spelling) refuses the send.
+A name that is a file the program is not allowed to read, or that the disk fails to read, refuses
+it too, with a sentence saying it could not be read.
+The refusal is one line for each such name, naming the `@name` and saying to remove the `@` to send
+it as text, and the line stays in the box as typed, with its paste markers and attachments. Both
+front ends take the sentences from the same catalog entries through `bravebot_agent::named`.
+
+A line that names only text files, a directory with its slash, a bare `@` or an address in a
+sentence is sent as before (NAME-6). A line this program composed names no file and is never
+refused (NAME-1). A rule is recorded for a named file only when the survey passes, so a name the
+read refuses leaves nothing in the trust map (NAME-2).
+
+Whether a name is refused depends on the verdict of the survey: the path, the kind of file, and
+whether the first 8 KiB of the file is text or binary under `decode_text`, which honours a byte
+order mark and decodes UTF-8. [labels.md](labels.md) lists that check as the seventh place that
+looks at untrusted bytes. `Workspace::survey` takes the verdict and `bravebot_agent::named::surveyed`
+asks it for each name. The driver uses only the verdict and does not read the contents. The name and
+the verdict never reach the planner. The person's screen, the session record and the trust map's
+vouching depend on them.
+
+**Why.** A missing name used to leave a trusted rule for a path that does not exist and end the
+turn on a workspace failure after the prompt was recorded, losing a pasted request the person could
+not get back.
+
+`verified-by: bravebot_tui::references::enter_refuses_a_name_that_is_not_a_file_and_keeps_the_line`
+`verified-by: bravebot_tui::references::enter_refuses_a_directory_a_binary_file_and_a_path_outside_the_project`
+`verified-by: bravebot_tui::references::the_refusal_names_each_bad_name_and_not_the_good_one`
+`verified-by: bravebot_tui::references::a_refused_line_keeps_its_folded_paste`
+`verified-by: bravebot_tui::references::a_handle_inside_a_folded_paste_is_refused_and_the_marker_stays`
+`verified-by: bravebot_tui::references::a_refused_line_keeps_its_attachments`
+`verified-by: bravebot_tui::references::a_name_under_a_reference_alias_is_surveyed_in_its_directory`
+`verified-by: bravebot_tui::references::a_prompt_the_driver_composed_is_never_surveyed`
+`verified-by: bravebot_tui::references::enter_still_sends_lines_that_name_real_files_or_nothing`
+`verified-by: bravebot_tui::references::a_session_with_no_workspace_surveys_nothing`
+`verified-by: bravebot_tui::references::while_a_turn_works_a_bad_name_is_refused_and_not_queued`
+`verified-by: bravebot_agent::workspace::surveying_a_lines_names_answers_each_in_order_through_the_resolver`
+`verified-by: bravebot_tui::render::transcript::a_refusal_note_quoting_a_name_with_an_escape_is_drawn_with_the_escape_made_visible`
+`verified-by: bravebot_agent::turn::a_missing_named_file_leaves_no_rule_in_the_trust_map`
+`verified-by: bravebot_ui_bridge::mentions::a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn`
+
+<a id="NAME-13"></a>
+### NAME-13: a turn that ends on the read of a named file says which file and why
+
+A name that passed the survey (NAME-12) can still fail when the turn reads it: the file was removed
+or replaced after Enter, a file in another encoding is read by the turn and not by the survey, or a
+`--file` or a front end other than the two above handed over a name nobody surveyed. The turn then
+ends on that read, and the failure line it shows, and the reason stored in the session record, name
+the `@name` as it was written and give the reason in the sentences NAME-12 uses (not a file in this
+project, not a text file, text in an encoding other than UTF-8, or a file that could not be read)
+taken from the same catalog
+entries through `bravebot_agent::named`. Where the line names several files, the one whose read
+failed is the one named. A failed read of anything else, or a failure that is not a read of a named
+file, keeps the sentence for its category.
+
+The name reaches only the line the person is shown and the record of the turn. The note the planner
+receives about a failed turn is made from the category and the request count
+([turns](turns.md#TURN-13)) and holds no
+name, and the name is not a field of the diagnosis. Which sentence is chosen depends on the kind of
+failure the read reported, which for a binary file or text in another encoding is the verdict of
+`Workspace::survey` or of the decoding in the turn's read (NAME-12). `bravebot_agent::named` maps
+the kind to a sentence, and the driver does not read the contents. The name and the sentence never
+reach the planner. The name is made printable where the line is drawn, since it is text the person
+typed or pasted.
+
+**Why.** The failure line said only that the workspace could not be used, which did not say which
+of several files, or what was wrong with it.
+
+`verified-by: bravebot_tui::sessions::a_named_file_that_cannot_be_read_is_named_with_its_reason_in_the_failure_line`
+`verified-by: bravebot_tui::sessions::the_failure_line_names_the_file_that_failed_among_several`
+`verified-by: bravebot_agent::turn::the_note_and_the_conversation_of_a_turn_that_failed_on_a_named_file_hold_no_name`
+`verified-by: bravebot_agent::turn::a_failed_read_of_a_dropped_file_or_an_attachment_carries_no_name`
+`verified-by: bravebot_agent::workspace::a_named_file_the_process_may_not_read_is_unreadable_and_not_a_missing_file`
+`verified-by: bravebot_tui::render::transcript::a_failure_line_quoting_a_name_with_an_escape_is_drawn_with_the_escape_made_visible`
+`verified-by: bravebot_ui_bridge::failure_tests::a_failure_on_a_named_file_is_sent_as_the_workspace_kind_with_no_name`
 
 ## Known costs
 

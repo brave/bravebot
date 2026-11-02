@@ -3275,9 +3275,7 @@ fn work(work: Work) {
     state.turns = turn;
     let ended = match &outcome {
         Ok(_) => bravebot_session::sessions::StoredOutcome::Completed,
-        Err(error) => {
-            bravebot_session::sessions::StoredOutcome::ended(turn, error.ending(), error.cut_off())
-        }
+        Err(error) => bravebot_session::sessions::StoredOutcome::ended_by(turn, error),
     };
     record_turn(
         &mut state,
@@ -3576,7 +3574,7 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         // this one, and a stop is what it would be: the ending says `Stopped`.
         TurnError::Cancelled { .. } | TurnError::LimitReached(_) => "cancelled",
         TurnError::Precommit(_) => "precommit",
-        TurnError::Workspace(_) => "workspace",
+        TurnError::Workspace(_) | TurnError::Named { .. } => "workspace",
         TurnError::Chat(_) => "chat",
         // Only a manifest run fails this way, and `crate::manifest` reports the cause inside
         // it, so a turn never sends this kind.

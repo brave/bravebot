@@ -28,6 +28,32 @@ pub(super) fn io_detail(error: &std::io::Error, named: &str, root: &Path) -> Str
     error.to_string()
 }
 
+/// The error of a read of `resolved`, which the caller reached by the name `named`.
+///
+/// A file that is not there, and a path that is there and is not a regular file, are
+/// [`WorkspaceError::Io`]. A regular file the operating system would not let this process read,
+/// and any other failure of the read, is [`WorkspaceError::Unreadable`]. Decided from the kind of
+/// failure and from `stat` of the path, never from a byte of what the file holds.
+pub(super) fn read_failure(
+    error: &std::io::Error,
+    resolved: &Path,
+    named: &str,
+    root: &Path,
+) -> WorkspaceError {
+    let detail = io_detail(error, named, root);
+    let path = named.to_string();
+    let not_a_file = error.kind() == std::io::ErrorKind::NotFound
+        || match std::fs::metadata(resolved) {
+            Ok(meta) => !meta.is_file(),
+            Err(second) => second.kind() == std::io::ErrorKind::NotFound,
+        };
+    if not_a_file {
+        WorkspaceError::Io { path, detail }
+    } else {
+        WorkspaceError::Unreadable { path, detail }
+    }
+}
+
 #[derive(Debug)]
 pub enum WorkspaceError {
     /// The policy refused the operation.
@@ -38,6 +64,9 @@ pub enum WorkspaceError {
     Invalid { path: String, reason: &'static str },
     /// The operation failed on disk.
     Io { path: String, detail: String },
+    /// A file that is there and is a regular file could not be read: permission was refused or the
+    /// disk reported an error. [`WorkspaceError::Io`] is the path that is absent or is not a file.
+    Unreadable { path: String, detail: String },
     /// The file changed after it was read, so the approved change no longer applies.
     Stale { path: String },
     /// Another effect already holds the path, so this write was refused rather than interleaved.
@@ -195,7 +224,9 @@ impl WorkspaceError {
                  file on the window to have it read with their next message"
             ),
             Self::Invalid { reason, .. } => format!("'{named}' is not usable: {reason}"),
-            Self::Io { detail, .. } => format!("'{named}': {detail}"),
+            Self::Io { detail, .. } | Self::Unreadable { detail, .. } => {
+                format!("'{named}': {detail}")
+            }
             Self::Stale { .. } => {
                 format!("'{named}' changed after it was read; read it again before editing")
             }
@@ -260,6 +291,7 @@ impl WorkspaceError {
             Self::Escapes { path, .. }
             | Self::Invalid { path, .. }
             | Self::Io { path, .. }
+            | Self::Unreadable { path, .. }
             | Self::Stale { path }
             | Self::Contended { path }
             | Self::Binary { path }

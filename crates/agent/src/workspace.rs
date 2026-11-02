@@ -54,7 +54,7 @@ mod touched;
 mod tree_mark;
 mod volume;
 
-use error::{ENDS_CHECKOUTS, io_detail};
+use error::{ENDS_CHECKOUTS, io_detail, read_failure};
 pub use error::{Remedy, WorkspaceError};
 #[cfg(unix)]
 use other_names::{LinkNames, directory_identity};
@@ -746,10 +746,8 @@ impl Workspace {
         };
         let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
 
-        let raw = std::fs::read(&resolved).map_err(|e| WorkspaceError::Io {
-            path: relative.clone(),
-            detail: io_detail(&e, &relative, &self.root),
-        })?;
+        let raw = std::fs::read(&resolved)
+            .map_err(|e| read_failure(&e, &resolved, &relative, &self.root))?;
 
         Ok(Labelled::new(exact_text(raw, &relative)?, label))
     }
@@ -1109,10 +1107,7 @@ impl Workspace {
         let resolved = self
             .resolve_for_reading(relative, skills)
             .map_err(WorkspaceError::for_a_read)?;
-        let io = |e: std::io::Error| WorkspaceError::Io {
-            path: relative.to_string(),
-            detail: io_detail(&e, relative, &self.root),
-        };
+        let io = |e: std::io::Error| read_failure(&e, &resolved, relative, &self.root);
 
         // Before the bytes rather than after them. A file written while it is being read hands back
         // the new content, and a token taken afterwards describes that same new state: the next look
@@ -1196,10 +1191,7 @@ impl Workspace {
     /// or hands on a slot's text refuses it (READ-3).
     pub fn survey(&self, relative: &str) -> Result<usize, WorkspaceError> {
         let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
-        let io = |e: std::io::Error| WorkspaceError::Io {
-            path: relative.to_string(),
-            detail: io_detail(&e, relative, &self.root),
-        };
+        let io = |e: std::io::Error| read_failure(&e, &resolved, relative, &self.root);
 
         let size = std::fs::metadata(&resolved).map_err(io)?.len();
 

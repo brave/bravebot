@@ -425,7 +425,15 @@ fn speaker_laid(
         // clipped: a reason is the one line in the transcript somebody reads to the end.
         Speaker::Failure | Speaker::Stopped => {
             for text in entry.text.lines() {
-                for row in wrap::wrap(text, (width as usize).saturating_sub(LEAD).max(8), 0).rows {
+                // Made printable because a failure line can quote a name the person typed or
+                // pasted (NAME-13), and a control character in it must not move the cursor.
+                for row in wrap::wrap(
+                    &printable(text),
+                    (width as usize).saturating_sub(LEAD).max(8),
+                    0,
+                )
+                .rows
+                {
                     lines.push(Line::from(Span::styled(
                         format!("{:LEAD$}{row}", ""),
                         Style::default().fg(theme::fail()),
@@ -2320,6 +2328,24 @@ mod tests {
             rows,
             ["  @a\u{241b}[2Jb.txt is not a file in this project.\u{2407}"]
         );
+    }
+
+    /// NAME-13: a failure line can quote a name the person typed or pasted, so an escape in it is
+    /// drawn as its picture and the line holds no control character. The fault this rejects is
+    /// wrapping the recorded text as it is, which leaves the escape in the row.
+    #[test]
+    fn a_failure_line_quoting_a_name_with_an_escape_is_drawn_with_the_escape_made_visible() {
+        let _held = crate::theme::exclusive();
+        let session = Session::new("kernel-enforced");
+        let rows: Vec<String> = speaker_lines(
+            &session,
+            &Entry::failure("'a\u{1b}[2Jb.txt' is not text\u{7}"),
+            90,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert_eq!(rows, ["  'a\u{241b}[2Jb.txt' is not text\u{2407}"]);
     }
 
     /// Who an entry is from decides how it reads: the person's words behind the marker they were

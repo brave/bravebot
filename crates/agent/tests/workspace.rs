@@ -3368,6 +3368,55 @@ fn a_deferred_read_of_a_file_in_another_encoding_is_reported_as_text() {
     }
 }
 
+/// A regular file the process may not read is neither absent nor a directory: the survey, the
+/// sentence a person is shown and the error of a turn's read all say it could not be read, and a
+/// name with nothing at it, or a directory, still says it is not a file. The fault this rejects is
+/// every failure of the read being worded "is not a file in this project".
+#[cfg(unix)]
+#[test]
+fn a_named_file_the_process_may_not_read_is_unreadable_and_not_a_missing_file() {
+    use bravebot_agent::named::{Unsendable, refusal, survey};
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("survey-unreadable");
+    let shut = scratch.path.join("shut.txt");
+    std::fs::write(&shut, "private").unwrap();
+    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&shut).is_ok() {
+        // A process that ignores the mode (root) cannot make a file unreadable.
+        return;
+    }
+    std::fs::create_dir(scratch.path.join("folder")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let error = workspace.survey("shut.txt").expect_err("mode 000");
+    assert!(
+        matches!(&error, WorkspaceError::Unreadable { path, .. } if path == "shut.txt"),
+        "{error:?}"
+    );
+    assert_eq!(Unsendable::of(&error), Some(Unsendable::Unreadable));
+    assert_eq!(survey(&workspace, "shut.txt"), Err(Unsendable::Unreadable));
+    let said = refusal("shut.txt", Unsendable::Unreadable);
+    assert!(
+        said.contains("@shut.txt") && said.contains("could not be read"),
+        "{said}"
+    );
+    assert!(!said.contains("not a file"), "{said}");
+
+    let turn = bravebot_agent::TurnError::of_a_named_read("shut.txt", error);
+    assert_eq!(
+        turn.named_file(),
+        Some(("shut.txt", Unsendable::Unreadable))
+    );
+
+    for name in ["absent.txt", "folder"] {
+        assert_eq!(
+            survey(&workspace, name),
+            Err(Unsendable::NotAFile),
+            "{name}"
+        );
+    }
+}
+
 /// What a slot holds comes from the decoding, and the slot's own page keeps the file's bytes out of
 /// the text: no note about the decoding is part of the document.
 #[test]

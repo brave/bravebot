@@ -63092,6 +63092,104 @@ fn a_turn_that_failed_before_adding_anything_leaves_no_note_and_one_that_added_i
     );
 }
 
+/// NAME-13, TURN-13: a turn that ends on the read of a file the person named has the name in the
+/// error, for the person's line, and the planner is told the category and nothing of the name. The
+/// first file is read, so the conversation holds something and the note is added; the second is
+/// missing. The fault this rejects is the name travelling into the note or into the saved
+/// conversation, for instance by making the note from the error's text.
+#[test]
+fn the_note_and_the_conversation_of_a_turn_that_failed_on_a_named_file_hold_no_name() {
+    let scratch = Scratch::new("failed-named-note");
+    std::fs::write(scratch.path.join("fine.txt"), "the file body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_script(vec![Served::Reply(reply_with("never read"))]);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let error = take_a_turn_reporting(
+        &config_for(&endpoint),
+        &workspace,
+        &mut conversation,
+        Task::new("look at these")
+            .with_file("fine.txt")
+            .with_file("absent-sentinel.txt"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("the second file cannot be read");
+
+    let (name, _) = error.named_file().expect("the error names the file");
+    assert_eq!(name, "absent-sentinel.txt");
+    assert_eq!(received.try_iter().count(), 0, "a request was sent");
+    let note = conversation.messages().last().expect("a message");
+    assert_eq!(
+        note.composed,
+        Some(bravebot_agent::conversation::Composed::Notice),
+        "the last message is not the driver's notice: {note:?}"
+    );
+    assert!(
+        note.message
+            .content
+            .text()
+            .ends_with("Failure category: workspace."),
+        "{:?}",
+        note.message.content.text()
+    );
+    let written = serde_json::to_string(&conversation.snapshot()).expect("it serialises");
+    assert!(
+        written.contains(FAILED_TURN_NOTE),
+        "the turn left no note, so this checks nothing"
+    );
+    assert!(
+        !written.contains("absent-sentinel"),
+        "the name reached the conversation: {written}"
+    );
+}
+
+/// NAME-13: only the read of a file the person named with `@` is told apart. A dropped text file
+/// and an attachment have no `@name`, so their failed reads keep the category's sentence and carry
+/// no name. The fault this rejects is every workspace error being given a name, which would put a
+/// path the person never typed into the failure line.
+#[test]
+fn a_failed_read_of_a_dropped_file_or_an_attachment_carries_no_name() {
+    for (kind, task) in [
+        (
+            "dropped",
+            Task::new("read").with_dropped_text("gone-dropped.txt"),
+        ),
+        (
+            "attachment",
+            Task::new("read").with_attachment("gone-attachment.png", "image/png"),
+        ),
+        ("named", Task::new("read").with_file("gone-named.txt")),
+    ] {
+        let scratch = Scratch::new(&format!("unnamed-read-{kind}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut conversation = bravebot_agent::Conversation::new();
+        let error = take_a_turn_reporting(
+            &config_for("http://127.0.0.1:1"),
+            &workspace,
+            &mut conversation,
+            task,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect_err("the file is missing");
+        assert_eq!(
+            why_it_failed(&error).category,
+            bravebot_agent::Category::Workspace,
+            "{kind}"
+        );
+        assert_eq!(error.named_file().is_some(), kind == "named", "{kind}");
+        // What a one-shot run prints is the error's text, which names the file and the reason
+        // whether or not the turn knows the name as a named file (R10).
+        assert!(
+            error.to_string().contains(&format!("gone-{kind}")),
+            "{kind}: {error}"
+        );
+    }
+}
+
 /// BACKEND-53: the client makes its attempts at the model it was asked for, and the request after
 /// them names the fallback the person's settings gave. A 503 is attempted three times and a 529,
 /// which the client does not send again, once.

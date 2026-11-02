@@ -706,6 +706,15 @@ pub enum StoredOutcome {
 }
 
 impl StoredOutcome {
+    /// How turn `turn` ended in `error`, in the words the interface uses for it. A turn that ended
+    /// on the read of a file the person named says which file and why (NAME-13), as the screen does.
+    pub fn ended_by(turn: usize, error: &bravebot_agent::TurnError) -> Self {
+        match (error.ending(), named_failure(error)) {
+            (bravebot_agent::Ending::Failed(_), Some(reason)) => Self::Failed { reason },
+            (ending, _) => Self::ended(turn, ending, error.cut_off()),
+        }
+    }
+
     /// How turn `turn` ended, in the words the interface uses for it.
     pub fn ended(
         turn: usize,
@@ -722,6 +731,24 @@ impl StoredOutcome {
             },
         }
     }
+}
+
+/// The failure line a turn that ended in `error` shows: the file and the reason where the read of
+/// a file the person named ended it (NAME-13), and the sentence for the category otherwise.
+pub fn failure_line(
+    error: &bravebot_agent::TurnError,
+    diagnosis: bravebot_agent::Diagnosis,
+) -> String {
+    named_failure(error).unwrap_or_else(|| failure_reason(diagnosis, error.cut_off()))
+}
+
+/// The failure line for a turn that ended on the read of a file the person named with `@`: the
+/// name as they typed it and why it could not be read (NAME-13). `None` for every other ending,
+/// which is worded by [`failure_reason`] from the category alone.
+pub fn named_failure(error: &bravebot_agent::TurnError) -> Option<String> {
+    error
+        .named_file()
+        .map(|(name, why)| bravebot_agent::named::refusal(name, why))
 }
 
 /// Compose a localized failure reason from safe fields, without raw backend error text.

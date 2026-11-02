@@ -16,17 +16,45 @@ pub enum Unsendable {
     PathNotText,
     /// The file is there and is not text.
     Binary,
+    /// The file is text in an encoding other than UTF-8. The survey tolerates it and the read a
+    /// turn makes refuses it, so only a turn that has started reports this.
+    NotUtf8,
     /// Not a file the turn can read: absent, a directory, or outside the workspace.
     NotAFile,
+    /// A file that is there and is a regular file, and that this process could not read:
+    /// permission was refused or the disk reported an error.
+    Unreadable,
+}
+
+impl Unsendable {
+    /// The reason a read or survey failed with `error`, where it is one of the closed reasons a
+    /// person can act on. Any other failure of a read has none, and is not given a sentence about
+    /// a named file.
+    ///
+    /// Decided from the kind of failure the read reported and never from what the file holds.
+    pub fn of(error: &WorkspaceError) -> Option<Self> {
+        match error {
+            WorkspaceError::Binary { .. } => Some(Self::Binary),
+            WorkspaceError::NotUtf8 { .. } => Some(Self::NotUtf8),
+            WorkspaceError::Escapes { .. }
+            | WorkspaceError::Invalid { .. }
+            | WorkspaceError::Io { .. } => Some(Self::NotAFile),
+            WorkspaceError::Unreadable { .. } => Some(Self::Unreadable),
+            _ => None,
+        }
+    }
 }
 
 /// The line a person reads for a name that cannot be sent, naming it and saying how to send it as
-/// text. The same words in the terminal and in the desktop window.
+/// text. The same words in the terminal and in the desktop window, and in the failure line of a
+/// turn that ended on the read of a named file (NAME-13).
 pub fn refusal(name: &str, why: Unsendable) -> String {
     match why {
+        Unsendable::NotUtf8 => t!(named_not_utf8, name = name).to_string(),
         Unsendable::PathNotText => t!(named_path_not_text, name = name).to_string(),
         Unsendable::Binary => t!(named_not_text, name = name).to_string(),
         Unsendable::NotAFile => t!(named_not_a_file, name = name).to_string(),
+        Unsendable::Unreadable => t!(named_unreadable, name = name).to_string(),
     }
 }
 
@@ -62,7 +90,6 @@ pub fn surveyed<E>(
 pub fn survey(workspace: &Workspace, name: &str) -> Result<(), Unsendable> {
     match workspace.survey(name) {
         Ok(_) => Ok(()),
-        Err(WorkspaceError::Binary { .. }) => Err(Unsendable::Binary),
-        Err(_) => Err(Unsendable::NotAFile),
+        Err(error) => Err(Unsendable::of(&error).unwrap_or(Unsendable::Unreadable)),
     }
 }

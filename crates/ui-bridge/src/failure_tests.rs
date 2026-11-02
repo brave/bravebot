@@ -240,6 +240,35 @@ fn a_failure_with_no_account_in_it_is_sent_with_no_account_name() {
     assert_eq!(workspace["accountCommand"], Value::Null, "{workspace}");
 }
 
+/// NAME-13: a turn that ended on the read of a named file is sent to the window as the workspace
+/// failure it always was, with the category's name and no file name. The window refuses a send that
+/// names an unreadable file before the turn starts (NAME-12), so it has no use for the name here.
+///
+/// The fault this rejects is the name or the reason's sentence being added to the fields sent, or
+/// the kind changing for the named case.
+#[test]
+fn a_failure_on_a_named_file_is_sent_as_the_workspace_kind_with_no_name() {
+    let named = TurnError::of_a_named_read(
+        "typed-sentinel.txt",
+        bravebot_agent::WorkspaceError::NotUtf8 {
+            path: "typed-sentinel.txt".to_string(),
+        },
+    );
+    assert!(named.named_file().is_some(), "{named}");
+    let unnamed = TurnError::Workspace(bravebot_agent::WorkspaceError::NotUtf8 {
+        path: "typed-sentinel.txt".to_string(),
+    });
+    let sent = failure_fields(&named, &configured(), "stub-model");
+    assert_eq!(sent["kind"], "workspace", "{sent}");
+    assert_eq!(sent["category"], "workspace", "{sent}");
+    assert!(!sent.to_string().contains("sentinel"), "{sent}");
+    assert_eq!(
+        sent,
+        failure_fields(&unnamed, &configured(), "stub-model"),
+        "the fields differ from those of a plain workspace failure"
+    );
+}
+
 /// CHATGPT-8: what is sent about a failure is the fixed names and the counts, and nothing a
 /// reply, a request or a settings file held. The keys are `kind`, `message`, `category`, `attempts` and
 /// `status`, and the name, the sentence and the command of the account's failure.

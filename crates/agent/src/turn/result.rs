@@ -67,6 +67,18 @@ pub enum TurnError {
     Precommit(String),
     /// A file operation failed or was refused.
     Workspace(WorkspaceError),
+    /// The read of a file the person named with `@` failed for a reason they can act on (NAME-13).
+    ///
+    /// `name` is the word the turn was handed for the file. It is the person's own and is read only
+    /// by the line the person is shown and the record of the turn, never by the planner: the
+    /// note it receives about a failed turn is made from [`TurnError::ending`], which is the
+    /// workspace category here as it is for [`TurnError::Workspace`]. `cause` is what the read
+    /// reported and is what is displayed, so a one-shot run says what it always said.
+    Named {
+        name: String,
+        why: crate::named::Unsendable,
+        cause: WorkspaceError,
+    },
     /// The model call failed or was refused.
     Chat(crate::backend::BackendError),
     /// A manifest run stopped before it had a frozen plan, or a step failed.
@@ -89,7 +101,7 @@ impl fmt::Display for TurnError {
             Self::Cancelled { .. } => write!(f, "cancelled"),
             Self::LimitReached(reached) => write!(f, "{reached}"),
             Self::Precommit(detail) => write!(f, "{detail}"),
-            Self::Workspace(e) => write!(f, "{e}"),
+            Self::Workspace(e) | Self::Named { cause: e, .. } => write!(f, "{e}"),
             Self::Chat(e) => write!(f, "{e}"),
             Self::Manifest { cause, .. } => write!(f, "{cause}"),
         }
@@ -110,12 +122,41 @@ impl TurnError {
             // handed to egress after it was reached.
             Self::LimitReached(_) => Ending::Stopped { attempts: Some(0) },
             Self::Chat(error) => Ending::Failed(error.diagnosis()),
-            Self::Workspace(_) => Ending::Failed(Diagnosis::of(Category::Workspace)),
+            Self::Workspace(_) | Self::Named { .. } => {
+                Ending::Failed(Diagnosis::of(Category::Workspace))
+            }
             // A precommit that would not hold and a plan that would not run are both this program
             // failing to get a turn off the ground, whatever the wording of either.
             Self::Precommit(_) | Self::Manifest { .. } => {
                 Ending::Failed(Diagnosis::of(Category::Internal))
             }
+        }
+    }
+
+    /// The file the person named with `@` that ended the turn, and why it could not be read, where
+    /// that is what ended it.
+    ///
+    /// Beside [`Self::ending`] rather than in it, since a diagnosis is `Copy` and this carries the
+    /// name. Only a front end that shows the person the failure reads it.
+    pub fn named_file(&self) -> Option<(&str, crate::named::Unsendable)> {
+        match self {
+            Self::Named { name, why, .. } => Some((name, *why)),
+            Self::Manifest { cause, .. } => cause.named_file(),
+            _ => None,
+        }
+    }
+
+    /// The error of a read of the file named `name` with `@`: [`TurnError::Named`] where the read
+    /// failed for one of the reasons [`crate::named::Unsendable`] has, and the plain workspace
+    /// error for any other.
+    pub fn of_a_named_read(name: &str, cause: WorkspaceError) -> Self {
+        match crate::named::Unsendable::of(&cause) {
+            Some(why) => Self::Named {
+                name: name.to_string(),
+                why,
+                cause,
+            },
+            None => Self::Workspace(cause),
         }
     }
 

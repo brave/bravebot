@@ -231,7 +231,9 @@ pub(crate) fn walk(walk: Walk) {
             // The driver's own sentence about why, where the driver wrote it. A failure of the
             // model service is reported by its category, since its text is the service's.
             let problem = match cause {
-                TurnError::Precommit(_) | TurnError::Workspace(_) => Some(cause.to_string()),
+                TurnError::Precommit(_) | TurnError::Workspace(_) | TurnError::Named { .. } => {
+                    Some(cause.to_string())
+                }
                 _ => None,
             };
             merge(

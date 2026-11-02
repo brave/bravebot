@@ -2896,7 +2896,9 @@ where
         if workspace.survey(&path).is_ok() {
             crate::memory::vouch_for_named(policy, workspace, &path);
         }
-        let contents = workspace.read(policy, &Labelled::trusted(path.clone()))?;
+        let contents = workspace
+            .read(policy, &Labelled::trusted(path.clone()))
+            .map_err(|cause| TurnError::of_a_named_read(&path, cause))?;
         admit_context_file(policy, conversation, &path, &contents)?;
     }
 
