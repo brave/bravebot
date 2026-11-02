@@ -17820,6 +17820,27 @@ mod tests {
         );
     }
 
+    /// A planner that writes `ulimit -n 10240 && cargo test` is refused when the line is compiled,
+    /// and on a host with `/usr/bin/ulimit` the line used to run with a stage that changed
+    /// nothing. The description is the only place the planner can learn before writing the line
+    /// that the whole line goes inside `sh -c`. A description that names `ulimit` without the
+    /// `sh -c` spelling, or names `cd` alone, fails this test.
+    #[test]
+    fn the_run_description_says_a_limit_or_mask_step_is_refused_and_goes_inside_sh_c() {
+        let described = run_description();
+        for part in [
+            "`ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash` or `wait` step is refused",
+            "changes nothing for the steps after it",
+            "`sh -c '... ulimit ...'`",
+            "approved as one line",
+        ] {
+            assert!(
+                described.contains(part),
+                "the description lacks `{part}`: {described}"
+            );
+        }
+    }
+
     /// A session with a browser already running and its debugging port open asked the person
     /// whether it could quit and relaunch the browser, because every way of looking it tried for
     /// the process was refused and it never tried the port. The description tells the planner to

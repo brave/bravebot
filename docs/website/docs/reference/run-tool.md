@@ -76,6 +76,15 @@ started on its own, so one of them would change nothing for the steps after it. 
 is refused wherever it stands, before anything is asked or run, and the refusal says to name the
 `directory` argument of the call to run elsewhere.
 
+**A `ulimit` step is refused too.** `ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash` and `wait`
+are shell builtins whose effect stays in the shell that runs them. A host may have a program of the
+name (macOS has `/usr/bin/ulimit`) that runs the builtin in a shell of its own and exits zero, so a
+step of that name would run and change nothing for the steps after it. A line that has one is
+refused in any form, `ulimit -a` and a bare `umask` included, wherever it stands, before anything is
+asked or run. To run a program under a limit or a mask, write the whole line as
+`sh -c '... ulimit ...'`, such as `sh -c 'ulimit -n 10240 && cargo test'`. That is one line and is
+approved as one line. A limit or a mask is read the same way, inside `sh -c`.
+
 A directory that is not the workspace root **is asked about**, and what the line prints is quarantined,
 unless something you answered names that exact tree. A directory that does not exist is an error and
 moves nothing, and a refused directory does not become the one the next line runs in. This holds for a
@@ -117,6 +126,7 @@ runs nothing**. There is no falling back to a shell and no running the prefix th
 | `<<`, `<<<` | a here-document is content, not syntax |
 | `eval`, `source`, `.`, `exec`, `trap` | they put an interpreter back in the plan |
 | `cd`, `pushd`, `popd`, `export` | they change a shell's state, which no step has; name the `directory` of the call, or put `NAME=value` in front of the program |
+| `ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash`, `wait` | they act on the shell that runs them and change nothing for later steps; write the whole line as `sh -c '... ulimit ...'` |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text you typed reaching a line the planner wrote |
 | `(` or `)` written onto the end of an argument | grouping is syntax, so an argument that holds a parenthesis has to be quoted |

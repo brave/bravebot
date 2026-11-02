@@ -63175,6 +63175,85 @@ fn a_cd_stage_is_refused_before_asking_and_the_directory_argument_still_works() 
     );
 }
 
+/// CMDLINE-12: A `ulimit` stage is refused before any prompt, whether or not the host has a
+/// `ulimit` program, and nothing runs, so no `/usr/bin/ulimit` stage reaches a plan. The refusal
+/// the model reads names `ulimit` and `sh -c`, and the same limit written inside `sh -c` is then put
+/// to the person as one line.
+#[test]
+fn a_ulimit_stage_is_refused_before_asking_and_the_sh_c_form_is_put_to_the_person_as_one_line() {
+    let scratch = Scratch::new("cmdline-12-ulimit-stage");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"ulimit -n 100 && sh -c 'ulimit -n'"}"#),
+        tool_request("run", r#"{"command":"sh -c 'ulimit -n 100 && ulimit -n'"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run a line that starts with ulimit"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("`ulimit` is a shell builtin")
+            && second.contains("change nothing for the steps after it")
+            && second.contains("`sh -c '... ulimit ...'`"),
+        "the refusal did not name ulimit and sh -c: {second}"
+    );
+    // The request also carries the run tool description, which names the `directory` argument in
+    // its `cd` sentence, so the advice is looked for in the refusal sentence alone.
+    let start = second
+        .find("`ulimit` is a shell builtin")
+        .expect("the refusal sentence");
+    let sentence = &second[start..];
+    let sentence = &sentence[..sentence.find("ulimit -a'`").expect("end of the sentence")];
+    assert!(
+        !sentence.contains("`directory` argument")
+            && !sentence.contains("NAME=value")
+            && !second.contains("$PATH"),
+        "the refusal gave the cd advice or blamed the search path: {sentence}"
+    );
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        1,
+        "only the sh -c form was put to the person: {:?}",
+        asked
+            .iter()
+            .map(|ask| ask.plan.line.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        asked[0].plan.line, "sh -c 'ulimit -n 100 && ulimit -n'",
+        "the sh -c form is approved as one line"
+    );
+    assert_eq!(
+        asked[0].plan.steps().len(),
+        1,
+        "the sh -c form is one step, with no ulimit program of its own"
+    );
+}
+
 /// CMDLINE-12: A carried directory that has been removed is refused before any prompt, and the
 /// next call runs at the workspace root.
 #[test]

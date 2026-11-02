@@ -1276,6 +1276,10 @@ fn table(
              why first. \
              A `cd` step is refused because it moves nothing for the steps after it: the \
              `directory` argument is how a line runs elsewhere. \
+             A `ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash` or `wait` step is refused \
+             too, because it changes nothing for the steps after it: to run a program under a \
+             limit or a mask, write the whole line as `sh -c '... ulimit ...'`, which is \
+             approved as one line. \
              \
              Narrowing the result inside the line is the cheapest thing you can do, and usually \
              the difference between a few lines and a few thousand tokens: pipe to `head -n`, \
