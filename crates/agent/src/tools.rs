@@ -15739,12 +15739,55 @@ mod tests {
         };
         assert_eq!(
             line("migrator"),
-            "- migrator: Does it. Its delegates work in a checkout of the last commit, which \
-             holds no change not yet committed unless the call sets isolation to \
-             \"checkout_with_changes\"."
+            "- migrator: Does it. (limit: 120 rounds; a round is one reply with its tool calls) \
+             Its delegates work in a checkout of the last commit, which holds no change not yet \
+             committed unless the call sets isolation to \"checkout_with_changes\"."
         );
-        assert_eq!(line("reviewer"), "- reviewer: Does it.");
-        assert_eq!(line("tester"), "- tester: Does it.");
+        assert_eq!(
+            line("reviewer"),
+            "- reviewer: Does it. (limit: 60 rounds; a round is one reply with its tool calls)"
+        );
+        assert_eq!(
+            line("tester"),
+            "- tester: Does it. (limit: 80 rounds; a round is one reply with its tool calls)"
+        );
+    }
+
+    /// DELEGATE-6: the planner sizes a task to the rounds its kind allows, so each kind's line in
+    /// `kind` names that kind's own figure from `Kind::rounds`, and what a round is.
+    ///
+    /// Rejects: a line with no figure, one kind's figure on another's line, and a hard-coded figure
+    /// that drifts from the kind.
+    #[test]
+    fn each_kind_the_planner_may_pick_names_the_rounds_it_allows() {
+        let tools = for_planner(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            &bravebot_core::delegate::Definitions::default(),
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let spawn = tools
+            .iter()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .expect("a planner is offered a way to delegate");
+        let described = spawn.function.parameters["properties"]["kind"]["description"]
+            .as_str()
+            .expect("a description");
+        for name in bravebot_core::delegate::Kind::NAMES {
+            let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
+            let line = described
+                .lines()
+                .find(|line| line.starts_with(&format!("- {name}: ")))
+                .unwrap_or_else(|| panic!("no line for {name}: {described}"));
+            assert!(
+                line.contains(&format!(
+                    "(limit: {} rounds; a round is one reply with its tool calls)",
+                    kind.rounds()
+                )),
+                "{name}: {line}"
+            );
+        }
     }
 
     /// CHECKOUT-1, CHECKOUT-23: the planner is offered two values for `isolation`, and told that the

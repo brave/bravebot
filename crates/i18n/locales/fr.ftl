@@ -1533,6 +1533,11 @@ delegate-stopped-narration = vous avez arrete ce delegue, il doit donc conclure 
 
 delegate-budget-narration = ce delegue a depense son budget de { $budget } jetons, il doit donc conclure avec ce qu'il a
 
+delegate-rounds-narration = { $rounds ->
+    [one] cela fait { $rounds } tour d'appels d'outils sans reponse, ce tour doit donc conclure avec ce qu'il a
+   *[other] cela fait { $rounds } tours d'appels d'outils sans reponse, ce tour doit donc conclure avec ce qu'il a
+    }
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = proposer ces outils au modèle ?

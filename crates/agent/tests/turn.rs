@@ -44094,6 +44094,424 @@ fn a_delegate_held_to_its_bound_says_so_to_the_planner_and_the_person() {
     );
 }
 
+/// DELEGATE-6: a delegate with rounds left to spend is told it is near its limit, once, with the
+/// count, and asked to leave the working tree consistent. Without it a delegate part way through a
+/// rebase loses its tools on the limiting round and the rebase stays paused.
+///
+/// Rejects: no warning before the limit, a warning on every round, a warning that arrives with the
+/// limiting round instead of ahead of it, and a limiting-round request that still offers tools.
+#[test]
+fn a_delegate_is_warned_once_before_its_last_rounds_and_then_loses_its_tools() {
+    let scratch = Scratch::new("delegate-warned-ahead");
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let home = Scratch::new("delegate-warned-ahead-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("four-rounds.md"),
+        "---\nname: four-rounds\ndescription: Looks four times.\nkind: reader\nrounds: 4\n---\n\nLook.\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let look = || tool_request("read_file", r#"{"path":"notes.txt"}"#);
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "SEND-THE-FOUR-ROUND-DELEGATE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"four-rounds","task":"LOOK-FOUR-TIMES"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "LOOK-FOUR-TIMES",
+            vec![
+                look(),
+                look(),
+                look(),
+                look(),
+                reply_with("what four looks found"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-THE-FOUR-ROUND-DELEGATE").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let asked = every_request(&received);
+    let delegate: Vec<&String> = asked
+        .iter()
+        .filter(|body| {
+            body.contains("LOOK-FOUR-TIMES") && !body.contains("SEND-THE-FOUR-ROUND-DELEGATE")
+        })
+        .collect();
+    assert_eq!(delegate.len(), 5, "four rounds of calls and the answer");
+
+    let warning = "You have 3 rounds left of your 4.";
+    let warned_in: Vec<usize> = delegate
+        .iter()
+        .enumerate()
+        .filter(|(_, body)| body.contains(warning))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        warned_in,
+        [1, 2, 3, 4],
+        "the warning was not first carried by the request after the first round and kept in the \
+         conversation after it"
+    );
+    for (index, body) in delegate.iter().enumerate() {
+        assert_eq!(
+            body.matches("rounds left of your").count(),
+            usize::from(index > 0),
+            "request {index} holds the warning a wrong number of times"
+        );
+    }
+    let first = delegate[0];
+    assert!(
+        first.contains("Your rounds are bounded."),
+        "the delegate's own text does not say its rounds are bounded: {first}"
+    );
+    assert!(
+        delegate[1].contains("complete or abort a rebase")
+            && delegate[1].contains("commit or discard edits")
+            && delegate[1].contains("what is left"),
+        "the warning does not ask for a consistent tree and a report of what is left: {}",
+        delegate[1]
+    );
+
+    let last: serde_json::Value = serde_json::from_str(delegate[4]).expect("a request");
+    assert!(
+        last.get("tools")
+            .is_none_or(|tools| tools.is_null() || tools.as_array().is_some_and(Vec::is_empty)),
+        "the limiting round's request still offered tools: {last}"
+    );
+    assert!(
+        delegate[4].contains("You have used all 4 of your rounds"),
+        "the limiting notice does not count rounds: {}",
+        delegate[4]
+    );
+    for earlier in &delegate[..4] {
+        let request: serde_json::Value = serde_json::from_str(earlier).expect("a request");
+        assert!(
+            request.get("tools").is_some_and(|tools| tools.is_array()),
+            "a request before the limit carried no tools"
+        );
+    }
+}
+
+/// DELEGATE-6: a limit of one leaves no round to warn in, so the warning is never sent and the
+/// delegate is told only that it has used its round.
+///
+/// Rejects: a warning computed as `limit - 10` or `limit - 1` underflowing or firing at a limit
+/// with nothing ahead of it.
+#[test]
+fn a_delegate_with_one_round_is_not_warned_ahead() {
+    let scratch = Scratch::new("delegate-one-round-unwarned");
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let home = Scratch::new("delegate-one-round-unwarned-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("one-round.md"),
+        "---\nname: one-round\ndescription: Looks once.\nkind: reader\nrounds: 1\n---\n\nLook once.\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "SEND-THE-UNWARNED-DELEGATE",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"one-round","task":"LOOK-ONCE-UNWARNED"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "LOOK-ONCE-UNWARNED",
+            vec![
+                tool_request("read_file", r#"{"path":"notes.txt"}"#),
+                reply_with("what one look found"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("SEND-THE-UNWARNED-DELEGATE").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let asked = every_request(&received);
+    let delegate: Vec<&String> = asked
+        .iter()
+        .filter(|body| {
+            body.contains("LOOK-ONCE-UNWARNED") && !body.contains("SEND-THE-UNWARNED-DELEGATE")
+        })
+        .collect();
+    assert_eq!(delegate.len(), 2, "one round of calls and the answer");
+    assert!(
+        delegate
+            .iter()
+            .all(|body| !body.contains("rounds left of your")),
+        "a delegate with one round was warned ahead of it"
+    );
+    assert!(
+        delegate[1].contains("You have used all 1 of your rounds"),
+        "the limiting notice is missing: {}",
+        delegate[1]
+    );
+}
+
+/// Run one delegate of a `reader` definition bounded to `rounds` (and to `budget` tokens where
+/// given) through `script`, and return every request the delegate made, in order. Request `n` is
+/// the one made after `n` rounds of calls.
+fn bounded_delegate_requests<R: bravebot_agent::report::Reporter + Send>(
+    name: &str,
+    rounds: usize,
+    budget: Option<u64>,
+    script: Vec<String>,
+    reporter: &mut R,
+) -> Vec<String> {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let home = Scratch::new(&format!("{name}-home"));
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    let budget = budget.map_or_else(String::new, |tokens| format!("budget: {tokens}\n"));
+    std::fs::write(
+        home.path.join("agents").join("bounded.md"),
+        format!(
+            "---\nname: bounded\ndescription: Looks.\nkind: reader\nrounds: {rounds}\n{budget}---\n\nLook.\n"
+        ),
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "BOUNDED-TURN",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"bounded","task":"BOUNDED-TASK"}"#),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("BOUNDED-TASK", script),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("BOUNDED-TURN").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    every_request(&received)
+        .into_iter()
+        .filter(|body| body.contains("BOUNDED-TASK") && !body.contains("BOUNDED-TURN"))
+        .collect()
+}
+
+/// DELEGATE-6: the warning comes when exactly ten rounds remain, or one fewer than the limit where
+/// the limit is ten or less, and says "round" for a count of one.
+///
+/// Rejects: a distance of 5 or 20 instead of 10 (the limit of 15 is warned at 10 left, not 5 or
+/// 14), a distance that ignores a small limit, and a count of one worded as "1 rounds".
+#[test]
+fn a_delegate_is_warned_when_ten_rounds_remain_or_one_fewer_than_a_small_limit() {
+    for (limit, warning, first) in [
+        (15, "You have 10 rounds left of your 15.", 5),
+        (10, "You have 9 rounds left of your 10.", 1),
+        (2, "You have 1 round left of your 2.", 1),
+    ] {
+        let look = || tool_request("read_file", r#"{"path":"notes.txt"}"#);
+        let mut script: Vec<String> = (0..limit).map(|_| look()).collect();
+        script.push(reply_with("what the looks found"));
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+        let delegate = bounded_delegate_requests(
+            &format!("delegate-warned-at-{limit}"),
+            limit,
+            None,
+            script,
+            &mut reporter,
+        );
+
+        assert_eq!(
+            delegate.len(),
+            limit + 1,
+            "{limit} rounds of calls and the answer"
+        );
+        let warned_in: Vec<usize> = delegate
+            .iter()
+            .enumerate()
+            .filter(|(_, body)| body.contains(warning))
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            warned_in,
+            (first..=limit).collect::<Vec<_>>(),
+            "a limit of {limit} was not warned with '{warning}' first in request {first}"
+        );
+        for (index, body) in delegate.iter().enumerate() {
+            assert_eq!(
+                body.matches("left of your").count(),
+                usize::from(index >= first),
+                "request {index} of a limit of {limit} holds the warning a wrong number of times"
+            );
+        }
+    }
+}
+
+/// DELEGATE-6: a turn the person runs, bounded the same way, is not warned. The warning is for a
+/// delegate, which cannot be asked, and the limiting notice is still sent to the turn.
+///
+/// Rejects: a warning sent to every bounded run because the delegate condition was dropped.
+#[test]
+fn a_bounded_turn_that_is_not_a_delegate_is_not_warned_ahead() {
+    let scratch = Scratch::new("turn-bounded-unwarned");
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut script: Vec<String> = (0..12)
+        .map(|_| tool_request("read_file", r#"{"path":"notes.txt"}"#))
+        .collect();
+    script.push(reply_with("what the looks found"));
+    let (endpoint, received) = serve_by_marker(vec![("BOUNDED-TURN", script)]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("BOUNDED-TURN").with_rounds(Some(12)),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let asked = every_request(&received);
+    assert_eq!(asked.len(), 13, "twelve rounds of calls and the answer");
+    assert!(
+        asked.iter().all(|body| !body.contains("left of your")),
+        "a bounded turn that is not a delegate was warned ahead"
+    );
+    assert!(
+        asked[12].contains("You have used all 12 of your rounds"),
+        "the limiting notice is missing: {}",
+        asked[12]
+    );
+}
+
+/// DELEGATE-6 and DELEGATE-25: a delegate a person stopped on the round the warning would come is
+/// told it was stopped and not that it is near its limit.
+///
+/// Rejects: the warning sent in the round of a stop.
+#[test]
+fn a_delegate_stopped_by_a_person_is_not_warned_ahead_in_the_same_round() {
+    let mut reporter = StopsOneDelegate {
+        stopping: "BOUNDED-TASK",
+        notes: Vec::new(),
+    };
+    let delegate = bounded_delegate_requests(
+        "delegate-stopped-unwarned",
+        2,
+        None,
+        vec![
+            tool_request("read_file", r#"{"path":"notes.txt"}"#),
+            reply_with("what the stopped one had"),
+        ],
+        &mut reporter,
+    );
+
+    assert_eq!(delegate.len(), 2, "one round of calls and the answer");
+    assert!(
+        delegate[1].contains("The person stopped you"),
+        "the stop was not what ended the delegate's tools: {}",
+        delegate[1]
+    );
+    assert!(
+        delegate.iter().all(|body| !body.contains("left of your")),
+        "a delegate that was stopped was also warned ahead of its limit"
+    );
+}
+
+/// DELEGATE-6 and DELEGATE-29: a delegate whose token budget is spent on the round the warning
+/// would come loses its tools and is not warned of a round limit.
+///
+/// Rejects: the warning sent in the round the token budget ended.
+#[test]
+fn a_delegate_that_spent_its_token_budget_is_not_warned_ahead_in_the_same_round() {
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let delegate = bounded_delegate_requests(
+        "delegate-budget-unwarned",
+        2,
+        Some(1000),
+        vec![
+            tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, 800, 300),
+            reply_with("what the budget bought"),
+        ],
+        &mut reporter,
+    );
+
+    assert_eq!(delegate.len(), 2, "one round of calls and the answer");
+    let last: serde_json::Value = serde_json::from_str(&delegate[1]).expect("a request");
+    assert!(
+        last.get("tools")
+            .is_none_or(|tools| tools.is_null() || tools.as_array().is_some_and(Vec::is_empty)),
+        "the token budget did not take the tools away: {last}"
+    );
+    assert!(
+        delegate.iter().all(|body| !body.contains("left of your")),
+        "a delegate that spent its budget was also warned ahead of its round limit"
+    );
+}
+
 /// DELEGATE-26 where the delegate spent its bound and then did not answer at all. This is the
 /// common way the bound is reached rather than a corner of it: a delegate held to a tight bound
 /// loses its tools and is asked to answer, and where it asks for a tool instead there is no answer

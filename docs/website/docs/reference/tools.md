@@ -894,6 +894,12 @@ work it describes.
 A name that is neither a kind nor a definition is refused, and the refusal lists the names that would
 have worked.
 
+The planner is told how many rounds a delegate of each kind makes before it has to answer, so it can
+size the task: 60 for a `reader`, 80 for a `checker` and 120 for a `worker`. A round is one reply
+with its tool calls. A [definition](../customize/agents.md) is listed with its kind's figure. The
+delegate is told its rounds are bounded and is warned before the last of them, so it can leave its
+working tree consistent and report what is left.
+
 A delegate holds its kind's capabilities **narrowed by its parent's**, so delegation redistributes
 authority and never creates it, and a kind asking for more gets a delegate without it. The planner
 supplies the task and nothing else. What a delegate is told about itself is a constant its kind

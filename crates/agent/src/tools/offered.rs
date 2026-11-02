@@ -2376,10 +2376,13 @@ fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definiti
                 }
                 false => "",
             };
+            // The kind's own figure, so a task can be sized to it. Not the definition's
+            // `rounds:` and not the kind's ceiling, which the person who wrote the file owns.
             format!(
-                "\n- {}: {}{apart}",
+                "\n- {}: {} (limit: {} rounds; a round is one reply with its tool calls){apart}",
                 definition.name(),
-                definition.description()
+                definition.description(),
+                definition.kind().rounds()
             )
         })
         .collect::<String>();

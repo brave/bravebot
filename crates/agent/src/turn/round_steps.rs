@@ -786,8 +786,37 @@ pub(super) fn stop_at_token_budget<R: Reporter>(
     true
 }
 
+/// The most rounds a delegate is warned ahead of its limit, when its limit leaves room for that
+/// many.
+pub(super) const WARNED_ROUNDS_AHEAD: usize = 10;
+
+/// How many rounds before its limit a delegate is warned: [`WARNED_ROUNDS_AHEAD`], or one fewer
+/// than the limit where the limit is smaller, so a delegate always has a round of its own before
+/// the warning. Zero for a limit of one, which has no round to warn in.
+pub(super) fn rounds_warned_ahead(limit: usize) -> usize {
+    WARNED_ROUNDS_AHEAD.min(limit.saturating_sub(1))
+}
+
+/// What a delegate is told when `left` rounds remain before its limit of `limit` (DELEGATE-6).
+///
+/// Made of the two counts and fixed words, so nothing a tool returned or the delegate wrote
+/// reaches it. It asks for the working tree to be left consistent because the limiting round
+/// removes the tools, and a rebase, merge or edit still open then stays open.
+pub(super) fn rounds_left_notice(limit: usize, left: usize) -> String {
+    let rounds = if left == 1 { "round" } else { "rounds" };
+    format!(
+        "{TOOL_BUDGET_SPENT} You have {left} {rounds} left of your {limit}. A round is one \
+         reply of yours with its tool calls, however many calls it holds. After the last you \
+         have no tools and can only answer. Finish what you have started or undo it, so that \
+         the working tree is consistent when your tools go: complete or abort a rebase, merge \
+         or cherry-pick that is in progress, and commit or discard edits you have made. Then \
+         answer with what you did, what is left, and the state you left the tree in."
+    )
+}
+
 /// Take the tools away from the next request once the budget is spent or a person has stopped this
-/// delegate, and say so to the person and to the planner.
+/// delegate, and say so to the person and to the planner. Before the limit on rounds, warn a
+/// delegate once that it is near, from the two counts and nothing else (DELEGATE-6).
 pub(super) fn limit_the_tools<R: Reporter>(
     may_call_tools: &mut bool,
     task: &Task,
@@ -829,17 +858,26 @@ pub(super) fn limit_the_tools<R: Reporter>(
         .filter(|limit| steps >= *limit && *may_call_tools)
     {
         *may_call_tools = false;
-        reporter.narration(format!(
-            "that is {limit} tool calls without an answer, so this turn has to finish with \
- what it has"
-        ));
+        reporter.narration(t!(delegate_rounds_narration, rounds = limit));
         conversation.push_composed_from(
             Message::user(format!(
-                "{TOOL_BUDGET_SPENT} You have made {limit} tool calls this turn and have no more. \
- Answer now with what you know. If the work is not finished, say what you found, \
- what stopped you, and what would let you finish, such as a file named or a \
- directory trusted."
+                "{TOOL_BUDGET_SPENT} You have used all {limit} of your rounds and have no more \
+                 tool calls. Answer now with what you know. If the work is not finished, say \
+                 what you found, what stopped you, and what would let you finish, such as a \
+                 file named or a directory trusted."
             )),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+    } else if task.delegate.is_some()
+        && *may_call_tools
+        && let Some(limit) = task.rounds
+        && let ahead = rounds_warned_ahead(limit)
+        && ahead > 0
+        && limit.saturating_sub(steps) == ahead
+    {
+        conversation.push_composed_from(
+            Message::user(rounds_left_notice(limit, ahead)),
             Composed::Notice,
             Provenance::Driver,
         );
