@@ -7213,35 +7213,104 @@ fn page_of(text: &str, slot: &SlotId, offset: usize, cap: usize) -> String {
     )
 }
 
+/// What [`read_in_the_result`] produced: the released text where there is one, and what the check
+/// it made cost, so the turn reports a check made here as it reports one `read_output` makes.
+pub(crate) struct ReadInTheResult {
+    /// The slot's bytes at the label `read_output` gives them, or `None` where the slot stays
+    /// quarantined.
+    pub text: Option<Labelled<String>>,
+    /// What the check spent. Zero where none was made.
+    pub usage: Usage,
+    /// How long the turn waited on the check. `None` where none was made.
+    pub waited: Option<crate::timing::Interval>,
+}
+
 /// What a run that asked to read what it printed is handed in the same result, where the answer
-/// `read_output` would get is already given: bypassing permissions with no screening asked for.
+/// `read_output` would get does not need a person: bypassing permissions with no screening asked
+/// for, or a check whose word is `safe` where screening was asked for.
 ///
-/// The release is `read_output`'s own, down to the confirmer the mode answers and the trail entry
-/// crediting the mode, so the label and the record cannot differ between the two routes and only
-/// the round between them is gone. Only for that mode: in any other this would put a prompt or a
-/// check to somebody about output nobody called `read_output` for. `None` where the release was
-/// refused, which leaves the slot quarantined, as it would have been had the planner not asked.
-pub(crate) fn read_in_the_result<S: Sink, C: Confirmer>(
+/// The release is `read_output`'s own, down to the check that precedes it, the confirmer the mode
+/// answers and the trail entry crediting whoever released, so the label and the record cannot
+/// differ between the two routes and only the round between them is gone. The planner's flag
+/// decides whether this is called, and it was set before the output existed.
+///
+/// Where screening was asked for, any word other than `safe` leaves the slot quarantined and
+/// draws no prompt: the planner has not seen the size or the shape of what was printed, and the
+/// person is asked when it calls `read_output`, as it would have been without the flag. The same
+/// holds where the check could not be made. `text` is `None` for each of those, and for a release
+/// the kernel or the confirmer refused, which leaves the slot as it would have been had the
+/// planner not asked.
+///
+/// The only branch on the check is on its word, the one `release_output` already makes. Nothing
+/// here reads a byte of the output or the reason the check wrote.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy, confirmer, chat and reporter are `&mut` borrows of the turn while the rest is read-only state of one read, so bundling them would split one borrow across two values"
+)]
+pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     slots: &SlotStore,
     mode: crate::PermissionMode,
     auto_vetting: bool,
     confirmer: &mut C,
+    chat: &mut Chat<'_>,
+    reporter: &mut R,
     slot: &SlotId,
-) -> Option<Labelled<String>> {
-    release_output(
-        policy,
-        slots,
-        mode,
-        auto_vetting,
-        confirmer,
-        slot,
-        Verdict::Inconclusive("the check was not made"),
-        (None, None),
-        0,
-    )
-    .ok()
-    .map(|(text, _, _)| text)
+) -> ReadInTheResult {
+    let nothing = |text| ReadInTheResult {
+        text,
+        usage: Usage::default(),
+        waited: None,
+    };
+    if !mode.checks_before_promoting(auto_vetting) {
+        return nothing(
+            release_output(
+                policy,
+                slots,
+                mode,
+                auto_vetting,
+                confirmer,
+                slot,
+                Verdict::Inconclusive("the check was not made"),
+                (None, None),
+                0,
+            )
+            .ok()
+            .map(|(text, _, _)| text),
+        );
+    }
+
+    let Ok(spec) = policy.before_vetting(slot, None, slots) else {
+        return nothing(None);
+    };
+    let asked_at = std::time::Instant::now();
+    let checked = crate::vet::run(policy, chat, reporter, &spec);
+    let waited = Some(crate::timing::Interval::since(asked_at));
+    let usage = checked.usage;
+    // Before `release_output`, which would put anything but `safe` to the person: nobody is
+    // shown this output here.
+    let text = if checked.verdict.is_safe() {
+        release_output(
+            policy,
+            slots,
+            mode,
+            auto_vetting,
+            confirmer,
+            slot,
+            checked.verdict,
+            (None, None),
+            spec.lines(),
+        )
+        .ok()
+        .map(|(text, _, _)| text)
+    } else {
+        None
+    };
+    ReadInTheResult {
+        text,
+        usage,
+        waited,
+    }
 }
 
 /// What a check said about content, released for the screen an approval is read on, with the label

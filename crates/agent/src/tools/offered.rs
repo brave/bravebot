@@ -1417,15 +1417,15 @@ fn table(
                         "type": "boolean",
                         "description": "Ask to read what the command prints in this result. \
                                         Where read_output would hand it to you without asking \
-                                        the user or checking it, it comes back here as text you \
-                                        can read, and there is no read_output call to make. \
-                                        Output too long for one result still comes back as a \
-                                        reference, with its size, and read_output is not held \
-                                        to that size. \
-                                        Everywhere else this changes nothing, and output you \
-                                        may not read still comes back as a reference. Defaults \
-                                        to false. Not with background: true, which has printed \
-                                        nothing yet."
+                                        the user, or would hand it back at once, it comes back \
+                                        here as text you can read, and there is no read_output \
+                                        call to make. Where it would be kept back, it still \
+                                        comes back as a reference. Output too long for one \
+                                        result still comes back as a reference, with its size, \
+                                        and read_output is not held to that size. Everywhere \
+                                        else this changes nothing, and output you may not read \
+                                        still comes back as a reference. Defaults to false. Not \
+                                        with background: true, which has printed nothing yet."
                     }
                 },
                 "required": ["command"]

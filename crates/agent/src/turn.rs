@@ -109,11 +109,13 @@ const TOOL_BUDGET_SPENT: &str = "(from the system, not the user)";
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReadOutputIs {
     /// Bypassing with no screening asked for, in a turn offered `read_output`: the answer is yes, with
-    /// nobody asked and no check made.
+    /// nobody asked and no check made. A `read` on a run's result is answered in that result.
     Unasked,
     /// Screening asked for, in a turn offered `read_output`: a check's word answers whenever it is
     /// `safe`, and any other word keeps the output back where nobody is asked or puts it to the person
-    /// where somebody is. Said the same in every mode, so it does not name one.
+    /// where somebody is. Said the same in every mode, so it does not name one. A `read` on a run's
+    /// result makes the check there and releases on a `safe` word; any other word leaves the output
+    /// behind its reference with nobody asked.
     ByACheck,
     /// Everything else, and any turn not offered `read_output`: the advice is that a person is shown
     /// the output and decides.
@@ -4158,30 +4160,50 @@ where
                 let read_from = match &presented {
                     Presentation::Quarantined(reference)
                         if output.read_asked
-                            && read_output_is() == ReadOutputIs::Unasked
+                            && read_output_is() != ReadOutputIs::Asked
                             && reference.bytes.is_some_and(|bytes| bytes <= output_cap) =>
                     {
-                        tools::read_in_the_result(
+                        let mut chat =
+                            crate::processor::Chat::new(config, egress, task.account_session())
+                                .spending(state.subscription.as_mut())
+                                .on(state.turn_model.as_deref())
+                                .stoppable_by(cancel);
+                        let released = tools::read_in_the_result(
                             policy,
                             conversation.quarantine(),
                             task.permission_mode.get(),
                             task.auto_vetting,
                             confirmer,
+                            &mut chat,
+                            reporter,
                             &reference.slot,
-                        )
-                        .map(|released| {
-                            policy
-                                .present(
-                                    "tool_result",
-                                    reference.slot.clone(),
-                                    &origin,
-                                    &released,
-                                    conversation.quarantine(),
-                                )
-                                .map(|shown| (shown, reference.slot.clone()))
-                        })
-                        .transpose()
-                        .map_err(|d| TurnError::Precommit(d.to_string()))?
+                        );
+                        // A check made here is a model call like the one read_output makes, so
+                        // its tokens and the time spent waiting on it are the turn's.
+                        if let Some(interval) = released.waited {
+                            reporter.inference_interval(interval);
+                            state.spent.inference += interval.duration();
+                        }
+                        state.account.add_usage(released.usage);
+                        reporter.spent(crate::outcome::Spent {
+                            timing: state.spent.finish(),
+                            ..state.account
+                        });
+                        released
+                            .text
+                            .map(|released| {
+                                policy
+                                    .present(
+                                        "tool_result",
+                                        reference.slot.clone(),
+                                        &origin,
+                                        &released,
+                                        conversation.quarantine(),
+                                    )
+                                    .map(|shown| (shown, reference.slot.clone()))
+                            })
+                            .transpose()
+                            .map_err(|d| TurnError::Precommit(d.to_string()))?
                     }
                     _ => None,
                 };

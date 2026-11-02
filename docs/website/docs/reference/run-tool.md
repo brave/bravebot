@@ -431,7 +431,8 @@ changes it in any mode: a check's word answers first, so the planner is told the
 text it can read or that it was kept back. Otherwise the planner is told you see the output and decide.
 The description names neither the mode nor the check. A run's result carries only the reference, the
 advice about vouching for the command (left out where a remembered line already stops the asking), and,
-where the call passed `read: true`, a note that the argument was not applied.
+where the call passed `read: true` and the output did not come back, a note that the argument did not
+return it.
 
 A command that printed nothing, such as a `mkdir`, has nothing to keep back. The planner is told it
 printed nothing, with no reference and no advice, and the transcript does not mark it as kept from
@@ -478,8 +479,12 @@ was too long for one result. It is told where the rest is too: `read_output` han
 it, and a filter such as `tail` given the reference as `stdin_ref` reads part of it without the line
 being run again.
 
-In every other mode `read` changes nothing: the output is quarantined as usual, and you are asked, or
-a check reads it, only when the planner calls `read_output`. The same holds for an
+In every other mode `read` changes nothing where you are asked: the output is quarantined as usual, and
+you are asked only when the planner calls `read_output`. Where screening is asked for
+([`--vet`](../security/permission-modes.md#bypassing)), the check reads the output at the run, and when
+it finds nothing the output comes back in that result with the same label and audit entry
+`read_output` would have written. When it does not, or cannot be made, the output stays behind its
+reference, nobody is asked, and the result says the argument did not return it. The same holds for an
 [agent definition](../customize/agents.md) whose `tools` leave out `read_output`. `read` must be
 `true` or `false`, and it is refused beside `background: true`, since the result that starts a job
 holds nothing the job has printed.

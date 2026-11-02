@@ -454,6 +454,14 @@ apart on the screen, because the reason for asking is different in the two cases
 
 A picture is answered the same way, on the first of the routes in the table below.
 
+**A run that asks to read is a third route.** A `run` that passes `read: true` ([RUN-22](tools/run.md#RUN-22))
+where screening is asked for makes the check `read_output` would make on its slot, in any mode, and a
+`safe` word releases the output in the result that ran it. It is the `read_output` promotion made a
+round early, so it is not a fourth kind of grant. Any other word, and a check that could not be made,
+keep the output back with no prompt drawn in any mode, including one that asks: the person is asked when
+the planner calls `read_output`. The planner is told that `read: true` did not return the output and
+nothing of the word.
+
 **Where there is nobody to fall back to, the fallback is a refusal.** A run bypassing permissions
 ([MODE-4](permission-modes.md#MODE-4)) puts no prompt to anybody, so a verdict that is not `safe` has
 nothing to hand the question to. The bytes are kept back rather than promoted with a warning drawn on
@@ -493,8 +501,9 @@ for did, it reads `1 line, read without asking or checking`. A person's answer l
 was, `1 line, read`. The trail tells the same three apart ([CHECK-8](#CHECK-8)), but only for
 somebody who opens it after the fact. The words on the row are the driver's, picked by which of the
 three answered, and nothing the check wrote is among them. A run that is handed what it printed in
-its own result ([RUN-22](tools/run.md#RUN-22)) makes no such call and leaves only its own row; the
-mode is the one thing that releases output there.
+its own result ([RUN-22](tools/run.md#RUN-22)) leaves its own row. Where the mode released the
+output no check is made. Where a check released it, the check is made at the run and announced as
+`read_output` announces it, and the trail credits the check ([CHECK-8](#CHECK-8)).
 
 What the mode never decides is anything but who answers. The slot is the planner's choice either
 way, the label is `(T,priv)` either way ([CHECK-7](#CHECK-7)), the endorsement is single-use either
@@ -527,6 +536,10 @@ owns the content gains from this, which is the reason it is off by default.
 `verified-by: bravebot_agent::turn::the_row_for_output_a_person_read_names_no_check`
 `verified-by: bravebot_agent::turn::the_row_for_a_slot_a_person_let_through_names_no_check`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_says_on_the_row_that_nothing_checked_the_output`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`
+`verified-by: bravebot_agent::turn::a_screened_run_that_asks_to_read_more_than_one_result_may_hold_makes_no_check`
+`verified-by: bravebot_agent::turn::sentences::a_check_answering_says_where_the_rest_is_for_output_past_the_cap`
 
 <a id="CHECK-13"></a>
 ### CHECK-13: every surface a promotion prompt reaches is given the verdict, and none of them is given an answer

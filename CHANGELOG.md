@@ -16,6 +16,7 @@
  - Fixed the time you take to answer the question about a server's tool list being left out of the time the turn spent waiting on you. It is now counted as waiting, and a turn stopped at the question keeps it. ([#3662](https://github.com/brave/bravebot/issues/3662))
  - Fixed a line you type while the model waits in `job_output` being held until the wait ends. The wait now ends within a moment, the job keeps running, and the model reads the line at the next round. ([#3663](https://github.com/brave/bravebot/issues/3663))
  - Fixed a call to a server's tool whose arguments came from content the model had read and a person had not vouched for. It is asked with its own reason, offers no answer that would remember it, and one question now covers the later calls to the same tool in the same round. ([#3664](https://github.com/brave/bravebot/issues/3664))
+ - Fixed `read: true` on `run` leaving the output quarantined for a model that has screening on. The output is now checked, and returned in the same result when the check finds nothing in it. Any other result, or a check that cannot be made, keeps it back without asking anyone. ([#3665](https://github.com/brave/bravebot/issues/3665))
 
 ## [0.20.0](https://github.com/brave/bravebot/releases/tag/v0.20.0)
 

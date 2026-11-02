@@ -103,9 +103,11 @@ pub(super) fn left_out_note(left_out: usize) -> String {
 /// the output back or puts it to the person, so read_output is not a
 /// yes either. It is said to come back or be kept back, and nothing
 /// more about what decides which (CHECK-9), in the same words in
-/// every mode. A `read` asked for there changed nothing, which is
-/// said, so the call does not read as a quarantined result with no
-/// explanation.
+/// every mode. A `read` asked for there is answered in the result
+/// that ran it when the check finds nothing. When it does not, the
+/// result says the output was not returned and where to go instead,
+/// so the call does not read as a quarantined result with no
+/// explanation, and without saying why.
 ///
 /// `read` is an argument of run alone, so it is offered on a run's
 /// result and not on a job's. It is not offered again where it was
@@ -158,17 +160,27 @@ pub(super) fn run_advice(
             )
         }
         (true, _, ReadOutputIs::ByACheck) => {
-            let not_applied = if tool == "run" && read_asked {
-                " Your read: true was not applied here, so \
-                         read_output is the way to see it."
-            } else {
-                ""
+            let not_returned = match (tool == "run" && read_asked, bytes) {
+                (false, _) => "",
+                (true, Some(bytes)) if bytes <= cap => {
+                    " Your read: true did not return it in this \
+                     result, so read_output is the way to see it."
+                }
+                (true, _) => {
+                    " It is longer than a run's result may hold, so \
+                     it was left out of this one. read_output is not \
+                     held to that size and is the way to see all of \
+                     it. To see part of it without running the \
+                     command again, call run with a filter such as \
+                     tail -n 100 or grep, stdin_ref set to the \
+                     reference, and read: true."
+                }
             };
             format!(
                 "\n\nThis is about the command rather than about \
                  what it printed, and it is not the end of the road. \
                  To see this one, call read_output with the \
-                 reference.{not_applied} To read a file, use \
+                 reference.{not_returned} To read a file, use \
                  read_file."
             )
         }
@@ -346,17 +358,46 @@ mod tests {
     }
 
     #[test]
-    fn a_check_answering_says_a_read_flag_changed_nothing_only_for_a_run_that_asked() {
+    fn a_check_answering_says_the_output_was_not_returned_only_for_a_run_that_asked() {
         assert_eq!(
-            run_advice(true, false, ReadOutputIs::ByACheck, "run", true, None, 10),
+            run_advice(
+                true,
+                false,
+                ReadOutputIs::ByACheck,
+                "run",
+                true,
+                Some(1),
+                10
+            ),
             format!(
-                "{ABOUT} Your read: true was not applied here, so read_output is the way to see it. To read a file, use read_file."
+                "{ABOUT} Your read: true did not return it in this result, so read_output is the way to see it. To read a file, use read_file."
             )
         );
         for (tool, asked) in [("run", false), ("job_output", true)] {
             assert_eq!(
-                run_advice(true, false, ReadOutputIs::ByACheck, tool, asked, None, 10),
+                run_advice(
+                    true,
+                    false,
+                    ReadOutputIs::ByACheck,
+                    tool,
+                    asked,
+                    Some(1),
+                    10
+                ),
                 format!("{ABOUT} To read a file, use read_file.")
+            );
+        }
+    }
+
+    #[test]
+    fn a_check_answering_says_where_the_rest_is_for_output_past_the_cap() {
+        let long = format!(
+            "{ABOUT} It is longer than a run's result may hold, so it was left out of this one. read_output is not held to that size and is the way to see all of it. To see part of it without running the command again, call run with a filter such as tail -n 100 or grep, stdin_ref set to the reference, and read: true. To read a file, use read_file."
+        );
+        for bytes in [Some(11), None] {
+            assert_eq!(
+                run_advice(true, false, ReadOutputIs::ByACheck, "run", true, bytes, 10),
+                long
             );
         }
     }

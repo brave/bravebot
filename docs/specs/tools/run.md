@@ -856,8 +856,8 @@ request from the session as it stands, so a mode the person changes in the middl
 the next request says, and it is the same words a result would otherwise repeat. Where a person is
 asked, it says the user sees the output and decides, and if they agree it comes back as text the
 planner can read. A result's advice then holds only what is true of that result: the reference, the
-vouching advice where a record does not already stop the asking, that `read: true` was not applied,
-and that git ran. The description is sent with every request, so changing it costs the prompt cache
+vouching advice where a record does not already stop the asking, that `read: true` did not return the
+output, and that git ran. The description is sent with every request, so changing it costs the prompt cache
 the tool block, once, when the mode changes.
 
 Where permissions are bypassed with no screening asked for, nobody is shown what `read_output`
@@ -877,9 +877,10 @@ where permissions are asked and keeps it back where they are bypassed, so `read_
 yes either. The planner is told that `read_output` hands the output back as text it can read, or
 reports that it was kept back, in the description and not in a result, and nothing of what decided
 which, as [CHECK-9](../vetting.md#CHECK-9) requires. The words are the same in every mode, so they
-say nothing of which one it is in. `read` is not applied there ([RUN-22](#RUN-22)), so a run's result for a call
-that passed `read: true` says it was not applied and that `read_output` is the way to see the
-output. A call that did not pass it is told nothing of `read`, and neither is a job's result nor
+say nothing of which one it is in. A `read` is answered there with the same check
+([RUN-22](#RUN-22)): when the word is `safe` the output comes back in the result that ran it, and
+when it is not, or the check could not be made, a run's result for a call that passed `read: true`
+says it did not return the output and that `read_output` is the way to see it. A call that did not pass it is told nothing of `read`, and neither is a job's result nor
 the account the turn gives of an ended job, since `read` is an argument of `run` alone. None of it
 names the mode or a check, and none of it is said to a turn that was not offered `read_output`
 ([ADDRESS-7](../addressing-a-definition.md#ADDRESS-7)), which has no such tool to be pointed at.
@@ -899,7 +900,7 @@ that is not `safe`, so the claim is false for every output the check finds nothi
 `read_output` always hands the output back, it is told something false whenever the check objects.
 Saying that the output comes back or is kept back is true on both branches and gives the planner
 nothing about what decided, which is what [CHECK-9](../vetting.md#CHECK-9) keeps from it. A `read`
-that changed nothing and was not remarked on leaves a call that looks like a quarantined result with
+that returned nothing and was not remarked on leaves a call that looks like a quarantined result with
 no explanation, and the planner repeats the call with `read: true` to try to see the output.
 
 **This changes no label.** What is said is what [RUN-7](#RUN-7) already provides for, and saying it
@@ -908,7 +909,7 @@ is not inferring it: the planner still cannot vouch for anything, and a person s
 `verified-by: bravebot_agent::turn::the_read_output_description_says_who_answers_for_the_session`
 `verified-by: bravebot_agent::turn::a_quarantined_run_says_what_would_make_it_visible`
 `verified-by: bravebot_agent::turn::a_quarantined_run_where_a_check_answers_for_the_person_does_not_say_a_user_decides`
-`verified-by: bravebot_agent::turn::a_read_asked_for_where_a_check_answers_for_the_person_is_said_not_to_have_applied`
+`verified-by: bravebot_agent::turn::a_read_asked_for_where_a_check_objects_is_said_not_to_have_returned_the_output`
 `verified-by: bravebot_agent::turn::a_quarantined_run_where_a_person_is_still_asked_still_offers_the_vouch`
 `verified-by: bravebot_agent::turn::what_a_job_printed_leaves_who_answers_to_the_description_where_a_check_answers_for_the_person`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_leaves_who_answers_to_the_description_where_a_check_answers_for_the_person`
@@ -1748,8 +1749,8 @@ gives of itself, and a `read_output` page of output the planner may read
 ([OUTPUT-4](read-output.md#OUTPUT-4)), because those are the same bytes reaching the same context by
 four routes. It does not bound `read_output`'s release of output nobody vouched for, which hands over
 the whole of the slot it was endorsed for ([OUTPUT-1](read-output.md#OUTPUT-1)). It does bound the
-same release made in a run's own result ([RUN-22](#RUN-22)), which is asked for before the size is
-known.
+same release made in a run's own result ([RUN-22](#RUN-22)), by the mode or by a check, which is asked
+for before the size is known.
 
 A cap of zero is absence rather than a program permitted to say nothing, as is any value that is not
 a whole count. Absence leaves the built-in cap in force, which is what a layer setting the key gets
@@ -1789,7 +1790,7 @@ worth and does not stop being theirs because the work moved ([DELEGATE-1](../del
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_the_account_of_a_finished_job_is_cut_to`
 
 <a id="RUN-22"></a>
-### RUN-22: a run may ask to read what it printed, and gets it in the same result where nobody would be asked
+### RUN-22: a run may ask to read what it printed, and gets it in the same result where the mode or a check answers
 
 `read: true` asks for what the line printed in the result that ran it. Where permissions are
 bypassed with no screening asked for ([MODE-4](../permission-modes.md#MODE-4)), in a turn offered
@@ -1799,18 +1800,31 @@ mode in the entry [OUTPUT-1](read-output.md#OUTPUT-1) writes, and nobody is show
 keeps its name, and the result gives the name beside the text, so the same bytes can still be fed to
 a line or written by reference.
 
+Where screening is asked for ([CHECK-11](../vetting.md#CHECK-11)), in any mode and in a turn offered
+`read_output`, the run makes the check `read_output` would make on that slot, and the output is
+released in the result when its word is `safe`. The release is `read_output`'s: the value is
+`(T,priv)`, the trail credits the check ([CHECK-8](../vetting.md#CHECK-8)), nobody is asked and
+nobody is shown anything. The check is a model call like the one `read_output` makes, so its tokens
+and the time spent waiting on it are the turn's, and it is announced in the same way. Any other word,
+and a check that could not be made, leaves the output behind its reference with nobody asked, in a
+mode that asks as in one that does not: the person is asked when the planner calls `read_output`, as
+it would have been without `read`. The result then says that `read: true` did not return the output
+and that `read_output` is the way to see it ([RUN-14](#RUN-14)), and nothing of the word or the
+reason the check wrote ([CHECK-9](../vetting.md#CHECK-9)).
+
 [RUN-21](#RUN-21)'s cap bounds the release, where it does not bound `read_output`. A `read_output`
 call is made by a planner that has seen the reference and the size it states, and `read` is asked
 before there is a size to see. Output longer than the cap stays behind its reference, and the
-result says it was too long for a run's result rather than pointing at `read` again. It says with
-that where the rest is: `read_output` is not held to the cap, and a filter given the reference as
-`stdin_ref` reads part of it without the line being run again. The size is the slot's, as its
+result says it was too long for a run's result rather than pointing at `read` again, whether the
+output was left behind its reference by the mode or by screening. It says with that where the rest
+is: `read_output` is not held to the cap, and a filter given the reference as `stdin_ref` reads part
+of it without the line being run again. The size is tested before any check
+is made, so no model call is spent on output that cannot be returned. The size is the slot's, as its
 reference states it, so no byte the program printed is read to decide.
 
-Everywhere else `read` changes nothing. Where a person or a check answers `read_output`, the output
-is quarantined, nobody is asked and no check is made, since a prompt or a check made here would be
-spent on output the planner has not called `read_output` for. Where a check answers in the person's
-place, the result says that `read` was not applied ([RUN-14](#RUN-14)). Where the turn was not offered
+Everywhere else `read` changes nothing. Where a person answers `read_output` and screening was not
+asked for, the output is quarantined, nobody is asked and no check is made, since a prompt made here
+would be spent on output the planner has not called `read_output` for. Where the turn was not offered
 `read_output`, as a definition may leave it ([ADDRESS-7](../addressing-a-definition.md#ADDRESS-7),
 [DELEGATE-4](../delegation.md#DELEGATE-4)), `read` would widen what it was confined to, so it is not
 a release there either. A `read` that is absent or null is a call without it, and one that is
@@ -1820,7 +1834,10 @@ again. `read` beside `background: true` is refused, as `stdin_ref` is ([RUN-3](#
 that starts a job holds nothing the job printed.
 
 **Why.** Under unscreened bypass `read_output` has one answer, so a round spent calling it buys
-nothing but the round: a model call, and the whole conversation sent again. Doing it on request
+nothing but the round: a model call, and the whole conversation sent again. Where a check answers,
+the check is made either way and only the round is saved, which was most of the rounds in sessions
+that passed `read: true` with screening on and were told it was not applied. A prompt is not drawn at
+the run, because the planner has not seen the size or shape of the output yet. Doing it on request
 rather than for every run keeps output the planner does not want out of its context, where a build
 or test log is often the largest thing a turn produces and is often read only for how it ended,
 which [RUN-13](#RUN-13) already says.
@@ -1833,17 +1850,24 @@ changes what the planner knows to ask for and nothing it may be given.
 
 **This changes no label.** The value and the trail entry are the ones `read_output` makes, a round
 early. What decides whether the release happens is the mode, the tools the turn was offered, the
-slot's size and the planner's own argument. The mode is the person's answer given before the session
-started, and a planner offered `read_output` may call it on any reference it holds, so asking with
-`read` gives it nothing it could not already have. No byte the program printed is read to decide it.
+slot's size, the planner's own argument, and where screening is asked for the check's word. The mode
+is the person's answer given before the session started, the argument was set before the output
+existed, and a planner offered `read_output` may call it on any reference it holds, so asking with
+`read` gives it nothing it could not already have. The only branch on the check is on its word, the
+branch `read_output` makes. No byte the program printed and no reason the check wrote is read to
+decide it.
 
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
-`verified-by: bravebot_agent::turn::asking_to_read_a_runs_output_changes_nothing_where_anybody_still_answers_for_it`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`
+`verified-by: bravebot_agent::turn::asking_to_read_a_runs_output_changes_nothing_where_a_person_still_answers_for_it`
 `verified-by: bravebot_agent::turn::a_background_line_cannot_ask_to_read_what_it_printed`
 `verified-by: bravebot_agent::turn::asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output`
 `verified-by: bravebot_agent::turn::asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_says_why`
+`verified-by: bravebot_agent::turn::a_screened_run_that_asks_to_read_more_than_one_result_may_hold_makes_no_check`
+`verified-by: bravebot_agent::turn::sentences::a_check_answering_says_where_the_rest_is_for_output_past_the_cap`
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference`
 `verified-by: bravebot_agent::turn::a_read_that_was_refused_is_not_asked_for_again`
 `verified-by: bravebot_agent::turn::a_read_that_is_not_true_or_false_is_refused_before_the_line_runs`

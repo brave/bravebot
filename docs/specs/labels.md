@@ -737,8 +737,9 @@ arrives at all.
     written into a checkout. What it buys is bounded by everything the verdict does not decide: one
     slot, whichever one the planner named, once, at `(T,priv)` so nothing leaves the machine and
     nothing becomes routing, with no trust rule written, and only on the routes
-    [CHECK-12](vetting.md#CHECK-12) covers, so vouching for a path and a server's tool list are
-    still asked about. The slot is still the planner's choice and not the content's. A picture
+    [CHECK-12](vetting.md#CHECK-12) covers, which are the `vet_content` and `read_output` prompts and
+    the result of a `run` that passed `read: true` ([RUN-22](tools/run.md#RUN-22)), so vouching for a
+    path and a server's tool list are still asked about. The slot is still the planner's choice and not the content's. A picture
     ([VET-4](tools/vet-content.md#VET-4)) is the easier case of this: no encoding stands between the
     words drawn in it and the checker ([CHECK-15](vetting.md#CHECK-15)), and what it buys is the
     same one slot, once.
@@ -748,6 +749,8 @@ arrives at all.
     prompt: the verdict alone answers, anything but `safe` is a refusal, and the planner is told
     the slot was kept back and not to ask again ([CHECK-12](vetting.md#CHECK-12), "nobody to fall
     back to", and the Known cost "A screened run with nobody to ask" in [vetting.md](vetting.md)).
+    A `run` that passed `read: true` is the same in every mode: a word other than `safe` keeps the
+    output back with no prompt drawn, and the person is asked when the planner calls `read_output`.
     What it buys is the denial of one slot read the planner asked for, decided by the check's
     reply with no person in between, at no cost to the attacker. It promotes nothing, chooses no
     destination, changes no label and writes no trust rule, and none of their bytes reach the

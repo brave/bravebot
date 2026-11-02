@@ -259,8 +259,8 @@ The two about trust are the ones that cost the most. Vouching is what lets a fil
 shown to the planner rather than held behind a reference, so in this mode every file the planner
 asks to read is shown to it, and the startup question grants that over the whole tree at once
 rather than a file at a time. A command's output still goes behind a reference, since a run approved
-here vouches for nothing, and where no screening was asked for a run that asks with `read` has it
-released in its own result ([RUN-22](tools/run.md#RUN-22)).
+here vouches for nothing, and a run that asks with `read` has it released in its own result where no
+screening was asked for, or where the check made for it finds nothing ([RUN-22](tools/run.md#RUN-22)).
 
 A run approved this way vouches for no program. The list of commands a person said to stop asking
 about is written into the session record and outlives the mode, and a record claiming somebody
