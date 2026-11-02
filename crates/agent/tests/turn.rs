@@ -57055,6 +57055,7 @@ fn a_line_typed_during_a_delegates_job_output_wait_does_not_end_it() {
                     r#"{"kind":"worker","task":"DELEGATE-WAITS-FOR-A-JOB"}"#,
                 ),
                 reply_with("waiting on the delegate"),
+                reply_with("still waiting on the delegate"),
                 reply_with("done"),
             ],
         ),
