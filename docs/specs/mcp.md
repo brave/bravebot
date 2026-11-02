@@ -455,9 +455,9 @@ are the existing split of the call's outcome, so no branch is added on the bytes
 
 It says the server reported no failure. It does not say the effect happened, because the flag is the
 only fact the driver has about the call. A reply that could not be used, and a call that got no reply,
-are described by the driver's own sentences as before ([MCP-8](#MCP-8)).
+are described by the driver's own sentences ([MCP-8](#MCP-8)).
 
-**Why.** A planner that made several writes could not tell a completed call from a failed one without
+**Why.** A planner that makes several writes cannot tell a completed call from a failed one without
 reading the reply, and a reply is not read unless a person or a check lets it through.
 
 `verified-by: bravebot_agent::mcp::a_reply_with_no_failure_reported_says_so_and_a_failed_one_does_not`

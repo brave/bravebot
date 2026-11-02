@@ -327,9 +327,9 @@ only that `vet_content` is the question to ask to read a reference, and never wh
 descriptions of the browser tools whose result is quarantined, and the refusal of a processor in a
 conversation that holds private content.
 
-**Why.** The text was one sentence for every session. Where a safe verdict releases the content with
-no prompt, or permissions are bypassed, a planner told that the user sees the content and decides
-treated a read that cost nothing as one that needed approval. The result of the call stays as
+**Why.** A sentence that is the same for every session tells a planner that the user sees the content
+and decides. Where a safe verdict releases the content with no prompt, or permissions are bypassed,
+the planner then treats a read that costs nothing as one that needs approval. The result of the call stays as
 [VET-3](#VET-3) has it, so who answered is said in the description, which holds the session, and
 never in a result, which a planner could aim at.
 

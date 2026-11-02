@@ -554,8 +554,7 @@ stays in the archive and the record, and the copy is drawn in no transcript
 ([COMPACT-6](#COMPACT-6)). The quarantine, the counter and the integrity are untouched
 ([COMPACT-3](#COMPACT-3)).
 
-A turn that is not a delegate's records no task, and its opening prompt is left to the summary as
-before. `/compact` and the compaction of a request the server refused ([COMPACT-14](#COMPACT-14))
+A turn that is not a delegate's records no task, and its opening prompt is left to the summary. `/compact` and the compaction of a request the server refused ([COMPACT-14](#COMPACT-14))
 end in the same step as the compaction in the middle of a turn, so they send the task again the
 same way. Masking old tool results ([COMPACT-18](#COMPACT-18)) leaves the task and its copy whole,
 since neither is a tool result.
