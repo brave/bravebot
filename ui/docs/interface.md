@@ -309,7 +309,9 @@ A bot has a name, purpose, model choice, avatar, a home folder and persistent me
 folder is made by the app under its own data directory, beside the briefing and never inside it.
 Opening a bot opens its conversation, one that carries on, in its home folder
 ([MEMORY-14](../../docs/specs/definition-memory.md#MEMORY-14)). A bot nobody has talked to yet
-shows its face and **Talk to** its name above the message box. The conversation has no project
+shows its face and **Talk to** its name above the message box. The face, the title, the notes
+and the composer are centred in the column, and the column scrolls when that block is taller
+than the space under the header. The conversation has no project
 picker. The history button in its header opens **Earlier conversations**,
 the bot's other conversations and its details, and the arrow on that page goes back to the
 conversation.

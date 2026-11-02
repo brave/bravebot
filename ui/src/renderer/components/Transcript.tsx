@@ -801,7 +801,7 @@ export function Transcript({
               <div className="bot-first-hero" data-test="bot-greeting">
                 <BotAvatar seed={bot.avatar} size={160} doing="open" />
                 <h1>Talk to {bot.name}</h1>
-                <p>One conversation that carries on. Type @ to bring in another bot, or summon {bot.name} from a project’s chat to work there.</p>
+                <p>Type @ to bring in another bot, or summon {bot.name} from a project’s chat to work there.</p>
               </div>
             ) : noProject ? <>
               <h1>Ready</h1>
