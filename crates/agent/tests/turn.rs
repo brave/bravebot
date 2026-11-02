@@ -13074,17 +13074,26 @@ fn a_bounded_quarantined_listing_hands_over_the_directories_it_stopped_at() {
         second.contains("Its 3 entries are quarantined"),
         "the two directories the walk stopped at were dropped from the count: {second}"
     );
-    assert_eq!(
-        second
-            .matches("a directory this listing stopped at")
-            .count(),
-        2,
+    assert!(
+        second.contains("[ref:2] to [ref:3]: 2 directories"),
         "the planner was not told which entries are places to look: {second}"
     );
+    assert!(
+        second.contains("[ref:1] file"),
+        "the file entry is not given as a file: {second}"
+    );
+    for held in ["[ref:2] file", "[ref:3] file"] {
+        assert!(
+            !second.contains(held),
+            "a directory was handed over as a file to read: {second}"
+        );
+    }
     assert_eq!(
-        second.matches("not be shown what this file holds").count(),
+        second
+            .matches("A directory: this listing stopped at it")
+            .count(),
         1,
-        "a directory was handed over as a file to read: {second}"
+        "the advice for a directory is not said once: {second}"
     );
 
     // The person watching owns the directory and is told the real names, which is the half of this
@@ -13113,6 +13122,69 @@ fn a_bounded_quarantined_listing_hands_over_the_directories_it_stopped_at() {
                 .any(|line| line.ends_with("dir-victor/")),
         "a directory reads as a file of the same name on the line a person reviews: {:?}",
         shown.preview
+    );
+}
+
+/// A quarantined listing of 110 entries (109 directories a bounded walk stopped at, and one file)
+/// says what its references are once. The result is resent with every later round, so a sentence
+/// repeated for each entry is paid for 110 times over.
+#[test]
+fn a_large_quarantined_listing_says_what_its_references_are_once() {
+    let scratch = Scratch::new("list-large-quarantined");
+    std::fs::write(scratch.path.join("file-tango.txt"), "x").unwrap();
+    for n in 0..109 {
+        std::fs::create_dir(scratch.path.join(format!("dir-{n:03}"))).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":".","depth":1}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is at the top level");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    let start = second
+        .find("could not be shown to you")
+        .expect("the listing was answered with a reference result");
+    let result = second[start..]
+        .split("\",\"role\"")
+        .next()
+        .expect("the message ends");
+    assert!(
+        result.len() < 7_000,
+        "the result for 110 entries is {} bytes: {result}",
+        result.len()
+    );
+    assert!(
+        result.matches("stopped at").count() == 1,
+        "the explanation of a directory reference is not said exactly once: {result}"
+    );
+    assert!(
+        result.matches("read_file has nothing to add").count() == 1,
+        "the explanation of a file reference is not said exactly once: {result}"
+    );
+    assert!(
+        result.contains("[ref:1] file"),
+        "the file's own reference is missing: {result}"
+    );
+    assert!(
+        result.contains("[ref:2] to [ref:110]: 109 directories"),
+        "the count and the first and last directory reference are missing: {result}"
     );
 }
 

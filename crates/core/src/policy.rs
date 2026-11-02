@@ -9589,6 +9589,73 @@ mod tests {
         );
     }
 
+    /// A listing gives a run of directories as a count with its first and last reference, so the
+    /// planner can name a reference that the listing never printed. Each reference in the range is
+    /// a directory the kernel refuses where a path belongs, whichever position it has in the run.
+    #[test]
+    fn a_directory_reference_from_the_middle_of_a_range_is_refused_where_a_path_is_expected() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let entries = Labelled::new(
+            vec![
+                "notes.md".to_string(),
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+                "e".to_string(),
+            ],
+            Label::untrusted_private(),
+        );
+        let ids: Vec<SlotId> = (1..=6).map(|n| SlotId::new(format!("ref:{n}"))).collect();
+        let references = policy
+            .defer_entries(
+                "list_files",
+                "an entry in \".\"",
+                &entries,
+                5,
+                &ids,
+                &mut slots,
+            )
+            .expect("entries may be reserved");
+
+        let described = crate::reference::describe_listing(&references);
+        assert!(
+            described.contains("[ref:2] to [ref:6]: 5 directories"),
+            "the listing does not give the run as a range: {described}"
+        );
+        for middle in &ids[2..5] {
+            assert!(
+                !described.contains(&format!("[{middle}]")),
+                "{middle} is inside the range and should not have a line of its own: {described}"
+            );
+            let read = policy
+                .promote_reference_for_read("read_file", "path_ref", middle, &slots)
+                .expect_err("a directory in the middle of the range is not somewhere to read from");
+            assert!(
+                read.to_string().contains("directory"),
+                "the refusal for {middle} does not say what was wrong with it: {read}"
+            );
+            let destination = policy
+                .destination_from_reference("write_file", "path_ref", middle, &slots)
+                .expect_err("a directory in the middle of the range is not somewhere to write to");
+            assert!(
+                destination.to_string().contains("greater depth"),
+                "the refusal for {middle} does not say what to do instead: {destination}"
+            );
+        }
+        for reference in &references[2..5] {
+            assert_eq!(reference.kind, crate::reference::Kind::Directory);
+        }
+
+        // The file before the range still resolves.
+        policy
+            .promote_reference_for_read("read_file", "path_ref", &ids[0], &slots)
+            .expect("the file entry is still somewhere to read from");
+    }
+
     /// The count comes from outside and the list from inside, so they have to agree. Taking the
     /// shorter of the two would drop entries with nothing saying so.
     #[test]

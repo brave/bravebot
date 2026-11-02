@@ -3885,10 +3885,7 @@ where
                         conversation.quarantine(),
                     )
                     .map_err(|d| TurnError::Precommit(d.to_string()))?;
-                let described: Vec<String> = references
-                    .iter()
-                    .map(bravebot_core::reference::Reference::describe)
-                    .collect();
+                let described = bravebot_core::reference::describe_listing(&references);
                 result_from = Provenance::Reference(
                     ids.iter()
                         .map(ToString::to_string)
@@ -3952,10 +3949,9 @@ where
                 let linked = sentences::links_note(&output.tool, output.links);
                 format!(
                     "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its {} entries are \
-             quarantined, one reference each.{capped}{linked}\n\n{}",
+             quarantined, one reference each.{capped}{linked}\n\n{described}",
                     output.tool,
                     references.len(),
-                    described.join("\n")
                 )
             } else if !output.pictures.is_empty() {
                 // A server's answer that carried pictures: its text and each picture get a
@@ -8169,12 +8165,16 @@ mod tests {
             let told = results(&round.requests[1]);
             assert_eq!(told.len(), 2, "{told:?}");
             assert!(
-                told[0].contains("[ref:1] an entry in") && told[0].contains("m1"),
+                told[0].contains("[ref:1] file")
+                    && told[0].contains("an entry in")
+                    && told[0].contains("m1"),
                 "{}",
                 told[0]
             );
             assert!(
-                told[1].contains("[ref:2] an entry in") && told[1].contains("m2"),
+                told[1].contains("[ref:2] file")
+                    && told[1].contains("an entry in")
+                    && told[1].contains("m2"),
                 "{}",
                 told[1]
             );

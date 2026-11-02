@@ -257,30 +257,15 @@ impl Reference {
         // Once the context holds private content no processor can be started, so the move that
         // names one is left out rather than offered and refused. The same goes for each tool a
         // run is not offered: `vet_content`, `spawn_processor`, `write_file` and `read_output`.
-        let vet = match self.vetting_offered {
-            true => " Where you have to read it yourself, vet_content is how to ask for it.",
-            false => "",
-        };
+        let vet = self.vet_move();
         let can_process = self.spawning_offered && !self.processors_closed;
         let next = match self.kind {
-            Kind::File => {
-                // Putting the result back is the second half of the move that starts a processor,
-                // so a run that cannot write is told only the first, and a run that cannot start
-                // one is told neither.
-                let moves = match (can_process, self.writing_offered) {
-                    (true, true) => {
-                        " Give it to spawn_processor to work on, and name it as write_file's \
-                         path_ref to put the result back."
-                    }
-                    (true, false) => " Give it to spawn_processor to work on.",
-                    (false, _) => "",
-                };
-                format!(
-                    "Quarantined: you will not be shown what this file holds, and read_file has \
-                     nothing to add: {} already is the file.{moves}{vet}",
-                    self.slot
-                )
-            }
+            Kind::File => format!(
+                "Quarantined: you will not be shown what this file holds, and read_file has \
+                 nothing to add: {} already is the file.{}{vet}",
+                self.slot,
+                self.file_moves()
+            ),
             Kind::Content => format!(
                 "Quarantined: you will not be shown it.{}{vet}",
                 self.moves_with(&self.slot.to_string(), can_process)
@@ -322,6 +307,31 @@ impl Reference {
         format!("[{}] {} {shape}. {next}", self.slot, self.origin)
     }
 
+    /// The move that asks to read it, led by a space, or nothing where the run is not offered
+    /// `vet_content`.
+    fn vet_move(&self) -> &'static str {
+        match self.vetting_offered {
+            true => " Where you have to read it yourself, vet_content is how to ask for it.",
+            false => "",
+        }
+    }
+
+    /// What to do with a file reference, led by a space, or nothing where the run cannot do it.
+    ///
+    /// Putting the result back is the second half of the move that starts a processor, so a run
+    /// that cannot write is told only the first, and a run that cannot start one is told neither.
+    fn file_moves(&self) -> &'static str {
+        let can_process = self.spawning_offered && !self.processors_closed;
+        match (can_process, self.writing_offered) {
+            (true, true) => {
+                " Give it to spawn_processor to work on, and name it as write_file's path_ref to \
+                 put the result back."
+            }
+            (true, false) => " Give it to spawn_processor to work on.",
+            (false, _) => "",
+        }
+    }
+
     /// What to do with the content besides reading it, led by a space, or nothing where the run
     /// is offered neither tool that does it. `subject` is how the sentence names the content.
     fn moves_with(&self, subject: &str, can_process: bool) -> String {
@@ -335,6 +345,78 @@ impl Reference {
             (false, false) => String::new(),
         }
     }
+}
+
+/// How the planner is told about the entries of a listing it may not read.
+///
+/// What is the same for every entry is said once at the top: where they are from, and what a
+/// reference to a file and a reference to a directory is for. The lines below give each file its
+/// reference and label, and each run of directories that share a label as a count with the first
+/// and last reference. `describe` says the same words again for every entry, which a listing of a
+/// hundred entries pays for in every round after it.
+///
+/// The references come from one call of `Policy::defer_entries`, so they share an origin and what
+/// the run is offered, and the first one speaks for all. Which are files and which are
+/// directories is each reference's `kind`, which the policy set from the position of the entry in
+/// the listing. A run is cut where the label changes, and a label is the policy's, not a fact read
+/// off a name. Nothing here is a name.
+///
+/// Empty for no references.
+pub fn describe_listing(references: &[Reference]) -> String {
+    let Some(first) = references.first() else {
+        return String::new();
+    };
+
+    let mut notes = vec![format!(
+        "Each is {}. The lines below give each its reference, what it stands for and its label.",
+        first.origin
+    )];
+    if references.iter().any(|r| r.kind == Kind::File) {
+        notes.push(format!(
+            "A file: you will not be shown what it holds, and read_file has nothing to add: its \
+             reference already is the file.{}{}",
+            first.file_moves(),
+            first.vet_move()
+        ));
+    }
+    if references.iter().any(|r| r.kind == Kind::Directory) {
+        notes.push(
+            "A directory: this listing stopped at it rather than at a file in it, so there is \
+             nothing behind its reference to read, process or write. List the directory you \
+             named again with a greater depth to reach what is inside it. A range of references \
+             covers every reference from its first to its last."
+                .to_string(),
+        );
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut at = 0;
+    while at < references.len() {
+        let start = &references[at];
+        let mut end = at + 1;
+        // Files are listed one by one. Directories that follow each other with one label are
+        // one line.
+        if start.kind == Kind::Directory {
+            while end < references.len()
+                && references[end].kind == Kind::Directory
+                && references[end].label == start.label
+            {
+                end += 1;
+            }
+        }
+        let last = &references[end - 1];
+        lines.push(match (start.kind, end - at) {
+            (Kind::Directory, 1) => format!("[{}] directory {}", start.slot, start.label),
+            (Kind::Directory, count) => format!(
+                "[{}] to [{}]: {count} directories {}",
+                start.slot, last.slot, start.label
+            ),
+            _ => format!("[{}] file {}", start.slot, start.label),
+        });
+        at = end;
+    }
+
+    format!("{}\n\n{}", notes.join(" "), lines.join("\n"))
 }
 
 impl fmt::Display for Reference {
@@ -885,5 +967,105 @@ mod tests {
     fn references_are_ordinary_values() {
         assert_eq!(reference(), reference());
         assert!(!format!("{}", reference()).is_empty());
+    }
+
+    fn listing(files: usize, directories: usize) -> Vec<Reference> {
+        let entry = |n: usize| {
+            Reference::unread(
+                SlotId::new(format!("ref:{n}")),
+                "an entry in \".\"",
+                None,
+                Label::untrusted_private(),
+            )
+        };
+        (1..=files)
+            .map(entry)
+            .chain((files + 1..=files + directories).map(|n| entry(n).of_a_directory()))
+            .collect()
+    }
+
+    /// A listing says what its references are once, gives each file its own line and a run of
+    /// directories one line, and never hands a directory over as a file.
+    #[test]
+    fn a_listing_is_described_once_with_a_line_per_file_and_one_per_run_of_directories() {
+        let described = describe_listing(&listing(2, 3));
+        assert_eq!(described.matches("read_file has nothing to add").count(), 1);
+        assert_eq!(described.matches("stopped at").count(), 1);
+        assert!(described.contains("[ref:1] file (U,priv)"), "{described}");
+        assert!(described.contains("[ref:2] file (U,priv)"), "{described}");
+        assert!(
+            described.contains("[ref:3] to [ref:5]: 3 directories (U,priv)"),
+            "{described}"
+        );
+        for directory in ["[ref:3] file", "[ref:4] file", "[ref:5] file"] {
+            assert!(!described.contains(directory), "{described}");
+        }
+    }
+
+    /// One directory is a line of its own, not a range of one, and a listing with no files says
+    /// nothing about files.
+    #[test]
+    fn a_listing_of_one_directory_is_one_line_and_names_no_file_move() {
+        let described = describe_listing(&listing(0, 1));
+        assert!(
+            described.contains("[ref:1] directory (U,priv)"),
+            "{described}"
+        );
+        assert!(!described.contains(" to [ref:"), "{described}");
+        assert!(!described.contains("spawn_processor"), "{described}");
+        assert!(!described.contains("already is the file"), "{described}");
+    }
+
+    /// Directories with different labels are not one run: the count states what the label is
+    /// for each of them.
+    #[test]
+    fn directories_with_different_labels_are_not_counted_together() {
+        let mut entries = listing(0, 3);
+        entries[1].label = Label::trusted_private();
+        let described = describe_listing(&entries);
+        assert!(
+            described.contains("[ref:1] directory (U,priv)"),
+            "{described}"
+        );
+        assert!(
+            described.contains("[ref:2] directory (T,priv)"),
+            "{described}"
+        );
+        assert!(
+            described.contains("[ref:3] directory (U,priv)"),
+            "{described}"
+        );
+    }
+
+    /// The tools a run is offered decide what the header says, as they do for one reference.
+    #[test]
+    fn the_header_of_a_listing_names_only_the_moves_the_run_is_offered() {
+        let described_with = |change: fn(Reference) -> Reference| {
+            describe_listing(&listing(1, 0).into_iter().map(change).collect::<Vec<_>>())
+        };
+        let open = described_with(|r| r);
+        assert!(
+            open.contains("spawn_processor")
+                && open.contains("path_ref")
+                && open.contains("vet_content"),
+            "{open}"
+        );
+        let closed = described_with(Reference::closed_to_processors);
+        assert!(
+            !closed.contains("spawn_processor") && closed.contains("vet_content"),
+            "{closed}"
+        );
+        let no_writing = described_with(Reference::without_writing);
+        assert!(
+            no_writing.contains("spawn_processor") && !no_writing.contains("path_ref"),
+            "{no_writing}"
+        );
+        let no_vetting = described_with(Reference::without_vetting);
+        assert!(!no_vetting.contains("vet_content"), "{no_vetting}");
+    }
+
+    #[test]
+    fn no_references_are_described_as_nothing() {
+        assert_eq!(describe_listing(&[]), "");
     }
 }

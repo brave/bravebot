@@ -573,10 +573,10 @@ fn table(
                  does not name it: it says how many it did not enter, so a directory made of \
                  links lists as that count and not as empty. List the directory a link points \
                  to, by its own name, to see what is behind it. In a directory you may not \
-                 read, the names are quarantined and you get one \
-                 reference per entry instead, saying of each whether it is a file or a directory \
-                 the walk stopped at: use a file's as path_ref to read it, process it, and write \
-                 it back, without ever being told what it is called.",
+                 read, the names are quarantined and you get a reference for each file, and for \
+                 the directories the walk stopped at a count with the first and last reference \
+                 of each run, instead: use a file's as path_ref to read it, process it, and \
+                 write it back, without ever being told what it is called.",
                 bravebot_filetype::ignored_directories().join(", ")
             ),
             json!({
