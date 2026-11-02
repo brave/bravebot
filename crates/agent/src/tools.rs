@@ -11769,6 +11769,7 @@ fn spawn_agent<S: Sink, R: Reporter>(
     // Read once for the call and put into each checkout it makes (CHECKOUT-23).
     let mut plan: Option<crate::workspace::CarryPlan> = None;
     let mut kind_name = String::new();
+    let mut without: Vec<bravebot_core::capability::Capability> = Vec::new();
     let mut rest_refused: Option<String> = None;
 
     for task in &tasks {
@@ -11890,6 +11891,9 @@ fn spawn_agent<S: Sink, R: Reporter>(
 
         kind_name = spec.definition().to_string();
         started.push(id.to_string());
+        // Every delegate of one call names one kind and starts from this run's one set, so what
+        // one was started without is what each was (DELEGATE-33).
+        without = spec.without().to_vec();
 
         // Everything the kernel settled, taken off the policy here on the turn's own thread. From
         // this point the delegate needs nothing further from the run that spawned it, which is
@@ -11939,6 +11943,10 @@ fn spawn_agent<S: Sink, R: Reporter>(
             started.len()
         )
     };
+    let body = match started_without_sentence(&without, started.len()) {
+        Some(said) => format!("{body} {said}"),
+        None => body,
+    };
     let body = match checkouts.first() {
         Some((_, commit, None)) if started.len() == 1 => format!(
             "{body} It works in a checkout of commit {commit}, which has no changes that are not \
@@ -11987,6 +11995,42 @@ fn spawn_agent<S: Sink, R: Reporter>(
     produced.origin = format!("a {kind_name} delegate");
     produced.note = note;
     produced
+}
+
+/// One sentence naming what the delegates of a call were started without, or nothing where they
+/// were started with all their definition asked for (DELEGATE-33).
+///
+/// Built from the capabilities the kernel compared when it approved them, and from nothing a
+/// delegate, a definition file or the planner wrote.
+fn started_without_sentence(
+    without: &[bravebot_core::capability::Capability],
+    started: usize,
+) -> Option<String> {
+    use bravebot_core::capability::Capability;
+    if without.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = without
+        .iter()
+        .map(|capability| match capability {
+            Capability::FileWrite => "writing files".to_string(),
+            Capability::ShellExec => "running programs".to_string(),
+            Capability::LanguageServer => "asking a language server".to_string(),
+            other => other.to_string(),
+        })
+        .collect();
+    let subject = match started {
+        1 => "It was",
+        _ => "Each was",
+    };
+    Some(format!(
+        "{subject} started without {}, because the run that started it does not hold {}.",
+        names.join(", "),
+        match without.len() {
+            1 => "it",
+            _ => "them",
+        }
+    ))
 }
 
 /// What the planner is told was carried into the checkouts a call made (CHECKOUT-23): one account
@@ -15193,9 +15237,32 @@ mod tests {
         );
     }
 
+    /// DELEGATE-33. The sentence is built from the capabilities a delegate was started without.
+    /// It is absent where there are none, names each one in the driver's words, and says "Each"
+    /// for a fan-out. Rejects a sentence added to every start message, one that names what the
+    /// definition asked for instead of what was removed, and one that is the same for one
+    /// delegate and many.
+    #[test]
+    fn the_start_message_names_what_a_delegate_was_started_without() {
+        use bravebot_core::capability::Capability;
+
+        assert_eq!(started_without_sentence(&[], 1), None);
+        assert_eq!(
+            started_without_sentence(&[Capability::FileWrite], 1).as_deref(),
+            Some(
+                "It was started without writing files, because the run that started it does \
+                 not hold it."
+            )
+        );
+        let many = started_without_sentence(&[Capability::FileWrite, Capability::ShellExec], 3)
+            .expect("two were taken away");
+        assert!(many.starts_with("Each was started without writing files, running programs"));
+        assert!(many.ends_with("does not hold them."));
+    }
+
     /// Every kind above the bottom of the tree is offered the way to delegate, with the kinds this
-    /// session resolved, and none at the bottom is. This is the offer; the kernel refusing a call
-    /// from the bottom anyway is `policy::tests`' half.
+    /// session resolved that its own capabilities reach, and none at the bottom is. This is the
+    /// offer; the kernel refusing a call from the bottom anyway is `policy::tests`' half.
     #[test]
     fn a_delegate_is_offered_a_way_to_delegate_only_above_the_bottom_of_the_tree() {
         use bravebot_core::delegate::{Definition, Definitions, Kind};
@@ -15223,10 +15290,14 @@ mod tests {
                 .unwrap_or_else(|| {
                     panic!("a {name} above the bottom was offered no way to delegate")
                 });
+            let reached = match kind {
+                Kind::Reader => json!(["reader", "rule-reviewer"]),
+                Kind::Checker => json!(["reader", "checker", "rule-reviewer"]),
+                Kind::Worker => json!(["reader", "checker", "worker", "rule-reviewer"]),
+            };
             assert_eq!(
-                spawn.function.parameters["properties"]["kind"]["enum"],
-                json!(["reader", "checker", "worker", "rule-reviewer"]),
-                "a {name} was offered kinds other than the ones this session resolved"
+                spawn.function.parameters["properties"]["kind"]["enum"], reached,
+                "a {name} was offered kinds other than the ones this session resolved that it reaches"
             );
 
             let bottom: Vec<String> =

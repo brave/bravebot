@@ -20,7 +20,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [processors.md](processors.md) | `PROC` | 16 | the one component that reads untrusted content, and what it may do with it |
 | [vetting.md](vetting.md) | `CHECK` | 15 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [grounding.md](grounding.md) | `GROUND` | 6 | counting what a delegate or a goal's turns actually ran and wrote, and telling the planner and the goal judge (proposed: not built) |
-| [delegation.md](delegation.md) | `DELEGATE` | 31 | a second planner, narrower than the first, and what crosses back from one |
+| [delegation.md](delegation.md) | `DELEGATE` | 33 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
 | [definition-memory.md](definition-memory.md) | `MEMORY` | 14 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
 | [recall.md](recall.md) | `RECALL` | 11 | what a person's sessions remember across projects: rules loaded in full every turn, facts ranked and recalled, and how neither lets untrusted content in (proposed: built, thresholds not yet measured on a bravebot store) |

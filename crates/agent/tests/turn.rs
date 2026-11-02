@@ -84894,6 +84894,301 @@ fn an_addressed_definition_is_offered_spawn_agent_only_with_delegates_it_may_sta
     );
 }
 
+/// DELEGATE-32. A turn addressed to a definition of kind `checker` holds no writing, so the
+/// planner it runs is offered the reader and the checker and not the worker, with no `spawns:` line
+/// to say so. Through the whole turn, because the list is built from the capability set the turn
+/// holds after the definition narrowed it, and a build from the set the session resolved would
+/// offer all three. Rejects offering the planner of a turn the whole resolved set.
+#[test]
+fn a_turn_whose_run_cannot_write_is_not_offered_the_worker() {
+    let scratch = Scratch::new("reach-checker-turn");
+    let home = Scratch::new("reach-checker-turn-home");
+    define(&home, "checker-lead", "kind: checker\n", "LEAD-BODY");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![("REACH-TASK", vec![reply_with("done")])]);
+
+    let offered = addressed_once(
+        &endpoint,
+        &received,
+        &workspace,
+        &addressed("REACH-TASK", &home, "checker-lead"),
+    );
+
+    assert!(
+        offered.contains(r#""name":"spawn_agent""#),
+        "a checker above the bottom of the tree was offered no way to delegate"
+    );
+    assert!(
+        offered.contains(r#""enum":["reader","checker","checker-lead"]"#),
+        "the kinds offered were not the ones a checker reaches: {offered}"
+    );
+    assert!(
+        !offered.contains(r#""enum":["reader","checker","worker""#),
+        "a run that cannot write was offered the worker"
+    );
+}
+
+/// DELEGATE-32 with DELEGATE-30. A `spawns:` list is intersected with the kinds the run reaches:
+/// `reader, worker` from a checker offers the reader alone, and a list naming only the worker
+/// leaves the entries as they were rather than an empty enumeration. Rejects offering the list
+/// without comparing it, and narrowing to nothing.
+#[test]
+fn a_spawns_list_is_intersected_with_the_kinds_the_run_reaches() {
+    let scratch = Scratch::new("reach-spawns-intersect");
+    let home = Scratch::new("reach-spawns-intersect-home");
+    define(
+        &home,
+        "lists-both",
+        "kind: checker\nspawns: reader, worker\n",
+        "LISTS-BOTH",
+    );
+    define(
+        &home,
+        "lists-worker",
+        "kind: checker\nspawns: worker\n",
+        "LISTS-WORKER",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        ("TASK-BOTH", vec![reply_with("done")]),
+        ("TASK-WORKER", vec![reply_with("done")]),
+    ]);
+    let offered = |task: &str, name: &str| {
+        addressed_once(
+            &endpoint,
+            &received,
+            &workspace,
+            &addressed(task, &home, name),
+        )
+    };
+
+    let both = offered("TASK-BOTH", "lists-both");
+    assert!(
+        both.contains(r#""enum":["reader"]"#),
+        "the list was not intersected with what a checker reaches: {both}"
+    );
+
+    let worker = offered("TASK-WORKER", "lists-worker");
+    assert!(
+        worker.contains(r#""enum":["worker"]"#),
+        "a list naming only an unreached kind did not leave the entries as they were: {worker}"
+    );
+    assert!(
+        !worker.contains(r#""enum":[]"#),
+        "a tool was offered with an empty enumeration"
+    );
+}
+
+/// DELEGATE-32 and DELEGATE-33 through the real spawn path. A checker's turn asks for a worker
+/// anyway: the kernel starts it narrowed, and the message that says it has started carries the
+/// driver's sentence naming what it was started without. Rejects a start message with no
+/// sentence, one naming what the worker's kind asked for instead of what was taken away, and a
+/// kernel that refuses the kind because it was not offered.
+#[test]
+fn a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing() {
+    let scratch = Scratch::new("reach-single");
+    let home = Scratch::new("reach-single-home");
+    define(&home, "checker-lead", "kind: checker\n", "LEAD-BODY");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "SINGLE-TASK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"worker","task":"WORKER-SINGLE"}"#),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        ("WORKER-SINGLE", vec![reply_with("looked")]),
+    ]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("SINGLE-TASK", &home, "checker-lead"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let planners: Vec<&String> = requests
+        .iter()
+        .filter(|body| body.contains("SINGLE-TASK"))
+        .collect();
+    assert!(
+        planners[0].contains(r#""enum":["reader","checker","checker-lead"]"#),
+        "the checker's turn was offered more than it reaches"
+    );
+    assert_eq!(reporter.delegated.len(), 1, "the worker was not started");
+    let told = planners.last().expect("asked at least once");
+    assert!(
+        told.contains(
+            "It was started without writing files, because the run that started it does not \
+             hold it."
+        ),
+        "the start message did not name what the worker was started without: {told}"
+    );
+}
+
+/// DELEGATE-33 and AGENT-5 through the real spawn path: a fan-out from a run that cannot write
+/// says once, for the call, that each delegate was started without writing. Rejects a sentence
+/// said per delegate and one worded for a single delegate.
+#[test]
+fn a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_without_writing() {
+    let scratch = Scratch::new("reach-fan-out");
+    let home = Scratch::new("reach-fan-out-home");
+    define(&home, "checker-lead", "kind: checker\n", "LEAD-BODY");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "FAN-TASK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"worker","task":"SHARED-HALF","each":["ENTRY-ONE","ENTRY-TWO"]}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        ("ENTRY-ONE", vec![reply_with("one")]),
+        ("ENTRY-TWO", vec![reply_with("two")]),
+    ]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("FAN-TASK", &home, "checker-lead"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(reporter.delegated.len(), 2, "both delegates should start");
+    let requests: Vec<String> = received.try_iter().collect();
+    let told = requests
+        .iter()
+        .rfind(|body| body.contains("FAN-TASK"))
+        .expect("the planner asked");
+    assert!(
+        told.contains(
+            "Each was started without writing files, because the run that started it does not \
+             hold it."
+        ),
+        "the start message did not say what each was started without: {told}"
+    );
+    assert_eq!(
+        told.matches("started without").count(),
+        1,
+        "the sentence was not said once for the call"
+    );
+}
+
+/// DELEGATE-32 and DELEGATE-33 at every depth, through the real spawn path: a checker's turn starts
+/// a worker, that worker (narrowed to what the checker holds) starts another worker. The first
+/// worker is offered the kinds its own capabilities reach and not the worker, and the start message
+/// each parent receives names that its child was started without writing files. Rejects an offer
+/// and a message that are built once from the session's resolved set or the top planner's, and a
+/// sentence present only for the first level.
+#[test]
+fn a_worker_started_by_a_checker_is_offered_no_worker_and_each_depth_is_told_what_was_dropped() {
+    let scratch = Scratch::new("reach-nested");
+    let home = Scratch::new("reach-nested-home");
+    define(&home, "checker-lead", "kind: checker\n", "LEAD-BODY");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    // A turn replays the tasks it handed out, so a parent's marker is listed before its child's.
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "NEST-TASK",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"worker","task":"NEST-MID"}"#),
+                reply_with("waiting"),
+                reply_with("delegates finished"),
+            ],
+        ),
+        (
+            "NEST-MID",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"worker","task":"NEST-INNER"}"#),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("NEST-INNER", vec![reply_with("inner done")]),
+    ]);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed("NEST-TASK", &home, "checker-lead"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        reporter.delegated.len(),
+        2,
+        "the worker and the worker it started should both run"
+    );
+    let requests: Vec<String> = received.try_iter().collect();
+    let sentence = "It was started without writing files, because the run that started it does \
+                    not hold it.";
+
+    // Depth one: the checker's turn.
+    let top: Vec<&String> = requests
+        .iter()
+        .filter(|body| body.contains("NEST-TASK"))
+        .collect();
+    assert!(
+        top[0].contains(r#""enum":["reader","checker","checker-lead"]"#),
+        "the checker's turn was offered more than it reaches"
+    );
+    assert!(
+        top.last().expect("asked").contains(sentence),
+        "the checker's turn was not told its worker was started without writing"
+    );
+
+    // Depth two: the worker the checker started, which holds what the checker holds.
+    let middle: Vec<&String> = requests
+        .iter()
+        .filter(|body| body.contains("NEST-MID") && !body.contains("NEST-TASK"))
+        .collect();
+    assert!(
+        middle[0].contains(r#""name":"spawn_agent""#),
+        "a delegate above the bottom of the tree was offered no way to delegate"
+    );
+    assert!(
+        middle[0].contains(r#""enum":["reader","checker","checker-lead"]"#),
+        "the narrowed worker was offered kinds its own capabilities do not reach: {}",
+        middle[0]
+    );
+    assert!(
+        !middle[0].contains(r#""enum":["reader","checker","worker""#),
+        "the narrowed worker was offered the worker"
+    );
+    assert!(
+        middle.last().expect("asked").contains(sentence),
+        "the narrowed worker was not told that the worker it started was without writing"
+    );
+}
+
 /// What a request to the service put in front of the planner as the system prompt.
 fn system_prompt_of(body: &str) -> String {
     let sent: serde_json::Value = serde_json::from_str(body).expect("a JSON request");

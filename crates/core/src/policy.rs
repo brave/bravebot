@@ -575,6 +575,10 @@ pub struct Policy<'sink, S: Sink> {
     /// Whether this run's definition named its tools and left `spawn_agent` out, which refuses
     /// every delegate it asks for wherever it sits.
     named_out_delegating: bool,
+    /// The capabilities this run, where it is a delegate, was started without because the run
+    /// that started it did not hold them (DELEGATE-33). Taken from the spec and never from a word
+    /// a delegate or a file wrote.
+    started_without: Vec<Capability>,
     /// Whether the run is offered `vet_content`, which a reference it is handed says to use.
     vetting_offered: bool,
     /// Whether the run is offered `spawn_processor`, which a reference it is handed says to use.
@@ -756,6 +760,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             // tree from its spec with `within`.
             at: None,
             named_out_delegating: false,
+            started_without: Vec::new(),
             vetting_offered: true,
             spawning_offered: true,
             writing_offered: true,
@@ -867,10 +872,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Check that a capability was granted before it is exercised.
     pub fn before_capability(&mut self, capability: Capability) -> Gated<()> {
         if !self.capabilities.contains(&capability) {
+            // A delegate started without a capability its definition asked for says why, from the
+            // list the kernel built when it approved the delegate (DELEGATE-33).
+            let why = match self.started_without.contains(&capability) {
+                true => {
+                    ", because this delegate was started without it: the run that started it \
+                         does not hold it"
+                }
+                false => "",
+            };
             return Err(self.deny(
                 "capability",
                 Principle::Capability,
-                format!("capability '{capability}' was not granted for this turn"),
+                format!("capability '{capability}' was not granted for this turn{why}"),
             ));
         }
         self.allow("capability", format!("{capability} granted"));
@@ -1638,6 +1652,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             delegates: self.delegates.clone(),
             at: self.at,
             named_out_delegating: self.named_out_delegating,
+            started_without: self.started_without.clone(),
             vetting_offered: self.vetting_offered,
             spawning_offered: self.spawning_offered,
             writing_offered: self.writing_offered,
@@ -1964,6 +1979,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         &self.delegates
     }
 
+    /// Of `delegates`, the ones this run is offered to start: those whose kind's capabilities it
+    /// holds itself (DELEGATE-32). Read off the capability set the run holds now, so a turn
+    /// addressed to a definition that narrowed it is offered the narrower list.
+    pub fn delegates_reached_from(
+        &self,
+        delegates: &crate::delegate::Definitions,
+    ) -> crate::delegate::Definitions {
+        delegates.offered_to(&self.capabilities)
+    }
+
     /// Run as the delegate this spec describes: numbering what it spawns beneath it, and
     /// drawing on the tree it was spawned into rather than starting one.
     ///
@@ -1973,6 +1998,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     pub fn within(mut self, spec: &crate::delegate::DelegateSpec) -> Self {
         self.at = Some(spec.id());
         self.named_out_delegating = spec.named_out_delegating();
+        self.started_without = spec.without().to_vec();
         self.spawns = spec.spawns().map(<[String]>::to_vec);
         self.write_limits = spec.write_limits().to_vec();
         self.tree = spec.tree().clone();
@@ -4635,11 +4661,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
 
         let wanted = selected.capabilities();
         let held = selected.held_out_of(&self.capabilities);
-        let dropped: Vec<&str> = wanted
+        // Kept as capabilities for the spec, which the start message reads, as well as named in
+        // the trail below: the trail's words are for a person and are not read back.
+        let without: Vec<Capability> = wanted
             .iter()
             .filter(|capability| !self.capabilities.contains(capability))
-            .map(|capability| capability.as_str())
             .collect();
+        let dropped: Vec<&str> = without.iter().map(Capability::as_str).collect();
         if !dropped.is_empty() {
             self.allow(
                 "delegate",
@@ -4759,6 +4787,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let spec = crate::delegate::DelegateSpec::new(id, &selected, task, held, rounds, place)
             .holding(self.holds)
             .limited_to(limits)
+            .started_without(without)
             .budgeted_to(asked)
             .spawning_within(self.spawns.as_deref());
 
@@ -20178,6 +20207,113 @@ five
                 !spec.capabilities().contains(&Capability::ShellExec),
                 "a delegate was handed running by a run that could not run"
             );
+        }
+
+        /// DELEGATE-33. What a delegate was started without is on its spec as capabilities the
+        /// kernel compared, so the planner can be told. A worker started by a run that holds
+        /// only reading is without exactly what the run lacks, and one started by a run holding
+        /// all of it is without nothing. Rejects a spec that reports what its definition asked
+        /// for rather than what was taken away, and one that reports nothing.
+        #[test]
+        fn a_delegate_records_what_it_was_started_without() {
+            let mut sink = RecordingSink::new();
+            let mut narrow = Policy::begin(
+                routing_with("task", "look into it"),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .unwrap();
+            let spec = narrow
+                .before_delegate(&argument("worker"), &argument("fix it"), None)
+                .expect("a narrow run may still delegate");
+            assert_eq!(
+                spec.without().to_vec(),
+                Kind::Worker
+                    .capabilities()
+                    .iter()
+                    .filter(|capability| *capability != Capability::FileRead)
+                    .collect::<Vec<_>>()
+            );
+            assert!(!spec.without().is_empty());
+
+            // The planner's list of kinds is the same comparison, made before the call.
+            let reached = narrow.delegates_reached_from(narrow.delegates());
+            assert_eq!(reached.names(), ["reader"]);
+
+            let mut wide_sink = RecordingSink::new();
+            let mut wide = open_policy(&mut wide_sink);
+            let spec = wide
+                .before_delegate(&argument("worker"), &argument("fix it"), None)
+                .expect("a wide run may delegate");
+            assert!(spec.without().is_empty());
+        }
+
+        /// DELEGATE-33. The refusal of a capability a delegate was started without says that it was
+        /// started without it and that the run that started it does not hold it, from the list the
+        /// kernel built; the same capability refused to a run that was never a delegate, and a
+        /// capability the delegate never asked for, keep the plain wording. Rejects a refusal that
+        /// never names the cause, and one that names it for every refused capability.
+        #[test]
+        fn a_refusal_names_why_a_delegate_was_started_without_the_capability() {
+            let mut sink = RecordingSink::new();
+            let mut checker = Policy::begin(
+                routing_with("task", "look into it"),
+                ReleasePlan::new(),
+                Kind::Checker.capabilities(),
+                &mut sink,
+            )
+            .unwrap();
+            let spec = checker
+                .before_delegate(&argument("worker"), &argument("fix it"), None)
+                .expect("a checker may still delegate");
+            assert!(spec.without().contains(&Capability::FileWrite));
+
+            let mut inner = RecordingSink::new();
+            let mut worker = Policy::begin(
+                routing_with("task", "fix it"),
+                ReleasePlan::new(),
+                Kind::Checker.capabilities(),
+                &mut inner,
+            )
+            .unwrap()
+            .within(&spec);
+            let said = format!(
+                "{}",
+                worker
+                    .before_capability(Capability::FileWrite)
+                    .expect_err("a worker started without writing wrote")
+            );
+            assert!(
+                said.contains("capability 'file_write' was not granted for this turn")
+                    && said.contains("started without it")
+                    && said.contains("does not hold it"),
+                "{said}"
+            );
+
+            // A run that is no delegate, and a capability this delegate never asked for.
+            let mut plain_sink = RecordingSink::new();
+            let mut plain = Policy::begin(
+                routing_with("task", "look"),
+                ReleasePlan::new(),
+                Kind::Checker.capabilities(),
+                &mut plain_sink,
+            )
+            .unwrap();
+            let said = format!(
+                "{}",
+                plain
+                    .before_capability(Capability::FileWrite)
+                    .expect_err("a checker wrote")
+            );
+            assert!(!said.contains("started without it"), "{said}");
+            let said = format!(
+                "{}",
+                worker
+                    .before_capability(Capability::GitWrite)
+                    .expect_err("a checker-held delegate wrote to git")
+            );
+            assert!(!said.contains("started without it"), "{said}");
         }
 
         /// SERVERS-9 through DELEGATE-4. A worker holds every server the run that spawned it holds

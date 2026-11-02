@@ -31,8 +31,14 @@ wrote rather than anything the call describes. That is what a person could appro
 that a delegate may read, or read and run, or read and run and write. A name matching nothing in
 the list is refused and reaches no capability set.
 
+The list offered to a run is narrowed by the capabilities that run holds: a run that cannot write
+is not offered the kind that writes ([DELEGATE-32](../delegation.md#DELEGATE-32)). The offer is
+advisory, and a name outside the resolved set is refused as before.
+
 `verified-by: bravebot_core::policy::a_kind_nobody_enumerated_is_refused`
 `verified-by: bravebot_core::delegate::a_kind_is_selected_from_the_enumerated_set_and_nothing_else`
+`verified-by: bravebot_core::delegate::a_run_is_offered_the_kinds_its_own_capabilities_reach`
+`verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`
 
 <a id="AGENT-2"></a>
 ### AGENT-2: `task` is the whole of what the delegate is told, and it may not be private
@@ -52,6 +58,11 @@ The call answers with the delegate's number as soon as the kernel has approved o
 planner has its round back. What the delegate says arrives as a message of its own, before the
 planner is next asked what to do.
 
+Where the kernel started the delegate without a capability its definition asked for, because the
+run that started it does not hold the capability, the result names what it was started without in
+one sentence of the driver's ([DELEGATE-33](../delegation.md#DELEGATE-33)). In a fan-out the
+sentence is said once for the call.
+
 Not as the result of this call. A result answers a call once, and by the time a delegate has
 anything to say the call it came from was answered rounds earlier. A call that waited for the
 report would hold the turn still until the delegate finished, so a turn could have one delegate
@@ -66,6 +77,9 @@ waiting for every delegate of a batch, so nothing about it is for a person to ap
 `verified-by: bravebot_agent::turn::the_planner_is_asked_again_when_the_first_delegate_ends_and_the_turn_then_waits_for_the_rest`
 `verified-by: bravebot_agent::turn::two_delegates_ending_together_are_both_collected_by_one_wake_whatever_their_labels`
 `verified-by: bravebot_agent::turn::a_delegates_report_reaches_the_planner_that_asked_for_it`
+`verified-by: bravebot_agent::tools::the_start_message_names_what_a_delegate_was_started_without`
+`verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`
+`verified-by: bravebot_agent::turn::a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_without_writing`
 
 <a id="AGENT-4"></a>
 ### AGENT-4: what shape the report takes is not the tool's to decide
