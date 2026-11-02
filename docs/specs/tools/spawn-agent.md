@@ -163,3 +163,21 @@ round bound out of the call because a larger figure would be authority; a smalle
 `verified-by: bravebot_core::policy::a_private_budget_cannot_direct_a_delegate`
 `verified-by: bravebot_core::policy::each_delegate_of_a_fan_out_carries_the_figure`
 `verified-by: bravebot_agent::turn::a_call_budget_stops_a_delegate_and_cannot_raise_the_definitions`
+
+<a id="AGENT-8"></a>
+### AGENT-8: the text of `kind` names the round limit of each kind it lists
+
+Each line of the `kind` parameter's description ends with the number of rounds a delegate of that
+kind makes before it loses its tools, and what a round is: one reply with its tool calls. The
+number is [`Kind::rounds`](../delegation.md#DELEGATE-6) of the line's kind. A line for a definition
+carries its kind's number, not the definition's own `rounds:` and not the kind's ceiling.
+
+**Why.** The planner writes the task and has no other way to learn how much work fits in a
+delegate. A task sized to a figure it was never given ends with the delegate's tools removed part
+way through.
+
+**Why only the parameter text.** The tool's description names neither of the bounds on the tree
+([DELEGATE-7](../delegation.md#DELEGATE-7)), and a delegate's own rounds are not one of them.
+
+`verified-by: bravebot_agent::tools::each_kind_the_planner_may_pick_names_the_rounds_it_allows`
+`verified-by: bravebot_agent::tools::the_way_to_delegate_is_described_without_the_numbers_that_bound_it`

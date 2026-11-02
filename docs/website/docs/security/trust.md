@@ -272,8 +272,10 @@ permissions bypassed the file tools reach such a path with no request and the re
 outside the paths a granted request refuses ([`request_path`](../reference/tools.md#request_path)).
 An absolute path that lands inside the project is
 refused with "is inside the workspace, and a path there is named relative to the workspace root",
-and no directory is offered, since opening one would change nothing. A refused write is not pointed
-at an unconfined `run` line in that case.
+and no directory is offered, since opening one would change nothing. A path with `..` that lands
+inside the project is refused with "contains '..' and lands inside the workspace" and the instruction
+to name it relative to the workspace root without the `..`, and no directory is offered for it
+either. A refused write is not pointed at an unconfined `run` line in either case.
 
 ## Moving the working directory
 
@@ -310,7 +312,9 @@ refused. A path with `..` in it is allowed only where it lands in a directory th
 (`../worktree/file.rs` beside the project, for example), and it is then treated as the absolute
 path it lands on, so rules, trust and the audit trail see that one spelling. A `..` that goes
 through a symlink, lands back inside the project or lands on a name that is not valid UTF-8 is
-refused. A relative path always means the project, never a directory opened beside it.
+refused. One that lands back inside the project is told to be named relative to the project root
+without the `..`; the others are refused as leaving the workspace. A relative path always means the
+project, never a directory opened beside it.
 
 Confinement is about where an operation lands rather than how its path is spelled, so it holds for a
 file that does not exist yet: a write creates what it names, and a symlink out of the tree is refused

@@ -4050,7 +4050,7 @@ fn record_confinement_refusal<S: Sink>(
     remedy: crate::workspace::Remedy,
 ) {
     match remedy {
-        crate::workspace::Remedy::Inside => {
+        crate::workspace::Remedy::Inside | crate::workspace::Remedy::InsideClimb => {
             policy.refuse_path_inside_workspace(call, named, remedy.offered());
         }
         _ => policy.refuse_outside_workspace(call, named, remedy.offered()),
@@ -4097,7 +4097,7 @@ fn write_refused<S: Sink>(
     use crate::workspace::{Remedy, WorkspaceError};
     let way_out = match e {
         WorkspaceError::Escapes {
-            remedy: Remedy::Inside,
+            remedy: Remedy::Inside | Remedy::InsideClimb,
             ..
         } => "",
         WorkspaceError::Escapes { .. } => unconfined_way_out(policy, tools),
@@ -15739,12 +15739,55 @@ mod tests {
         };
         assert_eq!(
             line("migrator"),
-            "- migrator: Does it. Its delegates work in a checkout of the last commit, which \
-             holds no change not yet committed unless the call sets isolation to \
-             \"checkout_with_changes\"."
+            "- migrator: Does it. (limit: 120 rounds; a round is one reply with its tool calls) \
+             Its delegates work in a checkout of the last commit, which holds no change not yet \
+             committed unless the call sets isolation to \"checkout_with_changes\"."
         );
-        assert_eq!(line("reviewer"), "- reviewer: Does it.");
-        assert_eq!(line("tester"), "- tester: Does it.");
+        assert_eq!(
+            line("reviewer"),
+            "- reviewer: Does it. (limit: 60 rounds; a round is one reply with its tool calls)"
+        );
+        assert_eq!(
+            line("tester"),
+            "- tester: Does it. (limit: 80 rounds; a round is one reply with its tool calls)"
+        );
+    }
+
+    /// DELEGATE-6: the planner sizes a task to the rounds its kind allows, so each kind's line in
+    /// `kind` names that kind's own figure from `Kind::rounds`, and what a round is.
+    ///
+    /// Rejects: a line with no figure, one kind's figure on another's line, and a hard-coded figure
+    /// that drifts from the kind.
+    #[test]
+    fn each_kind_the_planner_may_pick_names_the_rounds_it_allows() {
+        let tools = for_planner(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            &bravebot_core::delegate::Definitions::default(),
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let spawn = tools
+            .iter()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .expect("a planner is offered a way to delegate");
+        let described = spawn.function.parameters["properties"]["kind"]["description"]
+            .as_str()
+            .expect("a description");
+        for name in bravebot_core::delegate::Kind::NAMES {
+            let kind = bravebot_core::delegate::Kind::from_name(name).expect("enumerated");
+            let line = described
+                .lines()
+                .find(|line| line.starts_with(&format!("- {name}: ")))
+                .unwrap_or_else(|| panic!("no line for {name}: {described}"));
+            assert!(
+                line.contains(&format!(
+                    "(limit: {} rounds; a round is one reply with its tool calls)",
+                    kind.rounds()
+                )),
+                "{name}: {line}"
+            );
+        }
     }
 
     /// CHECKOUT-1, CHECKOUT-23: the planner is offered two values for `isolation`, and told that the
@@ -16711,6 +16754,32 @@ mod tests {
         assert!(
             described.contains("returns less"),
             "the description does not say to prefer whichever returns less: {described}"
+        );
+    }
+
+    /// The planner learns which forms are refused only from this description, and a `$?` written to
+    /// report an exit status is refused for a reason it cannot guess: the run result already says how
+    /// each step ended. A description that names only `$VAR` leaves it writing `echo "exit=$?"`.
+    #[test]
+    fn the_run_description_names_the_special_parameters_and_the_dollar_quote_as_refused() {
+        let described = run_description();
+        for form in [
+            "`$?`", "`$$`", "`$@`", "`$*`", "`$#`", "`$-`", "`$!`", "`$'...'`",
+        ] {
+            assert!(
+                described.contains(form),
+                "the description does not name {form} as refused: {described}"
+            );
+        }
+        assert!(
+            described.contains("result of a run already says how each step ended")
+                && described.contains("a newline comes from a file or from standard input"),
+            "the description does not say what to do instead: {described}"
+        );
+        assert!(
+            described.contains("Double quotes do not")
+                && described.contains("no name, brace, parenthesis, special parameter or quote"),
+            "the description does not say what quoting settles or when a `$` is ordinary: {described}"
         );
     }
 

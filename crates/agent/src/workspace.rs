@@ -6302,7 +6302,36 @@ mod tests {
         let through = format!("{}/link/../x.txt", home.display());
         assert_eq!(workspace.climbed_to(&through), None);
         assert!(workspace.resolve(&through).is_err());
-
+        assert!(
+            matches!(
+                workspace.resolve(&through),
+                Err(WorkspaceError::Escapes {
+                    remedy: Remedy::Nothing,
+                    ..
+                })
+            ),
+            "a climb that leaves a link is not a climb inside the workspace"
+        );
+        let leaves_the_top = format!("{}x.txt", "../".repeat(64));
+        for typed in [through.as_str(), leaves_the_top.as_str()] {
+            let error = workspace.resolve(typed).expect_err("the climb is refused");
+            assert!(
+                matches!(
+                    &error,
+                    WorkspaceError::Escapes {
+                        remedy: Remedy::Nothing,
+                        ..
+                    }
+                ),
+                "{typed}: {error:?}"
+            );
+            assert!(
+                error
+                    .describe("ref:1")
+                    .contains("resolves outside the workspace"),
+                "{typed}: the refusal that no opened directory cures did not say it leaves"
+            );
+        }
         let base = home.parent().expect("base").to_path_buf();
         let mut holding = Workspace::new(&project).expect("workspace");
         holding
@@ -6310,6 +6339,78 @@ mod tests {
             .expect("the parent is opened");
         assert_eq!(holding.climbed_to("../project/x.txt"), None);
         assert!(holding.resolve("../project/x.txt").is_err());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A `..` that comes back into the working directory lands inside the workspace, so the refusal
+    /// says that and says to name the file relative to the root without the `..`, whether the path
+    /// is typed relative or from the top of the file system, and whether or not a directory
+    /// holding the root is open. It names no directory to open and no file to drop, and it does
+    /// not carry the path it was given, which may be a reference's filename (LIST-2).
+    ///
+    /// The failure this rejects is `refuse_climb` offering `Remedy::Nothing`, which tells the
+    /// planner that a file inside the workspace resolves outside it and gives it no way forward.
+    #[test]
+    fn a_climb_back_into_the_working_directory_is_told_to_drop_the_climb() {
+        let (home, project) = home_and_project("climb-inside");
+        std::fs::create_dir_all(project.join("src/a")).expect("src/a");
+        std::fs::create_dir_all(project.join("src/b")).expect("src/b");
+        std::fs::write(project.join("src/b/x.txt"), "text").expect("file");
+        let base = home.parent().expect("base").to_path_buf();
+        let absolute = format!("{}/src/a/../b/x.txt", project.display());
+        let held = format!(
+            "../{}/src/b/x.txt",
+            project.file_name().unwrap().to_str().unwrap()
+        );
+
+        let closed = Workspace::new(&project).expect("workspace");
+        let mut holding = Workspace::new(&project).expect("workspace");
+        holding
+            .add_directory(base.to_str().expect("utf-8"))
+            .expect("the parent is opened");
+
+        for (workspace, typed) in [
+            (&closed, "src/a/../b/x.txt"),
+            (&closed, absolute.as_str()),
+            (&holding, "src/a/../b/x.txt"),
+            (&holding, absolute.as_str()),
+            (&holding, held.as_str()),
+        ] {
+            let error = workspace.resolve(typed).expect_err("the climb is refused");
+            assert!(
+                matches!(&error, WorkspaceError::Escapes { path, remedy: Remedy::InsideClimb } if path == typed),
+                "{typed}: {error:?}"
+            );
+            for told in [
+                error.describe("ref:1"),
+                error.for_a_read().describe("ref:1"),
+            ] {
+                for said in [
+                    "'..'",
+                    "inside the workspace",
+                    "relative to the workspace root",
+                ] {
+                    assert!(told.contains(said), "{typed}: {said} was not said: {told}");
+                }
+                for untrue in ["outside", "add-dir", "drop the file", "absolute", "run"] {
+                    assert!(
+                        !told.contains(untrue),
+                        "{typed}: {untrue} was said of a climb inside the workspace: {told}"
+                    );
+                }
+                assert!(!told.contains(typed) && !told.contains("src/"), "{told}");
+            }
+            assert_eq!(
+                Remedy::InsideClimb.offered(),
+                "name it relative to the workspace root, without the '..'"
+            );
+        }
+        assert_eq!(
+            closed
+                .resolve("src/b/x.txt")
+                .expect("the plain spelling reaches it"),
+            project.join("src/b/x.txt")
+        );
         let _ = std::fs::remove_dir_all(base);
     }
 
@@ -6354,7 +6455,16 @@ mod tests {
             workspace.keyed("../x.txt", false, None),
             workspace.keyed(lookalike_file.to_str().expect("utf-8"), false, None)
         );
-        assert!(workspace.resolve("../x.txt").is_err());
+        assert!(
+            matches!(
+                workspace.resolve("../x.txt"),
+                Err(WorkspaceError::Escapes {
+                    remedy: Remedy::Nothing,
+                    ..
+                })
+            ),
+            "a climb onto a name that is not text is not a climb inside the workspace"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

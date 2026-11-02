@@ -63,7 +63,12 @@ Say what you did not settle. Where the task was ambiguous, take the most useful 
 that, and say in the answer which reading you took and what the other one was. Where you could \
 not finish, say how far you got and what stopped you. Both are more use than a confident answer \
 about something you did not do, and neither costs you anything: you are not being marked, you \
-are being read by somebody who has to act on this.";
+are being read by somebody who has to act on this.
+
+Your rounds are bounded. A round is one reply of yours with its tool calls, and after the last one \
+you have no tools and can only answer. If you have more than one round you are warned before that, \
+so that you can leave the working tree consistent and report what is left; plan the work to fit, and do not start \
+something you could not finish or undo in the rounds you have.";
 
 /// What a delegate above the bottom of the tree is told about delegating in turn.
 ///
@@ -900,6 +905,31 @@ mod tests {
             assert!(
                 !prompt.contains("call todo_write"),
                 "a {name} was told to use a tool it does not have"
+            );
+        }
+    }
+
+    /// The task a delegate is given is sized to its rounds, so each kind is told they are bounded,
+    /// what a round is, and that a warning comes before the last of them (DELEGATE-6). The figure
+    /// itself is left out: the kind's figure is said in the planner's list and the count in the
+    /// warning, so a definition's `rounds:` cannot contradict this text.
+    #[test]
+    fn every_kind_is_told_its_rounds_are_bounded_without_a_figure() {
+        for (name, may_delegate) in Kind::NAMES
+            .iter()
+            .flat_map(|name| [(name, true), (name, false)])
+        {
+            let kind = Kind::from_name(name).expect("enumerated");
+            let prompt = prompt_for(&kind.capabilities(), "", "", may_delegate);
+            assert!(
+                prompt.contains(
+                    "Your rounds are bounded. A round is one reply of yours with its tool calls"
+                ),
+                "a {name} was not told its rounds are bounded: {prompt}"
+            );
+            assert!(
+                prompt.contains("If you have more than one round you are warned before that"),
+                "a {name} was not told a warning comes ahead of the limit"
             );
         }
     }

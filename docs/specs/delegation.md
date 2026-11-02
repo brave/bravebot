@@ -215,6 +215,24 @@ watching. The call sets no round bound at all. On the limiting round the delegat
 rather than its run, and answers with what it has. [DELEGATE-29](#DELEGATE-29) adds a bound in
 tokens.
 
+A round is one reply of the delegate with its tool calls, however many calls it holds, and the
+limit counts rounds. A delegate is told this in three places, and each is a constant or one of the
+two counts the driver holds:
+
+- Its prompt says its rounds are bounded, what a round is, and that a warning comes before the
+  last of them. It names no figure, since a definition's `rounds:` may differ from its kind's.
+- A delegate with a limit of more than one round is warned once, in the request after the round at
+  which ten rounds remain, or at which one fewer than its limit remains where the limit is
+  smaller. The warning gives the count left and the limit, says that after the last round it has no
+  tools, and asks it to leave the working tree consistent (complete or abort a rebase, merge or
+  cherry-pick in progress, commit or discard its edits) and to answer with what it did, what is
+  left and the state it left the tree in. A delegate that has no tools left for another reason
+  ([DELEGATE-25](#DELEGATE-25), [DELEGATE-29](#DELEGATE-29)) is not sent it.
+- The notice on the limiting round says the delegate has used all its rounds.
+
+Only a delegate is warned. A run that is not a delegate and carries a round limit
+([TURN-2](turns.md#TURN-2)) is not.
+
 A definition asking for more than its kind's ceiling is loaded with the ceiling, and the turn
 says so, naming the definition, the number it asked for and the number it is given. An empty
 `rounds:` line names no number, as an empty `model:` line names no model
@@ -256,6 +274,13 @@ Zero goes with it: the bound is checked after a round, so zero would run as one.
 `verified-by: bravebot_agent::agents::a_rounds_line_that_is_not_a_count_is_not_a_definition`
 `verified-by: bravebot_agent::agents::a_definition_asking_past_its_kinds_ceiling_says_what_it_is_given`
 `verified-by: bravebot_agent::turn::no_kind_lets_a_definition_run_longer_than_an_unwatched_turn`
+`verified-by: bravebot_agent::delegate::every_kind_is_told_its_rounds_are_bounded_without_a_figure`
+`verified-by: bravebot_agent::turn::a_delegate_is_warned_once_before_its_last_rounds_and_then_loses_its_tools`
+`verified-by: bravebot_agent::turn::a_delegate_with_one_round_is_not_warned_ahead`
+`verified-by: bravebot_agent::turn::a_delegate_is_warned_when_ten_rounds_remain_or_one_fewer_than_a_small_limit`
+`verified-by: bravebot_agent::turn::a_bounded_turn_that_is_not_a_delegate_is_not_warned_ahead`
+`verified-by: bravebot_agent::turn::a_delegate_stopped_by_a_person_is_not_warned_ahead_in_the_same_round`
+`verified-by: bravebot_agent::turn::a_delegate_that_spent_its_token_budget_is_not_warned_ahead_in_the_same_round`
 
 <a id="DELEGATE-26"></a>
 ### DELEGATE-26: a delegate that reached its bound says so beside its report
@@ -401,6 +426,11 @@ The tool's description names neither bound. Delegates read it too, and a model t
 has left spends them. The refusal a request meets at the ceiling names the figure, since that is
 when the run that asked can act on it.
 
+That reasoning concerns the depth and the ceiling on running delegates, which are bounds on the
+tree. It does not extend to the rounds one delegate may make: the text of the tool's `kind`
+parameter names each kind's own round limit ([DELEGATE-6](#DELEGATE-6)), so that the planner can
+size a task to it, and the tool's description stays without a number.
+
 Every level is gated as the first is. [DELEGATE-2](#DELEGATE-2) refuses a run whose own context
 has met something untrusted, at whatever depth it sits, and [DELEGATE-4](#DELEGATE-4) narrows
 each delegate by the run that spawned it, so a nested delegate holds nothing its parent did not.
@@ -436,6 +466,7 @@ reader holding every tool a reader has, and the narrowing a person wrote would l
 
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_a_way_to_delegate_only_above_the_bottom_of_the_tree`
 `verified-by: bravebot_agent::tools::the_way_to_delegate_is_described_without_the_numbers_that_bound_it`
+`verified-by: bravebot_agent::tools::each_kind_the_planner_may_pick_names_the_rounds_it_allows`
 `verified-by: bravebot_core::policy::a_definition_that_names_its_tools_without_spawn_agent_cannot_delegate`
 `verified-by: bravebot_core::policy::a_delegate_refused_at_the_ceiling_is_recorded_only_as_refused`
 `verified-by: bravebot_agent::delegate::a_delegate_is_told_whether_it_may_delegate_by_where_it_sits`

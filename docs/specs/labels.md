@@ -29,7 +29,7 @@ guards:
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 139
+      - crates/core/src/policy.rs: 140
       - crates/core/src/slot.rs: 12
       - crates/core/src/value.rs: 9
       - crates/core/tests/browser_group_aliases.rs: 1
@@ -127,11 +127,11 @@ guards:
   - symbol: Policy::promote_reference_for_read
     sites:
       - crates/agent/src/tools.rs: 1
-      - crates/core/src/policy.rs: 5
+      - crates/core/src/policy.rs: 7
   - symbol: Policy::destination_from_reference
     sites:
       - crates/agent/src/tools.rs: 1
-      - crates/core/src/policy.rs: 5
+      - crates/core/src/policy.rs: 6
   - symbol: VettingSpec::where_it_came_from
     sites:
       - crates/core/src/policy.rs: 5
@@ -284,7 +284,8 @@ No inputs means no taint.
 
 Untrusted content is never placed in a message to the model. It is quarantined in a write-once
 slot and the planner is given a **reference**: origin, line count, byte count, label, and for an
-entry out of a listing whether it stands for a file or for a directory the walk stopped at. The
+entry out of a listing whether it stands for a file or for a directory the walk stopped at, said once
+in the listing's result for all its entries ([LIST-2](tools/list-files.md#LIST-2)). The
 planner acts on content it cannot read by naming that reference, and the policy layer resolves it
 when the write or the call actually happens. Where the content has to be changed rather than moved, it goes
 to a processor, described in [processors.md](processors.md). A reference to a number a processor chose

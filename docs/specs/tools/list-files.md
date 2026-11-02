@@ -48,9 +48,25 @@ withholds, arriving in the strongest position the design has.
 A symbolic link is not named either. The walk counts the links it meets and does not enter, and the
 result carries that count ([LIST-6](#LIST-6)).
 
-**Why.** One reference for the whole listing would leave the planner holding an address it cannot
-use. What came of that in practice was a planner guessing globs to see which came back empty.
+The result says once what its references are: where the entries are from, what a reference to a file
+is for, and what a reference to a directory is for. Each file then has a line of its own with its
+reference and label. The directories a bounded walk stopped at ([LIST-5](#LIST-5)) are given as a
+run, a count with the first and last reference and the label they share, and a directory whose label
+differs from its neighbour's starts a new run. Every reference in a run is a directory, and each is
+still a reference the planner can name. Which entries are files and which are directories comes from
+where the entry sits in the listing, never from its name. The header names only the tools the run is
+offered, as the description of a single reference does.
 
+**Why.** One reference for the whole listing would leave the planner holding an address it cannot
+use, and it would guess globs to see which came back empty. Describing every entry in full repeats
+the same sentence for each one, and the result is sent again every round: at 110 entries that is
+about 32 KB (~8k tokens) a round, and one invitation per directory to list the same directory again.
+
+`verified-by: bravebot_agent::turn::a_large_quarantined_listing_says_what_its_references_are_once`
+`verified-by: bravebot_core::reference::a_listing_is_described_once_with_a_line_per_file_and_one_per_run_of_directories`
+`verified-by: bravebot_core::reference::directories_with_different_labels_are_not_counted_together`
+`verified-by: bravebot_core::reference::the_header_of_a_listing_names_only_the_moves_the_run_is_offered`
+`verified-by: bravebot_core::reference::a_listing_of_one_directory_is_one_line_and_names_no_file_move`
 `verified-by: bravebot_core::policy::an_entry_reference_names_its_directory_and_never_its_file`
 `verified-by: bravebot_core::policy::reserving_the_wrong_number_of_names_is_refused`
 `verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
@@ -130,9 +146,9 @@ pattern does not apply to those: it says which files are wanted, and a directory
 answer might be rather than an answer.
 
 A quarantined listing names them the only way it names anything, as one of the references
-[LIST-2](#LIST-2) hands over per entry, and each of those says whether it stands for a file or for
-a directory the walk stopped at. A reference standing for a directory is refused where a path is
-expected, so the difference is enforced and not only stated.
+[LIST-2](#LIST-2) hands over per entry, and the result says which of them stand for a directory the
+walk stopped at, as a run with a count and its first and last reference. A reference standing for a
+directory is refused where a path is expected, so the difference is enforced and not only stated.
 
 **Why.** Without a bound the only listing on offer is every path at every depth, which in a real
 repository is thousands of them. That is paid for in the planner's context, again on every round

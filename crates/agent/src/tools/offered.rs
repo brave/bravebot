@@ -573,10 +573,10 @@ fn table(
                  does not name it: it says how many it did not enter, so a directory made of \
                  links lists as that count and not as empty. List the directory a link points \
                  to, by its own name, to see what is behind it. In a directory you may not \
-                 read, the names are quarantined and you get one \
-                 reference per entry instead, saying of each whether it is a file or a directory \
-                 the walk stopped at: use a file's as path_ref to read it, process it, and write \
-                 it back, without ever being told what it is called.",
+                 read, the names are quarantined and you get a reference for each file, and for \
+                 the directories the walk stopped at a count with the first and last reference \
+                 of each run, instead: use a file's as path_ref to read it, process it, and \
+                 write it back, without ever being told what it is called.",
                 bravebot_filetype::ignored_directories().join(", ")
             ),
             json!({
@@ -1253,12 +1253,17 @@ fn table(
              globs and {a,b} all work in the operands. There is no shell: the line is compiled \
              here into the programs and arguments it names, and anything that cannot be worked \
              out from the line itself is refused rather than guessed at. $(...), backticks, $VAR \
-             and ${...} are refused for that reason: write the value out. Name the program \
+             and ${...} are refused for that reason: write the value out. `$?`, `$$`, `$@`, \
+             `$*`, `$#`, `$-`, `$!` and `$'...'` are refused too: the result of a run already says \
+             how each step ended, no shell keeps parameters between steps, and escapes in \
+             `$'...'` are not read, so a newline comes from a file or from standard input. Name \
+             the program \
              outright for the same reason, since a pattern there stands for whichever file it \
-             matches today: `./scr*.sh` is refused where `./script.sh` runs. Quoting settles all \
-             of them, so '$HOME' is six characters and reaches the program as one argument. A \
-             `$` followed by no name, brace or parenthesis, as the end anchor in `grep -E \"x$\"`, is \
-             an ordinary character. \
+             matches today: `./scr*.sh` is refused where `./script.sh` runs. Single quotes settle \
+             all of them, so '$HOME' is six characters and reaches the program as one \
+             argument. Double quotes do not: \"$HOME\", \"$?\" and \"$(ls)\" are refused too. A \
+             `$` followed by no name, brace, parenthesis, special parameter or quote, as the end \
+             anchor in `grep -E \"x$\"`, is an ordinary character. \
              A \
              pattern the program should match itself is quoted for the same reason, so write \
              `find . -name '*.md'`: unquoted, `*.md` is replaced by the files it matches here, \
@@ -2376,10 +2381,13 @@ fn offer_kinds(tools: &mut [Tool], delegates: &bravebot_core::delegate::Definiti
                 }
                 false => "",
             };
+            // The kind's own figure, so a task can be sized to it. Not the definition's
+            // `rounds:` and not the kind's ceiling, which the person who wrote the file owns.
             format!(
-                "\n- {}: {}{apart}",
+                "\n- {}: {} (limit: {} rounds; a round is one reply with its tool calls){apart}",
                 definition.name(),
-                definition.description()
+                definition.description(),
+                definition.kind().rounds()
             )
         })
         .collect::<String>();

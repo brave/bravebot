@@ -149,7 +149,10 @@ Refused, as a compile error with the offending span named:
 |---|---|
 | `$(…)`, `` `…` `` | a command whose text is computed is a destination nobody saw; inside double quotes it is still one, and the refusal says single quotes pass it as text |
 | `<(…)`, `>(…)` | same, plus a file descriptor nobody named |
-| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line; a `$` that names nothing (the end anchor in `grep -E "x$"`) is an ordinary character, and a literal one before a name is written `'$'` or `\$` |
+| `$VAR`, `${…}` | the value is not in the line, so the plan is not in the line; a `$` followed by no name, brace, parenthesis, special parameter or quote (the end anchor in `grep -E "x$"`) is an ordinary character, and a literal one before a name is written `'$'` or `\$` |
+| `$?` | the exit status of an earlier step is not in the line; the refusal names the whole `$?` and says the run result already reports how each step ended ([RUN-13](run.md#RUN-13)) and that single quotes pass the characters as text |
+| `$$`, `$@`, `$*`, `$#`, `$-`, `$!` | no shell holds parameters between the steps of a line, so there is no value for these to stand for; the refusal names both characters and says single quotes pass the text as one argument |
+| `$'…'`, `$"…"` | a quote after a `$` asks a shell to read escapes, and escapes are not read; the refusal names the whole quoted text (to the end of the line where it is never closed, a backslash keeping the next character inside it) and says a newline comes from a file or from standard input |
 | `$((…))` | arithmetic is a language, and a language needs an interpreter; inside double quotes it is still one, and the refusal says single quotes pass it as text |
 | `&` | backgrounding is a parameter of the call, not a token in the line |
 | `<<`, `<<<` | here-documents are content wearing the shape of syntax |
@@ -187,6 +190,11 @@ is the same thing as the planner having written them.
 `verified-by: bravebot_agent::cmdline::a_variable_is_refused`
 `verified-by: bravebot_agent::cmdline::a_dollar_that_names_nothing_is_an_ordinary_character`
 `verified-by: bravebot_agent::cmdline::a_dollar_that_opens_an_expansion_is_still_refused`
+`verified-by: bravebot_agent::cmdline::a_refused_special_parameter_or_quoted_text_is_named_whole`
+`verified-by: bravebot_agent::cmdline::the_exit_status_refusal_says_the_run_result_reports_each_steps_status`
+`verified-by: bravebot_agent::cmdline::the_special_parameter_refusal_says_no_parameters_are_kept_and_single_quotes_pass_the_text`
+`verified-by: bravebot_agent::cmdline::the_dollar_quote_refusal_says_escapes_are_not_read_and_a_newline_comes_from_a_file`
+`verified-by: bravebot_agent::tools::the_run_description_names_the_special_parameters_and_the_dollar_quote_as_refused`
 `verified-by: bravebot_agent::cmdline::the_variable_refusal_names_the_quoting_that_works`
 `verified-by: bravebot_agent::cmdline::the_substitution_and_arithmetic_refusals_name_single_quotes`
 `verified-by: bravebot_agent::cmdline::arithmetic_is_refused`

@@ -209,6 +209,12 @@ pub enum Reason {
     ProcessSubstitution,
     /// `$VAR` or `${…}`.
     Variable,
+    /// `$?`.
+    ExitStatus,
+    /// `$$`, `$@`, `$*`, `$#`, `$-` or `$!`.
+    SpecialParameter,
+    /// `$'…'` or `$"…"`.
+    DollarQuote,
     /// `$((…))`.
     Arithmetic,
     /// A bare `&`.
@@ -272,6 +278,15 @@ impl fmt::Display for Reason {
             ),
             Self::Variable => f.write_str(
                 "the value is not in the line, so the plan would not be in the line. Write the value out, or put a literal `$` in single quotes or write it as `\\$`",
+            ),
+            Self::ExitStatus => f.write_str(
+                "the exit status of an earlier step is not in the line, so the plan would not be in the line. The result of a run already says how each step ended. To pass the characters `$?` to a program, put them in single quotes",
+            ),
+            Self::SpecialParameter => f.write_str(
+                "no shell holds parameters between the steps of a line, so there is no value for this to stand for. To pass the text to a program, write it inside single quotes as one argument",
+            ),
+            Self::DollarQuote => f.write_str(
+                "a quote after a `$` asks a shell to read escapes in the text, and escapes are not read here. Write the text in plain quotes, and where it holds a newline, take the text from a file or from standard input",
             ),
             Self::Arithmetic => f.write_str(
                 "arithmetic is a language, and a language needs an interpreter. To hand the text to one, pass it as one literal argument in single quotes, as when handing a script to `sh -c`",
@@ -997,6 +1012,9 @@ impl<'a> Scan<'a> {
         let reason = match (self.ahead(1), self.ahead(2)) {
             (Some('('), Some('(')) => Reason::Arithmetic,
             (Some('('), _) => Reason::CommandSubstitution,
+            (Some('?'), _) => Reason::ExitStatus,
+            (Some('$' | '@' | '*' | '#' | '-' | '!'), _) => Reason::SpecialParameter,
+            (Some('\'' | '"'), _) => Reason::DollarQuote,
             _ => Reason::Variable,
         };
         self.bump();
@@ -1005,6 +1023,10 @@ impl<'a> Scan<'a> {
         match self.peek() {
             Some('(') => self.take_until(')'),
             Some('{') => self.take_until('}'),
+            Some('?' | '$' | '@' | '*' | '#' | '-' | '!') => {
+                self.bump();
+            }
+            Some(quote @ ('\'' | '"')) => self.take_quoted(quote),
             _ => {
                 while self.peek().is_some_and(|c| c.is_alphanumeric() || c == '_') {
                     self.bump();
@@ -1012,6 +1034,20 @@ impl<'a> Scan<'a> {
             }
         }
         self.refuse(Span::new(start, self.offset()), reason)
+    }
+
+    /// Consume a quoted text opening at the cursor, up to and including its closing quote, or to
+    /// the end of the line. A backslash keeps the character after it inside the text, so an
+    /// escaped quote does not end it.
+    fn take_quoted(&mut self, quote: char) {
+        self.bump();
+        while let Some(c) = self.bump() {
+            if c == '\\' {
+                self.bump();
+            } else if c == quote {
+                break;
+            }
+        }
     }
 
     /// A refusal for the backtick at the cursor.
@@ -2569,28 +2605,112 @@ mod tests {
     }
 
     /// What follows a `$` still decides: a name, a brace, a parenthesis, a special parameter, or
-    /// outside double quotes a quote, each stays refused, in or out of quotes.
+    /// outside double quotes a quote, each stays refused, in or out of quotes. The reason says which
+    /// of them it was, since what to do instead differs.
     #[test]
     fn a_dollar_that_opens_an_expansion_is_still_refused() {
-        for line in [
-            r#"echo "$HOME""#,
-            r#"echo "a$_b""#,
-            r#"echo "$1""#,
-            r#"echo "$?""#,
-            r#"echo "$@""#,
-            r#"echo "${HOME}""#,
-            r#"echo "$$""#,
-            "echo $'a'",
-            r#"echo $"a""#,
-            "echo $?",
+        for (line, reason) in [
+            (r#"echo "$HOME""#, Reason::Variable),
+            (r#"echo "a$_b""#, Reason::Variable),
+            (r#"echo "$1""#, Reason::Variable),
+            (r#"echo "$?""#, Reason::ExitStatus),
+            (r#"echo "$@""#, Reason::SpecialParameter),
+            (r#"echo "${HOME}""#, Reason::Variable),
+            (r#"echo "$$""#, Reason::SpecialParameter),
+            ("echo $*", Reason::SpecialParameter),
+            ("echo $#", Reason::SpecialParameter),
+            ("echo $-", Reason::SpecialParameter),
+            ("echo $!", Reason::SpecialParameter),
+            ("echo $'a'", Reason::DollarQuote),
+            (r#"echo $"a""#, Reason::DollarQuote),
+            ("echo $?", Reason::ExitStatus),
         ] {
-            assert_eq!(refused(line).reason, Reason::Variable, "{line}");
+            assert_eq!(refused(line).reason, reason, "{line}");
         }
         assert_eq!(
             refused(r#"echo "$(ls)""#).reason,
             Reason::CommandSubstitution
         );
         assert_eq!(refused(r#"echo "$((1))""#).reason, Reason::Arithmetic);
+    }
+
+    /// The exit status is already reported for each step of a run, so the refusal says so instead of
+    /// asking for a value that cannot be written out.
+    #[test]
+    fn the_exit_status_refusal_says_the_run_result_reports_each_steps_status() {
+        for line in ["true; echo $?", r#"echo "exit=$?""#] {
+            let said = refused(line).to_string();
+            assert!(
+                said.starts_with("`$?` at offset ")
+                    && said.ends_with(
+                        ": the exit status of an earlier step is not in the line, so the plan would not be in the line. The result of a run already says how each step ended. To pass the characters `$?` to a program, put them in single quotes"
+                    ),
+                "{line}: {said}"
+            );
+        }
+    }
+
+    /// No shell keeps a parameter between steps, so there is nothing to write out. The text can
+    /// still reach a program as one single-quoted argument.
+    #[test]
+    fn the_special_parameter_refusal_says_no_parameters_are_kept_and_single_quotes_pass_the_text() {
+        for parameter in ["$$", "$@", "$*", "$#", "$-", "$!"] {
+            let said = refused(&format!("echo {parameter}")).to_string();
+            assert_eq!(
+                said,
+                format!(
+                    "`{parameter}` at offset 5: no shell holds parameters between the steps of a line, so there is no value for this to stand for. To pass the text to a program, write it inside single quotes as one argument"
+                )
+            );
+        }
+    }
+
+    /// `$'…'` is a quoting form and holds no missing value, so the refusal says that escapes are
+    /// not read and where a newline comes from, and does not ask for a value.
+    #[test]
+    fn the_dollar_quote_refusal_says_escapes_are_not_read_and_a_newline_comes_from_a_file() {
+        for (line, text) in [
+            (r"echo $'a\nb'", r"$'a\nb'"),
+            (r#"echo $"a b""#, r#"$"a b""#),
+        ] {
+            let said = refused(line).to_string();
+            assert_eq!(
+                said,
+                format!(
+                    "`{text}` at offset 5: a quote after a `$` asks a shell to read escapes in the text, and escapes are not read here. Write the text in plain quotes, and where it holds a newline, take the text from a file or from standard input"
+                ),
+                "{line}"
+            );
+        }
+    }
+
+    /// The refusal names the whole construct, as it does for `$HOME`, `${HOME}` and `$(ls)`, so the
+    /// reader is pointed at `$?` and not at a dollar sign to go looking for.
+    #[test]
+    fn a_refused_special_parameter_or_quoted_text_is_named_whole() {
+        for (line, text, offset) in [
+            ("echo $?", "$?", 5),
+            ("echo $$", "$$", 5),
+            ("echo $@", "$@", 5),
+            ("echo $*", "$*", 5),
+            ("echo $#", "$#", 5),
+            ("echo $-", "$-", 5),
+            ("echo $!", "$!", 5),
+            (r#"echo "a $? b""#, "$?", 8),
+            (r"echo $'a\nb' c", r"$'a\nb'", 5),
+            (r#"echo $"a b" c"#, r#"$"a b""#, 5),
+            // The quoted text runs to the end of the line where it is never closed, as the other
+            // constructs do.
+            ("echo $'abc", "$'abc", 5),
+            // The parameter ends at its one character, so what follows is not part of the span.
+            ("true; echo $?x", "$?", 11),
+            // A backslash keeps the quote it escapes inside the span.
+            (r"echo $'it\'s' c", r"$'it\'s'", 5),
+        ] {
+            let refusal = refused(line);
+            assert_eq!(refusal.text, text, "{line}");
+            assert_eq!(refusal.span.start, offset, "{line}");
+        }
     }
 
     /// The refusals that remain say how to write a literal `$`, since the planner cannot guess it.

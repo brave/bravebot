@@ -63,7 +63,9 @@ the remedy, and the turn does not end as clean. Where the person has turned perm
 a path a read would reach is armed instead, and the first time the session reaches its directory
 the trail carries one `path_reach` record naming the mode, `watch_file` and `path`. An absolute path
 that lands inside the workspace is recorded as "is inside the workspace but not named relative to
-its root; remedy offered: name it relative to the workspace root".
+its root; remedy offered: name it relative to the workspace root". A relative or absolute path with a
+`..` that lands inside the workspace is recorded the same way, with the remedy "name it relative to
+the workspace root, without the '..'".
 
 Three pieces of notation appear throughout:
 

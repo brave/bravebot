@@ -1778,6 +1778,13 @@ delegate-stopped-narration = you stopped this delegate, so it has to finish with
 # set: it loses its tools and answers with what it has. The figure is a count of tokens.
 delegate-budget-narration = this delegate has spent its budget of { $budget } tokens, so it has to finish with what it has
 
+# Said among a turn's own lines when it has made the most rounds it may: it loses its tools and answers
+# with what it has. The figure is a count of rounds, each a reply with its tool calls.
+delegate-rounds-narration = { $rounds ->
+    [one] that is { $rounds } round of tool calls without an answer, so this turn has to finish with what it has
+   *[other] that is { $rounds } rounds of tool calls without an answer, so this turn has to finish with what it has
+    }
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = offer these tools to the model?

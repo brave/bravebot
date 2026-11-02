@@ -186,9 +186,10 @@ which files are wanted, and a directory is where the answer might be rather than
 A listing of a directory nobody vouched for is quarantined, because a filename is content. It returns
 **one reference per entry**, not one for the listing. That is what lets the planner read a file,
 process it and write it back without ever being told what it is called. The directories a bounded
-walk stopped at are entries too, and each reference says which of the two it stands for: there is
-nothing behind a directory to read, and the way to what is inside it is another listing with a
-greater depth.
+walk stopped at are entries too. The result says once what a reference to a file and a reference to a
+directory are for, gives each file a line with its reference, and gives the directories as a count
+with the first and last reference. There is nothing behind a directory to read, and the way to what
+is inside it is another listing with a greater depth.
 
 A walk does not enter a fixed list of directories, at any depth, and its result does not say that it
 left them out: version control (`.git`, `.hg`, `.svn`), build output and caches (`target`, `dist`,
@@ -892,6 +893,12 @@ work it describes.
 
 A name that is neither a kind nor a definition is refused, and the refusal lists the names that would
 have worked.
+
+The planner is told how many rounds a delegate of each kind makes before it has to answer, so it can
+size the task: 60 for a `reader`, 80 for a `checker` and 120 for a `worker`. A round is one reply
+with its tool calls. A [definition](../customize/agents.md) is listed with its kind's figure. The
+delegate is told its rounds are bounded and is warned before the last of them, so it can leave its
+working tree consistent and report what is left.
 
 A delegate holds its kind's capabilities **narrowed by its parent's**, so delegation redistributes
 authority and never creates it, and a kind asking for more gets a delegate without it. The planner
