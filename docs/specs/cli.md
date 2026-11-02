@@ -2636,6 +2636,10 @@ are not sent anywhere.
 `verified-by: bravebot_cli::scheduled_runs::a_cron_expression_that_is_not_five_plain_fields_writes_nothing`
 `verified-by: bravebot_cli::scheduled_runs::removing_an_entry_takes_its_line_and_its_files_and_no_other`
 `verified-by: bravebot_cli::scheduled_runs::a_run_is_recorded_and_listed_by_history`
+`verified-by: bravebot_cli::scheduled_runs::a_removed_entrys_id_is_not_given_to_the_next_entry`
+`verified-by: bravebot_cli::scheduled_runs::history_is_newest_first_and_shows_the_tokens_the_session_spent`
+`verified-by: bravebot_cli::scheduled_runs::an_entry_is_not_kept_where_the_crontab_would_not_take_the_line`
+`verified-by: bravebot_cli::scheduled_runs::a_host_with_no_crontab_refuses_add_and_remove`
 `verified-by: bravebot_cli::schedule::the_mode_is_read_only_unless_a_flag_was_typed`
 `verified-by: bravebot_cli::schedule::a_cron_expression_is_five_fields_of_digits_and_the_four_operators`
 `verified-by: bravebot_cli::schedule::a_table_keeps_every_other_line_and_replaces_only_its_own`

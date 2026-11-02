@@ -204,3 +204,133 @@ fn a_run_is_recorded_and_listed_by_history() {
         .unwrap();
     assert!(history.contains(&format!("status {status}")), "{history}");
 }
+
+/// Ids are never handed out again, since the history is kept under the id and would otherwise be
+/// read as the new entry's.
+#[test]
+fn a_removed_entrys_id_is_not_given_to_the_next_entry() {
+    let scratch = Scratch::new("schedule-id-reuse");
+    added(&scratch, &[]);
+    scratch.run(&["schedule", "run-now", "1"]);
+    assert!(scratch.state().join("1.history").exists());
+    scratch.run(&["schedule", "remove", "1"]);
+
+    let again = added(&scratch, &[]);
+    assert!(out(&again).contains("Added schedule 2."), "{}", out(&again));
+    let history = out(&scratch.run(&["schedule", "history"]));
+    assert!(!history.contains("status "), "{history}");
+}
+
+/// The state directory the sessions of the entry's directory are kept in.
+fn sessions_of(scratch: &Scratch, id: &str) -> PathBuf {
+    let entry = std::fs::read_to_string(scratch.state().join(format!("{id}.entry"))).unwrap();
+    let directory = entry
+        .lines()
+        .find_map(|line| line.strip_prefix("dir="))
+        .unwrap();
+    let key: String = directory
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '_' => c,
+            _ => '-',
+        })
+        .collect();
+    scratch.path.join("home/.bravebot/sessions").join(key)
+}
+
+#[test]
+fn history_is_newest_first_and_shows_the_tokens_the_session_spent() {
+    let scratch = Scratch::new("schedule-history-order");
+    added(&scratch, &[]);
+    // Written oldest first, as a run appends them.
+    std::fs::write(
+        scratch.state().join("1.history"),
+        "1700000000 0 -\n1800000000 3 20260101T000000-ab\n",
+    )
+    .unwrap();
+    let sessions = sessions_of(&scratch, "1");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("20260101T000000-ab.json"),
+        r#"{"id":"20260101T000000-ab","directory":"/x","title":"t","started":1,"updated":1,"tokens":4321,"conversation":{"messages":[],"context":"trusted"}}"#,
+    )
+    .unwrap();
+
+    let history = out(&scratch.run(&["schedule", "history"]));
+    let rows: Vec<&str> = history.lines().collect();
+    assert_eq!(rows.len(), 2, "{history}");
+    assert!(
+        rows[0].contains("status 3")
+            && rows[0].contains("session 20260101T000000-ab")
+            && rows[0].contains("tokens 4321"),
+        "{history}"
+    );
+    assert!(
+        rows[1].contains("status 0") && rows[1].contains("tokens -"),
+        "{history}"
+    );
+}
+
+/// An entry is kept only where the line was installed.
+#[test]
+fn an_entry_is_not_kept_where_the_crontab_would_not_take_the_line() {
+    let scratch = Scratch::new("schedule-install-fails");
+    let crontab = scratch.path.join("bin/crontab");
+    std::fs::write(
+        &crontab,
+        "#!/bin/sh\ncase \"$1\" in\n  -l) exit 1 ;;\n  -) /bin/cat > /dev/null; exit 1 ;;\nesac\n",
+    )
+    .unwrap();
+    let output = added(&scratch, &[]);
+    assert!(!output.status.success(), "{}", out(&output));
+    assert_eq!(scratch.table(), "");
+    let kept: Vec<_> = std::fs::read_dir(scratch.state())
+        .map(|dir| dir.flatten().map(|f| f.file_name()).collect())
+        .unwrap_or_default();
+    assert!(kept.is_empty(), "{kept:?}");
+}
+
+#[test]
+fn a_host_with_no_crontab_refuses_add_and_remove() {
+    let scratch = Scratch::new("schedule-no-crontab");
+    added(&scratch, &[]);
+    let table = scratch.table();
+    std::fs::create_dir_all(scratch.path.join("empty")).unwrap();
+    let without = |arguments: &[&str], terminal: bool| {
+        let mut command = scratch.command(arguments);
+        command.env("PATH", scratch.path.join("empty"));
+        if terminal {
+            let quoted: Vec<String> = std::iter::once(env!("CARGO_BIN_EXE_bravebot").to_string())
+                .chain(arguments.iter().map(|a| a.to_string()))
+                .map(|word| format!("'{}'", word.replace('\'', "'\\''")))
+                .collect();
+            let mut wrapped = Command::new("/usr/bin/script");
+            wrapped
+                .args(["-qec", &quoted.join(" "), "/dev/null"])
+                .env_clear()
+                .envs(command.get_envs().filter_map(|(k, v)| Some((k, v?))))
+                .current_dir(scratch.path.join("work"))
+                .stdin(Stdio::null());
+            wrapped.output().unwrap()
+        } else {
+            command.output().unwrap()
+        }
+    };
+    let removal = without(&["schedule", "remove", "1"], false);
+    assert!(!removal.status.success());
+    assert!(scratch.state().join("1.entry").exists());
+    let addition = without(
+        &[
+            "schedule",
+            "add",
+            "--cron",
+            "0 9 * * *",
+            "--prompt",
+            "hello",
+        ],
+        true,
+    );
+    assert!(!addition.status.success());
+    assert!(!scratch.state().join("2.entry").exists());
+    assert_eq!(scratch.table(), table);
+}

@@ -407,10 +407,7 @@ fn add(words: &[String], typed: &Typed) -> ExitCode {
     let Some(store) = store() else {
         return fail(Ending::Failed, t!(schedule_no_store));
     };
-    let used: Vec<u64> = entries().iter().filter_map(|e| e.id.parse().ok()).collect();
-    let id = (1u64..)
-        .find(|n| !used.contains(n))
-        .map_or_else(String::new, |n| n.to_string());
+    let id = next_id(&store);
     let Some(line) = me
         .as_path()
         .to_str()
@@ -436,6 +433,22 @@ fn add(words: &[String], typed: &Typed) -> ExitCode {
     println!("{}", t!(schedule_added, id = id.as_str()));
     println!("{}", mode.limit());
     ExitCode::SUCCESS
+}
+
+/// An id past every one the store has a file for, so a removed entry's history is never read as a
+/// new entry's.
+fn next_id(store: &Path) -> String {
+    let highest = std::fs::read_dir(store)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| {
+            let name = file.ok()?.file_name();
+            let (id, _) = name.to_str()?.split_once('.')?;
+            id.parse::<u64>().ok()
+        })
+        .max()
+        .unwrap_or(0);
+    highest.saturating_add(1).to_string()
 }
 
 /// Remove an entry's files. The history stays, since the sessions it names do.
