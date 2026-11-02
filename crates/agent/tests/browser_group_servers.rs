@@ -2574,7 +2574,7 @@ fn an_item_held_out_reaches_the_planner_only_when_a_person_has_read_it_and_every
             tool_request(&wire("held", "take_held"), "{}"),
             tool_request(
                 "spawn_processor",
-                r#"{"reads":["ref:2"],"instruction":"say what it is about"}"#,
+                r#"{"reads":["ref:5"],"instruction":"say what it is about"}"#,
             ),
             reply_with("done"),
         ],
@@ -3443,10 +3443,20 @@ fn a_free_text_answer_cannot_be_named_as_a_choice() {
         .map(|message| words_of_a_result(message["content"].as_str().expect("a result")))
         .collect();
     assert_eq!(refusals.len(), 4, "{refusals:#?}");
-    for (named, told) in ["ref:1", "ref:3", "ref:99"].iter().zip(&refusals) {
+    for (named, told) in ["ref:1"].iter().zip(&refusals) {
         assert!(
             told.starts_with("refused:")
                 && told.contains(&format!("slot '{named}' holds no choice")),
+            "{named}: {told}"
+        );
+    }
+    // A name nothing holds is told how a reference is written, not that a slot holds no choice.
+    for (named, told) in ["ref:3", "ref:99"].iter().zip(&refusals[1..]) {
+        assert!(
+            told.starts_with(&format!("refused: no reference is named \"{named}\""))
+                && told.contains("ref:N, for example ref:3")
+                && told.contains("No processor has made a choice yet.")
+                && !told.contains("holds no choice"),
             "{named}: {told}"
         );
     }
@@ -3454,6 +3464,33 @@ fn a_free_text_answer_cannot_be_named_as_a_choice() {
         refusals[3].starts_with("error:") && refusals[3].contains("must be a reference"),
         "{}",
         refusals[3]
+    );
+}
+
+/// OUTPUT-6, ROUTE-10. A name no slot holds, named where a choice is expected after a processor
+/// has made one, is told how a reference is written and is listed the references that hold a
+/// choice: `ref:3` only, not the listing `ref:1` that holds text. The regression it rejects is a
+/// list of every reference, which would offer the planner text where only a choice fills the
+/// argument, or a list that is empty although a choice was made.
+#[test]
+fn a_name_no_slot_holds_is_listed_the_choices_that_were_made() {
+    let ran = choosing_turn(
+        "lists-choices",
+        "3",
+        choosing_replies(&[click_naming("ref:99")]),
+        approving(),
+        &mut Conversation::new(),
+    );
+
+    assert_eq!(after_the_listing(&ran), [], "a call named no choice");
+    let told = told_of_the_last_call(&ran);
+    assert!(
+        told.starts_with("refused: no reference is named \"ref:99\"")
+            && told.contains("ref:N, for example ref:3")
+            && told.contains("The references to choices so far are ref:3.")
+            && !told.contains("ref:1")
+            && !told.contains("No processor has made a choice yet."),
+        "{told}"
     );
 }
 

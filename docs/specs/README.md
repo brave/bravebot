@@ -31,7 +31,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [permission-modes.md](permission-modes.md) | `MODE` | 14 | a standing answer to those prompts: accepting edits, planning, auto, or asking about nothing at all |
 | [auto-mode.md](auto-mode.md) | `AUTO` | 9 | a fifth permission mode in which a classifier that reads only the person's typed lines and the action answers a confined run and the first fetch question, and every other question is asked (the setting that removes the mode from the ladder and from the desktop window's menu, and a model of its own, are not built) |
 | [references.md](references.md) | `REFER` | 6 | directories outside the working one that a person declared in their settings, what declaring one grants, and what the planner is told (repository entries and `@alias` proposed, not built) |
-| [naming-files.md](naming-files.md) | `NAME` | 11 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
+| [naming-files.md](naming-files.md) | `NAME` | 13 | writing `@path` in a prompt: what it puts into the turn and what it vouches for |
 | [pasting.md](pasting.md) | `PASTE` | 12 | what Ctrl-V puts into a turn, text, a picture or a copied file, and on what footing |
 | [dropping.md](dropping.md) | `DROP` | 12 | what dragging a file onto a window puts into a turn, and on what footing |
 | [deep-links.md](deep-links.md) | `LINK` | 6 | a `bravebot://open` link: what it may ask for, where it starts, and why its words are put in the box and not sent |
@@ -107,7 +107,7 @@ the routing-versus-content split they share.
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 8 | `spawn_agent` |
 | [tools/run.md](tools/run.md) | `RUN` | 30 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
-| [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 5 | `read_output` |
+| [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 6 | `read_output` |
 | [tools/vet-content.md](tools/vet-content.md) | `VET` | 5 | `vet_content` |
 | [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 8 | `fetch_url` |
 | [tools/download-url.md](tools/download-url.md) | `DOWNLOAD` | 5 | `download_url` |

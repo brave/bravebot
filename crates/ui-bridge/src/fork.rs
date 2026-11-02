@@ -146,6 +146,12 @@ pub fn cut(snapshot: &Snapshot, said: &[Said], ordinal: usize) -> Option<Cut> {
             // child ends earlier than they did. False costs at most one needless line to the
             // planner, where true could withhold one a turn needed.
             asked_to_write: false,
+            // Carried verbatim. When the cut took the plan notice away, true costs one needless
+            // "plan mode has ended" line. When the parent ended plan mode after the cut point, the
+            // kept notice still says plan mode is on and the child is not told otherwise (#3703);
+            // the message list holds no tag that says which notice is which, so this is not decided
+            // here.
+            plan_mode_told: snapshot.plan_mode_told,
             // Carried verbatim, like the integrity and for the same reason on the other axis.
             holds: snapshot.holds.clone(),
         },
@@ -175,6 +181,7 @@ mod tests {
             archive: Vec::new(),
             measured: 4096,
             asked_to_write: true,
+            plan_mode_told: false,
             holds: "public".into(),
         }
     }
@@ -478,6 +485,29 @@ mod tests {
         assert_eq!(
             cut.before.references, 3,
             "but the names handed out are remembered"
+        );
+    }
+
+    /// The kept messages may hold a plan-mode notice, and the flag says whether it is the last
+    /// thing they say about the mode. A cut that reset it would leave the child's planner reading
+    /// that notice as current, with nothing to retract it when the child starts outside plan mode.
+    /// The child is the conversation restored from the cut, and a turn that starts outside plan
+    /// mode retracts the notice when that conversation reports the flag (MODE-8), so the flag is
+    /// read from the restored conversation. That the turn then retracts is pinned in the agent's
+    /// tests listed under MODE-8.
+    #[test]
+    fn a_cut_leaves_the_child_recording_that_its_last_plan_mode_notice_said_plan_mode_is_on() {
+        let mut before = snapshot(vec![Message::user("first"), Message::user("second")]);
+        before.plan_mode_told = true;
+        let cut = cut(&before, &drawn(&before), 1).expect("a second prompt");
+
+        assert!(
+            cut.before.plan_mode_told,
+            "the cut lost the record that the last notice said plan mode is on"
+        );
+        assert!(
+            Conversation::restored(cut.before).plan_mode_told(),
+            "the child's conversation does not report the notice it keeps as plan mode being on"
         );
     }
 

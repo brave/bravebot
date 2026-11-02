@@ -3031,6 +3031,88 @@ fn argument(arguments: &Value, key: &str) -> Option<Labelled<String>> {
     ))
 }
 
+/// Which references [`accept_named_reference`] lists when it refuses a name no slot holds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NamesToList {
+    /// The references a run's output was put under.
+    Output,
+    /// Every reference holding text.
+    Text,
+    /// The choices a processor made.
+    Choices,
+}
+
+/// Accept a reference the planner named, and refuse a name no slot holds with the way to write one.
+///
+/// [`Policy::accept_reference`] answers for the context and the label of the name and nothing
+/// else, so a name that is not a slot at all (`3`, `ref:99`) came out of it as a slot id and was
+/// then taken for a slot that exists and is not what the tool wants. The slot store is asked here
+/// whether the name is written, which is driver metadata: a yes or a no about a name the planner
+/// typed, never a byte of what any slot holds.
+///
+/// The refusal echoes the planner's own argument, escaped, and names the references the driver
+/// has minted, which are `ref:N` and carry no content. `listing` narrows that list to the
+/// references the tool can use: a run's output for a tool that reads nothing else, or the
+/// choices a processor made for one that takes nothing else.
+pub(crate) fn accept_named_reference<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    slots: &SlotStore,
+    tool: &str,
+    field: &str,
+    named: &Labelled<String>,
+    listing: NamesToList,
+) -> Result<SlotId, String> {
+    // The latest few, so a long session does not turn a refusal into a listing.
+    const SHOWN: usize = 8;
+    let slot = policy
+        .accept_reference(tool, field, named)
+        .map_err(|denial| format!("refused: {denial}"))?;
+    // A choice is not text, so a name that holds one is refused in the words used for a name
+    // nothing holds. A text slot named where a choice is expected goes on to the kernel, which
+    // says it holds no choice.
+    let usable = match listing {
+        NamesToList::Choices => slots.is_written(&slot),
+        NamesToList::Output | NamesToList::Text => slots.holds_text(&slot),
+    };
+    if usable {
+        return Ok(slot);
+    }
+    policy.refuse_unknown_reference(tool, field);
+    let known: Vec<String> = match listing {
+        NamesToList::Choices => slots.choice_names(),
+        NamesToList::Output | NamesToList::Text => slots.text_names(),
+    }
+    .into_iter()
+    .filter(|id| listing != NamesToList::Output || slots.is_from_command(id))
+    .map(|id| id.to_string())
+    .collect();
+    let held = if known.is_empty() {
+        match listing {
+            NamesToList::Output => "No run has printed anything under a reference yet.".to_string(),
+            NamesToList::Choices => "No processor has made a choice yet.".to_string(),
+            NamesToList::Text => "No reference has been given yet.".to_string(),
+        }
+    } else {
+        let skipped = known.len().saturating_sub(SHOWN);
+        let latest = known[skipped..].join(", ");
+        let which = match listing {
+            NamesToList::Output => "The references to output so far",
+            NamesToList::Choices => "The references to choices so far",
+            NamesToList::Text => "The references given so far",
+        };
+        if skipped == 0 {
+            format!("{which} are {latest}.")
+        } else {
+            format!("{which} include the latest {SHOWN}: {latest}.")
+        }
+    };
+    Err(format!(
+        "refused: no reference is named {:?}. A reference is written ref:N, for example ref:3, \
+         and is one a result gave you. {held}",
+        slot.as_str()
+    ))
+}
+
 /// An argument that names something, where a blank one names nothing.
 ///
 /// A planner sent a schema whose optional fields are all strings will sometimes fill every one
@@ -3878,9 +3960,14 @@ fn path_argument<S: Sink>(
             })
         }
         (None, Some(reference)) => {
-            let slot = policy
-                .accept_reference(tool, "path_ref", &reference)
-                .map_err(|denial| format!("refused: {denial}"))?;
+            let slot = accept_named_reference(
+                policy,
+                slots,
+                tool,
+                "path_ref",
+                &reference,
+                NamesToList::Text,
+            )?;
             // Which gate the name comes out of is decided by what this call will do with it: a
             // read may promote it, an effect may not and needs a person instead. Asking the
             // wrong one is not possible from here, because the caller says which it is.
@@ -4717,9 +4804,14 @@ fn quarantined_body<S: Sink>(
     path: &str,
     destination: Destination,
 ) -> Result<Quarantined, String> {
-    let slot = policy
-        .accept_reference("write_file", "contents_ref", named)
-        .map_err(|denial| format!("refused: {denial}"))?;
+    let slot = accept_named_reference(
+        policy,
+        slots,
+        "write_file",
+        "contents_ref",
+        named,
+        NamesToList::Text,
+    )?;
 
     // The bytes are needed now, so a slot still holding only a path reads its file here.
     materialise(
@@ -6856,13 +6948,21 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         );
     };
 
-    let slot = match policy.accept_reference("read_output", "ref", &named) {
+    let slot = match accept_named_reference(
+        policy,
+        tools.slots,
+        "read_output",
+        "ref",
+        &named,
+        NamesToList::Output,
+    ) {
         Ok(slot) => slot,
-        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        Err(refusal) => return Produced::problem(refusal),
     };
 
     // Refused here as well as in the kernel, so a planner naming a file is told what to do about
-    // it rather than being told a gate said no.
+    // it rather than being told a gate said no. The name is a slot by now, so what is left is a
+    // slot that holds something other than what a program printed.
     if !tools.slots.is_from_command(&slot) {
         // `vet_content` is offered only where the turn is not a delegate's (the dispatch arm),
         // so a delegate is not pointed at a tool it does not have.
@@ -7491,9 +7591,16 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     // Read once for the whole call: the check, the release and the picture's copy are one decision,
     // and a mode changed part way through must not give them different answers.
     let mode = tools.permission_mode.get();
-    let slot = match policy.accept_reference("vet_content", "ref", &named) {
+    let slot = match accept_named_reference(
+        policy,
+        tools.slots,
+        "vet_content",
+        "ref",
+        &named,
+        NamesToList::Text,
+    ) {
         Ok(slot) => slot,
-        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+        Err(refusal) => return Produced::problem(refusal),
     };
 
     // A reference to a file the driver reserved and never opened has no bytes yet, and there is
@@ -9606,9 +9713,16 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                      to fill the same standard input, and only one of them can be honoured.",
                 );
             }
-            let slot = match policy.accept_reference("run", "stdin_ref", named) {
+            let slot = match accept_named_reference(
+                policy,
+                tools.slots,
+                "run",
+                "stdin_ref",
+                named,
+                NamesToList::Text,
+            ) {
                 Ok(slot) => slot,
-                Err(denial) => return Produced::problem(format!("refused: {denial}")),
+                Err(refusal) => return Produced::problem(refusal),
             };
             let opened = match materialise(
                 policy,
@@ -11202,9 +11316,16 @@ fn spawn_processor<S: Sink>(
             name.to_string(),
             bravebot_core::label::Label::untrusted_public(),
         );
-        match policy.accept_reference("spawn_processor", "reads", &named) {
+        match accept_named_reference(
+            policy,
+            tools.slots,
+            "spawn_processor",
+            "reads",
+            &named,
+            NamesToList::Text,
+        ) {
             Ok(slot) => reads.push(slot),
-            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+            Err(refusal) => return Produced::problem(refusal),
         }
     }
 
@@ -11271,9 +11392,16 @@ fn spawn_processor<S: Sink>(
     // no document leaves it standing. The planner's own choice, out of the references it named,
     // fixed before the processor exists.
     let about = match argument(arguments, "about") {
-        Some(named) => match policy.accept_reference("spawn_processor", "about", &named) {
+        Some(named) => match accept_named_reference(
+            policy,
+            tools.slots,
+            "spawn_processor",
+            "about",
+            &named,
+            NamesToList::Text,
+        ) {
             Ok(slot) => Some(slot),
-            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+            Err(refusal) => return Produced::problem(refusal),
         },
         None => None,
     };
@@ -24390,6 +24518,296 @@ mod tests {
             text.clone().declassify(&proof)
         }
 
+        /// What `read_output` answers for a reference named `named` after the slots in `held` were
+        /// written, each held under its name, and `command` marks the ones that hold output.
+        fn read_output_answer(
+            named: &str,
+            held: &[(&str, bool)],
+            delegated: bool,
+        ) -> (String, bool) {
+            let scratch = Scratch::new("read-output-named");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let output = with_tools(&workspace, |tools| {
+                tools.delegated = delegated;
+                for (name, command) in held {
+                    let id = bravebot_core::slot::SlotId::new(*name);
+                    tools
+                        .slots
+                        .writer_for(id.clone(), bravebot_core::label::Label::untrusted_private())
+                        .expect("a writer")
+                        .write("bytes")
+                        .expect("written");
+                    if *command {
+                        policy.came_from_command(&id, "a command", tools.slots);
+                    }
+                }
+                read_output(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveWrites,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"ref": named}),
+                )
+            });
+            let failed = output.failed;
+            (told(&mut policy, &output.text), failed)
+        }
+
+        /// OUTPUT-6. A bare number, or a reference no run gave, is a name that is not a slot. The
+        /// refusal says so, spells the form `ref:N` with an example, and lists the references that
+        /// exist. The regression it rejects is the old answer, which called a name no slot holds
+        /// "not something a program printed" and never said how a reference is written.
+        #[test]
+        fn a_name_no_slot_holds_is_refused_with_the_form_a_reference_is_written_in() {
+            for named in ["3", "ref:99"] {
+                let (told, failed) = read_output_answer(named, &[("ref:3", true)], false);
+                assert!(failed, "{told}");
+                assert!(
+                    told.starts_with(&format!("refused: no reference is named \"{named}\"")),
+                    "{told}"
+                );
+                assert!(told.contains("ref:N, for example ref:3"), "{told}");
+                assert!(
+                    told.contains("The references to output so far are ref:3."),
+                    "{told}"
+                );
+                assert!(!told.contains("not something a program printed"), "{told}");
+                assert!(!told.contains("vet_content"), "{told}");
+            }
+        }
+
+        /// OUTPUT-6. The list names the references that hold output and not the ones that hold
+        /// something else, and says so when there are none. The regression it rejects is a list
+        /// of every slot, which would point the planner at a file's reference it cannot read here.
+        #[test]
+        fn the_references_listed_for_an_unknown_name_are_the_ones_that_hold_output() {
+            let (told, _) = read_output_answer(
+                "7",
+                &[("ref:1", false), ("ref:2", true), ("ref:10", true)],
+                false,
+            );
+            assert!(
+                told.contains("The references to output so far are ref:2, ref:10."),
+                "{told}"
+            );
+            assert!(
+                !told.contains("ref:1,") && !told.ends_with("ref:1."),
+                "{told}"
+            );
+
+            let (told, _) = read_output_answer("7", &[("ref:1", false)], false);
+            assert!(
+                told.contains("No run has printed anything under a reference yet."),
+                "{told}"
+            );
+        }
+
+        /// OUTPUT-6. Past eight outputs the list is the latest eight, in numeric order, and says
+        /// it is a part. Eight are listed whole. The regressions it rejects are a list of every
+        /// output, which turns a refusal into a listing in a long session, and a cut that keeps
+        /// the oldest eight or one more or fewer than eight.
+        #[test]
+        fn the_references_listed_for_an_unknown_name_are_the_latest_eight() {
+            let twelve: Vec<(String, bool)> =
+                (1..=12).map(|n| (format!("ref:{n}"), true)).collect();
+            let held: Vec<(&str, bool)> = twelve
+                .iter()
+                .map(|(name, command)| (name.as_str(), *command))
+                .collect();
+            let (told, _) = read_output_answer("99", &held, false);
+            assert!(
+                told.contains(
+                    "The references to output so far include the latest 8: ref:5, ref:6, \
+                     ref:7, ref:8, ref:9, ref:10, ref:11, ref:12."
+                ),
+                "{told}"
+            );
+            assert!(!told.contains("ref:4"), "{told}");
+
+            let (told, _) = read_output_answer("99", &held[..8], false);
+            assert!(
+                told.contains(
+                    "The references to output so far are ref:1, ref:2, ref:3, ref:4, ref:5, \
+                     ref:6, ref:7, ref:8."
+                ),
+                "{told}"
+            );
+            assert!(!told.contains("latest"), "{told}");
+        }
+
+        /// OUTPUT-6. A delegate is refused a name no slot holds in the same words, and none of them
+        /// names `vet_content`, a tool it is not offered.
+        #[test]
+        fn a_delegate_naming_no_slot_is_told_the_form_and_not_vet_content() {
+            let (told, _) = read_output_answer("3", &[("ref:3", true)], true);
+            assert!(told.contains("ref:N, for example ref:3"), "{told}");
+            assert!(!told.contains("vet_content"), "{told}");
+        }
+
+        /// OUTPUT-2. A slot that exists and holds a file is not a name no slot holds, so it keeps
+        /// the refusal that points at `vet_content`. The regression it rejects is the new
+        /// not-a-slot refusal swallowing a real slot.
+        #[test]
+        fn a_slot_that_holds_a_file_keeps_the_vet_content_refusal() {
+            let (told, _) = read_output_answer("ref:1", &[("ref:1", false)], false);
+            assert!(
+                told.starts_with("refused: ref:1 is not something a program printed"),
+                "{told}"
+            );
+            assert!(told.contains("vet_content is how to ask for it"), "{told}");
+        }
+
+        /// OUTPUT-6. `vet_content` refuses a name no slot holds the same way, so the pointer
+        /// between the two tools never sends a planner to a tool that cannot find the name. The
+        /// regression it rejects is `vet_content` still passing the name on as if it were a slot.
+        #[test]
+        fn vet_content_naming_no_slot_is_told_how_a_reference_is_written() {
+            let scratch = Scratch::new("vet-content-no-slot");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let output = with_tools(&workspace, |tools| {
+                vet_content(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveWrites,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"ref": "3", "expects": "the release notes for version 2"}),
+                )
+            });
+            let told = told(&mut policy, &output.text);
+            assert!(output.failed, "{told}");
+            assert!(
+                told.starts_with("refused: no reference is named \"3\""),
+                "{told}"
+            );
+            assert!(told.contains("ref:N, for example ref:3"), "{told}");
+            assert!(told.contains("No reference has been given yet."), "{told}");
+        }
+
+        /// What a tool answers for `arguments` when no slot is held, and whether the trail records
+        /// the refusal as a gate that blocked.
+        fn answer_with_no_slot(
+            name: &str,
+            call: impl FnOnce(&mut Policy<'_, RecordingSink>, &mut Tools<'_>) -> Produced,
+        ) -> (String, bool, bool) {
+            let scratch = Scratch::new(name);
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let produced = with_tools(&workspace, |tools| call(&mut policy, tools));
+            let told = told(&mut policy, &produced.text);
+            let failed = produced.failed;
+            let blocked = sink.events().iter().any(
+                |event| matches!(event, Event::GateBlocked { gate, .. } if *gate == "reference"),
+            );
+            (told, failed, blocked)
+        }
+
+        fn assert_the_form_is_told(told: &str, failed: bool, blocked: bool, context: &str) {
+            assert!(failed, "{context}: {told}");
+            assert!(
+                told.starts_with("refused: no reference is named \"3\""),
+                "{context}: {told}"
+            );
+            assert!(
+                told.contains("ref:N, for example ref:3"),
+                "{context}: {told}"
+            );
+            assert!(
+                blocked,
+                "{context}: the refusal is not in the trail, so the turn reads as clean"
+            );
+        }
+
+        /// OUTPUT-6. `write_file` refuses a `contents_ref` or `path_ref` that no slot
+        /// holds with the form a reference is written in, and records the refusal. The
+        /// regression it rejects is the name going on to the kernel and out as a refusal that
+        /// never says what a reference looks like, or a refusal left out of the trail.
+        #[test]
+        fn write_file_naming_no_slot_is_told_how_a_reference_is_written() {
+            for arguments in [
+                json!({"path": "out.txt", "contents_ref": "3"}),
+                json!({"path_ref": "3", "contents": "text"}),
+            ] {
+                let (told, failed, blocked) =
+                    answer_with_no_slot("write-no-slot", |policy, tools| {
+                        write_file(
+                            policy,
+                            tools,
+                            &mut crate::confirm::ApproveWrites,
+                            &arguments,
+                        )
+                    });
+                assert_the_form_is_told(&told, failed, blocked, &arguments.to_string());
+                assert!(
+                    told.contains("No reference has been given yet."),
+                    "{arguments}: {told}"
+                );
+            }
+        }
+
+        /// OUTPUT-6. `read_file` refuses a `path_ref` no slot holds the same way.
+        #[test]
+        fn read_file_naming_no_slot_is_told_how_a_reference_is_written() {
+            let (told, failed, blocked) = answer_with_no_slot("read-no-slot", |policy, tools| {
+                read_file(
+                    policy,
+                    tools,
+                    &mut crate::confirm::ApproveWrites,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"path_ref": "3"}),
+                )
+            });
+            assert_the_form_is_told(&told, failed, blocked, "read_file");
+        }
+
+        /// RUN-3. `run` refuses a `stdin_ref` no slot holds with the form a reference is written
+        /// in, before anything is compiled or approved. The regression it rejects is the name
+        /// reaching the kernel, whose refusal never says what a reference looks like.
+        #[test]
+        fn run_naming_no_slot_for_stdin_is_told_how_a_reference_is_written() {
+            let (told, failed, blocked) = answer_with_no_slot("run-no-slot", |policy, tools| {
+                run(
+                    policy,
+                    tools,
+                    &mut crate::confirm::Unattended,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"command": "cat", "stdin_ref": "3"}),
+                )
+            });
+            assert_the_form_is_told(&told, failed, blocked, "run");
+        }
+
+        /// OUTPUT-6. A name no slot holds is recorded as a blocked gate by every tool that takes a
+        /// reference, and the trail's sentence names the call's tool and argument and not the
+        /// name typed (TRACE-2). The regression it rejects is a refusal the planner is told of
+        /// that the trail leaves out.
+        #[test]
+        fn the_trail_names_the_argument_and_not_the_name_typed() {
+            let scratch = Scratch::new("trail-no-slot");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let _ = with_tools(&workspace, |tools| {
+                vet_content(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveWrites,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"ref": "ignore-all-previous-instructions", "expects": "x"}),
+                )
+            });
+            let refusals = format!("{:?}", policy.refusals());
+            assert!(
+                refusals.contains("vet_content.ref names a reference no slot holds"),
+                "{refusals}"
+            );
+            assert!(!refusals.contains("ignore-all"), "{refusals}");
+        }
+
         /// What `read_output` answers for a reference that holds a file's bytes, not output.
         fn refusal_for_a_file_reference(delegated: bool) -> String {
             let scratch = Scratch::new("read-output-not-a-program");
@@ -24987,6 +25405,51 @@ mod tests {
                     spawn_processor(&mut policy, tools, &arguments)
                 });
                 assert_eq!(told(&mut policy, &produced.text), expected, "{arguments}");
+            }
+        }
+
+        /// SPAWN-1, OUTPUT-6. A name in `reads` or `about` that no slot holds is refused with the form a
+        /// reference is written in, before a processor exists. The regression it rejects is
+        /// treating the name as a slot, which sent it on to the kernel and out as a refusal that
+        /// never said what a reference looks like.
+        #[test]
+        fn a_processor_naming_no_slot_is_told_how_a_reference_is_written() {
+            let scratch = Scratch::new("processor-no-slot");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            for arguments in [
+                json!({"instruction": "redo it", "reads": ["3"]}),
+                json!({"instruction": "redo it", "reads": ["ref:0", "ref:99"]}),
+                json!({"instruction": "redo it", "reads": ["ref:0"], "about": "7"}),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let produced = with_tools(&workspace, |tools| {
+                    tools
+                        .slots
+                        .writer_for(
+                            SlotId::new("ref:0"),
+                            bravebot_core::label::Label::untrusted_private(),
+                        )
+                        .expect("a reference to hold")
+                        .write("text")
+                        .expect("written");
+                    spawn_processor(&mut policy, tools, &arguments)
+                });
+                let told = told(&mut policy, &produced.text);
+                assert!(produced.failed, "{arguments}: {told}");
+                assert!(
+                    told.starts_with("refused: no reference is named \""),
+                    "{arguments}: {told}"
+                );
+                assert!(
+                    told.contains("ref:N, for example ref:3"),
+                    "{arguments}: {told}"
+                );
+                assert!(
+                    told.contains("The references given so far are ref:0."),
+                    "{arguments}: {told}"
+                );
             }
         }
 

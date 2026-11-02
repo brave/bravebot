@@ -227,13 +227,15 @@ impl PermissionMode {
 }
 
 impl PermissionMode {
-    /// What the planner is told when the person changes the mode while its turn runs (MODE-8).
+    /// What the planner is told when the mode it was last told differs from the one in force
+    /// (MODE-8).
     ///
-    /// The prompt it started with still says the old mode, so a change into plan mode repeats the
-    /// instruction and a change out of it says the refusal is over. Between the other modes nothing
-    /// is said, for the reason [`PermissionMode::instruction`] says nothing about them. Both are
-    /// worded for the rest of the turn, because they stay in the conversation after it ends and the
-    /// next turn is told its own mode afresh.
+    /// `self` is the mode the planner was last told. A turn's prompt states the mode the turn starts
+    /// in, and a notice stays in the conversation after its turn ends, so the first request of a later
+    /// turn can also need one: a turn that starts outside plan mode after a plan-mode notice says the
+    /// refusal is over. A change into plan mode repeats the instruction. Between the other modes
+    /// nothing is said, for the reason [`PermissionMode::instruction`] says nothing about them. Both
+    /// notices say what is true from then on and name no turn, because they are read in later turns.
     pub fn change_notice(self, to: PermissionMode) -> Option<String> {
         match (self, to) {
             (from, to) if from == to => None,
@@ -241,8 +243,8 @@ impl PermissionMode {
                 format!("The user changed the mode while this turn was running.{instruction}")
             }),
             (Self::Plan, _) => Some(
-                "Plan mode has ended for the rest of this turn. The user changed the mode, so \
-                 writing is no longer refused by it."
+                "Plan mode has ended. The user changed the mode, so writing is no longer refused \
+                 by it."
                     .to_string(),
             ),
             _ => None,

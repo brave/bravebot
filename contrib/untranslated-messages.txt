@@ -56,6 +56,11 @@ fr:memory-source-person
 fr:memory-standing-live
 fr:memory-standing-superseded
 fr:memory-verified-never
+fr:named-not-a-file
+fr:named-not-text
+fr:named-not-utf8
+fr:named-path-not-text
+fr:named-unreadable
 fr:open-loops-checkouts
 fr:open-loops-failed
 fr:open-loops-goal

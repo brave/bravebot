@@ -2890,8 +2890,15 @@ where
         // The rule goes under the name the map keys on: `@` takes the word the user typed, so a
         // file in the project can arrive spelled absolutely, and a rule under that spelling would
         // leave the read below asking about the relative one and finding nothing.
-        crate::memory::vouch_for_named(policy, workspace, &path);
-        let contents = workspace.read(policy, &Labelled::trusted(path.clone()))?;
+        //
+        // Only for a name that is a text file in the project. A name that is not one leaves no
+        // rule for a path that does not exist, and the read below refuses it as it always did.
+        if workspace.survey(&path).is_ok() {
+            crate::memory::vouch_for_named(policy, workspace, &path);
+        }
+        let contents = workspace
+            .read(policy, &Labelled::trusted(path.clone()))
+            .map_err(|cause| TurnError::of_a_named_read(&path, cause))?;
         admit_context_file(policy, conversation, &path, &contents)?;
     }
 
@@ -3344,7 +3351,15 @@ where
         confined_failures: tools::ConfinedFailures::default(),
         // Seeded with the time the lists' questions kept the turn waiting on the person.
         spent,
-        told_mode: started_in,
+        // The system prompt states the mode the turn starts in, and a plan-mode notice an earlier
+        // turn left in the conversation still stands in the planner's history. Where one does, the
+        // planner was last told plan mode is on, so a turn starting in another mode retracts it
+        // before its first request (MODE-8).
+        told_mode: if conversation.plan_mode_told() {
+            crate::permission_mode::PermissionMode::Plan
+        } else {
+            started_in
+        },
         told_sandbox: sandbox_at_start,
         turn_model,
         effort,

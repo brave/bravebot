@@ -3285,6 +3285,39 @@ fn a_slot_is_never_filled_from_a_decoding_of_another_encoding() {
     }
 }
 
+/// Both front ends ask `surveyed` for a line's names: each name comes back in the order written,
+/// as what the resolver left it or as its refusal sentence, and a name the resolver gives no
+/// answer for is refused as a path that is not text. The faults this rejects are dropping the
+/// resolver's answer (the survey would then ask about the name as written) and stopping at the
+/// first refusal (the terminal names every bad name).
+#[test]
+fn surveying_a_lines_names_answers_each_in_order_through_the_resolver() {
+    use bravebot_agent::named::{Unsendable, refusal, surveyed};
+    let scratch = Scratch::new("surveyed-names");
+    std::fs::write(scratch.path.join("real.txt"), "text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let answers = surveyed(
+        &workspace,
+        ["alias", "gone.txt", "unspellable", "real.txt"].map(String::from),
+        |name| match name {
+            "alias" => Ok("real.txt".to_string()),
+            "unspellable" => Err(()),
+            other => Ok(other.to_string()),
+        },
+    );
+
+    assert_eq!(
+        answers,
+        [
+            Ok("real.txt".to_string()),
+            Err(refusal("gone.txt", Unsendable::NotAFile)),
+            Err(refusal("unspellable", Unsendable::PathNotText)),
+            Ok("real.txt".to_string()),
+        ]
+    );
+}
+
 /// A deferred read reserves a slot that is filled with the same decoding the planner is shown, so
 /// the survey answers as that fill will: a UTF-16 or UTF-32 file with a mark, and a Latin-1 file,
 /// are text at the moment the planner asks. A file that is not text stays binary whatever it
@@ -3331,6 +3364,55 @@ fn a_deferred_read_of_a_file_in_another_encoding_is_reported_as_text() {
         assert!(
             matches!(workspace.survey(name), Err(WorkspaceError::Binary { .. })),
             "{name} is not text"
+        );
+    }
+}
+
+/// A regular file the process may not read is neither absent nor a directory: the survey, the
+/// sentence a person is shown and the error of a turn's read all say it could not be read, and a
+/// name with nothing at it, or a directory, still says it is not a file. The fault this rejects is
+/// every failure of the read being worded "is not a file in this project".
+#[cfg(unix)]
+#[test]
+fn a_named_file_the_process_may_not_read_is_unreadable_and_not_a_missing_file() {
+    use bravebot_agent::named::{Unsendable, refusal, survey};
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("survey-unreadable");
+    let shut = scratch.path.join("shut.txt");
+    std::fs::write(&shut, "private").unwrap();
+    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&shut).is_ok() {
+        // A process that ignores the mode (root) cannot make a file unreadable.
+        return;
+    }
+    std::fs::create_dir(scratch.path.join("folder")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let error = workspace.survey("shut.txt").expect_err("mode 000");
+    assert!(
+        matches!(&error, WorkspaceError::Unreadable { path, .. } if path == "shut.txt"),
+        "{error:?}"
+    );
+    assert_eq!(Unsendable::of(&error), Some(Unsendable::Unreadable));
+    assert_eq!(survey(&workspace, "shut.txt"), Err(Unsendable::Unreadable));
+    let said = refusal("shut.txt", Unsendable::Unreadable);
+    assert!(
+        said.contains("@shut.txt") && said.contains("could not be read"),
+        "{said}"
+    );
+    assert!(!said.contains("not a file"), "{said}");
+
+    let turn = bravebot_agent::TurnError::of_a_named_read("shut.txt", error);
+    assert_eq!(
+        turn.named_file(),
+        Some(("shut.txt", Unsendable::Unreadable))
+    );
+
+    for name in ["absent.txt", "folder"] {
+        assert_eq!(
+            survey(&workspace, name),
+            Err(Unsendable::NotAFile),
+            "{name}"
         );
     }
 }

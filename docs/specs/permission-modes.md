@@ -436,9 +436,14 @@ The mode is the session's, and a turn reads it again at each decision rather tha
 prompt is sent. A mode chosen while a turn runs governs every question and every refusal the turn
 reaches after that, and the planner is told when the change matters to it: a change into plan mode
 repeats the plan-mode instruction, and a change out of it says the refusal has ended. A change
-between the other modes says nothing, as MODE-1 says nothing of them. An answer is credited in the
-trail to the mode the question was put in, so a mode chosen over a prompt already on screen does not
-take credit for the answer given to it.
+between the other modes says nothing, as MODE-1 says nothing of them. The system prompt of a turn
+says nothing for a mode other than plan, and a notice stays in the conversation after the turn that
+pushed it. So the conversation records whether its last notice said plan mode is on, and the first
+request of a later turn is compared against that: a turn that starts outside plan mode says the
+refusal has ended, and a turn that starts in plan mode says nothing more, since its system prompt
+says it. The record is kept with a stored session, so a resumed session is told the same. An answer
+is credited in the trail to the mode the question was put in, so a mode chosen over a prompt already
+on screen does not take credit for the answer given to it.
 
 **Why.** A person who presses the key while a turn runs is telling the session what they want from
 then on. A turn that kept the mode it began with would go on writing after the person pressed the
@@ -451,6 +456,13 @@ withdraw it.
 `verified-by: bravebot_agent::turn::an_answer_given_over_a_mode_change_is_not_credited_to_the_new_mode`
 `verified-by: bravebot_agent::turn::a_turn_moved_into_plan_mode_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_moved_out_of_plan_mode_is_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_started_outside_plan_mode_after_a_stopped_one_in_plan_mode_is_told_it_ended`
+`verified-by: bravebot_agent::turn::a_turn_started_outside_plan_mode_after_a_finished_one_in_plan_mode_is_told_it_ended`
+`verified-by: bravebot_agent::turn::plan_mode_ending_is_said_to_the_planner_once`
+`verified-by: bravebot_agent::turn::a_turn_started_in_plan_mode_after_a_notice_of_plan_mode_is_told_nothing_more`
+`verified-by: bravebot_agent::turn::a_turn_started_in_another_mode_than_the_last_one_outside_plan_mode_is_told_nothing`
+`verified-by: bravebot_ui_bridge::fork::a_cut_leaves_the_child_recording_that_its_last_plan_mode_notice_said_plan_mode_is_on`
+`verified-by: bravebot_agent::conversation::a_restored_conversation_remembers_that_its_last_notice_said_plan_mode_is_on`
 `verified-by: bravebot_agent::permission_mode::a_confirmer_follows_the_mode_chosen_after_it_was_made`
 `verified-by: bravebot_agent::permission_mode::the_planner_is_told_only_of_a_change_into_or_out_of_plan_mode`
 `verified-by: bravebot_tui::app::the_mode_can_be_changed_while_a_turn_runs`

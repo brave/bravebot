@@ -979,6 +979,52 @@ fn a_missing_file_fails_the_turn() {
     assert!(error.to_string().contains("does-not-exist.rs"));
 }
 
+/// NAME-2, NAME-9: a rule vouching for a named file is recorded for a file that is there and for
+/// no other. A name that matches no file fails the turn at its read, and the trust map the turn
+/// shared with its caller holds no rule for a path that does not exist, because a rule recorded
+/// ahead of a read that then fails stays in the map and in the audit trail as a grant nobody
+/// could have meant. The existing file is the control: the same turn records one rule for it, so
+/// the count the missing file is held to is one this test can see move.
+#[test]
+fn a_missing_named_file_leaves_no_rule_in_the_trust_map() {
+    let scratch = Scratch::new(&format!("missing-no-rule-{}", std::process::id()));
+    std::fs::write(scratch.path.join("present.md"), "THERE").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let rules_after = |name: &str| {
+        let (endpoint, _received) = serve(&reply_with("ok"));
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let authority = bravebot_core::file_authority::FileAuthority::new(
+            bravebot_core::trust::TrustStore::new("/work"),
+        );
+        let task = Task::new("explain")
+            .with_file(name)
+            .with_file_authority(authority.clone());
+        let outcome = turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        );
+        (outcome.is_ok(), authority.snapshot().rules().count())
+    };
+
+    let (sent, found) = rules_after("present.md");
+    assert!(sent, "a file that is there is read");
+    assert_eq!(found, 1, "naming a file that is there records its rule");
+
+    let (sent, missing) = rules_after("alice");
+    assert!(!sent, "a name matching no file fails the turn");
+    assert_eq!(
+        missing, 0,
+        "a rule was recorded for a path that is not there"
+    );
+}
+
 /// NAME-5: a name that climbs out of the workspace, or is absolute, is refused when the turn reads
 /// it, and the file it points at never reaches the model. The completion and the finished-name
 /// check refuse these first, but a line sent without going through either arrives here as the
@@ -21387,6 +21433,291 @@ fn a_turn_moved_out_of_plan_mode_is_told_to_write() {
     );
 }
 
+/// Moves the session into plan mode when the planner's first call finishes, and stops the turn
+/// when its second call finishes where `stop` is given. Stands in for the person pressing the mode
+/// key during the first round and Escape during the second.
+struct PlansThenMaybeStops {
+    live: bravebot_agent::LiveMode,
+    stop: Option<bravebot_core::cancel::Cancel>,
+    finished: usize,
+}
+
+impl bravebot_agent::report::Reporter for PlansThenMaybeStops {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn tool_finished(&mut self, _activity: bravebot_agent::report::Activity) {
+        self.finished += 1;
+        if self.finished == 1 {
+            self.live.set(bravebot_agent::PermissionMode::Plan);
+        }
+        if self.finished == 2
+            && let Some(stop) = &self.stop
+        {
+            stop.cancel();
+        }
+    }
+}
+
+/// Runs a turn that is moved into plan mode while it runs, then a second turn over the same
+/// conversation started in `second`, then a third in the same mode. Returns every request the
+/// second turn sent and every request the third sent.
+///
+/// The first turn is stopped after its second call where `stopped` is true, and otherwise ends with
+/// an answer. Either way its second request carried the plan-mode notice, which stays in the
+/// conversation.
+fn requests_of_a_turn_after_one_moved_into_plan_mode(
+    name: &str,
+    stopped: bool,
+    second: bravebot_agent::PermissionMode,
+    second_replies: Vec<String>,
+) -> (Vec<String>, Vec<String>) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Ask);
+    let cancel = bravebot_core::cancel::Cancel::new();
+
+    let (endpoint, first_received) = serve_sequence(if stopped {
+        vec![
+            tool_request("list_files", r#"{"directory":"."}"#),
+            tool_request("list_files", r#"{"directory":"."}"#),
+        ]
+    } else {
+        vec![
+            tool_request("list_files", r#"{"directory":"."}"#),
+            reply_with("here is the plan"),
+        ]
+    });
+    let first = turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("add a toggle").with_permission_mode(live.clone()),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut PlansThenMaybeStops {
+            live: live.clone(),
+            stop: stopped.then(|| cancel.clone()),
+            finished: 0,
+        },
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome;
+    assert_eq!(
+        first.is_err(),
+        stopped,
+        "the first turn did not end the way this test needs: {first:?}"
+    );
+    let first_bodies = every_request(&first_received);
+    assert!(
+        first_bodies
+            .last()
+            .is_some_and(|body| body.contains("The user changed the mode while this turn")),
+        "the first turn was never told it had been moved into plan mode, so this says nothing"
+    );
+    assert_eq!(live.get(), bravebot_agent::PermissionMode::Plan);
+
+    live.set(second);
+    let (endpoint, received) = serve_sequence(second_replies);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("continue").with_permission_mode(live.clone()),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+    let second_bodies = every_request(&received);
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("again")]);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("and again").with_permission_mode(live.clone()),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the third turn finishes");
+    (second_bodies, every_request(&received))
+}
+
+/// MODE-8: a turn that starts outside plan mode after a turn that was stopped in plan mode is told
+/// that plan mode has ended, before its first request.
+///
+/// The system prompt says nothing for a mode other than plan, and the plan-mode notice the stopped
+/// turn pushed stays in the conversation. A driver that assumes a new turn has been told the mode it
+/// starts in leaves the planner reading that notice as current. Asking and bypassing are both tried,
+/// since the second turn's mode is read from the session and not assumed to be the default.
+#[test]
+fn a_turn_started_outside_plan_mode_after_a_stopped_one_in_plan_mode_is_told_it_ended() {
+    for (second, name) in [
+        (
+            bravebot_agent::PermissionMode::Ask,
+            "plan-notice-stopped-ask",
+        ),
+        (
+            bravebot_agent::PermissionMode::Bypass,
+            "plan-notice-stopped-bypass",
+        ),
+    ] {
+        let (bodies, _) = requests_of_a_turn_after_one_moved_into_plan_mode(
+            name,
+            true,
+            second,
+            vec![reply_with("done")],
+        );
+        assert_eq!(bodies.len(), 1, "{second:?}: {bodies:#?}");
+        assert!(
+            bodies[0].contains("Plan mode has ended"),
+            "{second:?}: the first request of the next turn did not say plan mode had ended"
+        );
+    }
+}
+
+/// MODE-8: a turn that starts outside plan mode after a turn that finished in plan mode is told
+/// that plan mode has ended, before its first request.
+///
+/// The person leaves plan mode between two turns to have the plan carried out, which is the ordinary
+/// way out of it. The first turn is not stopped, so the notice does not depend on how it ended.
+#[test]
+fn a_turn_started_outside_plan_mode_after_a_finished_one_in_plan_mode_is_told_it_ended() {
+    let (bodies, _) = requests_of_a_turn_after_one_moved_into_plan_mode(
+        "plan-notice-finished",
+        false,
+        bravebot_agent::PermissionMode::AcceptEdits,
+        vec![reply_with("done")],
+    );
+    assert!(
+        bodies[0].contains("Plan mode has ended"),
+        "the first request of the next turn did not say plan mode had ended"
+    );
+}
+
+/// MODE-8: the end notice is said once, at the first request that follows the change.
+///
+/// A later request of the same turn, and a turn after that one, have been told already. Repeating it
+/// would say again what the planner has read.
+#[test]
+fn plan_mode_ending_is_said_to_the_planner_once() {
+    let (bodies, third) = requests_of_a_turn_after_one_moved_into_plan_mode(
+        "plan-notice-once",
+        true,
+        bravebot_agent::PermissionMode::Ask,
+        vec![
+            tool_request("list_files", r#"{"directory":"."}"#),
+            reply_with("done"),
+        ],
+    );
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert_eq!(
+        bodies[1].matches("Plan mode has ended").count(),
+        1,
+        "the end of plan mode was said more than once"
+    );
+    assert_eq!(third.len(), 1, "{third:#?}");
+    assert_eq!(
+        third[0].matches("Plan mode has ended").count(),
+        1,
+        "the third turn was told again, or the end notice is missing from its history"
+    );
+}
+
+/// MODE-8: a turn that starts in plan mode after a turn that was moved into it gets neither an end
+/// notice nor a second plan-mode instruction.
+///
+/// Its system prompt already says plan mode. An end notice would contradict that, and a notice
+/// repeating the instruction would say it a third time (the system prompt, the earlier notice and
+/// this one).
+#[test]
+fn a_turn_started_in_plan_mode_after_a_notice_of_plan_mode_is_told_nothing_more() {
+    let (bodies, _) = requests_of_a_turn_after_one_moved_into_plan_mode(
+        "plan-notice-then-plan",
+        true,
+        bravebot_agent::PermissionMode::Plan,
+        vec![reply_with("here is the plan")],
+    );
+    assert!(
+        !bodies[0].contains("Plan mode has ended"),
+        "a turn that began in plan mode was told plan mode had ended"
+    );
+    assert_eq!(
+        bodies[0].matches("Plan mode. The user is deciding").count(),
+        2,
+        "plan mode was not stated exactly by the system prompt and the earlier notice"
+    );
+}
+
+/// MODE-8: a turn that starts in another non-plan mode than the one before it is told nothing about
+/// the mode.
+///
+/// A driver that compared the mode of the turn with the mode of the previous turn, and said
+/// something on any difference, would add a line here. Only a notice into plan mode or out of it
+/// is said, so the second turn's first request carries neither notice.
+#[test]
+fn a_turn_started_in_another_mode_than_the_last_one_outside_plan_mode_is_told_nothing() {
+    let scratch = Scratch::new("mode-change-between-turns-outside-plan");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Ask);
+
+    let mut second_bodies = Vec::new();
+    for (mode, name) in [
+        (bravebot_agent::PermissionMode::Ask, "first"),
+        (bravebot_agent::PermissionMode::Bypass, "second"),
+    ] {
+        live.set(mode);
+        let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+        turn::resume(
+            &config_for(&endpoint),
+            &egress,
+            &workspace,
+            &Task::new(name).with_permission_mode(live.clone()),
+            &mut conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn finishes");
+        second_bodies = every_request(&received);
+    }
+    assert_eq!(second_bodies.len(), 1, "{second_bodies:#?}");
+    for said in ["Plan mode", "changed the mode"] {
+        assert!(
+            !second_bodies[0].contains(said),
+            "a change between two modes outside plan mode was said to the planner ({said})"
+        );
+    }
+}
+
 /// A turn continuing one that was stopped after a write is not told that nothing is written yet.
 ///
 /// A stop is usually not the end of the task. The next prompt is `continue`, and the change the
@@ -22783,7 +23114,19 @@ fn a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor() {
         assert_eq!(results.len(), 7, "{results:#?}");
         results[2..]
             .iter()
-            .map(|result| result.replace(name, "NAME"))
+            .map(|result| {
+                // The example in the form is a fixed `ref:3`, whatever name was typed. It is
+                // stood in for before the typed name is, so that naming `ref:3` does not rewrite
+                // it, and it is checked here as written.
+                assert!(
+                    result.contains("A reference is written ref:N, for example ref:3,")
+                        && !result.contains("holds no choice"),
+                    "the refusal did not give the form a reference is written in: {result}"
+                );
+                result
+                    .replace("for example ref:3", "for example EXAMPLE")
+                    .replace(name, "NAME")
+            })
             .collect::<Vec<_>>()
     };
 
@@ -22905,7 +23248,8 @@ fn a_processor_cannot_be_given_a_reference_to_nothing() {
     let bodies: Vec<String> = received.try_iter().collect();
     assert_eq!(bodies.len(), 2, "no processor should have run");
     assert!(
-        bodies[1].contains("is not a reference to anything"),
+        bodies[1].contains("no reference is named \\\"ref:99\\\"")
+            && bodies[1].contains("ref:N, for example ref:3"),
         "the model was not told why: {}",
         bodies[1]
     );
@@ -55578,7 +55922,8 @@ fn a_processor_is_not_given_the_path_of_the_file_a_page_was_saved_to() {
         results
             .iter()
             .any(|result| result.starts_with("Result of spawn_processor")
-                && result.contains("is not a reference to anything")),
+                && result.contains("no reference is named")
+                && result.contains("ref:N, for example ref:3")),
         "the planner was not told a path is no reference: {results:?}"
     );
     assert!(
@@ -62745,6 +63090,104 @@ fn a_turn_that_failed_before_adding_anything_leaves_no_note_and_one_that_added_i
         "the conversation holds something of a turn that added nothing: {:?}",
         unread.messages()
     );
+}
+
+/// NAME-13, TURN-13: a turn that ends on the read of a file the person named has the name in the
+/// error, for the person's line, and the planner is told the category and nothing of the name. The
+/// first file is read, so the conversation holds something and the note is added; the second is
+/// missing. The fault this rejects is the name travelling into the note or into the saved
+/// conversation, for instance by making the note from the error's text.
+#[test]
+fn the_note_and_the_conversation_of_a_turn_that_failed_on_a_named_file_hold_no_name() {
+    let scratch = Scratch::new("failed-named-note");
+    std::fs::write(scratch.path.join("fine.txt"), "the file body").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_script(vec![Served::Reply(reply_with("never read"))]);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let error = take_a_turn_reporting(
+        &config_for(&endpoint),
+        &workspace,
+        &mut conversation,
+        Task::new("look at these")
+            .with_file("fine.txt")
+            .with_file("absent-sentinel.txt"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("the second file cannot be read");
+
+    let (name, _) = error.named_file().expect("the error names the file");
+    assert_eq!(name, "absent-sentinel.txt");
+    assert_eq!(received.try_iter().count(), 0, "a request was sent");
+    let note = conversation.messages().last().expect("a message");
+    assert_eq!(
+        note.composed,
+        Some(bravebot_agent::conversation::Composed::Notice),
+        "the last message is not the driver's notice: {note:?}"
+    );
+    assert!(
+        note.message
+            .content
+            .text()
+            .ends_with("Failure category: workspace."),
+        "{:?}",
+        note.message.content.text()
+    );
+    let written = serde_json::to_string(&conversation.snapshot()).expect("it serialises");
+    assert!(
+        written.contains(FAILED_TURN_NOTE),
+        "the turn left no note, so this checks nothing"
+    );
+    assert!(
+        !written.contains("absent-sentinel"),
+        "the name reached the conversation: {written}"
+    );
+}
+
+/// NAME-13: only the read of a file the person named with `@` is told apart. A dropped text file
+/// and an attachment have no `@name`, so their failed reads keep the category's sentence and carry
+/// no name. The fault this rejects is every workspace error being given a name, which would put a
+/// path the person never typed into the failure line.
+#[test]
+fn a_failed_read_of_a_dropped_file_or_an_attachment_carries_no_name() {
+    for (kind, task) in [
+        (
+            "dropped",
+            Task::new("read").with_dropped_text("gone-dropped.txt"),
+        ),
+        (
+            "attachment",
+            Task::new("read").with_attachment("gone-attachment.png", "image/png"),
+        ),
+        ("named", Task::new("read").with_file("gone-named.txt")),
+    ] {
+        let scratch = Scratch::new(&format!("unnamed-read-{kind}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut conversation = bravebot_agent::Conversation::new();
+        let error = take_a_turn_reporting(
+            &config_for("http://127.0.0.1:1"),
+            &workspace,
+            &mut conversation,
+            task,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect_err("the file is missing");
+        assert_eq!(
+            why_it_failed(&error).category,
+            bravebot_agent::Category::Workspace,
+            "{kind}"
+        );
+        assert_eq!(error.named_file().is_some(), kind == "named", "{kind}");
+        // What a one-shot run prints is the error's text, which names the file and the reason
+        // whether or not the turn knows the name as a named file (R10).
+        assert!(
+            error.to_string().contains(&format!("gone-{kind}")),
+            "{kind}: {error}"
+        );
+    }
 }
 
 /// BACKEND-53: the client makes its attempts at the model it was asked for, and the request after

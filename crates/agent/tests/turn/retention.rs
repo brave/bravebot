@@ -30,8 +30,12 @@ fn early_loading_errors_return_current_decisions() {
             None,
             &Cancel::new(),
         );
+        // A missing file the person named is `Named`, and the others stay a workspace failure.
         assert!(
-            matches!(completed.outcome, Err(turn::TurnError::Workspace(_))),
+            matches!(
+                completed.outcome,
+                Err(turn::TurnError::Workspace(_) | turn::TurnError::Named { .. })
+            ),
             "{kind}"
         );
         assert_eq!(

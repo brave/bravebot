@@ -76,9 +76,12 @@ been shown private content are not quoted, and the transcript says which. On the
 before anything is sent. The desktop app does not offer sessions in its message box.
 
 The desktop app's message box works the same way: `@` opens the list over the project, Tab and the
-arrows choose, and Enter completes a half-typed name or sends a finished one. A name that is not a
-text file inside the project stops the send and says which name it was, so nothing goes that you
-did not mean to send.
+arrows choose, and Enter completes a half-typed name or sends a finished one.
+
+In both, a name that is not a text file inside the project stops the send and says which name it
+was, so nothing goes that you did not mean to send. The line stays in the box, a paste included, and
+removing the `@` sends the word as text. This applies to a handle in pasted text, such as
+`cc @alice`, as well as to a path.
 
 :::caution
 Content you have not read is content you are vouching for. Be as careful naming a file as answering

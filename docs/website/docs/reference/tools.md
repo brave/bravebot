@@ -564,7 +564,10 @@ the planner as text.
 | `offset` | for output the planner may read that was too long for one result, the byte to start from; defaults to 0 |
 | `pattern` | for output the planner may read, a regular expression (or a list of them) to search it for instead of paging it |
 
-It works only for output from `run`. A quarantined *file* is not readable this way. This is why
+It works only for output from `run`. A quarantined *file* is not readable this way. A `ref` that
+names no reference at all, such as `3` or a number no run printed under, is refused with the form a
+reference is written in (`ref:N`, for example `ref:3`) and the references that hold output so far;
+the other tools that take a reference name refuse an unknown name the same way. This is why
 `which`, `find` and `uname` tell the planner nothing until it asks. When you bypass permissions with no
 screening, nobody is shown it and it comes back at once, and [`read` on `run`](run-tool.md#reading-the-output-in-the-same-result)
 makes the same release without the extra call.

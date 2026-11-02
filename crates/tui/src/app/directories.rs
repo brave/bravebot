@@ -82,7 +82,7 @@ pub(super) fn add_directory(
     // the session's to say, so the name is made absolute here.
     let outcome = named_directory(workspace.root(), directory)
         .and_then(|named| workspace.add_directory(&named));
-    session.set_reference_sources(workspace.reference_sources());
+    session.adopt_workspace(workspace);
     match outcome {
         Ok(added) => {
             trust.trust(&bravebot_agent::workspace::key_of(&added));
@@ -123,7 +123,7 @@ pub(super) fn close_directory(
     }
     let outcome = named_directory(workspace.root(), directory)
         .and_then(|named| workspace.close_added_directory(&named));
-    session.set_reference_sources(workspace.reference_sources());
+    session.adopt_workspace(workspace);
     match outcome {
         Ok(closed) => {
             let directory = closed.display().to_string();
@@ -225,7 +225,7 @@ pub(super) fn change_directory(
     *servers = None;
     session.now_in_workspace(&moved.root);
     session.adopt_repository(crate::issue_link::Repository::of(&moved.root));
-    session.set_reference_sources(workspace.reference_sources());
+    session.adopt_workspace(workspace);
     // An MCP server is not a tree's, so it stays; answer 2 is about a project, so it moves.
     if let Some(mcp) = &session.servers.session {
         mcp.now_in_workspace(&moved.root);

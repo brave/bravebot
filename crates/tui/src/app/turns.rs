@@ -1819,7 +1819,7 @@ pub(super) fn fold_outcome(
             match ending {
                 bravebot_agent::Ending::Failed(diagnosis) => {
                     session.fail(
-                        bravebot_session::sessions::failure_reason(diagnosis, error.cut_off()),
+                        bravebot_session::sessions::failure_line(&error, diagnosis),
                         ending,
                     );
                 }

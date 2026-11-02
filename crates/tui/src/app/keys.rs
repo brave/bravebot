@@ -1371,6 +1371,9 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.accept_completion();
             Action::Redraw
         }
+        // A file named with `@` that the turn could not read is said so and not sent, with the
+        // line left in the box, as the desktop window does (NAME-9).
+        KeyCode::Enter if session.refuse_unsendable_names() => Action::Redraw,
         KeyCode::Enter => match session.submit() {
             Some(prompt) => Action::Submit(prompt),
             None => Action::None,
@@ -1828,6 +1831,14 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // the highlighted row rather than queueing "/mod" as a prompt.
     if key.code == KeyCode::Enter && session.completion_would_change_the_line() {
         session.accept_completion();
+        return Action::Redraw;
+    }
+
+    // And a name the turn could not read is refused before the line is queued, as at rest, since a
+    // queued line is sent later with nobody looking (NAME-9).
+    if key.code == KeyCode::Enter
+        && session.answer_while_working(|session| session.refuse_unsendable_names())
+    {
         return Action::Redraw;
     }
 

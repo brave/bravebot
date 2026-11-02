@@ -97,6 +97,7 @@ what it said, and it is [vetting.md](../vetting.md).
 
 `verified-by: bravebot_core::policy::a_file_cannot_be_promoted_by_reading_it_aloud`
 `verified-by: bravebot_agent::tools::a_refused_read_of_a_non_output_reference_names_vet_content_where_it_is_offered`
+`verified-by: bravebot_agent::tools::a_slot_that_holds_a_file_keeps_the_vet_content_refusal`
 
 <a id="OUTPUT-3"></a>
 ### OUTPUT-3: the person is told what a check made of the output before they answer
@@ -219,3 +220,43 @@ a page would not.
 `verified-by: bravebot_agent::turn::a_pattern_list_holding_one_that_will_not_compile_is_refused_before_the_slot_is_opened`
 `verified-by: bravebot_agent::tools::matching_lines_carry_the_byte_each_starts_at`
 `verified-by: bravebot_agent::tools::a_match_whose_context_is_long_is_still_held_to_the_cap`
+
+<a id="OUTPUT-6"></a>
+### OUTPUT-6: a name no slot holds is refused with the form a reference is written in
+
+A `ref` that names no slot at all, such as `3` or `ref:99`, is a mistake in how the planner wrote the
+name and not a statement that the slot holds something other than output. A choice a processor made
+is no text, so a name that holds one is a name no slot holds wherever text is expected: it is refused
+in the same words and is not listed. The other way round, a name that holds text where a choice is
+expected, such as `ref:1` in an `mcp_call` argument filled from a reference, is a slot that exists
+and holds no choice, and is refused as that. Both answers come from which store holds the name and
+never from a byte of either. The refusal says that no
+reference is named that, echoing the planner's own argument escaped, and that a reference is
+written `ref:N`, for example `ref:3`. It then lists the references that hold what a program printed,
+the latest eight where there are more, or says that no run has printed anything under a reference.
+It does not say the name is not something a program printed and does not name `vet_content`, which
+is the route for a file and is named only for a slot that exists and holds one
+([OUTPUT-2](#OUTPUT-2)).
+
+The names listed are the ones the driver minted. Whether a name is a slot is read from the slot
+store, which answers from the names it holds and not from any byte they hold. The same refusal, with
+the list of every reference given in place of the list of outputs, answers a name no slot holds in
+`vet_content` `ref`, in `spawn_processor` `reads` and `about`, in `read_file`, `edit_file` and
+`write_file` `path_ref`, in `write_file` `contents_ref` and in `run` `stdin_ref`. In an `mcp_call`
+argument filled from a reference it lists the references that hold a choice. Each of these refusals
+is also recorded in the trail as a blocked `reference` gate naming the tool and the argument and not
+the name typed ([TRACE-2](../trace.md#TRACE-2)), so a turn that was refused is not recorded as clean.
+
+`verified-by: bravebot_agent::tools::a_name_no_slot_holds_is_refused_with_the_form_a_reference_is_written_in`
+`verified-by: bravebot_agent::tools::the_references_listed_for_an_unknown_name_are_the_ones_that_hold_output`
+`verified-by: bravebot_agent::tools::a_delegate_naming_no_slot_is_told_the_form_and_not_vet_content`
+`verified-by: bravebot_agent::tools::vet_content_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::a_processor_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::write_file_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::read_file_naming_no_slot_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::run_naming_no_slot_for_stdin_is_told_how_a_reference_is_written`
+`verified-by: bravebot_agent::tools::the_references_listed_for_an_unknown_name_are_the_latest_eight`
+`verified-by: bravebot_agent::tools::the_trail_names_the_argument_and_not_the_name_typed`
+`verified-by: bravebot_agent::turn::a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor`
+`verified-by: bravebot_agent::browser_group_servers::a_free_text_answer_cannot_be_named_as_a_choice`
+`verified-by: bravebot_agent::browser_group_servers::a_name_no_slot_holds_is_listed_the_choices_that_were_made`

@@ -360,6 +360,19 @@ pub struct Conversation {
     /// Trusted metadata: from the names of the functions the planner called, never their
     /// arguments or anything a tool returned.
     asked_to_write: bool,
+    /// Whether the last thing the kept messages say about the permission mode is a notice that
+    /// plan mode is on (MODE-8).
+    ///
+    /// Kept here rather than in the turn because the notice stays in the conversation after the turn
+    /// that pushed it ends, while the system prompt a later turn is built with says nothing about any
+    /// mode but plan. A turn that starts outside plan mode while this is set has to say that plan
+    /// mode ended, or the planner reads the notice as current. A turn that starts in plan mode has
+    /// its system prompt say so and needs no second notice. Written down with the messages that
+    /// hold the notice.
+    ///
+    /// Trusted metadata: set from the driver's own decision to push a notice, never from a word of
+    /// any message.
+    plan_mode_told: bool,
     /// The windows of files the planner has been shown, and the call that showed each.
     ///
     /// Held here for the reason `quarantine` is: a session is many turns and this is the only thing
@@ -510,6 +523,7 @@ impl Conversation {
             archive: Vec::new(),
             measured: 0,
             asked_to_write: false,
+            plan_mode_told: false,
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
@@ -908,6 +922,18 @@ impl Conversation {
     /// Whether a write has been asked for since a turn last ended with an answer.
     pub fn asked_to_write(&self) -> bool {
         self.asked_to_write
+    }
+
+    /// Record whether the notice just pushed into the kept messages says plan mode is on or that it
+    /// ended (MODE-8).
+    pub fn plan_mode_noticed(&mut self, on: bool) {
+        self.plan_mode_told = on;
+    }
+
+    /// Whether the kept messages last say that plan mode is on, which a turn that starts outside it
+    /// has to retract before its first request.
+    pub fn plan_mode_told(&self) -> bool {
+        self.plan_mode_told
     }
 
     /// Whether `skills_overview_said` is set.
@@ -1468,6 +1494,13 @@ pub struct Snapshot {
     /// needless line to the planner.
     #[serde(default)]
     pub asked_to_write: bool,
+    /// Whether the last notice in the messages said plan mode is on (MODE-8).
+    ///
+    /// Stored because the notice is in the messages that are stored, and a resumed session whose
+    /// first turn starts outside plan mode has to say that plan mode ended. Defaulted to false, so
+    /// a record written before this existed reads as it did then.
+    #[serde(default)]
+    pub plan_mode_told: bool,
     /// Whether the planner had been shown private content: `public`, or anything else.
     ///
     /// A word for the reason `context` is one, and read the same way: anything but `public` is
@@ -1511,6 +1544,7 @@ impl Conversation {
             archive: self.archive.clone(),
             measured: self.measured,
             asked_to_write: self.asked_to_write,
+            plan_mode_told: self.plan_mode_told,
             holds: match self.holds {
                 Confidentiality::Public => PUBLIC.to_string(),
                 Confidentiality::Private => PRIVATE.to_string(),
@@ -1587,6 +1621,7 @@ impl Conversation {
             archive: snapshot.archive,
             measured: snapshot.measured,
             asked_to_write: snapshot.asked_to_write,
+            plan_mode_told: snapshot.plan_mode_told,
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
@@ -2996,6 +3031,27 @@ mod tests {
         );
     }
 
+    /// A plan-mode notice in the kept messages is as current in a later process as in this one.
+    /// Dropped on the way to disk, a resumed session that starts outside plan mode would never
+    /// be told that plan mode ended. A record written before the flag existed reads as false.
+    #[test]
+    fn a_restored_conversation_remembers_that_its_last_notice_said_plan_mode_is_on() {
+        let mut conversation = four_exchanges();
+        conversation.plan_mode_noticed(true);
+
+        let written = serde_json::to_string(&conversation.snapshot()).expect("a record");
+        let restored =
+            Conversation::restored(serde_json::from_str(&written).expect("the record back"));
+        assert!(
+            restored.plan_mode_told(),
+            "a plan-mode notice before the record was written came back retracted"
+        );
+
+        let older = r#"{"messages":[],"context":"trusted","references":0}"#;
+        let older = Conversation::restored(serde_json::from_str(older).expect("an older record"));
+        assert!(!older.plan_mode_told());
+    }
+
     /// The figure said how large the conversation was before it was shortened. Kept, it would
     /// have the next turn open by trying to compact again on the strength of a measurement of
     /// something that no longer exists.
@@ -3622,6 +3678,7 @@ mod tests {
                 archive: Vec::new(),
                 measured: 0,
                 asked_to_write: false,
+                plan_mode_told: false,
                 holds: PUBLIC.to_string(),
             });
             assert_eq!(
@@ -3684,6 +3741,7 @@ mod tests {
                 archive: Vec::new(),
                 measured: 0,
                 asked_to_write: false,
+                plan_mode_told: false,
                 holds: word.to_string(),
             });
             assert_eq!(

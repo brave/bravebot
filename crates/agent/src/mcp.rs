@@ -1871,9 +1871,14 @@ fn fill_from_a_choice<'a, S: Sink>(
         reference.to_string(),
         bravebot_core::label::Label::untrusted_public(),
     );
-    let slot = policy
-        .accept_reference("mcp_call", &key, &named)
-        .map_err(|denial| format!("refused: {denial}"))?;
+    let slot = crate::tools::accept_named_reference(
+        policy,
+        slots,
+        "mcp_call",
+        &key,
+        &named,
+        crate::tools::NamesToList::Choices,
+    )?;
     Ok(Some(Filling {
         argument,
         key,

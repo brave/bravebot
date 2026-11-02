@@ -8364,6 +8364,17 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a reference argument named a name no slot holds, so nothing was read, written
+    /// or carried (TRACE-1). `tool` and `field` are the call's own tool and argument names. The
+    /// name the planner typed is not in the sentence (TRACE-2).
+    pub fn refuse_unknown_reference(&mut self, tool: &str, field: &str) {
+        let _ = self.deny(
+            "reference",
+            Principle::Confinement,
+            format!("{tool}.{field} names a reference no slot holds"),
+        );
+    }
+
     /// Record that a write was put to the person and not approved, so nothing was written
     /// (TRACE-1).
     ///

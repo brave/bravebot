@@ -3954,7 +3954,7 @@ mod preserved_history {
             }
             Err(error) => match error.ending() {
                 Ending::Failed(diagnosis) => session.fail(
-                    bravebot_session::sessions::failure_reason(diagnosis, None),
+                    bravebot_session::sessions::failure_line(&error, diagnosis),
                     error.ending(),
                 ),
                 Ending::Stopped { attempts } => {
@@ -4629,6 +4629,96 @@ mod preserved_history {
             assert_eq!(export.contains("CONTEXT_SENTINEL"), partial);
             assert!(export.contains("**Outcome:** failed"));
         }
+    }
+
+    /// A turn that ends on a file named with `@` says which one and why (NAME-13), for each reason
+    /// the read can fail with. A category-only line names no file, so it fails every row here.
+    #[test]
+    fn a_named_file_that_cannot_be_read_is_named_with_its_reason_in_the_failure_line() {
+        // (what the person typed, the file to make for it, its bytes, the reason said)
+        let cases: [(&str, Option<&str>, &[u8], &str); 5] = [
+            (
+                "nothing-here.txt",
+                None,
+                b"",
+                "is not a file in this project",
+            ),
+            (
+                "a-directory",
+                Some("a-directory/inner.txt"),
+                b"x",
+                "is not a file in this project",
+            ),
+            (
+                "picture.bin",
+                Some("picture.bin"),
+                &[0, 159, 146, 150, 0, 1, 2],
+                "is not a text file",
+            ),
+            (
+                "latin.txt",
+                Some("latin.txt"),
+                b"caf\xe9 au lait, caf\xe9 noir",
+                "other than UTF-8",
+            ),
+            ("../outside.txt", None, b"", "is not a file in this project"),
+        ];
+        for (typed, made, bytes, said) in cases {
+            let scratch = Scratch::new("named-failure-line");
+            if let Some(made) = made {
+                let at = scratch.project.join(made);
+                std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+                std::fs::write(at, bytes).unwrap();
+            }
+            let task = bravebot_agent::Task::new("look at these").with_file(typed);
+            let mut session = Session::new("test");
+            let mut conversation = Conversation::new();
+            run_task(
+                &mut session,
+                &mut conversation,
+                &scratch.project,
+                &config_for("http://127.0.0.1:1"),
+                &task,
+                &bravebot_core::cancel::Cancel::new(),
+            );
+            let line = session.failure_said().expect("a failure line").to_string();
+            assert!(line.contains(&format!("@{typed}")), "{typed}: {line}");
+            assert!(line.contains(said), "{typed}: {line}");
+            // The record keeps the same line, so reopening shows what the screen showed.
+            match &session.turn_history()[0].outcome {
+                Some(bravebot_session::sessions::StoredOutcome::Failed { reason }) => {
+                    assert_eq!(reason, &line, "{typed}")
+                }
+                other => panic!("{typed}: {other:?}"),
+            }
+        }
+    }
+
+    /// With several names the one that failed is the one named, and one that read is not.
+    #[test]
+    fn the_failure_line_names_the_file_that_failed_among_several() {
+        let scratch = Scratch::new("named-failure-several");
+        std::fs::write(scratch.project.join("fine.txt"), "fine").unwrap();
+        let task = bravebot_agent::Task::new("look at these")
+            .with_file("fine.txt")
+            .with_file("absent.txt")
+            .with_file("later.txt");
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for("http://127.0.0.1:1"),
+            &task,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        let line = session.failure_said().expect("a failure line");
+        assert!(line.contains("@absent.txt"), "{line}");
+        assert!(
+            !line.contains("fine.txt") && !line.contains("later.txt"),
+            "{line}"
+        );
     }
 
     /// The next request must exclude the failure that reopening displays to the person.

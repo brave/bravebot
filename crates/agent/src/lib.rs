@@ -53,6 +53,7 @@ pub mod mcp;
 pub mod memory;
 pub mod messages;
 pub mod mode;
+pub mod named;
 pub mod notebook;
 pub mod open_loops;
 pub mod outcome;

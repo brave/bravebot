@@ -1053,7 +1053,9 @@ A record keeps, for every turn, its number, the prompt as it was shown, what cam
 messages of the conversation belong to it. A turn that failed or was cancelled keeps its own task
 list, spend, timing and audit lines through saving and reopening, with no final answer and no
 planner message of its own needed to hold them. A recorded failure carries only the reason the
-interface composed, never a message from the backend. A prompt handed back to the editor on
+interface composed, never a message from the backend. For a turn that ended on the read of a file
+the person named with `@`, the reason the interface composed holds that name, which the person
+wrote ([NAME-13](naming-files.md#NAME-13)). A prompt handed back to the editor on
 cancellation stays out of the transcript on resume while that turn's spend and timing stay with its
 number; whether those words remain available to recall is SESSION-6, and the two are independent of
 each other. None of this is sent to the planner. What the planner is told of a failure is the note

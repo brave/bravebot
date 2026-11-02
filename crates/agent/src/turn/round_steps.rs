@@ -204,7 +204,9 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
 
     // The mode the person last chose applies to this turn as it runs (MODE-8). The
     // prompt was written in the one the turn started in, so a change that matters to
-    // the planner is said to it before the next request.
+    // the planner is said to it before the next request. The first request of a turn also
+    // retracts a plan-mode notice an earlier turn left in the conversation, since the prompt
+    // says nothing for a mode other than plan.
     let chosen = task.permission_mode.get();
     if let Some(notice) = state.told_mode.change_notice(chosen) {
         conversation.push_composed_from(
@@ -212,6 +214,9 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
             Composed::Notice,
             Provenance::Driver,
         );
+        // A notice is only ever into plan mode or out of it, so the conversation now says plan
+        // mode is on exactly when the mode chosen is plan.
+        conversation.plan_mode_noticed(chosen == crate::permission_mode::PermissionMode::Plan);
     }
     state.told_mode = chosen;
 
