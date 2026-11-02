@@ -2146,6 +2146,20 @@ pub trait Confirmer {
     /// needed it for.
     fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision;
 
+    /// [`Confirmer::confirm_exposing_read`], and with the answer the name of the mode that gave it
+    /// where a mode approved the read without asking anybody (MODE-4, TRACE-7).
+    ///
+    /// One call rather than a question and then a query about it, so the name is the mode in force
+    /// when the question was answered and not at a later read (MODE-8). A confirmer that is not a
+    /// mode, and a wrapper that does not forward this, answers `None`, which the trail reads as a
+    /// person having agreed.
+    fn confirm_exposing_read_noting_the_mode(
+        &mut self,
+        request: &ExposureRequest,
+    ) -> (Decision, Option<&'static str>) {
+        (self.confirm_exposing_read(request), None)
+    }
+
     /// Ask whether the tools an MCP server offers may be offered to the planner. Implementations
     /// must default to refusal when they cannot ask.
     ///
@@ -3147,6 +3161,13 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_exposing_read(&mut self, request: &ExposureRequest) -> Decision {
         self.timing(|inner| inner.confirm_exposing_read(request))
+    }
+
+    fn confirm_exposing_read_noting_the_mode(
+        &mut self,
+        request: &ExposureRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.timing(|inner| inner.confirm_exposing_read_noting_the_mode(request))
     }
 
     fn confirm_tool_list(&mut self, request: &ToolListRequest) -> Decision {

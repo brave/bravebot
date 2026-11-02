@@ -6885,17 +6885,28 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.exposed.holds(path)
     }
 
-    /// Record that a person, having read the question, agreed to this file reaching the planner.
+    /// Record that this file may reach the planner, and who said so.
     ///
-    /// Only ever called because somebody answered. The path is the name the workspace reduces a
-    /// planner's spelling to, relative to the working directory for a file inside it, so the
-    /// spelling a planner used does not decide whether the question comes back.
-    pub fn allow_exposing_read(&mut self, path: &str) {
+    /// Called once the question has been answered yes. `answered_by` is the name of the mode that
+    /// answered in the person's place, and `None` is an answer that went to the confirmer, which
+    /// is what a person saying yes looks like here. The entry credits a person only for the
+    /// second: a mode that approved without drawing the question has not had a person agree to
+    /// anything (TRACE-7). The name is the mode's own fixed word and the entry holds no other text
+    /// than the path. The path is the name the workspace reduces a planner's spelling to, relative
+    /// to the working directory for a file inside it, so the spelling a planner used does not
+    /// decide whether the question comes back. The session remembers the path either way.
+    pub fn allow_exposing_read(&mut self, path: &str, answered_by: Option<&'static str>) {
         self.exposed.allow(path);
-        self.allow(
-            "approval",
-            format!("{path}: the user agreed to the planner being given it despite the scan"),
-        );
+        let detail = match answered_by {
+            Some(mode) => format!(
+                "{path}: answered by {mode} mode, nobody was asked, the planner may be given it \
+                 despite the scan"
+            ),
+            None => {
+                format!("{path}: the user agreed to the planner being given it despite the scan")
+            }
+        };
+        self.allow("approval", detail);
     }
 
     /// Whether a person has already agreed that writes may create a credential in this file.
@@ -16691,6 +16702,43 @@ five
             policy.vouched().trust.is_empty(),
             "a trust rule was written by a release nobody was asked about"
         );
+    }
+
+    /// TRACE-7: a read of a flagged file is recorded as a person's agreement only where a person
+    /// answered. An answer a mode gave names the mode and says nobody was asked. Both remember the
+    /// path for the session. The regressions it rejects are an entry that credits a person for a
+    /// mode's answer, an entry that names a mode for a person's, and a mode's answer that is not
+    /// remembered, which would record it again on every round.
+    #[test]
+    fn the_trail_says_who_answered_for_a_flagged_read() {
+        for (answered_by, expected, absent) in [
+            (
+                Some("bypass"),
+                "answered by bypass mode, nobody was asked",
+                "the user agreed",
+            ),
+            (None, "the user agreed", "nobody was asked"),
+        ] {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            assert!(!policy.read_exposure_is_allowed(".env"));
+            policy.allow_exposing_read(".env", answered_by);
+            assert!(
+                policy.read_exposure_is_allowed(".env"),
+                "{answered_by:?} was not remembered for the session"
+            );
+            drop(policy);
+
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                trail.contains(expected),
+                "{answered_by:?} left no entry saying {expected:?}: {trail}"
+            );
+            assert!(
+                !trail.contains(absent),
+                "{answered_by:?} left an entry saying {absent:?}: {trail}"
+            );
+        }
     }
 
     /// A trail crediting a person who was never shown the bytes is the one record a reader cannot

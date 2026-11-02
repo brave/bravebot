@@ -320,7 +320,10 @@ is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)).
 
 A language server's start that the mode answers ([LSP-5](tools/lsp.md#LSP-5)) is one entry under
 `approval` that names the mode and says nobody was asked, written before the server starts. No entry before it says the start was
-being asked about, since the policy decides nothing about one. Other prompts a mode answers, such
+being asked about, since the policy decides nothing about one. A flagged read the bypassing mode lets through
+([CRED-15](credential-protection.md#CRED-15)) is one entry under `approval` that names the mode and the path
+and says nobody was asked; a person's yes to the same question is recorded as the user having agreed. Other
+prompts a mode answers, such
 as a fetch, are not named here.
 
 Each question put to the auto mode's classifier ([AUTO-8](auto-mode.md#AUTO-8)) is one entry under
@@ -346,6 +349,9 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 `verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`
 `verified-by: bravebot_agent::turn::auto_answers_a_confined_run_on_the_classifiers_allow_word_and_asks_the_person_otherwise`
 `verified-by: bravebot_agent::turn::auto_answers_a_fetch_on_the_classifiers_allow_word_and_asks_the_person_otherwise`
+`verified-by: bravebot_agent::turn::a_flagged_read_bypass_mode_let_through_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::turn::a_flagged_read_a_person_agrees_to_is_recorded_as_the_user_agreeing`
+`verified-by: bravebot_core::policy::the_trail_says_who_answered_for_a_flagged_read`
 
 <a id="TRACE-8"></a>
 ### TRACE-8: the trail says how each delegate ended and why

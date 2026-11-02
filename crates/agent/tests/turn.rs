@@ -68186,6 +68186,206 @@ fn a_file_agreed_to_once_is_not_asked_about_again_this_session() {
     );
 }
 
+/// The `approval` entries written when a read the scan flagged was let through, in trail order.
+fn exposure_approvals(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "approval",
+                detail,
+            } if detail.ends_with("despite the scan") => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// One turn in which the planner makes each of `calls` against a tree holding a flagged `.env` that
+/// a commit also added. Returns the trail.
+fn a_turn_over_a_flagged_env<C: bravebot_agent::confirm::Confirmer + Send>(
+    name: &str,
+    calls: Vec<String>,
+    mode: bravebot_agent::PermissionMode,
+    confirmer: &mut C,
+) -> RecordingSink {
+    let scratch = Scratch::new(name);
+    let body = format!("DEBUG=true\nAWS_ACCESS_KEY_ID={DECLARED_KEY}\nPORT=80\n");
+    repository::commit_files(&scratch.path, &[(".env", &body)], "add a key");
+    std::fs::write(scratch.path.join(".env"), &body).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = calls;
+    replies.push(reply_with("understood"));
+    let (endpoint, _received) = serve_sequence(replies);
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("work on .env").with_permission_mode(mode),
+        confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+    sink
+}
+
+const FLAGGED_READS: [(&str, &str); 3] = [
+    ("read_file", r#"{"path":".env"}"#),
+    (
+        "edit_file",
+        r#"{"path":".env","old_text":"DEBUG=true","new_text":"DEBUG=false"}"#,
+    ),
+    ("read_git", r#"{"query":"show","path":".env"}"#),
+];
+
+/// MODE-4, TRACE-7. Bypass mode answers the question a flagged read raises, so nobody agreed to
+/// anything and the trail must not credit a person. A record written by `Policy` alone, from the
+/// fact that the answer was yes, reads the same for a mode and a person; this fails on it for each
+/// of the three tools that reach the question.
+#[test]
+fn a_flagged_read_bypass_mode_let_through_is_recorded_as_the_modes_answer() {
+    for (tool, arguments) in FLAGGED_READS {
+        let mut asked = RemembersExposures::default();
+        let questions = asked.asked.clone();
+        let mut confirmer = bravebot_agent::Confining::new(
+            &mut asked,
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+        );
+        let sink = a_turn_over_a_flagged_env(
+            "credential-read-bypass-trail",
+            vec![tool_request_2(tool, arguments)],
+            bravebot_agent::PermissionMode::Bypass,
+            &mut confirmer,
+        );
+        assert_eq!(
+            exposure_approvals(&sink),
+            [
+                ".env: answered by bypass mode, nobody was asked, the planner may be given it despite the scan"
+            ],
+            "{tool} under bypass"
+        );
+        assert!(
+            questions.lock().unwrap().is_empty(),
+            "{tool}: bypass mode put the question to the confirmer"
+        );
+    }
+}
+
+/// CRED-15. A person's yes is still recorded as the user having agreed, whether the confirmer is
+/// the person directly or sits under a mode that leaves the question to them. A record that said
+/// "bypass" for every yes would pass the test above and fail this.
+#[test]
+fn a_flagged_read_a_person_agrees_to_is_recorded_as_the_user_agreeing() {
+    for (tool, arguments) in FLAGGED_READS {
+        for under_a_mode in [None, Some(bravebot_agent::PermissionMode::Ask)] {
+            let mut person = RemembersExposures {
+                allow: true,
+                ..Default::default()
+            };
+            let questions = person.asked.clone();
+            let sink = match under_a_mode {
+                None => a_turn_over_a_flagged_env(
+                    "credential-read-person-trail",
+                    vec![tool_request_2(tool, arguments)],
+                    bravebot_agent::PermissionMode::Ask,
+                    &mut person,
+                ),
+                Some(mode) => a_turn_over_a_flagged_env(
+                    "credential-read-person-trail-ask",
+                    vec![tool_request_2(tool, arguments)],
+                    mode,
+                    &mut bravebot_agent::Confining::new(&mut person, mode, false),
+                ),
+            };
+            assert_eq!(
+                exposure_approvals(&sink),
+                [".env: the user agreed to the planner being given it despite the scan"],
+                "{tool}, mode {under_a_mode:?}"
+            );
+            assert_eq!(questions.lock().unwrap().len(), 1, "{tool}: asked once");
+        }
+    }
+}
+
+/// The session remembers a path the mode let through: reading it again writes no second entry, as
+/// a person's answer writes none (CRED-15).
+#[test]
+fn a_flagged_file_bypass_mode_let_through_is_recorded_once_per_session() {
+    let mut asked = RemembersExposures::default();
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut asked, bravebot_agent::PermissionMode::Bypass, false);
+    let sink = a_turn_over_a_flagged_env(
+        "credential-read-bypass-once",
+        vec![
+            tool_request_2("read_file", r#"{"path":".env"}"#),
+            tool_request_2("read_file", r#"{"path":".env"}"#),
+            tool_request_2("read_git", r#"{"query":"show","path":".env"}"#),
+        ],
+        bravebot_agent::PermissionMode::Bypass,
+        &mut confirmer,
+    );
+    assert_eq!(exposure_approvals(&sink).len(), 1);
+}
+
+/// MODE-9. A delegate is lent the turn's confirmer, so its flagged read is answered by the same
+/// mode and recorded the same way. A wrapper between the delegate and the mode that did not forward
+/// the answer would fall back to the default and record a person.
+#[test]
+fn a_flagged_read_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer() {
+    let scratch = Scratch::new("credential-read-bypass-delegate");
+    std::fs::write(
+        scratch.path.join(".env"),
+        format!("AWS_ACCESS_KEY_ID={DECLARED_KEY}\n"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-READ",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"READ-THE-ENV"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "READ-THE-ENV",
+            vec![
+                tool_request("read_file", r#"{"path":".env"}"#),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let mut asked = RemembersExposures::default();
+    let questions = asked.asked.clone();
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut asked, bravebot_agent::PermissionMode::Bypass, false);
+    let mut sink = RecordingSink::new();
+    turns::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-THE-READ")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        exposure_approvals(&sink),
+        [
+            ".env: answered by bypass mode, nobody was asked, the planner may be given it despite the scan"
+        ]
+    );
+    assert!(questions.lock().unwrap().is_empty());
+}
+
 /// The other end of the same round trip. A caller carrying the answer in puts no question at all,
 /// which is what makes the field on the outcome worth having: a turn that took the list and
 /// ignored it would pass the test above and still ask on every message.

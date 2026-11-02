@@ -3606,7 +3606,8 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             path: shown_path.clone(),
             credentials: described(&found),
         };
-        if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+        let (decision, answered_by) = confirmer.confirm_exposing_read_noting_the_mode(&request);
+        if decision != Decision::Approve {
             policy.refuse_unapproved_exposure("read_file");
             // The planner is told that much and no more. Enough to stop it reading the same file
             // a second way, and nothing about what was found, because a finding may not enter a
@@ -3621,7 +3622,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 format!("not shown, it holds {}", exposure_note(&found)),
             ));
         }
-        policy.allow_exposing_read(&keyed);
+        policy.allow_exposing_read(&keyed, answered_by);
     }
 
     // A read that was refused above is no touch of the file. Nor is one through a reference, where
@@ -6412,7 +6413,9 @@ fn edit_file<S: Sink, C: Confirmer>(
                         path: shown_path.clone(),
                         credentials: described(&exposed),
                     };
-                    if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+                    let (decision, answered_by) =
+                        confirmer.confirm_exposing_read_noting_the_mode(&request);
+                    if decision != Decision::Approve {
                         policy.refuse_unapproved_exposure("edit_file");
                         // The planner is told its edit landed and why the lines are missing, and
                         // nothing about what was found: a finding may not enter a model's context
@@ -6434,7 +6437,7 @@ fn edit_file<S: Sink, C: Confirmer>(
                         .marked_untrusted(false)
                         .having_changed_a_file();
                     }
-                    policy.allow_exposing_read(&keyed);
+                    policy.allow_exposing_read(&keyed, answered_by);
                 }
 
                 let told = policy.render_in_place("edit_file", &region, |region| match region {
@@ -13204,7 +13207,8 @@ fn read_git<S: Sink, C: Confirmer>(
             path: git_shown.clone(),
             credentials: describe_all(&pending),
         };
-        if confirmer.confirm_exposing_read(&request) != Decision::Approve {
+        let (decision, answered_by) = confirmer.confirm_exposing_read_noting_the_mode(&request);
+        if decision != Decision::Approve {
             policy.refuse_unapproved_exposure("read_git");
             return Produced::refused_with_a_note(
                 format!(
@@ -13217,7 +13221,7 @@ fn read_git<S: Sink, C: Confirmer>(
             );
         }
         for (key, _) in &asked {
-            policy.allow_exposing_read(key);
+            policy.allow_exposing_read(key, answered_by);
         }
     }
     let found: Vec<_> = allowed
