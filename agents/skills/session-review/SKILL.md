@@ -15,9 +15,15 @@ Every bravebot session is recorded under `~/.bravebot/sessions`, one directory p
 directory, as `<id>.json` and `<id>.audit.jsonl`. Those records show where bravebot failed the
 person using it, including a task left unfinished or finished in part that another coding agent
 would probably have finished. They also show turns the person did not expect, which appear as the
-person asking why bravebot did or did not do something. The review looks for those and proposes a
-change that would have avoided each. This skill reads them, files what it finds, and remembers
-which it has read.
+person asking why bravebot did or did not do something. They also show where the person was
+frustrated, such as a request repeated, a turn interrupted or undone, or an approval refused and
+asked again, and where a session spent context, cost or time it did not need to, such as a file
+read several times, a turn that cost several times the median, or independent calls made one at a
+time. The review looks for all of those and proposes a change that would have avoided each. A
+frustration or waste finding is filed only where the cause is in bravebot and the report names a
+change to the product, and a waste finding also gives the measure (tokens, requests, calls or
+seconds) and the saving. Both are filed as `enhancement` unless something is broken. This skill
+reads the records, files what it finds, and remembers which it has read.
 
 It files defects in the bravebot product (`crates/`, `ui/` and the behaviour the specs describe). A
 session often runs one of this repository's own skills, such as `pr-fix` or `rebase`. Defects in
@@ -64,7 +70,8 @@ for every session with a new note, and a session whose summary is empty is left 
 
 **A run never posts any other way than the poster.** No script here files an issue. Every issue
 goes through the [issue-poster](../../agents/issue-poster.md) definition (step 6), and
-`session-review.py filed` is the only thing here that records the result. `gh` is absent from
+`session-review.py filed` is the only thing here that records the result. Frustration and waste
+findings are posted the same way as any other. `gh` is absent from
 this skill's `allowed-tools` so that a `gh` call that files an issue typed here asks first, and so does every
 call the poster makes.
 
@@ -74,6 +81,9 @@ own words with no copied text, names or paths, and the verifier checks that. The
 this machine's home directory and the session's working directory from what is left. This session
 reads no record and no prompt, and of the results it sees only what the draft step prints: the
 problem titles and the summary of a session with new notes. Each is a path passed between steps.
+A frustration finding describes the sign in general terms and never quotes the person or describes
+their tone beyond what the events show. A waste finding carries counts, token figures and durations,
+which identify nobody.
 
 **A run never files a security concern.** A problem the analyzer flags as untrusted content
 reaching the planner or the driver is printed by the draft step with its title and turn and is never
@@ -147,7 +157,7 @@ readable verdict leaves the problem, and so its session, unsettled.
 python3 agents/skills/session-review/session-review.py draft --work-dir "$WORK_DIR"
 ```
 
-Print its output: one title and label set per confirmed problem, then any problems held back as
+Print its output: one title and label set per confirmed problem (a defect, a frustration or a waste), then any problems held back as
 security concerns, then the summary of every session with a new note, which says what was decided
 about each note. The labels follow
 [labelling-issues.md](../../../docs/development/labelling-issues.md): `bug` or `enhancement`,
@@ -190,8 +200,8 @@ the session had when step 1 copied it, so turns added since are reviewed by the 
 
 ### Step 8: say what happened
 
-In two or three lines: how many sessions were reviewed, how many problems were found, the issues
-filed and the ones the tracker already held, any held back as security concerns, and the sessions
+In two or three lines: how many sessions were reviewed, how many problems were found and how many of
+them were frustration or waste findings, the issues filed and the ones the tracker already held, any held back as security concerns, and the sessions
 left unmarked.
 
 Then, for every session with a new note, one line per note: what it was about and what was decided,

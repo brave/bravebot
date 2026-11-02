@@ -1,9 +1,11 @@
 # Find the problems bravebot gave the person in this session
 
 A person used bravebot, and the session was recorded. Your job is to find the places where
-bravebot itself failed them or got in their way, so that each can be fixed. Read the session, work
-out which of those places are defects in the bravebot product, and report at most five of them,
-most important first. Defects in this repository's own skills and scripts are not reported.
+bravebot itself failed them or got in their way, so that each can be fixed. That includes the places
+where the person became frustrated, and the places where the session spent context, money or time
+it did not need to. Read the session, work out which of those places are caused by the bravebot
+product, and report at most {{max_problems}} of them, most costly to the person first. Defects in this
+repository's own skills and scripts are not reported.
 
 ## The session
 
@@ -83,6 +85,76 @@ not a fix. The conditions in the previous section on untrusted content apply to 
 
 Describe the person's question in your own words and do not quote it.
 
+## Signs the person was frustrated
+
+Search the turns to review for signs that the person was frustrated, whether or not they said so.
+A sign is an event in the session, and a blunt message alone is not one. Look for:
+
+- the same request repeated or reworded after a turn that did not do it, or the same correction given more than once;
+- a running turn interrupted, or a turn undone or rewound, followed by a redirect;
+- an approval refused and the request then restated, or the same kind of approval answered over and over;
+- the person telling the model to stop doing something, to stop asking, or that it was told already;
+- a message that is sharply shorter, capitalised, sarcastic or profane after longer ones, directly after a bravebot action;
+- the person doing the work themselves, switching tool, or ending the session straight after a failure;
+- a note that expresses annoyance.
+
+For each sign:
+
+1. Find the trigger: the events in the turns and the audit trail just before it.
+2. Decide where the cause is, as in the previous section. It is in bravebot where a tool, prompt, default, approval flow, refusal message, missing command, slow step or lost context made the turn go the way it did. It is the model's where bravebot gave it what it needed. It is the person's where the request was ambiguous, and the environment's where their machine or project caused it.
+3. Work out how the process could be better, and name the smallest change in bravebot that would have prevented the frustration or ended it sooner. Examples are a prompt that shows what will happen before it does, an approval that can be answered once for a class of action, a message that names the way through a refusal, progress shown during a long turn, a warning before a costly action, a default that matches what people ask for, a command that does the thing they had to ask for in words, and context that survives compaction or resume. "The model should have chosen differently" is not a fix.
+
+Report a sign only where the cause is in bravebot, or a change in bravebot would have prevented it.
+Set `turn` to the turn of the trigger, not the turn where the person reacted. Make the fix a change
+to how bravebot works, and file it as an `enhancement` unless something is broken. Describe the sign
+in general terms, such as the request was repeated three times, and judge the product and not the
+person. Do not quote them, and do not describe their tone beyond what the events show. Where several
+signs have one cause, report the cause once.
+
+## Waste of context, cost and time
+
+Look for places where the session spent more than the task needed. The record holds the tokens each
+turn read and wrote, the share served from cache, the cost and the timing of each turn, and the
+audit trail holds every tool call. Measure before you report: compare turns in the session with each
+other, and count calls in the trail. A finding with no number or count behind it is not reported.
+
+Context:
+
+- the same file or output read into the conversation more than once, or a whole large file read where a search or a range would have answered;
+- a tool result so long that it filled the context, was cut off, or had to be fetched again;
+- the context growing much faster in one turn than in others because of one tool, one result or one delegate's report;
+- compaction run often, run soon after a resume, or followed by re-reading what it dropped;
+- a prompt, tool description or preamble that is large relative to what a turn uses it for.
+
+Cost:
+
+- a turn costing several times the median turn without the person asking for more work;
+- the cached share of a turn falling away because something changed the start of the prompt between turns;
+- retries and repeated failing calls that each spent a request;
+- a delegate started for work one read would have answered, or several delegates reading the same files.
+
+Clock time:
+
+- a turn whose time went to waiting on the backend, a tool or an approval, read from the timing breakdown, where the wait could have been shorter or avoided;
+- calls made one after another that were independent, where the tool surface allows several in one round;
+- the same build, test or setup command run again with nothing changed;
+- an approval asked for something that did not need asking about.
+
+Anything else that made the person or the model do more steps than needed: a refusal that said too little, so the next several calls guessed, a result that omitted what the next call then had to fetch, and output the person had to scroll through to find one line.
+
+Report a waste only where:
+
+- you can state the measure, for example how many tokens, requests, calls or seconds, and what the same work needed;
+- the cause is in bravebot: a tool description, a default, the shape or size of a result, guidance in a prompt, caching, compaction, scheduling or an approval flow. It is the model's where bravebot offered the efficient route, such as batching or a ranged read, and the model did not take it;
+- a change in bravebot would have saved it, and `fix` names the change and the saving it should make in the same units;
+- it is not listed under a spec's `## Known costs`, and the work was not large or slow because the task was.
+
+Report one finding per cause and not one per occurrence, with the count of occurrences in
+`what_happens`. Counts, token figures and durations are not identifying and belong in the report.
+File it as an `enhancement` unless a tool is broken, and set `turn` to the first turn where it
+shows. Time the person spent thinking or typing is not a wait. Waste in this repository's own skills
+and scripts is out of scope, as before.
+
 ## Notes the person typed
 
 A note is a line the person typed with `/note` while the session ran, attached to the turn it was
@@ -109,7 +181,9 @@ problem still gets its decision in the summary.
 
 - A task the person set that was left unfinished or finished in part, under the conditions above. Set `turn` to the turn where it stopped, and have `fix` say what bravebot would need to do for the task to succeed.
 - A tool call that failed, was refused, or was approved for something other than what was shown, and the cause is in bravebot.
-- A turn that stalled, looped, repeated itself, ran far longer or cost far more than the others for no reason the person gave, or stopped without finishing.
+- A turn that stalled, looped, repeated itself, or stopped without finishing.
+- A sign that the person was frustrated whose cause is in bravebot, with the change that would have prevented it, as the section on frustration describes.
+- Context, money or time spent that the task did not need, with a measure and a change in bravebot that saves it, as the section on waste describes.
 - The person correcting, repeating or abandoning a request because of what bravebot did, or asking how to do something bravebot has no way to do.
 - The person asking why something unexpected happened, where the cause is in bravebot or a change in bravebot would have prevented it, as the previous section describes.
 - Output that is wrong, truncated, mislabelled or hard to read, in the transcript or in the interface.
@@ -122,6 +196,8 @@ problem still gets its decision in the summary.
 - A bug in the person's own project, or a command that failed because of their machine.
 - A defect in a skill, agent definition, script, `Makefile` target or CI workflow of this repository, as "What counts as bravebot" describes.
 - An approval prompt, refusal or label restriction that behaves as the specs say it should. Where one leaves a task unfinished and a way through exists that the person was never told about, the missing guidance is the problem.
+- Terse, blunt or impatient wording with no bravebot event before it that explains it.
+- A long or costly turn that the task needed, or a cost a spec lists under `## Known costs`.
 - Something an open or closed issue on the tracker already covers.
 - Anything you cannot tie to a turn.
 
@@ -153,15 +229,15 @@ Write this JSON, and nothing else, to `{{results_file}}`:
     {
       "title": "what is wrong and what it costs, in one sentence a person searching the tracker would match",
       "key": "the one distinctive word or symbol in the title",
-      "kind": "bug | enhancement",
+      "kind": "bug | enhancement (frustration and waste are usually enhancement)",
       "area": "trust | tools | turns | interface | cli | delegation | backends | skus | i18n | (empty)",
       "security": false,
       "turn": 7,
-      "what_happens": "what the person sees and what they expected, in your words",
+      "what_happens": "what the person sees and what they expected, in your words; for frustration, the sign and its trigger; for waste, the measure and how often",
       "code_path": "the files and functions it comes from, as `path:line`",
       "reproduce": "steps a stranger can follow",
       "fix": "what would stop it, or for an unfinished task what would let it succeed, in a sentence or two",
-      "evidence": "what in the session shows it, for the verifier: which turn and event, in your words"
+      "evidence": "what in the session shows it, for the verifier: which turn and event, in your words; for waste, which fields or events give the figures"
     }
   ]
 }

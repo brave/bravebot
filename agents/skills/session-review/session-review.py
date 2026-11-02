@@ -55,7 +55,8 @@ one_line = pa.one_line
 
 MAX = 8
 IDLE_MINUTES = 30
-MAX_PROBLEMS = 5
+# Defects, frustration signs and wasted context, cost or time are all reported, so a session may report more than defects alone would.
+MAX_PROBLEMS = 8
 # A summary of a session with notes says what was decided about each, so it runs longer than a title.
 SUMMARY_LIMIT = 1200
 MARKER_SUFFIX = ".analysis.jsonl"
@@ -251,6 +252,7 @@ def pending(args, now=None):
                     "build": session["build"],
                     "turns": str(session["turns"]),
                     "from_turn": str(session["from_turn"]),
+                    "max_problems": str(MAX_PROBLEMS),
                     "notes": str(len(notes)),
                     "from_note": str(min(session["from_note"], len(notes))),
                     "notes_file": str(notes_copy) if notes else "(this session has no notes)",
