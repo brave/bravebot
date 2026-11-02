@@ -85167,21 +85167,26 @@ fn a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_withou
     let home = Scratch::new("reach-fan-out-home");
     define(&home, "checker-lead", "kind: checker\n", "LEAD-BODY");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "FAN-TASK",
-            vec![
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"worker","task":"SHARED-HALF","each":["ENTRY-ONE","ENTRY-TWO"]}"#,
-                ),
-                reply_with("waiting"),
-                reply_with("delegates finished"),
-            ],
-        ),
-        ("ENTRY-ONE", vec![reply_with("one")]),
-        ("ENTRY-TWO", vec![reply_with("two")]),
-    ]);
+    // The delegates answer only once the planner has asked a second time, so the planner is
+    // never told what came back in a round the script does not hold a reply for.
+    let (endpoint, received, _) = serve_by_marker_in(
+        vec![
+            (
+                "FAN-TASK",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"worker","task":"SHARED-HALF","each":["ENTRY-ONE","ENTRY-TWO"]}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("delegates finished"),
+                ],
+            ),
+            ("ENTRY-ONE", vec![reply_with("one")]),
+            ("ENTRY-TWO", vec![reply_with("two")]),
+        ],
+        Order::Staged(&[("ENTRY-ONE", "FAN-TASK", 2), ("ENTRY-TWO", "FAN-TASK", 2)]),
+    );
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
 
     turns::run_cancellable(
