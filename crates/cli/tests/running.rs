@@ -18701,7 +18701,10 @@ fn trigger_add_refusals_store_nothing() {
 
 /// A workspace whose path is not text is refused at `trigger add` and nothing is stored, where a
 /// lossy copy of it (`dir-\u{FFFD}`) is a different directory the run would start in.
-#[cfg(unix)]
+///
+/// Not on macOS, where the file system refuses to create a name that is not UTF-8; the check is
+/// tested there in `trigger.rs` by `a_workspace_path_that_is_not_text_is_not_text`.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn trigger_add_refuses_a_workspace_that_is_not_text() {
     use std::os::unix::ffi::OsStrExt;
@@ -21231,6 +21234,10 @@ impl LinesRun {
     }
 
     /// Started in `cwd` with `environment` beside the gateway's, for a run that starts programs.
+    ///
+    /// Gated with the one test that calls it, which is Unix only: an ungated helper is dead code on
+    /// Windows, where `-D warnings` makes that a failed build.
+    #[cfg(unix)]
     fn start_with_path(scratch: &Scratch, cwd: &Path, flags: &[&str]) -> Self {
         let mut environment = AT_A_GATEWAY.to_vec();
         environment.push(("PATH", "/usr/bin:/bin"));

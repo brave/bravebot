@@ -439,6 +439,12 @@ fn store_failed(name: &str, error: &std::io::Error) -> ExitCode {
     )
 }
 
+/// Whether `path` is text. A path that is not is refused rather than stored in a lossy copy, which
+/// would name a different directory than the one the run starts in.
+fn is_text(path: &Path) -> bool {
+    path.to_str().is_some()
+}
+
 /// `add <name> --event <event> [--workspace <dir>] [--max-concurrent <n>] [--max-per-hour <n>] --
 /// <prompt>`.
 fn add_entry(
@@ -485,7 +491,7 @@ fn add_entry(
         Ok(path) => path,
         Err(code) => return code,
     };
-    if workspace.to_str().is_none() {
+    if !is_text(&workspace) {
         return fail(Ending::Argument, t!(trigger_bad_workspace));
     }
     let Some(state) = home::writable() else {
@@ -1149,6 +1155,20 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// A workspace whose bytes are not text is not text, and its lossy copy is, so the copy is a
+    /// different path. The path is built in memory, since macOS refuses to create such a name.
+    #[cfg(unix)]
+    #[test]
+    fn a_workspace_path_that_is_not_text_is_not_text() {
+        use std::os::unix::ffi::OsStrExt;
+        let odd = PathBuf::from(std::ffi::OsStr::from_bytes(b"/work/dir-\xff"));
+        let lookalike = PathBuf::from("/work/dir-\u{FFFD}");
+        assert!(!is_text(&odd));
+        assert!(is_text(&lookalike));
+        assert_ne!(odd, lookalike);
+        assert!(is_text(Path::new("/work")));
     }
 
     fn entry(name: &str, event: &str) -> Entry {
