@@ -2596,7 +2596,9 @@ of a skill change the tree it is graded in.
 `bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>]` writes an entry and
 adds one line to the person's crontab that runs `bravebot schedule run-now <id>` at the times the
 expression gives. `list` prints each entry's id, expression, directory, what its run may do and its
-prompt. `remove <id>` takes the line out and deletes the entry. `run-now <id>` starts the entry's
+prompt. `remove <id>` takes the line out and deletes the entry. An id is never given to a second entry: a new entry takes
+the id after the highest one the store has a file for, since `remove` keeps the entry's history
+under its id. `run-now <id>` starts the entry's
 run at once, and `history [<id>]` lists the recorded runs, newest first, each with its status, the
 session it recorded and the tokens that session spent ([SESSION-11](sessions.md#SESSION-11)). Any
 other word, a number that names no entry, and a flag that `add` does not read are refused with the
