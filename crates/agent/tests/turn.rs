@@ -40301,6 +40301,65 @@ fn the_trail_says_what_a_compaction_gave_up_and_what_it_cost() {
     );
 }
 
+/// COMPACT-19, COMPACT-14: `/compact` sends a delegate's task again the same way a compaction in
+/// the middle of a turn does, because both end in the same `compacted`. The summary is a stand-in
+/// that keeps nothing of the task, so the task in the next request is the carried copy.
+#[test]
+fn a_manual_compaction_sends_the_recorded_task_again() {
+    let (endpoint, _received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.push(bravebot_aichat::protocol::Message::user(
+        "THE-DELEGATES-TASK\nport the parser to the new lexer",
+    ));
+    conversation.task_given();
+    conversation.push(bravebot_aichat::protocol::Message::assistant(
+        "started on it",
+    ));
+    for (prompt, answer) in [
+        ("what about the error type", "widened it"),
+        ("now the tests", "updated them"),
+        ("carry on", "carrying on"),
+        ("and the docs", "written"),
+        ("and the changelog", "written"),
+        ("and the release notes", "written"),
+    ] {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+    }
+    conversation.measured(50_000);
+
+    turn::compact(
+        &config,
+        &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+        None,
+    )
+    .expect("compacting runs")
+    .expect("a long conversation has something to summarise");
+
+    let sent: Vec<String> = conversation
+        .with_system("sys")
+        .iter()
+        .map(|message| message.content.text())
+        .collect();
+    assert_eq!(
+        sent.iter()
+            .filter(|text| text.contains("THE-DELEGATES-TASK"))
+            .count(),
+        1,
+        "{sent:?}"
+    );
+}
+
 /// What a person typed after `/compact` has to reach the summariser, or the argument is
 /// decoration. It goes on the closing instruction, after the exchange, so the system prompt that
 /// carries the cache mark stays the same bytes.
@@ -62152,6 +62211,177 @@ fn a_delegate_s_compaction_fires_no_compacted_hook() {
         Some("{\"event\":\"turn-finished\"}\n"),
         "a compaction in the delegate's conversation fired a hook, or the hooks did not run at all"
     );
+}
+
+/// COMPACT-19: a delegate's conversation is one prompt and then rounds, so a compaction cuts by
+/// round and gives the prompt up. Its next request, and every one after it, holds the task as the
+/// parent wrote it, once, whatever the stand-in summary kept of it. Each delegate request is read
+/// as the wire body, in which the task is JSON text, so the task is looked for in that form.
+#[test]
+fn a_delegates_requests_after_a_compaction_still_hold_its_task_once() {
+    let filler = "mind the edge cases".to_string();
+    let task = format!(
+        "Do all four.\n1. ITEM-ONE caf\u{e9} \u{20ac}\n2. ITEM-TWO\n3. ITEM-THREE\n4. ITEM-FOUR\n{filler}"
+    );
+    let arguments = serde_json::json!({ "kind": "reader", "task": task }).to_string();
+    every_request_after_a_delegates_compaction_holds_its_task(
+        "compact-keeps-the-delegates-task",
+        arguments,
+        task,
+    );
+}
+
+/// COMPACT-19, AGENT-5: a delegate started by a fan-out is told the shared task and then its own
+/// entry, and what it keeps through a compaction is all of that, not the entry alone or the shared
+/// half alone.
+#[test]
+fn a_fan_out_delegate_keeps_the_shared_task_and_its_entry_through_a_compaction() {
+    let shared = "Look it up.\n1. SHARED-ONE caf\u{e9}\n2. SHARED-TWO";
+    let entry = "ENTRY-FOR-THIS-ONE \u{20ac}\nand its second line";
+    let arguments =
+        serde_json::json!({ "kind": "reader", "task": shared, "each": [entry] }).to_string();
+    every_request_after_a_delegates_compaction_holds_its_task(
+        "compact-keeps-the-fan-out-task",
+        arguments,
+        format!("{shared}\n\n{entry}"),
+    );
+}
+
+/// The scenario of the two tests above: a parent spawns one delegate with `arguments`, the delegate
+/// reads files until it has compacted at least twice, and every request after the first compaction
+/// holds `task`, the whole task as the delegate was told it, once.
+fn every_request_after_a_delegates_compaction_holds_its_task(
+    scratch_name: &str,
+    arguments: String,
+    task: String,
+) {
+    let scratch = Scratch::new(scratch_name);
+    for n in 1..=30 {
+        std::fs::write(scratch.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let spawn = serde_json::json!({
+        "model": "test-model",
+        "choices": [{ "message": { "role": "assistant", "tool_calls": [{
+            "id": "c1",
+            "type": "function",
+            "function": { "name": "spawn_agent", "arguments": arguments }
+        }] } }]
+    })
+    .to_string();
+    let wire_form = {
+        let quoted = serde_json::to_string(&task).expect("serialises");
+        quoted[1..quoted.len() - 1].to_string()
+    };
+
+    let mut parent = vec![spawn, reply_with("waiting"), reply_with("done")].into_iter();
+    let mut delegate = (1..=30)
+        .map(|n| {
+            tool_request_with_usage(
+                "read_file",
+                &format!(r#"{{"path":"f{n}.txt"}}"#),
+                50_000,
+                10,
+            )
+        })
+        .chain(std::iter::once(reply_with_usage("read them", 50_000, 10)));
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        if body.contains(A_SUMMARY_ASKING) {
+            return Some(Some(reply_with("they have started on the first item")));
+        }
+        match body.contains("DELEGATE-THE-WORK") {
+            true => parent.next().map(Some),
+            false => delegate.next().map(Some),
+        }
+    });
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        !reporter.delegated.is_empty(),
+        "no delegate ran, so this says nothing about one"
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    let summaries = bodies
+        .iter()
+        .filter(|body| body.contains(A_SUMMARY_ASKING))
+        .count();
+    assert!(
+        summaries >= 2,
+        "the delegate compacted {summaries} times, so this says nothing about a second cut"
+    );
+    let delegate_requests: Vec<&String> = bodies
+        .iter()
+        .filter(|body| !body.contains(A_SUMMARY_ASKING) && !body.contains("DELEGATE-THE-WORK"))
+        .collect();
+    assert_eq!(
+        delegate_requests[0].matches(&wire_form).count(),
+        1,
+        "the delegate was not given the task as written"
+    );
+    let first_after = delegate_requests
+        .iter()
+        .position(|body| body.contains("they have started on the first item"))
+        .expect("no delegate request followed a compaction");
+    assert!(
+        !delegate_requests[first_after].contains("f1.txt"),
+        "the first read is still in the request, so the cut did not give it up"
+    );
+    for (index, body) in delegate_requests.iter().enumerate().skip(first_after) {
+        assert_eq!(
+            body.matches(&wire_form).count(),
+            1,
+            "delegate request {index} after the first compaction does not hold the task once"
+        );
+    }
+}
+
+/// An ordinary turn is not a delegate's: its opening prompt is left to the summary and nothing is
+/// sent again in its place (COMPACT-19).
+#[test]
+fn a_turns_own_prompt_is_not_sent_again_after_a_compaction() {
+    let scratch = Scratch::new("compact-keeps-no-prompt");
+    for n in 1..=30 {
+        std::fs::write(scratch.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_a_long_turn(30, |_| reply_with("they began on the work"));
+    let config = config_with_budget(&endpoint, 1_000);
+
+    turns::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("ORDINARY-OPENING-PROMPT"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let after = bodies
+        .iter()
+        .find(|body| !body.contains(A_SUMMARY_ASKING) && body.contains("they began on the work"))
+        .expect("the turn never compacted");
+    assert!(
+        !after.contains("ORDINARY-OPENING-PROMPT"),
+        "an ordinary turn's opening prompt was sent again"
+    );
+    assert!(!after.contains("word for word"), "{after}");
 }
 
 /// The one question the prompt-shown tests put to a person.

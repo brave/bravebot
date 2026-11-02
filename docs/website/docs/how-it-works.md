@@ -126,7 +126,7 @@ reading.
 | | |
 |---|---|
 | Tools | its kind's, a way to delegate again above the bottom of the tree, and never a way to ask you something or fetch a URL |
-| Memory | none of its parent's exchange: it begins with the task it was given |
+| Memory | none of its parent's exchange: it begins with the task it was given, which is sent again word for word if its conversation is compacted |
 | Conversation | a loop of its own, bounded |
 | Reads | whatever its capabilities and the paths you vouched for allow |
 | Writes | files, each shown to you first, and slots in a quarantine of its own |

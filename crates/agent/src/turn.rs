@@ -3027,6 +3027,12 @@ where
         ),
         None => conversation.push_from(submitted, Provenance::Typed),
     }
+    // A delegate's task is the whole of what it was told, so a compaction sends it again
+    // (COMPACT-19). Recorded from the fact that the turn is a delegate's, not from the task.
+    if task.delegate.is_some() {
+        conversation.task_given();
+    }
+
     // Which definition the turn was addressed to, from the name the caller addressed it under and
     // from nothing in the prompt, so a surface can say who answered once the turn is over
     // (ADDRESS-12).

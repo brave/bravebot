@@ -39,7 +39,8 @@ the list is refused and reaches no capability set.
 
 It is the only thing steering the call, and it comes from a context holding nothing an attacker
 wrote. The delegate cannot see the conversation it came from, so a task that leaves something out
-is a delegate that never learns it.
+is a delegate that never learns it. A compaction of the delegate's conversation sends the task
+again after the summary ([COMPACT-19](../compaction.md#COMPACT-19)).
 
 `verified-by: bravebot_core::policy::a_private_task_cannot_direct_a_delegate`
 `verified-by: bravebot_core::policy::a_run_that_has_met_something_untrusted_cannot_delegate`

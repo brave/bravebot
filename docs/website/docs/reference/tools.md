@@ -948,7 +948,9 @@ tree, and you are not asked, since the copy goes into the checkout bravebot made
 
 The delegate cannot see the conversation the task came from, so a task that leaves something out is a
 delegate that never learns it. It cannot come back for more, since there is no channel to ask
-along. A run whose own context has met something untrusted cannot delegate at all.
+along. A run whose own context has met something untrusted cannot delegate at all. If the delegate's
+own conversation is compacted, the task is sent again after the summary word for word, so it is not
+lost with the rounds the summary replaces.
 
 **Delegation saves context, never an approval.** Every write and every run a delegate makes reaches you
 with its own single-use endorsement, so you see the path and the diff whoever proposed them, and every
