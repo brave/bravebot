@@ -178,13 +178,13 @@ refusals of a write in a mode that refuses writes and in a read-only sandbox are
 the credential scan, the display, the approval and the endpoint grant, none of which the call
 reaches.
 
-A run that holds writing is unchanged: its write is scanned, shown and put to a person as
+A run that holds writing has its write scanned, shown and put to a person as
 [WRITE-3](tools/write-file.md#WRITE-3) and [EDIT-3](tools/edit-file.md#EDIT-3) say.
 
-**Why.** Without the early refusal the capability check met the call last, after the question. A
-person was asked to approve a write that always failed, and in a mode that asks nothing the trail
-showed the scan, the display and the approval before the denial. The delegate was told that a
-capability was not granted for the turn, which gives it no way forward, so it tried again.
+**Why.** A capability check placed after the question asks a person to approve a write that cannot
+land, and in a mode that asks nothing the trail shows a scan, a display and an approval before the
+denial. A refusal that says only that a capability is not granted gives the delegate no way
+forward, so it retries.
 
 **What the check reads.** The capabilities the run was started with, which the driver fixed before
 the run ([DELEGATE-4](#DELEGATE-4)). It reads nothing the run met, so no decision is taken from
@@ -193,8 +193,8 @@ untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::a_reader_or_checker_delegate_naming_a_write_tool_is_refused_before_anyone_is_asked`
 
 `the_main_session_and_an_addressed_worker_still_write_after_the_capability_check` and
-`a_delegates_write_is_approved_on_its_own` in `crates/agent/tests/turn.rs` are controls for the
-unchanged case. They pass without the early refusal.
+`a_delegates_write_is_approved_on_its_own` in `crates/agent/tests/turn.rs` are the controls for a
+run that holds writing.
 
 <a id="DELEGATE-5"></a>
 ### DELEGATE-5: the prompt belongs to the definition, and the planner writes no word of it
@@ -1344,13 +1344,13 @@ for a delegate at every depth and for the planner of a turn whose capabilities e
 A definition is judged by the kind it names, as [DELEGATE-4](#DELEGATE-4) fixes its capabilities.
 MCP grants are not compared, since a worker holds a server only where its parent does. The
 `reader` is always offered. Where the entries left are none, as when a `spawns:` line names only
-kinds the run does not reach, the entries are offered as they were, because the tool is never
+kinds the run does not reach, the entries are offered as written, because the tool is never
 offered with an empty set of kinds ([DELEGATE-30](#DELEGATE-30)) and the kernel narrows whatever
 is started. The offered kinds are the `spawns:` list intersected with the kinds the run's
 capabilities reach.
 
 The list is advisory. A call naming a kind that was not offered is answered by the same rules as
-before: [DELEGATE-3](#DELEGATE-3) refuses a name outside the resolved set and names what the set
+any other call: [DELEGATE-3](#DELEGATE-3) refuses a name outside the resolved set and names what the set
 holds, and [DELEGATE-4](#DELEGATE-4) starts a kind the run reaches only in part, narrowed. The set
 resolved before the turn is never added to.
 
@@ -1377,7 +1377,7 @@ fan-out ([AGENT-5](tools/spawn-agent.md#AGENT-5)) every delegate of a call names
 from one run's set, so the sentence is the same for each and says so once.
 
 The sentence is built from capability values the kernel compared when it approved the delegate and
-carried to the message on the delegate's spec. The trail still records the same narrowing for a
+carried to the message on the delegate's spec. The trail records the same narrowing for a
 person ([TRACE-1](trace.md#TRACE-1)). No word of the sentence comes from a delegate, a definition
 file or the planner.
 

@@ -33,7 +33,7 @@ the list is refused and reaches no capability set.
 
 The list offered to a run is narrowed by the capabilities that run holds: a run that cannot write
 is not offered the kind that writes ([DELEGATE-32](../delegation.md#DELEGATE-32)). The offer is
-advisory, and a name outside the resolved set is refused as before.
+advisory, and a name outside the resolved set is refused ([DELEGATE-3](../delegation.md#DELEGATE-3)).
 
 `verified-by: bravebot_core::policy::a_kind_nobody_enumerated_is_refused`
 `verified-by: bravebot_core::delegate::a_kind_is_selected_from_the_enumerated_set_and_nothing_else`
