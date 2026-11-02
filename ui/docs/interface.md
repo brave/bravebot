@@ -65,21 +65,10 @@ ground on its left too, so its corners never meet the edge. The three column hea
 so they line up across the window, and the sidebar's head leaves room for the inset traffic
 lights.
 
-The **Agent** menu beside the model picker chooses how the next message is handled. **Agent** is
-the default: an ordinary turn. **Plan** makes the next Send start a manifest run from the draft.
-The agent plans the whole task before reading anything, shows you the plan, and runs it only if
-you approve. The menu goes back to Agent once the run starts, so the next message is an ordinary
-turn; a conversation never holds the mode. A run cannot take attached or dropped files or pasted
-pictures, and a bot cannot start one, so Plan is greyed with the reason in either case. A file
-named with `@` in the task stays a word of the task and is not read into it, as with `/manifest`
-in the terminal: a plan is fixed before anything is read, so the run reads that file, if it does,
-as one of its steps. The run is saved as its own record and is not part of the conversation, so a
-later turn is not sent what the run said.
-
-A run's record is listed with the conversations and marked **Plan run**. Choosing one reads
-it: the task, the goal, the plan, the steps that ran, and why it stopped if it did. It has
-no message box, because a run has no conversation to continue. **New chat here** starts
-a chat in the run's project. Runs started in the terminal are listed and read the same way.
+The window starts no manifest runs. A run's record, started in the terminal, is listed with the
+conversations and marked **Plan run**. Choosing one reads it: the task, the goal, the plan, the
+steps that ran, and why it stopped if it did. It has no message box, because a run has no
+conversation to continue. **New chat here** starts a chat in the run's project.
 
 Drafts and reading positions survive conversation switches and restarts. A running
 conversation can continue in the background. Enter while a turn runs sends the message into that
@@ -153,15 +142,25 @@ banners above the header. It goes where it is needed:
   clear themselves after four seconds, name where a file went, and at most three show at once.
   A failure is never a confirmation.
 
-The mode control in the composer, beside the model, says how much the session asks before it acts: **Ask** (every
+The composer has two controls on the right, before Send: the session controls menu and the model
+picker, the model last. The menu has two groups, **Approvals** and **Sandbox**. Its button shows the approval mode, and
+adds the sandbox mode when it is not Workspace write, so nothing that changes what the session
+does is hidden in the closed menu. The button's accessible name lists both, and `⇧⌘M` still cycles the approval mode.
+The menu opens upward from the button and is no taller than the space above it, so a short window
+scrolls it instead of cropping it.
+
+The **Approvals** group says how much the session asks before it acts: **Ask** (every
 write and command is put to you), **Accept edits** (writes go through, commands and writes that
-would create a credential are still asked about) or **Plan** (nothing is written, commands are still
-asked about). Ask is drawn plainly. The other two are tinted for as long as they hold. Every session
+would create a credential are still asked about), **Plan** (nothing is written, commands are still
+asked about) or **Auto** (writes go through as in Accept edits, and a model decides whether to run
+a command or fetch a URL; anything it does not allow is still put to you, as in Ask). Each is
+drawn in a hue of its own, on the button and on the chosen item: yellow for Ask, green for Accept
+edits, blue for Plan and pink for Auto. Every session
 opens in Ask, including a resumed one and a fork. A change while a turn runs applies to the rest
 of that turn. Bypassing every check is not offered here, because it is reached
 only through the terminal's `--dangerously-skip-permissions` flag.
 
-The sandbox control beside it says how much a program the agent runs is held to: **Workspace write**
+The **Sandbox** group says how much a program the agent runs is held to: **Workspace write**
 (the machine can be read except credential locations, and writes stay in the session), **Read only**
 (the same reads and no writes in the session) or **Strict** (a program reads only what its command
 names). On Windows none of the three reads the machine and Strict gives a program what Workspace
@@ -583,7 +582,7 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 | `⌘L` | View › Focus Composer | Move focus to the message box; needs a session |
 | `⌘↩` | Chat › Send | Send the draft; greyed while a turn runs or the draft is empty |
 | `⌘.` | Chat › Cancel Turn | Cancel the running turn; greyed when nothing is running |
-| `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Ask again; needs a session |
+| `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Auto, then Ask again; needs a session |
 | | Chat › Undo Last Turn… | [Undo](#undo-and-rewind) the latest turn; greyed while a turn runs or with nothing to undo |
 | | Brave Bot › Keep Computer Awake During Turns | A checkbox, off at every launch: while it is on the computer does not sleep while any chat has a turn running. The first time, a dialog says what it does (the screen still locks) and asks to Enable |
 | | Chat › Add Note… | Keep a note on the chat's record, never sent to the model; greyed while a turn runs. The context panel's Notes section lists the notes and has the same Add button |

@@ -32,26 +32,30 @@ that untrusted content never reaches the driver or the planner is
 ## Clauses
 
 <a id="AUTO-1"></a>
-### AUTO-1: the key and a flag on a one-shot run reach auto, and nothing else does
+### AUTO-1: the key, a flag on a one-shot run and the desktop window's menu reach auto, and nothing else does
 
 The mode key stops on auto between planning and bypassing, so the press after planning lands in auto
 and the one after that in bypassing where that is reachable ([MODE-5](permission-modes.md#MODE-5)).
 A click on the mode under the box passes it by ([MOUSE-14](mouse.md#MOUSE-14)). `--auto` opens a
 one-shot run in it, and is refused beside `--dangerously-skip-permissions` and `--accept-edits`, and
-where the line starts no one-shot run, since a session has the key. `/plan` does not set it, the
-desktop window does not offer it and a request naming it is refused
-([MODE-11](permission-modes.md#MODE-11)), a background session cannot be in it
-([BG-7](background-sessions.md#BG-7)), no settings file selects it, and no recorded session restores
-it ([MODE-10](permission-modes.md#MODE-10)).
+where the line starts no one-shot run, since a session has the key. The desktop window offers it as
+an item of the Approvals group of the session controls menu, named and described there, and its
+shortcut stops on it after planning and walks on to asking, since the window has no bypassing
+([MODE-11](permission-modes.md#MODE-11)). `/plan` does not set it, a background session cannot be in
+it ([BG-7](background-sessions.md#BG-7)), no settings file selects it, and no recorded session
+restores it ([MODE-10](permission-modes.md#MODE-10)).
 
 **Why.** Bypassing is on the key's ladder, and auto answers fewer questions than it does, so the key
-reaches it. A click is the input a stray press can make, and the mode hands questions to a model, so
-a click does not grant it. A checkout or a file a person did not write must not be able to choose
-who answers.
+reaches it. A click on a control that cycles is the input a stray press can make, and the mode hands
+questions to a model, so a click there does not grant it. The window's menu shows what each item
+does before it is chosen, so choosing auto there is a choice made by name. A checkout or a file a
+person did not write must not be able to choose who answers, and every session opens asking, so none
+can.
 
 `verified-by: bravebot_agent::permission_mode::the_key_reaches_auto_after_planning_and_before_bypass`
 `verified-by: bravebot_tui::app::a_click_on_the_permission_mode_moves_as_the_key_does_and_never_into_bypass`
-`verified-by: bravebot_ui_bridge::wire::a_window_cannot_choose_auto`
+`verified-by: bravebot_ui_bridge::wire::a_window_chooses_auto_and_never_bypass`
+`verified-by: bravebot_ui_bridge::permission_mode::auto_writes_unasked_and_lets_the_classifier_answer_a_command`
 `verified-by: bravebot_session::jobs::a_background_session_cannot_be_in_auto`
 `verified-by: bravebot_cli::running::auto_is_refused_with_the_other_mode_flags_and_outside_a_one_shot_run`
 
@@ -229,10 +233,9 @@ nothing about what the person wanted.
 
 - A setting that makes the mode unreachable for a layer, as `permissions.bypassUnreachable` does for
   bypassing ([PERM-17](permissions.md#PERM-17), [PERM-18](permissions.md#PERM-18)). Until it exists an
-  administrator cannot remove the mode from the ladder.
+  administrator cannot remove the mode from the ladder or from the desktop window's menu.
 - A model of its own for the classifier, read from the home layer only
   ([BACKEND-24](backends.md#BACKEND-24), [COMPACT-15](compaction.md#COMPACT-15)). It runs on the
   session's model.
-- The desktop window, which offers three modes ([MODE-11](permission-modes.md#MODE-11)).
 - A flag that opens an interactive session in the mode. The key reaches it.
 - Instruction files as input to the classifier, which Claude Code includes.

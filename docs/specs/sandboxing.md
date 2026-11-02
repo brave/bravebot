@@ -2181,8 +2181,10 @@ start-up chose, since the background process chooses again ([BG-2](background-se
 The opening screen, `/status` and the trace's `sandbox` gate
 name the mode in force after the command.
 
-The desktop window has a control of its own in the composer, beside the permission mode. It shows
-the mode in force and offers `strict`, `read-only` and `workspace-write`. It offers no `off`, and the bridge refuses a
+The desktop window offers the sandbox mode as the Sandbox group of the session controls menu in the
+composer, below the Approvals group that holds the permission mode. The open menu marks the mode in
+force and offers `strict`, `read-only` and `workspace-write`. The closed button names the mode in
+force after the permission mode when it is not `workspace-write`. It offers no `off`, and the bridge refuses a
 request for `off`, or for any word that is not one of the three or `standard`, whatever the window
 sends. A mode the kernel cannot hold ([SANDBOX-3](#SANDBOX-3)) is still offered and accepted, and a `run`
 stage under it is refused with the sentence that clause describes. A choice is

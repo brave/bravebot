@@ -81,10 +81,36 @@ try {
   await page.screenshot({ path: join(output, 'mode-ask.png') })
   await mode.click()
   await page.getByRole('menuitemradio', { name: /^Accept edits/ }).waitFor()
-  await page.waitForTimeout(300)
+  // Leo fades an item's colours in, so the pointer is moved off the menu and the screenshot waits for them.
+  await page.mouse.move(5, 5)
+  await page.waitForTimeout(1500)
   await page.screenshot({ path: join(output, 'mode-menu.png') })
+  // One menu holds the approval and sandbox controls, each in a group of its own, with its copy and the chosen item marked.
+  assert.deepEqual((await page.locator('.controls-heading').allInnerTexts()).map((text) => text.trim()), ['Approvals', 'Sandbox'])
+  assert.deepEqual(await page.locator('leo-menu-item[data-role="menuitemradio"]').evaluateAll((items) => items.map((item) => [
+    item.getAttribute('data-test'), item.querySelector('.controls-option-text > span:first-child')?.textContent, item.querySelector('.menu-detail')?.textContent ?? null, item.getAttribute('aria-checked'),
+  ])), [
+    ['mode-option-ask', 'Ask', 'Asks before every write and command', 'true'],
+    ['mode-option-acceptEdits', 'Accept edits', 'Writes without asking. Commands still ask', 'false'],
+    ['mode-option-plan', 'Plan', 'Reads and plans only. Commands still ask', 'false'],
+    ['mode-option-auto', 'Auto', 'Writes freely. A model checks commands', 'false'],
+    ['sandbox-option-workspace-write', 'Workspace write', 'Can read most files, but can only make changes inside this workspace', 'true'],
+    ['sandbox-option-read-only', 'Read only', 'Can read most files, but can’t change anything', 'false'],
+    ['sandbox-option-strict', 'Strict', 'Can only access the files named in the command. Anything else fails', 'false'],
+  ], 'every item, its copy, and which one is chosen')
+  const popupBox = () => page.evaluate(() => {
+    const box = document.querySelector('.controls-menu').shadowRoot.querySelector('.leo-menu-popup')
+    const { top, bottom } = box.getBoundingClientRect()
+    return { top, bottom, height: window.innerHeight, scrolls: box.scrollHeight > box.clientHeight, overflowY: getComputedStyle(box).overflowY }
+  })
+  const roomy = await popupBox()
+  assert.ok(roomy.top >= 0 && roomy.bottom <= roomy.height, `the menu is not cropped where the composer sits mid-window: ${JSON.stringify(roomy)}`)
+  const background = (selector) => page.locator(selector).first().evaluate((node) => getComputedStyle(node).backgroundColor)
+  assert.notEqual(await background('leo-menu-item[aria-checked="true"]'), await background('leo-menu-item[aria-checked="false"]'), 'the chosen item has a background of its own')
   await page.getByRole('menuitemradio', { name: /^Accept edits/ }).click()
   await inMode('acceptEdits')
+  await page.getByRole('menuitemradio', { name: /^Accept edits/ }).waitFor({ state: 'hidden' })
+  await page.waitForFunction(() => document.activeElement?.getAttribute('data-test') === 'mode-trigger')
   await ask('Write notes.md')
   assert.equal(await writeCards.count(), 0, 'accepting edits put a write to the window')
   assert.equal(readFileSync(join(project, 'notes.md'), 'utf8'), '# Notes\n', 'the write landed')
@@ -116,6 +142,12 @@ try {
   await page.screenshot({ path: join(output, 'mode-plan-dark.png') })
   await page.emulateMedia({ colorScheme: 'light' })
 
+  // The shortcut walks on from planning to auto, drawn with the Brave Leo icon, and then back to asking.
+  await cycle()
+  await inMode('auto')
+  assert.equal(await mode.locator('leo-icon[name="product-brave-leo"]').count(), 1, 'auto is drawn with the Brave Leo icon')
+  assert.equal((await mode.innerText()).trim(), 'Auto')
+  await page.screenshot({ path: join(output, 'mode-auto.png') })
   await cycle()
   await inMode('ask')
   await send('Write later.md')
@@ -127,8 +159,98 @@ try {
   assert.equal(await changeState('later.md'), 'refused', 'a write the person refused is listed as refused')
   await page.screenshot({ path: join(output, 'mode-ask-refused.png') })
 
+  // The chosen approval is drawn in its own hue: the hue's 10 as the background and its 60 as the text and
+  // the icon, both of which Leo flips between light and dark.
+  const expanded = () => mode.getAttribute('aria-expanded')
+  const openMenu = async () => {
+    if ((await expanded()) !== 'true') await mode.click()
+    await page.waitForFunction(() => document.querySelector('[data-test="mode-trigger"]')?.getAttribute('aria-expanded') === 'true')
+  }
+  const closeMenu = async () => {
+    if ((await expanded()) === 'true') await mode.click()
+    await page.waitForFunction(() => document.querySelector('[data-test="mode-trigger"]')?.getAttribute('aria-expanded') === 'false')
+  }
+  await closeMenu()
+  for (const [wanted, id, hue] of [['ask', 'mode-option-ask', 'yellow'], ['acceptEdits', 'mode-option-acceptEdits', 'green'], ['plan', 'mode-option-plan', 'blue'], ['auto', 'mode-option-auto', 'pink']]) {
+    await openMenu()
+    if ((await page.locator(`[data-test="${id}"]`).getAttribute('aria-checked')) !== 'true') {
+      await page.locator(`[data-test="${id}"]`).click()
+      await inMode(wanted)
+      await closeMenu()
+      await openMenu()
+    }
+    await page.mouse.move(5, 5)
+    await page.waitForTimeout(1500)
+    const drawn = await page.evaluate(({ id, hue }) => {
+      const probe = document.createElement('i')
+      document.body.append(probe)
+      const resolve = (value, property) => { probe.style[property] = ''; probe.style[property] = value; return getComputedStyle(probe)[property] }
+      const row = document.querySelector(`[data-test="${id}"]`)
+      const style = getComputedStyle(row)
+      const result = {
+        background: style.backgroundColor, wantBackground: resolve(`var(--leo-color-${hue}-10)`, 'backgroundColor'),
+        text: style.color, wantInk: resolve(`var(--leo-color-${hue}-60)`, 'color'),
+        icon: resolve(getComputedStyle(row.querySelector('.menu-icon-row')).getPropertyValue('--leo-icon-color'), 'color'),
+        tick: resolve(getComputedStyle(row.querySelector('.menu-check')).getPropertyValue('--leo-icon-color'), 'color'),
+        subtitle: getComputedStyle(row.querySelector('.menu-detail')).color,
+      }
+      probe.remove()
+      return result
+    }, { id, hue })
+    assert.equal(drawn.background, drawn.wantBackground, `${wanted}: the chosen row is on the ${hue}-10 background: ${JSON.stringify(drawn)}`)
+    for (const part of ['text', 'icon', 'tick', 'subtitle']) assert.equal(drawn[part], drawn.wantInk, `${wanted}: the chosen row's ${part} is ${hue}-60: ${JSON.stringify(drawn)}`)
+    await page.screenshot({ path: join(output, `mode-colours-${wanted}.png`) })
+    await closeMenu()
+    // The button is drawn in the same hue.
+    const button = await page.evaluate((hue) => {
+      const probe = document.createElement('i')
+      document.body.append(probe)
+      probe.style.backgroundColor = `var(--leo-color-${hue}-10)`
+      const wantBackground = getComputedStyle(probe).backgroundColor
+      probe.remove()
+      return { background: getComputedStyle(document.querySelector('[data-test="mode-trigger"]')).backgroundColor, wantBackground }
+    }, hue)
+    assert.equal(button.background, button.wantBackground, `${wanted}: the button is on the ${hue}-10 background: ${JSON.stringify(button)}`)
+  }
+
+  // The model picker is the last control before Send, and its selected row is drawn on the selected background.
+  await page.keyboard.press('Escape')
+  const order = await page.locator('.composer-toolbar [data-test="mode-trigger"], .composer-toolbar [data-test="model-trigger"], .composer-toolbar [data-test="send-message"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-test')))
+  assert.deepEqual(order, ['mode-trigger', 'model-trigger', 'send-message'], 'the model sits between the session controls and Send')
+  await page.locator('[data-test="model-trigger"]').click()
+  await page.locator('[data-test="model-popover"]').waitFor()
+  await page.mouse.move(5, 5)
+  await page.waitForTimeout(1500)
+  const selectedRow = await page.locator('.model-menu leo-option[data-current="true"]').first().evaluate((node) => getComputedStyle(node).backgroundColor)
+  assert.notEqual(selectedRow, 'rgba(0, 0, 0, 0)', 'the selected model row has a background')
+  await page.screenshot({ path: join(output, 'mode-model-menu.png') })
+  await page.keyboard.press('Escape')
+
+  // A window too short for the whole menu scrolls it, and every item can be brought inside the window.
+  await page.setViewportSize({ width: 1000, height: 560 })
+  await mode.click()
+  await page.getByRole('menuitemradio', { name: /^Accept edits/ }).waitFor()
+  await page.mouse.move(5, 5)
+  await page.waitForTimeout(1500)
+  await page.screenshot({ path: join(output, 'mode-menu-short-window.png') })
+  // The popup is Leo's own box inside the menu's shadow root. It stays inside the window and scrolls
+  // what does not fit, as the model picker's list does.
+  const popup = await popupBox()
+  assert.ok(popup.top >= 0 && popup.bottom <= popup.height, `the menu stays inside a short window: ${JSON.stringify(popup)}`)
+  assert.ok(popup.scrolls && popup.overflowY !== 'visible', `and scrolls what does not fit: ${JSON.stringify(popup)}`)
+  const items = page.locator('leo-menu-item[data-role="menuitemradio"]')
+  const last = await items.last().evaluate((node) => {
+    node.scrollIntoView({ block: 'nearest' })
+    const box = node.getBoundingClientRect()
+    return { top: box.top, bottom: box.bottom, height: window.innerHeight }
+  })
+  assert.ok(last.top >= 0 && last.bottom <= last.height, `the last item can be scrolled into view: ${JSON.stringify(last)}`)
+  await page.screenshot({ path: join(output, 'mode-menu-short-window-end.png') })
+  await page.keyboard.press('Escape')
+  await page.setViewportSize({ width: 1400, height: 1000 })
+
   assert.deepEqual(errors, [])
-  console.log(`PASS: accepting edits writes with no card and still asks about a command, the control works while a turn runs, planning writes nothing and asks nothing, a refused write keeps its path in view and is listed as refused, and the menu shortcut walks back to asking. Screenshots in ${output}/mode-*.png`)
+  console.log(`PASS: accepting edits writes with no card and still asks about a command, the control works while a turn runs, planning writes nothing and asks nothing, a refused write keeps its path in view and is listed as refused, and the menu shortcut walks from planning through auto back to asking. Screenshots in ${output}/mode-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'mode-failure.png') }).catch(() => undefined)
   throw error

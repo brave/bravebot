@@ -113,43 +113,82 @@
 .composer-toolbar .model-picker { flex: 0 1 auto; min-width: 0; max-width: 220px; margin: 0; }
 .composer .model-trigger { width: auto; max-width: 100%; --leo-button-color: var(--ink-tertiary); }
 .composer .model-current { max-width: 180px; }
-/* Asking is drawn like the model beside it. The other two modes are tinted for as long as they
-   hold, and their names say the same thing where colour is not drawn. */
-.composer-toolbar .permission-menu { flex: none; }
-.composer .permission-trigger {
+/* One menu holds the approval mode and the sandbox mode, and sits beside the model. The trigger is
+   drawn in the hue of the approval mode, and names a sandbox mode that is not Workspace write after
+   it, so the name says the same where colour is not drawn. */
+.composer-toolbar .controls-menu { flex: 0 1 auto; min-width: 0; max-width: 280px; }
+/* The popup scrolls when there is not room above the button to hold it, rather than running past the
+   window's edge. The component sets the limit from the space above the button each time it opens. */
+.controls-menu { --leo-menu-max-height: 70vh; }
+.composer .controls-trigger {
+  max-width: 100%;
+  min-width: 0;
   --leo-button-color: var(--ink-tertiary);
   --leo-icon-color: currentColor;
-  border-radius: var(--radius-control);
+  --leo-button-radius: var(--radius-pill);
+  border-radius: var(--radius-pill);
   white-space: nowrap;
 }
-.composer .permission-trigger.permission-acceptEdits {
-  --leo-button-color: var(--ink-primary);
-  --leo-icon-color: var(--status-warning);
-  background: var(--status-warning-bg);
+.composer .controls-current { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer .controls-trigger.permission-ask {
+  --leo-button-color: var(--mode-ask-ink);
+  --leo-icon-color: var(--mode-ask-ink);
+  background: var(--mode-ask-bg);
 }
-.composer .permission-trigger.permission-plan {
-  --leo-button-color: var(--ink-primary);
-  --leo-icon-color: var(--status-info);
-  background: var(--status-info-bg);
+.composer .controls-trigger.permission-acceptEdits {
+  --leo-button-color: var(--mode-accept-ink);
+  --leo-icon-color: var(--mode-accept-ink);
+  background: var(--mode-accept-bg);
 }
-.permission-option,
-.sandbox-option { width: min(320px, calc(100vw - 24px)); }
-.permission-option-text,
-.sandbox-option-text { display: flex; flex-direction: column; min-width: 0; white-space: normal; }
-/* Workspace write is the resting state and is drawn like the model beside it. Strict is tinted for as
-   long as it holds, and its name says the same where colour is not drawn. */
-.composer-toolbar .sandbox-menu { flex: none; }
-.composer .sandbox-trigger {
-  --leo-button-color: var(--ink-tertiary);
-  --leo-icon-color: currentColor;
-  border-radius: var(--radius-control);
-  white-space: nowrap;
+.composer .controls-trigger.permission-plan {
+  --leo-button-color: var(--mode-plan-ink);
+  --leo-icon-color: var(--mode-plan-ink);
+  background: var(--mode-plan-bg);
 }
-.composer .sandbox-trigger.sandbox-strict {
+.composer .controls-trigger.permission-auto {
+  --leo-button-color: var(--mode-auto-ink);
+  --leo-icon-color: var(--mode-auto-ink);
+  background: var(--mode-auto-bg);
+}
+.composer .controls-trigger.sandbox-strict:not(.permission-acceptEdits, .permission-plan, .permission-auto) {
   --leo-button-color: var(--ink-primary);
   --leo-icon-color: var(--status-success);
   background: var(--status-success-bg);
 }
+/* A section title is a full-width band over the menu's 4px inset, and the first one runs to the
+   popup's top edge. */
+.controls-heading {
+  margin-inline: calc(-1 * var(--leo-spacing-s));
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  background: var(--surface-app);
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+}
+.controls-trigger + .controls-heading { margin-top: calc(-1 * var(--leo-spacing-s)); }
+/* The chosen item in each group: interactive background, text, subtitle and icon. A disabled item
+   keeps the disabled colours. */
+.controls-menu leo-menu-item[aria-checked='true']:not([aria-disabled='true']) {
+  background: var(--surface-selected);
+  border-radius: var(--radius-control);
+  color: var(--ink-link);
+}
+.controls-menu leo-menu-item[aria-checked='true']:not([aria-disabled='true']) .menu-icon-row { --leo-icon-color: var(--ink-accent); }
+.controls-menu leo-menu-item[aria-checked='true']:not([aria-disabled='true']) .menu-detail { color: var(--ink-link); }
+/* The chosen approval is drawn in its own hue, its background, text, subtitle, icon and tick. */
+.controls-menu leo-menu-item[data-test='mode-option-ask'] { --mode-bg: var(--mode-ask-bg); --mode-ink: var(--mode-ask-ink); }
+.controls-menu leo-menu-item[data-test='mode-option-acceptEdits'] { --mode-bg: var(--mode-accept-bg); --mode-ink: var(--mode-accept-ink); }
+.controls-menu leo-menu-item[data-test='mode-option-plan'] { --mode-bg: var(--mode-plan-bg); --mode-ink: var(--mode-plan-ink); }
+.controls-menu leo-menu-item[data-test='mode-option-auto'] { --mode-bg: var(--mode-auto-bg); --mode-ink: var(--mode-auto-ink); }
+.controls-menu leo-menu-item[data-test^='mode-option-'][aria-checked='true']:not([aria-disabled='true']) {
+  background: var(--mode-bg);
+  color: var(--mode-ink);
+}
+.controls-menu leo-menu-item[data-test^='mode-option-'][aria-checked='true']:not([aria-disabled='true']) .menu-icon-row,
+.controls-menu leo-menu-item[data-test^='mode-option-'][aria-checked='true']:not([aria-disabled='true']) .menu-check { --leo-icon-color: var(--mode-ink); }
+.controls-menu leo-menu-item[data-test^='mode-option-'][aria-checked='true']:not([aria-disabled='true']) .menu-detail { color: var(--mode-ink); }
+.controls-option { width: min(320px, calc(100vw - 24px)); }
+.controls-option-text { display: flex; flex-direction: column; min-width: 0; white-space: normal; }
+.controls-option-text .menu-detail { font: var(--type-meta); }
 /* The icon is 20px in a 28px target. */
 .composer .attach-files {
   --leo-button-color: var(--ink-secondary);
@@ -529,16 +568,12 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
   .composer-tray,
   .attention-pill,
   .composer-box:focus-within { outline: 2px solid Highlight; }
-  .composer .permission-trigger.permission-acceptEdits,
-  .composer .permission-trigger.permission-plan,
-  .composer .sandbox-trigger.sandbox-strict { outline: 1px solid CanvasText; }
+  .composer .controls-trigger.permission-ask,
+  .composer .controls-trigger.permission-acceptEdits,
+  .composer .controls-trigger.permission-auto,
+  .composer .controls-trigger.permission-plan,
+  .composer .controls-trigger.sandbox-strict { outline: 1px solid CanvasText; }
   .mention-list { border: 1px solid CanvasText; }
   .mention-option.active { outline: 2px solid Highlight; outline-offset: -2px; }
 }
 
-/* Beside Send, so it reads as the other way to send what is written. */
-/* Agent or Plan for the next message. In caption ink like the model beside it; the accent while
-   Plan is chosen, since the next Send does something other than the usual. */
-.composer .mode-trigger { flex: none; --leo-button-color: var(--ink-tertiary); white-space: nowrap; }
-.composer .mode-trigger.planning { --leo-button-color: var(--ink-accent); }
-.mode-menu leo-menu-item { width: min(320px, calc(100vw - 24px)); box-sizing: border-box; }

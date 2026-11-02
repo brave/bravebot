@@ -289,7 +289,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
         restoreFocus()
       }}
     >
-      <Button ref={trigger} slot="anchor-content" kind={scope === 'bot' ? 'plain' : 'plain-faint'} size={compact ? 'tiny' : 'medium'} className="model-trigger" isDisabled={disabled}
+      <Button ref={trigger} slot="anchor-content" kind={scope === 'bot' && !compact ? 'plain' : 'plain-faint'} size={compact ? 'tiny' : 'medium'} className="model-trigger" isDisabled={disabled}
         data-tooltip={`Choose model · ${model ?? label}`} aria-label={`Choose model: ${label}`}
         aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
         data-test="model-trigger">

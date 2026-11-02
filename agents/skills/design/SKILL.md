@@ -116,6 +116,7 @@ that aliases a Leo token, then use it.
 | Border | `--border-hairline`, `-subtle`, `-strong`, `-focus` |
 | Ink | `--ink-primary`, `-secondary`, `-tertiary`, `-disabled`, `-link`, `-accent` |
 | Status | `--status-success`, `-warning`, `-error`, `-info` and their `-bg` |
+| Approval mode | `--mode-ask-bg` and `-ink`, and the same for `accept`, `plan` and `auto` |
 | Type | `--type-page-title` 28, `-heading` 20, `-title` 16, `-lede` 16, `-body` 14, `-meta` 12, `-caption` 11, `-code`, `-code-body`, with `-strong` forms |
 | Radius | `--radius-chip`, `-control`, `-card`, `-field`, `-bubble`, `-pill` |
 | Elevation | `--shadow-raised`, `--shadow-floating`, `--shadow-focus` |

@@ -507,12 +507,12 @@ directories that sitting held, since the mode answered for them ([TRUST-6](trust
 `verified-by: bravebot_session::sessions::a_record_does_not_keep_a_permission_mode`
 
 <a id="MODE-11"></a>
-### MODE-11: the desktop offers asking, accepting edits and planning, one mode per open session
+### MODE-11: the desktop offers asking, accepting edits, planning and auto, one mode per open session
 
-The desktop window offers three of the five modes: asking, accepting edits and planning. Auto and
-bypassing are not among them and no request reaches either. The window has no command line for the
-flag in MODE-5 to be given on, so a request naming either is refused rather than read as another
-mode.
+The desktop window offers four of the five modes: asking, accepting edits, planning and auto
+([AUTO-1](auto-mode.md#AUTO-1)). Bypassing is not among them and no request reaches it. The window
+has no command line for the flag in MODE-5 to be given on, so a request naming it is refused rather
+than read as another mode.
 
 The mode belongs to one open session, and every session opens asking, a resumed session and a fork
 included (MODE-10). The bridge holds it, rather than each turn's request carrying it, because a
@@ -527,6 +527,7 @@ again.
 
 `verified-by: bravebot_ui_bridge::permission_mode::every_way_of_opening_a_session_opens_asking`
 `verified-by: bravebot_ui_bridge::permission_mode::a_window_cannot_choose_to_bypass_every_check`
+`verified-by: bravebot_ui_bridge::permission_mode::auto_writes_unasked_and_lets_the_classifier_answer_a_command`
 `verified-by: bravebot_ui_bridge::permission_mode::accepting_edits_writes_unasked_and_still_asks_about_a_command`
 `verified-by: bravebot_ui_bridge::permission_mode::planning_writes_nothing_and_asks_nothing_about_a_write`
 `verified-by: bravebot_ui_bridge::permission_mode::a_mode_chosen_while_a_turn_runs_applies_to_that_turn`

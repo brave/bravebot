@@ -2311,17 +2311,22 @@ fn a_host_prompt_carries_the_hosts_and_nothing_else() {
     );
 }
 
-/// AUTO-1, MODE-11: a window cannot ask for auto, and a mode it can ask for is still read. The
-/// wire has a name for auto so a session that held the mode could be drawn. The regression it
-/// rejects is a request naming the mode being read as another one, which would leave a client
-/// drawing a mode its session is not in.
+/// AUTO-1, MODE-11: a window can ask for auto, and for no mode past it. The regression it rejects
+/// is a request naming a mode being read as another one, or bypass being read at all, which would
+/// leave a client drawing a mode its session is not in or reach a mode only the command line may.
 #[test]
-fn a_window_cannot_choose_auto() {
+fn a_window_chooses_auto_and_never_bypass() {
     use bravebot_agent::PermissionMode;
-    assert!(wire::permission_mode(&json!("auto")).is_err());
+    assert_eq!(
+        wire::permission_mode(&json!("auto")).ok(),
+        Some(PermissionMode::Auto)
+    );
     assert_eq!(
         wire::permission_mode(&json!("plan")).ok(),
         Some(PermissionMode::Plan)
     );
+    for word in [json!("bypass"), json!("Auto"), json!(null)] {
+        assert!(wire::permission_mode(&word).is_err(), "{word} was accepted");
+    }
     assert_eq!(wire::permission_mode_name(PermissionMode::Auto), "auto");
 }

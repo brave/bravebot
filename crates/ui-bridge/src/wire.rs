@@ -92,7 +92,7 @@ pub fn status(status: Status) -> &'static str {
 }
 
 /// The name a front end knows a permission mode by. The inverse of [`permission_mode`] for the
-/// three a window may choose.
+/// four a window may choose.
 pub fn permission_mode_name(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Ask => "ask",
@@ -120,8 +120,9 @@ pub fn permission_mode(value: &Value) -> Result<PermissionMode, Failure> {
         Some("ask") => Ok(PermissionMode::Ask),
         Some("acceptEdits") => Ok(PermissionMode::AcceptEdits),
         Some("plan") => Ok(PermissionMode::Plan),
+        Some("auto") => Ok(PermissionMode::Auto),
         _ => Err(Failure::bad_request(format!(
-            "`mode` may be `ask`, `acceptEdits` or `plan`, not {value}"
+            "`mode` may be `ask`, `acceptEdits`, `plan` or `auto`, not {value}"
         ))),
     }
 }

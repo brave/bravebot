@@ -386,11 +386,10 @@ chip with the drawing sits above the box; deleting the marker takes the picture 
 the chip deletes the marker ([PASTE-6](#PASTE-6)). The transcript keeps the marker in the prompt,
 and a reopened session shows those words and draws no bytes ([PASTE-9](#PASTE-9)).
 
-Two parts do not follow. A message queued while a turn runs keeps its pictures and sends them as
+One part does not follow. A message queued while a turn runs keeps its pictures and sends them as
 its own turn when the running one ends, as a dropped file does
 ([DROP-12](dropping.md#DROP-12)), rather than becoming words; the window's queue never joins a
-running turn. And Plan is off while a picture is staged, where the terminal's `/manifest`
-carries one to the planner (PASTE-6): the bridge's `manifest.run` takes a task and no pictures.
+running turn.
 
 `verified-by: bravebot_ui_bridge::attaching::a_window_asks_the_bridge_whether_a_paste_fits_and_is_told_the_terminals_note`
 `verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`

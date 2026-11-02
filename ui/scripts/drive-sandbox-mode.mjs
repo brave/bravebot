@@ -48,10 +48,12 @@ try {
   const composer = page.locator(COMPOSER_INPUT)
   const stop = page.locator('.composer .stop')
   const replies = page.locator(ASSISTANT_BUBBLE)
-  const sandbox = page.locator('[data-test="sandbox-trigger"]')
+  // One menu holds the approval and sandbox controls, so the sandbox mode is read off the
+  // same trigger under its own attribute.
+  const sandbox = page.locator('[data-test="mode-trigger"]')
   // The Leo host has no box of its own, so the mode is read off its attribute, not its visibility.
   const inMode = (wanted) => page.waitForFunction((wanted) =>
-    document.querySelector('[data-test="sandbox-trigger"]')?.getAttribute('data-mode') === wanted, wanted)
+    document.querySelector('[data-test="mode-trigger"]')?.getAttribute('data-sandbox') === wanted, wanted)
   // Ask for a program to be run, approve it once, and return what the tool handed the model.
   const run = async (prompt) => {
     const before = await replies.count()
@@ -65,8 +67,8 @@ try {
     return lastToolResult(rounds.at(-1))
   }
 
-  assert.equal(await sandbox.getAttribute('data-mode'), 'workspace-write', 'a session opens in workspace-write')
-  assert.equal(await page.locator('[data-test="mode-trigger"]').getAttribute('data-mode'), 'ask', 'the permission mode is a control of its own')
+  assert.equal(await sandbox.getAttribute('data-sandbox'), 'workspace-write', 'a session opens in workspace-write')
+  assert.equal(await page.locator('[data-test="mode-trigger"]').getAttribute('data-mode'), 'ask', 'the permission mode is held apart from the sandbox mode')
   await page.screenshot({ path: join(output, 'sandbox-workspace-write.png') })
 
   await sandbox.click()
@@ -96,7 +98,7 @@ try {
     const refused = await run('Read a file')
     assert.match(String(refused), /exited 1/, 'strict refused a read outside the session')
     assert.match(String(refused), /Confinement:/, 'and the planner was told what it ran under')
-    assert.equal(await sandbox.getAttribute('data-mode'), 'strict', 'the choice holds for the next turn')
+    assert.equal(await sandbox.getAttribute('data-sandbox'), 'strict', 'the choice holds for the next turn')
 
     await sandbox.click()
     await page.getByRole('menuitemradio', { name: /^Workspace write/ }).click()
