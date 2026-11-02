@@ -425,7 +425,8 @@ fn the_list_under_the_box_scrolls_to_keep_the_cursor_drawn() {
         }
         assert_eq!(seen.len(), commands.len(), "{rows} rows");
 
-        // Back up to the first command: it is drawn again, and the rows are the first ones.
+        // Walking back up must pull `offered_first` back to 0, not leave the list
+        // scrolled with the cursor on its top row.
         for _ in 0..commands.len() {
             handle_key(&mut session, key(KeyCode::Up));
         }

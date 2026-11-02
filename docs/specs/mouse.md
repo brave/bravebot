@@ -424,8 +424,9 @@ by nothing else, so while it stands no press or turn of the wheel does anything 
 
 In the list of commands, skills or files that is offered under the box as a line is typed,
 a left click that sweeps nothing on a row puts the cursor on it, and a second click on the same
-cell within the double-click interval takes it into the box as Tab does. The list draws its items from
-the first and does not move with a click, so a double click in place takes the row pointed at. It never runs a command:
+cell within the double-click interval takes it into the box as Tab does. Rows are read from the first row
+drawn, so a list that has scrolled to keep the cursor in view is read as it is drawn, and a click does not move
+the list, so a double click in place takes the row pointed at. It never runs a command:
 Enter does. The click is read on its release, so that a drag across the list still selects what it
 covers, and it takes only what the frame drew, so a row the pane had no room for is not there to
 click. The keys that `?` lists have nothing to take, so a click on one does nothing, and a click in
