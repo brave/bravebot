@@ -2113,6 +2113,9 @@ fn opened_scratch(session: &mut Session, workspace: &mut Workspace) -> Option<Se
     let scratch = match SessionScratch::create() {
         Ok(scratch) => Some(scratch),
         Err(problem) => {
+            // `problem` is the operating system's error and holds no path or other text a checkout
+            // chose (`SessionScratch::create`), so it is not drawn; the one-shot run's copy of this
+            // sentence follows the same reasoning (LAYER-3).
             session.note(t!(
                 session_scratch_unavailable,
                 problem = problem.to_string()

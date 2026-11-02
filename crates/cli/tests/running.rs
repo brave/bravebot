@@ -4745,6 +4745,110 @@ fn control_character_in(text: &str) -> Option<char> {
         .find(|c| c.is_control() && !matches!(c, '\n' | '\t'))
 }
 
+/// LAYER-3, CLI-7: the configuration's complaint about an endpoint is drawn by the sign-in commands
+/// that read the configuration first (`auth login chatgpt`, `auth login xai`, `auth login gateway`
+/// and `auth login bedrock`), as `doctor` draws it.
+///
+/// Rejects handing the complaint to `fail` as it stands, which sent the value's escape sequence to
+/// the terminal. The gateway and bedrock sign-ins reach `drawn_problem` from their own call sites,
+/// so each is run.
+#[test]
+fn the_sign_in_commands_draw_the_endpoint_the_configuration_quotes_as_pictures() {
+    for way in [
+        ["auth", "login", "chatgpt"],
+        ["auth", "login", "xai"],
+        ["auth", "login", "gateway"],
+        ["auth", "login", "bedrock"],
+    ] {
+        let scratch = Scratch::new("cli-running-sign-in-endpoint-escapes");
+
+        let output = bravebot(
+            &scratch.path,
+            &[
+                ("SERVICES_KEY_AICHAT", "a-services-key"),
+                ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+                ("BRAVE_AI_CHAT_ENDPOINT", "bad\u{1b}[2Jendpoint"),
+            ],
+            &way,
+        );
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(3), "{way:?}: {stdout}{stderr}");
+        assert_eq!(
+            control_character_in(&format!("{stdout}{stderr}")),
+            None,
+            "{way:?}: the complaint sent a control character from the endpoint: {stderr:?}"
+        );
+        assert!(
+            stderr.contains("bad\u{241b}[2Jendpoint"),
+            "{way:?}: the complaint did not draw the endpoint as pictures: {stderr:?}"
+        );
+    }
+}
+
+/// LAYER-3: `sessions import` told to look in a directory that is a file draws the name it was
+/// given as pictures on stderr.
+///
+/// Rejects printing the path as `Path::display` writes it.
+#[test]
+fn the_refusal_of_a_directory_that_is_a_file_draws_its_name_as_pictures() {
+    let home = Scratch::new("sessions-not-a-directory-escapes");
+    let file = home.path.join("plain\u{1b}[2J.txt");
+    std::fs::write(&file, "not a directory").expect("write the file");
+    let typed = file.to_str().expect("utf-8");
+
+    let output = bravebot(
+        &home.path,
+        &[],
+        &["sessions", "import", "claude-code", "--project", typed],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert_eq!(
+        control_character_in(&format!("{stdout}{stderr}")),
+        None,
+        "the refusal sent a control character from the name: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("plain\u{241b}[2J.txt"),
+        "the refusal did not draw the name as pictures: {stderr:?}"
+    );
+}
+
+/// LAYER-3, CLI-7: the configuration's complaint about an endpoint quotes the value an environment
+/// variable or a settings file gave, so `doctor` draws its control characters as pictures on stderr.
+///
+/// Rejects handing the complaint to the stream as it stands. The same sentence is drawn by the
+/// other starts that read the configuration (a session in lines, `--bg`, an import), which this
+/// binary reaches only through a terminal or a background host and so is a stated gap here.
+#[test]
+fn doctor_draws_the_endpoint_the_configuration_quotes_as_pictures() {
+    let scratch = Scratch::new("cli-running-doctor-endpoint-escapes");
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "bad\u{1b}[2Jendpoint"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert_eq!(
+        control_character_in(&format!("{stdout}{stderr}")),
+        None,
+        "the complaint sent a control character from the endpoint to the terminal: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("bad\u{241b}[2Jendpoint"),
+        "the complaint did not draw the endpoint as pictures: {stderr:?}"
+    );
+}
+
 /// LAYER-3, CLI-7: `doctor` run in a cloned repository draws what the repository's settings files
 /// say as pictures, so the text cannot move the cursor, conceal the lines after it or write the
 /// clipboard. Every place the report names a piece of the checkout's text is asserted on, and each
@@ -4800,6 +4904,40 @@ fn doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures() {
             .lines()
             .any(|line| line.contains("override") && line.contains("\u{241b}[8mcontested-name")),
         "doctor did not draw the environment name two files set as pictures: {stdout}"
+    );
+}
+
+/// LAYER-3 for `doctor`'s model line (the report's other half is [`managed_refusal`], which a test
+/// cannot reach from a binary because the machine-level file has a fixed path): a model name with an
+/// escape sequence in the settings is drawn as pictures on stdout.
+#[test]
+fn doctor_draws_the_model_the_settings_name_as_pictures() {
+    let scratch = Scratch::new("cli-running-doctor-model-escapes")
+        .with_settings(r#"{"model": "a-model\u001b[8mhidden"}"#);
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    for (stream, text) in [("stdout", &stdout), ("stderr", &stderr)] {
+        assert_eq!(
+            control_character_in(text),
+            None,
+            "doctor sent a control character from the checkout on {stream}: {text:?}"
+        );
+    }
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("a-model\u{241b}[8mhidden")),
+        "doctor did not draw the model the settings name as pictures: {stdout}"
     );
 }
 
@@ -18380,6 +18518,105 @@ fn a_reply_off_the_output_schema_ends_on_its_own_status() {
     );
 }
 
+/// LAYER-3, CLI-28: the complaint about a reply off the schema names where the reply broke it, and
+/// that position is made of property names the schema file chose, which a checkout can hold. On
+/// stderr the control characters are drawn as pictures. The result object `--json` writes to stdout
+/// keeps the real string, which JSON escapes itself.
+///
+/// Rejects printing the complaint as it stands (the escape reaches the terminal), and drawing it
+/// before it is handed on, which would put the pictures into the object a program reads.
+#[test]
+fn the_off_schema_complaint_draws_the_property_it_names_as_pictures() {
+    let gateway = a_gateway(r#"["tools", "structured_outputs"]"#, |_| streamed("{}"));
+    let scratch = Scratch::new("cli-running-output-schema-complaint-escapes")
+        .with_settings(&settings_for(&gateway));
+    std::fs::write(
+        scratch.path.join("named.json"),
+        r#"{"type": "object", "required": ["a\u001b[31mred"]}"#,
+    )
+    .expect("write the schema");
+
+    let plain = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--output-schema", "named.json", "-p", "judge it"],
+    );
+    let (stdout, stderr) = said(&plain);
+    assert_eq!(plain.status.code(), Some(6), "{stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        control_character_in(&stderr.replace('\n', "")),
+        None,
+        "the complaint sent a control character from the schema to stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("$.a\u{241b}[31mred"),
+        "the complaint did not draw the property name as pictures: {stderr:?}"
+    );
+
+    let object = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        AT_A_GATEWAY,
+        &["--output-schema", "named.json", "--json", "-p", "judge it"],
+    );
+    let (stdout, stderr) = said(&object);
+    assert_eq!(object.status.code(), Some(6), "{stderr}");
+    assert_eq!(
+        control_character_in(&stderr.replace('\n', "")),
+        None,
+        "the complaint sent a control character from the schema to stderr: {stderr:?}"
+    );
+    let result: serde_json::Value =
+        serde_json::from_str(stdout.trim()).unwrap_or_else(|_| panic!("not an object: {stdout}"));
+    let message = result["message"].as_str().expect("a message");
+    assert!(
+        message.contains("$.a\u{1b}[31mred"),
+        "the result object does not carry the name as it is: {message:?}"
+    );
+    assert!(
+        !message.contains('\u{241b}'),
+        "the result object carries the pictures: {message:?}"
+    );
+}
+
+/// LAYER-3, CHATGPT-8, XAI-8: when the stored sign-in cannot be removed, the sentence names the
+/// path and what the system said, and the path is made of directories a person or a checkout named.
+/// Its control characters reach stderr as pictures.
+///
+/// Rejects printing the detail as it stands. The file is made unremovable by being a directory
+/// with something in it, so no permission is needed and the test runs as any user.
+#[cfg(unix)]
+#[test]
+fn a_sign_in_that_cannot_be_forgotten_draws_its_path_as_pictures() {
+    for (service, file) in [
+        ("chatgpt", "chatgpt-account.json"),
+        ("xai", "xai-account.json"),
+    ] {
+        let scratch = Scratch::new(&format!("cli-running-logout-{service}-\u{1b}[2Jescapes"))
+            .with_state(&format!("{file}/inside"), "not a sign-in");
+
+        let output = bravebot(
+            &scratch.path,
+            NOTHING_CONFIGURED,
+            &["auth", "logout", service],
+        );
+        let (stdout, stderr) = said(&output);
+
+        assert_eq!(output.status.code(), Some(1), "{service}: {stdout}{stderr}");
+        assert_eq!(
+            control_character_in(&stderr.replace('\n', "")),
+            None,
+            "{service}: the sentence sent a control character from the path to stderr: {stderr:?}"
+        );
+        assert!(
+            stderr.contains("\u{241b}[2Jescapes"),
+            "{service}: the path was not drawn as pictures: {stderr:?}"
+        );
+    }
+}
+
 /// CLI-28, CLI-5: without `--json` a reply off the schema leaves stdout empty, so a pipe cannot
 /// take prose for the shape it asked for, and a matching reply is written as it came.
 #[test]
@@ -18465,6 +18702,89 @@ fn an_output_schema_is_refused_for_a_model_served_through_bedrock() {
     assert!(
         gateway.asked.try_recv().is_err(),
         "a request was sent by a run that was refused"
+    );
+}
+
+/// LAYER-3, CLI-28: the refusal names the model in force, which a settings file or an environment
+/// variable chose, so its words reach stderr with the control characters drawn as pictures. The
+/// result object `--json` writes to stdout keeps the real string, which JSON escapes itself.
+///
+/// Rejects drawing nothing (the escape reaches the terminal), and drawing the message before it is
+/// handed on, which would put the pictures into the object a program reads.
+#[test]
+fn the_output_schema_refusal_draws_the_model_it_names_as_pictures() {
+    let gateway = a_gateway(r#"["tools", "structured_outputs"]"#, |_| {
+        streamed("all done")
+    });
+    let scratch = Scratch::new("cli-running-output-schema-escapes").with_settings(&format!(
+        r#"{{
+            "provider": {{
+                "amazon-bedrock": {{"options": {{"region": "us-west-2"}}}},
+                "openrouter": {{
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{}/api/v1"}}
+                }}
+            }},
+            "model": "opus"
+        }}"#,
+        gateway.port
+    ));
+    std::fs::write(scratch.path.join("verdict.json"), A_VERDICT_SCHEMA).expect("write the schema");
+
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.extend([
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-east-1"),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL", "an-opus\u{1b}[31mred"),
+    ]);
+
+    let plain = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        &environment,
+        &["--output-schema", "verdict.json", "-p", "judge it"],
+    );
+    let (_, stderr) = said(&plain);
+    assert_eq!(plain.status.code(), Some(2), "{stderr}");
+    assert_eq!(
+        control_character_in(&stderr.replace('\n', "")),
+        None,
+        "the refusal sent a control character from the model name to stderr: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("an-opus\u{241b}[31mred"),
+        "the refusal did not draw the model name as pictures: {stderr:?}"
+    );
+
+    let object = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        &environment,
+        &[
+            "--output-schema",
+            "verdict.json",
+            "--json",
+            "-p",
+            "judge it",
+        ],
+    );
+    let (stdout, stderr) = said(&object);
+    assert_eq!(object.status.code(), Some(2), "{stderr}");
+    assert_eq!(
+        control_character_in(&stderr.replace('\n', "")),
+        None,
+        "the refusal sent a control character from the model name to stderr: {stderr:?}"
+    );
+    let result: serde_json::Value =
+        serde_json::from_str(stdout.trim()).unwrap_or_else(|_| panic!("not an object: {stdout}"));
+    let message = result["message"].as_str().expect("a message");
+    assert!(
+        message.contains("an-opus\u{1b}[31mred"),
+        "the result object does not carry the model name as it is: {message:?}"
+    );
+    assert!(
+        !message.contains('\u{241b}'),
+        "the result object carries the pictures: {message:?}"
     );
 }
 
@@ -20015,6 +20335,58 @@ fn a_refusal_that_outranks_an_unmet_goal_does_not_hide_it() {
         message.contains("a policy gate refused something")
             && message.contains("without a turn making a tool call"),
         "{message}"
+    );
+}
+
+/// LAYER-3, CLI-17: a definition's name is chosen by a file, and the sentence that refuses its model
+/// for want of a sign-in repeats it. In a one-shot run it reaches stderr with the control characters
+/// drawn as pictures, where the escape sequence would otherwise set the terminal's title.
+///
+/// This run is drawn by `stopped_before_the_turn`, which #3445 already covered, so the test pins that
+/// path and does not fail when only the session in lines or the screen's print site loses its draw.
+#[cfg(unix)]
+#[test]
+fn the_refusal_of_a_definitions_model_draws_the_definitions_name_as_pictures() {
+    let gateway = a_gateway(r#"["tools"]"#, answered("done"));
+    let scratch = Scratch::new("cli-running-definition-model-refused-drawn")
+        .with_settings(&settings_for(&gateway))
+        .with_state(
+            "agents/escaped.md",
+            &a_definition(
+                "x\u{1b}]0;PWNED-TITLE\u{7}\u{1b}[31mred",
+                "kind: reader\nmodel: haiku\n",
+            ),
+        );
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.extend([
+        ("BRAVEBOT_USE_BEDROCK", "1"),
+        ("AWS_REGION", "us-west-2"),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL", "sonnet-arn"),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "haiku-arn"),
+        ("AWS_PROFILE", "a-profile-no-machine-has"),
+    ]);
+
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &[
+            "--agent",
+            "x\u{1b}]0;PWNED-TITLE\u{7}\u{1b}[31mred",
+            "-p",
+            "hello",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stdout}\n{stderr}");
+    assert_eq!(
+        control_character_in(&stderr),
+        None,
+        "the refusal sent a control character from the checkout: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("x\u{241b}]0;PWNED-TITLE\u{2407}\u{241b}[31mred"),
+        "the definition's name was not drawn as pictures: {stderr:?}"
     );
 }
 

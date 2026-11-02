@@ -10,7 +10,7 @@ use std::io::Write;
 pub(crate) const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 
 /// The subcommands, as the usage table lists them.
-pub(crate) const COMMANDS: [&str; 14] = [
+pub(crate) const COMMANDS: [&str; 15] = [
     "acp",
     "doctor",
     "update",
@@ -20,6 +20,7 @@ pub(crate) const COMMANDS: [&str; 14] = [
     "permissions",
     "sessions",
     "stats",
+    "skill",
     "attach",
     "reply",
     "import-providers",
@@ -41,6 +42,9 @@ const PERMISSIONS: [&str; 1] = ["check"];
 /// What follows `sessions`. The bare word lists the background roster, so these are the words
 /// that do something else with it.
 const SESSIONS: [&str; 4] = ["list", "stop", "import", "search"];
+
+/// What follows `skill`.
+const SKILL: [&str; 1] = ["eval"];
 
 /// A flag, as the usage table spells it: the long form, the short form where there is one, and
 /// whether a value follows.
@@ -158,6 +162,7 @@ fn bash() -> String {
             mcp) COMPREPLY=($(compgen -W "{mcp}" -- "$cur")); return 0 ;;
             permissions) COMPREPLY=($(compgen -W "{permissions}" -- "$cur")); return 0 ;;
             sessions) COMPREPLY=($(compgen -W "{sessions}" -- "$cur")); return 0 ;;
+            skill) COMPREPLY=($(compgen -W "{skill}" -- "$cur")); return 0 ;;
             completion|shell-init) COMPREPLY=($(compgen -W "{shells}" -- "$cur")); return 0 ;;
         esac
     fi
@@ -177,6 +182,7 @@ complete -o default -F _bravebot bravebot
         mcp = MCP.join(" "),
         permissions = PERMISSIONS.join(" "),
         sessions = SESSIONS.join(" "),
+        skill = SKILL.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -193,6 +199,7 @@ _bravebot() {{
             mcp) compadd -- {mcp}; return ;;
             permissions) compadd -- {permissions}; return ;;
             sessions) compadd -- {sessions}; return ;;
+            skill) compadd -- {skill}; return ;;
             completion|shell-init) compadd -- {shells}; return ;;
         esac
     fi
@@ -215,6 +222,7 @@ fi
         mcp = MCP.join(" "),
         permissions = PERMISSIONS.join(" "),
         sessions = SESSIONS.join(" "),
+        skill = SKILL.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -232,6 +240,7 @@ fn fish() -> String {
         ("mcp", MCP.join(" ")),
         ("permissions", PERMISSIONS.join(" ")),
         ("sessions", SESSIONS.join(" ")),
+        ("skill", SKILL.join(" ")),
         ("completion", SHELLS.join(" ")),
         ("shell-init", SHELLS.join(" ")),
     ] {

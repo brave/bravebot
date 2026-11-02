@@ -142,6 +142,17 @@ const meet = (a: Box, b: Box): Box => ({
   top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom), left: Math.max(a.left, b.left),
 })
 
+/**
+ * The element a box inherits its clip and opacity from: the slot an element is placed in, so a row
+ * in a dialog's body is held to the dialog's scrolling box, and the host of a shadow tree above it.
+ */
+const parentOf = (element: Element): Element | null => {
+  if (element.assignedSlot) return element.assignedSlot
+  if (element.parentElement) return element.parentElement
+  const root = element.getRootNode()
+  return root instanceof ShadowRoot ? root.host : null
+}
+
 /** For an element, the part of the window its content can be drawn in, and whether it is opaque. */
 function frames(): (element: Element) => Frame {
   const root = document.documentElement
@@ -151,7 +162,7 @@ function frames(): (element: Element) => Frame {
     if (!element) return view
     const kept = known.get(element)
     if (kept) return kept
-    const above = of(element.parentElement)
+    const above = of(parentOf(element))
     const style = getComputedStyle(element)
     let clip = above.clip
     if (style.display !== 'inline' && style.display !== 'contents') {
@@ -175,10 +186,14 @@ function frames(): (element: Element) => Frame {
  * absolutely placed `::before` of an element marked `data-veil="before"`, and for any other value
  * the box the element is slotted into, or its own box where it is slotted nowhere. The overlay
  * drawn while a file is dragged over the transcript is marked `own`.
+ *
+ * A card in a modal dialog is drawn in the top layer, above everything outside the dialog, so for
+ * such a card only a veil inside the dialog counts. The composer's fade lies beneath it.
  */
-function veils(): Box[] {
+function veils(modal: Element | null): Box[] {
   const boxes: Box[] = []
   for (const element of document.querySelectorAll('[data-veil]')) {
+    if (modal && !modal.contains(element)) continue
     if (!element.getClientRects().length) continue
     if (element.getAttribute('data-veil') === 'before') {
       const style = getComputedStyle(element, '::before')
@@ -226,7 +241,7 @@ function sight(element: Element, row: Box, clip: Box, over: readonly Box[]): [nu
 export function measure(card: Element, ledger: Ledger<Element>): { width: number; looked: Looked<Element>[] } {
   const width = card.getBoundingClientRect().width
   const frameOf = frames()
-  const over = veils()
+  const over = veils(card.closest('[aria-modal="true"]'))
   const looked = [...card.querySelectorAll('[data-deciding]')].map((element) => {
     const want = element.getAttribute('data-deciding')
     const drawn = rowsOf(lineBoxes(element, want === 'first', frameOf))
@@ -262,12 +277,13 @@ const POLL_MS = 500
 /**
  * The rows left to read in the card holding `answers`, kept current while it is mounted. Once none
  * are left, scrolling and animation stop measuring, since only a change of size can undo that.
+ * The card is the `.confirm` holding `answers`, or `root` where the question is not drawn in one.
  */
-export function useShown(answers: RefObject<HTMLElement | null>): Counted {
+export function useShown(answers: RefObject<HTMLElement | null>, root?: RefObject<HTMLElement | null>): Counted {
   const [shown, setShown] = useState({ measured: false, left: 0, standing: 0 })
   const check = useRef<(standing: boolean) => boolean>(() => false)
   useEffect(() => {
-    const card = answers.current?.closest('.confirm')
+    const card = root ? root.current : answers.current?.closest('.confirm')
     if (!card) return
     const ledger = new Ledger<Element>()
     let frame = 0
@@ -295,10 +311,15 @@ export function useShown(answers: RefObject<HTMLElement | null>): Counted {
     const resized = new ResizeObserver(soon)
     resized.observe(card)
     for (const element of card.querySelectorAll('[data-deciding]')) resized.observe(element)
-    for (let at = card.parentElement; at; at = at.parentElement) {
+    const shadows = new Set<ShadowRoot>()
+    for (let at: Element | null = card; at; at = parentOf(at)) {
       const { overflowX, overflowY } = getComputedStyle(at)
-      if (overflowX !== 'visible' || overflowY !== 'visible') resized.observe(at)
+      if (at !== card && (overflowX !== 'visible' || overflowY !== 'visible')) resized.observe(at)
+      const tree = at.getRootNode()
+      if (tree instanceof ShadowRoot) shadows.add(tree)
     }
+    // A scroll does not cross out of a shadow tree, so a box that scrolls inside one is listened to there.
+    for (const tree of shadows) tree.addEventListener('scroll', soon, { capture: true, passive: true })
     const events = ['scroll', 'animationend', 'transitionend', 'visibilitychange'] as const
     for (const event of events) document.addEventListener(event, moved, { capture: true, passive: true })
     window.addEventListener('resize', soon)
@@ -310,9 +331,10 @@ export function useShown(answers: RefObject<HTMLElement | null>): Counted {
       clearInterval(poll)
       resized.disconnect()
       for (const event of events) document.removeEventListener(event, moved, { capture: true })
+      for (const tree of shadows) tree.removeEventListener('scroll', soon, { capture: true })
       window.removeEventListener('resize', soon)
     }
-  }, [answers])
+  }, [answers, root])
   const now = useCallback((standing: boolean) => check.current(standing), [])
   return useMemo(() => ({ ...shown, now }), [shown, now])
 }

@@ -59,7 +59,14 @@ pub(crate) fn login() -> ExitCode {
     let config = match Config::from_env() {
         _ if incognito => None,
         Ok(config) => Some(config),
-        Err(problem) => return fail(Ending::Configuration, problem),
+        Err(problem) => {
+            // Drawn: the problem can quote an endpoint value an environment variable or a
+            // settings file chose (LAYER-3).
+            return fail(
+                Ending::Configuration,
+                crate::progress::printable_lines(&t!(cli_configuration_problem, problem = problem)),
+            );
+        }
     };
     let named_by_a_gateway = config
         .as_ref()
@@ -449,15 +456,21 @@ mod tests {
         assert!(unusable.contains("bravebot auth login xai"), "{unusable}");
         assert!(unusable.contains("bravebot auth logout xai"), "{unusable}");
         assert!(!unusable.contains('\u{1b}'), "{unusable:?}");
+        assert!(
+            unusable.contains("\u{241b}[2Jdenied"),
+            "the escape was not drawn as a picture: {unusable:?}"
+        );
         assert!(unusable.contains("xai-account.json"), "{unusable}");
 
         let unwritable = said_of_account(&AccountError::Unwritable {
             detail: detail.clone(),
         });
         assert!(!unwritable.contains('\u{1b}'), "{unwritable:?}");
+        assert!(unwritable.contains("\u{241b}[2Jdenied"), "{unwritable:?}");
         assert!(unwritable.contains("nothing was changed"), "{unwritable}");
         let nowhere = said_of_account(&AccountError::Nowhere { detail });
         assert!(!nowhere.contains('\u{1b}'), "{nowhere:?}");
+        assert!(nowhere.contains("\u{241b}[2Jdenied"), "{nowhere:?}");
 
         let mut defects: Vec<String> = [
             Defect::Empty,

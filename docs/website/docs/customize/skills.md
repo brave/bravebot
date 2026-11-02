@@ -201,6 +201,43 @@ directory is never listed. Directories that are generated (`__pycache__`, `node_
 `.pyc` files are left out of the list too, so a skill whose scripts have been run still names its real
 files. Running a script kept there is not part of this; `run` has its own gate.
 
+## Evaluating a skill
+
+`bravebot skill eval <name>` gives a skill a number. It runs the skill's saved cases with the skill
+and again with the skill taken out of the catalogue, grades both, and prints `WITH`, `W/OUT` and the
+difference. Run it before and after changing a description or a body to see whether the change
+helped, and read the counts under each case to see whether the planner searched for the skill and
+loaded it. A skill nobody finds shows as runs that never loaded it.
+
+A case is a JSON file in an `evals` directory beside the `SKILL.md`:
+
+```json
+{
+  "prompt": "Sort the imports in src/main.rs",
+  "repeats": 3,
+  "graders": [
+    { "check": { "tool_called": "edit_file" }, "weight": 2 },
+    { "check": { "tool_not_called": "run" } },
+    { "check": { "rounds_at_most": 8 } },
+    { "check": { "skill_loaded": true } }
+  ]
+}
+```
+
+`repeats` is 3 where left out and at most 20. `weight` is 1 where left out. A key that is not
+listed here makes the file refused, so a misspelt grader cannot leave a case that checks nothing. A
+run scores the weight of the graders that passed over the weight of all of them, and a case is the
+mean over its runs. The checks read what bravebot recorded of the run, the tools it called and the
+rounds it made, and never the reply. A `rubric` check gives a model with no tools the run and your
+text and asks it three times; it passes when two answers say it is met. An answer is counted only
+where bravebot may read it. A run whose conversation holds untrusted content has no score for that
+check, and the report says how many runs were left out that way.
+
+The cases are read with the trust of the skill: a case file in a project you have not vouched for is
+counted and never read. A skill only you can load is refused, since both arms would be the same. A
+skill in a plugin is not evaluated. The reference for the command is
+[`skill eval`](../reference/cli.md#skill-eval).
+
 ## Trust
 
 | Source | Trusted because |

@@ -10,7 +10,8 @@ import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
-import { CASES } from './shown-cases.mjs'
+import { CASES, TRUST_CASE } from './shown-cases.mjs'
+import { texts, VOID, withoutModal, plainLeo } from './shown-markup.mjs'
 
 const require = createRequire(import.meta.url)
 const React = require('react')
@@ -70,27 +71,6 @@ const ENTRY = {
 
 const draw = (entry) =>
   renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: true }))
-
-const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'])
-
-/** The text of some markup, run by run, each with the `data-deciding` of the nearest element marked. */
-function texts(markup) {
-  const open = []
-  const runs = []
-  let at = 0
-  for (const found of markup.matchAll(/<(\/?)([a-zA-Z][\w-]*)([^>]*)>/g)) {
-    if (found.index > at) runs.push({ text: markup.slice(at, found.index), deciding: open.findLast((element) => element.deciding)?.deciding ?? null })
-    at = found.index + found[0].length
-    const [, closing, name, attributes] = found
-    if (closing) {
-      const index = open.findLastIndex((element) => element.name === name)
-      if (index >= 0) open.length = index
-    } else if (!VOID.has(name)) {
-      open.push({ name, deciding: attributes.match(/data-deciding="([a-z]+)"/)?.[1] ?? null })
-    }
-  }
-  return runs
-}
 
 const buttons = (markup) => [...markup.matchAll(/<button([^>]*)>(.*?)<\/button>/g)].map(([, attributes, label]) => ({ attributes, label }))
 
@@ -160,6 +140,43 @@ test('a change in how many rows an element draws starts that element again, and 
   ledger.take(500, [looked('a', [[300, [0, 300]]]), looked('b', [[200, [0, 200]]])])
   assert.deepEqual(ledger.take(500, [looked('a', [[300, null], [120, null]]), looked('b', [[200, null]])]), { left: 2, standing: 0 })
   assert.equal(ledger.read('b', 1, 0, 500, 200), true)
+})
+
+// The startup question is a dialog and not a card, so it has no entry in CASES. It rests on the
+// rows it marks as deciding, which the count takes as it does a card's: shut before anything is
+// measured, open once every one of them has been wholly in view, and counted again after a change
+// of width. drive-shown.mjs holds the real window to the same.
+test('the startup question’s yes waits on the rows it marks as deciding, which the count opens and resets', async () => {
+  const source = (await build({
+    entryPoints: ['src/renderer/components/TrustPrompt.tsx'],
+    bundle: true,
+    write: false,
+    platform: 'node',
+    format: 'cjs',
+    jsx: 'automatic',
+    external: ['react', 'react-dom', 'react/jsx-runtime'],
+    plugins: [withoutModal, plainLeo],
+  })).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const { TrustPrompt } = module.exports
+  const markup = renderToStaticMarkup(React.createElement(TrustPrompt, { ...TRUST_CASE.props, onAnswer() {} }))
+  const yes = markup.match(/<button[^>]*data-test="trust-approve"[^>]*>/)?.[0] ?? ''
+  const no = markup.match(/<button[^>]*data-test="trust-decline"[^>]*>/)?.[0] ?? ''
+  assert.ok(/\bdisabled\b/.test(yes), `the yes is open before anything is measured\n${yes}`)
+  assert.ok(!/disabled/.test(no), `the no waits\n${no}`)
+  assert.ok(!markup.includes('class="shown-left"'), 'a count is drawn before anything was counted')
+  const deciding = markup.match(/data-deciding="all"/g)?.length ?? 0
+  assert.ok(deciding >= 5, `only ${deciding} rows are marked as deciding\n${markup}`)
+
+  const ledger = new Ledger()
+  const whole = (seen) => Array.from({ length: deciding }, (_, n) => looked(`r${n}`, [[300, seen(n)]]))
+  assert.deepEqual(ledger.take(500, whole(() => null)), { left: deciding, standing: 0 })
+  assert.deepEqual(ledger.take(500, whole((n) => (n === deciding - 1 ? null : [0, 300]))), { left: 1, standing: 0 })
+  assert.deepEqual(ledger.take(500, whole(() => [0, 300])), { left: 0, standing: 0 })
+  assert.equal(mayAnswer({ measured: true, left: 0, standing: 0, note: 'n' }), true)
+  assert.deepEqual(ledger.take(480, whole(() => null)), { left: deciding, standing: 0 })
+  assert.equal(ledger.read('r0', 1, 0, 500, 300), false)
 })
 
 test('rows only a standing answer waits on are counted apart', () => {

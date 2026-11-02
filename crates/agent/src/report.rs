@@ -236,6 +236,14 @@ pub struct Activity {
     /// audiences: the verb is a word in the reader's own language, and this is what a program
     /// matches on. A surface that offered only the verb would have a script keying off French.
     pub tool: String,
+    /// The name of the catalogue entry a `load_skill` call resolved to, as the catalogue spells
+    /// it. `None` for every other call and for a `load_skill` that was refused or resolved to no
+    /// entry.
+    ///
+    /// The driver's own string, taken from the entry the catalogue returned and never from the
+    /// call's arguments, so a program counting loads of a skill compares names the driver holds
+    /// and not the model's word for one ([`Activity::target`] is that, and is only drawn).
+    pub skill: Option<String>,
     /// What came of it, in a few words. `None` while the call is still running, which is what
     /// makes an unfinished line distinguishable from one that finished with nothing to say.
     pub note: Option<String>,
@@ -278,6 +286,7 @@ impl Activity {
             names_a_file: false,
             why: String::new(),
             tool: String::new(),
+            skill: None,
             note: None,
             failed: false,
             changes: Vec::new(),
@@ -290,6 +299,12 @@ impl Activity {
     /// Say which tool this is, by the name dispatch matched rather than the word shown.
     pub fn of_tool(mut self, tool: &str) -> Self {
         self.tool = tool.to_string();
+        self
+    }
+
+    /// Say which catalogue entry a `load_skill` call resolved to, by the catalogue's own name.
+    pub fn loading_skill(mut self, skill: Option<String>) -> Self {
+        self.skill = skill;
         self
     }
 

@@ -1,10 +1,12 @@
 //! The workspace, trust map, rules and definition a run starts with.
 
+use crate::exit::{Ending, fail};
 use bravebot_agent::Workspace;
 use bravebot_config::{Config, Managed};
 use bravebot_core::event::RecordingSink;
 use bravebot_i18n::t;
 use std::path::Path;
+use std::process::ExitCode;
 
 /// The workspace is the current directory: file arguments resolve relative to it, and
 /// confinement keeps reads inside it.
@@ -38,12 +40,28 @@ pub(crate) fn current_workspace(
         })
 }
 
+/// The exit for a workspace that could not be opened, with the problem drawn: it can name a
+/// directory a checkout chose (LAYER-3).
+pub(crate) fn workspace_problem(problem: &str) -> ExitCode {
+    fail(
+        Ending::Failed,
+        crate::progress::printable_lines(&t!(cli_workspace_problem, problem = problem)),
+    )
+}
+
 /// The directory this run writes what is not part of the project into, made and reachable.
 ///
 /// Nothing on a machine that cannot give it one, which is not a reason to refuse to run: a full or
 /// read-only temporary directory leaves a turn with nowhere to put an intermediate file and nothing
 /// else. On stderr, beside every other line this run has to say about itself, because a turn told
 /// there is nowhere to write leaves nothing else to read it off.
+///
+/// The problem is printed as it stands, without [`crate::progress::printable_lines`] (LAYER-3).
+/// `SessionScratch::create` fails only with an `io::Error` that the operating system made, and
+/// that error's text is the system's own words and an error number. It holds no path, no
+/// environment value and nothing a checkout or a model chose, so there is no control character in
+/// it to draw. A test in `bravebot-agent` pins that the error names neither the directory it was
+/// asked to make nor anything else beyond the system's text.
 pub(crate) fn scratch_for_this_run(
     workspace: &mut Workspace,
 ) -> Option<bravebot_agent::SessionScratch> {

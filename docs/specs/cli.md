@@ -27,6 +27,7 @@ governs:
   - crates/cli/src/sessions_list.rs
   - crates/cli/src/session_delete.rs
   - crates/cli/src/stats.rs
+  - crates/cli/src/skill_eval.rs
   - crates/session/src/stats.rs
   - crates/cli/src/update.rs
   - crates/config/src/keys.rs
@@ -41,7 +42,7 @@ documented-by:
 ## Scope
 
 Running bravebot without the interface that draws: a one-shot task, piped input, `doctor`, `auth`,
-a session in lines, and what goes where on the way out. Also the command line that opens the
+`skill eval`, a session in lines, and what goes where on the way out. Also the command line that opens the
 interface that draws on a task (CLI-31). The interface itself is
 [terminal-input.md](terminal-input.md) and [terminal-transcript.md](terminal-transcript.md).
 
@@ -2534,7 +2535,7 @@ The `bravebot-acp` program stays, because the tests of the loop start it.
 `verified-by: bravebot_cli::acp::acp_treats_an_option_never_offered_as_a_refusal`
 `verified-by: bravebot_cli::acp::acp_ending_its_input_with_a_question_waiting_writes_nothing_and_exits`
 `verified-by: bravebot_cli::acp::acp_waits_for_the_end_of_an_open_session_before_it_exits`
-`verified-by: bravebot_cli::flags::exactly_the_fifteen_commands_that_start_no_session_are_named`
+`verified-by: bravebot_cli::flags::exactly_the_sixteen_commands_that_start_no_session_are_named`
 
 <a id="CLI-40"></a>
 ### CLI-40: `--issue <url>` and `--pr <url>` give the session the command line opens its links
@@ -2553,3 +2554,32 @@ a value holding an escape cannot be a link.
 `verified-by: bravebot_cli::main::issue_and_pr_flags_are_taken_out_and_set_their_own_link`
 `verified-by: bravebot_cli::main::a_value_that_is_not_one_web_address_is_refused_and_not_repeated`
 `verified-by: bravebot_cli::main::only_a_line_that_opens_a_session_takes_links`
+
+<a id="CLI-41"></a>
+### CLI-41: `skill eval <name>` runs a skill's saved cases with the skill and without it
+
+`bravebot skill eval <name> [--model <model>] [--max-rounds <n>] [--max-tokens <n>]
+[--trust-workspace]` runs each saved
+case of the skill several times as a one-shot run with nobody to ask (CLI-1), once with the skill in
+the catalogue and once with it taken out, and prints a score for each arm and their difference. What
+a case is, which skill may be named, how a run is graded and how the scores are made are in
+[skills evaluation](skill-evals.md).
+
+Every run carries the limits of CLI-38: the round limit, 12 where `--max-rounds` is not given, and
+the token limit where `--max-tokens` is. Each is read as CLI-38 reads it, so a value that is not a
+whole number of 1 or more, and a `--max-rounds` of 200 or more, are refused with the status for an
+argument. A run that reaches either is reported as stopped and has no score. The command ends on
+the status for an argument
+(CLI-6) where its words are not the ones above, where the name matches no skill the person could be
+offered, where the skill is kept from the planner, and where no case of it is accepted. It ends on 1
+after the report when a run ended on an error other than a limit. Status 8 is never used, since a
+stopped run does not end the evaluation. Flags that let a run write, `--dangerously-skip-permissions`
+among them, are refused with the status for an argument. Standard output holds the report and
+nothing else (CLI-5).
+
+**Why.** A run that stops at its cap is a datum of the evaluation and not a failure of the command,
+so a script reads the report and not the status for it. A write flag taken would let an evaluation
+of a skill change the tree it is graded in.
+
+`verified-by: bravebot_cli::skill_eval::the_name_and_the_four_flags_are_read_and_nothing_else`
+`verified-by: bravebot_cli::skill_eval::a_run_that_has_spent_max_tokens_is_stopped_and_has_no_score`

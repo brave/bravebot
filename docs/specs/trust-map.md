@@ -44,6 +44,7 @@ governs:
   - ui/scripts/bot-directory.test.mjs
   - ui/scripts/session-directory.test.mjs
   - ui/src/renderer/components/Permissions.tsx
+  - ui/src/renderer/components/TrustPrompt.tsx
   - ui/scripts/remembered-trust-list.test.mjs
   - crates/tui/src/command_table.rs
   - crates/core/src/permissions.rs
@@ -1522,9 +1523,15 @@ answer another would refuse. The question says what the yes keeps, how far it re
 back, and the file it writes, since nobody can endorse a record they were not shown. Where the box is
 too short for those lines they scroll below the keys, and `y` in the terminal interface is taken only
 once they have all been on the screen in one draw; until then the row above the keys says why it does
-nothing, or that they do not fit where they are taller than the box, and `n` still answers. Where
+nothing, or that they do not fit where they are taller than the box, and `n` still answers. The
+desktop interface's question holds its yes to the same: the button that says yes, whether it reads
+"Trust and remember" or "Trust for this session", takes no press until the directory, the rows saying
+what each answer does and the row naming the file have been on screen, the directory being drawn in a
+box that scrolls inside itself so that a long path cannot push those rows away, and "Don't trust"
+answers at every draw. Until then the question says how many rows are left. Where
 the yes may not be kept, the question says that the answer cannot be kept and that a session started
-here later asks again, names no file, and `y` trusts this session only and is taken at once. A no
+here later asks again, names no file, and `y` in the terminal interface trusts this session only and is taken at once; the desktop interface's yes
+there waits on the rows it shows, as above. A no
 writes nothing, and the question once answered offers nothing more.
 
 **Kept.** A yes writes the rule a yes writes, for this session, and appends one line to
@@ -1646,6 +1653,7 @@ yes writes rather than everything the session went on to record.
 `verified-by: bravebot_tui::trust_prompt::the_hint_says_when_no_scroll_can_show_what_a_key_waits_for`
 `verified-by: bravebot_tui::trust_prompt::the_keys_stay_on_screen_when_the_offer_lengthens_the_question`
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_offering_to_remember_still_renders`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the startup question through react-dom and asserts the directory, the rows saying what an answer does and the row naming the file are marked as deciding, that the yes is held shut under both of its labels and the no under neither, and that a directory of three 255-character components is drawn in a box that scrolls; ui/scripts/shown.test.mjs pins the rules of the count that question shares with the cards (it opens once every row has been wholly in view, starts again on a change of width and stays shut before anything is measured); ui/scripts/drive-shown.mjs asks it in the real window at 900x560 and checks that the yes is refused until those rows have been on screen; ui/scripts/drive-remembered-trust.mjs checks that a record holding confined_lines is written only for a yes given after the sentence was on screen; make check-ui runs them)`
 
 <a id="TRUST-24"></a>
 ### TRUST-24: a kept answer is shown with the session's rules and taken back where they are

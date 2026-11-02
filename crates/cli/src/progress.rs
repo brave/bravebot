@@ -293,6 +293,7 @@ impl<W: Write> Reporter for Progress<W> {
             let call = Call {
                 tool: activity.tool.clone(),
                 target: activity.target.clone(),
+                skill: activity.skill.clone(),
                 refused: activity.failed,
             };
             if let Some(stream) = self.stream.as_mut() {

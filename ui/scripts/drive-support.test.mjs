@@ -17,9 +17,12 @@ import {
   COMPOSER_SEND,
   SIDEBAR_TAB,
   TRUST_APPROVE,
+  approveTrust,
   checker,
   launchLive,
+  readTrust,
   showSessions,
+  trustQuestion,
 } from './drive-support.mjs'
 
 // A page that records what it was asked, in order, and answers every wait and click with the
@@ -156,4 +159,35 @@ test('the send, name, reply, bot and trust constants name what the renderer draw
   assert.equal(ASSISTANT_BUBBLE, '.bubble.assistant')
   assert.equal(BOT_OPEN_BUTTON, '.bot-open-button')
   assert.equal(TRUST_APPROVE, '[data-test="trust-approve"]')
+})
+
+// The trust question's yes is held shut until the question has been read, so a driver that means to
+// press it reads first. These pin the order and the names, against a question that records its calls.
+function questionDouble() {
+  const calls = []
+  const question = {
+    evaluate: async () => { calls.push(['evaluate']); return { outer: 1, inner: 1 } },
+    locator: (selector) => ({ click: async () => calls.push(['click', selector]) }),
+  }
+  return { question, calls }
+}
+
+test('trustQuestion names the dialog the renderer titles Project trust', () => {
+  const asked = []
+  const page = { getByRole: (role, options) => { asked.push([role, options]); return 'dialog' } }
+  assert.equal(trustQuestion(page), 'dialog')
+  assert.deepEqual(asked, [['dialog', { name: 'Project trust', exact: true }]])
+  assert.match(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'renderer', 'components', 'TrustPrompt.tsx'), 'utf8'), /title="Project trust"/)
+})
+
+test('readTrust reports how many scrolling boxes it went through', async () => {
+  const { question, calls } = questionDouble()
+  assert.deepEqual(await readTrust(question), { outer: 1, inner: 1 })
+  assert.deepEqual(calls, [['evaluate']])
+})
+
+test('approveTrust reads the question through before it presses the yes', async () => {
+  const { question, calls } = questionDouble()
+  await approveTrust(question)
+  assert.deepEqual(calls, [['evaluate'], ['click', '[data-test="trust-approve"]']])
 })

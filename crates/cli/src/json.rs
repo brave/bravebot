@@ -34,6 +34,10 @@ pub struct Call {
     /// further back to ask, since the driver carries the argument without reading it, so a field
     /// promising paths would be right most of the time and wrong without saying which.
     pub target: String,
+    /// The catalogue entry a `load_skill` call resolved to, by the name the catalogue holds it
+    /// under. Not written to the result object. `None` for every other call and for a load that
+    /// was refused.
+    pub skill: Option<String>,
     /// Whether it was refused or failed.
     pub refused: bool,
 }
@@ -404,16 +408,19 @@ mod tests {
             Call {
                 tool: "read_file".to_string(),
                 target: "src/main.rs".to_string(),
+                skill: None,
                 refused: false,
             },
             Call {
                 tool: "edit_file".to_string(),
                 target: "src/main.rs".to_string(),
+                skill: None,
                 refused: false,
             },
             Call {
                 tool: "write_file".to_string(),
                 target: "notes.md".to_string(),
+                skill: None,
                 refused: true,
             },
         ];
@@ -540,6 +547,7 @@ mod tests {
         let calls = [Call {
             tool: "write_file".to_string(),
             target: r#""},"ok":true,"x":""#.to_string(),
+            skill: None,
             refused: false,
         }];
         let mut report = finished(Ending::Done, &calls, &[]);
@@ -591,6 +599,7 @@ mod tests {
         let call = Call {
             tool: "write_file".to_string(),
             target: "notes.md".to_string(),
+            skill: None,
             refused: true,
         };
         let refusal = Refusal {

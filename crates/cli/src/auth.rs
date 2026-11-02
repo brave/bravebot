@@ -301,7 +301,7 @@ fn bedrock() -> ExitCode {
     );
     let config = match bedrock_config(&settings, &managed) {
         Ok(config) => config,
-        Err(problem) => return fail(Ending::Configuration, problem),
+        Err(problem) => return fail(Ending::Configuration, drawn_problem(&problem)),
     };
     let accounts = accounts(&config, inherited_profile().as_deref());
     if accounts.is_empty() {
@@ -637,7 +637,7 @@ fn gateway(named: Option<&str>) -> ExitCode {
     }
     let providers = match gateways_configured(Config::from_env()) {
         Ok(providers) => providers,
-        Err(problem) => return fail(Ending::Configuration, problem),
+        Err(problem) => return fail(Ending::Configuration, drawn_problem(&problem)),
     };
     let managed = Managed::load();
     let directory = home::writable();
@@ -658,6 +658,12 @@ fn gateway(named: Option<&str>) -> ExitCode {
         &mut std::io::stderr(),
     )
     .code()
+}
+
+/// A configuration complaint as the terminal gets it. It can quote an endpoint value an environment
+/// variable or a settings file chose, so its control characters are drawn as pictures (LAYER-3).
+fn drawn_problem(problem: &ConfigError) -> String {
+    crate::progress::printable_lines(&t!(cli_configuration_problem, problem = problem))
 }
 
 /// The gateways a configuration names, where it can be read.

@@ -53,7 +53,7 @@ pub(crate) const TASK_FLAGS: [&str; 20] = [
 
 /// The commands that start neither a session nor a task, so a flag that shapes one is refused
 /// beside them rather than taken and ignored, for the reason CLI-13 gives about a settings file.
-const NON_SESSION_COMMANDS: [&str; 15] = [
+const NON_SESSION_COMMANDS: [&str; 16] = [
     "acp",
     "doctor",
     "update",
@@ -63,6 +63,7 @@ const NON_SESSION_COMMANDS: [&str; 15] = [
     "permissions",
     "sessions",
     "stats",
+    "skill",
     "attach",
     "reply",
     "import-leo-creds",
@@ -679,11 +680,11 @@ mod tests {
     }
 
     #[test]
-    fn exactly_the_fifteen_commands_that_start_no_session_are_named() {
+    fn exactly_the_sixteen_commands_that_start_no_session_are_named() {
         for command in NON_SESSION_COMMANDS {
             assert_eq!(starts_neither_a_session_nor_a_task(command), Some(command));
         }
-        assert_eq!(NON_SESSION_COMMANDS.len(), 15);
+        assert_eq!(NON_SESSION_COMMANDS.len(), 16);
         for other in ["", "-p", "--resume", "resume", "Doctor", "doctor "] {
             assert_eq!(
                 starts_neither_a_session_nor_a_task(other),

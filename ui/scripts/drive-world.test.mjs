@@ -373,6 +373,7 @@ function projectDouble() {
   const dialog = {}
   const target = (path) => ({
     click: async () => calls.push(['click', ...path]),
+    evaluate: async () => { calls.push(['read', ...path]) },
     waitFor: async (options) => calls.push(['waitFor', ...path, options]),
     locator: (selector) => target([...path, ['locator', selector]]),
     getByRole: (role, options) => target([...path, ['role', role, options]]),
@@ -390,6 +391,7 @@ test('openProject answers the picker with the project, presses Open project, app
   assert.deepEqual(calls, [
     ['evaluate'],
     ['click', ['role', 'button', { name: 'Open project', exact: true }]],
+    ['read', question],
     ['click', question, ['locator', '[data-test="trust-approve"]']],
     ['waitFor', question, { state: 'hidden' }],
   ])

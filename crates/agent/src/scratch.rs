@@ -771,6 +771,33 @@ mod tests {
         );
     }
 
+    /// LAYER-3: a scratch directory that cannot be made is reported as the operating system's own
+    /// error, which names no path. `scratch_for_this_run` prints that error undrawn on this
+    /// ground, so an error that carried the temporary directory (which `TMPDIR` can set to a name
+    /// with a control character) would be written to stderr raw.
+    ///
+    /// Rejects an implementation that wraps the failure with the directory's name, as
+    /// `io::Error::new(kind, format!("{path}: ..."))` would: that error has no OS code and its text
+    /// holds the name.
+    #[test]
+    fn a_directory_that_cannot_be_made_is_the_systems_error_and_names_no_path() {
+        let held = SessionScratch::create().expect("a scratch directory");
+        let missing = held.path().join("no-such-\u{1b}[31mdirectory");
+
+        let refused = SessionScratch::made_in(&missing, SESSION)
+            .expect_err("a temporary directory that does not exist gives no scratch directory");
+
+        assert!(
+            refused.raw_os_error().is_some(),
+            "the failure was not the system's own: {refused:?}"
+        );
+        let said = refused.to_string();
+        assert!(
+            !said.contains("no-such") && !said.contains('\u{1b}'),
+            "the failure names the directory it was asked to make: {said:?}"
+        );
+    }
+
     /// Nobody else on the machine may read what a turn writes there. The directory sits in a
     /// place every account can list, so the mode is the whole of what keeps it private.
     #[test]

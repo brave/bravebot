@@ -80,8 +80,14 @@ pub(crate) fn ends_on(found: Ending, also: Ending) -> Ending {
 ///
 /// It leaves through [`fail`], which is what makes CLI-6's identifier a property of one function
 /// rather than of every place a report can go wrong.
+///
+/// The problem is drawn through [`crate::progress::printable_lines`] (LAYER-3), because the
+/// configuration's can quote an endpoint value an environment variable or a settings file chose.
 fn doctor_found(ending: &mut Ending, found: Ending, problem: impl std::fmt::Display) {
-    let _ = fail(found, problem);
+    let _ = fail(
+        found,
+        crate::progress::printable_lines(&problem.to_string()),
+    );
     *ending = ends_on(*ending, found);
 }
 
@@ -887,15 +893,16 @@ fn report_model(config: &Config, settings: &bravebot_config::Settings) {
         config,
         bravebot_session::store::model(bravebot_session::store::load_model(), settings),
     ) {
-        bravebot_agent::backend::Pick::InForce(chosen) => {
-            fact(t!(doctor_model), t!(doctor_model_chosen, model = chosen))
-        }
+        bravebot_agent::backend::Pick::InForce(chosen) => fact(
+            t!(doctor_model),
+            t!(doctor_model_chosen, model = progress::printable(&chosen)),
+        ),
         bravebot_agent::backend::Pick::SetAside(pick) => fact(
             t!(doctor_model),
             t!(
                 doctor_model_set_aside,
-                model = &config.default_model,
-                pick = pick
+                model = progress::printable(&config.default_model),
+                pick = progress::printable(&pick)
             ),
         ),
         // The configured model answers as it does above, and the reason differs: a model this
@@ -909,22 +916,25 @@ fn report_model(config: &Config, settings: &bravebot_config::Settings) {
                 t!(doctor_model),
                 t!(
                     doctor_model_refused,
-                    model = &config.default_model,
-                    pick = &recorded
+                    model = progress::printable(&config.default_model),
+                    pick = progress::printable(&recorded)
                 ),
             );
             fact(
                 t!(doctor_settings_ignored),
                 t!(
                     session_model_pick_refused,
-                    model = &recorded,
-                    reason = reason
+                    model = progress::printable(&recorded),
+                    reason = progress::printable_lines(&reason)
                 ),
             );
         }
         bravebot_agent::backend::Pick::Absent => fact(
             t!(doctor_model),
-            t!(doctor_model_default, model = &config.default_model),
+            t!(
+                doctor_model_default,
+                model = progress::printable(&config.default_model)
+            ),
         ),
     }
 }
@@ -951,6 +961,11 @@ fn report_serving(config: &Config, ending: &mut Ending) {
                 other => other,
             };
             let (chatgpt, xai) = (unsaid(chatgpt), unsaid(xai));
+            // Nothing printed here is left undrawn text a checkout chose: the how-to is catalog
+            // wording, the lines of `import::looked` draw each name and path they carry
+            // (`left_lines`, `unwritable`), and the sign-in reasons are not passed (the unreadable
+            // files are blanked above, and no question was asked, so no listing failure is said).
+            // The model that was refused or absent is drawn by the arms that print one (LAYER-3).
             println!();
             println!(
                 "{}",

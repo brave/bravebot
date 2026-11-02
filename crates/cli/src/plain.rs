@@ -183,9 +183,11 @@ fn run(
     let mut config = match Config::from_env() {
         Ok(config) => config,
         Err(err) => {
+            // Drawn: the problem can quote an endpoint value an environment variable or a
+            // settings file chose (LAYER-3).
             return fail(
                 Ending::Configuration,
-                t!(cli_configuration_problem, problem = err),
+                crate::progress::printable_lines(&t!(cli_configuration_problem, problem = err)),
             );
         }
     };
@@ -211,7 +213,7 @@ fn run(
     let mut workspace =
         match crate::workspace::current_workspace(&settings, &bravebot_config::Managed::load()) {
             Ok(workspace) => workspace,
-            Err(err) => return fail(Ending::Failed, t!(cli_workspace_problem, problem = err)),
+            Err(err) => return crate::workspace::workspace_problem(&err),
         };
 
     // Somewhere of its own to write what is not part of the project, for the length of the
@@ -426,7 +428,10 @@ fn run(
                 None
             }
             Ok(bravebot_tui::app::Settled::Nothing) => None,
-            Err(refused) => return fail(Ending::Argument, refused),
+            // Names the definition and the model it writes, which a checkout chose (LAYER-3).
+            Err(refused) => {
+                return fail(Ending::Argument, crate::progress::printable_lines(&refused));
+            }
         };
     // With the definition's model, because the opening line named the session's before the name
     // was matched, and every prompt asks for the definition's.
@@ -634,7 +639,9 @@ fn lines<R: BufRead + Send, W: Write + Send, T: Turns<Prompting<R, W>>>(
         // the reply and nothing else (CLI-5). The session goes on: a backend that was unreachable
         // a moment ago is worth another prompt, and the conversation is still here.
         if let Some(failure) = &said.failure {
-            let _ = writeln!(beside, "{failure}");
+            // Drawn: the failure can name a path, a tool or a provider text a checkout or a
+            // backend chose (LAYER-3).
+            let _ = writeln!(beside, "{}", crate::progress::printable_lines(failure));
             crate::finish::say_notices(beside, &said.notices);
             continue;
         }
@@ -2033,6 +2040,31 @@ mod tests {
             String::from_utf8(reply).expect("what was written is text"),
             aside,
         )
+    }
+
+    /// LAYER-3: a turn that could not run is said beside the reply with a path, a tool or a provider's
+    /// text drawn as pictures, so the failure cannot move the cursor or write the clipboard.
+    ///
+    /// Rejects writing the failure as it was given.
+    #[test]
+    fn a_turn_that_could_not_run_is_said_beside_the_reply_drawn_as_pictures() {
+        let (reply, beside) = session_over(
+            "do it\n",
+            vec![Said {
+                failure: Some("BB1003: no 'a\u{1b}]0;T\u{7}file' here".to_string()),
+                ..Said::default()
+            }],
+        );
+
+        assert_eq!(reply, "");
+        assert!(
+            beside.contains("no 'a\u{241b}]0;T\u{2407}file' here"),
+            "the failure was not drawn as pictures: {beside:?}"
+        );
+        assert!(
+            !beside.contains('\u{1b}') && !beside.contains('\u{7}'),
+            "the failure sent a control character beside the reply: {beside:?}"
+        );
     }
 
     /// The reply is what a pipe gets, and nothing else is (CLI-5). A session in lines is

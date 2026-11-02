@@ -114,6 +114,19 @@ taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
 `verified-by: bravebot_cli::running::a_session_in_lines_draws_the_control_characters_of_a_definitions_names_as_pictures`
 `verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_draws_a_checkouts_names_as_pictures`
 `verified-by: bravebot_cli::running::doctor_draws_a_vouched_projects_skill_keys_and_directory_name_as_pictures`
+`verified-by: bravebot_cli::running::the_output_schema_refusal_draws_the_model_it_names_as_pictures`
+`verified-by: bravebot_agent::scratch::a_directory_that_cannot_be_made_is_the_systems_error_and_names_no_path`
+`verified-by: bravebot_cli::running::doctor_draws_the_model_the_settings_name_as_pictures`
+`verified-by: bravebot_cli::running::the_refusal_of_a_definitions_model_draws_the_definitions_name_as_pictures`
+`verified-by: bravebot_cli::running::the_sign_in_commands_draw_the_endpoint_the_configuration_quotes_as_pictures`
+`verified-by: bravebot_cli::running::the_refusal_of_a_directory_that_is_a_file_draws_its_name_as_pictures`
+`verified-by: bravebot_cli::plain::a_turn_that_could_not_run_is_said_beside_the_reply_drawn_as_pictures`
+`verified-by: bravebot_cli::model::the_managed_refusal_draws_the_model_and_the_file_as_pictures`
+`verified-by: bravebot_cli::running::the_off_schema_complaint_draws_the_property_it_names_as_pictures`
+`verified-by: bravebot_cli::running::a_sign_in_that_cannot_be_forgotten_draws_its_path_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_the_endpoint_the_configuration_quotes_as_pictures`
+`verified-by: bravebot_cli::chatgpt::a_failure_of_the_file_is_worded_with_its_detail_made_printable_and_the_remedy`
+`verified-by: bravebot_cli::xai::a_file_that_cannot_be_used_is_a_sentence_with_the_remedy_and_a_detail_that_is_one_line`
 
 <a id="LAYER-4"></a>
 ### LAYER-4: a crate root says what it does about unsafe

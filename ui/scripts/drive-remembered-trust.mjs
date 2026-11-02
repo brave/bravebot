@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inheritedEnv, launchWorld } from './drive-world.mjs'
-import { TRUST_APPROVE } from './drive-support.mjs'
+import { TRUST_APPROVE, approveTrust, readTrust } from './drive-support.mjs'
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-remembered-')))
 const home = join(root, 'home'), project = join(root, 'project '), profile = join(root, 'profile')
@@ -21,13 +21,13 @@ for (const path of [join(home, '.bravebot'), project, profile]) mkdirSync(path, 
 const shots = '/tmp/bravebot-ui'
 mkdirSync(shots, { recursive: true })
 
-async function launch(drive) {
+async function launch(drive, directory = project, viewport = undefined) {
   const env = Object.assign(inheritedEnv(), { HOME: home, XDG_CONFIG_HOME: join(home, '.config') })
-  const { app, page, errors } = await launchWorld({ profile, env, timeout: 15000 })
+  const { app, page, errors } = await launchWorld({ profile, env, timeout: 15000, viewport })
   try {
     await app.evaluate(({ dialog }, path) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
-    }, project)
+    }, directory)
     await drive(page)
     assert.deepEqual(errors, [])
   } finally {
@@ -39,7 +39,67 @@ const trust = (page) => page.getByRole('dialog', { name: 'Project trust', exact:
 const banner = (page) => page.locator('.entries .session-banner', { hasText: 'You trusted this directory' })
 const openProject = (page) => page.getByRole('button', { name: 'Open project', exact: true }).click()
 
+// A long directory in the smallest window: the path fills its box and the rows under it start out
+// of view. The record's file name is the whole path, so the path stays short enough for the name to
+// fit in 255 bytes; three 255-character components cannot be kept at all. The yes is shut, so a
+// press sends nothing and writes no record, until the question has been read through. Then the yes
+// keeps the answer with `confined_lines`, which the sentence on screen is the ground for (TRUST-7,
+// TRUST-23).
+const far = join(root, 'a'.repeat(50), 'b'.repeat(50), 'c'.repeat(50))
+mkdirSync(far, { recursive: true })
+
+// The issue's own shape: three 255-character components. The directory exists, but the record is
+// named after the whole path, which no file system takes as one name, so a yes cannot be kept here.
+// This run therefore checks the layout and the gate, and refuses; the run after it keeps a record.
+const widest = join(root, 'a'.repeat(255), 'b'.repeat(255), 'c'.repeat(255))
+mkdirSync(widest, { recursive: true })
+
 try {
+  await launch(async (page) => {
+    await openProject(page)
+    const asked = trust(page)
+    const yes = asked.locator(TRUST_APPROVE)
+    await yes.waitFor()
+    const box = await asked.locator('.path').evaluate((path) => ({ scrolls: path.scrollHeight > path.clientHeight + 1, height: path.clientHeight }))
+    assert.ok(box.scrolls, `the long path scrolls inside its own box: ${JSON.stringify(box)}`)
+    assert.equal(await yes.getAttribute('aria-disabled'), 'true', 'the yes is shut in a question nobody has read')
+    assert.match(await asked.locator('.shown-left').innerText(), /^\d+ more lines? to read before approving$/)
+    await yes.click({ force: true })
+    await yes.dispatchEvent('click')
+    await page.waitForTimeout(500)
+    assert.equal(await asked.count(), 1, 'a press on the shut yes answered the question')
+    await page.screenshot({ path: `${shots}/remembered-0-widest-waiting.png` })
+    await readTrust(asked)
+    await page.waitForTimeout(500)
+    assert.notEqual(await yes.getAttribute('aria-disabled'), 'true', 'the yes opens once the question has been read')
+    await asked.getByRole('button', { name: "Don't trust", exact: true }).click()
+    await asked.waitFor({ state: 'hidden' })
+  }, widest, { width: 900, height: 560 })
+
+  await launch(async (page) => {
+    await openProject(page)
+    const asked = trust(page)
+    const yes = asked.locator(TRUST_APPROVE)
+    await yes.waitFor()
+    const record = (await asked.locator('.aside code').innerText()).trim()
+    assert.equal(await yes.getAttribute('aria-disabled'), 'true', 'the yes is shut in a question nobody has read')
+    assert.match(await asked.locator('.shown-left').innerText(), /^\d+ more lines? to read before approving$/, 'the question says how many lines are left')
+    assert.equal(await asked.getByRole('button', { name: "Don't trust", exact: true }).getAttribute('aria-disabled'), null, 'the no is never held')
+    await yes.click({ force: true })
+    await yes.dispatchEvent('click')
+    await page.waitForTimeout(500)
+    assert.equal(await asked.count(), 1, 'a press on the shut yes answered the question')
+    assert.equal(existsSync(record), false, 'a press on the shut yes wrote the record')
+    await page.screenshot({ path: `${shots}/remembered-0-long-path-waiting.png` })
+    await readTrust(asked)
+    await page.waitForTimeout(500)
+    assert.notEqual(await yes.getAttribute('aria-disabled'), 'true', 'the yes opens once the question has been read')
+    await yes.click()
+    await asked.waitFor({ state: 'hidden' })
+    assert.match(readFileSync(record, 'utf8'), /"confined_lines":true/, 'the entry says the question said so')
+    rmSync(record)
+  }, far, { width: 900, height: 560 })
+
   let record = null
   await launch(async (page) => {
     await openProject(page)
@@ -58,7 +118,7 @@ try {
       'the question says that confined lines run without asking',
     )
     await page.screenshot({ path: `${shots}/remembered-1-offered.png` })
-    await yes.click()
+    await approveTrust(asked)
     await asked.waitFor({ state: 'hidden' })
     await banner(page).waitFor()
     assert.ok(existsSync(record), 'a yes wrote the record it named')

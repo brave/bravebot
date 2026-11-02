@@ -29,7 +29,9 @@ A prompt shows the thing itself, not a summary of it:
 You cannot endorse a destination you were not shown. A key that approves is refused until every row
 that decides the question has been drawn whole at the width of the box, and the line under the body
 says how many are left. That covers writes, output, vetting, vouching, exposure, server, tool list,
-call and plan prompts. A refusal and ctrl-c work at every draw.
+call and plan prompts, and in the desktop app the startup trust question, whose yes waits until the
+directory and the lines saying what a yes grants and keeps have been on screen. A refusal and ctrl-c
+work at every draw.
 
 A prompt also says what approving **does**, and what it does not. The run prompt says what the command is
 confined to (the directories and what each program brings beyond them), or that it is not sandboxed
@@ -77,8 +79,8 @@ thing on the screen that is not.
 A review stays legible or says it could not: a long body keeps the question on screen and offers the
 rest to scroll to, a small edit in a large file shows only the change, an empty output says so, and a
 diff that cannot be computed says so rather than showing nothing. In the full-screen interface, and
-on the decision cards of a desktop conversation, no approval is taken until the lines it rests on have
-been on screen:
+on the decision cards of a desktop conversation and in the desktop app's startup trust question, no
+approval is taken until the lines it rests on have been on screen:
 until then the question says how many are left to read, a refusal is taken at any time, and a change
 of width starts the count again.
 

@@ -363,6 +363,11 @@ pub struct Task {
     /// puts in its system instructions (SKILL-21). Only a name: the body comes from the catalogue
     /// the turn resolved, through the gate any skill goes through. Not given to a delegate.
     pub skill_mode: Option<String>,
+    /// The name of one skill the turn takes out of the catalogue it resolved, which is the baseline
+    /// arm of a skill evaluation. Taken out after discovery, so every gate has run on every other
+    /// skill and nothing else about the turn changes: hooks, `AGENTS.md`, definitions and servers
+    /// stay in force. Set by the driver from a command line the person typed and never from a file.
+    pub without_skill: Option<String>,
     /// How much this turn asks before it acts.
     ///
     /// Carried by the task because the planner has to be told about one of them: plan mode refuses
@@ -617,6 +622,7 @@ impl Task {
             system_prompts: SystemPrompts::default(),
             style: None,
             skill_mode: None,
+            without_skill: None,
             delegate: None,
             addressing: None,
             addressing_is_standing: false,
@@ -998,6 +1004,13 @@ impl Task {
     /// Open the system prompt with this style's words, unless `--system-prompt` named its own.
     pub fn with_style(mut self, style: Option<crate::styles::Style>) -> Self {
         self.style = style;
+        self
+    }
+
+    /// Run the turn with the skill of this name taken out of its catalogue. See
+    /// [`Task::without_skill`].
+    pub fn without_skill(mut self, name: Option<String>) -> Self {
+        self.without_skill = name;
         self
     }
 

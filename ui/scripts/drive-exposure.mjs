@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT, COMPOSER_SEND, TRUST_APPROVE } from './drive-support.mjs'
+import { COMPOSER_INPUT, COMPOSER_SEND, approveTrust } from './drive-support.mjs'
 
 const KEY = 'AKIAIOSFODNN7EXAMPLE'
 
@@ -32,7 +32,7 @@ try {
   ;({ app, page, errors } = await launchWorld({ profile, env, viewport: { width: 1400, height: 1000 } }))
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
   const trustIt = async () => {
-    await trust.locator(TRUST_APPROVE).click()
+    await approveTrust(trust)
     await trust.waitFor({ state: 'hidden' })
   }
   await openProject(page, app, project)

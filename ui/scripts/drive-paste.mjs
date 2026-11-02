@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_NAME, COMPOSER_SEND } from './drive-support.mjs'
+import { COMPOSER_NAME, COMPOSER_SEND, approveTrust } from './drive-support.mjs'
 
 // Each answer waits a moment, so a message can be queued behind a turn that is still running.
 const { service, rounds: requests } = await startModelService(async () => {
@@ -213,7 +213,7 @@ try {
   await page.locator('.session-row .session').filter({ hasText: 'Compare [Image #1]' }).first().click()
   const again = page.getByRole('dialog', { name: 'Project trust', exact: true })
   if (await again.isVisible().catch(() => false)) {
-    await again.getByRole('button', { name: 'Trust this directory' }).click()
+    await approveTrust(again)
     await again.waitFor({ state: 'hidden' })
   }
   await page.locator('.entries').getByText('Compare [Image #1] [Image #2]').first().waitFor()

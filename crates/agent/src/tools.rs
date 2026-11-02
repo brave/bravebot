@@ -2620,6 +2620,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         .of_tool(&name)
         .naming_a_file(names_a_file(&name))
         .saying_why(why)
+        .loading_skill(produced.skill.clone())
         .with_changes(std::mem::take(&mut produced.changes))
         .with_written(produced.written.take())
         .marked_untrusted(produced.untrusted)

@@ -116,7 +116,11 @@ fn claude_code(request: Request) -> ExitCode {
                 failed = true;
                 eprintln!(
                     "{}",
-                    t!(sessions_import_failed, title = &one.title, problem = err)
+                    t!(
+                        sessions_import_failed,
+                        title = crate::progress::printable(&one.title),
+                        problem = err
+                    )
                 );
             }
         }

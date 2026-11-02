@@ -76,6 +76,7 @@ Usage:
 | `bravebot sessions delete <id>` | delete one session recorded for this directory, with its trail and search index ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot sessions purge [--dry-run] [-y]` | delete every session recorded for this directory, asking first unless `-y` is given ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot stats [--days <n>] [--models] [--project [<dir>]]` | total the sessions, turns and tokens, read and written, the recorded sessions spent, for every project or one ([below](#stats)) |
+| `bravebot skill eval <name> [--model <model>] [--max-rounds <n>] [--max-tokens <n>] [--trust-workspace]` | run a skill's saved cases with the skill and without it and report both scores ([below](#skill-eval)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
 | `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
@@ -1189,6 +1190,32 @@ Entries in the sessions directory that cannot be read as a record are counted th
 their names, and add to no figure. Stdout holds the table and nothing else, so
 `bravebot stats | tail -n 1` is the total. A project that is not a directory, a count that is zero,
 too large or not a number, a repeated option and any other word are refused with status 2.
+
+## `skill eval`
+
+```sh
+bravebot skill eval <name> [--model <model>] [--max-rounds <n>] [--max-tokens <n>] [--trust-workspace]
+```
+
+Runs the saved cases of one skill, each several times with the skill in the catalogue and as many
+times with it taken out, grades both, and prints the score of each (`WITH` and `W/OUT`) and their
+difference for each case and over all of them. The skill may be one of your own or one of a project
+you vouched for. The other skills, hooks, instruction files, definitions and servers are the same in
+both arms. How to write the cases is in [Skills](../customize/skills.md#evaluating-a-skill).
+
+Each run is a one-shot run with nobody to ask, so a call that needs approval is refused and counted
+in the report, and none of the flags that let a run write is accepted. A run is stopped after
+`--max-rounds` rounds (12 where it is not given), and before the request that would follow once it
+has spent `--max-tokens` tokens (no limit where it is not given). Each takes a whole number as it
+does for a [one-shot run](#--max-rounds-n-and---max-tokens-n). A stopped run is reported as stopped
+and has no score. Under each
+case line the report counts, for each arm, the runs, how many searched for skills, how many loaded
+the skill, and how many stopped, failed or were refused a call.
+
+A name that matches no skill, including one only in a project you have not vouched for, a skill only
+you can load, a skill with no accepted case and a case file that is not valid are refused with status
+2. A run that ended on an error other than its limit makes the command end on status 1 after the
+report. Stdout holds the report and nothing else.
 
 ## `completion`
 

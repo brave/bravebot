@@ -35,6 +35,7 @@ mod session_import;
 mod session_search;
 mod sessions_list;
 mod shell_init;
+mod skill_eval;
 mod stats;
 #[cfg(unix)]
 mod supervisor;
@@ -92,6 +93,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 struct Settled {
     as_json: bool,
     skip_permissions: bool,
+    /// The spelling of the bypass flag that was typed, for a refusal that names it. Meaningful only
+    /// where `skip_permissions` is true.
+    bypass_flag: &'static str,
     /// The mode a flag other than the bypass flag opened a one-shot run in (`--accept-edits` or
     /// `--auto`), or `None` where neither was given and the run asks.
     starts_in: Option<bravebot_agent::PermissionMode>,
@@ -458,6 +462,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     Ok(Settled {
         as_json,
         skip_permissions,
+        bypass_flag,
         starts_in,
         carried,
         agent,
@@ -503,6 +508,7 @@ fn main() -> ExitCode {
     let Settled {
         as_json,
         skip_permissions,
+        bypass_flag,
         starts_in,
         carried,
         agent,
@@ -613,6 +619,7 @@ fn main() -> ExitCode {
         Some("auth") => auth::command(&args[1..]),
         Some("sessions") => background::sessions(&args[1..]),
         Some("stats") => stats::command(&args[1..]),
+        Some("skill") => skill_eval::command(&args[1..], skip_permissions.then_some(bypass_flag)),
         Some("--bg") => match carried {
             Some(flag) => stopped_before_the_turn(
                 as_json,
@@ -735,6 +742,10 @@ fn open_link(
     if let Some(directory) = &placement.start_in
         && let Err(problem) = std::env::set_current_dir(directory)
     {
+        // Printed as it stands, without `progress::printable_lines` (LAYER-3): `set_current_dir`
+        // fails only with an `io::Error` the operating system made, whose text is the system's own
+        // words and an error number. It holds no path, so the directory the link named is not in
+        // it and there is no control character to draw.
         return fail(Ending::Failed, t!(cli_workspace_problem, problem = problem));
     }
     interactive(
@@ -2069,7 +2080,9 @@ fn report_a_failed_turn(
         true => Ending::Refused,
         false => exit::ending_of(error),
     };
-    let stopped = fail(ending, error);
+    // A failure can name a path, a model or a definition a checkout chose, so the copy on stderr
+    // is drawn (LAYER-3). The result object below keeps the text as it is.
+    let stopped = fail(ending, progress::printable_lines(&error.to_string()));
     say_notices(&mut std::io::stderr().lock(), reporter.notices());
     // The trail, where `--trace` asked for one, was written as the gates ran.
     if let Some(attempt) = attempt {
@@ -2258,9 +2271,12 @@ fn resume_named(
         // Nor by a second process when another one holds the record: one process writes a record
         // at a time, and the one that holds it may be a terminal (SESSION-38).
         Some(record) if bravebot_session::sessions::is_open_elsewhere(&directory, &record.id) => {
+            // Drawn: the id is read from a stored record (LAYER-3).
             fail(
                 Ending::Failed,
-                bravebot_session::sessions::Held::Open { id: record.id }.refusal(),
+                progress::printable_lines(
+                    &bravebot_session::sessions::Held::Open { id: record.id }.refusal(),
+                ),
             )
         }
         Some(record) => interactive(
@@ -2344,9 +2360,11 @@ fn interactive(
     let mut config = match Config::from_env() {
         Ok(c) => c,
         Err(err) => {
+            // Drawn: the problem can quote an endpoint value an environment variable or a
+            // settings file chose (LAYER-3).
             return fail(
                 Ending::Configuration,
-                t!(cli_configuration_problem, problem = err),
+                progress::printable_lines(&t!(cli_configuration_problem, problem = err)),
             );
         }
     };
@@ -2369,7 +2387,7 @@ fn interactive(
     let settings = bravebot_config::Settings::load();
     let workspace = match current_workspace(&settings, &Managed::load()) {
         Ok(w) => w,
-        Err(err) => return fail(Ending::Failed, t!(cli_workspace_problem, problem = err)),
+        Err(err) => return workspace::workspace_problem(&err),
     };
 
     // What the platform offers, which is what the session reports: this confines a process running
@@ -2458,7 +2476,11 @@ fn interactive(
         // Printed after the terminal is handed back, like the hint above, with the argument status:
         // the session never took a turn, and a one-shot run exits with the same status for the
         // same name (CLI-17).
-        Ok(bravebot_tui::app::Ended::Refused(refused)) => fail(Ending::Argument, refused),
+        // The sentence can name a definition and the model it writes, which a checkout chose, so
+        // it is drawn here and not where the screen's own notes are (LAYER-3).
+        Ok(bravebot_tui::app::Ended::Refused(refused)) => {
+            fail(Ending::Argument, progress::printable_lines(&refused))
+        }
         // After the terminal is handed back, like the rest, so the session it opens has the terminal
         // to itself (SCREEN-8).
         Ok(bravebot_tui::app::Ended::Open(opening)) => reopen::open(&opening),

@@ -462,7 +462,13 @@ The same holds for the other words a run writes to stderr that can name a file o
 checkout holds: each notice, the plan or the steps of a manifest run that stopped or was traced, the
 model line, and the progress line of each call with its reason and note. The names listed for an
 agent setting that does not resolve, the sign-in lines and a sign-in failure, and the complaint that
-a reply is off its schema are drawn the same way. The model a stored pick names and the reason it was
+a reply is off its schema are drawn the same way. The model and the refusing file that `doctor`, a
+one-shot run and the start of a session name when the managed layer refuses a model, and the model
+names `doctor` reports on its model line, are drawn the same way. The model an output-schema refusal
+names is drawn on stderr and keeps its text in the `--json` object. The sentence that refuses a
+definition's model, a turn's failure said beside a reply, the configuration complaint of the
+sign-in commands, and the directory `sessions import` was told to read are drawn on stderr the same
+way. The model a stored pick names and the reason it was
 refused, the model the opening line of a session in lines names, the model a service reported
 serving instead of the one asked for, the report of a stored manifest run that `--resume` or
 `--fork` names, and the directories a kept answer or a resume hint names are drawn the same way. The
@@ -489,6 +495,10 @@ still branches on none of them ([TRACE-5](#TRACE-5)).
 `verified-by: bravebot_cli::main::the_complaint_about_a_model_not_served_draws_the_served_name_as_pictures`
 `verified-by: bravebot_cli::plain::the_opening_lines_draw_a_model_name_and_a_refusal_as_pictures`
 `verified-by: bravebot_cli::plain::the_kept_answer_line_draws_the_paths_it_names_as_pictures`
+`verified-by: bravebot_cli::running::the_refusal_of_a_definitions_model_draws_the_definitions_name_as_pictures`
+`verified-by: bravebot_cli::running::the_sign_in_commands_draw_the_endpoint_the_configuration_quotes_as_pictures`
+`verified-by: bravebot_cli::running::the_refusal_of_a_directory_that_is_a_file_draws_its_name_as_pictures`
+`verified-by: bravebot_cli::plain::a_turn_that_could_not_run_is_said_beside_the_reply_drawn_as_pictures`
 `verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_definitions_names_as_pictures`
 `verified-by: bravebot_cli::running::a_session_in_lines_draws_the_control_characters_of_a_definitions_names_as_pictures`
 `verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_draws_a_checkouts_names_as_pictures`

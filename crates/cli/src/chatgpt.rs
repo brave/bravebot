@@ -73,7 +73,14 @@ pub(crate) fn login() -> ExitCode {
     let config = match Config::from_env() {
         _ if incognito => None,
         Ok(config) => Some(config),
-        Err(problem) => return fail(Ending::Configuration, problem),
+        Err(problem) => {
+            // Drawn: the problem can quote an endpoint value an environment variable or a
+            // settings file chose (LAYER-3).
+            return fail(
+                Ending::Configuration,
+                crate::progress::printable_lines(&t!(cli_configuration_problem, problem = problem)),
+            );
+        }
     };
     let named_by_a_gateway = config
         .as_ref()
@@ -784,6 +791,10 @@ mod tests {
             let said = said_of_account(&failure);
             assert!(said.contains("chatgpt-account.json"), "{said}");
             assert!(!said.contains('\u{1b}'), "{said:?}");
+            assert!(
+                said.contains("\u{241b}[2Jdenied"),
+                "the escape was not drawn as a picture: {said:?}"
+            );
             assert_eq!(
                 said.contains("bravebot auth logout chatgpt"),
                 remedy,

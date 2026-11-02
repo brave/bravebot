@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { ASSISTANT_BUBBLE, BOT_OPEN_BUTTON, COMPOSER_NAME, TRUST_APPROVE } from './drive-support.mjs'
+import { ASSISTANT_BUBBLE, BOT_OPEN_BUTTON, COMPOSER_NAME, approveTrust } from './drive-support.mjs'
 
 // While set, the next reply waits until the test resolves it, so a turn stays running.
 let held = null
@@ -208,7 +208,7 @@ try {
   await page.locator('[data-test="sidebar-tabs"] [role="option"]').nth(1).click()
   // Switching to Bots opens the first bot's home conversation, and opening the bot again opens the
   // same one rather than asking about its folder a second time.
-  await trust.locator(TRUST_APPROVE).click()
+  await approveTrust(trust)
   await trust.waitFor({ state: 'hidden' })
   await page.locator('[data-test="bot-greeting"]').waitFor()
   await page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: /^Scribe$/ }) }).locator(BOT_OPEN_BUTTON).click()

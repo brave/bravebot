@@ -83,6 +83,7 @@ mod server_calls;
 pub mod servers;
 pub mod shared;
 pub mod shell;
+pub mod skill_eval;
 pub mod skills;
 // The build script reads it into the pages `help` serves, so the program itself holds no parser:
 // compiling it here is for its tests.

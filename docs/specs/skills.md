@@ -620,6 +620,11 @@ a project was vouched for from outliving the vouching.
 
 ## Known costs
 
+- **A skill nobody searches for is seen with `skill eval`.** Whether `search_skills` finds a skill of
+  the user's own or the project's ([SKILL-18](#SKILL-18)) depends on its description. `bravebot skill
+  eval <name>` ([SKILLEVAL-1](skill-evals.md#SKILLEVAL-1)) runs a skill's saved cases with and
+  without it and reports how many runs searched for it and how many loaded it.
+
 - **A mode applies a skill's instructions and nothing else of it ([SKILL-21](#SKILL-21)).** Its
   `model` and `effort` are not applied, since they take effect from the round after a load and a mode
   has no load to follow. A person who wants them names the skill in a line as well.

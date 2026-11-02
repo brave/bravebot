@@ -336,13 +336,18 @@ pub(crate) fn say_the_result(result: &str) {
 
 /// Stop before the turn: the identifier and the message on stderr, and a result object on stdout
 /// where one was asked for.
+///
+/// A message can carry a name a checkout or a flag chose, such as the model an output schema was
+/// refused for, so the copy on stderr is drawn through [`crate::progress::printable_lines`]
+/// (LAYER-3). The result object keeps the text as it is, because JSON escapes a control character
+/// itself and a caller reads the real string there.
 pub(crate) fn stopped_before_the_turn(
     as_json: bool,
     ending: Ending,
     message: impl std::fmt::Display,
 ) -> ExitCode {
     let message = message.to_string();
-    let stopped = fail(ending, &message);
+    let stopped = fail(ending, crate::progress::printable_lines(&message));
     if as_json {
         say_the_result(&what_ran(
             ending,

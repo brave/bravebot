@@ -24,6 +24,61 @@ export const BOT_OPEN_BUTTON = '.bot-open-button'
 /** The yes on a trust question. */
 export const TRUST_APPROVE = '[data-test="trust-approve"]'
 
+/** The trust question, which is a dialog named "Project trust". */
+export const trustQuestion = (page) => page.getByRole('dialog', { name: 'Project trust', exact: true })
+
+/**
+ * Scroll every box in the question through, the dialog's own body and the path box inside it, and
+ * back to the top. The yes is held shut until every row it rests on has been on screen, so a
+ * driver that means to press it reads the question first. A question that fits needs no scrolling
+ * and this does nothing to it. It runs in the page, so it names nothing outside itself.
+ */
+export function readTrust(question) {
+  return question.evaluate(async (host) => {
+    const settle = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 120))))
+    const scrolls = (element) => /auto|scroll/.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight + 1
+    const outer = [...(host.shadowRoot?.querySelectorAll('*') ?? [])].filter(scrolls)
+    const inner = [...host.querySelectorAll('*')].filter(scrolls)
+    const through = async (element, step) => {
+      const last = element.scrollHeight - element.clientHeight
+      for (let at = 0; ; at = Math.min(last, at + step)) {
+        element.scrollTo({ top: at, behavior: 'instant' })
+        await settle()
+        if (at >= last) break
+      }
+      element.scrollTo({ top: 0, behavior: 'instant' })
+      await settle()
+    }
+    const insides = async () => {
+      for (const element of inner) {
+        const box = element.getBoundingClientRect()
+        const showing = Math.min(box.bottom, innerHeight) - Math.max(box.top, 0)
+        if (showing >= Math.min(element.clientHeight, 80)) await through(element, Math.max(16, showing * 0.3))
+      }
+    }
+    await insides()
+    for (const element of outer) {
+      const last = element.scrollHeight - element.clientHeight
+      const step = Math.max(40, element.clientHeight * 0.3)
+      for (let at = 0; ; at = Math.min(last, at + step)) {
+        element.scrollTo({ top: at, behavior: 'instant' })
+        await settle()
+        await insides()
+        if (at >= last) break
+      }
+      element.scrollTo({ top: 0, behavior: 'instant' })
+      await settle()
+    }
+    return { outer: outer.length, inner: inner.length }
+  })
+}
+
+/** Read the question through, then press its yes. The press waits for the yes to open. */
+export async function approveTrust(question) {
+  await readTrust(question)
+  await question.locator(TRUST_APPROVE).click()
+}
+
 /** The `check` helper every driver prints with, and the list of what failed. */
 export function checker() {
   const problems = []

@@ -133,6 +133,7 @@ test('openBot writes the bot, finds its row, opens its conversation and answers 
       click: async () => calls.push(`click ${selector}`),
       waitFor: async () => calls.push(`waitFor ${selector}`),
       isVisible: async () => true,
+      evaluate: async () => ({ outer: 0, inner: 0 }),
       selector,
       nth: (n) => ({ click: async () => calls.push(`click ${selector} #${n}`) }),
     }
@@ -149,6 +150,7 @@ test('openBot writes the bot, finds its row, opens its conversation and answers 
     },
     reload: async () => calls.push('reload'),
     waitForTimeout: async () => {},
+    getByRole: () => locator('dialog Project trust'),
     locator,
   }
   const checks = []
