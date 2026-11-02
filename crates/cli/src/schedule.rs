@@ -1193,6 +1193,7 @@ mod tests {
                     cron: "0 9 * * *".to_string(),
                     directory: PathBuf::from("/work"),
                     mode,
+                    scheduler: Scheduler::Crontab,
                     prompt: prompt.to_string(),
                 };
                 let arguments = run_arguments(&entry);
