@@ -8343,6 +8343,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a write was refused at once because this run holds no `file_write`
+    /// capability, before the path was read, scanned or put to anybody.
+    ///
+    /// The refusal is answered before any other gate sees the call, for the reason
+    /// [`Policy::refuse_write_in_mode`] gives. `call` is the tool.
+    pub fn refuse_write_without_capability(&mut self, call: &str) {
+        let _ = self.deny(
+            "capability",
+            Principle::Capability,
+            format!(
+                "{call}: this run holds no '{}' capability, so nothing was written and nobody was asked",
+                Capability::FileWrite
+            ),
+        );
+    }
+
     /// Record that a `run` call asked for reach past the session's profile and the session
     /// refused it (SANDBOX-26, SANDBOX-29).
     ///

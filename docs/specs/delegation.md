@@ -162,6 +162,40 @@ tool list is written out a second time as a refusal.
 `verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
 `verified-by: bravebot_agent::mcp::a_worker_is_offered_only_the_servers_its_parent_holds`
 
+<a id="DELEGATE-31"></a>
+### DELEGATE-31: a run that holds no writing is refused a write at once, and told where its content goes
+
+A reader and a checker are not offered a way to write a file, and a call that names `write_file` or
+`edit_file` anyway is refused before anything else is done with it: the path is not read, the body
+is not scanned for credentials, no change is displayed, nobody is asked and no grant is issued. The
+same holds for a worker or a definition whose held set leaves writing out
+([DELEGATE-5](#DELEGATE-5)). The refusal says that this kind of delegate writes nothing and that
+its content belongs in its report to the run that started it, and tells it not to retry. It names
+no capability.
+
+The trail records the refusal once, as a denial under the capability principle, in the place the
+refusals of a write in a mode that refuses writes and in a read-only sandbox are recorded: before
+the credential scan, the display, the approval and the endpoint grant, none of which the call
+reaches.
+
+A run that holds writing is unchanged: its write is scanned, shown and put to a person as
+[WRITE-3](tools/write-file.md#WRITE-3) and [EDIT-3](tools/edit-file.md#EDIT-3) say.
+
+**Why.** Without the early refusal the capability check met the call last, after the question. A
+person was asked to approve a write that always failed, and in a mode that asks nothing the trail
+showed the scan, the display and the approval before the denial. The delegate was told that a
+capability was not granted for the turn, which gives it no way forward, so it tried again.
+
+**What the check reads.** The capabilities the run was started with, which the driver fixed before
+the run ([DELEGATE-4](#DELEGATE-4)). It reads nothing the run met, so no decision is taken from
+untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
+
+`verified-by: bravebot_agent::turn::a_reader_or_checker_delegate_naming_a_write_tool_is_refused_before_anyone_is_asked`
+
+`the_main_session_and_an_addressed_worker_still_write_after_the_capability_check` and
+`a_delegates_write_is_approved_on_its_own` in `crates/agent/tests/turn.rs` are controls for the
+unchanged case. They pass without the early refusal.
+
 <a id="DELEGATE-5"></a>
 ### DELEGATE-5: the prompt belongs to the definition, and the planner writes no word of it
 

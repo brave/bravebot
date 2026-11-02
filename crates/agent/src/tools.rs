@@ -5052,6 +5052,23 @@ fn a_picture_may_be_written_here(
     ))
 }
 
+/// The refusal for a write by a run that holds no `file_write` capability, such as a reader or a
+/// checker delegate. Asked before the path is read, scanned or put to anybody, so a person is never
+/// asked about a write that cannot land. `Ok` where the run may write.
+fn refuse_unless_writing_is_held<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tool: &str,
+) -> Result<(), &'static str> {
+    if policy.holds_capability(bravebot_core::capability::Capability::FileWrite) {
+        return Ok(());
+    }
+    policy.refuse_write_without_capability(tool);
+    Err(
+        "refused: this kind of delegate writes nothing, so no file was changed and nobody was \
+         asked. Do not retry; put the content in your report to the session that started you.",
+    )
+}
+
 /// Write a file, after a person approves it.
 ///
 /// The order matters: the user sees the exact path and body *before* any grant exists, and
@@ -5190,7 +5207,8 @@ fn write_file<S: Sink, C: Confirmer>(
     )
 }
 
-/// Where a `write_file` call lands, as [`path_argument`] settled it.
+/// Where a `write_file` call lands, as [`path_argument`] settled it, or the refusal of a run that
+/// holds no writing, which is asked before the path is read.
 ///
 /// The path is routing, so naming a destination from it is not a content decision, and the gate
 /// that released it ran where the argument was read.
@@ -5199,6 +5217,7 @@ fn write_landing<S: Sink>(
     tools: &Tools<'_>,
     arguments: &Value,
 ) -> Result<Landing, String> {
+    refuse_unless_writing_is_held(policy, "write_file").map_err(String::from)?;
     let found = path_argument(
         policy,
         tools.workspace,
@@ -6317,6 +6336,9 @@ fn edit_file<S: Sink, C: Confirmer>(
     confirmer: &mut C,
     arguments: &Value,
 ) -> Produced {
+    if let Err(refused) = refuse_unless_writing_is_held(policy, "edit_file") {
+        return Produced::problem(refused);
+    }
     let found = match path_argument(
         policy,
         workspace,

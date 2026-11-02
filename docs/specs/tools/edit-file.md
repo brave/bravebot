@@ -53,6 +53,10 @@ file whose two sides cannot be matched line by line within the bound [`read_git`
 states for `diff` is shown as a notice that the change is too large to show, with no changes
 listed.
 
+A run that holds no writing, such as a reader or a checker delegate, is refused before the path is
+read and before anybody is asked, whatever form the edit takes
+([DELEGATE-31](../delegation.md#DELEGATE-31)).
+
 `verified-by: bravebot_agent::turn::an_edit_is_reviewed_as_a_diff`
 `verified-by: bravebot_agent::turn::a_reviewed_edit_carries_both_sides_of_the_diff`
 `verified-by: bravebot_agent::turn::edits_far_apart_in_a_long_file_are_approved_as_two_changes`
