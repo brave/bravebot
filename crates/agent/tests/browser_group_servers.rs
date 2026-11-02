@@ -1931,7 +1931,11 @@ fn an_answer_is_a_reference(acting: &'static Acting) {
         after_the_wait.contains(&format!(
             "what {} said about its failure",
             acting.named(acting.fails)
-        )) && after_the_wait.contains("Quarantined"),
+        )) && after_the_wait.contains("Quarantined")
+            && !after_the_wait.contains(&format!(
+                "what {} returned with no failure reported",
+                acting.named(acting.fails)
+            )),
         "the planner was given no reference for the failure the call reported: {after_the_wait}"
     );
     for (round, body) in sent.iter().enumerate() {
@@ -1947,7 +1951,7 @@ fn an_answer_is_a_reference(acting: &'static Acting) {
     for (_, media) in acting.pictures {
         // The request is JSON, so the reference's line ends at the escaped newline.
         let line = after_the_click
-            .split_once(&format!("returned ({media}, "))
+            .split_once(&format!("returned with no failure reported ({media}, "))
             .and_then(|(_, rest)| rest.split("\\n").next())
             .unwrap_or_default();
         assert!(

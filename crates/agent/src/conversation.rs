@@ -315,6 +315,10 @@ impl Stored {
 /// Not `Clone`: the quarantine holds the only copy of content nobody may read, and a second
 /// store would be a second place for a reference to resolve differently.
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about what the session has already said or been asked, set and read on its own"
+)]
 pub struct Conversation {
     /// The exchange so far, oldest first, without the system prompt.
     ///
@@ -372,20 +376,35 @@ pub struct Conversation {
     /// `todo_write` was accepted at this message and never looks inside it to decide anything.
     /// Not part of a [`Snapshot`], for the reason `reads` is not.
     task_list: Option<usize>,
-    /// How many tasks the planner's latest accepted list leaves open, while the planner has not been
-    /// asked about them (TURN-12).
+    /// How many tasks the planner's latest accepted list leaves open (TURN-12).
     ///
     /// Counted by the kernel and labelled as the list is, so the driver holds a number it cannot
-    /// read: [`Conversation::take_open_tasks`] hands it over for `Policy::read_trusted_content`,
-    /// which refuses it where the list is not trusted. Replaced with the list, so a list the
-    /// planner has since written is asked about afresh. Not part of a [`Snapshot`], for the reason
-    /// `task_list` is not.
+    /// read: [`Conversation::open_tasks`] hands it over for `Policy::read_trusted_content`, which
+    /// refuses it where the list is not trusted. Replaced with the list, so a list the planner has
+    /// since written is asked about afresh. Not part of a [`Snapshot`], for the reason `task_list`
+    /// is not.
     open_tasks: Option<Labelled<usize>>,
+    /// Whether the planner has been asked about the list `open_tasks` counts, or wrote it in answer
+    /// to being asked or reminded. A list asked about is asked about again only by a turn that did
+    /// work since it (TURN-12).
+    open_tasks_asked: bool,
     /// The latest task list, once a compaction took the message holding it out of the request.
     ///
     /// Carried word for word and put back after the summary (COMPACT-16). Model output the
     /// planner already held, so it comes back at the label of the context it came from.
     carried_task_list: Option<String>,
+    /// Where a delegate's task sits in `messages`, until a compaction takes the message out of the
+    /// request.
+    ///
+    /// A position recorded by the turn from the fact that it is a delegate's, so nothing here reads
+    /// the task. Not part of a [`Snapshot`], for the reason `task_list` is not: a delegate's
+    /// conversation is never written down.
+    task_at: Option<usize>,
+    /// A delegate's task, once a compaction took the message holding it out of the request.
+    ///
+    /// Carried byte for byte and put back after the summary (COMPACT-19). The task is the public
+    /// text the kernel gave the delegate, so it comes back at the label of the context it came from.
+    carried_task: Option<String>,
     /// Where the turn now running put the end of its opening: what it read for the prompt, and the
     /// prompt. A position in `messages`, so a compaction that moves them clears it.
     opening_end: Option<usize>,
@@ -494,7 +513,10 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
+            open_tasks_asked: false,
             carried_task_list: None,
+            task_at: None,
+            carried_task: None,
             opening_end: None,
             masked_before: 0,
             skills_overview_said: false,
@@ -745,22 +767,45 @@ impl Conversation {
         }
     }
 
+    /// Record that the message just pushed is a delegate's task, so a compaction sends it again
+    /// (COMPACT-19).
+    ///
+    /// Called by the turn from the fact that it is a delegate's and from nothing the task says.
+    pub fn task_given(&mut self) {
+        self.task_at = self.messages.len().checked_sub(1);
+        self.carried_task = None;
+    }
+
     /// Record how many tasks the planner's latest list leaves open, as the kernel counted them
     /// (TURN-12). Called for every accepted list, and with `None` where the planner was not shown
     /// that list, so that the count of an earlier list is not taken for the panel's.
     ///
-    /// A list written after the turn put the question was written in answer to it, and nothing more
-    /// is asked about it, whether or not it still has tasks open.
-    pub fn open_tasks_counted(&mut self, open: Option<Labelled<usize>>, asked_this_turn: bool) {
-        self.open_tasks = open.filter(|_| !asked_this_turn);
+    /// A list written after the turn put the question or the reminder was written in answer to it
+    /// (`in_answer`), and is not asked about unless a turn does work after it, whether or not it
+    /// still has tasks open.
+    pub fn open_tasks_counted(&mut self, open: Option<Labelled<usize>>, in_answer: bool) {
+        self.open_tasks = open;
+        self.open_tasks_asked = in_answer;
     }
 
-    /// Take the count of open tasks the planner has not been asked about, which is then not asked
-    /// about again until it writes another list.
+    /// The count of open tasks in the planner's latest list, left in place.
     ///
-    /// Labelled as the list is: the caller reads it with `Policy::read_trusted_content`.
-    pub fn take_open_tasks(&mut self) -> Option<Labelled<usize>> {
-        self.open_tasks.take()
+    /// Read by the reminder that a list may be behind the work and by the question put when the
+    /// planner answers, neither of which uses up the other. Labelled as the list is: the caller reads
+    /// it with `Policy::read_trusted_content`.
+    pub fn open_tasks(&self) -> Option<&Labelled<usize>> {
+        self.open_tasks.as_ref()
+    }
+
+    /// Whether the planner has been asked about the list `open_tasks` counts, or wrote it in
+    /// answer to being asked or reminded.
+    pub fn open_tasks_asked(&self) -> bool {
+        self.open_tasks_asked
+    }
+
+    /// Record that the planner has been asked about the list `open_tasks` counts.
+    pub fn open_tasks_were_asked_about(&mut self) {
+        self.open_tasks_asked = true;
     }
 
     /// Record what the last request built from this conversation came to.
@@ -917,9 +962,10 @@ impl Conversation {
     /// The start of the last [`RECENT_ROUNDS_KEPT`] rounds.
     ///
     /// The fallback, for the turn that is long by itself. It may cut away the prompt the turn
-    /// began with, which is the point: that prompt is one of the things the summary is required
-    /// to carry, and a turn on its fortieth round has more history behind it than the sentence
-    /// that started it.
+    /// began with, which is the point: a turn on its fortieth round has more history behind it than
+    /// the sentence that started it, and the summary carries it. A delegate's task is the exception:
+    /// it is the whole of what the delegate was told, so a cut that takes it sends it again after
+    /// the summary (COMPACT-19).
     ///
     /// A round that answered by id is found by the field alone: its results carry one and its
     /// own start does not. A round sent as prose carries no ids anywhere, so the field alone
@@ -959,7 +1005,8 @@ impl Conversation {
             .filter(|&&index| !matches!(self.messages[index].composed, Some(Composed::Summary)))
             .count();
         let carried = self.skills_to_carry(cut);
-        if given_up < kept + carried.len() {
+        let task = self.task_to_carry(cut).or(self.carried_task.as_deref());
+        if given_up < kept + carried.len() + usize::from(task.is_some()) {
             return None;
         }
 
@@ -974,8 +1021,19 @@ impl Conversation {
         let retained: usize = (cut..self.messages.len())
             .map(|index| self.sent_bytes(index))
             .chain(carried.iter().map(stored_bytes))
-            .sum();
+            .sum::<usize>()
+            + task.map_or(0, str::len);
         (freed >= retained).then_some(cut)
+    }
+
+    /// A delegate's task, when a cut at `boundary` would take it out of the request.
+    ///
+    /// Found from the position the turn recorded and from nothing the task says.
+    fn task_to_carry(&self, boundary: usize) -> Option<&str> {
+        self.task_at
+            .filter(|&at| at < boundary)
+            .and_then(|at| self.messages.get(at))
+            .and_then(|stored| stored.message.content.as_text())
     }
 
     /// The skills a cut at `boundary` would have to carry, as the result of the newest load of
@@ -1194,9 +1252,23 @@ impl Conversation {
     /// The replaced messages go to the archive rather than into a bin. See the field.
     ///
     /// Skills the planner loaded in what is replaced are sent again after the summary, because a
-    /// summary of instructions is not the instructions (COMPACT-17).
+    /// summary of instructions is not the instructions (COMPACT-17). So is a delegate's task,
+    /// which is the whole of what it was told (COMPACT-19).
     pub fn compacted(&mut self, boundary: usize, summary: &str) {
         let carried = self.skills_to_carry(boundary);
+        // Before the drain, while the message is still there to copy.
+        match self.task_at {
+            Some(at) if at < boundary => {
+                self.carried_task = self.messages[at]
+                    .message
+                    .content
+                    .as_text()
+                    .map(str::to_string);
+                self.task_at = None;
+            }
+            Some(at) => self.task_at = Some(at - boundary + 1 + carried.len()),
+            None => {}
+        }
         // Before the drain, while the message is still there to copy. Only a list the cut takes
         // is carried: one in the kept part is sent word for word already, and would be sent twice.
         match self.task_list {
@@ -1226,6 +1298,10 @@ impl Conversation {
         if let Some(live) = self.live_references() {
             note.push_str("\n\n");
             note.push_str(&live);
+        }
+        if let Some(task) = &self.carried_task {
+            note.push_str("\n\nThe task you were given, word for word:\n");
+            note.push_str(task);
         }
         if let Some(list) = &self.carried_task_list {
             note.push_str("\n\nYour task list, as you last wrote it:\n");
@@ -1514,7 +1590,10 @@ impl Conversation {
             reads: ShownReads::default(),
             task_list: None,
             open_tasks: None,
+            open_tasks_asked: false,
             carried_task_list: None,
+            task_at: None,
+            carried_task: None,
             opening_end: None,
             masked_before: 0,
             skills_overview_said: false,
@@ -3638,6 +3717,373 @@ mod tests {
             Confidentiality::Private,
             "a later turn shown nothing private does not un-see what an earlier one was shown"
         );
+    }
+
+    /// A round in which the planner read a file, for the tests of a turn that is long by itself.
+    fn a_read_round(conversation: &mut Conversation, round: usize) {
+        let mut call = a_call("read_file", r#"{"path":"src/main.rs"}"#);
+        call.id = format!("call-{round}");
+        conversation.push(Message::assistant_calling("looking", vec![call]));
+        conversation.push(Message::tool_result(format!("call-{round}"), "some lines"));
+    }
+
+    /// A delegate's conversation: its task, then the rounds it has worked.
+    fn a_delegate_after(task: &str, rounds: usize) -> Conversation {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user(task));
+        conversation.task_given();
+        for round in 0..rounds {
+            a_read_round(&mut conversation, round);
+        }
+        conversation
+    }
+
+    /// How many messages of the request hold `text`.
+    fn holding(conversation: &Conversation, text: &str) -> usize {
+        conversation
+            .messages()
+            .iter()
+            .filter(|stored| stored.message.content.text().contains(text))
+            .count()
+    }
+
+    /// COMPACT-19: a delegate's task is cut away by the round cut and comes back word for word.
+    /// Carrying the trimmed summary text, or only what the summariser kept, would lose items 2 to 4.
+    #[test]
+    fn a_delegates_task_is_in_the_request_after_the_cut_byte_for_byte() {
+        let task = "  Items:\n1. caf\u{e9} \u{20ac}\n2. second\n3. third\n4. fourth\n\n  ";
+        let mut conversation = a_delegate_after(task, 20);
+        let boundary = conversation
+            .compaction_boundary()
+            .expect("a long turn is cut by round");
+        assert!(boundary > 0, "the task has to be inside what is given up");
+        conversation.compacted(boundary, "  only item 1 was started  ");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(note.contains(task), "{note:?}");
+        assert_eq!(holding(&conversation, "4. fourth"), 1);
+    }
+
+    /// COMPACT-19: a second cut summarises the first summary, and the task is still there once.
+    #[test]
+    fn the_carried_task_survives_a_second_compaction_once() {
+        let task = "TASK-ITEMS 1 2 3 4";
+        let mut conversation = a_delegate_after(task, 20);
+        for round in 0..2 {
+            let boundary = conversation
+                .compaction_boundary()
+                .expect("something to compact");
+            conversation.compacted(boundary, &format!("summary {round}"));
+            assert_eq!(holding(&conversation, task), 1, "cut {round}");
+            for more in 0..20 {
+                a_read_round(&mut conversation, 100 * (round + 1) + more);
+            }
+        }
+    }
+
+    /// COMPACT-19: a task in the part the cut keeps is sent as it was, not twice.
+    #[test]
+    fn a_task_the_cut_leaves_in_place_is_not_sent_again() {
+        let mut conversation = Conversation::new();
+        for prompt in ["first", "second", "third"] {
+            an_exchange(&mut conversation, prompt);
+        }
+        conversation.push(Message::user("THE-TASK"));
+        conversation.task_given();
+        conversation.push(Message::assistant("ok"));
+
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "they started");
+
+        assert_eq!(holding(&conversation, "THE-TASK"), 1);
+        let note = conversation.messages()[0].message.content.text();
+        assert!(!note.contains("THE-TASK"), "{note}");
+    }
+
+    /// COMPACT-19: a conversation nobody recorded a task in gains none, so a person's own long turn
+    /// is unchanged.
+    #[test]
+    fn a_conversation_that_never_recorded_a_task_gains_none() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("find and fix the bug"));
+        for round in 0..20 {
+            a_read_round(&mut conversation, round);
+        }
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "looking");
+
+        assert_eq!(holding(&conversation, "find and fix the bug"), 0);
+        let note = conversation.messages()[0].message.content.text();
+        assert!(!note.contains("word for word"), "{note}");
+    }
+
+    /// COMPACT-19: the task is found by the position recorded and not by being the first message.
+    #[test]
+    fn a_task_not_at_the_start_is_found_by_its_position() {
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user("CONTEXT-FILE"));
+        conversation.push(Message::user("THE-TASK"));
+        conversation.task_given();
+        for round in 0..20 {
+            a_read_round(&mut conversation, round);
+        }
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "looking");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(note.contains("THE-TASK"), "{note}");
+        assert!(!note.contains("CONTEXT-FILE"), "{note}");
+    }
+
+    /// COMPACT-19, COMPACT-5: a carried task counts as kept, so a delegate waits one round longer
+    /// than a conversation with no task recorded before its first cut, as with a carried skill.
+    #[test]
+    fn a_carried_task_counts_as_kept_for_the_cut() {
+        let first_cut = |recorded: bool| {
+            (1..20)
+                .find(|&exchanges| {
+                    let mut conversation = Conversation::new();
+                    conversation.push(Message::user("prompt 0"));
+                    if recorded {
+                        conversation.task_given();
+                    }
+                    conversation.push(Message::assistant("ok ".repeat(200)));
+                    for index in 1..exchanges {
+                        an_exchange(&mut conversation, &format!("prompt {index}"));
+                    }
+                    conversation.compaction_boundary().is_some()
+                })
+                .expect("enough exchanges are cut")
+        };
+        assert_eq!(first_cut(true), first_cut(false) + 1);
+    }
+
+    /// COMPACT-19, COMPACT-5: the carried task is one more message kept, whatever it weighs. Here
+    /// the exchanges given up outweigh the exchanges kept by far, so only the count can decline the
+    /// cut: two exchanges given up are not enough to keep two and bring a task back.
+    #[test]
+    fn a_carried_task_is_one_more_message_kept_whatever_it_weighs() {
+        let exchanges = |recorded: bool| {
+            let mut conversation = Conversation::new();
+            conversation.push(Message::user("t"));
+            if recorded {
+                conversation.task_given();
+            }
+            conversation.push(Message::assistant("big ".repeat(2_000)));
+            for prompt in ["a", "b", "c"] {
+                conversation.push(Message::user(prompt));
+                conversation.push(Message::assistant("ok"));
+            }
+            conversation
+        };
+
+        assert!(exchanges(false).compaction_boundary().is_some());
+        assert!(exchanges(true).compaction_boundary().is_none());
+    }
+
+    /// COMPACT-19: the task is not capped at the share a skill gets.
+    #[test]
+    fn a_task_past_the_size_of_a_skill_is_carried_whole() {
+        let task = "y".repeat(SKILL_KEPT_BYTES + 5_000);
+        let mut conversation = a_delegate_after(&task, 14);
+        // Enough given up to pay for the task, as COMPACT-5 asks.
+        for round in 14..40 {
+            conversation.push(Message::assistant("z".repeat(8_000)));
+            a_read_round(&mut conversation, round);
+        }
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "looking");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(note.contains(&task));
+    }
+
+    /// COMPACT-19, COMPACT-5: after the first cut the carried task is part of what the next cut
+    /// would have to bring back, so a large task makes the next cut wait until the rounds given
+    /// up outweigh it, and the delegate does not summarise once per round.
+    #[test]
+    fn a_large_carried_task_delays_the_next_cut() {
+        let rounds_to_the_next_cut = |task: &str| {
+            let mut conversation = a_delegate_after(task, 20);
+            compact_now(&mut conversation);
+            let mut round = 100;
+            while conversation.compaction_boundary().is_none() {
+                assert!(round < 5_000, "no cut was ever made");
+                a_read_round(&mut conversation, round);
+                round += 1;
+            }
+            round - 100
+        };
+
+        let small = rounds_to_the_next_cut("short task");
+        let large = rounds_to_the_next_cut(&"t".repeat(32_000));
+        assert!(large > small + 100, "small {small}, large {large}");
+    }
+
+    /// COMPACT-19, COMPACT-18: dropping old tool results leaves the carried task whole, because it
+    /// is the driver's note and not a tool result. A task sent as a stub would be lost again.
+    #[test]
+    fn a_carried_task_is_not_dropped_with_the_old_tool_results() {
+        let task = format!("THE-TASK {}", "item ".repeat(600));
+        let mut conversation = a_delegate_after(&task, 20);
+        compact_now(&mut conversation);
+        for round in 0..8 {
+            a_round_that_read(
+                &mut conversation,
+                &format!("big-{round}"),
+                "read_file",
+                "BULK ".repeat(20_000),
+            );
+        }
+
+        assert!(conversation.mask_old_results().is_some());
+        let sent = sent_text(&conversation);
+        assert!(
+            sent.contains("dropped from the request"),
+            "nothing was masked"
+        );
+        assert_eq!(sent.matches(&task).count(), 1);
+    }
+
+    /// COMPACT-19, COMPACT-4: the carried task adds no place to cut, so the next cut falls in front
+    /// of a round, behind the note that holds the task, and never on the note itself or inside a
+    /// round.
+    #[test]
+    fn the_carried_task_is_not_a_place_to_cut() {
+        let mut conversation = a_delegate_after("THE-TASK", 20);
+        compact_now(&mut conversation);
+        for round in 100..120 {
+            a_read_round(&mut conversation, round);
+        }
+        conversation.push(Message::assistant("done"));
+
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        assert!(boundary > 0, "the cut fell on the note holding the task");
+        assert!(opens_a_round(&conversation.messages()[boundary]));
+        assert!(
+            conversation.messages()[boundary]
+                .message
+                .tool_call_id
+                .is_none(),
+            "the cut fell on the answer to a call"
+        );
+        assert!(!matches!(
+            conversation.messages()[boundary].composed,
+            Some(Composed::Summary)
+        ));
+    }
+
+    /// COMPACT-19, COMPACT-6: the task stays in the archive and in the record, and the note holding
+    /// its copy is not drawn as something anybody said.
+    #[test]
+    fn the_carried_task_is_in_the_archive_and_not_drawn_twice() {
+        let mut conversation = a_delegate_after("THE-TASK", 20);
+        compact_now(&mut conversation);
+
+        let drawn = conversation.recounted();
+        let users: Vec<&Said> = drawn
+            .iter()
+            .filter(|said| matches!(said, Said::User(text, _) if text == "THE-TASK"))
+            .collect();
+        assert_eq!(users.len(), 1, "{drawn:?}");
+        assert!(
+            !drawn.iter().any(|said| matches!(
+                said,
+                Said::Composed { text, .. } if text.contains("THE-TASK")
+            )),
+            "the note holding the copy was drawn: {drawn:?}"
+        );
+    }
+
+    /// COMPACT-19, COMPACT-1: the carried task rides in the summary message, which is tagged and
+    /// attributed as the driver's summary note and not as something the person typed. Putting it
+    /// in a message that claims to be the person's words, or in an untagged one, would misstate who
+    /// said it.
+    #[test]
+    fn the_carried_task_rides_in_the_summary_note_and_is_attributed_as_one() {
+        let mut conversation = a_delegate_after("THE-TASK", 20);
+        compact_now(&mut conversation);
+
+        let holders: Vec<&Stored> = conversation
+            .messages()
+            .iter()
+            .filter(|stored| stored.message.content.text().contains("THE-TASK"))
+            .collect();
+        assert_eq!(holders.len(), 1);
+        assert!(matches!(holders[0].composed, Some(Composed::Summary)));
+        assert!(matches!(holders[0].provenance(), Provenance::Summary));
+    }
+
+    /// COMPACT-19, COMPACT-3: carrying the task changes nothing the compaction leaves alone: the
+    /// content behind a live reference, the reference counter and what the context has read.
+    #[test]
+    fn carrying_a_task_leaves_the_quarantine_the_counter_and_the_integrity_alone() {
+        let mut conversation = a_delegate_after("THE-TASK", 20);
+        let slot = conversation.next_reference();
+        conversation
+            .quarantine()
+            .writer_for(slot.clone(), Label::untrusted_private())
+            .expect("a writer")
+            .write("what nobody may read")
+            .expect("written");
+        conversation.observed(Label::untrusted_private());
+        let integrity = conversation.context();
+        let holds = conversation.holds();
+
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "looking");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(note.contains("THE-TASK"), "{note}");
+        assert!(conversation.quarantine().take_for_effect(&slot).is_ok());
+        assert_eq!(conversation.next_reference(), SlotId::new("ref:1"));
+        assert_eq!(conversation.context(), integrity);
+        assert_eq!(conversation.holds(), holds);
+    }
+
+    /// COMPACT-19, COMPACT-18: masking drops old tool results and nothing else. The task is a
+    /// user message, and after a compaction its copy is a summary note, so neither is stubbed
+    /// however large it is.
+    #[test]
+    fn masking_old_results_leaves_the_task_and_its_carried_copy_whole() {
+        let task = format!("{}\nEND-OF-TASK", "TASK-LINE\n".repeat(400));
+        let big_rounds = |conversation: &mut Conversation, rounds: std::ops::Range<usize>| {
+            for round in rounds {
+                let mut call = a_call("read_file", r#"{"path":"big.log"}"#);
+                call.id = format!("m{round}");
+                conversation.push(Message::assistant_calling("looking", vec![call]));
+                conversation.push(Message::tool_result(
+                    format!("m{round}"),
+                    "BULK-LINE\n".repeat(2_000),
+                ));
+            }
+        };
+
+        let mut conversation = Conversation::new();
+        conversation.push(Message::user(task.clone()));
+        conversation.task_given();
+        big_rounds(&mut conversation, 0..20);
+        assert!(conversation.mask_old_results().is_some(), "nothing masked");
+        assert_eq!(sent_text(&conversation).matches("END-OF-TASK").count(), 1);
+        assert!(sent_text(&conversation).contains(&task));
+
+        let mut conversation = a_delegate_after(&task, 20);
+        compact_now(&mut conversation);
+        big_rounds(&mut conversation, 100..120);
+        assert!(conversation.mask_old_results().is_some(), "nothing masked");
+        assert_eq!(sent_text(&conversation).matches("END-OF-TASK").count(), 1);
+        assert!(sent_text(&conversation).contains(&task));
+    }
+
+    /// COMPACT-19: a restored conversation records no task and carries nothing.
+    #[test]
+    fn a_restored_conversation_carries_no_task() {
+        let mut conversation = Conversation::restored(a_delegate_after("THE-TASK", 20).snapshot());
+        let boundary = conversation.compaction_boundary().expect("a cut");
+        conversation.compacted(boundary, "looking");
+
+        let note = conversation.messages()[0].message.content.text();
+        assert!(!note.contains("THE-TASK"), "{note}");
     }
 
     /// A prompt and an answer, the filler between the parts of the skill tests.

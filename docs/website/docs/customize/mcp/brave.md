@@ -123,7 +123,7 @@ gives back its permissions, except those another group that is on still uses.
 | `platform` | read the operating system and architecture Brave runs on. Always on | `off` | no |
 | `tabs-read` | list your open tabs, windows and tab groups, the tabs and windows you closed lately, and the frames in a tab | `look`, `read`, `browse` | no |
 | `history-read` | search your history, list the visits to one address, your most visited sites and the tabs open on your other devices | `look`, `read`, `browse` | no |
-| `bookmarks-read` | search your bookmarks, list the contents of a folder, your newest bookmarks and your reading list | `look`, `read`, `browse` | no |
+| `bookmarks-read` | search your bookmarks, list the contents of a folder (including the Bookmarks bar and Other bookmarks, named by the title Brave shows) or the folders at the top, your newest bookmarks and your reading list | `look`, `read`, `browse` | no |
 | `page-read` | read the text of an open page or one frame, up to 100,000 characters, the links in a page, and where its forms submit with the name and type of each field and never what is typed in one. Also number the buttons, links and fields of a page, up to 40, for you to name one to the session, and take a picture of an open tab (a JPEG, with the group on all sites). The model sees the picture only if you look at it and agree | `read`, `browse` | no |
 | `tabs-manage` | switch to, pin, mute, move, group, unload, duplicate and zoom open tabs, bring a window forward and resize it | `browse` | no |
 | `bookmarks-write` | add bookmarks, folders and reading list entries, move and rename bookmarks, and change reading list entries. It deletes none | `browse` | no |

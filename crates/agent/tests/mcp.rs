@@ -791,11 +791,15 @@ fn a_picture_a_server_returns_is_never_shown_to_the_planner() {
     );
     let [told] = tool_results(second).try_into().expect("one tool result");
     assert!(
-        told.contains("[ref:1] what weather:get_forecast returned (1 lines, 36 bytes, (U,priv))"),
+        told.contains(
+            "[ref:1] what weather:get_forecast returned with no failure reported (1 lines, 36 bytes, (U,priv))"
+        ),
         "the text did not get a reference of its own: {told}"
     );
     assert!(
-        told.contains("[ref:2] what weather:get_forecast returned (image/png, 34 bytes, (U,priv))"),
+        told.contains(
+            "[ref:2] what weather:get_forecast returned with no failure reported (image/png, 34 bytes, (U,priv))"
+        ),
         "the planner was not told what the picture is: {told}"
     );
     assert!(

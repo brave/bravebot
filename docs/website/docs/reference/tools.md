@@ -614,6 +614,11 @@ If you agree, the bytes come back as text the planner may read. If you do not, i
 to work with what it has or to say what it needed, rather than being left to ask again. Nothing the
 check wrote goes back either way.
 
+The planner is told who answers in the tool's description, for the session it is in. Where you are
+asked, it is told that you see the content and decide. Where a check answers, it is told the content
+comes back or is kept back. Where nobody is asked, it is told the content comes back. The description
+names neither the mode nor the check, and the result of a call does not say which answered.
+
 A picture or a PDF is vetted the same way, except that the check is given the file and you are shown a
 copy of it to open. If you let it through, it is attached to the planner's next request and is not
 returned as text. See [A picture or a PDF](../security/vetting.md#a-picture-or-a-pdf).
@@ -950,7 +955,9 @@ tree, and you are not asked, since the copy goes into the checkout bravebot made
 
 The delegate cannot see the conversation the task came from, so a task that leaves something out is a
 delegate that never learns it. It cannot come back for more, since there is no channel to ask
-along. A run whose own context has met something untrusted cannot delegate at all.
+along. A run whose own context has met something untrusted cannot delegate at all. If the delegate's
+own conversation is compacted, the task is sent again after the summary word for word, so it is not
+lost with the rounds the summary replaces.
 
 **Delegation saves context, never an approval.** Every write and every run a delegate makes reaches you
 with its own single-use endorsement, so you see the path and the diff whoever proposed them, and every
@@ -1139,8 +1146,11 @@ through and counted apart from the finished ones.
 A turn whose last list still has a task pending or in progress when the planner answers is not
 ended there. The planner is told how many tasks are open, and nothing about them, and is asked to
 send the list again with each task marked completed or cancelled. Where work remains it leaves the
-tasks open and says in its answer what is left. This happens once for each list: a list the planner
-sends in answer to the question is not asked about, in that turn or in a later one. A list the
+tasks open and says in its answer what is left. This happens at most once in a turn: a list the planner
+sends in answer to the question is not asked about again in that turn. A later turn asks about the
+same list again only if it did work after the list: it ran many rounds, changed a file or ran a
+program. A turn that only read, or answered at once, is not asked. A long turn that leaves the list
+untouched is also reminded part way through, with the number of open tasks and nothing about them. A list the
 planner wrote in a session that has read something untrusted is not counted. A reply that stopped at
 the output limit ends the turn as it stands.
 

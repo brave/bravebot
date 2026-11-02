@@ -905,7 +905,12 @@ no explanation, and the planner repeats the call with `read: true` to try to see
 **This changes no label.** What is said is what [RUN-7](#RUN-7) already provides for, and saying it
 is not inferring it: the planner still cannot vouch for anything, and a person still answers.
 
+The description of `vet_content` is built the same way, for each request, from the same condition,
+with its own three wordings ([VET-5](vet-content.md#VET-5)).
+
 `verified-by: bravebot_agent::turn::the_read_output_description_says_who_answers_for_the_session`
+`verified-by: bravebot_agent::turn::the_vet_content_description_says_who_answers_for_the_session`
+`verified-by: bravebot_agent::turn::the_vet_content_description_follows_a_mode_changed_between_requests`
 `verified-by: bravebot_agent::turn::a_quarantined_run_says_what_would_make_it_visible`
 `verified-by: bravebot_agent::turn::a_quarantined_run_where_a_check_answers_for_the_person_does_not_say_a_user_decides`
 `verified-by: bravebot_agent::turn::a_read_asked_for_where_a_check_answers_for_the_person_is_said_not_to_have_applied`

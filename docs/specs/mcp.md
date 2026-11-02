@@ -441,3 +441,25 @@ place that fills an argument from a choice is a moved count or a line in a diff.
 `verified-by: bravebot_agent::browser_group_servers::a_delegate_is_refused_a_call_with_a_choice_with_nobody_asked`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_cannot_name_a_choice`
 `verified-by: by-construction (Carried implements no comparison, Hash, Display, conversion to an integer, Deref or AsRef and shows only that a number is there in Debug, so the one thing a caller can do with it is move it into bravebot_mcp::protocol::with_choice; the compile_fail doctests on Carried in crates/core/src/policy.rs pin each of them, and labels.md pins the uses of Carried::into_wire, one of them outside the policy layer, in with_choice)`
+
+<a id="MCP-15"></a>
+### MCP-15: a reply the server did not report as failed is described as having reported no failure
+
+The sentence the planner reads beside a quarantined reply to a tool call, and the origin drawn beside
+it on the screen and in a plan run, says `what <alias>:<tool> returned with no failure reported` where
+the call ended in an answer, and `what <alias>:<tool> said about its failure` where the server marked
+the result as an error ([MCP-5](#MCP-5)). It is built from the alias and the tool name the person
+read on the list ([SERVERS-7](mcp-servers.md#SERVERS-7)) and from which of the two the transport
+settled from the protocol's own error flag. Nothing the server wrote is in it, and the two readings
+are the existing split of the call's outcome, so no branch is added on the bytes of a reply.
+
+It says the server reported no failure. It does not say the effect happened, because the flag is the
+only fact the driver has about the call. A reply that could not be used, and a call that got no reply,
+are described by the driver's own sentences ([MCP-8](#MCP-8)).
+
+**Why.** A planner that makes several writes cannot tell a completed call from a failed one without
+reading the reply, and a reply is not read unless a person or a check lets it through.
+
+`verified-by: bravebot_agent::mcp::a_reply_with_no_failure_reported_says_so_and_a_failed_one_does_not`
+`verified-by: bravebot_agent::mcp::a_picture_a_server_returns_is_never_shown_to_the_planner`
+`verified-by: bravebot_agent::browser_group_servers::what_a_tool_of_input_answers_is_a_reference_and_the_planner_never_holds_it`

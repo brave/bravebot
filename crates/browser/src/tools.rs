@@ -315,7 +315,9 @@ pub const TOOLS: &[Tool] = &[
         group: "bookmarks-read",
         description: "List the bookmarks and folders directly in the bookmark folder with this \
             exact title: each bookmark's title and URL, and each folder's title. It fails if no \
-            folder, or more than one, has that title.",
+            folder, or more than one, has that title. The built-in folders at the top of the \
+            tree (such as Bookmarks bar and Other bookmarks) are named by the title the browser \
+            shows. With no folder, it lists the titles of those built-in folders.",
         schema: || {
             json!({
                 "type": "object",
@@ -323,7 +325,6 @@ pub const TOOLS: &[Tool] = &[
                     "folder": {"type": "string"},
                     "max_results": {"type": "integer", "minimum": 1, "maximum": 100},
                 },
-                "required": ["folder"],
             })
         },
     },
@@ -519,8 +520,9 @@ pub const TOOLS: &[Tool] = &[
             value that a field holds. An element that is hidden or disabled, and a password, \
             payment card or file field, is not listed. The result is text from the page. It \
             arrives as a reference that the model does not read: a person reads the list and \
-            tells the model which number, or lets the text through with vet_content, after which \
-            the model can read it. The number is then given as element_number to click_element, \
+            tells the model which number, or the model asks for the text with vet_content, \
+            which may release it for the model to read. The number is then given as \
+            element_number to click_element, \
             type_text or select_option for the same URL, within 5 minutes and only while the \
             page still shows that element. A later list replaces this one.",
         schema: || {
@@ -540,7 +542,7 @@ pub const TOOLS: &[Tool] = &[
             extension capture a tab only with access to all sites. The result is a picture the \
             model does not see. It arrives as a reference, and the picture becomes available to \
             the model only through spawn_processor, which reads it for a question the model \
-            gives, or through vet_content, after a person has looked at it and agreed. A frame of \
+            gives, or through vet_content, which is the question to ask to read it. A frame of \
             another site inside the page is in the picture, and the blocked sites list names the \
             tab's own URL only.",
         schema: || {
@@ -561,7 +563,7 @@ pub const TOOLS: &[Tool] = &[
             including what is not a page of Brave. The result is a picture the model does not \
             see. It arrives as a reference, and the picture becomes available to the model only \
             through spawn_processor, which reads it for a question the model gives, or through \
-            vet_content, after a person has looked at it and agreed.",
+            vet_content, which is the question to ask to read it.",
         schema: || {
             json!({
                 "type": "object",
@@ -580,8 +582,8 @@ pub const TOOLS: &[Tool] = &[
             browser lets an extension capture a tab only with access to all sites. The result is \
             a picture the model does not see. It arrives as a reference, and the picture \
             becomes available to the model only through spawn_processor, which reads it for a \
-            question the model gives, or through vet_content, after a person has looked at it \
-            and agreed. A frame of another site inside the page is in the picture, and the \
+            question the model gives, or through vet_content, which is the question to ask to \
+            read it. A frame of another site inside the page is in the picture, and the \
             blocked sites list names the tab's own URL only.",
         schema: || {
             json!({
@@ -1298,7 +1300,7 @@ pub const TOOLS: &[Tool] = &[
             browser. The result is the code's answer as text: it is page content that the model \
             cannot read, whoever wrote the code, and it arrives as a reference that becomes \
             readable only through spawn_processor, which reads it for a question the model \
-            gives, or through vet_content, after a person has read the exact text and agreed.",
+            gives, or through vet_content, which is the question to ask to read it.",
         schema: || {
             json!({
                 "type": "object",
@@ -1584,7 +1586,7 @@ pub const TOOLS: &[Tool] = &[
             for a page it cannot find. The result is a picture the model does not see. It arrives \
             as a reference, and the picture becomes available to the model only through \
             spawn_processor, which reads it for a question the model gives, or through \
-            vet_content, after a person has looked at it and agreed. A frame of another site \
+            vet_content, which is the question to ask to read it. A frame of another site \
             inside the page is in the picture, and the blocked sites list names the tab's own URL \
             only.",
         schema: || {
@@ -1613,7 +1615,7 @@ pub const TOOLS: &[Tool] = &[
             a page it cannot find. The result is page text that the model cannot read directly, \
             whoever wrote the page: it arrives as a reference, and becomes readable only through \
             spawn_processor, which reads it for a question the model gives, or through \
-            vet_content, after a person has read the exact text and agreed.",
+            vet_content, which is the question to ask to read it.",
         schema: || {
             json!({
                 "type": "object",
@@ -1672,7 +1674,7 @@ pub const TOOLS: &[Tool] = &[
             characters. It takes no argument and names no page. The result is page text that the \
             model cannot read directly, whoever selected it: it arrives as a reference, and \
             becomes readable only through spawn_processor, which reads it for a question the model \
-            gives, or through vet_content, after a person has read the exact text and agreed.",
+            gives, or through vet_content, which is the question to ask to read it.",
         schema: || json!({"type": "object", "properties": {}}),
     },
 ];
@@ -2609,7 +2611,7 @@ mod tests {
             "a frame that Brave runs in another process is not read",
             "page text that the model cannot read directly",
             "spawn_processor",
-            "vet_content, after a person has read the exact text and agreed",
+            "vet_content, which is the question to ask to read it",
         ] {
             assert!(said.contains(phrase), "{phrase}: {said}");
         }
@@ -2696,7 +2698,7 @@ mod tests {
             "including what is not a page of Brave",
             "a picture the model does not see",
             "spawn_processor",
-            "vet_content, after a person has looked at it and agreed",
+            "vet_content, which is the question to ask to read it",
         ] {
             assert!(said("capture_screen").contains(phrase), "{phrase}");
         }
@@ -2710,7 +2712,7 @@ mod tests {
             "on all sites, because the browser lets an extension capture a tab only with access \
              to all sites",
             "a picture the model does not see",
-            "vet_content, after a person has looked at it and agreed",
+            "vet_content, which is the question to ask to read it",
             "A frame of another site inside the page is in the picture",
             "names the tab's own URL only",
         ] {
@@ -2770,7 +2772,7 @@ mod tests {
             "shows the site, the address and the size of the page",
             "a picture the model does not see",
             "spawn_processor",
-            "vet_content, after a person has looked at it and agreed",
+            "vet_content, which is the question to ask to read it",
             "A frame is in the picture as the page draws it",
             "names the tab's own URL only",
         ] {
@@ -2792,7 +2794,7 @@ mod tests {
         for phrase in [
             "a picture the model does not see",
             "spawn_processor",
-            "vet_content, after a person has looked at it and agreed",
+            "vet_content, which is the question to ask to read it",
             "visible tab of its window",
             "not brought forward",
             "on all sites, because the browser lets an extension capture a tab only with access \
@@ -2832,8 +2834,8 @@ mod tests {
 
     /// The description is what a person reads when they accept the server's tool list. It says
     /// that the result is page text the model cannot read directly, whoever selected it, and how
-    /// it becomes readable: through a processor, or through `vet_content` after a person has read
-    /// the exact text. It also says what is kept and for how long, and that nothing is named. A
+    /// it becomes readable: through a processor, or through `vet_content`, the question to ask to
+    /// read it. It also says what is kept and for how long, and that nothing is named. A
     /// description that dropped one would let a person accept a tool that hands a session what
     /// they selected without saying who reads it.
     #[test]
@@ -2850,11 +2852,36 @@ mod tests {
             "page text that the model cannot read directly, whoever selected it",
             "arrives as a reference",
             "spawn_processor",
-            "vet_content, after a person has read the exact text and agreed",
+            "vet_content, which is the question to ask to read it",
         ] {
             assert!(said.contains(phrase), "{phrase}: {said}");
         }
         assert!(!said.contains('\u{2014}'), "an em-dash: {said}");
+    }
+
+    /// A description is the same for every session, so it cannot say that a person looks at what
+    /// `vet_content` releases or agrees to it: with auto-vetting, or with permissions bypassed,
+    /// nobody is asked (VET-5). The planner is told who answers in the `vet_content` description.
+    #[test]
+    fn no_description_says_a_person_answers_vet_content() {
+        for tool in TOOLS {
+            let said = tool.description;
+            if !said.contains("vet_content") {
+                continue;
+            }
+            for claim in [
+                "agreed",
+                "after a person",
+                "a person reads the exact",
+                "lets the text through",
+            ] {
+                assert!(
+                    !said.contains(claim),
+                    "{} says who answers vet_content ({claim:?}): {said}",
+                    tool.name
+                );
+            }
+        }
     }
 
     /// `save_page_archive` is in `downloads` alone, takes a URL and nothing else, and returns no
@@ -3011,7 +3038,7 @@ mod tests {
             "The result is text from the page",
             "a reference that the model does not read",
             "tells the model which number",
-            "vet_content, after which the model can read it",
+            "the model asks for the text with vet_content, which may release it for the model to read",
             "as element_number to click_element, type_text or select_option for the same URL",
             "within 5 minutes",
             "only while the page still shows that element",
@@ -3120,7 +3147,7 @@ mod tests {
                 .clone()
         };
         let folder = schema("list_bookmark_folder");
-        assert_eq!(folder["required"], json!(["folder"]));
+        assert!(folder.get("required").is_none());
         assert_eq!(folder["properties"]["folder"]["type"], "string");
         assert_eq!(folder["properties"]["max_results"]["type"], "integer");
         assert_eq!(folder["properties"].as_object().unwrap().len(), 2);

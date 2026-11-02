@@ -531,6 +531,49 @@ impl Steps {
         rest.next().is_none().then_some(shown)
     }
 
+    /// These steps with each step's operands replaced by `written`: one list per step, in the order
+    /// [`Steps::steps`] gives them. `None` where `written` does not hold exactly one list per step.
+    ///
+    /// For a question about the plan's structure that must not turn on the names a pattern matched.
+    /// The result is not a plan to run.
+    pub fn with_operands(&self, written: &[Vec<String>]) -> Option<Steps> {
+        let mut rest = written.iter();
+        let rebuilt = self.rebuild_with_operands(&mut rest)?;
+        rest.next().is_none().then_some(rebuilt)
+    }
+
+    fn rebuild_with_operands(
+        &self,
+        written: &mut std::slice::Iter<'_, Vec<String>>,
+    ) -> Option<Steps> {
+        Some(match self {
+            Self::Pipeline(steps) => {
+                let mut rebuilt = Vec::with_capacity(steps.len());
+                for step in steps {
+                    rebuilt.push(Step {
+                        args: written.next()?.clone(),
+                        ..step.clone()
+                    });
+                }
+                Self::Pipeline(rebuilt)
+            }
+            Self::Join {
+                left,
+                joiner,
+                right,
+            } => {
+                let left = left.rebuild_with_operands(written)?;
+                let right = right.rebuild_with_operands(written)?;
+                Self::Join {
+                    left: Box::new(left),
+                    joiner: *joiner,
+                    right: Box::new(right),
+                }
+            }
+            Self::Group(inner) => Self::Group(Box::new(inner.rebuild_with_operands(written)?)),
+        })
+    }
+
     fn draw_with_operands(
         &self,
         written: &mut std::slice::Iter<'_, Vec<String>>,
@@ -1184,6 +1227,52 @@ mod tests {
             .expect("one list per step");
         assert_eq!(told, "/home/me/.cargo/bin/cargo test | /usr/bin/tail -n 5");
         assert!(steps.display().contains("HOSTILE-landed"));
+    }
+
+    /// Operands put in place of a step's own keep the rest of the step and the shape of the line,
+    /// and a list count that does not match the steps is refused.
+    ///
+    /// Rejects a rebuild that drops the join shape, keeps the matched names, or accepts too few or
+    /// too many lists.
+    #[test]
+    fn steps_take_the_operands_given_and_keep_the_shape() {
+        let steps = Steps::Join {
+            left: Box::new(Steps::Pipeline(vec![
+                step("ls", &["matched-a", "matched-b"]),
+                step("wc", &["-l"]),
+            ])),
+            joiner: Joiner::And,
+            right: Box::new(Steps::Pipeline(vec![step("cp", &["x", "y"])])),
+        };
+        let rebuilt = steps
+            .with_operands(&[
+                vec!["*".into()],
+                vec!["-l".into()],
+                vec!["x".into(), "y".into()],
+            ])
+            .expect("one list per step");
+        let args: Vec<&Vec<String>> = rebuilt.steps().into_iter().map(|one| &one.args).collect();
+        assert_eq!(
+            args,
+            vec![
+                &vec!["*".to_string()],
+                &vec!["-l".to_string()],
+                &vec!["x".to_string(), "y".to_string()]
+            ]
+        );
+        assert!(matches!(
+            rebuilt,
+            Steps::Join {
+                joiner: Joiner::And,
+                ..
+            }
+        ));
+        assert!(steps.with_operands(&[vec![], vec![]]).is_none());
+        assert!(
+            steps
+                .with_operands(&[vec![], vec![], vec![], vec![]])
+                .is_none()
+        );
     }
 
     /// The arrow separates a link from its file, so arguments that spell one cannot be drawn as

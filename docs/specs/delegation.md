@@ -677,7 +677,9 @@ delegate, the planner has its round back, and the work goes on behind it. A turn
 many going at once as [DELEGATE-7](#DELEGATE-7)'s ceiling allows, and what one is doing has no
 bearing on what another may do.
 
-Each holds its own conversation, quarantine, capabilities, routing grants and prompt history.
+Each holds its own conversation, quarantine, capabilities, routing grants and prompt history. A
+compaction of a delegate's conversation sends its task again after the summary
+([COMPACT-19](compaction.md#COMPACT-19)).
 They share live file authority because their effects touch the same filesystem. A capture boundary
 spans one operation, so a large listing or search can delay other captures until it finishes.
 Reservations are per path, so writes to other paths proceed.

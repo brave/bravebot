@@ -302,12 +302,10 @@ impl Servers {
         ) {
             crate::mcp::Called::Answered(output) => (
                 output.text,
-                format!("what {name} returned"),
+                crate::mcp::origin_of_reply(&name, false),
                 output.pictures.len() + output.left_out,
             ),
-            crate::mcp::Called::Failed(text) => {
-                (text, format!("what {name} said about its failure"), 0)
-            }
+            crate::mcp::Called::Failed(text) => (text, crate::mcp::origin_of_reply(&name, true), 0),
             // Nothing of the reply is kept, so there is nothing to draw, and the run goes on.
             crate::mcp::Called::Unusable(_) => {
                 return Ok(format!("{name} failed: its reply could not be used"));

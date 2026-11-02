@@ -1096,14 +1096,32 @@ function sameAddress(held, asked) {
   }
 }
 
+// The folders at the top of the bookmark tree, which the browser makes and
+// titles in the person's language.
+async function builtInFolders(chrome) {
+  const [root] = await chrome.bookmarks.getTree();
+  return (root?.children ?? []).filter((node) => typeof node.url !== "string");
+}
+
 // The one bookmark folder with exactly this title, which is how a folder is
 // named: its id is a number that says nothing a person can judge. A title that
 // is no folder's, or is the title of more than one, names none. A node the
-// browser returns with another title is not kept.
+// browser returns with another title is not kept. The browser's search leaves
+// out the built-in folders at the top of the tree (Bookmarks bar, Other
+// bookmarks), so those are read from the tree and counted with the search's
+// finds, once each.
 async function bookmarkFolder(chrome, title) {
-  const found = (await chrome.bookmarks.search({ title })).filter(
-    (node) => typeof node.url !== "string" && node.title === title,
-  );
+  const searched = await chrome.bookmarks.search({ title });
+  const found = [];
+  for (const node of [...searched, ...(await builtInFolders(chrome))]) {
+    if (
+      typeof node.url !== "string" &&
+      node.title === title &&
+      !found.some((held) => held.id === node.id)
+    ) {
+      found.push(node);
+    }
+  }
   if (found.length === 0) {
     throw new ToolError(`no bookmark folder is titled ${title}`);
   }
@@ -2148,9 +2166,16 @@ export const TOOLS = {
   // what a person read in the question. A title that is a folder's in more
   // than one place is refused, as two frames at one URL are, because the
   // question cannot tell them apart. A bookmark at a blocked site is left out
-  // and a folder keeps its other entries.
+  // and a folder keeps its other entries. A call that names no folder lists
+  // the titles of the built-in folders at the top of the tree, which are the
+  // titles the other bookmark tools take.
   async list_bookmark_folder(chrome, params) {
-    const title = text(params, "folder");
+    const title = optionalText(params, "folder");
+    if (title === undefined) {
+      return (await builtInFolders(chrome))
+        .slice(0, count(params))
+        .map((node) => ({ kind: "folder", title: node.title ?? "" }));
+    }
     const sites = await blockedSites(chrome);
     const folder = await bookmarkFolder(chrome, title);
     const children = await chrome.bookmarks.getChildren(folder.id);

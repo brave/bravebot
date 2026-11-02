@@ -598,6 +598,13 @@ steps and their order survive. A list still in the kept part is not repeated, a 
 not the latest list, and the copy is carried through later compactions until the planner writes a
 newer one.
 
+A delegate's task is kept the same way. A delegate's conversation is its task and the rounds it has
+worked, so a compaction can take the task out of the request. The summary then ends with the task
+word for word, with nothing trimmed or cut however long it is, and the copy is carried through later
+compactions and is in the request once. A task still in the kept part is not repeated. Counting it as
+kept can make a compaction wait until more has built up. The other messages a delegate starts with,
+such as context files, are summarised like any other.
+
 Compaction never touches three things: the quarantine, which holds the only copy of what a surviving
 reference names; the reference counter, since a slot name handed out twice would collide; and the
 context's integrity, since nothing here has un-read what the conversation read. The cut never lands

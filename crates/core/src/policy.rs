@@ -4311,7 +4311,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                  rewording changes that and no processor can be started in this conversation; \
                  to narrow a reference that holds text, run a filter such as grep or tail with \
                  stdin_ref set to it and call read_output on what that prints, and vet_content \
-                 asks the user to show you a reference whole"
+                 is the question to ask to read a reference whole"
             } else {
                 "say what to do rather than pasting what was read"
             };
@@ -7312,6 +7312,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         }
 
         Some(Label::new(integrity, base.confidentiality))
+    }
+
+    /// Whether nothing establishes that this plan leaves every file as it found it.
+    ///
+    /// True unless [`Policy::read_proven`] answers for every step, which is the table the approval
+    /// question consults. It is not a read-only category: a line that is true here may well write
+    /// nothing, and one that is false here is only a line the table does not account for, such as
+    /// `cp`, `git apply`, a build, or any line with a redirection or an environment assignment.
+    /// False means the audited table proved the argv writes nothing.
+    ///
+    /// Only for a sentence about the turn, such as the reminder that nothing is written yet. It
+    /// grants nothing and labels nothing, so it never stands in for [`Policy::plan_needs_approval`].
+    /// The answer is a boolean over the plan's structure; no label and no byte a program printed
+    /// takes part. A caller passes a plan whose operands are the line's own words, because the
+    /// operands of a compiled plan can be names a pattern took out of a directory nobody vouched
+    /// for ([CMDLINE-4]).
+    ///
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    pub fn plan_may_change_files(&self, plan: &crate::command::Plan) -> bool {
+        !plan.writes.is_empty() || self.read_proven(plan).is_none()
     }
 
     /// Whether a person has to be asked before this plan runs.
@@ -11971,6 +11991,72 @@ five
         assert!(
             !label_of(&mut policy, &climbing).is_trusted(),
             "a name that climbs was labelled from a rule about the path it appears to reach"
+        );
+    }
+
+    /// TURN-3 asks the same table the approval question uses, and answers for a line the table
+    /// proves reads only as "does not change files". Anything else may.
+    ///
+    /// Rejects a default of "does not change files" for a program the table does not know (`cp`,
+    /// `touch`), a name list standing in for the table, a redirection or assignment treated as
+    /// read-only, a plan that names files it writes treated as read-only, and a line run outside
+    /// the root.
+    #[test]
+    fn a_plan_may_change_files_unless_the_table_proves_it_reads_only() {
+        let mut sink = RecordingSink::new();
+        let policy = in_a_project(&mut sink, &[]);
+
+        for line in [
+            vec![step_named("wc", &["-l", "Cargo.toml"])],
+            vec![
+                step_named("grep", &["error", "log.txt"]),
+                step_named("wc", &["-l"]),
+            ],
+        ] {
+            assert!(
+                !policy.plan_may_change_files(&plan_of(line.clone())),
+                "a line the table proves reads only was counted as a write: {line:?}"
+            );
+        }
+
+        for program in ["cp", "touch", "mv", "sh"] {
+            assert!(
+                policy.plan_may_change_files(&plan_of(vec![step_named(program, &["a", "b"])])),
+                "{program} was counted as reading only"
+            );
+        }
+
+        let mut redirected = step_named("wc", &["-l", "Cargo.toml"]);
+        redirected.routes = vec![crate::command::Route::Stdout {
+            path: std::path::PathBuf::from("/work/out.txt"),
+            append: false,
+        }];
+        assert!(
+            policy.plan_may_change_files(&plan_of(vec![redirected])),
+            "a redirection was counted as reading only"
+        );
+
+        let mut assigned = step_named("wc", &["-l", "Cargo.toml"]);
+        assigned.environment = vec![("A".to_string(), "b".to_string())];
+        assert!(
+            policy.plan_may_change_files(&plan_of(vec![assigned])),
+            "an environment assignment was counted as reading only"
+        );
+
+        let mut naming_a_write = plan_of(vec![step_named("wc", &["-l", "Cargo.toml"])]);
+        naming_a_write.writes = vec![std::path::PathBuf::from("/work/out.txt")];
+        assert!(
+            policy.plan_may_change_files(&naming_a_write),
+            "a plan naming a file it writes was counted as reading only"
+        );
+
+        assert!(
+            policy.plan_may_change_files(&reading_in("/elsewhere", "Cargo.toml")),
+            "a line run outside the root was counted as reading only"
+        );
+        assert!(
+            policy.plan_may_change_files(&plan_of(Vec::new())),
+            "a plan with no steps was counted as reading only"
         );
     }
 
@@ -19570,6 +19656,11 @@ five
                     && err.message.contains("read_output")
                     && err.message.contains("vet_content"),
                 "the refusal names no route that still works: {}",
+                err.message
+            );
+            assert!(
+                !err.message.contains("asks the user"),
+                "the refusal says who answers vet_content, which depends on the session: {}",
                 err.message
             );
             assert!(

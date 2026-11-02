@@ -1638,6 +1638,22 @@ pub(crate) enum Called {
     Problem(String),
 }
 
+/// Where the planner is told a server's reply came from, which is also what the screen draws
+/// beside it (MCP-15).
+///
+/// Built from the alias and the word the person read on the tool's list and from which arm of
+/// [`Called`] the call ended in, which the transport settles from the protocol's own `isError`
+/// field. Nothing the server wrote is in it. An answered call says the server reported no failure,
+/// so a planner can tell a call the server completed from one it did not without reading the reply.
+/// It says that and no more: it is the server's report and not a check that the effect happened.
+pub(crate) fn origin_of_reply(name: &str, failed: bool) -> String {
+    if failed {
+        format!("what {name} said about its failure")
+    } else {
+        format!("what {name} returned with no failure reported")
+    }
+}
+
 /// The argument of a call that the planner filled from a choice a processor made (MCP-14).
 struct Filling<'a> {
     /// The argument the declaration says takes a choice, and the call fills.
@@ -1905,6 +1921,24 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MCP-15: a reply the server did not report as failed says so, in the driver's own words, and
+    /// a reply it reported as failed does not. The origin is built from the name alone, so it holds
+    /// nothing the server wrote.
+    #[test]
+    fn a_reply_with_no_failure_reported_says_so_and_a_failed_one_does_not() {
+        let answered = origin_of_reply("weather:get_forecast", false);
+        assert_eq!(
+            answered,
+            "what weather:get_forecast returned with no failure reported"
+        );
+        let failed = origin_of_reply("weather:get_forecast", true);
+        assert_eq!(failed, "what weather:get_forecast said about its failure");
+        assert!(
+            !failed.contains("no failure reported"),
+            "a failed call was described as reporting no failure: {failed}"
+        );
+    }
 
     fn pairs(typed: &str) -> Vec<(String, String)> {
         arguments_of(typed).unwrap_or_else(|why| panic!("{typed:?} did not parse: {why:?}"))

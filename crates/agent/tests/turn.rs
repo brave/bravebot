@@ -24,8 +24,8 @@ mod turns;
 
 use bravebot_agent::Workspace;
 use bravebot_agent::turn::{
-    self, MAX_TOOL_ROUNDS, PastedImage, ROUNDS_AFTER_WRITING_BEFORE_RUNNING, ROUNDS_BEFORE_WRITING,
-    Task,
+    self, MAX_TOOL_ROUNDS, PastedImage, ROUNDS_AFTER_WRITING_BEFORE_RUNNING,
+    ROUNDS_BEFORE_LIST_REMINDER, ROUNDS_BEFORE_WRITING, Task,
 };
 use bravebot_config::Config;
 use bravebot_config::DEFAULT_MODEL;
@@ -17293,6 +17293,69 @@ fn a_turn_that_wrote_and_ran_is_not_asked_about_it() {
     );
 }
 
+/// TURN-4: a turn whose only edit is a `run` line has run a program, so neither the planner nor the
+/// person is told that nothing was run.
+///
+/// Rejects counting a `run` line that TURN-3 counts as a changed file without also counting it as
+/// a program run, which would ask "nothing has been run" and report "no command was run" after a
+/// command ran.
+#[test]
+fn a_turn_whose_only_edit_is_a_run_line_is_not_told_nothing_was_run() {
+    let scratch = Scratch::new("edited-only-through-run");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut replies = vec![tool_request("run", r#"{"command":"touch made.txt"}"#)];
+    replies.extend(
+        (0..ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1)
+            .map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    replies.push(reply_with("done"));
+
+    let (endpoint, received) = serve_sequence(replies);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    assert!(
+        scratch.path.join("made.txt").exists(),
+        "the line did not run, so nothing here was tested"
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies.len() > ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1,
+        "the turn ended before the round the question would be asked in"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing has been run")),
+        "a turn that ran a command was asked why it had not"
+    );
+    assert!(
+        !reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was told no command was run after one ran: {:?}",
+        reporter.narration
+    );
+}
+
 /// GROUND-1, GROUND-4. A turn hands back what it did however it ended: each call that changed a
 /// file is a write, each that ran a program is a command, and a command after the last write is
 /// recorded as after it. A goal's record is built from this and nothing a reply said.
@@ -18338,6 +18401,274 @@ fn a_turn_whose_worker_delegate_wrote_is_not_told_nothing_is_written() {
             .iter()
             .any(|body| body.contains("nothing written yet")),
         "a turn whose worker wrote was told nothing is written"
+    );
+}
+
+/// Every request a turn sent when it opened with `first` and then read past the round the line to
+/// write comes at, with runs answered by `decision`. `prepare` sets up the workspace.
+fn requests_after_a_run_then_reading(
+    name: &str,
+    first: String,
+    decision: bravebot_agent::RunDecision,
+    prepare: impl FnOnce(&std::path::Path),
+) -> Vec<String> {
+    let scratch = Scratch::new(name);
+    prepare(&scratch.path);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = vec![first];
+    replies.extend(
+        (0..ROUNDS_BEFORE_WRITING + 1).map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(decision),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+    every_request(&received)
+}
+
+/// TURN-3: a `run` line the planner asked for that nothing proves leaves every file alone counts as
+/// a write tried, so the turn is not told that nothing is written yet.
+///
+/// The line the turn reads with (`wc -l`) is the control: the table proves it reads only, so the
+/// same turn is told. Rejects counting every `run` as a write, which would silence the line for a
+/// turn that only reads; counting no `run` as one, which is the defect; and counting only a run
+/// that was approved, since the planner tried to deliver either way. The glob case rejects a
+/// classification that reads the names the pattern matched, where `*` matching a vouched-for
+/// listing must classify as the line was written.
+#[test]
+fn a_turn_whose_run_line_may_change_files_is_not_told_nothing_is_written() {
+    let told = |bodies: &[String]| {
+        bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet"))
+    };
+    let reading = |name: &str, line: &str, decision| {
+        requests_after_a_run_then_reading(
+            name,
+            tool_request("run", &serde_json::json!({ "command": line }).to_string()),
+            decision,
+            |dir| {
+                std::fs::write(dir.join("notes.txt"), "one\n").unwrap();
+                // A name a pattern can match that the table reads as an option it does not know, so
+                // the expanded line is not provable while the line as written is.
+                std::fs::write(dir.join("--zzz.txt"), "two\n").unwrap();
+            },
+        )
+    };
+
+    let control = reading(
+        "run-reads-only-control",
+        "wc -l notes.txt",
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert!(
+        control.len() > ROUNDS_BEFORE_WRITING,
+        "the control ended before the round the line is said in"
+    );
+    assert!(
+        told(&control),
+        "a turn that only read was not told to write, so this says nothing"
+    );
+
+    for (name, line, decision) in [
+        (
+            "run-touch-approved",
+            "touch made.txt",
+            bravebot_agent::RunDecision::approve(),
+        ),
+        (
+            "run-cp-approved",
+            "cp notes.txt copy.txt",
+            bravebot_agent::RunDecision::approve(),
+        ),
+        (
+            "run-redirect-approved",
+            "wc -l notes.txt > count.txt",
+            bravebot_agent::RunDecision::approve(),
+        ),
+        (
+            "run-touch-declined",
+            "touch made.txt",
+            bravebot_agent::RunDecision::reject(),
+        ),
+        (
+            "run-glob-operand",
+            "touch *",
+            bravebot_agent::RunDecision::approve(),
+        ),
+    ] {
+        let bodies = reading(name, line, decision);
+        assert!(
+            bodies.len() > ROUNDS_BEFORE_WRITING,
+            "{name}: the turn ended before the round the line is said in"
+        );
+        assert!(
+            !told(&bodies),
+            "{name}: a turn that asked to run `{line}` was told nothing is written"
+        );
+    }
+
+    let glob_read = reading(
+        "run-glob-read-only",
+        "wc -l *.txt",
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert!(
+        told(&glob_read),
+        "a read-only line with a pattern was counted as a write, so the names it matched took part"
+    );
+}
+
+/// A line the rules refused before it compiled is not a write tried, so the turn is still told.
+///
+/// Rejects setting the signal from the request's text before the line is compiled and allowed.
+#[test]
+fn a_turn_whose_run_line_was_refused_before_it_compiled_is_still_told_to_write() {
+    let bodies = requests_after_a_run_then_reading(
+        "run-refused-unparsed",
+        tool_request("run", r#"{"command":"touch 'unterminated"}"#),
+        bravebot_agent::RunDecision::approve(),
+        |_| {},
+    );
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line is said in"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a run line that never compiled was counted as a write tried"
+    );
+}
+
+/// TURN-3: a background `run` line counts as a foreground one does.
+///
+/// The background path returns before the program ends, so a signal set only where a foreground
+/// line finishes would leave it out. The control is a background line the table proves read-only,
+/// which is still told.
+#[test]
+fn a_turn_whose_background_run_line_may_change_files_is_not_told_nothing_is_written() {
+    let told = |bodies: &[String]| {
+        bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet"))
+    };
+    let background = |name: &str, line: &str| {
+        requests_after_a_run_then_reading(
+            name,
+            tool_request(
+                "run",
+                &serde_json::json!({ "command": line, "background": true }).to_string(),
+            ),
+            bravebot_agent::RunDecision::approve(),
+            |dir| std::fs::write(dir.join("notes.txt"), "one\n").unwrap(),
+        )
+    };
+
+    let control = background("background-reads-only-control", "wc -l notes.txt");
+    assert!(
+        control.len() > ROUNDS_BEFORE_WRITING,
+        "the control ended before the round the line is said in"
+    );
+    assert!(
+        told(&control),
+        "a turn whose background line only read was not told to write, so this says nothing"
+    );
+
+    let bodies = background("background-touch", "touch made.txt");
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line is said in"
+    );
+    assert!(
+        !told(&bodies),
+        "a turn that started a background line that may change files was told nothing is written"
+    );
+}
+
+/// TURN-3: a worker delegate that ran a line that may change files has delivered as one that
+/// wrote does, so its parent is not told nothing is written.
+///
+/// Rejects adopting a delegate's file changes and program runs but not the run-line signal.
+#[test]
+fn a_turn_whose_worker_delegate_ran_a_line_that_may_change_files_is_not_told_nothing_is_written() {
+    let scratch = Scratch::new("delegate-ran-writing-line");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut parent = vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request("spawn_agent", r#"{"kind":"worker","task":"RUN-THE-SLICE"}"#),
+        reply_with("waiting on the delegate"),
+    ];
+    parent.extend(
+        (0..ROUNDS_BEFORE_WRITING + 1).map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    parent.push(reply_with("done"));
+
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
+        ("HAND-OFF-THE-RUN", parent),
+        (
+            "RUN-THE-SLICE",
+            vec![
+                tool_request("run", r#"{"command":"touch slice.txt"}"#),
+                reply_with("ran it"),
+            ],
+        ),
+    );
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HAND-OFF-THE-RUN"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before its parent waited for it"
+    );
+    assert!(
+        scratch.path.join("slice.txt").exists(),
+        "the delegate's line did not run, so nothing here was tested"
+    );
+    let asked = every_request(&received);
+    let parent_requests: Vec<&String> = asked
+        .iter()
+        .filter(|body| body.contains("HAND-OFF-THE-RUN"))
+        .collect();
+    assert!(
+        parent_requests.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line would be said in"
+    );
+    assert!(
+        !parent_requests
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn whose worker ran a writing line was told nothing is written"
     );
 }
 
@@ -19760,6 +20091,678 @@ fn a_session_that_has_met_something_untrusted_is_not_asked_about_the_list() {
     );
 }
 
+/// The sentence the driver puts to the planner mid-turn when its list may be behind the work, as
+/// far as the count that precedes it.
+const LIST_REMINDER: &str = "so the list may be behind the work";
+
+/// `rounds` requests for a listing, each a round of work that does not touch the task list.
+fn rounds_of_work(rounds: usize) -> Vec<String> {
+    (0..rounds)
+        .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+        .collect()
+}
+
+/// Run `task` once against a stand-in that sends `replies`, and return the request bodies.
+fn bodies_of_a_turn(
+    name: &str,
+    replies: Vec<String>,
+    conversation: &mut bravebot_agent::Conversation,
+) -> Vec<String> {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        conversation,
+        Task::new("work through the steps"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+    received.try_iter().collect()
+}
+
+/// TURN-15: a planner that writes a list with tasks open and then goes `ROUNDS_BEFORE_LIST_REMINDER`
+/// rounds without writing another is told, in the request after that round, how many tasks are open
+/// and that the list may be behind. Said once, however much longer the turn goes on, and not a round
+/// early.
+#[test]
+fn a_planner_that_does_not_update_its_list_is_reminded_after_enough_rounds() {
+    let mut replies = vec![writing_a_task_list(&["in_progress", "pending"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER + 3));
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    // Request 0 precedes the list, and request n precedes round n + 1, so the list is round 1 and
+    // the threshold round is ROUNDS_BEFORE_LIST_REMINDER + 1.
+    let first = ROUNDS_BEFORE_LIST_REMINDER + 1;
+    assert!(
+        bodies[..first]
+            .iter()
+            .all(|body| !body.contains(LIST_REMINDER)),
+        "the reminder came before {ROUNDS_BEFORE_LIST_REMINDER} rounds since the list"
+    );
+    assert!(
+        bodies[first].contains("which has 2 tasks not marked completed"),
+        "the reminder did not come on the threshold round with the open count: {}",
+        bodies[first]
+    );
+    assert!(bodies[first].contains(LIST_REMINDER), "{}", bodies[first]);
+    assert!(
+        bodies[first].contains("Send the whole list again with todo_write"),
+        "the reminder did not ask for the whole list: {}",
+        bodies[first]
+    );
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(LIST_REMINDER).count(),
+        1,
+        "the reminder was said more than once for one list: {last}"
+    );
+}
+
+/// TURN-15: the rounds are counted from the last accepted list. A list written part way through
+/// restarts the count, so the reminder does not come at the round it would have for the first.
+#[test]
+fn the_list_reminder_counts_from_the_last_accepted_list() {
+    let mut replies = vec![writing_a_task_list(&["in_progress", "pending"])];
+    replies.extend(rounds_of_work(5));
+    replies.push(writing_a_task_list(&["completed", "in_progress"]));
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER - 1));
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder-resets",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    assert!(
+        bodies.iter().all(|body| !body.contains(LIST_REMINDER)),
+        "the reminder counted from the first list and not the latest: {bodies:#?}"
+    );
+}
+
+/// TURN-15: a list that leaves nothing open is not reminded about, however long the turn goes on.
+#[test]
+fn a_list_with_nothing_open_is_not_reminded_about() {
+    let mut replies = vec![writing_a_task_list(&["completed", "cancelled"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER + 2));
+    replies.push(reply_with("all the work is done"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder-nothing-open",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    assert!(
+        bodies.iter().all(|body| !body.contains(LIST_REMINDER)),
+        "a list with no task open was reminded about: {bodies:#?}"
+    );
+}
+
+/// TURN-15: the line carries the number of open tasks and nothing the tasks said.
+#[test]
+fn the_list_reminder_names_no_task() {
+    let list = tool_request(
+        "todo_write",
+        &json!({ "todos": [
+            {"content": "zebra-marker-one", "status": "in_progress"},
+            {"content": "zebra-marker-two", "status": "pending"},
+        ] })
+        .to_string(),
+    );
+    let mut replies = vec![list];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER));
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder-no-task-text",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    let body = &bodies[ROUNDS_BEFORE_LIST_REMINDER + 1];
+    let start = body
+        .find("It has been ")
+        .expect("the reminder was not sent");
+    let end = body[start..]
+        .find("carry on.")
+        .expect("the reminder has no end");
+    let reminder = &body[start..start + end];
+    assert!(
+        !reminder.contains("zebra-marker"),
+        "the reminder repeated a task: {reminder}"
+    );
+    // The whole sentence is fixed wording and the two figures the driver counted, so any text added
+    // to it, from the list or from anywhere else, changes it.
+    assert_eq!(
+        reminder,
+        format!(
+            "It has been {ROUNDS_BEFORE_LIST_REMINDER} rounds since you last wrote your task list, \
+             which has 2 tasks not marked completed or cancelled, so the list may be behind the \
+             work. Send the whole list again with todo_write, marking a task completed where it is \
+             done and cancelled where it was dropped. If the list is accurate, "
+        )
+    );
+}
+
+/// Request bodies of a turn that does `ROUNDS_BEFORE_LIST_REMINDER` rounds of work and then answers,
+/// in a conversation whose latest list was counted as `count` with nothing written this turn. The
+/// count is set on the conversation directly, so the only thing that can stop the driver acting on
+/// it is the gate it is read through.
+fn bodies_with_a_count_of_open_tasks(
+    name: &str,
+    count: bravebot_core::value::Labelled<usize>,
+) -> Vec<String> {
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.open_tasks_counted(Some(count), false);
+    let mut replies = rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER);
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+    bodies_of_a_turn(name, replies, &mut conversation)
+}
+
+/// TURN-12, TURN-15: a count of open tasks at a trusted label is acted on, in the reminder and in
+/// the question put when the planner answers. The control for the test below, which differs from it
+/// only in the label.
+#[test]
+fn a_trusted_count_of_open_tasks_is_acted_on() {
+    let bodies = bodies_with_a_count_of_open_tasks(
+        "count-trusted",
+        bravebot_core::value::Labelled::trusted(2usize),
+    );
+
+    assert!(
+        bodies[ROUNDS_BEFORE_LIST_REMINDER].contains(LIST_REMINDER),
+        "the reminder did not come for a trusted count: {bodies:#?}"
+    );
+    assert!(
+        bodies
+            .last()
+            .expect("a last request")
+            .contains(&format!("{OPEN_TASKS_NOTICE} 2 tasks")),
+        "the question was not put for a trusted count"
+    );
+}
+
+/// TURN-12, TURN-15: a count of open tasks that is not trusted is refused by
+/// `Policy::read_trusted_content`, so neither the reminder nor the question is put. The conversation
+/// here has met nothing untrusted and the count is set directly, so the turn takes the same path as
+/// the control above and the label on the count is the only difference.
+///
+/// Rejects reading the count some other way than through the gate (acting on it whatever its label).
+#[test]
+fn an_untrusted_count_of_open_tasks_is_refused_by_the_gate() {
+    let bodies = bodies_with_a_count_of_open_tasks(
+        "count-untrusted",
+        bravebot_core::value::Labelled::new(2usize, Label::untrusted_public()),
+    );
+
+    assert!(
+        bodies
+            .iter()
+            .all(|body| !body.contains(LIST_REMINDER) && !body.contains(OPEN_TASKS_NOTICE)),
+        "the driver acted on a count that was not trusted: {bodies:#?}"
+    );
+    assert_eq!(
+        bodies.len(),
+        ROUNDS_BEFORE_LIST_REMINDER + 1,
+        "the turn did not end on its first answer"
+    );
+}
+
+/// TURN-15: a conversation that has met something untrusted writes every list at that label, no
+/// count is kept, and the driver does not remind the planner about a list it was not shown.
+#[test]
+fn a_session_that_has_met_something_untrusted_is_not_reminded_about_the_list() {
+    let mut replies = vec![writing_a_task_list(&["in_progress", "pending"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER + 2));
+    replies.push(reply_with("all the work is done"));
+
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.observed(bravebot_core::label::Label::untrusted_public());
+    let bodies = bodies_of_a_turn("list-reminder-untrusted", replies, &mut conversation);
+
+    assert!(
+        bodies.iter().all(|body| !body.contains(LIST_REMINDER)),
+        "the driver reminded the planner about a list it was not shown: {bodies:#?}"
+    );
+}
+
+/// TURN-15: a turn that is not offered `todo_write` cannot send a list, so the list an earlier turn
+/// wrote is not reminded about however many rounds it goes.
+#[test]
+fn a_turn_not_offered_the_task_list_tool_is_not_reminded_about_the_list() {
+    let scratch = Scratch::new("list-reminder-not-offered");
+    let home = Scratch::new("list-reminder-not-offered-home");
+    define(
+        &home,
+        "reader-only",
+        "kind: reader\ntools: read_file\n",
+        "REVIEW",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut replies = vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("the plan is written"),
+    ];
+    replies.extend((0..ROUNDS_BEFORE_LIST_REMINDER + 2).map(|n| {
+        tool_request(
+            "read_file",
+            &json!({ "path": format!("f{n}.txt") }).to_string(),
+        )
+    }));
+    replies.push(reply_with("reviewed"));
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut ask = |task: Task| {
+        take_a_turn_reporting(
+            &config,
+            &workspace,
+            &mut conversation,
+            task,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("the turn finishes")
+    };
+
+    ask(Task::new("plan the work").with_rounds(Some(1)));
+    ask(addressed("review the plan", &home, "reader-only"));
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_LIST_REMINDER + 2,
+        "the second turn did not go the rounds the test needs: {}",
+        bodies.len()
+    );
+    assert!(
+        bodies.iter().all(|body| !body.contains(LIST_REMINDER)),
+        "a turn that cannot send a list was asked to bring it up to date: {bodies:#?}"
+    );
+}
+
+/// TURN-15: the reminder is not said in a turn whose next request carries no tools, since the
+/// planner could not act on it. The round limit takes the tools away at the round the reminder would
+/// have come in.
+///
+/// Rejects saying it without checking `may_call_tools`.
+#[test]
+fn a_turn_with_no_tools_left_is_not_reminded_about_the_list() {
+    let scratch = Scratch::new("list-reminder-no-tools");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.open_tasks_counted(Some(bravebot_core::value::Labelled::trusted(2usize)), false);
+    let mut replies = rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER);
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+    let (endpoint, received) = serve_sequence(replies);
+
+    take_a_turn_reporting(
+        &config_for(&endpoint),
+        &workspace,
+        &mut conversation,
+        Task::new("work through the steps").with_rounds(Some(ROUNDS_BEFORE_LIST_REMINDER)),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_LIST_REMINDER,
+        "the turn did not go the rounds the test needs"
+    );
+    assert!(
+        bodies[ROUNDS_BEFORE_LIST_REMINDER].contains("no more tool calls")
+            || bodies[ROUNDS_BEFORE_LIST_REMINDER].contains("have no more"),
+        "the round limit did not take the tools away where the test needs it"
+    );
+    assert!(
+        bodies.iter().all(|body| !body.contains(LIST_REMINDER)),
+        "a turn with no tools left was told to rewrite its list: {bodies:#?}"
+    );
+}
+
+/// TURN-15: a turn that goes several times the threshold without rewriting its one list is
+/// reminded once. The last request holds the whole turn, so it holds every reminder that was said.
+///
+/// Rejects a reminder repeated every `ROUNDS_BEFORE_LIST_REMINDER` rounds, or every round after the
+/// threshold.
+#[test]
+fn a_turn_many_times_the_threshold_long_gets_one_reminder_for_its_list() {
+    let mut replies = vec![writing_a_task_list(&["in_progress", "pending"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER * 3 + 2));
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+
+    let bodies = bodies_of_a_turn(
+        "list-reminder-once-in-a-long-turn",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(LIST_REMINDER).count(),
+        1,
+        "the reminder was not said exactly once in a turn of {} requests: {last}",
+        bodies.len()
+    );
+}
+
+/// TURN-15: a list an earlier turn left open is reminded about in a later turn that goes
+/// `ROUNDS_BEFORE_LIST_REMINDER` rounds without writing one, counted from the start of that turn.
+/// The earlier turn's own rounds do not count, so no request before the threshold holds the line.
+///
+/// Rejects dropping the count of the list between turns, and counting the rounds of the earlier turn.
+#[test]
+fn a_list_left_open_by_an_earlier_turn_is_reminded_about_in_a_later_turn_of_many_rounds() {
+    let mut second = rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER + 2);
+    second.push(reply_with("the work is done"));
+    second.push(reply_with("the list is still as it was"));
+
+    let bodies = bodies_of_a_second_turn(
+        "reminded-in-a-later-turn",
+        second,
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+
+    assert!(
+        bodies[..FIRST_TURN_REQUESTS + ROUNDS_BEFORE_LIST_REMINDER]
+            .iter()
+            .all(|body| !body.contains(LIST_REMINDER)),
+        "the reminder came before the later turn had gone {ROUNDS_BEFORE_LIST_REMINDER} rounds"
+    );
+    assert!(
+        bodies[FIRST_TURN_REQUESTS + ROUNDS_BEFORE_LIST_REMINDER].contains(LIST_REMINDER),
+        "the later turn was not reminded about the list it carried: {bodies:#?}"
+    );
+}
+
+/// The requests a first turn makes when it writes a list with two tasks open, is asked about it as
+/// it answers, and answers with the list as it was.
+fn a_first_turn_that_left_a_list_open() -> Vec<String> {
+    vec![
+        writing_a_task_list(&["in_progress", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("the rest waits for your answer"),
+    ]
+}
+
+/// How many requests [`a_first_turn_that_left_a_list_open`] makes.
+const FIRST_TURN_REQUESTS: usize = 3;
+
+/// Request bodies of two turns in one conversation. The first is
+/// [`a_first_turn_that_left_a_list_open`]; the second is given `second` to be answered with and
+/// `confirmer` to ask.
+fn bodies_of_a_second_turn<C: bravebot_agent::confirm::Confirmer + Send>(
+    name: &str,
+    second: Vec<String>,
+    confirmer: &mut C,
+) -> Vec<String> {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = a_first_turn_that_left_a_list_open();
+    replies.extend(second);
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("do the first part, then ask me about the rest"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the first turn finishes");
+    turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("keep going"),
+        &mut conversation,
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+    received.try_iter().collect()
+}
+
+/// TURN-12: a list the planner was asked about is asked about again at the end of a later turn that
+/// went `ROUNDS_BEFORE_LIST_REMINDER` rounds without rewriting it, once. The reminder said on the way
+/// does not use up the question.
+///
+/// Rejects keeping the question to once for the life of a list, and a reminder that takes the count
+/// the question reads.
+#[test]
+fn a_list_is_asked_about_again_at_the_end_of_a_later_turn_of_many_rounds() {
+    let mut second = rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER);
+    second.push(reply_with("the work is done"));
+    second.push(reply_with("the list is still as it was"));
+    second.push(reply_with("never asked for"));
+
+    let bodies = bodies_of_a_second_turn(
+        "asked-again-many-rounds",
+        second,
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+
+    assert_eq!(
+        bodies.len(),
+        FIRST_TURN_REQUESTS + ROUNDS_BEFORE_LIST_REMINDER + 2,
+        "the turn was not asked once at its end: {bodies:#?}"
+    );
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(OPEN_TASKS_NOTICE).count(),
+        2,
+        "the later turn was not asked about the list at its end: {last}"
+    );
+    assert_eq!(
+        last.matches(LIST_REMINDER).count(),
+        1,
+        "the reminder was not said once on the way: {last}"
+    );
+}
+
+/// TURN-12: a later turn that wrote a file without rewriting the list is asked about it at its
+/// end, however few rounds it took.
+///
+/// Rejects an end-of-turn rule that counts rounds only.
+#[test]
+fn a_list_is_asked_about_again_at_the_end_of_a_later_turn_that_wrote_a_file() {
+    let second = vec![
+        tool_request("write_file", r#"{"path":"a.txt","contents":"x"}"#),
+        reply_with("the work is done"),
+        reply_with("the list is still as it was"),
+        reply_with("never asked for"),
+    ];
+
+    let bodies = bodies_of_a_second_turn(
+        "asked-again-wrote",
+        second,
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+
+    assert_eq!(bodies.len(), FIRST_TURN_REQUESTS + 3, "{bodies:#?}");
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(OPEN_TASKS_NOTICE).count(),
+        2,
+        "a turn that wrote a file was not asked about the list at its end: {last}"
+    );
+}
+
+/// TURN-12: a later turn that ran a program without rewriting the list is asked about it at its
+/// end, however few rounds it took.
+///
+/// Rejects an end-of-turn rule that counts rounds and writes only.
+#[test]
+fn a_list_is_asked_about_again_at_the_end_of_a_later_turn_that_ran_a_program() {
+    let second = vec![
+        tool_request("run", r#"{"command":"echo built"}"#),
+        reply_with("the work is done"),
+        reply_with("the list is still as it was"),
+        reply_with("never asked for"),
+    ];
+
+    let bodies = bodies_of_a_second_turn(
+        "asked-again-ran",
+        second,
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+    );
+
+    assert_eq!(bodies.len(), FIRST_TURN_REQUESTS + 3, "{bodies:#?}");
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(OPEN_TASKS_NOTICE).count(),
+        2,
+        "a turn that ran a program was not asked about the list at its end: {last}"
+    );
+}
+
+/// TURN-12: a later turn that only read a few files is not asked about the list again, since it did
+/// none of the work that would have left the list behind.
+///
+/// Rejects asking at the end of every turn.
+#[test]
+fn a_list_is_not_asked_about_again_at_the_end_of_a_later_turn_that_only_read() {
+    let mut second = rounds_of_work(3);
+    second.push(reply_with("here is what is there"));
+    second.push(reply_with("never asked for"));
+
+    let bodies = bodies_of_a_second_turn(
+        "not-asked-again-read-only",
+        second,
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+
+    assert_eq!(bodies.len(), FIRST_TURN_REQUESTS + 4, "{bodies:#?}");
+    assert_eq!(
+        bodies
+            .last()
+            .expect("a last request")
+            .matches(OPEN_TASKS_NOTICE)
+            .count(),
+        1,
+        "a turn that did no work was asked about the list again"
+    );
+}
+
+/// TURN-12, TURN-15: a planner that was reminded and rewrote its list is not asked about it at the
+/// end of the turn, since the list is then the planner's answer to the reminder.
+///
+/// Rejects a question that stacks on a reminder the planner acted on.
+#[test]
+fn a_planner_that_rewrote_its_list_when_reminded_is_not_asked_at_the_end() {
+    let mut second = rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER);
+    second.push(writing_a_task_list(&["completed", "in_progress"]));
+    second.push(reply_with("the work is done"));
+    second.push(reply_with("never asked for"));
+
+    let bodies = bodies_of_a_second_turn(
+        "rewrote-when-reminded",
+        second,
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+
+    assert_eq!(
+        bodies.len(),
+        FIRST_TURN_REQUESTS + ROUNDS_BEFORE_LIST_REMINDER + 2,
+        "{bodies:#?}"
+    );
+    let last = bodies.last().expect("a last request");
+    assert!(last.contains(LIST_REMINDER), "no reminder was said: {last}");
+    assert_eq!(
+        last.matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the planner was asked at the end after it rewrote the list: {last}"
+    );
+}
+
+/// TURN-12, TURN-15: one turn in which the planner writes a list with two tasks open, goes on doing
+/// other work past the threshold without rewriting it, is reminded once on the way, and is still
+/// asked about the list when it answers. The reminder is the first and the question the second of
+/// two separate lines, each said exactly once.
+///
+/// Rejects a reminder that is never said, one that repeats, and a reminder that uses up the question
+/// at the end of the turn.
+#[test]
+fn a_long_turn_with_a_stale_list_is_reminded_once_and_asked_once_at_its_end() {
+    let extra_rounds = 3;
+    let mut replies = vec![writing_a_task_list(&["in_progress", "pending"])];
+    replies.extend(rounds_of_work(ROUNDS_BEFORE_LIST_REMINDER + extra_rounds));
+    replies.push(reply_with("all the work is done"));
+    replies.push(reply_with("the list is as it was"));
+    replies.push(reply_with("never asked for"));
+
+    let bodies = bodies_of_a_turn(
+        "stale-list-reminded-and-asked",
+        replies,
+        &mut bravebot_agent::Conversation::new(),
+    );
+
+    // The list, the rounds of work, the answer, and the answer given again after the question.
+    assert_eq!(
+        bodies.len(),
+        1 + ROUNDS_BEFORE_LIST_REMINDER + extra_rounds + 2,
+        "the turn was not asked once at its end: {bodies:#?}"
+    );
+    let reminded_at = ROUNDS_BEFORE_LIST_REMINDER + 1;
+    assert!(
+        bodies[..reminded_at]
+            .iter()
+            .all(|body| !body.contains(LIST_REMINDER)),
+        "the reminder came before the threshold"
+    );
+    assert!(
+        bodies[reminded_at].contains(LIST_REMINDER),
+        "the reminder did not come at the threshold: {}",
+        bodies[reminded_at]
+    );
+    assert!(
+        bodies[..bodies.len() - 1]
+            .iter()
+            .all(|body| !body.contains(OPEN_TASKS_NOTICE)),
+        "the question was put before the planner answered"
+    );
+    let last = bodies.last().expect("a last request");
+    assert_eq!(
+        last.matches(LIST_REMINDER).count(),
+        1,
+        "the reminder was not said exactly once in the turn: {last}"
+    );
+    assert_eq!(
+        last.matches(OPEN_TASKS_NOTICE).count(),
+        1,
+        "the turn was not asked about its open tasks exactly once at its end: {last}"
+    );
+}
+
 /// Moves the session to another mode when the planner's `at`th call finishes, standing in for the
 /// person pressing the mode key while that round runs.
 struct ChangesTheModeAfterACall {
@@ -20133,6 +21136,150 @@ fn a_turn_after_a_completed_turn_that_wrote_is_still_told_to_write() {
     .expect("the second turn finishes");
 
     let bodies: Vec<String> = received.try_iter().collect();
+    let fired = bodies
+        .iter()
+        .position(|body| body.contains("nothing written yet"))
+        .expect("a new task after an answered one was never told it had written nothing");
+    assert_eq!(
+        fired, ROUNDS_BEFORE_WRITING,
+        "the line came on the wrong round"
+    );
+}
+
+/// What the second turn over `conversation` sent when it read past the threshold, after a first
+/// turn that asked for `first_line` to be run. `stop_after_the_run` stops the first turn once its
+/// line has finished, standing in for Escape pressed after it.
+fn requests_of_a_second_turn_after_a_run(
+    name: &str,
+    first_line: &str,
+    stop_after_the_run: bool,
+) -> Vec<String> {
+    /// Stops the turn once its `run` has finished.
+    struct StopAfterTheRun(bravebot_core::cancel::Cancel);
+
+    impl bravebot_agent::report::Reporter for StopAfterTheRun {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+            if activity.tool == "run" {
+                self.0.cancel();
+            }
+        }
+    }
+
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            &serde_json::json!({ "command": first_line }).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let first = if stop_after_the_run {
+        turn::resume(
+            &config_for(&endpoint),
+            &egress,
+            &workspace,
+            &Task::new("add a toggle"),
+            &mut conversation,
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+            &mut StopAfterTheRun(cancel.clone()),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &cancel,
+        )
+    } else {
+        turn::resume(
+            &config_for(&endpoint),
+            &egress,
+            &workspace,
+            &Task::new("add a toggle"),
+            &mut conversation,
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &cancel,
+        )
+    };
+    match (stop_after_the_run, first.outcome) {
+        (true, Err(turn::TurnError::Cancelled { .. })) | (false, Ok(_)) => {}
+        (_, other) => panic!(
+            "the first turn did not end as this test needs: {:?}",
+            other.err()
+        ),
+    }
+    assert!(
+        scratch.path.join("made.txt").exists(),
+        "the first turn's line did not run, so this says nothing about a turn after it"
+    );
+
+    let mut replies: Vec<String> = (0..ROUNDS_BEFORE_WRITING + 1)
+        .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("continue"),
+        &mut conversation,
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        ROUNDS_BEFORE_WRITING + 2,
+        "the second turn never read past the threshold, so it could not have been told"
+    );
+    bodies
+}
+
+/// TURN-3: a turn continuing one that was stopped after a `run` line that may change files is not
+/// told that nothing is written yet, as for a stopped turn that wrote with a file tool.
+///
+/// Rejects keeping the signal on the turn: the stop ends the turn, and the continuing one would
+/// start from nothing and be told.
+#[test]
+fn a_turn_after_a_stopped_turn_that_ran_a_writing_line_is_not_told_to_write() {
+    let bodies =
+        requests_of_a_second_turn_after_a_run("stopped-after-a-run", "touch made.txt", true);
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn continuing a stopped one that ran a writing line was told it had written nothing"
+    );
+}
+
+/// TURN-3: a turn after one that ran a line that may change files and answered starts from nothing
+/// written, so reading past the threshold is told as it is after a write tool.
+///
+/// Rejects keeping the signal for the whole session, which would silence the line for every task
+/// after the first run.
+#[test]
+fn a_turn_after_a_completed_turn_that_ran_a_writing_line_is_still_told_to_write() {
+    let bodies =
+        requests_of_a_second_turn_after_a_run("answered-after-a-run", "touch made.txt", false);
     let fired = bodies
         .iter()
         .position(|body| body.contains("nothing written yet"))
@@ -26842,6 +27989,16 @@ fn the_read_output_description(
     mode: bravebot_agent::PermissionMode,
     auto_vetting: bool,
 ) -> String {
+    a_tool_description("read_output", scratch_name, mode, auto_vetting)
+}
+
+/// The description of `tool` a first request carried, for a turn run under `mode`.
+fn a_tool_description(
+    tool_name: &str,
+    scratch_name: &str,
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+) -> String {
     let scratch = Scratch::new(scratch_name);
     let workspace = Workspace::new(&scratch.path).expect("workspace");
     let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
@@ -26876,8 +28033,8 @@ fn the_read_output_description(
         .as_array()
         .expect("tools offered")
         .iter()
-        .find(|tool| tool["function"]["name"] == "read_output")
-        .expect("read_output offered")["function"]["description"]
+        .find(|tool| tool["function"]["name"] == tool_name)
+        .unwrap_or_else(|| panic!("{tool_name} offered"))["function"]["description"]
         .as_str()
         .expect("a description")
         .to_string()
@@ -26910,6 +28067,192 @@ fn the_read_output_description_says_who_answers_for_the_session() {
         "a session where a person is asked was not told so: {asked}"
     );
     for description in [&bypassed, &checked, &asked] {
+        assert_eq!(
+            description.matches("text you can read").count(),
+            1,
+            "who answers was stated more than once: {description}"
+        );
+    }
+}
+
+/// VET-5: who answers `vet_content` is said once, in the tool's description, from the session's mode
+/// and auto-vetting. The fixed text claims nothing about a person, so it is not false where nobody
+/// is asked, and the sentences that depend on a person answering are said only there.
+#[test]
+fn the_vet_content_description_says_who_answers_for_the_session() {
+    use bravebot_agent::PermissionMode::{Ask, Bypass};
+    let bypassed = a_tool_description("vet_content", "vc-desc-bypass", Bypass, false);
+    let checked = a_tool_description("vet_content", "vc-desc-checked", Ask, true);
+    let screened_bypass =
+        a_tool_description("vet_content", "vc-desc-screened-bypass", Bypass, true);
+    let asked = a_tool_description("vet_content", "vc-desc-asked", Ask, false);
+
+    assert!(
+        bypassed.contains("The content comes back to you as text you can read.")
+            && !bypassed.contains("The user sees")
+            && !bypassed.contains("kept back"),
+        "a bypassed session was told a user decides, or that content may be kept back: {bypassed}"
+    );
+    for described in [&checked, &screened_bypass] {
+        assert!(
+            described.contains("or you are told it was kept back")
+                && !described.contains("The user sees"),
+            "a session where a check answers was told a user decides, or not that content may be \
+             kept back: {described}"
+        );
+    }
+    assert!(
+        asked.contains("The user sees the content and decides; if they agree, it comes back")
+            && !asked.contains("kept back"),
+        "a session where a person is asked was not told so: {asked}"
+    );
+
+    for (name, described) in [
+        ("bypassed", &bypassed),
+        ("checked", &checked),
+        ("screened bypass", &screened_bypass),
+    ] {
+        for claim in [
+            "the user sees",
+            "The user sees",
+            "weighing",
+            "asks again",
+            "refusal you earned",
+            "If they agree",
+            "if they agree",
+        ] {
+            assert!(
+                !described.contains(claim),
+                "{name}: the description claims a person answers ({claim:?}): {described}"
+            );
+        }
+    }
+    assert!(
+        asked.contains("Your reason is what the user is weighing")
+            && asked.contains("asks again")
+            && asked.contains("refusal you earned"),
+        "a session where a person is asked lost what a person's answer means: {asked}"
+    );
+
+    for (name, described) in [
+        ("bypassed", &bypassed),
+        ("checked", &checked),
+        ("screened bypass", &screened_bypass),
+        ("asked", &asked),
+    ] {
+        for claim in [
+            "after a check",
+            "second model",
+            "one word",
+            "the check is told",
+        ] {
+            assert!(
+                !described.to_lowercase().contains(claim),
+                "{name}: the description says a check reads the content, which is false where \
+                 none is made ({claim:?}): {described}"
+            );
+        }
+    }
+
+    // fetch_url points at vet_content and says nothing of who answers it, so it is true of every
+    // session.
+    let mut fetches = Vec::new();
+    for (name, mode, auto_vetting) in [
+        ("fu-desc-bypass", Bypass, false),
+        ("fu-desc-checked", Ask, true),
+        ("fu-desc-asked", Ask, false),
+    ] {
+        fetches.push(a_tool_description("fetch_url", name, mode, auto_vetting));
+    }
+    for fetch in &fetches {
+        assert!(
+            fetch.contains("vet_content is the question to ask")
+                && !fetch.contains("has it checked")
+                && !fetch.contains("asks the user to show"),
+            "fetch_url claims how vet_content is answered: {fetch}"
+        );
+    }
+    assert!(
+        fetches.iter().all(|fetch| fetch == &fetches[0]),
+        "fetch_url changed with the session: {fetches:?}"
+    );
+
+    for (name, described) in [
+        ("bypassed", &bypassed),
+        ("checked", &checked),
+        ("asked", &asked),
+    ] {
+        for named in ["bypass", "auto-vet", "screen"] {
+            assert!(
+                !described.to_lowercase().contains(named),
+                "{name}: the description names the mode or the check ({named}): {described}"
+            );
+        }
+        assert_eq!(
+            described.matches("text you can read").count(),
+            1,
+            "{name}: who answers was stated more than once: {described}"
+        );
+    }
+}
+
+/// VET-5: the description is rebuilt for each request, so a mode the person changes while the turn
+/// runs shows in the next request, and who answers is stated once. The first request is built under
+/// Ask and the second after the confirmer switched to Bypass over the write's prompt.
+#[test]
+fn the_vet_content_description_follows_a_mode_changed_between_requests() {
+    use bravebot_agent::PermissionMode::{Ask, Bypass};
+    let scratch = Scratch::new("vc-desc-mode-change");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("write_file", r#"{"path":"notes.md","contents":"first"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let live = bravebot_agent::LiveMode::new(Ask);
+    let task = Task::new("write it").with_permission_mode(live.clone());
+    let mut recording = RecordingConfirmer::approving_while_the_mode_changes(&live, Bypass);
+    let mut confirmer = bravebot_agent::Confining::new(&mut recording, live.clone(), false);
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let descriptions: Vec<String> = (0..2)
+        .map(|_| {
+            let request: serde_json::Value =
+                serde_json::from_str(&received.recv().expect("request body")).expect("json");
+            request["tools"]
+                .as_array()
+                .expect("tools offered")
+                .iter()
+                .find(|tool| tool["function"]["name"] == "vet_content")
+                .expect("vet_content offered")["function"]["description"]
+                .as_str()
+                .expect("a description")
+                .to_string()
+        })
+        .collect();
+    assert!(
+        descriptions[0].contains("The user sees the content and decides"),
+        "the first request, built under Ask, did not say a person decides: {}",
+        descriptions[0]
+    );
+    assert!(
+        descriptions[1].contains("The content comes back to you as text you can read.")
+            && !descriptions[1].contains("The user sees")
+            && !descriptions[1].contains("weighing"),
+        "the second request, built after the switch to Bypass, kept the Ask wording: {}",
+        descriptions[1]
+    );
+    for description in &descriptions {
         assert_eq!(
             description.matches("text you can read").count(),
             1,
@@ -39143,6 +40486,65 @@ fn the_trail_says_what_a_compaction_gave_up_and_what_it_cost() {
     assert!(
         recorded.iter().any(|line| line.contains("round 0")),
         "the trail did not say which round this was: {recorded:?}"
+    );
+}
+
+/// COMPACT-19, COMPACT-14: `/compact` sends a delegate's task again the same way a compaction in
+/// the middle of a turn does, because both end in the same `compacted`. The summary is a stand-in
+/// that keeps nothing of the task, so the task in the next request is the carried copy.
+#[test]
+fn a_manual_compaction_sends_the_recorded_task_again() {
+    let (endpoint, _received) = serve_sequence(vec![reply_with("they were porting the parser")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.push(bravebot_aichat::protocol::Message::user(
+        "THE-DELEGATES-TASK\nport the parser to the new lexer",
+    ));
+    conversation.task_given();
+    conversation.push(bravebot_aichat::protocol::Message::assistant(
+        "started on it",
+    ));
+    for (prompt, answer) in [
+        ("what about the error type", "widened it"),
+        ("now the tests", "updated them"),
+        ("carry on", "carrying on"),
+        ("and the docs", "written"),
+        ("and the changelog", "written"),
+        ("and the release notes", "written"),
+    ] {
+        conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+        conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+    }
+    conversation.measured(50_000);
+
+    turn::compact(
+        &config,
+        &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
+        &mut conversation,
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+        None,
+    )
+    .expect("compacting runs")
+    .expect("a long conversation has something to summarise");
+
+    let sent: Vec<String> = conversation
+        .with_system("sys")
+        .iter()
+        .map(|message| message.content.text())
+        .collect();
+    assert_eq!(
+        sent.iter()
+            .filter(|text| text.contains("THE-DELEGATES-TASK"))
+            .count(),
+        1,
+        "{sent:?}"
     );
 }
 
@@ -61415,6 +62817,177 @@ fn a_delegate_s_compaction_fires_no_compacted_hook() {
         Some("{\"event\":\"turn-finished\"}\n"),
         "a compaction in the delegate's conversation fired a hook, or the hooks did not run at all"
     );
+}
+
+/// COMPACT-19: a delegate's conversation is one prompt and then rounds, so a compaction cuts by
+/// round and gives the prompt up. Its next request, and every one after it, holds the task as the
+/// parent wrote it, once, whatever the stand-in summary kept of it. Each delegate request is read
+/// as the wire body, in which the task is JSON text, so the task is looked for in that form.
+#[test]
+fn a_delegates_requests_after_a_compaction_still_hold_its_task_once() {
+    let filler = "mind the edge cases".to_string();
+    let task = format!(
+        "Do all four.\n1. ITEM-ONE caf\u{e9} \u{20ac}\n2. ITEM-TWO\n3. ITEM-THREE\n4. ITEM-FOUR\n{filler}"
+    );
+    let arguments = serde_json::json!({ "kind": "reader", "task": task }).to_string();
+    every_request_after_a_delegates_compaction_holds_its_task(
+        "compact-keeps-the-delegates-task",
+        arguments,
+        task,
+    );
+}
+
+/// COMPACT-19, AGENT-5: a delegate started by a fan-out is told the shared task and then its own
+/// entry, and what it keeps through a compaction is all of that, not the entry alone or the shared
+/// half alone.
+#[test]
+fn a_fan_out_delegate_keeps_the_shared_task_and_its_entry_through_a_compaction() {
+    let shared = "Look it up.\n1. SHARED-ONE caf\u{e9}\n2. SHARED-TWO";
+    let entry = "ENTRY-FOR-THIS-ONE \u{20ac}\nand its second line";
+    let arguments =
+        serde_json::json!({ "kind": "reader", "task": shared, "each": [entry] }).to_string();
+    every_request_after_a_delegates_compaction_holds_its_task(
+        "compact-keeps-the-fan-out-task",
+        arguments,
+        format!("{shared}\n\n{entry}"),
+    );
+}
+
+/// The scenario of the two tests above: a parent spawns one delegate with `arguments`, the delegate
+/// reads files until it has compacted at least twice, and every request after the first compaction
+/// holds `task`, the whole task as the delegate was told it, once.
+fn every_request_after_a_delegates_compaction_holds_its_task(
+    scratch_name: &str,
+    arguments: String,
+    task: String,
+) {
+    let scratch = Scratch::new(scratch_name);
+    for n in 1..=30 {
+        std::fs::write(scratch.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let spawn = serde_json::json!({
+        "model": "test-model",
+        "choices": [{ "message": { "role": "assistant", "tool_calls": [{
+            "id": "c1",
+            "type": "function",
+            "function": { "name": "spawn_agent", "arguments": arguments }
+        }] } }]
+    })
+    .to_string();
+    let wire_form = {
+        let quoted = serde_json::to_string(&task).expect("serialises");
+        quoted[1..quoted.len() - 1].to_string()
+    };
+
+    let mut parent = vec![spawn, reply_with("waiting"), reply_with("done")].into_iter();
+    let mut delegate = (1..=30)
+        .map(|n| {
+            tool_request_with_usage(
+                "read_file",
+                &format!(r#"{{"path":"f{n}.txt"}}"#),
+                50_000,
+                10,
+            )
+        })
+        .chain(std::iter::once(reply_with_usage("read them", 50_000, 10)));
+    let (endpoint, received) = serve_rounds(Vec::new(), false, move |body| {
+        if body.contains(A_SUMMARY_ASKING) {
+            return Some(Some(reply_with("they have started on the first item")));
+        }
+        match body.contains("DELEGATE-THE-WORK") {
+            true => parent.next().map(Some),
+            false => delegate.next().map(Some),
+        }
+    });
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        !reporter.delegated.is_empty(),
+        "no delegate ran, so this says nothing about one"
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    let summaries = bodies
+        .iter()
+        .filter(|body| body.contains(A_SUMMARY_ASKING))
+        .count();
+    assert!(
+        summaries >= 2,
+        "the delegate compacted {summaries} times, so this says nothing about a second cut"
+    );
+    let delegate_requests: Vec<&String> = bodies
+        .iter()
+        .filter(|body| !body.contains(A_SUMMARY_ASKING) && !body.contains("DELEGATE-THE-WORK"))
+        .collect();
+    assert_eq!(
+        delegate_requests[0].matches(&wire_form).count(),
+        1,
+        "the delegate was not given the task as written"
+    );
+    let first_after = delegate_requests
+        .iter()
+        .position(|body| body.contains("they have started on the first item"))
+        .expect("no delegate request followed a compaction");
+    assert!(
+        !delegate_requests[first_after].contains("f1.txt"),
+        "the first read is still in the request, so the cut did not give it up"
+    );
+    for (index, body) in delegate_requests.iter().enumerate().skip(first_after) {
+        assert_eq!(
+            body.matches(&wire_form).count(),
+            1,
+            "delegate request {index} after the first compaction does not hold the task once"
+        );
+    }
+}
+
+/// An ordinary turn is not a delegate's: its opening prompt is left to the summary and nothing is
+/// sent again in its place (COMPACT-19).
+#[test]
+fn a_turns_own_prompt_is_not_sent_again_after_a_compaction() {
+    let scratch = Scratch::new("compact-keeps-no-prompt");
+    for n in 1..=30 {
+        std::fs::write(scratch.path.join(format!("f{n}.txt")), format!("value {n}")).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_a_long_turn(30, |_| reply_with("they began on the work"));
+    let config = config_with_budget(&endpoint, 1_000);
+
+    turns::run_with_trust(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("ORDINARY-OPENING-PROMPT"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let bodies: Vec<String> = received.try_iter().collect();
+    let after = bodies
+        .iter()
+        .find(|body| !body.contains(A_SUMMARY_ASKING) && body.contains("they began on the work"))
+        .expect("the turn never compacted");
+    assert!(
+        !after.contains("ORDINARY-OPENING-PROMPT"),
+        "an ordinary turn's opening prompt was sent again"
+    );
+    assert!(!after.contains("word for word"), "{after}");
 }
 
 /// The one question the prompt-shown tests put to a person.

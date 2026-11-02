@@ -18,16 +18,17 @@ use bravebot_net::Egress;
 use std::time::Instant;
 
 use super::{
-    Inputs, LimitReached, Plan, ROUNDS_AFTER_WRITING_BEFORE_RUNNING, ROUNDS_BEFORE_WRITING,
-    ReadOutputIs, Running, State, TOOL_BUDGET_SPENT, Task, TurnError, Worked, Working,
-    adopt_and_say, collect_delegates, collect_jobs, fire_hooks, narrate_between_calls,
-    note_rules_added, record_answer, rule_notices, say_prompt_notices,
+    Inputs, LimitReached, Plan, ROUNDS_AFTER_WRITING_BEFORE_RUNNING, ROUNDS_BEFORE_LIST_REMINDER,
+    ROUNDS_BEFORE_WRITING, ReadOutputIs, Running, State, TOOL_BUDGET_SPENT, Task, TurnError,
+    Worked, Working, adopt_and_say, collect_delegates, collect_jobs, fire_hooks,
+    narrate_between_calls, note_rules_added, record_answer, rule_notices, say_prompt_notices,
     show_what_running_jobs_have_printed, stopped_at, take_interjections, take_session_messages,
     tell_of_kept_jobs, token_limit_reached,
 };
 use crate::backend::BackendError;
 use crate::confirm::Confirmer;
 use crate::conversation::{Composed, Conversation};
+use crate::outcome::Work;
 use crate::report::{DelegateId, Phase, Reporter};
 use crate::request_view::{Prompt, Provenance, RequestView};
 use crate::timing::Elapsed;
@@ -543,7 +544,7 @@ pub(super) fn after_a_reply<S: Sink, C: Confirmer, R: Reporter>(
         // a reply the ceiling stopped, which is the turn's answer as it stands.
         if completion.cut_off.is_none()
             && !cancel.is_cancelled()
-            && let Some(open) = open_tasks_to_ask_about(policy, conversation, &state.offered)
+            && let Some(open) = open_tasks_to_ask_about(policy, conversation, state)
         {
             narrate_between_calls(policy, reporter, &completion.content);
             record_answer(policy, conversation, &completion.content)?;
@@ -585,6 +586,10 @@ pub(super) fn model_was_substituted(config: &Config, resolved: &str, answered: &
 
 /// Which of the reminders a turn has already put to the planner. Each is said once.
 #[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one reminder the turn has or has not yet said, and each is set on its own"
+)]
 pub(super) struct Reminded {
     /// Whether the driver has already said this turn that no write has been asked for. Whether one
     /// has is the conversation's, since a turn continuing a stopped one inherits its writes. A
@@ -599,18 +604,56 @@ pub(super) struct Reminded {
     /// is handled rather than by [`nudges`], and read where a task list's result is recorded: a list
     /// written after the question is its answer to it, and the conversation does not count it.
     pub(super) open_tasks: bool,
+    /// The round the planner's latest accepted list was written in, or 0 for a list an earlier turn
+    /// left. The rounds since it are what the reminder that the list may be behind counts.
+    list_round: usize,
+    /// What the turn had done when the latest list was accepted, so the writes and programs since it
+    /// can be counted. Nothing for a list an earlier turn left.
+    list_work: Work,
+    /// Set once the planner has been told that the list it last wrote may be behind. Cleared by the
+    /// next accepted list, so each list is reminded about at most once.
+    list_reminded: bool,
 }
 
-/// The two reminders put to the planner after a round's results and any interjection.
+impl Reminded {
+    /// Record that the planner's list was accepted in round `steps`, which restarts the count of
+    /// rounds since it and allows a reminder about the new list.
+    pub(super) fn list_accepted(&mut self, steps: usize, work: Work) {
+        self.list_round = steps;
+        self.list_work = work;
+        self.list_reminded = false;
+    }
+
+    /// Whether a list accepted now answers the question or the reminder put this turn. It is then
+    /// not asked about unless the turn does work after it.
+    pub(super) fn list_answers_a_question(&self) -> bool {
+        self.open_tasks || self.list_reminded
+    }
+
+    /// Whether the turn has done work since the latest list was accepted, or since the start of the
+    /// turn for a list an earlier turn left: [`ROUNDS_BEFORE_LIST_REMINDER`] rounds, or a call that
+    /// changed a file, or a call that ran a program. The driver's own counts, never what a call
+    /// returned.
+    fn work_since_list(&self, steps: usize, worked: &Worked) -> bool {
+        steps >= self.list_round + ROUNDS_BEFORE_LIST_REMINDER
+            || worked.work.writes > self.list_work.writes
+            || worked.work.commands > self.list_work.commands
+    }
+}
+
+/// The three reminders put to the planner after a round's results and any interjection.
 #[expect(
     clippy::too_many_arguments,
     reason = "the conversation and `reminded` are exclusive borrows and the rest is read-only state of the round, so a bundle would hold both kinds at once"
 )]
-pub(super) fn nudges(
+pub(super) fn nudges<S: Sink>(
+    policy: &mut Policy<'_, S>,
     conversation: &mut Conversation,
+    offered: &[Tool],
     task: &Task,
     may_write: bool,
     may_run: bool,
+    may_call_tools: bool,
     steps: usize,
     worked: &Worked,
     delegates: &[Working<'_>],
@@ -641,6 +684,9 @@ pub(super) fn nudges(
         // A delegate that wrote in this workspace has delivered: its changes are on disk, and
         // the planner's own write calls are not the only way a turn writes (TURN-3).
         && worked.changed_at.is_none()
+        // A run line that may change files is a write tried, as a write tool's request is, and a
+        // delegate's is counted when it is taken back (TURN-3).
+        && !worked.run_may_change_files
         && !reminded.nothing_written
         && steps >= ROUNDS_BEFORE_WRITING
     {
@@ -691,35 +737,88 @@ pub(super) fn nudges(
             Provenance::Driver,
         );
     }
+
+    // The planner's list goes stale in the other direction: it wrote the list, did the work, and
+    // never marked any of it. The question put when the planner answers comes too late for a person
+    // watching the panel during a long turn.
+    //
+    // Counted in rounds since the list was accepted, which are the driver's own, and in how many
+    // tasks the list leaves open, which the kernel counted and the driver reads only through
+    // `Policy::read_trusted_content`. The line carries that number and nothing the list said, and is
+    // said once for each list. Conditional in its wording for the reason the reminders above are:
+    // the planner knows whether the list is behind. The count is left in place, so the question put
+    // when the planner answers is still asked.
+    //
+    // Not where the planner cannot send a list: a turn not offered `todo_write`, or one whose next
+    // request carries no tools.
+    if may_call_tools
+        && !reminded.list_reminded
+        && steps >= reminded.list_round + ROUNDS_BEFORE_LIST_REMINDER
+        && offered
+            .iter()
+            .any(|tool| tool.function.name == "todo_write")
+        && let Some(open) = open_count(policy, conversation)
+    {
+        reminded.list_reminded = true;
+        let rounds = steps - reminded.list_round;
+        let tasks = if open == 1 { "task" } else { "tasks" };
+        conversation.push_composed_from(
+            Message::user(format!(
+                "{TOOL_BUDGET_SPENT} It has been {rounds} rounds since you last wrote your task \
+                 list, which has {open} {tasks} not marked completed or cancelled, so the list \
+                 may be behind the work. Send the whole list again with todo_write, marking a \
+                 task completed where it is done and cancelled where it was dropped. If the list \
+                 is accurate, carry on."
+            )),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+    }
+}
+
+/// How many tasks the conversation's latest list leaves open, read through
+/// `Policy::read_trusted_content`, which refuses a count that is not trusted. `None` where there is
+/// no list, none is open, or the gate refused the count.
+///
+/// The count is left in the conversation. Whether to say something about the list is a decision, so
+/// the count is never read any other way. The conversation records a count only where the planner
+/// was shown its list, and a list at any other label is held back from it.
+pub(super) fn open_count<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    conversation: &Conversation,
+) -> Option<usize> {
+    conversation.open_tasks().and_then(|count| {
+        policy
+            .read_trusted_content("todo_write", count)
+            .ok()
+            .filter(|open| *open > 0)
+    })
 }
 
 /// How many tasks the planner's latest list leaves open, where the planner is to be asked about
 /// them before the turn ends with its answer (TURN-12). `None` where it is not: no list, none
-/// open, the planner already asked about this one, or no way to send a list this turn.
+/// open, the planner already asked this turn, no way to send a list this turn, or a list the
+/// planner was asked about that this turn did no work after.
 ///
-/// The count is taken from the conversation whether or not it leads to a question, so a list is
-/// read once: a list with nothing open is not read again at the end of every turn after it. A turn
-/// that cannot send a list leaves it for one that can.
-///
-/// Whether to ask is a decision, so the count is read through `Policy::read_trusted_content`, which
-/// refuses a list that is not trusted. None is kept for one: the conversation records a count only
-/// where the planner was shown its list, and a list at any other label is held back from it.
+/// A list the planner was asked about is asked about again only by a turn that did work after it
+/// ([`Reminded::work_since_list`]), and at most once in that turn. A turn that cannot send a list
+/// leaves the list for one that can.
 pub(super) fn open_tasks_to_ask_about<S: Sink>(
     policy: &mut Policy<'_, S>,
-    conversation: &mut Conversation,
-    offered: &[Tool],
+    conversation: &Conversation,
+    state: &State,
 ) -> Option<usize> {
-    if !offered
-        .iter()
-        .any(|tool| tool.function.name == "todo_write")
+    if state.reminded.open_tasks
+        || !state
+            .offered
+            .iter()
+            .any(|tool| tool.function.name == "todo_write")
+        || (conversation.open_tasks_asked()
+            && !state.reminded.work_since_list(state.steps, &state.worked))
     {
         return None;
     }
-    let open = conversation.take_open_tasks()?;
-    policy
-        .read_trusted_content("todo_write", &open)
-        .ok()
-        .filter(|count| *count > 0)
+    open_count(policy, conversation)
 }
 
 /// Ask the planner to bring its task list up to date, saying how many tasks it leaves open and
@@ -735,6 +834,7 @@ pub(super) fn ask_about_open_tasks(
     open: usize,
 ) {
     reminded.open_tasks = true;
+    conversation.open_tasks_were_asked_about();
     let tasks = if open == 1 { "task" } else { "tasks" };
     conversation.push_composed_from(
         Message::user(format!(
@@ -1141,6 +1241,12 @@ pub(super) fn build_request<R: Reporter>(
         // person can change the mode while the turn runs (RUN-14).
         let mut listed = offered.to_vec();
         tools::state_read_output_answer(&mut listed, read_output_is().stated());
+        // Offered on the list or not at all, so the tool being there is the offering. Asked of
+        // the mode again for the same reason as above.
+        tools::state_vet_content_answer(
+            &mut listed,
+            super::setup::read_output_is(task, true).stated_for_vet_content(),
+        );
         request.with_tools(listed)
     } else {
         request
@@ -1535,6 +1641,9 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
         && let Some(checkout) = workspace.checkout()
     {
         checkout.mark_worked_in();
+    }
+    if output.run_may_change_files {
+        state.worked.count_run_that_may_change_files();
     }
     attached.extend(output.attached.take());
 

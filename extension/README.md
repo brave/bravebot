@@ -342,7 +342,9 @@ Brave reports. Each returns the URL and the state Brave reports afterwards.
 The `bookmarks-read` group also lists the bookmarks and folders directly in one folder, named by its
 exact title (`list_bookmark_folder`), your newest bookmarks (`list_recent_bookmarks`) and your
 reading list (`list_reading_list`). These three are offered by the server of the group only. A title
-that is no folder, or is the title of more than one, is refused.
+that is no folder, or is the title of more than one, is refused. The folders Brave makes at the top
+of the bookmarks (such as Bookmarks bar and Other bookmarks) are named by the title Brave shows, and
+`list_bookmark_folder` with no folder lists their titles. `list_bookmark_folder` and the tools that create or move a bookmark accept them. `remove_bookmark_folder` does not, since the browser's search by title does not return them and the browser refuses to remove them.
 
 The `bookmarks-write` group adds and changes bookmarks and reading list entries, and deletes none. It
 asks Brave for the `bookmarks` and `readingList` permissions, which `bookmarks-read` asks for as well,
