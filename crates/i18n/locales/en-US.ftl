@@ -1918,6 +1918,12 @@ mcp-prompt-sent-as-text = that line names a prompt it cannot run, so it went to 
 mcp-prompt-twice = { $name } is given more than once, so the line was not sent
 mcp-prompt-quote = the value of { $name } has a double quote that does not close, or text straight after it, so the line was not sent
 
+## A file named with @ that cannot be sent
+
+named-path-not-text = @{ $name } is under a reference directory whose path is not text, so it cannot be sent. Remove the @ to send it as text.
+named-not-text = @{ $name } is not a text file, so it cannot be sent. Remove the @ to send it as text.
+named-not-a-file = @{ $name } is not a file in this project. Remove the @ to send it as text.
+
 ## Programs asking for one more path for the session
 
 path-title = let programs reach another path?

@@ -1249,6 +1249,11 @@ pub struct Session {
     workspace: std::path::PathBuf,
     /// The open references, so `@` offers their aliases (REFER-6).
     reference_sources: Vec<(String, std::path::PathBuf)>,
+    /// The workspace a file named with `@` is surveyed in before the line is sent (NAME-9).
+    ///
+    /// A clone of the one the session works in, said again wherever the references are. `None`
+    /// where nothing named it, which surveys nothing, so constructing a session reads no file.
+    named_in: Option<bravebot_agent::Workspace>,
     /// The skills a turn would advertise, held while a slash word is being typed.
     ///
     /// Resolved as one starts and let go once it ends, so a skill written mid-session is offered
@@ -1510,6 +1515,7 @@ impl Session {
             completion: 0,
             workspace: std::path::PathBuf::new(),
             reference_sources: Vec::new(),
+            named_in: None,
             skills: None,
             project_styles: Vec::new(),
             project_styles_read: false,
@@ -1538,6 +1544,14 @@ impl Session {
     /// (REFER-6). Said again whenever the workspace's open directories change.
     pub fn set_reference_sources(&mut self, sources: Vec<(String, std::path::PathBuf)>) {
         self.reference_sources = sources;
+    }
+
+    /// Survey the files a line names with `@` in this workspace before sending it (NAME-9), and
+    /// offer the aliases of its references. Said again whenever the workspace's open directories
+    /// or root change, in the places that say [`Session::set_reference_sources`].
+    pub fn adopt_workspace(&mut self, workspace: &bravebot_agent::Workspace) {
+        self.set_reference_sources(workspace.reference_sources());
+        self.named_in = Some(workspace.clone());
     }
 
     /// Complete against somewhere else from now on, the working directory having moved.
@@ -2391,6 +2405,36 @@ impl Session {
             Unparsed::Quote(name) => t!(mcp_prompt_quote, name = name),
             Unparsed::Ambiguous(word) => t!(mcp_prompt_ambiguous, word = word),
         });
+        true
+    }
+
+    /// Refuse a line that names, with `@`, a file the turn could not read, saying which names and
+    /// how to send each as text. The line stays in the box exactly as typed, markers and
+    /// attachments included, and nothing is sent (NAME-9).
+    ///
+    /// Returns whether the key was spent here. A shell line, a line with a row of the list
+    /// highlighted, and one naming only files the turn can read are left for the arms that follow.
+    /// Asked of the line the person wrote, which is the only kind that names files (NAME-1).
+    pub fn refuse_unsendable_names(&mut self) -> bool {
+        if self.shell || self.completion != 0 {
+            return false;
+        }
+        let Some(workspace) = self.named_in.clone() else {
+            return false;
+        };
+        let line = self.unfolded(self.input.trim());
+        let refused: Vec<String> = bravebot_agent::named::surveyed(
+            &workspace,
+            bravebot_mentions::referenced(&line),
+            |name| bravebot_mentions::resolved(workspace.root(), name, &self.reference_sources),
+        )
+        .into_iter()
+        .filter_map(Result::err)
+        .collect();
+        if refused.is_empty() {
+            return false;
+        }
+        self.note_refused(refused.join("\n"));
         true
     }
 

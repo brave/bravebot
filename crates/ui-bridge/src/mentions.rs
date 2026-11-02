@@ -7,7 +7,6 @@
 
 use crate::protocol::Failure;
 use bravebot_agent::Workspace;
-use bravebot_agent::workspace::WorkspaceError;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -71,30 +70,14 @@ pub fn offer(
 /// out, because a file the person thinks went and did not would be worse than a send that says
 /// why it stopped.
 pub fn named(workspace: &Workspace, prompt: &str) -> Result<Vec<String>, Failure> {
-    bravebot_mentions::referenced(prompt)
-        .into_iter()
-        // A name under a reference's alias is the file in that directory (REFER-6).
-        .map(|name| {
-            bravebot_mentions::resolved(workspace.root(), &name, &workspace.reference_sources())
-                .map_err(|_| {
-                    Failure::bad_request(format!(
-                        "@{name} is under a reference directory whose path is not text, so it \
-                         cannot be sent. Remove the @ to send it as text."
-                    ))
-                })
-        })
-        .map(|name| {
-            name.and_then(|name| match workspace.survey(&name) {
-            Ok(_) => Ok(name),
-            Err(WorkspaceError::Binary { .. }) => Err(Failure::bad_request(format!(
-                "@{name} is not a text file, so it cannot be sent. Remove the @ to send it as text."
-            ))),
-            Err(_) => Err(Failure::bad_request(format!(
-                "@{name} is not a file in this project. Remove the @ to send it as text."
-            ))),
-        })
-        })
-        .collect()
+    let sources = workspace.reference_sources();
+    // A name under a reference's alias is the file in that directory (REFER-6).
+    bravebot_agent::named::surveyed(workspace, bravebot_mentions::referenced(prompt), |name| {
+        bravebot_mentions::resolved(workspace.root(), name, &sources)
+    })
+    .into_iter()
+    .map(|surveyed| surveyed.map_err(Failure::bad_request))
+    .collect()
 }
 
 #[cfg(test)]

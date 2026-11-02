@@ -341,7 +341,9 @@ fn has_more_to_show(entry: &Entry) -> bool {
 /// A line longer than `width` less the margin continues on the next row under the margin, so every
 /// row of a note starts in the column the first does (VIEW-19), the way a refusal's rows do. The
 /// rows are broken here and not left to the paragraph that draws them, which continues a row at
-/// column 0. The words are drawn as they are, like a refusal's: a note is the session's own voice.
+/// column 0. The words are drawn as they are, like a refusal's, except that a control character is
+/// drawn as its picture: a note can quote a name a person typed or pasted (NAME-12), and an escape in
+/// it must not reach the terminal. A note is the session's own voice.
 ///
 /// The one caller is the `Speaker::System` entry. What commands typed during a turn answered is
 /// pushed as those entries, so it is drawn by this too, being the same voice. The ink is the tone's
@@ -355,7 +357,7 @@ fn note_lines(text: &str, tone: Tone, width: u16) -> Vec<Line<'static>> {
     };
     let room = (width as usize).saturating_sub(LEAD).max(8);
     text.lines()
-        .flat_map(|text| wrap::wrap(text, room, 0).rows)
+        .flat_map(|text| wrap::wrap(&printable(text), room, 0).rows)
         .map(|row| {
             Line::from(Span::styled(
                 format!("{:LEAD$}{row}", ""),
@@ -2296,6 +2298,27 @@ mod tests {
                 "  > first",
                 "  > \u{241b}[2Ksecond"
             ]
+        );
+    }
+
+    /// NAME-12: a refusal note quotes the name the person typed or pasted, so an escape in it is
+    /// drawn as its picture and no row holds a control character. The fault this rejects is
+    /// wrapping the note's text as it is, which leaves the escape in the row.
+    #[test]
+    fn a_refusal_note_quoting_a_name_with_an_escape_is_drawn_with_the_escape_made_visible() {
+        let _held = crate::theme::exclusive();
+        let session = Session::new("kernel-enforced");
+        let rows: Vec<String> = speaker_lines(
+            &session,
+            &Entry::refused("@a\u{1b}[2Jb.txt is not a file in this project.\u{7}"),
+            90,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert_eq!(
+            rows,
+            ["  @a\u{241b}[2Jb.txt is not a file in this project.\u{2407}"]
         );
     }
 

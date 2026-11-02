@@ -979,6 +979,52 @@ fn a_missing_file_fails_the_turn() {
     assert!(error.to_string().contains("does-not-exist.rs"));
 }
 
+/// NAME-2, NAME-9: a rule vouching for a named file is recorded for a file that is there and for
+/// no other. A name that matches no file fails the turn at its read, and the trust map the turn
+/// shared with its caller holds no rule for a path that does not exist, because a rule recorded
+/// ahead of a read that then fails stays in the map and in the audit trail as a grant nobody
+/// could have meant. The existing file is the control: the same turn records one rule for it, so
+/// the count the missing file is held to is one this test can see move.
+#[test]
+fn a_missing_named_file_leaves_no_rule_in_the_trust_map() {
+    let scratch = Scratch::new(&format!("missing-no-rule-{}", std::process::id()));
+    std::fs::write(scratch.path.join("present.md"), "THERE").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let rules_after = |name: &str| {
+        let (endpoint, _received) = serve(&reply_with("ok"));
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let authority = bravebot_core::file_authority::FileAuthority::new(
+            bravebot_core::trust::TrustStore::new("/work"),
+        );
+        let task = Task::new("explain")
+            .with_file(name)
+            .with_file_authority(authority.clone());
+        let outcome = turns::run(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut sink,
+        );
+        (outcome.is_ok(), authority.snapshot().rules().count())
+    };
+
+    let (sent, found) = rules_after("present.md");
+    assert!(sent, "a file that is there is read");
+    assert_eq!(found, 1, "naming a file that is there records its rule");
+
+    let (sent, missing) = rules_after("alice");
+    assert!(!sent, "a name matching no file fails the turn");
+    assert_eq!(
+        missing, 0,
+        "a rule was recorded for a path that is not there"
+    );
+}
+
 /// NAME-5: a name that climbs out of the workspace, or is absolute, is refused when the turn reads
 /// it, and the file it points at never reaches the model. The completion and the finished-name
 /// check refuse these first, but a line sent without going through either arrives here as the

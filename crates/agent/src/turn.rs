@@ -2890,7 +2890,12 @@ where
         // The rule goes under the name the map keys on: `@` takes the word the user typed, so a
         // file in the project can arrive spelled absolutely, and a rule under that spelling would
         // leave the read below asking about the relative one and finding nothing.
-        crate::memory::vouch_for_named(policy, workspace, &path);
+        //
+        // Only for a name that is a text file in the project. A name that is not one leaves no
+        // rule for a path that does not exist, and the read below refuses it as it always did.
+        if workspace.survey(&path).is_ok() {
+            crate::memory::vouch_for_named(policy, workspace, &path);
+        }
         let contents = workspace.read(policy, &Labelled::trusted(path.clone()))?;
         admit_context_file(policy, conversation, &path, &contents)?;
     }

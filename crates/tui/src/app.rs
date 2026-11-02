@@ -2482,7 +2482,7 @@ fn begin_session(
         Some(name) => session.name_model(config.model_named(name)),
         None => session.adopt_model(&settings, config),
     }
-    session.set_reference_sources(workspace.reference_sources());
+    session.adopt_workspace(&workspace);
     session.adopt_repository(crate::issue_link::Repository::of(workspace.root()));
     let mut mcp_servers = std::mem::take(servers);
     let absent = std::mem::take(&mut mcp_servers.notes);
@@ -36870,7 +36870,7 @@ mod tests {
             );
         let mut trust = TrustStore::new(workspace.root());
         let mut session = Session::new("none").in_workspace(workspace.root());
-        session.set_reference_sources(workspace.reference_sources());
+        session.adopt_workspace(&workspace);
         for c in "@li".chars() {
             session.type_char(c);
         }

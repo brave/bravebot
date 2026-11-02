@@ -3285,6 +3285,39 @@ fn a_slot_is_never_filled_from_a_decoding_of_another_encoding() {
     }
 }
 
+/// Both front ends ask `surveyed` for a line's names: each name comes back in the order written,
+/// as what the resolver left it or as its refusal sentence, and a name the resolver gives no
+/// answer for is refused as a path that is not text. The faults this rejects are dropping the
+/// resolver's answer (the survey would then ask about the name as written) and stopping at the
+/// first refusal (the terminal names every bad name).
+#[test]
+fn surveying_a_lines_names_answers_each_in_order_through_the_resolver() {
+    use bravebot_agent::named::{Unsendable, refusal, surveyed};
+    let scratch = Scratch::new("surveyed-names");
+    std::fs::write(scratch.path.join("real.txt"), "text").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let answers = surveyed(
+        &workspace,
+        ["alias", "gone.txt", "unspellable", "real.txt"].map(String::from),
+        |name| match name {
+            "alias" => Ok("real.txt".to_string()),
+            "unspellable" => Err(()),
+            other => Ok(other.to_string()),
+        },
+    );
+
+    assert_eq!(
+        answers,
+        [
+            Ok("real.txt".to_string()),
+            Err(refusal("gone.txt", Unsendable::NotAFile)),
+            Err(refusal("unspellable", Unsendable::PathNotText)),
+            Ok("real.txt".to_string()),
+        ]
+    );
+}
+
 /// A deferred read reserves a slot that is filled with the same decoding the planner is shown, so
 /// the survey answers as that fill will: a UTF-16 or UTF-32 file with a mark, and a Latin-1 file,
 /// are text at the moment the planner asks. A file that is not text stays binary whatever it
