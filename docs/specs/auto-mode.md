@@ -145,17 +145,27 @@ The reply is the word `allow` after trimming and lowercasing and after nothing e
 `allow, but` are not it ([CHECK-4](vetting.md#CHECK-4)). A block, an unreadable reply, a timeout, an
 error, a reply labelled quarantined and a refused model are the same result: the question goes to the
 person, or is refused where nobody can be asked ([CHECK-12](vetting.md#CHECK-12)). The classifier is
-not consulted at all where the planner's context holds private content
-([ADVISOR-3](tools/advisor.md#ADVISOR-3)) or has met something untrusted, or where the machine's
-settings refuse the model. It runs on the session's own model.
+not consulted at all where the planner's context has met something untrusted, or where the machine's
+settings refuse the model. It runs on the session's own model, and is consulted whether or not the
+planner's context holds private content.
 
 **Why.** The classifier removes a question and never refuses one on its own word, so a person is asked
 at most once more than in asking. A reply an attacker could make fail is a reply that must not
 approve ([MODE-4](permission-modes.md#MODE-4)).
 
+A private context is consulted because the request goes to the model the planner is running on, with
+the planner's own subscription, and the private content was read to that model already. The advisor
+is refused a private question ([ADVISOR-3](tools/advisor.md#ADVISOR-3)) because it is another model.
+Refusing here would end the classifier's use for the rest of a session as soon as the planner read
+one command's output: `read_output` makes what the planner writes private from then on, and a
+resumed context cannot be made public again ([LABEL-8](labels.md#LABEL-8)).
+
 `verified-by: bravebot_agent::classifier::only_the_allow_word_alone_allows`
 `verified-by: bravebot_agent::turn::auto_answers_a_confined_run_on_the_classifiers_allow_word_and_asks_the_person_otherwise`
-`verified-by: bravebot_agent::turn::a_context_that_is_private_or_untrusted_is_not_put_to_the_classifier`
+`verified-by: bravebot_agent::turn::an_untrusted_context_is_not_put_to_the_classifier`
+`verified-by: bravebot_agent::turn::a_private_context_is_put_to_the_classifier_and_its_word_answers`
+`verified-by: bravebot_agent::classifier::a_context_that_has_met_something_untrusted_is_not_consulted`
+`verified-by: bravebot_agent::classifier::a_trusted_context_is_consulted_whether_or_not_it_holds_private_content`
 `verified-by: bravebot_cli::running::an_auto_run_runs_a_command_the_classifier_allows_and_refuses_one_it_does_not`
 
 <a id="AUTO-7"></a>
@@ -211,8 +221,6 @@ nothing about what the person wanted.
 - GHSA-mhg7-666j-cqg4 is a defect in another agent in which a validator judged whether a command was
   safe to run. Here the classifier's yes answers one question and is bound to the exact line shown
   ([PROMPT-5](prompting.md#PROMPT-5)), and the sandbox holds the line.
-- After a slot is promoted, the planner's arguments are private, and the classifier is not consulted
-  for the rest of the session (AUTO-6). The questions go to the person.
 - Each run or fetch question costs one model round trip, on the session's own model.
 - A confined plain line in a trusted directory already runs unasked ([RUN-5](tools/run.md#RUN-5)), so
   the classifier is consulted in a directory the person has not trusted.

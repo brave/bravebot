@@ -72431,18 +72431,26 @@ fn auto_answers_a_fetch_on_the_classifiers_allow_word_and_asks_the_person_otherw
     }
 }
 
-/// AUTO-6: a context that holds private content or has met something untrusted is never put to the
-/// classifier. Private text is not sent to another model, and a reply written in an untrusted
-/// context cannot be read. The regression it rejects: a model call that carries a private
-/// argument to a second model, or one whose word is acted on after the planner met an attacker's.
+/// AUTO-6: in a turn, a context that has met something untrusted runs no line on the classifier's
+/// word and sends the classifier nothing, whatever else it holds. The argument gate refuses the
+/// planner's `run.command` in such a context before the run is asked about, so this pins the
+/// outcome of a turn; the guard inside the classifier is pinned by
+/// `classifier::tests::a_context_that_has_met_something_untrusted_is_not_consulted`. The regression
+/// it rejects: a line run on the word of a model that was shown an attacker's text.
 #[test]
-fn a_context_that_is_private_or_untrusted_is_not_put_to_the_classifier() {
+fn an_untrusted_context_is_not_put_to_the_classifier() {
     use bravebot_agent::PermissionMode;
     for (context, which) in [
-        (bravebot_core::label::Label::trusted_private(), "private"),
         (bravebot_core::label::Label::untrusted_public(), "untrusted"),
+        (
+            bravebot_core::label::Label::untrusted_private(),
+            "untrusted and private",
+        ),
     ] {
-        let scratch = Scratch::new(&format!("auto-classifier-context-{which}"));
+        let scratch = Scratch::new(&format!(
+            "auto-classifier-context-{}",
+            which.replace(' ', "-")
+        ));
         let workspace = Workspace::new(&scratch.path).expect("workspace");
         let (endpoint, received) = serve_sequence_answering_checks_with(
             vec![reply_with("allow")],
@@ -72486,6 +72494,88 @@ fn a_context_that_is_private_or_untrusted_is_not_put_to_the_classifier() {
         assert!(
             !scratch.path.join("made.txt").exists(),
             "the line ran in a {which} context without the person"
+        );
+    }
+}
+
+/// AUTO-6: a context that holds private content is put to the classifier, and the classifier's
+/// word answers as it does anywhere else. The planner's context is private as soon as it has read a
+/// command's output, so a guard on confidentiality ends the mode's use for the rest of the session
+/// at the first `read_output`. The request goes to the planner's own model, which that content was
+/// read to. The regressions it rejects: the old guard, which sends the question to the person
+/// every time after a read, and a private context whose `deny` or reply that only contains the
+/// word is taken for a yes.
+#[test]
+fn a_private_context_is_put_to_the_classifier_and_its_word_answers() {
+    use bravebot_agent::PermissionMode;
+    if bravebot_sandbox::base::Prelude::current().is_none() {
+        // No sandbox here, so a line is never put to the classifier (AUTO-3).
+        return;
+    }
+    for (said, answers) in [("allow", true), ("deny", false), ("allow, but", false)] {
+        let scratch = Scratch::new(&format!(
+            "auto-classifier-private-{}",
+            said.replace([' ', ','], "-")
+        ));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            vec![reply_with(said)],
+            vec![
+                tool_request_2("run", r#"{"command":"touch made.txt"}"#),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let live = bravebot_agent::LiveMode::new(PermissionMode::Auto);
+        let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::reject());
+        let seen = asked.seen.clone();
+        let mut confirmer = bravebot_agent::Confining::new(&mut asked, live.clone(), false);
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.observed(bravebot_core::label::Label::trusted_private());
+
+        let _ = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("make the file made.txt")
+                .with_permission_mode(live)
+                .with_confined_runs(true),
+            &mut conversation,
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+
+        let classifier: Vec<String> = received
+            .try_iter()
+            .filter(|body| body.contains(A_CLASSIFIER_ASKING))
+            .collect();
+        assert_eq!(
+            classifier.len(),
+            1,
+            "{said:?}: a private context was not put to the classifier once"
+        );
+        assert!(
+            classifier[0].contains("touch made.txt")
+                && classifier[0].contains("make the file made.txt"),
+            "{said:?}: {}",
+            classifier[0]
+        );
+        assert_eq!(
+            scratch.path.join("made.txt").exists(),
+            answers,
+            "{said:?}: the line's running did not follow the classifier's word"
+        );
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            usize::from(!answers),
+            "{said:?}: the person was asked a different number of times"
         );
     }
 }
