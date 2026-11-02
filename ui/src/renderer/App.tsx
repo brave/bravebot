@@ -61,7 +61,7 @@ import { NoteDialog } from './components/NoteDialog'
 import { CaffeinateConfirm, KEPT_OFF, keepAwakeAgreed, keepAwakeChosen, type KeepAwake } from './components/CaffeinateConfirm'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
-import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy } from './live'
+import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy, thinking } from './live'
 
 export function App(): React.JSX.Element {
   /** Settings take the place of the chat view while open; which page was last open is kept. */
@@ -409,12 +409,19 @@ export function App(): React.JSX.Element {
 
   /**
    * What the open bot's face should be doing — for the header, and for its row in the list, which
-   * mirrors it. Working while a turn runs; `failed` if the last thing the transcript got was an
-   * error, which is what a `turn.error` leaves at the end of it; otherwise looking at the reader.
-   * The turn's completion is not a state of its own — the face nods on leaving `working`.
+   * mirrors it. While a turn runs: `asking` while it waits on an answer, `thinking` while the model
+   * writes in a round with no tool being written, run or checked, and otherwise `working`. After
+   * one: `failed` if the last thing the transcript got was an error, which is what a `turn.error`
+   * leaves at the end of it; otherwise looking at the reader. The turn's completion is not a state
+   * of its own: the face nods, or cheers, on leaving a running state. Only the shape of the turn is
+   * read here, never what anything in it says.
    */
   const openDoing: Doing = live?.running
-    ? 'working'
+    ? pending
+      ? 'asking'
+      : thinking(live)
+        ? 'thinking'
+        : 'working'
     : live?.entries.at(-1)?.kind === 'error'
       ? 'failed'
       : 'open'

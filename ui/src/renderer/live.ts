@@ -216,6 +216,18 @@ export function cameFrom(
 }
 
 /** What a chat is called until its first prompt names it. */
+/**
+ * Whether a running turn is the model writing rather than a tool at work: a thinking or planning
+ * round with no tool call being written, no tool running and no check or hook under way. A tool
+ * runs from its entry until its landing arrives. For a bot's face (`Doing` in `avatar/clock.ts`).
+ */
+export function thinking(live: Live): boolean {
+  if (live.phase !== 'thinking' && live.phase !== 'planning') return false
+  if (live.composing !== null || live.checking !== null || live.hook !== null) return false
+  const last = live.entries.at(-1)
+  return !(last?.kind === 'tool' && last.landing === null)
+}
+
 export const NEW_CHAT = 'New Chat'
 
 /** The fields every new `Live` starts with, whichever answer it is built from. */

@@ -229,7 +229,119 @@ test('a look moves the pupils, or closes the eyes', () => {
   assert.deepEqual([right[0].whiteX, right[0].pupilX], [left.x, left.x + 1])
   const away = placeEyes(sprite, { ...rest, gaze: -1 })
   assert.deepEqual([away[0].whiteX, away[0].pupilX], [left.x + 1, left.x])
-  assert.deepEqual(placeEyes(sprite, { ...rest, blink: true }).map(eye => eye.closed), [true, true])
+  assert.deepEqual(placeEyes(sprite, { ...rest, eyes: 'blink' }).map(eye => eye.closed), [true, true])
+})
+
+const LOOK = { gaze: 1, drop: 0, eyes: 'open', nod: false }
+const shown = (eye) => Object.entries(eye.rects).filter(([, rect]) => !rect.hidden).map(([part]) => part).sort()
+
+test('each eye shape shows its own parts, and keeps them within the eye\'s two cells', () => {
+  const expected = {
+    open: ['glint', 'pupil', 'white'],
+    blink: ['lid'],
+    happy: ['foot-0', 'foot-1', 'lid'],
+    wide: ['glint', 'pupil', 'white'],
+    sleepy: ['lid', 'pupil', 'white'],
+  }
+  for (const seed of [...seeds(64), ...LEGACY]) {
+    const sprite = buildSprite(seed)
+    for (const [shape, parts] of Object.entries(expected))
+      for (const gaze of [1, -1])
+        placeEyes(sprite, { ...LOOK, gaze, eyes: shape }).forEach((eye, i) => {
+          assert.deepEqual(shown(eye), parts, `${seed} ${shape}`)
+          const { x, y } = sprite.eyes[i]
+          for (const [part, rect] of Object.entries(eye.rects))
+            assert.ok(rect.x >= x && rect.x + rect.width <= x + 2 && rect.y >= y && rect.y + rect.height <= y + 1, `${seed} ${shape}: ${part} leaves the eye`)
+        })
+  }
+})
+
+test('a happy eye is an arch: its feet are lower than its bar and sit at the two ends', () => {
+  const [eye] = placeEyes(buildSprite('v2:look'), { ...LOOK, eyes: 'happy' })
+  const { lid, 'foot-0': left, 'foot-1': right } = eye.rects
+  assert.ok(left.y > lid.y && right.y > lid.y)
+  assert.ok(left.x < lid.x && right.x + right.width > lid.x + lid.width)
+})
+
+test('a sleepy eye shows only its lower half, under a lid', () => {
+  const sprite = buildSprite('v2:look')
+  const [left] = sprite.eyes
+  const [eye] = placeEyes(sprite, { ...LOOK, eyes: 'sleepy' })
+  const { white, pupil, lid } = eye.rects
+  assert.ok(white.y > left.y && white.y + white.height === left.y + 1)
+  assert.equal(pupil.y, white.y)
+  assert.ok(lid.y + lid.height <= white.y + 1e-9 && lid.width === 2, 'the lid sits on top of what shows')
+})
+
+test('a wide eye whitens both cells around a smaller pupil on the side it looks to', () => {
+  const sprite = buildSprite('v2:look')
+  const [left] = sprite.eyes
+  for (const gaze of [1, -1]) {
+    const [eye] = placeEyes(sprite, { ...LOOK, gaze, eyes: 'wide' })
+    assert.deepEqual([eye.rects.white.x, eye.rects.white.width], [left.x, 2])
+    assert.ok(eye.rects.pupil.width < 1)
+    assert.equal(Math.floor(eye.rects.pupil.x), gaze > 0 ? left.x + 1 : left.x)
+  }
+})
+
+test('the catch-light sits in the upper left of the pupil and moves with it', () => {
+  const sprite = buildSprite('v2:look')
+  for (const gaze of [1, -1]) {
+    const [eye] = placeEyes(sprite, { ...LOOK, gaze })
+    const { glint, pupil } = eye.rects
+    assert.ok(glint.x > pupil.x && glint.x + glint.width < pupil.x + pupil.width / 2 + 0.01)
+    assert.ok(glint.y > pupil.y && glint.y + glint.height < pupil.y + pupil.height / 2 + 0.01)
+  }
+})
+
+test('every cell is in exactly one part, and the parts are the ones the traits drew', () => {
+  for (const seed of [...seeds(512), ...LEGACY]) {
+    const sprite = buildSprite(seed)
+    const grouped = sprite.groups.flatMap(group => group.cells.map(cell => `${cell.x},${cell.y}`))
+    assert.equal(grouped.length, sprite.cells.length, `${seed}: a cell is in two parts or none`)
+    assert.deepEqual(new Set(grouped), new Set(sprite.cells.map(cell => `${cell.x},${cell.y}`)))
+    const parts = new Set(sprite.groups.map(group => group.part))
+    const { crown, arms, legs } = sprite.traits
+    // A part may lose every cell to the mirror's edits, so only a part the traits did not draw is ruled out.
+    if (crown === 'none') assert.ok(!parts.has('crown'), `${seed}: a crown it was not given`)
+    if (arms === 'none') assert.ok(!parts.has('arm'), `${seed}: arms it was not given`)
+    if (legs === 'none') assert.ok(!parts.has('legs'), `${seed}: legs it was not given`)
+    const body = sprite.groups.find(group => group.part === 'body')
+    const top = Math.min(...body.cells.map(cell => cell.y))
+    const bottom = Math.max(...body.cells.map(cell => cell.y))
+    for (const group of sprite.groups) {
+      if (group.part === 'crown') for (const cell of group.cells) assert.ok(cell.y < top + 1, `${seed}: crown below the top of the body`)
+      if (group.part === 'legs') for (const cell of group.cells) assert.ok(cell.y > bottom - 1, `${seed}: legs above the bottom of the body`)
+      if (group.part === 'arm') for (const cell of group.cells) assert.equal(cell.x <= GRID / 2 - 1, group.side === 'left', `${seed}: arm on the wrong side`)
+    }
+  }
+  const sprite = buildSprite(pickedSeed('round', COLOURS[0].name))
+  assert.deepEqual(sprite.groups.map(group => `${group.part}${group.side ? `-${group.side}` : ''}`), ['body', 'legs', 'arm-left', 'arm-right', 'crown'])
+})
+
+test('light falls from the upper left, and never brightens a cell beside an eye', () => {
+  for (const seed of [...seeds(512), ...seeds(128, `${AVATAR_VERSION}bot-`), ...LEGACY]) {
+    const sprite = buildSprite(seed)
+    const cells = at(sprite)
+    const open = (x, y) => !cells.has(`${x},${y}`)
+    for (const group of sprite.groups)
+      for (const { x, y, tone } of group.light) {
+        assert.ok(group.cells.some(cell => cell.x === x && cell.y === y), `${seed}: light off its part`)
+        const toward = Number(open(x, y - 1)) + Number(open(x - 1, y))
+        const away = Number(open(x, y + 1)) + Number(open(x + 1, y))
+        if (tone === 'lit') {
+          assert.ok(toward > away, `${seed}: ${x},${y} is lit but faces away`)
+          const near = sprite.eyes.some(eye => x >= eye.x - 1 && x <= eye.x + 2 && y >= eye.y - 2 && y <= eye.y + 2)
+          assert.ok(!near, `${seed}: ${x},${y} is lit beside an eye`)
+        } else {
+          assert.ok(away > toward, `${seed}: ${x},${y} is shaded but faces the light`)
+          assert.equal(tone === 'rim', away === 2, `${seed}: ${x},${y} rim`)
+        }
+      }
+  }
+  // A plain block has its top and left lit and its bottom and right shaded.
+  const tones = new Map(buildSprite(pickedSeed('block', COLOURS[0].name)).groups[0].light.map(each => [`${each.x},${each.y}`, each.tone]))
+  assert.ok([...tones.values()].includes('lit') && [...tones.values()].includes('shade') && [...tones.values()].includes('rim'))
 })
 
 test('over a figure the eyes turn to the side the pointer is on, and up or down only when it is mostly there', () => {

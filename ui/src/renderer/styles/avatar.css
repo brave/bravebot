@@ -1,0 +1,90 @@
+/* ---------------------------------------------------------------- avatar
+
+   A bot's face: a pixel figure from `avatar/pixels.ts`, in its own colours, which do not follow
+   the theme. It is drawn straight onto the page, cropped to the figure so it fills its frame.
+
+   An animated face at `DETAIL` size or over (`data-detail`) breathes: a slow squash and stretch
+   from its feet, a quicker bob while it works with its arms tapping, a slow sway from side to side
+   while it thinks, and a slower, deeper breath once it has dozed off (`data-asleep`). The clock
+   starts each rhythm where the clock is (`--avatar-delay`) and slows it for a heavy body
+   (`--avatar-tempo`), so two views of one bot move together. The durations are `BREATH`, `BOB`
+   and `SLEEP_BREATH` in `avatar/gestures.ts`. Gestures play over this from the clock. */
+
+.bot-avatar-frame {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  vertical-align: middle;
+}
+.bot-avatar-status {
+  position: absolute;
+  right: calc(var(--leo-spacing-xs) * -1);
+  bottom: calc(var(--leo-spacing-xs) * -1);
+  display: grid;
+  place-items: center;
+  padding: 1px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-panel);
+  --leo-icon-size: var(--status-size);
+  --leo-icon-color: var(--ink-secondary);
+}
+.bot-avatar-status-failed { --leo-icon-color: var(--status-error); }
+.bot-avatar-status-asking { --leo-icon-color: var(--ink-accent); }
+.bot-avatar {
+  flex: none;
+  display: block;
+  transform-origin: 50% 100%;
+}
+/* A crown and arms move about their own feet when a gesture flings them. */
+.bot-avatar [data-part='crown'],
+.bot-avatar [data-part='arm'] {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+
+.bot-avatar-frame[data-detail] > .bot-avatar {
+  animation: avatar-breathe calc(3.4s * var(--avatar-tempo, 1)) ease-in-out var(--avatar-delay, 0s) infinite;
+}
+.bot-avatar-frame[data-detail][data-doing='working'] > .bot-avatar {
+  animation: avatar-bob calc(1.2s * var(--avatar-tempo, 1)) ease-in-out var(--avatar-delay, 0s) infinite;
+}
+.bot-avatar-frame[data-detail][data-doing='thinking'] > .bot-avatar {
+  animation: avatar-ponder calc(3.4s * var(--avatar-tempo, 1)) ease-in-out var(--avatar-delay, 0s) infinite;
+}
+.bot-avatar-frame[data-detail][data-asleep] > .bot-avatar {
+  animation: avatar-doze calc(5.6s * var(--avatar-tempo, 1)) ease-in-out var(--avatar-delay, 0s) infinite;
+}
+/* One arm and then the other, a cell at a time, like typing. */
+.bot-avatar-frame[data-detail][data-doing='working'] [data-part='arm'] {
+  animation: avatar-tap 0.8s steps(1, end) infinite;
+}
+.bot-avatar-frame[data-detail][data-doing='working'] [data-part='arm'][data-side='right'] {
+  animation-delay: -0.4s;
+}
+
+@keyframes avatar-breathe {
+  0%, 100% { transform: scale(1, 1); }
+  50% { transform: scale(0.985, 1.03); }
+}
+@keyframes avatar-bob {
+  0%, 100% { transform: translateY(0) scale(1, 1); }
+  50% { transform: translateY(-2%) scale(0.99, 1.015); }
+}
+@keyframes avatar-ponder {
+  0%, 100% { transform: rotate(0deg) scale(1, 1); }
+  25% { transform: rotate(-2deg) scale(0.99, 1.015); }
+  75% { transform: rotate(2deg) scale(0.99, 1.015); }
+}
+@keyframes avatar-doze {
+  0%, 100% { transform: scale(1, 1); }
+  50% { transform: scale(0.97, 1.05); }
+}
+@keyframes avatar-tap {
+  0% { transform: translateY(-1px); }
+  50% { transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bot-avatar-frame[data-detail] > .bot-avatar,
+  .bot-avatar-frame[data-detail] [data-part='arm'] { animation: none; }
+}

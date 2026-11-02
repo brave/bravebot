@@ -780,6 +780,22 @@ test('settledBy lands each field the bridge settled unchanged, and gives null fo
   )
 })
 
+/** A bot's face shows the model writing apart from a tool at work, from the turn's shape alone. */
+test('a running turn is thinking while the model writes, and not while a tool is written, run or checked', () => {
+  const { thinking } = load('src/renderer/live.ts')
+  const writing = { phase: 'thinking', composing: null, checking: null, hook: null, entries: [{ kind: 'assistant', id: '1', text: '' }] }
+  assert.equal(thinking(writing), true)
+  assert.equal(thinking({ ...writing, phase: 'planning' }), true)
+  assert.equal(thinking({ ...writing, phase: null }), false, 'no round open')
+  assert.equal(thinking({ ...writing, phase: 'compacting' }), false)
+  assert.equal(thinking({ ...writing, composing: 'read' }), false, 'a call being written')
+  assert.equal(thinking({ ...writing, checking: { lines: 3 } }), false)
+  assert.equal(thinking({ ...writing, hook: { moment: 'before', program: 'x' } }), false)
+  const tool = { kind: 'tool', id: '2', activity: { verb: 'read', target: 'a' }, landing: null }
+  assert.equal(thinking({ ...writing, entries: [tool] }), false, 'a tool running')
+  assert.equal(thinking({ ...writing, entries: [{ ...tool, landing: 'context' }] }), true, 'a tool that has landed')
+})
+
 test('a session is keyed by its record id once it has one, and by its draft or handle before', () => {
   const { liveKey, preIdKey } = load('src/renderer/live.ts')
   const key = (id) => JSON.stringify(['/d', id])

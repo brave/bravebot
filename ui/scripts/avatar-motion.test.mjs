@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { blink, glance, completionNod } from '../src/renderer/avatar/motion.ts'
+import { blink, glance, completionNod, fidget, FIDGET_CYCLE } from '../src/renderer/avatar/motion.ts'
 
 test('idle glances leave most of the cycle completely still and never exceed the turn limit', () => {
   for (const seed of ['blue', 'yellow', 'quiet']) {
@@ -40,4 +40,21 @@ test('completion pauses for eye contact before one smooth nod', () => {
   assert.ok(completionNod(0.8) > 0.2)
   assert.ok(completionNod(0.56) < 0.01)
   assert.ok(completionNod(1.04) < 0.01)
+})
+
+test('a face fidgets once in each window, at a moment of its own, the same in every view', () => {
+  const moments = []
+  for (let cycle = 0; cycle < 40; cycle++) {
+    const at = cycle * FIDGET_CYCLE + 1
+    const { cycle: window, start, kind } = fidget(at, 'same-bot')
+    assert.equal(window, cycle)
+    assert.ok(start >= cycle * FIDGET_CYCLE + 8 && start <= cycle * FIDGET_CYCLE + 24)
+    assert.ok(kind >= 0 && kind < 1)
+    assert.deepEqual(fidget(at + 20, 'same-bot'), fidget(at, 'same-bot'), 'one moment for the whole window')
+    moments.push(start)
+  }
+  const gaps = moments.slice(1).map((start, i) => start - moments[i])
+  assert.ok(gaps.every(gap => gap >= 16), 'at least 16 seconds between fidgets')
+  assert.ok(new Set(gaps.map(Math.round)).size > 5, 'not on a beat')
+  assert.notDeepEqual(fidget(1, 'a-bot'), fidget(1, 'another-bot'))
 })
