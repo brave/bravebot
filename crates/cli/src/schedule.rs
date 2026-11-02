@@ -1,12 +1,14 @@
 //! `bravebot schedule add|list|remove|run-now|history`: recurring one-shot runs started by the
-//! operating system's `crontab` (CLI-42).
+//! operating system's scheduler: `crontab`, a launchd job or a systemd timer (CLI-42).
 //!
 //! An entry is written by a person at a terminal and holds a cron expression, a prompt, a directory
 //! and the permission mode the person typed. It is kept as two files under the state directory, the
 //! prompt alone in one so that no character in it needs escaping, and installed as one line of the
-//! person's crontab that runs `bravebot schedule run-now <id>`. That command starts this program's
+//! person's crontab (or a launchd job or systemd timer) that runs `bravebot schedule run-now <id>`. That command starts this program's
 //! own one-shot `-p` path in the entry's directory. Nothing a run reads is ever written to an entry,
 //! and the driver reads the child's result only for the id of the session it recorded.
+
+mod calendar;
 
 use crate::exit::{Ending, fail};
 use bravebot_i18n::t;
@@ -77,6 +79,42 @@ impl Mode {
     }
 }
 
+/// What starts an entry's runs, as the person chose when writing the entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scheduler {
+    /// One line of the person's crontab.
+    Crontab,
+    /// A job in `~/Library/LaunchAgents`, loaded with `launchctl`.
+    Launchd,
+    /// A timer and a service in the person's systemd user directory.
+    Systemd,
+}
+
+impl Scheduler {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Crontab => "crontab",
+            Self::Launchd => "launchd",
+            Self::Systemd => "systemd",
+        }
+    }
+
+    fn named(word: &str) -> Option<Self> {
+        [Self::Crontab, Self::Launchd, Self::Systemd]
+            .into_iter()
+            .find(|scheduler| scheduler.word() == word)
+    }
+
+    /// The one a platform has when none is named: launchd on macOS, the crontab elsewhere.
+    fn usual() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Launchd
+        } else {
+            Self::Crontab
+        }
+    }
+}
+
 /// One entry, as read back from the state directory.
 #[derive(Debug, PartialEq, Eq)]
 struct Entry {
@@ -84,6 +122,7 @@ struct Entry {
     cron: String,
     directory: PathBuf,
     mode: Mode,
+    scheduler: Scheduler,
     prompt: String,
 }
 
@@ -93,6 +132,7 @@ struct Addition {
     cron: String,
     prompt: String,
     directory: Option<PathBuf>,
+    scheduler: Option<Scheduler>,
     mode: Mode,
 }
 
@@ -134,18 +174,22 @@ pub(crate) fn command(args: &[String], typed: &Typed) -> ExitCode {
     }
 }
 
-/// `--cron <expression> --prompt <text> [--dir <path>]`, in any order. A repeated flag, a missing
+/// `--cron <expression> --prompt <text> [--dir <path>] [--scheduler <name>]`, in any order. A repeated flag, a missing
 /// value and any other word are refused rather than guessed at.
 fn read_addition(words: &[String], mode: Mode) -> Option<Addition> {
     let mut cron = None;
     let mut prompt = None;
     let mut directory = None;
+    let mut scheduler = None;
     let mut rest = words.iter();
     while let Some(word) = rest.next() {
         match word.as_str() {
             "--cron" if cron.is_none() => cron = Some(rest.next()?.clone()),
             "--prompt" if prompt.is_none() => prompt = Some(rest.next()?.clone()),
             "--dir" if directory.is_none() => directory = Some(PathBuf::from(rest.next()?)),
+            "--scheduler" if scheduler.is_none() => {
+                scheduler = Some(Scheduler::named(rest.next()?)?);
+            }
             _ => return None,
         }
     }
@@ -153,6 +197,7 @@ fn read_addition(words: &[String], mode: Mode) -> Option<Addition> {
         cron: cron?,
         prompt: prompt?,
         directory,
+        scheduler,
         mode,
     })
 }
@@ -205,26 +250,30 @@ fn is_an_id(id: &str) -> bool {
 }
 
 /// What an entry's file holds.
-fn entry_text(cron: &str, directory: &Path, mode: Mode) -> Option<String> {
+fn entry_text(cron: &str, directory: &Path, mode: Mode, scheduler: Scheduler) -> Option<String> {
     let directory = directory.to_str()?;
     if directory.contains('\n') {
         return None;
     }
     Some(format!(
-        "cron={cron}\ndir={directory}\nmode={}\n",
-        mode.word()
+        "cron={cron}\ndir={directory}\nmode={}\nscheduler={}\n",
+        mode.word(),
+        scheduler.word()
     ))
 }
 
 /// An entry read back from `text` and the prompt file's contents.
 fn read_entry(id: &str, text: &str, prompt: String) -> Option<Entry> {
     let (mut cron, mut directory, mut mode) = (None, None, None);
+    // An entry written before there was a choice is a crontab line.
+    let mut scheduler = Some(Scheduler::Crontab);
     for line in text.lines() {
         let (key, value) = line.split_once('=')?;
         match key {
             "cron" => cron = checked_cron(value),
             "dir" => directory = Some(PathBuf::from(value)),
             "mode" => mode = Mode::named(value),
+            "scheduler" => scheduler = Scheduler::named(value),
             _ => {}
         }
     }
@@ -233,6 +282,7 @@ fn read_entry(id: &str, text: &str, prompt: String) -> Option<Entry> {
         cron: cron?,
         directory: directory?,
         mode: mode?,
+        scheduler: scheduler?,
         prompt,
     })
 }
@@ -308,10 +358,11 @@ fn with_line(table: &str, id: &str, line: Option<&str>) -> String {
     text
 }
 
-/// The `crontab` program, started without this agent's credentials.
+/// A scheduler's own program (`crontab`, `launchctl`, `systemctl`), started without this agent's
+/// credentials.
 #[cfg(unix)]
-fn crontab() -> Option<std::process::Command> {
-    let found = bravebot_sandbox::programs::find(std::ffi::OsStr::new("crontab"))?;
+fn tool(name: &str) -> Option<std::process::Command> {
+    let found = bravebot_sandbox::programs::find(std::ffi::OsStr::new(name))?;
     Some(bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::found_earlier(&found),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
@@ -323,7 +374,7 @@ fn crontab() -> Option<std::process::Command> {
 /// has an empty one: `crontab -l` ends with a failure status and prints nothing on stdout.
 #[cfg(unix)]
 fn read_table() -> Option<String> {
-    let output = crontab()?
+    let output = tool("crontab")?
         .arg("-l")
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -338,7 +389,7 @@ fn read_table() -> Option<String> {
 /// Replace the person's crontab with `table`.
 #[cfg(unix)]
 fn write_table(table: &str) -> bool {
-    let Some(mut command) = crontab() else {
+    let Some(mut command) = tool("crontab") else {
         return false;
     };
     let Ok(mut child) = command
@@ -377,6 +428,163 @@ fn install(id: &str, line: Option<&str>) -> bool {
     write_table(&with_line(&table, id, line))
 }
 
+/// What a scheduler is given to start entry `id`, written out and ready to install.
+enum Job {
+    Line(String),
+    Plist(String),
+    Units { service: String, timer: String },
+}
+
+/// The job for `scheduler`, or the sentence that says why there is none.
+fn job(scheduler: Scheduler, cron: &str, program: &str, id: &str) -> Result<Job, &'static str> {
+    let times = || calendar::groups(cron).ok_or(t!(schedule_cron_invalid));
+    match scheduler {
+        Scheduler::Crontab => crontab_line(cron, program, id)
+            .map(Job::Line)
+            .ok_or(t!(schedule_failed)),
+        Scheduler::Launchd => calendar::plist(&times()?, program, id)
+            .map(Job::Plist)
+            .ok_or(t!(schedule_job_unwritable)),
+        Scheduler::Systemd => calendar::units(&times()?, program, id)
+            .map(|(service, timer)| Job::Units { service, timer })
+            .ok_or(t!(schedule_job_unwritable)),
+    }
+}
+
+/// The directory launchd reads a person's jobs from.
+fn launch_agents() -> Option<PathBuf> {
+    Some(
+        bravebot_agent::home::profile()?
+            .join("Library")
+            .join("LaunchAgents"),
+    )
+}
+
+/// The directory a person's systemd user units are read from: `$XDG_CONFIG_HOME/systemd/user`
+/// where that names a directory, and `~/.config/systemd/user` otherwise.
+fn systemd_units() -> Option<PathBuf> {
+    let configured = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute());
+    let config = match configured {
+        Some(path) => path,
+        None => bravebot_agent::home::profile()?.join(".config"),
+    };
+    Some(config.join("systemd").join("user"))
+}
+
+/// Run `program` with `arguments` and say whether it ended with success.
+#[cfg(unix)]
+fn succeeds(program: &str, arguments: &[&str]) -> bool {
+    let Some(mut command) = tool(program) else {
+        return false;
+    };
+    command
+        .args(arguments)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(not(unix))]
+fn succeeds(_program: &str, _arguments: &[&str]) -> bool {
+    false
+}
+
+/// Write `text` as `directory/name`, over what is there, making the directory if need be.
+fn put_file(directory: &Path, name: &str, text: &str) -> bool {
+    bravebot_agent::home::create_directory(directory).is_ok()
+        && bravebot_agent::home::replace(&directory.join(name), text).is_ok()
+}
+
+/// Install `job` for `id`. A job that could not be loaded leaves no file behind.
+fn start(id: &str, job: &Job) -> bool {
+    match job {
+        Job::Line(line) => install(id, Some(line)),
+        Job::Plist(text) => {
+            let Some(directory) = launch_agents() else {
+                return false;
+            };
+            let name = format!("{}.plist", calendar::label(id));
+            let path = directory.join(&name);
+            let loaded = put_file(&directory, &name, text)
+                && path
+                    .to_str()
+                    .is_some_and(|path| succeeds("launchctl", &["load", "-w", path]));
+            if !loaded {
+                ignored(std::fs::remove_file(path));
+            }
+            loaded
+        }
+        Job::Units { service, timer } => {
+            let Some(directory) = systemd_units() else {
+                return false;
+            };
+            let unit = calendar::unit(id);
+            let timer_name = format!("{unit}.timer");
+            let loaded = put_file(&directory, &format!("{unit}.service"), service)
+                && put_file(&directory, &timer_name, timer)
+                && succeeds("systemctl", &["--user", "daemon-reload"])
+                && succeeds("systemctl", &["--user", "enable", "--now", &timer_name]);
+            if !loaded {
+                remove_units(&directory, id);
+            }
+            loaded
+        }
+    }
+}
+
+/// Delete entry `id`'s two unit files, and tell systemd they are gone.
+fn remove_units(directory: &Path, id: &str) {
+    let unit = calendar::unit(id);
+    ignored(std::fs::remove_file(
+        directory.join(format!("{unit}.timer")),
+    ));
+    ignored(std::fs::remove_file(
+        directory.join(format!("{unit}.service")),
+    ));
+    succeeds("systemctl", &["--user", "daemon-reload"]);
+}
+
+/// Take entry `id`'s job out of `scheduler`. A crontab that cannot be changed is a failure, so that
+/// an entry is kept only where its line is installed. A launchd job or a systemd timer the
+/// scheduler no longer knows is not one: stopping it fails exactly then, and its files are removed
+/// either way.
+fn stop(scheduler: Scheduler, id: &str) -> bool {
+    match scheduler {
+        Scheduler::Crontab => install(id, None),
+        Scheduler::Launchd => {
+            let Some(directory) = launch_agents() else {
+                return true;
+            };
+            let path = directory.join(format!("{}.plist", calendar::label(id)));
+            if let Some(path) = path.to_str() {
+                succeeds("launchctl", &["unload", "-w", path]);
+            }
+            ignored(std::fs::remove_file(path));
+            true
+        }
+        Scheduler::Systemd => {
+            let Some(directory) = systemd_units() else {
+                return true;
+            };
+            succeeds(
+                "systemctl",
+                &[
+                    "--user",
+                    "disable",
+                    "--now",
+                    &format!("{}.timer", calendar::unit(id)),
+                ],
+            );
+            remove_units(&directory, id);
+            true
+        }
+    }
+}
+
 /// `bravebot schedule add ...`, after `add`.
 fn add(words: &[String], typed: &Typed) -> ExitCode {
     let Some(request) = typed.mode().and_then(|mode| read_addition(words, mode)) else {
@@ -398,7 +606,8 @@ fn add(words: &[String], typed: &Typed) -> ExitCode {
         Ok(path) => path,
         Err(code) => return code,
     };
-    let Some(text) = entry_text(&cron, &directory, request.mode) else {
+    let scheduler = request.scheduler.unwrap_or_else(Scheduler::usual);
+    let Some(text) = entry_text(&cron, &directory, request.mode, scheduler) else {
         return fail(Ending::Argument, t!(schedule_directory_invalid));
     };
     let Ok(me) = bravebot_sandbox::programs::Resolved::own_executable() else {
@@ -408,12 +617,12 @@ fn add(words: &[String], typed: &Typed) -> ExitCode {
         return fail(Ending::Failed, t!(schedule_no_store));
     };
     let id = next_id(&store);
-    let Some(line) = me
-        .as_path()
-        .to_str()
-        .and_then(|program| crontab_line(&cron, program, &id))
-    else {
+    let Some(program) = me.as_path().to_str() else {
         return fail(Ending::Failed, t!(schedule_failed));
+    };
+    let job = match job(scheduler, &cron, program, &id) {
+        Ok(job) => job,
+        Err(sentence) => return fail(Ending::Failed, sentence),
     };
     let written = bravebot_agent::home::create_new_file(
         &store.join(format!("{id}.prompt")),
@@ -426,7 +635,7 @@ fn add(words: &[String], typed: &Typed) -> ExitCode {
         forget(&store, &id);
         return fail(Ending::Failed, t!(schedule_failed));
     }
-    if !install(&id, Some(&line)) {
+    if !start(&id, &job) {
         forget(&store, &id);
         return fail(Ending::Failed, t!(schedule_install_failed));
     }
@@ -473,6 +682,7 @@ fn list() -> ExitCode {
                 schedule_row,
                 id = entry.id.as_str(),
                 cron = entry.cron.as_str(),
+                scheduler = entry.scheduler.word(),
                 directory = crate::progress::printable_path(&entry.directory),
                 limit = entry.mode.limit(),
                 prompt = search::clean(&entry.prompt, LONGEST_PROMPT)
@@ -487,10 +697,10 @@ fn remove(id: &str) -> ExitCode {
     let Some(store) = store_to_read() else {
         return fail(Ending::Argument, t!(schedule_missing, id = id));
     };
-    if entry_named(&store, id).is_none() {
+    let Some(entry) = entry_named(&store, id) else {
         return fail(Ending::Argument, t!(schedule_missing, id = id));
-    }
-    if !install(id, None) {
+    };
+    if !stop(entry.scheduler, id) {
         return fail(Ending::Failed, t!(schedule_install_failed));
     }
     forget(&store, id);
@@ -726,12 +936,27 @@ mod tests {
         assert!(read_addition(&with(&["extra"]), Mode::Read).is_none());
         assert!(read_addition(&with(&["--dir"]), Mode::Read).is_none());
         assert!(read_addition(&with(&["--accept-edits"]), Mode::Read).is_none());
+        let named = read_addition(&with(&["--scheduler", "systemd"]), Mode::Read).expect("reads");
+        assert_eq!(named.scheduler, Some(Scheduler::Systemd));
+        assert!(read_addition(&with(&["--scheduler", "cron"]), Mode::Read).is_none());
+        assert!(
+            read_addition(
+                &with(&["--scheduler", "launchd", "--scheduler", "systemd"]),
+                Mode::Read
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn an_entry_reads_back_as_it_was_written() {
-        let text = entry_text("0 9 * * 1-5", Path::new("/work/here"), Mode::AcceptEdits)
-            .expect("a plain path");
+        let text = entry_text(
+            "0 9 * * 1-5",
+            Path::new("/work/here"),
+            Mode::AcceptEdits,
+            Scheduler::Systemd,
+        )
+        .expect("a plain path");
         let entry = read_entry("3", &text, "do it".into()).expect("reads");
         assert_eq!(
             entry,
@@ -740,12 +965,27 @@ mod tests {
                 cron: "0 9 * * 1-5".into(),
                 directory: PathBuf::from("/work/here"),
                 mode: Mode::AcceptEdits,
+                scheduler: Scheduler::Systemd,
                 prompt: "do it".into(),
             }
         );
-        assert_eq!(entry_text("0 9 * * *", Path::new("a\nb"), Mode::Read), None);
+        assert_eq!(
+            entry_text(
+                "0 9 * * *",
+                Path::new("a\nb"),
+                Mode::Read,
+                Scheduler::Crontab
+            ),
+            None
+        );
         // A mode the program did not write reads as no entry, and never as read-only.
         assert!(read_entry("3", "cron=0 9 * * *\ndir=/x\nmode=root\n", String::new()).is_none());
+        // A scheduler the program did not write is no entry, and an entry from before the choice
+        // was a crontab line.
+        let text = |extra: &str| format!("cron=0 9 * * *\ndir=/x\nmode=read\n{extra}");
+        assert!(read_entry("3", &text("scheduler=cron\n"), String::new()).is_none());
+        let old = read_entry("3", &text(""), String::new()).expect("reads");
+        assert_eq!(old.scheduler, Scheduler::Crontab);
     }
 
     #[cfg(unix)]
@@ -753,10 +993,14 @@ mod tests {
     fn a_directory_that_is_not_utf8_is_refused_and_not_written_as_its_lookalike() {
         use std::os::unix::ffi::OsStrExt;
         let directory = Path::new(std::ffi::OsStr::from_bytes(b"/work/\xff"));
-        assert_eq!(entry_text("0 9 * * *", directory, Mode::Read), None);
+        assert_eq!(
+            entry_text("0 9 * * *", directory, Mode::Read, Scheduler::Crontab),
+            None
+        );
         // The lookalike a lossy conversion would write is itself a valid directory name.
         let lookalike = Path::new("/work/\u{FFFD}");
-        let text = entry_text("0 9 * * *", lookalike, Mode::Read).expect("an entry");
+        let text =
+            entry_text("0 9 * * *", lookalike, Mode::Read, Scheduler::Crontab).expect("an entry");
         assert!(text.contains("dir=/work/\u{FFFD}\n"));
     }
 

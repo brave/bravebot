@@ -2595,12 +2595,16 @@ of a skill change the tree it is graded in.
 `verified-by: bravebot_cli::skill_eval::a_run_that_has_spent_max_tokens_is_stopped_and_has_no_score`
 
 <a id="CLI-42"></a>
-### CLI-42: `schedule` installs a recurring one-shot run in the person's crontab
+### CLI-42: `schedule` installs a recurring one-shot run in the person's crontab, launchd or systemd
 
-`bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>]` writes an entry and
-adds one line to the person's crontab that runs `bravebot schedule run-now <id>` at the times the
-expression gives. `list` prints each entry's id, expression, directory, what its run may do and its
-prompt. `remove <id>` takes the line out and deletes the entry. An id is never given to a second entry: a new entry takes
+`bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>] [--scheduler <name>]`
+writes an entry and has the scheduler it names run `bravebot schedule run-now <id>` at the times the
+expression gives: one line of the person's crontab for `crontab`, a plist in `~/Library/LaunchAgents`
+loaded with `launchctl load -w` for `launchd`, or a `.service` and a `.timer` in the systemd user
+directory enabled with `systemctl --user enable --now` for `systemd`. Without `--scheduler` the
+entry is a launchd job on macOS and a crontab line elsewhere, and it holds the choice, so an entry
+written before there was one is a crontab line. `list` prints each entry's id, expression, scheduler, directory, what its run may do and its
+prompt. `remove <id>` takes the entry's job out of its scheduler and deletes the entry. An id is never given to a second entry: a new entry takes
 the id after the highest one the store has a file for, since `remove` keeps the entry's history
 under its id. `run-now <id>` starts the entry's
 run at once, and `history [<id>]` lists the recorded runs, newest first, each with its status, the
@@ -2621,9 +2625,17 @@ for each entry. No other command accepts either flag.
 terminal, so a program a turn runs cannot add an entry. An expression is five fields of digits and
 `*`, `/`, `,` and `-` only, so it is never an instruction to the shell, and a prompt is refused when
 it is empty, over 64 KiB or begins with `-`. The crontab is read and replaced through the `crontab`
-program, found as [SANDBOX-30](sandboxing.md#SANDBOX-30) says, and only the line that ends with the
-entry's own marker is ever replaced or removed. An entry is kept only where the line was installed.
-A host with no `crontab` program, and a platform that is not Unix, refuse `add` and `remove`.
+program, `launchctl` and `systemctl` are run for the other two, each found as
+[SANDBOX-30](sandboxing.md#SANDBOX-30) says, and only the line that ends with the
+entry's own marker is ever replaced or removed. An entry is kept only where its job was installed,
+and a job that was written but not loaded leaves no file. A launchd or systemd job is written from
+the same five fields: each field's values are listed, `7` is Sunday, and where the day of the month
+and the day of the week are both restricted the job has one time set for each, as cron runs on
+either. An expression that gives a launchd job more than 2048 times, and a program path that holds a control
+character, are refused for those two. The path is escaped for XML in a plist and quoted, with `%` and `$`
+doubled, on an `ExecStart=` line. `remove` of a launchd job or systemd timer the scheduler no
+longer knows still deletes its files and the entry. A host with no program for the entry's scheduler,
+and a platform that is not Unix, refuse `add`, and refuse `remove` of a crontab entry.
 
 The driver reads a run's result for one value, the id of the session it recorded, and accepts it
 only where it is a session name. Nothing a run reads or says reaches an entry or the crontab.
@@ -2633,7 +2645,7 @@ writes it, in words they typed. The operating system's own scheduler needs no da
 Cron runs a job with almost none of the person's environment, so a run that needs a credential
 reads it from the state directory, as any run does.
 
-**Known costs.** Only `crontab` is installed. A job that finds no sign-in in the state directory
+**Known costs.** There is no Windows scheduler. A job that finds no sign-in in the state directory
 ends with the status of the one-shot run and records no session. Results are kept and listed and
 are not sent anywhere.
 
@@ -2652,3 +2664,11 @@ are not sent anywhere.
 `verified-by: bravebot_cli::schedule::a_cron_expression_is_five_fields_of_digits_and_the_four_operators`
 `verified-by: bravebot_cli::schedule::a_table_keeps_every_other_line_and_replaces_only_its_own`
 `verified-by: bravebot_cli::schedule::the_session_is_found_outside_the_reply_and_never_inside_it`
+`verified-by: bravebot_cli::scheduled_runs::a_systemd_entry_is_a_timer_and_a_service_and_not_a_crontab_line`
+`verified-by: bravebot_cli::scheduled_runs::a_launchd_entry_is_a_plist_loaded_and_unloaded_by_its_path`
+`verified-by: bravebot_cli::scheduled_runs::removing_a_job_the_scheduler_fails_to_stop_still_deletes_its_files_and_entry`
+`verified-by: bravebot_cli::scheduled_runs::an_entry_is_not_kept_where_launchctl_or_systemctl_refuses_the_job`
+`verified-by: bravebot_cli::scheduled_runs::an_unknown_scheduler_writes_nothing`
+`verified-by: bravebot_cli::schedule::calendar::a_day_and_a_weekday_that_are_both_restricted_run_on_either`
+`verified-by: bravebot_cli::schedule::calendar::a_plist_for_more_times_than_the_limit_is_refused`
+`verified-by: bravebot_cli::schedule::calendar::a_service_quotes_the_program_and_doubles_what_systemd_would_expand`

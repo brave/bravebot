@@ -29,11 +29,29 @@ impl Scratch {
         .unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&crontab, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The other two schedulers' programs write the words they were given to a log and end
+        // with the status the test names, so no test loads a job into the account's own.
+        for name in ["launchctl", "systemctl"] {
+            let stand_in = path.join("bin").join(name);
+            std::fs::write(
+                &stand_in,
+                format!(
+                    "#!/bin/sh\necho \"{name} $*\" >> \"$TOOL_LOG\"\nexit \"${{TOOL_STATUS:-0}}\"\n"
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         Self { path }
     }
 
     fn table(&self) -> String {
         std::fs::read_to_string(self.path.join("table")).unwrap_or_default()
+    }
+
+    /// What the stand-in `launchctl` and `systemctl` were asked, one call to a line.
+    fn tool_log(&self) -> String {
+        std::fs::read_to_string(self.path.join("tool-log")).unwrap_or_default()
     }
 
     fn state(&self) -> PathBuf {
@@ -52,6 +70,7 @@ impl Scratch {
             .env("PATH", self.path.join("bin"))
             .env("TMPDIR", self.path.join("tmp"))
             .env("CRONTAB_FILE", self.path.join("table"))
+            .env("TOOL_LOG", self.path.join("tool-log"))
             .args(arguments)
             .current_dir(self.path.join("work"))
             .stdin(Stdio::null());
@@ -109,6 +128,10 @@ fn added(scratch: &Scratch, extra: &[&str]) -> Output {
         "--prompt",
         "list merged pull requests",
     ];
+    // Each test names the scheduler it asserts on, so the host's usual one does not change it.
+    if !extra.contains(&"--scheduler") {
+        arguments.extend_from_slice(&["--scheduler", "crontab"]);
+    }
     arguments.extend_from_slice(extra);
     scratch.run_at_a_terminal(&arguments)
 }
@@ -124,6 +147,8 @@ fn an_entry_cannot_be_added_without_a_terminal() {
         "0 9 * * *",
         "--prompt",
         "hello",
+        "--scheduler",
+        "crontab",
     ]);
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(scratch.table(), "");
@@ -187,8 +212,16 @@ fn no_command_but_add_accepts_a_write_flag() {
 fn a_cron_expression_that_is_not_five_plain_fields_writes_nothing() {
     let scratch = Scratch::new("schedule-bad-cron");
     for bad in ["0 9 * *", "0 9 * * 1;2", "@daily"] {
-        let output =
-            scratch.run_at_a_terminal(&["schedule", "add", "--cron", bad, "--prompt", "hello"]);
+        let output = scratch.run_at_a_terminal(&[
+            "schedule",
+            "add",
+            "--cron",
+            bad,
+            "--prompt",
+            "hello",
+            "--scheduler",
+            "crontab",
+        ]);
         assert!(!output.status.success(), "{bad}");
         assert_eq!(scratch.table(), "", "{bad}");
     }
@@ -345,10 +378,175 @@ fn a_host_with_no_crontab_refuses_add_and_remove() {
             "0 9 * * *",
             "--prompt",
             "hello",
+            "--scheduler",
+            "crontab",
         ],
         true,
     );
     assert!(!addition.status.success());
     assert!(!scratch.state().join("2.entry").exists());
     assert_eq!(scratch.table(), table);
+}
+
+/// A systemd entry is a service and a timer in the user's unit directory, enabled through
+/// `systemctl --user`, and leaves the crontab alone.
+#[test]
+fn a_systemd_entry_is_a_timer_and_a_service_and_not_a_crontab_line() {
+    let scratch = Scratch::new("schedule-systemd");
+    let output = added(&scratch, &["--scheduler", "systemd"]);
+    assert!(
+        out(&output).contains("Added schedule 1."),
+        "{}",
+        out(&output)
+    );
+    assert_eq!(scratch.table(), "");
+
+    let units = scratch.path.join("home/.config/systemd/user");
+    let timer = std::fs::read_to_string(units.join("bravebot-schedule-1.timer")).unwrap();
+    assert!(
+        timer.contains("OnCalendar=Mon,Tue,Wed,Thu,Fri *-*-* 09:00:00\n"),
+        "{timer}"
+    );
+    let service = std::fs::read_to_string(units.join("bravebot-schedule-1.service")).unwrap();
+    assert!(service.contains("schedule run-now 1\n"), "{service}");
+    let log = scratch.tool_log();
+    assert!(
+        log.contains("systemctl --user enable --now bravebot-schedule-1.timer\n"),
+        "{log}"
+    );
+
+    let listed = out(&scratch.run(&["schedule", "list"]));
+    assert!(listed.contains("systemd"), "{listed}");
+
+    let removed = scratch.run(&["schedule", "remove", "1"]);
+    assert!(out(&removed).contains("Removed schedule 1."));
+    assert!(!units.join("bravebot-schedule-1.timer").exists());
+    assert!(!units.join("bravebot-schedule-1.service").exists());
+    assert!(!scratch.state().join("1.entry").exists());
+    assert!(
+        scratch
+            .tool_log()
+            .contains("systemctl --user disable --now bravebot-schedule-1.timer\n")
+    );
+}
+
+/// A launchd entry is a plist in `~/Library/LaunchAgents`, loaded with `launchctl`, and removing it
+/// unloads the job it loaded.
+#[test]
+fn a_launchd_entry_is_a_plist_loaded_and_unloaded_by_its_path() {
+    let scratch = Scratch::new("schedule-launchd");
+    let output = added(&scratch, &["--scheduler", "launchd"]);
+    assert!(
+        out(&output).contains("Added schedule 1."),
+        "{}",
+        out(&output)
+    );
+    assert_eq!(scratch.table(), "");
+
+    let plist = scratch
+        .path
+        .join("home/Library/LaunchAgents/com.brave.bravebot.schedule.1.plist");
+    let text = std::fs::read_to_string(&plist).unwrap();
+    assert_eq!(text.matches("<key>Weekday</key>").count(), 5, "{text}");
+    assert!(text.contains("<string>run-now</string>"), "{text}");
+    let log = scratch.tool_log();
+    assert!(
+        log.contains(&format!("launchctl load -w {}\n", plist.display())),
+        "{log}"
+    );
+
+    scratch.run(&["schedule", "remove", "1"]);
+    assert!(!plist.exists());
+    assert!(
+        scratch
+            .tool_log()
+            .contains(&format!("launchctl unload -w {}\n", plist.display()))
+    );
+}
+
+/// An entry is kept only where the scheduler took the job, whichever scheduler that is.
+#[test]
+fn an_entry_is_not_kept_where_launchctl_or_systemctl_refuses_the_job() {
+    for scheduler in ["launchd", "systemd"] {
+        let scratch = Scratch::new(&format!("schedule-{scheduler}-refuses"));
+        let mut command = scratch.command(&[
+            "schedule",
+            "add",
+            "--cron",
+            "0 9 * * *",
+            "--prompt",
+            "hello",
+            "--scheduler",
+            scheduler,
+        ]);
+        command.env("TOOL_STATUS", "1");
+        let output = scratch.at_a_terminal(
+            &command,
+            &[
+                "schedule",
+                "add",
+                "--cron",
+                "0 9 * * *",
+                "--prompt",
+                "hello",
+                "--scheduler",
+                scheduler,
+            ],
+        );
+        assert!(!output.status.success(), "{scheduler}: {}", out(&output));
+        let left = |directory: &str| {
+            std::fs::read_dir(scratch.path.join("home").join(directory))
+                .map(|dir| dir.flatten().count())
+                .unwrap_or(0)
+        };
+        assert_eq!(left("Library/LaunchAgents"), 0, "{scheduler}");
+        assert_eq!(left(".config/systemd/user"), 0, "{scheduler}");
+        assert_eq!(left(".bravebot/schedules"), 0, "{scheduler}");
+    }
+}
+
+/// A scheduler that no longer knows the job does not keep the entry: `remove` still deletes the
+/// files and the entry.
+#[test]
+fn removing_a_job_the_scheduler_fails_to_stop_still_deletes_its_files_and_entry() {
+    let scratch = Scratch::new("schedule-remove-tool-fails");
+    assert!(
+        added(&scratch, &["--scheduler", "launchd"])
+            .status
+            .success()
+    );
+    assert!(
+        added(&scratch, &["--scheduler", "systemd"])
+            .status
+            .success()
+    );
+    let plist = scratch
+        .path
+        .join("home/Library/LaunchAgents/com.brave.bravebot.schedule.1.plist");
+    let units = scratch.path.join("home/.config/systemd/user");
+    assert!(plist.exists());
+    assert!(units.join("bravebot-schedule-2.timer").exists());
+    for id in ["1", "2"] {
+        let mut command = scratch.command(&["schedule", "remove", id]);
+        command.env("TOOL_STATUS", "1");
+        let removal = command.output().unwrap();
+        assert!(removal.status.success(), "{id}: {}", out(&removal));
+        assert!(
+            !scratch.state().join(format!("{id}.entry")).exists(),
+            "{id}"
+        );
+    }
+    assert!(!plist.exists());
+    assert!(!units.join("bravebot-schedule-2.timer").exists());
+    assert!(!units.join("bravebot-schedule-2.service").exists());
+}
+
+/// An entry that is named for one scheduler is refused a name that is none.
+#[test]
+fn an_unknown_scheduler_writes_nothing() {
+    let scratch = Scratch::new("schedule-unknown-scheduler");
+    let output = added(&scratch, &["--scheduler", "cron"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(scratch.table(), "");
+    assert!(!scratch.state().exists());
 }
