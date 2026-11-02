@@ -734,14 +734,12 @@ test('Send is allowed once the trust question has been answered', () => {
   assert.equal(canSend(null, true, 'hello'), false, 'no open session')
 })
 
-test('submit and the run-plan callback list every field they test', () => {
+test('submit lists every field it tests', () => {
   const source = readFileSync('src/renderer/use-turn.ts', 'utf8')
-  for (const name of ['submit', 'submitPlan']) {
-    const body = source.slice(source.indexOf(`const ${name} = useCallback(`))
-    const deps = body.slice(0, body.indexOf('\n  }, [')+ 200).match(/\n  \}, \[([^\]]*)\]/)[1]
-    assert.match(deps, /live\?\.askingTrust/, `${name} must depend on live?.askingTrust`)
-    assert.match(deps, /live\?\.running/, `${name} must depend on live?.running`)
-  }
+  const body = source.slice(source.indexOf('const submit = useCallback('))
+  const deps = body.slice(0, body.indexOf('\n  }, [')+ 200).match(/\n  \}, \[([^\]]*)\]/)[1]
+  assert.match(deps, /live\?\.askingTrust/, 'submit must depend on live?.askingTrust')
+  assert.match(deps, /live\?\.running/, 'submit must depend on live?.running')
 })
 
 // The window builds a session in three places (resumed, new, forked) from three different bridge

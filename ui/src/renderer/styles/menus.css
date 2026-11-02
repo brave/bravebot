@@ -20,6 +20,9 @@ leo-option {
 leo-menu-item:not(:active, [aria-selected]),
 leo-option:not(:active, [aria-selected]) { color: var(--ink-primary); }
 leo-menu-item[aria-disabled='true'] { color: var(--ink-disabled); cursor: default; }
+leo-menu-item[aria-disabled='true'] .menu-icon-row { --leo-icon-color: var(--leo-color-icon-disabled); }
+/* The chosen model row, on the same interactive background as a chosen item in a mode menu. */
+.model-menu leo-option[data-current='true']:not(:active) { background: var(--surface-selected); }
 
 .icon-menu { flex: none; }
 

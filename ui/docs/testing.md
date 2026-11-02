@@ -62,11 +62,6 @@ matter:
   app and bridge, against a model service and a server the script supplies. The server is
   the witness: an approval starts one process, the next message asks nobody and starts none,
   and the process has ended once the app has closed. No paid inference. Not for Windows.
-- `pnpm run drive:plan`: a manifest run started from the composer, through the real app and
-  bridge, against a model service the script serves itself. The plan writes one file, so
-  whether it ran is read off the disk. Covers an approved plan, a declined plan, and a turn
-  taken afterwards, which is sent nothing the run said. Then reads both runs' records from
-  the session list, and checks that a record has no message box. No paid inference.
 - `pnpm run drive:exposure`: a read of a file holding a credential, through the real app and
   bridge, against a model service the script serves itself. An approval hands the model the
   file, a refusal keeps it back, and a new conversation asks again. The script checks that
@@ -169,7 +164,6 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:fetch` | Approving and refusing a fetch, and a redirect to another host, from the window, end to end, against a local model service and website |
 | `pnpm run drive:language` | Choosing the window's language in Settings ▸ General: saved where `/language` keeps it, read from the next start, Automatic removing it, a choice that cannot be saved, `BRAVEBOT_LOCALE` outranking it, and Restart held back while a turn runs. Every row's layout in English and French, light and dark; screenshots in `$TMPDIR/bravebot-language` |
 | `pnpm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
-| `pnpm run drive:plan` | Starting a manifest run from the composer, approving and declining its plan, that the run stays out of the conversation, and that its record is read and cannot be typed into |
 | `pnpm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |
 | `pnpm run drive:shown` | That no decision card takes an approval before the rows it rests on have been on screen: every kind drawn too tall for a 900x560 window, shut until scrolled through, shut again on a change of width, deaf to a press while shut, and a refusal taken at once; and that rows swept through under the file-drop overlay count for nothing until the drag ends. Screenshots of a card waiting and read, light and dark |
 | `pnpm run drive:rules` | Permission rules from settings files: what is refused, what is not asked, and what is reported as not in force |
@@ -255,13 +249,13 @@ These pass `--user-data-dir` with a temporary profile, so the app's own state is
 `drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-bot-summon`, `drive-connectors`,
 `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
 `drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
-`drive-permission-mode`, `drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
+`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
 `drive-secure-files`, `drive-session-list`, `drive-shown`, `drive-turn-details`,
 `drive-ux-acceptance`, `drive-vetting`, `drive-visual` and `drive-perf`.
 
 `drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
 `drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-note-changelog-awake`, `drive-paste`,
-`drive-permission-mode`, `drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode` and `drive-vetting`
+`drive-permission-mode`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode` and `drive-vetting`
 launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
 the temporary profile its caller made. `drive-manual-walkthrough`, `drive-note-changelog-awake`, `drive-remembered-trust`,
 `drive-rewind` and `drive-vetting` keep their own fixtures and take from it the launch, the

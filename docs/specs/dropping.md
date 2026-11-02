@@ -387,8 +387,7 @@ The rest follows the terminal where a window can. Each file gets a marker at the
 from one counter per conversation, with a chip beside the box; the draft is what decides, so
 deleting the marker takes the file off and removing the chip deletes the marker
 ([DROP-6](#DROP-6)). A type nothing takes has its path written into the box as text and is granted
-nothing ([DROP-4](#DROP-4)). A folder is left out with a note ([DROP-5](#DROP-5)). A run planned
-first takes no drop, so Plan is off while anything is staged.
+nothing ([DROP-4](#DROP-4)). A folder is left out with a note ([DROP-5](#DROP-5)).
 
 One part does not follow. A message queued while a turn runs keeps its grants and sends them as
 its own turn when the running one ends, where [DROP-8](#DROP-8) names the file instead. The

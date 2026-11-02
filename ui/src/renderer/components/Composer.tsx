@@ -10,8 +10,7 @@ import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
 import { MentionList } from './MentionList'
 import { ModelPicker } from './ModelPicker'
-import { PermissionModePicker } from './PermissionModePicker'
-import { SandboxModePicker } from './SandboxModePicker'
+import { SessionControlsMenu } from './SessionControlsMenu'
 import type { PermissionMode, SandboxMode } from '../../shared/protocol'
 
 /** The bridge's offer for `line`, or nothing offered when it cannot answer or answers out of shape. */
@@ -61,8 +60,6 @@ export interface ComposerProps {
   /** Alt-Enter while a turn runs: hold the line for after it, as a turn of its own. */
   onQueue: () => void
   onCancel: () => void
-  /** Offered only where a plan run can start: a conversation, not a bot. */
-  onPlan?: () => void
   onModel: (model: string) => void
   /** Absent where no session exists to hold a mode, as on a bot's first page. */
   permissionMode?: PermissionMode
@@ -108,62 +105,6 @@ export interface ComposerProps {
   footer?: ComposerFooterProps
 }
 
-/** How the next message is handled: as an ordinary turn, or as one manifest run. */
-type Mode = 'agent' | 'plan'
-
-const PLAN_BLOCKED: Record<'unavailable' | 'bot' | 'attachments', string> = {
-  unavailable: 'A plan run cannot start here.',
-  bot: 'A bot answers in turns, so it has no plan mode.',
-  attachments: 'A plan is fixed before anything is read, so it cannot take attached files or pictures. Remove them, and name the file in the task.',
-}
-
-/**
- * The choice between Agent and Plan for the next message.
- *
- * Plan goes back to Agent once that message is sent, so it reads as a choice about one message and
- * never as a mode the conversation is in.
- */
-function ModeMenu({ mode, blocked, disabled, onMode }: {
-  mode: Mode
-  blocked: keyof typeof PLAN_BLOCKED | null
-  disabled: boolean
-  onMode: (mode: Mode) => void
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const choose = (next: Mode) => { setOpen(false); onMode(next) }
-  const label = mode === 'plan' ? 'Plan' : 'Agent'
-  return (
-    <ButtonMenu className="mode-menu" isOpen={open} placement="top-end" positionStrategy="fixed" onChange={({ isOpen }) => setOpen(isOpen)}>
-      <Button slot="anchor-content" kind="plain-faint" size="tiny" className={`mode-trigger${mode === 'plan' ? ' planning' : ''}`}
-        isDisabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-label={`Mode: ${label}`} data-test="composer-mode"
-        data-tooltip={mode === 'plan' ? 'The next message starts a plan run' : 'Choose how the next message is handled'}>
-        {label}
-        <Icon name="carat-down" slot="icon-after" />
-      </Button>
-      <leo-menu-item onClick={() => choose('agent')} data-test="mode-agent" aria-checked={mode === 'agent' ? 'true' : 'false'}>
-        <span className="menu-icon-row">
-          <span className="menu-text">
-            <span className="menu-title">Agent</span>
-            <span className="menu-subtitle">Works in turns, deciding each step after reading</span>
-          </span>
-          <span className="menu-check" aria-hidden="true">{mode === 'agent' && <Icon name="check-normal" />}</span>
-        </span>
-      </leo-menu-item>
-      <leo-menu-item onClick={() => { if (!blocked) choose('plan') }} data-test="mode-plan"
-        aria-disabled={blocked ? 'true' : undefined} aria-checked={mode === 'plan' ? 'true' : 'false'}
-        data-tooltip={blocked ? PLAN_BLOCKED[blocked] : undefined}>
-        <span className="menu-icon-row">
-          <span className="menu-text">
-            <span className="menu-title">Plan</span>
-            <span className="menu-subtitle">{blocked ? PLAN_BLOCKED[blocked] : 'Plans the whole task, shows you the plan, then runs it'}</span>
-          </span>
-          <span className="menu-check" aria-hidden="true">{mode === 'plan' && <Icon name="check-normal" />}</span>
-        </span>
-      </leo-menu-item>
-    </ButtonMenu>
-  )
-}
-
 /** Chosen from the project menu: a folder, no project, or the picker. */
 export type ProjectChoice = { kind: 'folder'; directory: string } | { kind: 'none' } | { kind: 'pick' }
 
@@ -190,7 +131,7 @@ export interface ComposerFooterProps {
 export const Composer = memo(function Composer(props: ComposerProps): React.JSX.Element {
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
-    draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
+    draft, onDraft, onCancel, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
     interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false, summonable = NO_BOTS,
     enhancement, onEnhance, onStopEnhance, onDismissEnhancement,
@@ -321,21 +262,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   const blocked = askingTrust || backendReady === false || starting
   const canSend = !blocked && draft.trim().length > 0
 
-  // Agent or Plan, for the next message only. Plan starts one manifest run and the menu goes back
-  // to Agent, because a session may not hold the mode (MANIFEST-9).
-  const [mode, setMode] = useState<Mode>('agent')
-  const planBlocked = !onPlan ? 'unavailable' : scope === 'bot' ? 'bot' : attachments.length > 0 || staged.length > 0 ? 'attachments' : null
-  useEffect(() => { setMode('agent') }, [session])
-  useEffect(() => { if (planBlocked) setMode('agent') }, [planBlocked])
-  const modeNow = useRef(mode)
-  modeNow.current = planBlocked ? 'agent' : mode
-  const submit = () => {
-    const now = latest.current
-    if (modeNow.current === 'plan' && now.onPlan) {
-      setMode('agent')
-      now.onPlan()
-    } else now.onSend()
-  }
+  const submit = () => { latest.current.onSend() }
 
   return (
     <footer className="composer" data-paste-session={session}>
@@ -521,10 +448,9 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                 onClick={props.onQueue}>Queue for after</Button>
             )}
             <ContextMeter session={session} model={model} tokens={contextTokens} archived={archived} compacting={compacting} />
-            {permissionMode && onMode && <PermissionModePicker key={`mode-${session}`} mode={permissionMode} onChoose={onMode} />}
-            {sandboxMode && onSandbox && <SandboxModePicker key={`sandbox-${session}`} mode={sandboxMode} onChoose={onSandbox} />}
+            <SessionControlsMenu key={`controls-${session}`} permissionMode={permissionMode} onPermissionMode={onMode}
+              sandboxMode={sandboxMode} onSandboxMode={onSandbox} />
             <ModelPicker compact session={session} scope={scope} key={session} model={model} disabled={running} onChoose={onModel} />
-            {onPlan && <ModeMenu mode={planBlocked ? 'agent' : mode} blocked={planBlocked} disabled={running} onMode={setMode} />}
             <IconButton icon={running ? 'stop-circle' : 'arrow-up'} label={running ? 'Stop' : 'Send'}
               shortcut={running ? '⌘.' : '⌘↩'}
               kind={running ? 'plain' : 'filled'} size="medium" className={running ? 'send stop' : 'send'}

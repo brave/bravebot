@@ -257,36 +257,6 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     }
   }, [])
 
-  /**
-   * Start a manifest run for a task: plan all of it, ask once, then walk the plan.
-   *
-   * One run per press. The session does not hold this as a mode, so the next message is an
-   * ordinary turn unless the button is pressed again.
-   */
-  const plan = useCallback(async (task: string) => {
-    const handle = handleRef.current
-    if (!handle) return
-    const model = openedLives.current.get(handle)?.model ?? null
-    updateSession(handle, (old) => old ? { ...old, running: true, entries: [...old.entries, t.planAsked(task)] } : old)
-    try {
-      await call('manifest.run', { session: handle, task, model })
-    } catch (error) {
-      if (error instanceof Unconfigurable) setUnconfigured(error.message)
-      updateSession(handle, (old) => old ? { ...old, running: false, queuePaused: true, entries: [...old.entries, t.errored(error instanceof Unconfigurable ? error.message : String(error))] } : old)
-    }
-  }, [])
-
-  /** Start a run from whatever is in the composer, where a run can take it. */
-  const submitPlan = useCallback(() => {
-    const task = draft.trim()
-    if (!handleRef.current || !canSend(live, backendReady, task)) return
-    // A run reads nothing before it plans, so it cannot take attached files, and a bot's turn
-    // carries a briefing a run has no place for.
-    if (live?.attachments?.length || named(live?.staging, task).length || live?.bot) return
-    setDraft('')
-    void plan(task)
-  }, [draft, live?.running, live?.askingTrust, live?.attachments, live?.staging, live?.bot, plan, backendReady])
-
   /** Hold the draft for after the turn: each queued message starts a turn of its own, with the grants it names. */
   const queueDraft = () => {
     if (!draft.trim()) return
@@ -320,5 +290,5 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     void interject(handle, line)
   }
 
-  return { answerTrust, submit, submitPlan, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
+  return { answerTrust, submit, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
 }

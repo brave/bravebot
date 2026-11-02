@@ -145,7 +145,7 @@ export function App(): React.JSX.Element {
   }, [live?.summary.id, live?.summary.directory, live?.model])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
-  const { answerTrust, submit, submitPlan, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
+  const { answerTrust, submit, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
     liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
   })
   const enhancement = useEnhance({ openedLives, updateSession, setProblem })
@@ -1059,7 +1059,6 @@ export function App(): React.JSX.Element {
         onMode={(mode) => void chooseMode(mode)}
         onSandbox={(mode) => void chooseSandbox(mode)}
         onSubmit={submit}
-        onPlan={submitPlan}
         reading={reading}
         onCancel={cancel}
         canExport={canExport}

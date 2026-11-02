@@ -145,8 +145,6 @@ interface Props {
   onMode: (mode: PermissionMode) => void
   onSandbox: (mode: SandboxMode) => void
   onSubmit: () => void
-  /** Start a manifest run from the draft. Absent where the window cannot start one. */
-  onPlan?: () => void
   onCancel: () => void
   onDecide: Answer
   onAnswer: AnswerQuestions
@@ -332,7 +330,6 @@ export function Transcript({
   onMode,
   onSandbox,
   onSubmit,
-  onPlan,
   reading,
   onCancel,
   onDecide,
@@ -483,7 +480,6 @@ export function Transcript({
   const restoreEnhanced = useEvent(onRestoreEnhanced)
   const dismissEnhancement = useEvent(onDismissEnhancement)
   const cancel = useEvent(onCancel)
-  const plan = useEvent(() => { latest(); onPlan?.() })
   const draftChanged = useEvent(onDraft)
   const chooseModelFor = useEvent(onModel)
   const chooseMode = useEvent(onMode)
@@ -908,7 +904,6 @@ export function Transcript({
           onRestoreEnhanced={restoreEnhanced}
           onDismissEnhancement={dismissEnhancement}
           onCancel={cancel}
-          onPlan={onPlan ? plan : undefined}
           onModel={chooseModelFor}
           permissionMode={live.permissionMode}
           onMode={chooseMode}

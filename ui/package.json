@@ -32,7 +32,6 @@
     "drive:fetch": "pnpm run bridge && electron-vite build && node scripts/drive-fetch.mjs",
     "drive:shown": "pnpm run bridge && electron-vite build && node scripts/drive-shown.mjs",
     "drive:language-server": "pnpm run bridge && electron-vite build && node scripts/drive-language-server.mjs",
-    "drive:plan": "pnpm run bridge && electron-vite build && node scripts/drive-plan.mjs",
     "drive:exposure": "pnpm run bridge && electron-vite build && node scripts/drive-exposure.mjs",
     "drive:mcp": "pnpm run bridge && electron-vite build && node scripts/drive-mcp.mjs",
     "drive:connectors": "pnpm run bridge && electron-vite build && node scripts/drive-connectors.mjs",
