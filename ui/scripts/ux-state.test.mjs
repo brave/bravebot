@@ -871,3 +871,18 @@ test('the sidebar lists sessions from the record, the open windows and unsent dr
   assert.equal(listing.attention, 1)
   assert.equal(list({ ...{ sessions: [summary('asks')], opened: [open('asks', { entries: [asking] })] }, currentKey: key('/p', 'asks') }).attention, 0, 'the session on screen does not ask for attention')
 })
+
+test('a bot is thinking only while no tool of the turn is running, whatever follows the tool in the record', () => {
+  const live = load('src/renderer/live.ts')
+  const t = load('src/renderer/transcript.ts')
+  const running = { kind: 'tool', id: 't1', activity: {}, landing: null }
+  const landed = { ...running, landing: {} }
+  const card = { kind: 'decision', id: 'd1' }
+  const at = (entries, phase = 'thinking') => ({ phase, composing: null, checking: null, hook: null, entries })
+  assert.equal(live.thinking(at([t.turnStarted(1), t.narrated('Looking')])), true)
+  assert.equal(live.thinking(at([t.turnStarted(1), running])), false)
+  assert.equal(live.thinking(at([t.turnStarted(1), running, card])), false, 'an approved run is still at work behind its card')
+  assert.equal(live.thinking(at([t.turnStarted(1), landed, card])), true, 'once it lands the model is writing again')
+  assert.equal(live.thinking(at([running, t.turnStarted(2), t.narrated('Next')])), true, 'a tool left from an earlier turn does not count')
+  assert.equal(live.thinking(at([t.turnStarted(1), running], 'working')), false)
+})

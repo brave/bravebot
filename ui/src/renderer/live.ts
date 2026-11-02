@@ -224,8 +224,14 @@ export function cameFrom(
 export function thinking(live: Live): boolean {
   if (live.phase !== 'thinking' && live.phase !== 'planning') return false
   if (live.composing !== null || live.checking !== null || live.hook !== null) return false
-  const last = live.entries.at(-1)
-  return !(last?.kind === 'tool' && last.landing === null)
+  // An approved run keeps its decision card after the tool entry, so the last entry is not enough:
+  // look through this turn, and no further, for a tool still running.
+  for (let i = live.entries.length - 1; i >= 0; i--) {
+    const entry = live.entries[i]!
+    if (entry.kind === 'turn-start') break
+    if (entry.kind === 'tool' && entry.landing === null) return false
+  }
+  return true
 }
 
 export const NEW_CHAT = 'New Chat'
