@@ -310,8 +310,15 @@ fn remove(session: &mut Session, root: &Path, alias: &str, ways: &Ways<'_>) {
     // The request first: a declaration removed under a request that stays is reported at the start
     // of every session as a server nobody declared.
     let withdrawn = (ways.programs)(root, &["mcp", MCP_DISABLE, alias]);
+    for line in &withdrawn.lines {
+        session.note(crate::render::printable(line));
+    }
+    // A request that stays would be left under a declaration that goes.
+    if !withdrawn.succeeded {
+        return;
+    }
     let removed = (ways.programs)(root, &["mcp", MCP_REMOVE, alias]);
-    for line in withdrawn.lines.iter().chain(&removed.lines) {
+    for line in &removed.lines {
         session.note(crate::render::printable(line));
     }
     if !removed.succeeded {
@@ -824,7 +831,7 @@ pub(crate) mod tests {
         session: &mut Session,
         argument: &str,
         machine: &Machine,
-        succeeds: bool,
+        succeeds: impl Fn(&[&str]) -> bool,
     ) -> (std::path::PathBuf, Vec<Vec<String>>) {
         let (settings, root) = requesting("mcp-remove", &["weather"]);
         let calls = std::cell::RefCell::new(Vec::new());
@@ -834,7 +841,7 @@ pub(crate) mod tests {
                 .borrow_mut()
                 .push(args.iter().map(ToString::to_string).collect::<Vec<_>>());
             Ran {
-                succeeded: succeeds,
+                succeeded: succeeds(args),
                 lines: vec![format!("ran {}", args.join(" "))],
             }
         };
@@ -870,7 +877,7 @@ pub(crate) mod tests {
         let mut session = holding(&["weather"]);
         session.servers.disabled.push("weather".to_string());
 
-        let (_, calls) = removing(&mut session, "remove weather", &machine, true);
+        let (_, calls) = removing(&mut session, "remove weather", &machine, |_| true);
 
         assert_eq!(
             calls,
@@ -895,14 +902,31 @@ pub(crate) mod tests {
         let machine = writable_machine("mcp-remove-fails-home");
         let mut session = holding(&["weather"]);
 
-        removing(&mut session, "remove weather", &machine, false);
+        removing(&mut session, "remove weather", &machine, |_| false);
 
         assert_eq!(session.servers.started, ["weather"]);
         assert!(session.servers.session.is_some());
+        assert_eq!(said(&session), ["ran mcp disable weather"]);
+    }
+
+    /// SERVERS-19. A request the program fails to withdraw leaves the declaration alone, so no
+    /// later session reports a server nobody declared. Rejects deleting it under a request that stays.
+    #[test]
+    fn a_request_that_cannot_be_withdrawn_keeps_the_declaration() {
+        let machine = writable_machine("mcp-remove-disable-fails-home");
+        let mut session = holding(&["weather"]);
+
+        let (_, calls) = removing(&mut session, "remove weather", &machine, |args| {
+            args[1] != "disable"
+        });
+
         assert_eq!(
-            said(&session),
-            ["ran mcp disable weather", "ran mcp remove weather"]
+            calls,
+            [["mcp", "disable", "weather"].map(String::from).to_vec()],
+            "remove was called after disable failed"
         );
+        assert_eq!(session.servers.started, ["weather"]);
+        assert!(session.servers.session.is_some());
     }
 
     /// SERVERS-19. A word that is not an alias, a session that writes nothing and a machine with no
@@ -938,7 +962,7 @@ pub(crate) mod tests {
         ] {
             let mut session = holding(&["weather"]);
 
-            let (_, calls) = removing(&mut session, argument, &machine, true);
+            let (_, calls) = removing(&mut session, argument, &machine, |_| true);
 
             assert!(calls.is_empty(), "{argument}: {calls:?}");
             assert_eq!(said(&session), [reply], "{argument}");
