@@ -641,6 +641,9 @@ pub(super) fn nudges(
         // A delegate that wrote in this workspace has delivered: its changes are on disk, and
         // the planner's own write calls are not the only way a turn writes (TURN-3).
         && worked.changed_at.is_none()
+        // A run line that may change files is a write tried, as a write tool's request is, and a
+        // delegate's is counted when it is taken back (TURN-3).
+        && !worked.run_may_change_files
         && !reminded.nothing_written
         && steps >= ROUNDS_BEFORE_WRITING
     {
@@ -1497,6 +1500,9 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
         && let Some(checkout) = workspace.checkout()
     {
         checkout.mark_worked_in();
+    }
+    if output.run_may_change_files {
+        state.worked.count_run_that_may_change_files();
     }
     attached.extend(output.attached.take());
 

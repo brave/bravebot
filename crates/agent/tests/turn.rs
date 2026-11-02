@@ -17126,6 +17126,69 @@ fn a_turn_that_wrote_and_ran_is_not_asked_about_it() {
     );
 }
 
+/// TURN-4: a turn whose only edit is a `run` line has run a program, so neither the planner nor the
+/// person is told that nothing was run.
+///
+/// Rejects counting a `run` line that TURN-3 counts as a changed file without also counting it as
+/// a program run, which would ask "nothing has been run" and report "no command was run" after a
+/// command ran.
+#[test]
+fn a_turn_whose_only_edit_is_a_run_line_is_not_told_nothing_was_run() {
+    let scratch = Scratch::new("edited-only-through-run");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut replies = vec![tool_request("run", r#"{"command":"touch made.txt"}"#)];
+    replies.extend(
+        (0..ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1)
+            .map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    replies.push(reply_with("done"));
+
+    let (endpoint, received) = serve_sequence(replies);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    assert!(
+        scratch.path.join("made.txt").exists(),
+        "the line did not run, so nothing here was tested"
+    );
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert!(
+        bodies.len() > ROUNDS_AFTER_WRITING_BEFORE_RUNNING + 1,
+        "the turn ended before the round the question would be asked in"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing has been run")),
+        "a turn that ran a command was asked why it had not"
+    );
+    assert!(
+        !reporter
+            .narration
+            .iter()
+            .any(|said| said.contains("no command was run")),
+        "the person was told no command was run after one ran: {:?}",
+        reporter.narration
+    );
+}
+
 /// GROUND-1, GROUND-4. A turn hands back what it did however it ended: each call that changed a
 /// file is a write, each that ran a program is a command, and a command after the last write is
 /// recorded as after it. A goal's record is built from this and nothing a reply said.
@@ -18171,6 +18234,274 @@ fn a_turn_whose_worker_delegate_wrote_is_not_told_nothing_is_written() {
             .iter()
             .any(|body| body.contains("nothing written yet")),
         "a turn whose worker wrote was told nothing is written"
+    );
+}
+
+/// Every request a turn sent when it opened with `first` and then read past the round the line to
+/// write comes at, with runs answered by `decision`. `prepare` sets up the workspace.
+fn requests_after_a_run_then_reading(
+    name: &str,
+    first: String,
+    decision: bravebot_agent::RunDecision,
+    prepare: impl FnOnce(&std::path::Path),
+) -> Vec<String> {
+    let scratch = Scratch::new(name);
+    prepare(&scratch.path);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut replies = vec![first];
+    replies.extend(
+        (0..ROUNDS_BEFORE_WRITING + 1).map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(decision),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+    every_request(&received)
+}
+
+/// TURN-3: a `run` line the planner asked for that nothing proves leaves every file alone counts as
+/// a write tried, so the turn is not told that nothing is written yet.
+///
+/// The line the turn reads with (`wc -l`) is the control: the table proves it reads only, so the
+/// same turn is told. Rejects counting every `run` as a write, which would silence the line for a
+/// turn that only reads; counting no `run` as one, which is the defect; and counting only a run
+/// that was approved, since the planner tried to deliver either way. The glob case rejects a
+/// classification that reads the names the pattern matched, where `*` matching a vouched-for
+/// listing must classify as the line was written.
+#[test]
+fn a_turn_whose_run_line_may_change_files_is_not_told_nothing_is_written() {
+    let told = |bodies: &[String]| {
+        bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet"))
+    };
+    let reading = |name: &str, line: &str, decision| {
+        requests_after_a_run_then_reading(
+            name,
+            tool_request("run", &serde_json::json!({ "command": line }).to_string()),
+            decision,
+            |dir| {
+                std::fs::write(dir.join("notes.txt"), "one\n").unwrap();
+                // A name a pattern can match that the table reads as an option it does not know, so
+                // the expanded line is not provable while the line as written is.
+                std::fs::write(dir.join("--zzz.txt"), "two\n").unwrap();
+            },
+        )
+    };
+
+    let control = reading(
+        "run-reads-only-control",
+        "wc -l notes.txt",
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert!(
+        control.len() > ROUNDS_BEFORE_WRITING,
+        "the control ended before the round the line is said in"
+    );
+    assert!(
+        told(&control),
+        "a turn that only read was not told to write, so this says nothing"
+    );
+
+    for (name, line, decision) in [
+        (
+            "run-touch-approved",
+            "touch made.txt",
+            bravebot_agent::RunDecision::approve(),
+        ),
+        (
+            "run-cp-approved",
+            "cp notes.txt copy.txt",
+            bravebot_agent::RunDecision::approve(),
+        ),
+        (
+            "run-redirect-approved",
+            "wc -l notes.txt > count.txt",
+            bravebot_agent::RunDecision::approve(),
+        ),
+        (
+            "run-touch-declined",
+            "touch made.txt",
+            bravebot_agent::RunDecision::reject(),
+        ),
+        (
+            "run-glob-operand",
+            "touch *",
+            bravebot_agent::RunDecision::approve(),
+        ),
+    ] {
+        let bodies = reading(name, line, decision);
+        assert!(
+            bodies.len() > ROUNDS_BEFORE_WRITING,
+            "{name}: the turn ended before the round the line is said in"
+        );
+        assert!(
+            !told(&bodies),
+            "{name}: a turn that asked to run `{line}` was told nothing is written"
+        );
+    }
+
+    let glob_read = reading(
+        "run-glob-read-only",
+        "wc -l *.txt",
+        bravebot_agent::RunDecision::approve(),
+    );
+    assert!(
+        told(&glob_read),
+        "a read-only line with a pattern was counted as a write, so the names it matched took part"
+    );
+}
+
+/// A line the rules refused before it compiled is not a write tried, so the turn is still told.
+///
+/// Rejects setting the signal from the request's text before the line is compiled and allowed.
+#[test]
+fn a_turn_whose_run_line_was_refused_before_it_compiled_is_still_told_to_write() {
+    let bodies = requests_after_a_run_then_reading(
+        "run-refused-unparsed",
+        tool_request("run", r#"{"command":"touch 'unterminated"}"#),
+        bravebot_agent::RunDecision::approve(),
+        |_| {},
+    );
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line is said in"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a run line that never compiled was counted as a write tried"
+    );
+}
+
+/// TURN-3: a background `run` line counts as a foreground one does.
+///
+/// The background path returns before the program ends, so a signal set only where a foreground
+/// line finishes would leave it out. The control is a background line the table proves read-only,
+/// which is still told.
+#[test]
+fn a_turn_whose_background_run_line_may_change_files_is_not_told_nothing_is_written() {
+    let told = |bodies: &[String]| {
+        bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet"))
+    };
+    let background = |name: &str, line: &str| {
+        requests_after_a_run_then_reading(
+            name,
+            tool_request(
+                "run",
+                &serde_json::json!({ "command": line, "background": true }).to_string(),
+            ),
+            bravebot_agent::RunDecision::approve(),
+            |dir| std::fs::write(dir.join("notes.txt"), "one\n").unwrap(),
+        )
+    };
+
+    let control = background("background-reads-only-control", "wc -l notes.txt");
+    assert!(
+        control.len() > ROUNDS_BEFORE_WRITING,
+        "the control ended before the round the line is said in"
+    );
+    assert!(
+        told(&control),
+        "a turn whose background line only read was not told to write, so this says nothing"
+    );
+
+    let bodies = background("background-touch", "touch made.txt");
+    assert!(
+        bodies.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line is said in"
+    );
+    assert!(
+        !told(&bodies),
+        "a turn that started a background line that may change files was told nothing is written"
+    );
+}
+
+/// TURN-3: a worker delegate that ran a line that may change files has delivered as one that
+/// wrote does, so its parent is not told nothing is written.
+///
+/// Rejects adopting a delegate's file changes and program runs but not the run-line signal.
+#[test]
+fn a_turn_whose_worker_delegate_ran_a_line_that_may_change_files_is_not_told_nothing_is_written() {
+    let scratch = Scratch::new("delegate-ran-writing-line");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let mut parent = vec![
+        tool_request("list_files", r#"{"directory":"."}"#),
+        tool_request("spawn_agent", r#"{"kind":"worker","task":"RUN-THE-SLICE"}"#),
+        reply_with("waiting on the delegate"),
+    ];
+    parent.extend(
+        (0..ROUNDS_BEFORE_WRITING + 1).map(|_| tool_request("list_files", r#"{"directory":"."}"#)),
+    );
+    parent.push(reply_with("done"));
+
+    let (endpoint, received, held) = serve_a_turn_and_its_delegate(
+        ("HAND-OFF-THE-RUN", parent),
+        (
+            "RUN-THE-SLICE",
+            vec![
+                tool_request("run", r#"{"command":"touch slice.txt"}"#),
+                reply_with("ran it"),
+            ],
+        ),
+    );
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HAND-OFF-THE-RUN"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate was answered before its parent waited for it"
+    );
+    assert!(
+        scratch.path.join("slice.txt").exists(),
+        "the delegate's line did not run, so nothing here was tested"
+    );
+    let asked = every_request(&received);
+    let parent_requests: Vec<&String> = asked
+        .iter()
+        .filter(|body| body.contains("HAND-OFF-THE-RUN"))
+        .collect();
+    assert!(
+        parent_requests.len() > ROUNDS_BEFORE_WRITING,
+        "the turn ended before the round the line would be said in"
+    );
+    assert!(
+        !parent_requests
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn whose worker ran a writing line was told nothing is written"
     );
 }
 
@@ -19966,6 +20297,150 @@ fn a_turn_after_a_completed_turn_that_wrote_is_still_told_to_write() {
     .expect("the second turn finishes");
 
     let bodies: Vec<String> = received.try_iter().collect();
+    let fired = bodies
+        .iter()
+        .position(|body| body.contains("nothing written yet"))
+        .expect("a new task after an answered one was never told it had written nothing");
+    assert_eq!(
+        fired, ROUNDS_BEFORE_WRITING,
+        "the line came on the wrong round"
+    );
+}
+
+/// What the second turn over `conversation` sent when it read past the threshold, after a first
+/// turn that asked for `first_line` to be run. `stop_after_the_run` stops the first turn once its
+/// line has finished, standing in for Escape pressed after it.
+fn requests_of_a_second_turn_after_a_run(
+    name: &str,
+    first_line: &str,
+    stop_after_the_run: bool,
+) -> Vec<String> {
+    /// Stops the turn once its `run` has finished.
+    struct StopAfterTheRun(bravebot_core::cancel::Cancel);
+
+    impl bravebot_agent::report::Reporter for StopAfterTheRun {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn tool_finished(&mut self, activity: bravebot_agent::report::Activity) {
+            if activity.tool == "run" {
+                self.0.cancel();
+            }
+        }
+    }
+
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            &serde_json::json!({ "command": first_line }).to_string(),
+        ),
+        reply_with("done"),
+    ]);
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let first = if stop_after_the_run {
+        turn::resume(
+            &config_for(&endpoint),
+            &egress,
+            &workspace,
+            &Task::new("add a toggle"),
+            &mut conversation,
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+            &mut StopAfterTheRun(cancel.clone()),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &cancel,
+        )
+    } else {
+        turn::resume(
+            &config_for(&endpoint),
+            &egress,
+            &workspace,
+            &Task::new("add a toggle"),
+            &mut conversation,
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &cancel,
+        )
+    };
+    match (stop_after_the_run, first.outcome) {
+        (true, Err(turn::TurnError::Cancelled { .. })) | (false, Ok(_)) => {}
+        (_, other) => panic!(
+            "the first turn did not end as this test needs: {:?}",
+            other.err()
+        ),
+    }
+    assert!(
+        scratch.path.join("made.txt").exists(),
+        "the first turn's line did not run, so this says nothing about a turn after it"
+    );
+
+    let mut replies: Vec<String> = (0..ROUNDS_BEFORE_WRITING + 1)
+        .map(|_| tool_request("list_files", r#"{"directory":"."}"#))
+        .collect();
+    replies.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence(replies);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("continue"),
+        &mut conversation,
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        bodies.len(),
+        ROUNDS_BEFORE_WRITING + 2,
+        "the second turn never read past the threshold, so it could not have been told"
+    );
+    bodies
+}
+
+/// TURN-3: a turn continuing one that was stopped after a `run` line that may change files is not
+/// told that nothing is written yet, as for a stopped turn that wrote with a file tool.
+///
+/// Rejects keeping the signal on the turn: the stop ends the turn, and the continuing one would
+/// start from nothing and be told.
+#[test]
+fn a_turn_after_a_stopped_turn_that_ran_a_writing_line_is_not_told_to_write() {
+    let bodies =
+        requests_of_a_second_turn_after_a_run("stopped-after-a-run", "touch made.txt", true);
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("nothing written yet")),
+        "a turn continuing a stopped one that ran a writing line was told it had written nothing"
+    );
+}
+
+/// TURN-3: a turn after one that ran a line that may change files and answered starts from nothing
+/// written, so reading past the threshold is told as it is after a write tool.
+///
+/// Rejects keeping the signal for the whole session, which would silence the line for every task
+/// after the first run.
+#[test]
+fn a_turn_after_a_completed_turn_that_ran_a_writing_line_is_still_told_to_write() {
+    let bodies =
+        requests_of_a_second_turn_after_a_run("answered-after-a-run", "touch made.txt", false);
     let fired = bodies
         .iter()
         .position(|body| body.contains("nothing written yet"))

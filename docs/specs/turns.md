@@ -116,6 +116,23 @@ written: the files are on disk and its report says which, so the line is not sai
 is taken back. Saying it would contradict the work just done and could send the planner to write the
 same change twice. It is the same record [TURN-4](#TURN-4) reads.
 
+**A run the table does not prove read-only counts.** A `run` line is a way to write, so the
+planner asking for one that nothing establishes leaves every file alone has tried to deliver, the
+same as a write tool request, and the line is not said. The question is the one the approval
+answer is built on: the line counts unless the audited table of read-only programs
+([CMDLINE-8](tools/command-line.md#CMDLINE-8)) answers for every step, so `touch`, `cp`, a build, a
+redirection and an environment assignment count and `wc -l notes.txt` does not. It is asked once
+the line has compiled and the person's rules have let it through, of the plan with each pattern
+left as the line wrote it, so the names a pattern matched in a directory nobody vouched for never
+decide it ([CMDLINE-4](tools/command-line.md#CMDLINE-4)). It is the request and not the outcome, as
+for a write tool: a line the person declined counts, and a line refused before it compiled does not.
+It does not feed [TURN-4](#TURN-4) or the work record's writes ([GROUND-1](grounding.md#GROUND-1)),
+which count only a call that changed a file: a line the table does not prove read-only is often a
+build or a test run, so counting it as a write would leave "a command ran after the last write" false
+for every build. A call that ran a program is already a command for TURN-4, so a turn whose edits all
+go through `run` is not told that files changed and nothing was run. A worker delegate that asked for
+such a line has delivered, and the parent counts it when it takes the delegate back.
+
 **Counted since the last answer, not since the turn began.** A stop is usually not the end of a
 task: the next prompt is `continue`, and a change the stopped turn asked to write is the change
 being continued. An answer usually is the end of one, so the turn after it starts from nothing
@@ -127,6 +144,13 @@ at most a nudge the kept turns did not need, where starting set could withhold o
 `verified-by: bravebot_agent::turn::a_turn_that_writes_nothing_for_long_enough_is_told_so`
 `verified-by: bravebot_agent::turn::a_turn_that_has_written_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_whose_worker_delegate_wrote_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_whose_run_line_may_change_files_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_whose_run_line_was_refused_before_it_compiled_is_still_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_whose_background_run_line_may_change_files_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_whose_worker_delegate_ran_a_line_that_may_change_files_is_not_told_nothing_is_written`
+`verified-by: bravebot_agent::turn::a_turn_after_a_stopped_turn_that_ran_a_writing_line_is_not_told_to_write`
+`verified-by: bravebot_agent::turn::a_turn_after_a_completed_turn_that_ran_a_writing_line_is_still_told_to_write`
+`verified-by: bravebot_core::policy::a_plan_may_change_files_unless_the_table_proves_it_reads_only`
 `verified-by: bravebot_agent::turn::a_turn_in_plan_mode_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_under_read_only_is_not_told_to_write`
 `verified-by: bravebot_agent::turn::a_turn_moved_into_plan_mode_is_not_told_to_write`
@@ -164,7 +188,10 @@ programs have started. A line that ended in any other error does not, since the 
 say whether a program in it had started. This is the opposite of [TURN-3](#TURN-3)'s nudge and for
 the opposite reason:
 that line is about what the planner tried to do, and these two are about what the person is
-about to act on.
+about to act on. A `run` line that [TURN-3](#TURN-3) counts as a write tried is not a changed file
+here, and is a program run only when one started, so a line the person declined counts for TURN-3
+and not for this. A turn whose only changes were made by `run` lines has run a program, so it is
+neither asked the question nor told the closing line: both are about a turn that ran no program.
 
 **Work a delegate did.** A delegate working in the turn's own workspace writes and runs there, so
 a file it changed and a program it ran count as the turn's from the round the turn takes it back
@@ -191,6 +218,7 @@ In the terminal app the person's line is the open-loops line of [OPEN-3](open-lo
 `verified-by: bravebot_agent::turn::a_run_the_person_refused_leaves_the_change_reported_as_never_built`
 `verified-by: bravebot_agent::turn::a_turn_offered_no_run_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_stopped_before_any_write_is_not_told_a_change_was_never_built`
+`verified-by: bravebot_agent::turn::a_turn_whose_only_edit_is_a_run_line_is_not_told_nothing_was_run`
 `verified-by: bravebot_agent::turn::a_turn_stopped_after_a_write_is_told_the_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_after_a_write_is_told_the_change_was_never_built`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`

@@ -1218,6 +1218,10 @@ pub(crate) struct Worked {
     changed_at: Option<usize>,
     /// Whether a program has been run there since the run began.
     ran_a_program: bool,
+    /// Whether a `run` line has been asked for there that nothing establishes leaves every file as
+    /// it found it, which TURN-3 counts as a write having been tried. Not a change: it feeds neither
+    /// `changed_at` nor the work record.
+    run_may_change_files: bool,
     /// The calls counted, for the planner, the person and a goal's judge (GROUND-1).
     pub(crate) work: crate::outcome::Work,
 }
@@ -1239,7 +1243,13 @@ impl Worked {
             self.changed_at.get_or_insert(round);
         }
         self.ran_a_program |= delegate.ran_a_program;
+        self.run_may_change_files |= delegate.run_may_change_files;
         self.work.then(delegate.work);
+    }
+
+    /// Count a `run` line that may change files, as TURN-3 counts a write tool asked for.
+    fn count_run_that_may_change_files(&mut self) {
+        self.run_may_change_files = true;
     }
 
     /// Count a program a delegate ran in a checkout holding this run's changes as this run's own,
@@ -3804,6 +3814,11 @@ where
             policy.call_ended(&call.function.name);
             let took = ran_at.elapsed();
             let cancellation = output.cancelled;
+            // The conversation holds it as it holds a write tool asked for, so a stopped turn's
+            // next prompt still has it and a completed one does not (TURN-3).
+            if output.run_may_change_files {
+                conversation.write_requested();
+            }
             round_steps::after_a_call(
                 scope,
                 inputs,

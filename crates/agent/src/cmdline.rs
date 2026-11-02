@@ -1961,6 +1961,52 @@ pub fn display_as_written(plan: &Plan) -> String {
         .unwrap_or_else(|| plan.line.clone())
 }
 
+/// The plan with each pattern in the line left as the line wrote it, in place of the names it
+/// matched, for a question about what the line could do that must not turn on a directory listing.
+///
+/// A word with no pattern stands for what it expands to, which reads nothing from disk. A plan
+/// whose steps this walk cannot pair with the line's commands comes back as `None`, and the caller
+/// answers for a plan nothing is known about. Not a plan to run.
+pub fn plan_as_written(plan: &Plan, home: Option<&Path>) -> Option<Plan> {
+    let node = parse(&plan.line).ok()?;
+    let mut written = Vec::new();
+    unexpanded_operands(&node, &plan.directory, home, &mut written)?;
+    Some(Plan {
+        steps: plan.steps.with_operands(&written)?,
+        ..plan.clone()
+    })
+}
+
+/// Each command's operands with a pattern kept as written, in the order the compiler builds its
+/// steps. `None` where a word cannot be expanded.
+fn unexpanded_operands(
+    node: &Node,
+    directory: &Path,
+    home: Option<&Path>,
+    out: &mut Vec<Vec<String>>,
+) -> Option<()> {
+    let command = |command: &Command, out: &mut Vec<Vec<String>>| -> Option<()> {
+        let mut operands = Vec::new();
+        for word in &command.words[1..] {
+            match word.pieces.iter().any(is_pattern) {
+                true => operands.push(render(&word.pieces)),
+                false => operands.extend(expand(word, directory, home).ok()?),
+            }
+        }
+        out.push(operands);
+        Some(())
+    };
+    match node {
+        Node::Command(one) => command(one, out),
+        Node::Pipeline(commands) => commands.iter().try_for_each(|one| command(one, out)),
+        Node::Join { left, right, .. } => {
+            unexpanded_operands(left, directory, home, out)?;
+            unexpanded_operands(right, directory, home, out)
+        }
+        Node::Group(inner) => unexpanded_operands(inner, directory, home, out),
+    }
+}
+
 /// Each command's operands as the line spelled them, in the order the compiler builds its steps.
 fn operands_as_written(node: &Node, out: &mut Vec<Vec<String>>) {
     let command = |command: &Command, out: &mut Vec<Vec<String>>| {

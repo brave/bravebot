@@ -223,6 +223,13 @@ pub struct Output {
     /// anything started. Read for the checkout, which is kept wherever one was started
     /// (CHECKOUT-15).
     pub started_a_program: bool,
+    /// Whether this call was a `run` whose compiled plan is not established as leaving every file
+    /// as it found it (TURN-3).
+    ///
+    /// The request rather than the outcome, as a write tool's name is: a line the person declined
+    /// was still the planner trying to deliver. Not a count of files changed, so it never feeds
+    /// `changed_a_file` or the work record. False for a line refused before it was compiled.
+    pub run_may_change_files: bool,
     /// The directory each git stage of the command worked in, so a result sealed from the planner
     /// can name the tool that reads history without a prompt where that tool opens the
     /// repository. Where the line ran, moved by the stage's leading `-C` options.
@@ -1241,6 +1248,8 @@ struct Produced {
     command_failed: bool,
     /// Whether a program was started, including a call that was then refused or failed.
     started_a_program: bool,
+    /// See [`Output::run_may_change_files`].
+    run_may_change_files: bool,
     /// The directory each git stage of the command worked in.
     ran_git_in: Vec<std::path::PathBuf>,
     /// Which document a processor's answer is about, where it produced one.
@@ -1356,6 +1365,7 @@ impl Produced {
             ran_a_program: false,
             command_failed: false,
             started_a_program: false,
+            run_may_change_files: false,
             ran_git_in: Vec::new(),
             answers_for: None,
             said: None,
@@ -2667,6 +2677,7 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         ran_a_program: produced.ran_a_program,
         command_failed: produced.command_failed,
         started_a_program: produced.started_a_program,
+        run_may_change_files: produced.run_may_change_files,
         ran_git_in: produced.ran_git_in,
         usage: produced.usage,
         inference_interval: produced.inference_interval,
@@ -9319,6 +9330,30 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     reporter: &mut R,
     arguments: &Value,
 ) -> Produced {
+    let mut may_change_files = false;
+    let mut produced = run_line(
+        policy,
+        tools,
+        confirmer,
+        reporter,
+        arguments,
+        &mut may_change_files,
+    );
+    produced.run_may_change_files = may_change_files;
+    produced
+}
+
+/// The body of [`run`]. `may_change_files` is set once the line has compiled and the rules have
+/// let it through, to whether nothing establishes that the plan leaves every file alone
+/// ([`Policy::plan_may_change_files`]), and stays false for a line refused before that.
+fn run_line<S: Sink, C: Confirmer, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    reporter: &mut R,
+    arguments: &Value,
+    may_change_files: &mut bool,
+) -> Produced {
     let Some(line) = argument(arguments, "command") else {
         return Produced::problem(
             "error: 'command' is required and must be a string holding one command line, \
@@ -9449,6 +9484,12 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         }
         Err(crate::cmdline::Stopped::Rule(denial)) => return refused_by_a_rule(&denial),
     };
+
+    // Asked of the plan with its patterns left as the line wrote them: the names a pattern took out
+    // of a directory nobody may have vouched for do not decide it (CMDLINE-4). A plan that cannot
+    // be paired with the line is one nothing is known about.
+    *may_change_files = crate::cmdline::plan_as_written(&plan, tools.profile)
+        .is_none_or(|written| policy.plan_may_change_files(&written));
 
     let reaches_anywhere = match check_the_plan_before_asking(policy, tools, &plan, unconfined) {
         Ok(reaches_anywhere) => reaches_anywhere,
