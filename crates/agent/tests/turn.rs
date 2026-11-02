@@ -17804,6 +17804,107 @@ fn a_caller_that_shows_open_loops_is_not_also_told_of_unbuilt_changes() {
     assert!(unbuilt(&told), "{told:?}");
 }
 
+/// OPEN-1, TURN-4, GROUND-1. A turn whose only write lands in the session's own directory leaves
+/// nothing to build: its record counts no write, the closing line about unbuilt changes is not
+/// said, and the next turn is told nothing of them. A write into the project in the same setup
+/// still counts. The regression it rejects: every successful write setting the changed-file flag
+/// whatever it landed on.
+///
+/// Also pins the order (OPEN-1, GROUND-1): a scratch write beside a project write leaves the one
+/// project write, and a scratch write after a project write does not make the turn read as built or
+/// as unbuilt differently. The regression it rejects there: a scratch write replacing the order
+/// flag, or being counted as a write.
+#[test]
+fn a_turn_that_only_writes_in_the_session_directory_leaves_nothing_unbuilt() {
+    let turn_writing = |name: &str, writes: &[bool]| {
+        let scratch = Scratch::new(name);
+        let session = Scratch::new(&format!("{name}-given"));
+        let given = session
+            .path
+            .canonicalize()
+            .expect("the session's own directory");
+        let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+        workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(given.clone()));
+        let landed: Vec<std::path::PathBuf> = writes
+            .iter()
+            .enumerate()
+            .map(|(at, in_session)| match in_session {
+                true => given.join(format!("note{at}.txt")),
+                false => scratch.path.join(format!("a{at}.txt")),
+            })
+            .collect();
+        let mut replies: Vec<_> = landed
+            .iter()
+            .enumerate()
+            .map(|(at, path)| {
+                let name = match writes[at] {
+                    true => path.to_string_lossy().into_owned(),
+                    false => format!("a{at}.txt"),
+                };
+                tool_request(
+                    "write_file",
+                    &serde_json::json!({"path": name, "contents": "one"}).to_string(),
+                )
+            })
+            .collect();
+        replies.push(reply_with("done"));
+        let (endpoint, _received) = serve_sequence(replies);
+        let config = config_for(&endpoint);
+        let mut reporter = bravebot_agent::report::RecordingReporter::default();
+        let completed = turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("edit"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+            &mut reporter,
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        assert!(completed.outcome.is_ok());
+        assert!(
+            landed.iter().all(|path| path.exists()),
+            "a write did not land"
+        );
+        (completed.work, reporter.narration)
+    };
+    let (work, told) = turn_writing("scratch-only-turn", &[true]);
+    assert_eq!(work, bravebot_agent::Work::default(), "{work:?}");
+    assert!(
+        !told.iter().any(|said| said.contains("no command was run")),
+        "{told:?}"
+    );
+    assert!(
+        !bravebot_agent::open_loops::Loops::from_work(work).unbuilt_changes,
+        "a scratch write opened the unbuilt-changes loop"
+    );
+    let (work, told) = turn_writing("project-write-turn", &[false]);
+    assert_eq!(work.writes, 1, "{work:?}");
+    assert!(
+        told.iter().any(|said| said.contains("no command was run")),
+        "{told:?}"
+    );
+    for (name, writes) in [
+        ("scratch-then-project-turn", [true, false]),
+        ("project-then-scratch-turn", [false, true]),
+    ] {
+        let (work, told) = turn_writing(name, &writes);
+        assert_eq!(work.writes, 1, "{name}: {work:?}");
+        assert!(
+            bravebot_agent::open_loops::Loops::from_work(work).unbuilt_changes,
+            "{name}: the project write was not left unbuilt"
+        );
+        assert!(
+            told.iter().any(|said| said.contains("no command was run")),
+            "{name}: {told:?}"
+        );
+    }
+}
+
 /// An authority nothing here holds is recorded where it is spent, and nowhere else.
 ///
 /// The trail is the one record of a session that outlives the process, so a person accounting

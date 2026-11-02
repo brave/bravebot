@@ -52,12 +52,17 @@ An open loop is one of these, and nothing else:
 
 Each rule reads only bravebot's own records: the work record, exit statuses, the task list, the job table, the checkout list, the goal, and git's status of the files the session wrote. No model decides whether a loop is open, and nothing a model says closes one. A loop closes when its rule stops holding: a command runs after the last write, a later command ends with status 0, the todo is marked done, the job ends, the checkout is applied or removed, the files are committed or put back, the goal is cleared or resumed.
 
+A write into the session's own directory is not a written file for this rule. What a turn puts there is for its own use, outside the project and gone when the session ends, so it leaves nothing to build (a rewind does not restore it either, and [sessions.md](sessions.md) records it as a coverage gap for the same reason). The work record does not count the write, so the loop does not open for it, the planner is not told of it ([OPEN-4](#OPEN-4)), and `/unfinished` does not list the file under unbuilt changes ([OPEN-5](#OPEN-5)). The test is the resolved destination of the write, never the name typed and never what the file holds, so a link in the project that lands in that directory is not counted. Applying a checkout writes into the source tree and still counts. A session with no such directory counts every write.
+
 **Why fixed rules.** A model asked "is anything unfinished?" can be talked out of the answer by the content it read. A rule over bravebot's own records cannot.
 
 **Why these seven.** Each is something bravebot already records and can check cheaply at the end of a turn. Open review comments on a pull request and a failing CI run are left out, since both need a network request and their content is untrusted ([Out of scope](#out-of-scope)).
 
 `verified-by: bravebot_agent::open_loops::a_write_after_the_last_command_is_unbuilt_changes`
 `verified-by: bravebot_agent::turn::a_change_made_by_a_run_line_is_an_unbuilt_change_until_a_command_runs_after_it`
+`verified-by: bravebot_agent::tools::a_write_into_the_session_directory_is_not_a_changed_file`
+`verified-by: bravebot_agent::turn::a_turn_that_only_writes_in_the_session_directory_leaves_nothing_unbuilt`
+`verified-by: bravebot_tui::state::open_loops::unfinished_does_not_list_a_file_in_the_session_directory_as_unbuilt`
 `verified-by: bravebot_agent::open_loops::a_command_that_exited_non_zero_is_a_failed_command_until_another_runs`
 `verified-by: bravebot_agent::turn::a_turns_record_says_whether_its_last_command_failed`
 `verified-by: bravebot_agent::workspace::a_kept_checkout_is_open_until_applied_or_removed`
@@ -123,7 +128,8 @@ It is fixed text with counts and the job names bravebot minted ([RUN-15](tools/r
 
 `/unfinished` lists each open loop with what you need to act on it:
 
-- unbuilt changes: the files written since the last command
+- unbuilt changes: the files written since the last command, leaving out those that landed in the
+  session's own directory ([OPEN-1](#OPEN-1))
 - a failed command: the line and its exit status
 - open todos: each todo's text
 - running jobs: each job's name and how long it has run
@@ -138,6 +144,7 @@ With nothing open it says `nothing is open`. It starts no turn and sends nothing
 **Why paths here and not in the line.** You asked for the details, and they are shown to you only. The line and the planner's message stay counts.
 
 `verified-by: bravebot_tui::state::open_loops::unfinished_lists_each_open_loop_with_what_closes_it`
+`verified-by: bravebot_tui::state::open_loops::unfinished_does_not_list_a_file_in_the_session_directory_as_unbuilt`
 
 <a id="OPEN-6"></a>
 ### OPEN-6: a resumed session shows what it left open
@@ -189,5 +196,9 @@ The line and the planner's message are fixed English with counts and job names, 
 - **A failed command can be a command that was meant to fail**, such as a test written to fail first. It shows as open until a later command succeeds.
 - **Todo state is the planner's word.** A todo marked done is taken as done. bravebot does not check the work behind it.
 - **`commit` is not built yet** ([COMMIT-1](commits.md#COMMIT-1) is proposed), so every git repository counts as `commit = off` until it is.
+- **A write through a link that lands in the session's own directory is not counted.** The test is
+  where the write landed ([OPEN-1](#OPEN-1)), so such a write is hidden from the unbuilt-changes
+  warning, whatever the name that was typed. The person can still see it in the files state
+  ([FILES-1](files-mode.md#FILES-1)).
 - **A repository whose `.git` is a file**, a worktree git made, counts no uncommitted files, since bravebot reads only a `.git` directory without starting git.
 - **A file whose name is not UTF-8 is never counted as uncommitted**, since bravebot's reader of git's status lists only names that are text. It is never taken for another file whose name reads the same.

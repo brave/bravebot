@@ -1607,6 +1607,21 @@ impl Produced {
         self
     }
 
+    /// [`Produced::having_changed_a_file`] for a write that landed at `landed`, the destination the
+    /// workspace resolved, unless that is inside the session's own directory.
+    ///
+    /// What a turn writes there is for its own use, outside the project and gone when the session
+    /// ends, so it leaves nothing to build and is not a change the work record counts. Decided on
+    /// where the write landed and never on the name typed, so a link in the project into that
+    /// directory is not counted either. Nothing the file holds is read.
+    fn having_changed_a_file_at(self, workspace: &Workspace, landed: &std::path::Path) -> Self {
+        if workspace.reaches_scratch(landed) {
+            self
+        } else {
+            self.having_changed_a_file()
+        }
+    }
+
     /// Say that this call ran a program.
     ///
     /// Only where it started. A line the person declined and one that failed to launch have both
@@ -5538,7 +5553,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     policy.issue_grant("file_write", "path", proposed_path.clone());
 
     match workspace.write_endorsed_at_revision(policy, &path, &body, Some(approved_revision)) {
-        Ok(_) => {
+        Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
                 note,
@@ -5595,7 +5610,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                 .with_changes(changes)
                 .with_written(written)
                 .marked_untrusted(!body_label.is_trusted())
-                .having_changed_a_file()
+                .having_changed_a_file_at(workspace, &landed)
         }
         Err(e) => write_refused(policy, tools, "write_file", destination, &e, &shown_path),
     }
@@ -5714,7 +5729,7 @@ fn write_a_picture<S: Sink, C: Confirmer>(
         },
     );
     match outcome {
-        Ok(_) => {
+        Ok(landed) => {
             workspace.record_write(Some(&shown_path));
             let verb = if replaces { "replaced" } else { "created" };
             confirmed(
@@ -5726,7 +5741,7 @@ fn write_a_picture<S: Sink, C: Confirmer>(
                 format!("{media}, {size} bytes"),
             )
             .marked_untrusted(!label.is_trusted())
-            .having_changed_a_file()
+            .having_changed_a_file_at(workspace, &landed)
         }
         Err(e) => write_refused(
             policy,
@@ -6602,7 +6617,7 @@ fn edit_file<S: Sink, C: Confirmer>(
     // The path as the planner gave it, not the copy promoted above for the read. A write routed
     // on a promoted value would be routed by the model's own proposal.
     match workspace.write_endorsed_if_unchanged(policy, &proposed, &body, &current) {
-        Ok(_) => {
+        Ok(landed) => {
             workspace.record_write((destination == Destination::Named).then_some(&shown_path));
             let Reviewed {
                 note,
@@ -6692,7 +6707,7 @@ fn edit_file<S: Sink, C: Confirmer>(
                         .with_changes(changes)
                         .with_written(written)
                         .marked_untrusted(false)
-                        .having_changed_a_file();
+                        .having_changed_a_file_at(workspace, &landed);
                     }
                     policy.allow_exposing_read(&keyed, answered_by);
                 }
@@ -6705,13 +6720,13 @@ fn edit_file<S: Sink, C: Confirmer>(
                     .with_changes(changes)
                     .with_written(written)
                     .marked_untrusted(false)
-                    .having_changed_a_file()
+                    .having_changed_a_file_at(workspace, &landed)
             } else {
                 confirmed(headline, note)
                     .with_changes(changes)
                     .with_written(written)
                     .marked_untrusted(true)
-                    .having_changed_a_file()
+                    .having_changed_a_file_at(workspace, &landed)
             }
         }
         // As the read above: the name the planner is told is the one it asked with. `Stale` is the
@@ -10991,7 +11006,7 @@ fn download_url<S: Sink, C: Confirmer>(
     );
 
     match (outcome, stopped) {
-        (Ok(_), _) => {
+        (Ok(landed), _) => {
             workspace.record_write(Some(&shown_path));
             // The stream's own count of what it moved: nothing here measured the released chunks.
             let written = stream.handed_back();
@@ -11005,7 +11020,7 @@ fn download_url<S: Sink, C: Confirmer>(
                 format!("{status}, {written} bytes, {content_type}"),
             )
             .marked_untrusted(true)
-            .having_changed_a_file()
+            .having_changed_a_file_at(workspace, &landed)
         }
         (Err(_), Some(DownloadStopped::TooLarge)) => Produced::problem(format!(
             "error: {url} is larger than the {} bytes a download may write, so nothing was \
@@ -27546,6 +27561,83 @@ mod tests {
             !failed && trusted && said.contains(SKILL_FILE_MARKER),
             "a link inside the skill's directory was refused: {said}"
         );
+    }
+
+    /// The regression it rejects: a `write_file` into the session's own directory being counted as
+    /// a change to the project, so the turn ends saying a change was not built when the project is
+    /// as it was. The control is a write into the project, which still counts.
+    ///
+    /// The test is the resolved destination, never the name typed: a link in an added directory
+    /// into the session's directory is not counted, and a link in the session's directory out to the
+    /// added directory is. The regression it rejects is a test on the name typed. A link between the
+    /// project and the session's directory is refused by the workspace before any flag is set. With
+    /// no session directory every write counts.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_into_the_session_directory_is_not_a_changed_file() {
+        let project = arguments::Scratch::new("changed-flag-project");
+        let session = arguments::Scratch::new("changed-flag-session");
+        let session_path = session.path.canonicalize().unwrap();
+        let mut workspace = Workspace::new(&project.path).expect("workspace");
+        workspace.open_scratch(crate::scratch::ScratchDirectory::observed(
+            session_path.clone(),
+        ));
+        let changed_in = |workspace: &Workspace, path: String| {
+            let mut sink = RecordingSink::new();
+            let mut policy = skill_policy(&mut sink);
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": "a",
+                "function": {
+                    "name": "write_file",
+                    "arguments": json!({"path": path, "contents": "x"}).to_string()
+                }
+            }))
+            .expect("a call");
+            let produced = with_tools(workspace, |tools| {
+                dispatch(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::ApproveWrites,
+                    &mut crate::report::IgnoreReports,
+                    &call,
+                )
+            });
+            produced.changed_a_file
+        };
+        let changed = |path: String| changed_in(&workspace, path);
+        let in_session = session_path.join("note.txt");
+        assert!(!changed(in_session.to_string_lossy().into_owned()));
+        assert!(in_session.exists(), "the write did not land");
+        assert!(changed("kept.txt".to_string()), "a project write");
+
+        // A link in an added directory that lands in the session's directory: the name typed is
+        // under the added directory, the write lands in the session's, and only the landing counts.
+        let extra = arguments::Scratch::new("changed-flag-extra");
+        let extra_path = extra.path.canonicalize().unwrap();
+        workspace
+            .open_directory(extra_path.to_str().unwrap())
+            .unwrap();
+        std::os::unix::fs::symlink(&session_path, extra_path.join("into-session")).unwrap();
+        let by_link = extra_path.join("into-session/via-link.txt");
+        assert!(
+            !changed(by_link.to_string_lossy().into_owned()),
+            "a write through a link into the session directory was counted"
+        );
+        assert!(session_path.join("via-link.txt").exists(), "did not land");
+
+        // A link in the session's directory that lands in the added directory: typed under the
+        // session's directory, landed outside it, so it counts.
+        std::os::unix::fs::symlink(&extra_path, session_path.join("into-extra")).unwrap();
+        let by_link = session_path.join("into-extra/from-session.txt");
+        assert!(
+            changed(by_link.to_string_lossy().into_owned()),
+            "a write through a link out of the session directory was not counted"
+        );
+        assert!(extra_path.join("from-session.txt").exists(), "did not land");
+
+        // A session with no directory of its own counts every write.
+        let bare = Workspace::new(&project.path).expect("workspace");
+        assert!(changed_in(&bare, "plain.txt".to_string()));
     }
 
     /// The regression it rejects: a comparison of where a link lands with the skill's directory

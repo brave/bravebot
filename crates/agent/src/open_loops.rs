@@ -333,6 +333,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// OPEN-1, OPEN-6, FILES-1. A written file outside the repository, such as one in the
+    /// session's own directory that a resumed session reloads, is compared with nothing and so is
+    /// not uncommitted, while a changed file inside the repository still is.
+    #[cfg(unix)]
+    #[test]
+    fn a_written_file_outside_the_repository_is_not_uncommitted() {
+        let base = crate::testutil::scratch_dir("open-loops-outside");
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("repo");
+        let outside = base.join("session");
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::create_dir_all(&outside).expect("outside");
+        let root = root.canonicalize().expect("canonical");
+        let outside = outside.canonicalize().expect("canonical");
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .expect("git ran");
+        assert!(status.success());
+        std::fs::write(root.join("a.txt"), "one").expect("a");
+        std::fs::write(outside.join("note.txt"), "one").expect("note");
+        let written = [root.join("a.txt"), outside.join("note.txt")];
+        assert_eq!(uncommitted(&root, &written), [root.join("a.txt")]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// OPEN-1, PATH-003. A written name that is not UTF-8 is never taken for its lossy lookalike,
     /// in either direction.
     #[cfg(target_os = "linux")]
