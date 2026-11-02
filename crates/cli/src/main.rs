@@ -57,12 +57,13 @@ use crate::finish::{
     stopped_before_the_turn, what_ran, with_declined,
 };
 use crate::flags::{
-    ACCEPT_EDITS, AUTO, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS,
-    TASK_FLAGS, VET, bypass_made_unreachable, continues_with_a_task, flag_named,
+    ACCEPT_EDITS, AUTO, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, LAYOUT, SAFE, SKIP_PERMISSIONS,
+    TASK_FLAGS, TakenOut, VET, bypass_made_unreachable, continues_with_a_task, flag_named,
     interactive_out_of_place, is_a_one_shot, opens_a_session, sandbox_refusal, starts_no_program,
     take_agent, take_flag, take_links, take_log_level, take_run_network, take_sandbox,
-    take_sandbox_filesystem, take_settings, take_system_prompts, take_tool_limit, wants_json,
-    without_a_definition, without_a_prompt_to_give, without_a_tool_set_to_limit,
+    take_sandbox_filesystem, take_settings, take_system_prompts, take_tool_limit, take_valued,
+    wants_json, what_layout_does_not_go_with, without_a_definition, without_a_prompt_to_give,
+    without_a_tool_set_to_limit,
 };
 use crate::invocation::{
     Given, Invocation, approve_input_lines_conflict, input_lines_conflict, limit_not_with_a_goal,
@@ -107,6 +108,7 @@ struct Settled {
     agent: Option<String>,
     links: bravebot_tui::app::Links,
     prompts: SystemPrompts,
+    layout: Option<bravebot_tui::layout::Layout>,
 }
 
 /// Takes every flag that belongs to the process rather than to a command out of `args`, and engages
@@ -364,6 +366,35 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         return Err(stopped_before_the_turn(as_json, Ending::Argument, refused));
     }
 
+    let layout = match take_layout(args) {
+        Ok(layout) => layout,
+        Err(complaint) => {
+            return Err(stopped_before_the_turn(
+                as_json,
+                Ending::Argument,
+                complaint,
+            ));
+        }
+    };
+    if layout.is_some()
+        && let Some(other) = what_layout_does_not_go_with(
+            args.first().map(String::as_str),
+            &TakenOut {
+                incognito: bravebot_core::incognito::engaged(),
+                agent: agent.is_some(),
+                issue: links.issue.is_some(),
+                pull_request: links.pull_request.is_some(),
+                system_prompt: flag_named(&prompts),
+            },
+        )
+    {
+        return Err(stopped_before_the_turn(
+            as_json,
+            Ending::Argument,
+            t!(cli_layout_not_with, other = other).to_string(),
+        ));
+    }
+
     // After the flag above and after the layer named beside it, because a file `--settings` names is
     // one of the layers that may say this. MODE-5: the flag opens the bypass mode unless a layer in
     // force made it unreachable, and then the flag is refused with the file named rather than
@@ -480,6 +511,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         agent,
         links,
         prompts,
+        layout,
     })
 }
 
@@ -545,6 +577,7 @@ fn main() -> ExitCode {
         agent,
         links,
         prompts,
+        layout,
     } = match settle_flags(&mut args) {
         Ok(settled) => settled,
         Err(code) => return code,
@@ -566,7 +599,7 @@ fn main() -> ExitCode {
         }
         // With no arguments the interactive session is the natural default.
         None => interactive(
-            bravebot_tui::app::Start::Fresh,
+            start_in(layout),
             agent,
             links,
             skip_permissions,
@@ -866,6 +899,28 @@ fn background_start(
         );
     }
     background::start(words)
+}
+
+/// The session `--layout` opens. `default`, and no flag, begin a fresh session. Any other layout
+/// begins none: the bots layout is a screen of its own.
+fn start_in(layout: Option<bravebot_tui::layout::Layout>) -> bravebot_tui::app::Start {
+    match layout {
+        Some(layout) if layout != bravebot_tui::layout::Layout::Default => {
+            bravebot_tui::app::Start::Layout(layout)
+        }
+        _ => bravebot_tui::app::Start::Fresh,
+    }
+}
+
+fn take_layout(args: &mut Vec<String>) -> Result<Option<bravebot_tui::layout::Layout>, String> {
+    use bravebot_tui::layout::Layout;
+    let named = take_valued(args, &[LAYOUT], |_, word| match word {
+        Some(name) if !name.is_empty() => Layout::from_name(name).ok_or_else(|| {
+            t!(cli_layout_unknown, name = name, names = Layout::names()).to_string()
+        }),
+        _ => Err(t!(cli_layout_needs_a_name, names = Layout::names()).to_string()),
+    })?;
+    Ok(named.into_iter().last())
 }
 
 /// Whether a one-shot puts its plan to somebody: only where both ends of the conversation are a
@@ -2649,6 +2704,9 @@ fn resume_hint(left: &Resumable, started_in: &Path) -> String {
     };
     format!("{heading}\nbravebot --resume {}", left.id)
 }
+
+#[cfg(test)]
+mod layout_flag_tests;
 
 #[cfg(test)]
 mod tests {

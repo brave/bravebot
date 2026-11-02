@@ -170,6 +170,7 @@ cli-option-log-level =
     How much of a failure's shape is written to the diagnostic log: error (the default), info or debug.
     Hosts, statuses and counts only, never content; an incognito session writes none
 cli-option-agent = Address every turn to this definition, as /agent does for one
+cli-option-layout = Open the interface in this layout, one of { $names }. The bots layout begins with no session
 cli-option-issue = Give the session it opens this issue link, as /issue does
 cli-option-pr = Give the session it opens this pull request link, as /pr does
 cli-option-system-prompt =
@@ -3668,6 +3669,7 @@ command-undo = Rewind one turn and put back the files it wrote
 command-rewind = List the turns a rewind could go back to, or go back that many
 command-hunks = List the hunks the last turn wrote, or put one back as it stood before the turn
 command-exit = Leave
+command-layout = End this session and open another layout of the interface
 
 
 ## When Enter carries out a command listed while work runs
@@ -3880,6 +3882,10 @@ copied-from-offered = { $count ->
 copied-from-footer = { $count ->
     [one] { $count } char to clipboard, from the footer
    *[other] { $count } chars to clipboard, from the footer
+    }
+copied-from-bots = { $count ->
+    [one] { $count } char to clipboard, from the bots list
+   *[other] { $count } chars to clipboard, from the bots list
     }
 # A click on a web address in the transcript, when no browser could be started for it. The address is not repeated: it is text the assistant wrote.
 session-link-not-opened = no browser could be started for that address, which can be selected and copied instead
@@ -5935,3 +5941,29 @@ schedule-nothing-to-clear = Schedule { $id } has no question to clear.
 schedule-stopped-at-question = schedule { $id } stopped at a question. Run bravebot schedule pending to read it.
 schedule-skipped-paused = schedule { $id } is paused, so this firing was skipped.
 schedule-skipped-running = schedule { $id } is still running from the last firing, so this firing was skipped.
+## The bots layout
+
+bots-heading = Bots
+bots-none = No bots yet. Make one in the desktop app, and it is listed here.
+bots-file-unreadable = The bots file could not be read: { $path } ({ $reason })
+bots-old-rows-waiting = The bots saved by an earlier version are still in { $path } and could not be moved to the bots file, so they are not listed.
+bots-entries-left-out = Some entries in { $path } are not valid bots and are not listed.
+bots-pick-later = Starting a session as a bot arrives in a later release.
+bots-need-width = The panes need a wider terminal: at least { $columns } columns.
+bots-choose-a-bot-first = Choose a bot first. This screen takes /layout, ? and leaving.
+bots-hint = ? for shortcuts  ·  { $chord } moves between the list and the prompt  ·  /layout default for a session
+bots-hint-without-panes = ? for shortcuts  ·  /layout default for a session
+bots-layout-refuses-branch-and-resume = The bots layout holds only bots. Use --fork to fork a session and --resume to resume one.
+bots-layout-refuses-manifest = /manifest is not available in the bots layout.
+layout-draws-no-info-panel = The bots layout draws no info panel.
+layout-needs-a-name = /layout takes the name of a layout: { $names }.
+layout-unknown = There is no layout named { $name }. The layouts are { $names }.
+layout-already-open = The { $name } layout is already open.
+layout-refused-running = /layout does not end a session while a turn is running. Stop the turn first.
+layout-refused-queued = /layout does not end a session while lines are waiting to be sent.
+layout-refused-pending = /layout does not end a session while a /loop, /goal or /after is pending.
+layout-refused-incognito = /layout does not end a session in an incognito run, because no record of it is kept to come back to.
+layout-refused-agent = /layout does not end a session that works under an agent definition, because the next session would not keep it.
+cli-layout-needs-a-name = --layout needs the name of a layout: { $names }
+cli-layout-unknown = there is no layout named { $name }; the layouts are { $names }
+cli-layout-not-with = --layout opens the interface with no session begun, so it does not go with { $other }

@@ -40,6 +40,7 @@ pub enum Pane {
     Offered,
     Hint,
     Panel,
+    Bots,
 }
 
 /// Every cell, for the selection of a view that records no regions.

@@ -22,6 +22,7 @@ pub mod ask;
 pub mod avatar;
 mod away;
 mod blocks;
+pub mod bots_pane;
 pub mod caffeinate;
 pub mod checkouts_command;
 pub mod clipboard;

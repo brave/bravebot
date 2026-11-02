@@ -397,8 +397,11 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/issues` and `/prs`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/layout`; `/sidebar`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history`; `/mcp` alone and `/mcp list` | carried out as it is typed |
 | everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>`, every other form of `/schedule` and every other form of `/mcp` | waits for the turn to end |
+`/layout` is carried out as it is typed so that it can refuse while a turn runs, which it does with a
+line saying why and nothing ended. It is never queued, because a layout opened after the turn ended would
+change the screen with nothing typed ([BOT-17](bots.md#BOT-17)).
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
 box edits in or what a later start reads (`/theme`, `/config` and `/language`), goes ahead of every line already waiting, and a line behind
@@ -790,7 +793,7 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::mid_turn_schedule_reads_are_answered_and_every_other_form_waits`
 `verified-by: bravebot_tui::app::a_schedule_read_waits_behind_a_schedule_write_typed_before_it`
 `verified-by: bravebot_schedule::words::only_the_three_readers_and_the_bare_word_are_carried_out_while_a_turn_runs`
-`verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
+`verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note``verified-by: bravebot_tui::app::layout_tests::typed_mid_turn_it_is_refused_at_once_and_never_waits`
 
 ## What a slash word is offered
 

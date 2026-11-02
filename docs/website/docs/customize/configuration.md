@@ -1560,8 +1560,7 @@ only; a project or local file that sets it is ignored and reported by `bravebot 
 { "keybindings": { "stash": "alt-s", "scroller": "alt-o" } }
 ```
 
-Fifteen actions can be moved and nothing else can (fourteen on Windows, which has no `suspend`). A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
-
+Sixteen actions can be moved and nothing else can (fifteen on Windows, which has no `suspend`). A chord is spelled `ctrl-x`, `alt-o` or `ctrl+x`:
 | Action | Default | What it does |
 |---|---|---|
 | `background` | `ctrl-b` | move the command a turn is waiting on to the background |
@@ -1579,6 +1578,7 @@ Fifteen actions can be moved and nothing else can (fourteen on Windows, which ha
 | `suspend` | `ctrl-z` | suspend the session to the shell ([Interactive mode](../using/interactive-mode.md#suspending-to-the-shell)) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([Interactive mode](../using/interactive-mode.md#undoing-an-edit)) |
 | `enhance` | `ctrl-p` | rewrite the line to be more specific ([Interactive mode](../using/interactive-mode.md#enhancing-a-prompt)) |
+| `panes` | `alt-p` | move focus between the prompt and the panes of the bots layout |
 
 **A chord has to carry Ctrl or Alt.** Every unmodified key is already answered (a character is typed,
 Enter sends, Escape clears, Tab takes what is offered, the arrows move), so handing one to an action
@@ -1596,7 +1596,6 @@ until the file moves `scope`, `undo`, `suspend` or `enhance` as well. `outputs` 
 stands on `alt-l`, so a file that gave `alt-l` to another action has that action back on its default
 until the file moves `outputs` too. `todos` is as new and stands on `alt-a`, so a file that gave `alt-a`
 to another action has that action back on its default until the file moves `todos` too.
-
 The block layers per action the way `env` does, so a project file moving one action says nothing about
 the others. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
 

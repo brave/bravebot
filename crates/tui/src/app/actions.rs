@@ -31,7 +31,7 @@ use super::side_requests::{
 };
 use super::turns::{Continued, Wrote, next_after_a_turn, run_turn_animated};
 use super::{
-    BACKGROUND_LOSES, Ended, RunSettings, Suggesting, Switch, branch_session,
+    BACKGROUND_LOSES, Ended, LayoutChange, RunSettings, Suggesting, Switch, branch_session,
     handed_to_the_background, left_behind, opened_scratch, record_to_resume, run_command,
     status_report, suggest_next,
 };
@@ -363,6 +363,21 @@ impl Held<'_> {
             record,
         ));
         Some(left_behind(self.stored))
+    }
+
+    pub(super) fn leave_for_layout(
+        &mut self,
+        servers: &mut Servers,
+        layout: crate::layout::Layout,
+    ) -> (LayoutChange, Ended) {
+        self.workspace.end_session();
+        *servers = std::mem::take(&mut self.session.servers);
+        let change = LayoutChange {
+            layout,
+            workspace: self.workspace.clone(),
+            sandbox: self.session.sandbox().clone(),
+        };
+        (change, left_behind(self.stored))
     }
 
     pub(super) fn status(&mut self, config: &Config) {

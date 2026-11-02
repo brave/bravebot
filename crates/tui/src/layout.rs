@@ -1,23 +1,52 @@
 use crate::app::Action;
 use crate::state::Session;
+use bravebot_i18n::t;
 use ratatui::crossterm::event::KeyEvent;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Layout {
     #[default]
     Default,
+    Bots,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RightColumn {
     /// `columns` includes the panel's border.
-    InfoPanel { columns: u16 },
+    InfoPanel {
+        columns: u16,
+    },
+    Panes {
+        columns: u16,
+    },
 }
 
 impl Layout {
+    pub const ALL: [Layout; 2] = [Self::Default, Self::Bots];
+
     pub fn name(self) -> &'static str {
         match self {
             Self::Default => "default",
+            Self::Bots => "bots",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|layout| layout.name() == name)
+    }
+
+    pub fn names() -> String {
+        Self::ALL
+            .iter()
+            .map(|layout| layout.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    pub fn draws_the_info_panel(self) -> bool {
+        match self {
+            Self::Default => true,
+            Self::Bots => false,
         }
     }
 
@@ -26,12 +55,33 @@ impl Layout {
             Self::Default => crate::panel::drawn(session, width).then(|| RightColumn::InfoPanel {
                 columns: session.panel_columns(width),
             }),
+            Self::Bots => crate::bots_pane::drawn(width).then_some(RightColumn::Panes {
+                columns: crate::bots_pane::COLUMNS,
+            }),
         }
     }
 
-    pub fn claims_key(self, _session: &mut Session, _key: KeyEvent) -> Option<Action> {
+    pub fn refuses(self, line: &str) -> Option<String> {
+        use crate::command_table::{BRANCH_COMMAND, MANIFEST_COMMAND, RESUME_COMMAND, argument_to};
         match self {
             Self::Default => None,
+            Self::Bots => {
+                if [BRANCH_COMMAND, RESUME_COMMAND]
+                    .iter()
+                    .any(|command| argument_to(line, command).is_some())
+                {
+                    return Some(t!(bots_layout_refuses_branch_and_resume).to_string());
+                }
+                argument_to(line, MANIFEST_COMMAND)
+                    .map(|_| t!(bots_layout_refuses_manifest).to_string())
+            }
+        }
+    }
+
+    pub fn claims_key(self, session: &mut Session, key: KeyEvent) -> Option<Action> {
+        match self {
+            Self::Default => None,
+            Self::Bots => crate::bots_pane::claim(session, key),
         }
     }
 }
