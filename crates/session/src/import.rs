@@ -202,6 +202,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
                 .collect(),
             measured: 0,
             asked_to_write: false,
+            plan_mode_told: false,
             holds: "private".to_string(),
         },
         // Where one turn ended and the next began is not something these files say (SESSION-25).

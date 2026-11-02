@@ -3344,7 +3344,15 @@ where
         confined_failures: tools::ConfinedFailures::default(),
         // Seeded with the time the lists' questions kept the turn waiting on the person.
         spent,
-        told_mode: started_in,
+        // The system prompt states the mode the turn starts in, and a plan-mode notice an earlier
+        // turn left in the conversation still stands in the planner's history. Where one does, the
+        // planner was last told plan mode is on, so a turn starting in another mode retracts it
+        // before its first request (MODE-8).
+        told_mode: if conversation.plan_mode_told() {
+            crate::permission_mode::PermissionMode::Plan
+        } else {
+            started_in
+        },
         told_sandbox: sandbox_at_start,
         turn_model,
         effort,

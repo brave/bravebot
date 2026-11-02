@@ -21387,6 +21387,291 @@ fn a_turn_moved_out_of_plan_mode_is_told_to_write() {
     );
 }
 
+/// Moves the session into plan mode when the planner's first call finishes, and stops the turn
+/// when its second call finishes where `stop` is given. Stands in for the person pressing the mode
+/// key during the first round and Escape during the second.
+struct PlansThenMaybeStops {
+    live: bravebot_agent::LiveMode,
+    stop: Option<bravebot_core::cancel::Cancel>,
+    finished: usize,
+}
+
+impl bravebot_agent::report::Reporter for PlansThenMaybeStops {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn tool_finished(&mut self, _activity: bravebot_agent::report::Activity) {
+        self.finished += 1;
+        if self.finished == 1 {
+            self.live.set(bravebot_agent::PermissionMode::Plan);
+        }
+        if self.finished == 2
+            && let Some(stop) = &self.stop
+        {
+            stop.cancel();
+        }
+    }
+}
+
+/// Runs a turn that is moved into plan mode while it runs, then a second turn over the same
+/// conversation started in `second`, then a third in the same mode. Returns every request the
+/// second turn sent and every request the third sent.
+///
+/// The first turn is stopped after its second call where `stopped` is true, and otherwise ends with
+/// an answer. Either way its second request carried the plan-mode notice, which stays in the
+/// conversation.
+fn requests_of_a_turn_after_one_moved_into_plan_mode(
+    name: &str,
+    stopped: bool,
+    second: bravebot_agent::PermissionMode,
+    second_replies: Vec<String>,
+) -> (Vec<String>, Vec<String>) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Ask);
+    let cancel = bravebot_core::cancel::Cancel::new();
+
+    let (endpoint, first_received) = serve_sequence(if stopped {
+        vec![
+            tool_request("list_files", r#"{"directory":"."}"#),
+            tool_request("list_files", r#"{"directory":"."}"#),
+        ]
+    } else {
+        vec![
+            tool_request("list_files", r#"{"directory":"."}"#),
+            reply_with("here is the plan"),
+        ]
+    });
+    let first = turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("add a toggle").with_permission_mode(live.clone()),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut PlansThenMaybeStops {
+            live: live.clone(),
+            stop: stopped.then(|| cancel.clone()),
+            finished: 0,
+        },
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome;
+    assert_eq!(
+        first.is_err(),
+        stopped,
+        "the first turn did not end the way this test needs: {first:?}"
+    );
+    let first_bodies = every_request(&first_received);
+    assert!(
+        first_bodies
+            .last()
+            .is_some_and(|body| body.contains("The user changed the mode while this turn")),
+        "the first turn was never told it had been moved into plan mode, so this says nothing"
+    );
+    assert_eq!(live.get(), bravebot_agent::PermissionMode::Plan);
+
+    live.set(second);
+    let (endpoint, received) = serve_sequence(second_replies);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("continue").with_permission_mode(live.clone()),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the second turn finishes");
+    let second_bodies = every_request(&received);
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("again")]);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("and again").with_permission_mode(live.clone()),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the third turn finishes");
+    (second_bodies, every_request(&received))
+}
+
+/// MODE-8: a turn that starts outside plan mode after a turn that was stopped in plan mode is told
+/// that plan mode has ended, before its first request.
+///
+/// The system prompt says nothing for a mode other than plan, and the plan-mode notice the stopped
+/// turn pushed stays in the conversation. A driver that assumes a new turn has been told the mode it
+/// starts in leaves the planner reading that notice as current. Asking and bypassing are both tried,
+/// since the second turn's mode is read from the session and not assumed to be the default.
+#[test]
+fn a_turn_started_outside_plan_mode_after_a_stopped_one_in_plan_mode_is_told_it_ended() {
+    for (second, name) in [
+        (
+            bravebot_agent::PermissionMode::Ask,
+            "plan-notice-stopped-ask",
+        ),
+        (
+            bravebot_agent::PermissionMode::Bypass,
+            "plan-notice-stopped-bypass",
+        ),
+    ] {
+        let (bodies, _) = requests_of_a_turn_after_one_moved_into_plan_mode(
+            name,
+            true,
+            second,
+            vec![reply_with("done")],
+        );
+        assert_eq!(bodies.len(), 1, "{second:?}: {bodies:#?}");
+        assert!(
+            bodies[0].contains("Plan mode has ended"),
+            "{second:?}: the first request of the next turn did not say plan mode had ended"
+        );
+    }
+}
+
+/// MODE-8: a turn that starts outside plan mode after a turn that finished in plan mode is told
+/// that plan mode has ended, before its first request.
+///
+/// The person leaves plan mode between two turns to have the plan carried out, which is the ordinary
+/// way out of it. The first turn is not stopped, so the notice does not depend on how it ended.
+#[test]
+fn a_turn_started_outside_plan_mode_after_a_finished_one_in_plan_mode_is_told_it_ended() {
+    let (bodies, _) = requests_of_a_turn_after_one_moved_into_plan_mode(
+        "plan-notice-finished",
+        false,
+        bravebot_agent::PermissionMode::AcceptEdits,
+        vec![reply_with("done")],
+    );
+    assert!(
+        bodies[0].contains("Plan mode has ended"),
+        "the first request of the next turn did not say plan mode had ended"
+    );
+}
+
+/// MODE-8: the end notice is said once, at the first request that follows the change.
+///
+/// A later request of the same turn, and a turn after that one, have been told already. Repeating it
+/// would say again what the planner has read.
+#[test]
+fn plan_mode_ending_is_said_to_the_planner_once() {
+    let (bodies, third) = requests_of_a_turn_after_one_moved_into_plan_mode(
+        "plan-notice-once",
+        true,
+        bravebot_agent::PermissionMode::Ask,
+        vec![
+            tool_request("list_files", r#"{"directory":"."}"#),
+            reply_with("done"),
+        ],
+    );
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert_eq!(
+        bodies[1].matches("Plan mode has ended").count(),
+        1,
+        "the end of plan mode was said more than once"
+    );
+    assert_eq!(third.len(), 1, "{third:#?}");
+    assert_eq!(
+        third[0].matches("Plan mode has ended").count(),
+        1,
+        "the third turn was told again, or the end notice is missing from its history"
+    );
+}
+
+/// MODE-8: a turn that starts in plan mode after a turn that was moved into it gets neither an end
+/// notice nor a second plan-mode instruction.
+///
+/// Its system prompt already says plan mode. An end notice would contradict that, and a notice
+/// repeating the instruction would say it a third time (the system prompt, the earlier notice and
+/// this one).
+#[test]
+fn a_turn_started_in_plan_mode_after_a_notice_of_plan_mode_is_told_nothing_more() {
+    let (bodies, _) = requests_of_a_turn_after_one_moved_into_plan_mode(
+        "plan-notice-then-plan",
+        true,
+        bravebot_agent::PermissionMode::Plan,
+        vec![reply_with("here is the plan")],
+    );
+    assert!(
+        !bodies[0].contains("Plan mode has ended"),
+        "a turn that began in plan mode was told plan mode had ended"
+    );
+    assert_eq!(
+        bodies[0].matches("Plan mode. The user is deciding").count(),
+        2,
+        "plan mode was not stated exactly by the system prompt and the earlier notice"
+    );
+}
+
+/// MODE-8: a turn that starts in another non-plan mode than the one before it is told nothing about
+/// the mode.
+///
+/// A driver that compared the mode of the turn with the mode of the previous turn, and said
+/// something on any difference, would add a line here. Only a notice into plan mode or out of it
+/// is said, so the second turn's first request carries neither notice.
+#[test]
+fn a_turn_started_in_another_mode_than_the_last_one_outside_plan_mode_is_told_nothing() {
+    let scratch = Scratch::new("mode-change-between-turns-outside-plan");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let live = bravebot_agent::LiveMode::new(bravebot_agent::PermissionMode::Ask);
+
+    let mut second_bodies = Vec::new();
+    for (mode, name) in [
+        (bravebot_agent::PermissionMode::Ask, "first"),
+        (bravebot_agent::PermissionMode::Bypass, "second"),
+    ] {
+        live.set(mode);
+        let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+        turn::resume(
+            &config_for(&endpoint),
+            &egress,
+            &workspace,
+            &Task::new(name).with_permission_mode(live.clone()),
+            &mut conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn finishes");
+        second_bodies = every_request(&received);
+    }
+    assert_eq!(second_bodies.len(), 1, "{second_bodies:#?}");
+    for said in ["Plan mode", "changed the mode"] {
+        assert!(
+            !second_bodies[0].contains(said),
+            "a change between two modes outside plan mode was said to the planner ({said})"
+        );
+    }
+}
+
 /// A turn continuing one that was stopped after a write is not told that nothing is written yet.
 ///
 /// A stop is usually not the end of the task. The next prompt is `continue`, and the change the
