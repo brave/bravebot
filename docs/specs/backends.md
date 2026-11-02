@@ -1633,6 +1633,8 @@ fails somewhere far from the mistake. An entry whose region is not lowercase let
 starting with a letter or a digit configures no service either, since the host is built from it and
 one holding `/`, `@`, `?`, `#`, `:` or `.` would send the signed request to another host or another
 route than the one the person named. [BACKEND-33](#BACKEND-33) gives the same rule for `AWS_REGION`.
+`doctor` names a region this refuses, with the value and the entry that wrote it, so the account
+is not left missing from its output with nothing saying why.
 
 **What a row says.** A model named here has no tier, so a picker row carries what the block called
 it, and its id where the block called it nothing. An inference-profile ARN is not a name anybody
@@ -1649,6 +1651,9 @@ reads, which is why this is worth stating rather than left to fall out of the id
 `verified-by: bravebot_tui::app::a_bedrock_model_a_block_named_is_shown_under_that_name`
 `verified-by: bravebot_tui::app::an_aws_provider_entrys_models_are_offered_under_names_bedrock_answers_to`
 `verified-by: bravebot_ui_bridge::models::the_window_offers_an_aws_provider_entry_under_its_bare_id`
+`verified-by: bravebot_config::lib::a_refused_region_in_the_provider_entry_is_recorded_as_the_entry`
+`verified-by: bravebot_config::lib::a_provider_entry_the_machine_replaced_is_not_reported_as_refused`
+`verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_provider_entry_that_wrote_it`
 
 <a id="BACKEND-30"></a>
 ### BACKEND-30: what a commit or a pull request carries is a settings key, and empty says none
@@ -2054,6 +2059,14 @@ a Google location is held to ([BACKEND-49](#BACKEND-49)). A value with any other
 every layer that may set the name and for an exported variable, and the
 `options.region` of a `provider` entry is held to it too ([BACKEND-29](#BACKEND-29)).
 
+A region refused for what it holds is named by `doctor` with the value as written and where it
+was written: the exported variable, the `env` block of a settings file (with the path of that
+file) or the machine-level file that pinned it, while the switch is on, or the `amazon-bedrock`
+entry under `provider`, whether or not the switch is on. Nothing else the entry holds is printed, the value is drawn with its control characters
+replaced, and nothing is decided from it. A blank region is absence rather than a refusal, a region
+from `AWS_REGION` with the switch off is not reported, and a `provider` entry that a machine-level `provider` block
+replaced is not reported either, being never read.
+
 A gateway is not configured from this block: it is a `provider` entry, whose shape BACKEND-13
 states and whose credential BACKEND-16 names. The three Google names are the one exception, and only
 together: BACKEND-50 says when they name a service. The top-level `model` key is not one of these either, being a
@@ -2087,6 +2100,14 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_agent::transport::the_settings_and_the_transport_name_the_same_variables`
 `verified-by: bravebot_agent::transport::a_proxy_in_the_persons_file_is_the_one_a_client_carries_and_a_checkouts_is_not`
 `verified-by: bravebot_config::bedrock::a_region_that_would_move_the_request_configures_nothing`
+`verified-by: bravebot_config::bedrock::a_region_from_lookup_refuses_is_the_one_refused_region_reports`
+`verified-by: bravebot_config::lib::a_refused_region_in_the_env_block_is_recorded_as_the_env_block`
+`verified-by: bravebot_config::lib::a_refused_region_in_the_env_block_is_recorded_with_the_file_that_wrote_it`
+`verified-by: bravebot_config::lib::a_refused_region_that_was_exported_is_recorded_as_exported_over_the_file`
+`verified-by: bravebot_config::lib::a_refused_region_that_is_not_in_an_env_block_names_no_env_file`
+`verified-by: bravebot_config::lib::a_refused_region_the_machine_pinned_is_recorded_as_managed`
+`verified-by: bravebot_config::lib::a_region_nothing_refused_is_not_reported`
+`verified-by: bravebot_cli::running::doctor_names_a_refused_bedrock_region_and_the_env_block_that_wrote_it`
 `verified-by: bravebot_config::bedrock::a_region_holding_only_the_characters_aws_uses_is_accepted`
 `verified-by: bravebot_config::settings::a_checkouts_bedrock_names_configure_no_account_and_the_persons_own_still_do`
 `verified-by: bravebot_config::settings::every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it`
@@ -4444,13 +4465,11 @@ A cache read the service reports is shown as [BACKEND-31](#BACKEND-31) says; thi
   refused from the project layers outright, as `references` is, and reported by `doctor`. A checkout
   cannot say what its own history carries; the person says it once in their own file.
 
-- **A region refused for what it holds is not reported.** A Bedrock region outside the characters of
-  [BACKEND-33](#BACKEND-33), in an `env` block or in a `provider` entry, configures no account as an
-  absent one does, and nothing names the value that was refused: `doctor` lists the names a file set,
-  so an account missing from its output is the only sign, and a person who mistyped a region has the
-  other backends in force. Importing from Claude Code ([IMPORT-3](import.md#IMPORT-3)) writes the
-  region the file states, so one this refuses is imported and then not read, and an `amazon-bedrock`
-  entry from opencode with one is left with the reason that it has no region.
+- **An imported region that is refused for what it holds is not named at import.** `doctor` names a
+  Bedrock region refused by [BACKEND-33](#BACKEND-33) once it is in force, but importing from Claude
+  Code ([IMPORT-3](import.md#IMPORT-3)) writes the region the file states, so one this refuses is
+  imported and then not read, and an `amazon-bedrock` entry from opencode with one is left with the
+  reason that it has no region.
 
 - **The aichat endpoint Brave runs discards the effort level.** Measured against that endpoint: a
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits

@@ -1311,6 +1311,57 @@ pub struct Config {
     /// neither is a claim that the model takes only text. Read by the one thing that decides on it,
     /// which is whether a picture the planner asks to see can be put to a model that looks at it.
     listed_inputs: Option<(String, Vec<String>)>,
+    /// The Bedrock regions that were written and refused for what they hold, each with where it was
+    /// written, in the order of the layers that wrote them: the variable first, then the
+    /// `amazon-bedrock` entry under `provider`.
+    ///
+    /// Carried to `doctor` and nowhere else. Nothing reads it to decide anything: the account these
+    /// would have configured is simply absent ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)).
+    /// Empty for a `Config` built from a bare lookup, which has no layers to name.
+    pub refused_regions: Vec<bedrock::RefusedRegion>,
+}
+
+/// The Bedrock regions refused in the layers in force, each with where it was written.
+///
+/// The variable is asked in the order [`lookup_in`] answers it, so the layer named is the one whose
+/// value was refused. An `amazon-bedrock` entry is named only where the person's own settings are
+/// the gateways in force: a machine-level block replaces them, and an entry it replaced is not
+/// refused, being never read.
+fn refused_regions(
+    settings: &Settings,
+    managed: &Managed,
+    exported: &impl Fn(&str) -> Option<String>,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Vec<bedrock::RefusedRegion> {
+    let variable = bedrock::Bedrock::refused_region(lookup).map(|fault| {
+        let source = if managed.get(env_var::AWS_REGION).is_some() {
+            bedrock::RegionSource::Managed
+        } else if exported(env_var::AWS_REGION).is_some_and(|value| !value.trim().is_empty()) {
+            bedrock::RegionSource::Exported
+        } else {
+            bedrock::RegionSource::EnvBlock
+        };
+        // Asked of the settings only for the env block: the file is the one `Settings` kept as
+        // having stated the name, and the other sources are not a file.
+        let file = matches!(source, bedrock::RegionSource::EnvBlock)
+            .then(|| settings.network_source(env_var::AWS_REGION))
+            .flatten()
+            .map(std::path::Path::to_path_buf);
+        bedrock::RefusedRegion {
+            fault,
+            source,
+            file,
+        }
+    });
+    let entry = settings
+        .bedrock_region_refused()
+        .filter(|_| managed.gateways().is_none())
+        .map(|fault| bedrock::RefusedRegion {
+            fault: fault.clone(),
+            source: bedrock::RegionSource::ProviderEntry,
+            file: None,
+        });
+    variable.into_iter().chain(entry).collect()
 }
 
 /// A value captured when this binary was built, or `None` if the build had none.
@@ -1529,7 +1580,10 @@ impl Config {
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
-        let lookup = lookup_in(settings, managed, exported, baked);
+        let lookup = lookup_in(settings, managed, &exported, baked);
+        // Read before the lookup is handed on, so the layer that wrote the region can be asked
+        // for beside it ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)).
+        let refused_regions = refused_regions(settings, managed, &exported, &lookup);
         let providers = gateways(settings, managed, &lookup);
         // A gateway the machine-level layer names is given a stored key too: that layer pins where
         // a token goes and keeps none of its own, so a key its owner stored is the way it has.
@@ -1544,6 +1598,7 @@ impl Config {
             })
             .collect();
         let mut config = Self::from_lookup_with_providers(lookup, providers)?;
+        config.refused_regions = refused_regions;
         // Held only with a host to send it to, so a key stored on a machine whose build reaches no
         // Brave backend is carried by nothing.
         config.premium_key = premium_key.filter(|_| config.premium_endpoint.is_some());
@@ -1723,6 +1778,7 @@ impl Config {
             budget_was_chosen,
             budget_was_advertised,
             listed_inputs: None,
+            refused_regions: Vec::new(),
         })
     }
 
@@ -2227,6 +2283,177 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const REFUSED_REGION: &str = "us-east-1.attacker.example";
+
+    fn refused(source: bedrock::RegionSource) -> Vec<bedrock::RefusedRegion> {
+        vec![bedrock::RefusedRegion {
+            fault: bedrock::RegionFault {
+                region: REFUSED_REGION.to_string(),
+            },
+            source,
+            file: None,
+        }]
+    }
+
+    /// BACKEND-33: a region written in a settings file's `env` block and refused is recorded with
+    /// that block as its source, so `doctor` can say where to look.
+    #[test]
+    fn a_refused_region_in_the_env_block_is_recorded_as_the_env_block() {
+        let settings = Settings::parse(&format!(
+            r#"{{"env": {{"BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "{REFUSED_REGION}"}}}}"#
+        ));
+        let config = resolved(&settings, |_| None, complete_env).expect("configured");
+        assert!(config.bedrock.is_none());
+        assert_eq!(
+            config.refused_regions,
+            refused(bedrock::RegionSource::EnvBlock)
+        );
+    }
+
+    /// The exported variable outranks the file, so a refused value that was exported is the one
+    /// reported, and it is named as exported rather than as the file that also holds a region.
+    #[test]
+    fn a_refused_region_that_was_exported_is_recorded_as_exported_over_the_file() {
+        let settings =
+            Settings::parse(r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "eu-west-1"}}"#);
+        let exported = |name: &str| (name == env_var::AWS_REGION).then(|| REFUSED_REGION.into());
+        let config = resolved(&settings, exported, complete_env).expect("configured");
+        assert!(config.bedrock.is_none());
+        assert_eq!(
+            config.refused_regions,
+            refused(bedrock::RegionSource::Exported)
+        );
+    }
+
+    /// A pin from the machine-level file outranks the exported variable, so it is the source named.
+    #[test]
+    fn a_refused_region_the_machine_pinned_is_recorded_as_managed() {
+        let managed = managed::scratch(
+            "resolve-refused-region-pin",
+            &format!(r#"{{"env": {{"AWS_REGION": "{REFUSED_REGION}"}}}}"#),
+        );
+        let settings = Settings::parse(r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1"}}"#);
+        let exported = |name: &str| (name == env_var::AWS_REGION).then(|| "eu-west-1".into());
+        let config =
+            resolved_under(&managed, &settings, exported, complete_env).expect("configured");
+        assert!(config.bedrock.is_none());
+        assert_eq!(
+            config.refused_regions,
+            refused(bedrock::RegionSource::Managed)
+        );
+    }
+
+    /// The `amazon-bedrock` entry under `provider` is the other place a region is written, and
+    /// it is named as the entry so the person looks at `provider` rather than `env`.
+    #[test]
+    fn a_refused_region_in_the_provider_entry_is_recorded_as_the_entry() {
+        let settings = Settings::parse(&format!(
+            r#"{{"provider": {{"amazon-bedrock": {{"options": {{"region": "{REFUSED_REGION}"}}}}}}}}"#
+        ));
+        let config = resolved(&settings, |_| None, complete_env).expect("configured");
+        assert_eq!(config.bedrock_providers().count(), 0);
+        assert_eq!(
+            config.refused_regions,
+            refused(bedrock::RegionSource::ProviderEntry)
+        );
+    }
+
+    /// The file that wrote a refused region is carried with it, so `doctor` can say which of the
+    /// settings files to edit. The home layer and the file `--settings` names are the two that may
+    /// set the name, and the record must name the one whose block the value is in.
+    #[test]
+    fn a_refused_region_in_the_env_block_is_recorded_with_the_file_that_wrote_it() {
+        let root = testutil::scratch_dir("refused-region-file");
+        let _ = std::fs::remove_dir_all(&root);
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&home).expect("scratch home");
+        std::fs::create_dir_all(&cwd).expect("scratch cwd");
+        let own = home.join("settings.json");
+        std::fs::write(
+            &own,
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "eu-west-1"}}"#,
+        )
+        .expect("home layer");
+        let named = root.join("named.json");
+        std::fs::write(
+            &named,
+            format!(r#"{{"env": {{"AWS_REGION": "{REFUSED_REGION}"}}}}"#),
+        )
+        .expect("named layer");
+
+        let settings = Settings::layered(Some(home), Some(&cwd), Some(&named));
+        let config = resolved(&settings, |_| None, complete_env).expect("configured");
+        assert_eq!(
+            config.refused_regions.len(),
+            1,
+            "{:?}",
+            config.refused_regions
+        );
+        assert_eq!(
+            config.refused_regions[0].file.as_deref(),
+            Some(named.as_path())
+        );
+        assert_ne!(
+            config.refused_regions[0].file.as_deref(),
+            Some(own.as_path())
+        );
+    }
+
+    /// Only an `env` block is a file: the exported variable, the machine pin and the provider entry
+    /// carry no settings file of the `env` block kind.
+    #[test]
+    fn a_refused_region_that_is_not_in_an_env_block_names_no_env_file() {
+        let settings =
+            Settings::parse(r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "eu-west-1"}}"#);
+        let exported = |name: &str| (name == env_var::AWS_REGION).then(|| REFUSED_REGION.into());
+        let config = resolved(&settings, exported, complete_env).expect("configured");
+        assert_eq!(config.refused_regions[0].file, None);
+    }
+
+    /// A machine-level `provider` block replaces the person's, so an entry it replaced is never
+    /// read and is not reported as refused.
+    #[test]
+    fn a_provider_entry_the_machine_replaced_is_not_reported_as_refused() {
+        let managed = managed::scratch("resolve-refused-region-replaced", r#"{"provider": {}}"#);
+        let settings = Settings::parse(&format!(
+            r#"{{"provider": {{"amazon-bedrock": {{"options": {{"region": "{REFUSED_REGION}"}}}}}}}}"#
+        ));
+        let config =
+            resolved_under(&managed, &settings, |_| None, complete_env).expect("configured");
+        assert!(
+            config.refused_regions.is_empty(),
+            "{:?}",
+            config.refused_regions
+        );
+    }
+
+    /// Nothing is refused where Bedrock was not asked for, and a region that is spelled as one is
+    /// not refused, so a report never blames a configuration that works.
+    #[test]
+    fn a_region_nothing_refused_is_not_reported() {
+        let switch_off = Settings::parse(&format!(
+            r#"{{"env": {{"AWS_REGION": "{REFUSED_REGION}"}}}}"#
+        ));
+        let config = resolved(&switch_off, |_| None, complete_env).expect("configured");
+        assert!(
+            config.refused_regions.is_empty(),
+            "{:?}",
+            config.refused_regions
+        );
+
+        let spelled = Settings::parse(
+            r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "us-east-1"},
+                "provider": {"amazon-bedrock": {"options": {"region": "eu-west-1"}}}}"#,
+        );
+        let config = resolved(&spelled, |_| None, complete_env).expect("configured");
+        assert!(
+            config.refused_regions.is_empty(),
+            "{:?}",
+            config.refused_regions
+        );
+    }
 
     fn complete_env(key: &str) -> Option<String> {
         match key {

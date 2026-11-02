@@ -789,6 +789,20 @@ impl Provider {
             .collect()
     }
 
+    /// The region the `amazon-bedrock` entry under `provider` states when it is not spelled as one,
+    /// which is why [`Self::all`] drops the entry ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)).
+    ///
+    /// A blank region is no region, as it is for the entry itself, and is not a refusal.
+    pub fn refused_region(
+        root: &serde_json::Map<String, serde_json::Value>,
+    ) -> Option<crate::bedrock::RegionFault> {
+        let entry = object(root, "provider")?
+            .get(AWS_PROVIDER_ID)?
+            .as_object()?;
+        let region = string(object(entry, "options")?.get("region"))?;
+        (!crate::bedrock::is_region(&region)).then_some(crate::bedrock::RegionFault { region })
+    }
+
     /// One entry under `provider`, or `None` where it does not describe a reachable service.
     fn one(id: &str, entry: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
         let options = object(entry, "options");

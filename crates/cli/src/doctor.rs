@@ -500,6 +500,28 @@ fn refused_provider_port(id: &str, port: &str) -> String {
     )
 }
 
+/// The line for a Bedrock region refused for what it holds. The region is the person's own text,
+/// shown as pictures where it holds a control character; the source is one of five fixed phrases,
+/// and the one that names a settings file prints the path through the same call.
+fn refused_region(refused: &bravebot_config::bedrock::RefusedRegion) -> String {
+    use bravebot_config::bedrock::RegionSource;
+    let source = match (&refused.source, &refused.file) {
+        (RegionSource::EnvBlock, Some(file)) => t!(
+            doctor_region_source_env_block_of,
+            path = progress::printable(&file.display().to_string())
+        ),
+        (RegionSource::Exported, _) => t!(doctor_region_source_exported).to_string(),
+        (RegionSource::EnvBlock, None) => t!(doctor_region_source_env_block).to_string(),
+        (RegionSource::Managed, _) => t!(doctor_region_source_managed).to_string(),
+        (RegionSource::ProviderEntry, _) => t!(doctor_region_source_provider_entry).to_string(),
+    };
+    t!(
+        doctor_region_refused,
+        region = progress::printable(&refused.fault.region),
+        source = source
+    )
+}
+
 /// Every setting that was read and not obeyed, or not read at all, from the vetting key through the
 /// narrowing keys. The network and filesystem ones follow in their own sections.
 fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Managed) {
@@ -766,6 +788,13 @@ fn report_backends(config: &Config, ending: &mut Ending) {
     if let Some(bedrock) = config.bedrock.as_ref() {
         report_bedrock(bedrock);
     }
+    // A region written and refused leaves no Bedrock account, and this is the only place that
+    // is explained ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)).
+    each(
+        t!(doctor_settings_ignored),
+        &config.refused_regions,
+        refused_region,
+    );
     for provider in &config.providers {
         report_gateway(provider);
     }
@@ -3457,6 +3486,36 @@ mod tests {
         for withheld in ["hunter2", "gw.example.com"] {
             assert!(!reported[0].contains(withheld), "{}", reported[0]);
         }
+    }
+
+    /// BACKEND-33: a refused region is whatever the person wrote, and so is the path of the settings
+    /// file that holds it, so a control character in either is drawn as its picture. Written raw, an
+    /// escape sequence in the report could retitle or rewrite the terminal it is read in.
+    #[test]
+    fn a_refused_region_and_its_file_are_reported_with_control_characters_drawn_as_pictures() {
+        use bravebot_config::bedrock::{RefusedRegion, RegionFault, RegionSource};
+        let refused = RefusedRegion {
+            fault: RegionFault {
+                region: "us-east-1\u{1b}]0;PWNED-REGION\u{7}".to_string(),
+            },
+            source: RegionSource::EnvBlock,
+            file: Some(std::path::PathBuf::from("/home/\u{1b}[2Jsettings.json")),
+        };
+
+        let line = refused_region(&refused);
+
+        assert!(
+            !line.chars().any(char::is_control),
+            "a control character reached the report: {line:?}"
+        );
+        assert!(
+            line.contains("us-east-1\u{241b}]0;PWNED-REGION\u{2407}"),
+            "the region was not drawn as pictures: {line:?}"
+        );
+        assert!(
+            line.contains("/home/\u{241b}[2Jsettings.json"),
+            "the settings file path was not drawn as pictures: {line:?}"
+        );
     }
 
     /// A gateway's credential is a long-lived bearer token, so a diagnostic that echoed one would put

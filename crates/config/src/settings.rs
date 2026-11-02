@@ -711,6 +711,8 @@ pub struct Settings {
     providers: Vec<crate::provider::Provider>,
     /// The entries under `provider` dropped for a `baseURL` whose port cannot be read, by id.
     providers_refused: Vec<(String, crate::provider::PortFault)>,
+    /// The region the `amazon-bedrock` entry under `provider` states when it is not spelled as one.
+    bedrock_region_refused: Option<crate::bedrock::RegionFault>,
     /// The models a `provider` entry named `chatgpt` names where it states no endpoint, which is
     /// the ChatGPT account's roster rather than a gateway's.
     chatgpt_models: Vec<crate::provider::AccountModel>,
@@ -1612,6 +1614,7 @@ impl Settings {
             git_identities_misshapen: Vec::new(),
             providers: crate::provider::Provider::all(root),
             providers_refused: crate::provider::Provider::refused(root),
+            bedrock_region_refused: crate::provider::Provider::refused_region(root),
             chatgpt_models: crate::provider::account_models(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -2326,6 +2329,7 @@ impl Settings {
             && self.git_identities_misshapen.is_empty()
             && self.providers.is_empty()
             && self.providers_refused.is_empty()
+            && self.bedrock_region_refused.is_none()
             && self.chatgpt_models.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
@@ -2401,6 +2405,13 @@ impl Settings {
     /// cannot be read, by id ([BACKEND-62](../../../docs/specs/backends.md#BACKEND-62)).
     pub fn providers_refused(&self) -> &[(String, crate::provider::PortFault)] {
         &self.providers_refused
+    }
+
+    /// The region the `amazon-bedrock` entry under `provider` wrote when it is not spelled as one,
+    /// which is why that entry configures no account
+    /// ([BACKEND-33](../../../docs/specs/backends.md#BACKEND-33)).
+    pub fn bedrock_region_refused(&self) -> Option<&crate::bedrock::RegionFault> {
+        self.bedrock_region_refused.as_ref()
     }
 
     /// The models the ChatGPT account is offered as, where a `provider` entry named `chatgpt`

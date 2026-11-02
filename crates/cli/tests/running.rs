@@ -6687,6 +6687,73 @@ fn doctor_names_a_provider_left_out_for_its_port_without_the_rest_of_its_url() {
     );
 }
 
+/// BACKEND-33: a Bedrock region written in the `env` block of a settings file and refused for what
+/// it holds leaves no AWS account, and `doctor` names the value and the block it was written in.
+/// Without the line the account is missing from the report with nothing saying why.
+#[test]
+fn doctor_names_a_refused_bedrock_region_and_the_env_block_that_wrote_it() {
+    let scratch = Scratch::new("cli-running-doctor-refused-region-env").with_settings(
+        r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1", "AWS_REGION": "us-east-1.attacker.example"}}"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("Bedrock region") && line.contains("is not used"))
+        .unwrap_or_else(|| panic!("the report did not name the refused region: {stdout}{stderr}"));
+    assert!(
+        line.contains("us-east-1.attacker.example") && line.contains("env block"),
+        "the line did not name the value and the env block: {line}"
+    );
+    assert!(
+        line.contains(&scratch.path.display().to_string()) && line.contains("settings.json"),
+        "the line did not name the settings file that holds the block: {line}"
+    );
+}
+
+/// The same refusal for the `amazon-bedrock` entry under `provider`, which is named as the entry
+/// and not as the `env` block, since the person has to edit a different place.
+#[test]
+fn doctor_names_a_refused_bedrock_region_and_the_provider_entry_that_wrote_it() {
+    let scratch = Scratch::new("cli-running-doctor-refused-region-entry").with_settings(
+        r#"{"provider": {"amazon-bedrock": {"options": {"region": "us-east-1.attacker.example"}}}}"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("Bedrock region") && line.contains("is not used"))
+        .unwrap_or_else(|| panic!("the report did not name the refused region: {stdout}{stderr}"));
+    assert!(
+        line.contains("us-east-1.attacker.example") && line.contains("amazon-bedrock"),
+        "the line did not name the value and the provider entry: {line}"
+    );
+    assert!(
+        !line.contains("env block"),
+        "the line named the env block for a provider entry: {line}"
+    );
+}
+
 /// A checkout's `advisorModel` is dropped, and `doctor` says so rather than leaving whoever wrote
 /// it to conclude the conversation is being sent to the model it names (BACKEND-24).
 #[test]

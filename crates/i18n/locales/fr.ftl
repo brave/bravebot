@@ -615,6 +615,13 @@ doctor-settings-provider-ignored =
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-provider-port-refused =
     provider { $id } n'est pas utilisé : son baseURL écrit un port qui n'est pas un nombre jusqu'à 65535 (trouvé "{ $port }")
+doctor-region-refused =
+    la région Bedrock « { $region } » provenant de { $source } n'est pas utilisée : une région s'écrit en lettres minuscules, chiffres et tirets, comme us-east-1
+doctor-region-source-exported = la variable AWS_REGION exportée dans l'environnement
+doctor-region-source-env-block = AWS_REGION dans le bloc env d'un fichier de paramètres
+doctor-region-source-env-block-of = AWS_REGION dans le bloc env de { $path }
+doctor-region-source-managed = AWS_REGION imposée par le fichier de la machine
+doctor-region-source-provider-entry = options.region de l'entrée amazon-bedrock sous provider
 doctor-settings-model-ignored =
     model dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
