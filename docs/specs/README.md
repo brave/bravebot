@@ -107,7 +107,7 @@ the routing-versus-content split they share.
 | [tools/spawn-agent.md](tools/spawn-agent.md) | `AGENT` | 8 | `spawn_agent` |
 | [tools/run.md](tools/run.md) | `RUN` | 30 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
-| [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 5 | `read_output` |
+| [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 6 | `read_output` |
 | [tools/vet-content.md](tools/vet-content.md) | `VET` | 5 | `vet_content` |
 | [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 8 | `fetch_url` |
 | [tools/download-url.md](tools/download-url.md) | `DOWNLOAD` | 5 | `download_url` |

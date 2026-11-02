@@ -380,6 +380,43 @@ impl SlotStore {
         self.slots.contains_key(id) || self.choices.contains_key(id)
     }
 
+    /// Whether this name holds text. Metadata about a name: a yes or a no, never a byte of what a
+    /// slot holds. A choice is not text, so a tool that reads text finds nothing under its name.
+    pub fn holds_text(&self, id: &SlotId) -> bool {
+        self.slots.contains_key(id)
+    }
+
+    /// The names of the slots holding text, in the order they were minted.
+    ///
+    /// Metadata: the names are the driver's own (`ref:N`), never a byte of what a slot holds or
+    /// of a file name. A choice is left out because no tool reads it as text. Ordered by length and
+    /// then by spelling, which is numeric order for names of one prefix.
+    pub fn text_names(&self) -> Vec<SlotId> {
+        let mut names: Vec<SlotId> = self.slots.keys().cloned().collect();
+        names.sort_by(|a, b| {
+            a.as_str()
+                .len()
+                .cmp(&b.as_str().len())
+                .then_with(|| a.cmp(b))
+        });
+        names
+    }
+
+    /// The names of the choices a processor made, ordered as [`SlotStore::text_names`] is.
+    ///
+    /// Metadata like [`SlotStore::text_names`]: the driver's own `ref:N` names and no digit of
+    /// any choice.
+    pub fn choice_names(&self) -> Vec<SlotId> {
+        let mut names: Vec<SlotId> = self.choices.keys().cloned().collect();
+        names.sort_by(|a, b| {
+            a.as_str()
+                .len()
+                .cmp(&b.as_str().len())
+                .then_with(|| a.cmp(b))
+        });
+        names
+    }
+
     pub fn label_of(&self, id: &SlotId) -> Option<Label> {
         self.slots.get(id).map(Entry::label)
     }

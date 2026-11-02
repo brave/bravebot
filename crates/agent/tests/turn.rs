@@ -22783,7 +22783,19 @@ fn a_choice_cannot_be_a_path_a_body_or_a_document_for_a_processor() {
         assert_eq!(results.len(), 7, "{results:#?}");
         results[2..]
             .iter()
-            .map(|result| result.replace(name, "NAME"))
+            .map(|result| {
+                // The example in the form is a fixed `ref:3`, whatever name was typed. It is
+                // stood in for before the typed name is, so that naming `ref:3` does not rewrite
+                // it, and it is checked here as written.
+                assert!(
+                    result.contains("A reference is written ref:N, for example ref:3,")
+                        && !result.contains("holds no choice"),
+                    "the refusal did not give the form a reference is written in: {result}"
+                );
+                result
+                    .replace("for example ref:3", "for example EXAMPLE")
+                    .replace(name, "NAME")
+            })
             .collect::<Vec<_>>()
     };
 
@@ -22905,7 +22917,8 @@ fn a_processor_cannot_be_given_a_reference_to_nothing() {
     let bodies: Vec<String> = received.try_iter().collect();
     assert_eq!(bodies.len(), 2, "no processor should have run");
     assert!(
-        bodies[1].contains("is not a reference to anything"),
+        bodies[1].contains("no reference is named \\\"ref:99\\\"")
+            && bodies[1].contains("ref:N, for example ref:3"),
         "the model was not told why: {}",
         bodies[1]
     );
@@ -55578,7 +55591,8 @@ fn a_processor_is_not_given_the_path_of_the_file_a_page_was_saved_to() {
         results
             .iter()
             .any(|result| result.starts_with("Result of spawn_processor")
-                && result.contains("is not a reference to anything")),
+                && result.contains("no reference is named")
+                && result.contains("ref:N, for example ref:3")),
         "the planner was not told a path is no reference: {results:?}"
     );
     assert!(
