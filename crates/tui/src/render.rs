@@ -44,7 +44,9 @@ pub(crate) use self::transcript::{
     plan_item_row, reply_as_text, rows_of, top_of_view,
 };
 
-use self::beneath::{first_waiting_row, fit_to_room, lines_beneath_the_box, offered_picks};
+use self::beneath::{
+    first_waiting_row, fit_to_room, lines_beneath_the_box, offered_picks, queue_words,
+};
 use self::hint::draw_hint;
 use self::prompt::{draw_input, draw_status, input_height, status_height};
 use self::scroller::draw_scroller;
@@ -1073,7 +1075,8 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
 }
 
 /// The rows a click on a waiting prompt answers on. Each waiting prompt is two rows, and a click on
-/// either takes it back (MOUSE-28). Only the rows drawn are recorded.
+/// either takes it back, with the words on the first that remove it (MOUSE-28). Only the rows drawn
+/// are recorded.
 fn queued_prompts(
     session: &Session,
     width: u16,
@@ -1092,15 +1095,30 @@ fn queued_prompts(
         else {
             break;
         };
+        let y = area.y + u16::try_from(top).unwrap_or(u16::MAX);
         recorded.push(crate::state::Target::on_screen(
             Rect::new(
                 area.x,
-                area.y + u16::try_from(top).unwrap_or(u16::MAX),
+                y,
                 area.width,
                 u16::try_from(rows.min(2)).unwrap_or(2),
             ),
             crate::state::Hit::Queued(place),
         ));
+        // Over the row's own target, since the last one recorded is the one found.
+        if let Some(words) = queue_words(width, place, session.queued.len()) {
+            for (cells, which) in [
+                (words.clear, crate::state::Discard::All),
+                (Some(words.remove), crate::state::Discard::One(place)),
+            ] {
+                if let Some(cells) = cells {
+                    recorded.push(crate::state::Target::on_screen(
+                        Rect::new(area.x + cells.start, y, cells.end - cells.start, 1),
+                        crate::state::Hit::Discard(which),
+                    ));
+                }
+            }
+        }
     }
     recorded
 }
@@ -4633,9 +4651,21 @@ mod tests {
 
         /// The row of the line that follows `line` in `rows`, which is its mark.
         fn mark_under<'a>(rows: &'a [String], line: &str) -> &'a str {
+            // Without the words at the right of the row that remove the line from the queue.
+            let own = |row: &str| {
+                let row = row.trim();
+                let row = row
+                    .strip_suffix(t!(queued_remove))
+                    .unwrap_or(row)
+                    .trim_end();
+                row.strip_suffix(t!(queued_clear_all))
+                    .unwrap_or(row)
+                    .trim_end()
+                    .to_string()
+            };
             let at = rows
                 .iter()
-                .position(|row| row.trim() == line)
+                .position(|row| own(row) == line)
                 .unwrap_or_else(|| panic!("{line:?} is not drawn: {rows:#?}"));
             &rows[at + 1]
         }

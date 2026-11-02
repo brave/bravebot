@@ -4273,6 +4273,11 @@ queued-carried-out-after = after { $line }
 queued-a-prompt = the prompt before it
 # What a waiting command line is called where a command is said to wait behind it.
 queued-a-shell-line = the shell line before it
+# The word at the right of a waiting line that removes it from the queue, and the word on the
+# oldest line that removes every line waiting. Each is drawn in the columns the line leaves, so they
+# stay short.
+queued-remove = remove
+queued-clear-all = clear all
 
 ## Pasting, dropping and attaching
 
@@ -5285,6 +5290,9 @@ hover-back = click to leave this view
 hover-reply = click to copy this reply
 hover-block = click to copy this block
 hover-queued = click to take this prompt back into the box
+hover-queued-command = click to remove this command from the queue
+hover-queued-remove = click to remove this from the queue
+hover-queued-clear = click to remove everything waiting
 hover-call-toggle = click to expand or collapse this call
 hover-call-open = click to open the scroller on this call
 hover-delegate = click to open this delegate's view

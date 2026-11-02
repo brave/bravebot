@@ -1071,7 +1071,9 @@ as having done nothing: the line in the box, and the copy arriving at the planne
 Where the turn has taken every waiting prompt, the press leaves the box exactly as it was.
 
 A click on a waiting prompt takes it back with the ones typed after it, so a click on the oldest
-does what the key does ([MOUSE-28](mouse.md#MOUSE-28)).
+does what the key does ([MOUSE-28](mouse.md#MOUSE-28)). The words on the rows of the queue remove
+lines without putting them in the box, one line or all of them, by the same rule about what the turn
+has been given.
 
 With nothing waiting the key is unchanged: it walks the history, and scrolls once there is nothing
 left to walk. Inside a paragraph it moves between rows first, and reaches the queue from the top

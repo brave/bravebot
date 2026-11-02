@@ -127,7 +127,13 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
 
     let mut lines = Vec::new();
     for (at, waiting) in session.queued.iter().enumerate() {
-        let room = (width as usize).saturating_sub(4);
+        let words = queue_words(width, at, session.queued.len());
+        // The words that act on the line take the right of its first row, and the line is cut to
+        // the room left, with two blanks between.
+        let room = match &words {
+            Some(words) => usize::from(words.first_column()).saturating_sub(4),
+            None => (width as usize).saturating_sub(4),
+        };
         let goes = session.where_it_goes(at);
         let lead = match goes {
             Bound::Run => "! ",
@@ -136,13 +142,31 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
             | Bound::IntoTheNextTurn
             | Bound::CarriedOut => "  ",
         };
-        lines.push(Line::from(vec![
-            Span::styled(lead, Style::default().fg(theme::brand_primary())),
-            Span::styled(
-                printable(&head_of(&waiting.prompt, room)),
+        let shown = printable(&head_of(&waiting.prompt, room));
+        let mut row = vec![Span::styled(
+            lead,
+            Style::default().fg(theme::brand_primary()),
+        )];
+        if let Some(words) = &words {
+            let blanks =
+                usize::from(words.first_column()).saturating_sub(2 + wrap::display_width(&shown));
+            row.push(Span::styled(
+                shown,
                 Style::default().fg(theme::brand_primary()),
-            ),
-        ]));
+            ));
+            row.push(Span::raw(" ".repeat(blanks)));
+            if words.clear.is_some() {
+                row.push(Span::styled(t!(queued_clear_all).to_string(), dim()));
+                row.push(Span::raw("  "));
+            }
+            row.push(Span::styled(t!(queued_remove).to_string(), dim()));
+        } else {
+            row.push(Span::styled(
+                shown,
+                Style::default().fg(theme::brand_primary()),
+            ));
+        }
+        lines.push(Line::from(row));
         let mut mark = vec![
             Span::raw("  "),
             Span::styled(
@@ -202,6 +226,51 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
         lines.push(Line::from(mark));
     }
     lines
+}
+
+/// The columns of the words on a waiting line's first row that remove lines from the queue, counted
+/// from the left edge of the rows beneath the box (MOUSE-28).
+pub(super) struct QueueWords {
+    /// The word that removes this line.
+    pub remove: std::ops::Range<u16>,
+    /// The word that removes every line waiting, drawn on the oldest line's row once a second waits.
+    pub clear: Option<std::ops::Range<u16>>,
+}
+
+impl QueueWords {
+    /// The column of the leftmost word.
+    pub fn first_column(&self) -> u16 {
+        self.clear
+            .as_ref()
+            .map_or(self.remove.start, |clear| clear.start)
+    }
+}
+
+/// Where the words that remove lines from the queue are drawn on the first row of the line at
+/// `place`, of `count` waiting, in rows `width` columns wide. The words end one column short of the
+/// edge, and a word that would leave less than a legible few words of the line is left out, the
+/// word for every line before the word for this one.
+pub(super) fn queue_words(width: u16, place: usize, count: usize) -> Option<QueueWords> {
+    /// Enough of the line to recognise it by, and the lead before it. Below this the words go.
+    const LEGIBLE: u16 = 12 + 2;
+    /// The blanks between the line and the words, and between the words.
+    const GAP: u16 = 2;
+
+    let columns = |text: &str| u16::try_from(wrap::display_width(text)).unwrap_or(u16::MAX);
+    let end = width.checked_sub(1)?;
+    let remove = end.checked_sub(columns(t!(queued_remove)))?..end;
+    let fits = |start: u16| start >= LEGIBLE + GAP;
+    if !fits(remove.start) {
+        return None;
+    }
+    let clear = (place == 0 && count > 1)
+        .then(|| {
+            let end = remove.start.checked_sub(GAP)?;
+            let start = end.checked_sub(columns(t!(queued_clear_all)))?;
+            fits(start).then_some(start..end)
+        })
+        .flatten();
+    Some(QueueWords { remove, clear })
 }
 
 /// The row, among those beneath the box, where the first waiting prompt is drawn, where one waits.

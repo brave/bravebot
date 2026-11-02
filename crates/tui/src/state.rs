@@ -58,7 +58,7 @@ pub use menu::{Choice, Menu};
 pub use queue::{Bound, Queued};
 pub use scroller::{Bar, Footer, HintRow, Laid, Panel, Popup, Scroller, TopOfView};
 pub use settings::wheel_rows_named;
-pub use targets::{Hit, Scrolled, Space, Target};
+pub use targets::{Discard, Hit, Scrolled, Space, Target};
 pub use vi::Spelled;
 pub use watching::{AsideDone, AsideFlight, WatchScope, Watching};
 
@@ -12828,6 +12828,57 @@ mod tests {
             s.queued.len(),
             2,
             "a line was lost behind the one the turn took"
+        );
+    }
+
+    /// MOUSE-28: a command a click queued is removed by its own place, and a clear stops at the first
+    /// prompt the turn has been given, since the ones before it are older still. Rejects a removal that
+    /// puts the line in the box, and a clear that drops a prompt the planner already read from the
+    /// queue, which would show a prompt as unsent that had gone.
+    #[test]
+    fn discarding_removes_a_click_queued_command_and_stops_at_a_prompt_the_turn_took() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        let reaching = s.interjections();
+        for line in ["second", "third"] {
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            s.queue();
+            if line == "second" {
+                assert!(s.queue_command_line("/mcp"), "the click was not queued");
+            }
+        }
+        assert!(!s.queued_comes_back(1), "a click's line comes back");
+        assert!(s.queued_comes_back(0));
+
+        assert!(s.discard_queued(1));
+        assert!(s.input.is_empty(), "{:?}", s.input);
+        assert_eq!(
+            s.queued
+                .iter()
+                .map(|line| line.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["second", "third"]
+        );
+        assert!(!s.discard_queued(2), "a place past the end removed a line");
+
+        // The turn takes the oldest, and the session has not heard of it yet.
+        assert_eq!(reaching.take().as_deref(), Some("second"));
+        assert!(s.discard_queued_all());
+        assert_eq!(
+            s.queued
+                .iter()
+                .map(|line| line.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["second"],
+            "the prompt the turn took left the queue before the turn said so"
+        );
+        assert_eq!(reaching.take(), None, "`third` is still on its way");
+        assert!(
+            !s.discard_queued_all(),
+            "a prompt the turn took was removed"
         );
     }
 

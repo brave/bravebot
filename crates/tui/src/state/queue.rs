@@ -582,4 +582,50 @@ impl Session {
         self.set_input(lines.join("\n"));
         true
     }
+
+    /// Whether a click on the waiting line at `place` puts it in the box, which it does for a line
+    /// that was typed and does not for a command a click queued (MOUSE-28).
+    pub fn queued_comes_back(&self, place: usize) -> bool {
+        self.queued.get(place).is_some_and(Queued::was_typed)
+    }
+
+    /// Take the waiting line at `place` out of the queue and leave the box as it was (MOUSE-28).
+    ///
+    /// For a line with nothing to put in the box, which is a command a click queued, and for a
+    /// person who wants a prompt gone and not edited. A prompt is also taken out of the turn's reach
+    /// and stays in the history, as when it is taken back. Says whether a line was removed, which it
+    /// is not where nothing waits at `place` or the turn has already been given the prompt there.
+    pub fn discard_queued(&mut self, place: usize) -> bool {
+        let Some(line) = self.queued.get(place) else {
+            return false;
+        };
+        if line.waiting.is_sent() {
+            // Counted from the newest, since the turn takes from the oldest end and the prompts
+            // after this one are the same in the buffer whether or not it has taken the ones before.
+            let after = self.queued[place + 1..]
+                .iter()
+                .filter(|line| line.waiting.is_sent())
+                .count();
+            if !self.pending.forget_after(after) {
+                return false;
+            }
+        }
+        self.queued.remove(place);
+        true
+    }
+
+    /// Take every waiting line out of the queue and leave the box as it was (MOUSE-28), newest
+    /// first, stopping at a prompt the turn has already been given since the ones before it are
+    /// older still. Says whether any line was removed.
+    pub fn discard_queued_all(&mut self) -> bool {
+        let mut removed = false;
+        while let Some(line) = self.queued.last() {
+            if line.waiting.is_sent() && !self.pending.forget_last() {
+                break;
+            }
+            self.queued.pop();
+            removed = true;
+        }
+        removed
+    }
 }

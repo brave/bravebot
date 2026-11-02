@@ -31,8 +31,12 @@ pub enum Hit {
     /// Copy one fenced block of the reply held by the transcript entry at this index, the one that
     /// is the `n`th of its blocks (MOUSE-27).
     Block(usize, usize),
-    /// Take the waiting prompt at this place in the queue back into the box (MOUSE-28).
+    /// Take the waiting prompt at this place in the queue back into the box, or remove a command a
+    /// click queued (MOUSE-28).
     Queued(usize),
+    /// A word on a waiting prompt's row that removes lines from the queue and puts nothing in the
+    /// box (MOUSE-28).
+    Discard(Discard),
     /// The cells a panel that holds the input covers: a picker opened while a turn runs, the
     /// scroller's list of keys, or the search over the prompts already sent. A press on them is the
     /// panel's, and reaches nothing drawn beneath (MOUSE-45).
@@ -82,6 +86,15 @@ pub enum Hit {
     Wheel(Scrolled),
     /// A row, a tab or "Show more" of the Sessions screen (SCREEN-12).
     SessionsScreen(crate::sessions_screen::Click),
+}
+
+/// Which waiting lines a word on the queue's rows removes (MOUSE-28).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Discard {
+    /// The line at this place in the queue.
+    One(usize),
+    /// Every line waiting.
+    All,
 }
 
 /// A pane of the files state of the info panel that the wheel scrolls (MOUSE-19).
@@ -137,7 +150,9 @@ impl Hit {
             Hit::Reply(_) | Hit::Block(..) | Hit::Words(_) => {
                 beneath && session.watching().is_none() && !session.files_open()
             }
-            Hit::Queued(_) => beneath && !session.files_open() && session.in_the_plain_frame(),
+            Hit::Queued(_) | Hit::Discard(_) => {
+                beneath && !session.files_open() && session.in_the_plain_frame()
+            }
             // A view of a delegate, of what a command printed or of an aside is drawn from other
             // entries than the session's, and the list of them has no call or block of the
             // session's to click.

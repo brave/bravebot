@@ -3521,6 +3521,8 @@ queued-run = lancée dans votre shell
 queued-carried-out-after = après { $line }
 queued-a-prompt = l'invite précédente
 queued-a-shell-line = la ligne de shell précédente
+queued-remove = retirer
+queued-clear-all = tout retirer
 
 
 ## Coller, déposer et joindre
@@ -4364,6 +4366,9 @@ hover-back = cliquer pour quitter cette vue
 hover-reply = cliquer pour copier cette réponse
 hover-block = cliquer pour copier ce bloc
 hover-queued = cliquer pour reprendre cette invite dans la zone de saisie
+hover-queued-command = cliquer pour retirer cette commande de la file
+hover-queued-remove = cliquer pour retirer ceci de la file
+hover-queued-clear = cliquer pour retirer tout ce qui attend
 hover-call-toggle = cliquer pour déplier ou replier cet appel
 hover-call-open = cliquer pour ouvrir le défilement sur cet appel
 hover-delegate = cliquer pour ouvrir la vue de ce délégué
