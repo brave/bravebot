@@ -1835,8 +1835,8 @@ that starts a job holds nothing the job printed.
 
 **Why.** Under unscreened bypass `read_output` has one answer, so a round spent calling it buys
 nothing but the round: a model call, and the whole conversation sent again. Where a check answers,
-the check is made either way and only the round is saved, which was most of the rounds in sessions
-that passed `read: true` with screening on and were told it was not applied. A prompt is not drawn at
+the check is made either way, so a round spent calling `read_output` after it buys nothing but the
+round. A prompt is not drawn at
 the run, because the planner has not seen the size or shape of the output yet. Doing it on request
 rather than for every run keeps output the planner does not want out of its context, where a build
 or test log is often the largest thing a turn produces and is often read only for how it ended,
