@@ -67,6 +67,7 @@ pub(crate) fn print_help() {
             t!(cli_usage_sessions_import),
         ),
         ("bravebot stats [options]", t!(cli_usage_stats)),
+        ("bravebot schedule <verb> [<id>]", t!(cli_usage_schedule)),
         (
             "bravebot skill eval <name> [options]",
             t!(cli_usage_skill_eval),

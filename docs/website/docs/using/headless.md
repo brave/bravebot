@@ -197,6 +197,28 @@ Given twice, the last file wins. A path naming no file, and a blank path, are re
 run stops before it starts. A named file that did not parse leaves the layers below it in force, and is
 visible by its absence from what [`doctor`](../reference/cli.md) lists.
 
+## Running on a schedule
+
+```sh
+bravebot schedule add --cron "0 9 * * 1-5" --prompt "summarize the pull requests merged yesterday"
+bravebot schedule list
+bravebot schedule history 1
+```
+
+`schedule add` writes an entry and one line in your crontab that runs `bravebot schedule run-now <id>`
+at the times the expression gives. Each run is a one-shot run in the entry's directory (this one
+unless you gave `--dir`), with the stored prompt as its task, and it is recorded as a session like
+any other run. Nothing of bravebot's keeps running between runs, and a background job a run started
+ends with it. `add` has to be typed at a terminal, so a command a session runs cannot add one.
+
+A run has nobody to ask, so it reads and reports, and writes only if you typed `--accept-edits` or
+`--dangerously-skip-permissions` when you ran `add`. A run that the planner asks a question stops at
+the first one, exits with status 4 and keeps the question for `schedule pending`, which `schedule
+clear <id>` deletes. `schedule pause <id>` keeps an entry and its line and stops it from running, and
+`schedule resume <id>` lets it run again. A firing that finds the previous firing of the same entry
+still running is skipped. `history` lists each run with its exit status, the session it recorded and
+the tokens it spent. [The reference](../reference/cli.md#schedule) has the options.
+
 ## Planning the whole run first
 
 `--mode manifest` decides everything first: the planner emits a step list, and a driver walks it

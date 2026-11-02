@@ -54,6 +54,12 @@ pub(crate) struct OneShot<R: Read, W: Write> {
     /// what an interjection takes. Nothing else changes: a write, a run, a fetch and every other
     /// question is still refused here, because a line sent on a pipe approves none of them.
     lines: Option<crate::lines::Channel>,
+    /// Set for a run a stored schedule fired: the token that ends the turn when the planner asks a
+    /// question, since nobody is there to answer it (SCHEDULE-2).
+    stop_at_a_question: Option<bravebot_core::cancel::Cancel>,
+    /// The first question the planner asked a run that stops at one, kept whole to be written down
+    /// for `schedule pending`. Carried and written, never read: nothing here looks inside it.
+    asked: Option<Asking>,
 }
 
 /// One question a one-shot run could not put to anybody, and so answered no.
@@ -80,7 +86,23 @@ impl<R: Read, W: Write> OneShot<R, W> {
             alert: None,
             declined: Vec::new(),
             lines: None,
+            stop_at_a_question: None,
+            asked: None,
         }
+    }
+
+    /// End the turn with `cancel` at the first question the planner asks, and keep the question.
+    ///
+    /// For a run a stored schedule fired. Declining the question and carrying on would let the
+    /// planner act on the lack of an answer; stopping leaves the question for a person to read.
+    pub(crate) fn stopping_at_a_question(mut self, cancel: bravebot_core::cancel::Cancel) -> Self {
+        self.stop_at_a_question = Some(cancel);
+        self
+    }
+
+    /// The question a run stopped at, where it stopped at one.
+    pub(crate) fn asked(&self) -> Option<&Asking> {
+        self.asked.as_ref()
     }
 
     /// Put the planner's questions to the program sending these lines, and take its steers.
@@ -272,6 +294,18 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
     /// is put to the program sending them, and what comes back is a pick among the choices the
     /// planner offered (CLI-36).
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
+        if let Some(cancel) = &self.stop_at_a_question {
+            cancel.cancel();
+            // The first question is the one the run stopped at; a later one in the same turn is
+            // not kept over it.
+            self.asked.get_or_insert_with(|| asking.clone());
+            self.declined.push(Declined {
+                gate: "scheduled_question",
+                reason: "a scheduled run cannot be asked a question, so it stopped",
+                in_the_trail: false,
+            });
+            return self.refusing.ask_user(asking);
+        }
         match &self.lines {
             Some(lines) => lines.ask(asking),
             None => self.refusing.ask_user(asking),

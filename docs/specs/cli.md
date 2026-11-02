@@ -2610,7 +2610,10 @@ under its id. `run-now <id>` starts the entry's
 run at once, and `history [<id>]` lists the recorded runs, newest first, each with its status, the
 session it recorded and the tokens that session spent ([SESSION-11](sessions.md#SESSION-11)). Any
 other word, a number that names no entry, and a flag that `add` does not read are refused with the
-status for an argument (CLI-6).
+status for an argument (CLI-6). `pause <id>`, `resume <id>`, `pending [<id>]` and `clear <id>` pause
+an entry, resume it, show the question a firing stopped at and delete that question.
+[schedule.md](schedule.md) describes them, the stop at the first question, the skip of a firing that
+overlaps the previous one, and the ranges an expression is held to.
 
 An entry holds the expression, the prompt, the directory (this one where `--dir` is not given) and
 the mode. The prompt is the person's own text, fixed when the entry is written, as the line of a
@@ -2639,6 +2642,9 @@ and a platform that is not Unix, refuse `add`, and refuse `remove` of a crontab 
 
 The driver reads a run's result for one value, the id of the session it recorded, and accepts it
 only where it is a session name. Nothing a run reads or says reaches an entry or the crontab.
+
+A run is a one-shot run, so a background job its turn started ends with that turn
+([RUN-15](tools/run.md#RUN-15)); nothing a job started is left running after the run exits.
 
 **Why.** A recurring job has nobody to ask, so what it may write has to be decided when a person
 writes it, in words they typed. The operating system's own scheduler needs no daemon of bravebot's.

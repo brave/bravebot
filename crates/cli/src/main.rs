@@ -14,6 +14,7 @@ mod deep_link;
 mod doctor;
 mod exit;
 mod finish;
+mod firing;
 mod flags;
 mod goal_run;
 mod host;
@@ -1562,6 +1563,12 @@ fn run_and_report(
     if let Some(lines) = lines {
         one_shot = one_shot.with_lines(lines.clone());
     }
+    // A run `schedule run-now` started for a stored entry has nobody to ask, and stops at the
+    // first question (SCHEDULE-2).
+    let firing = schedule::firing();
+    if firing.is_some() {
+        one_shot = one_shot.stopping_at_a_question(cancel.clone());
+    }
     // Screening off the task, so the answer the tools fill a verdict in under and the answer that
     // decides whether a verdict which objects can refuse are the one value resolved above.
     // The sandbox mode off the task as well, since bypassing answers the start of a language server
@@ -1662,6 +1669,10 @@ fn run_and_report(
 
     // Read once the turn is over, which is when the confirmer's borrow ends.
     let declined = one_shot.declined().to_vec();
+    // What the schedule keeps beside its entry: the question this run stopped at, if it did.
+    if let Some(id) = &firing {
+        schedule::record_firing(id, one_shot.asked());
+    }
 
     let answered = outcome.is_ok();
     let code = match outcome {
@@ -2088,7 +2099,10 @@ fn report_a_failed_turn(
 ) -> ExitCode {
     // A plan nobody approved stopped the run before anything happened, which is a gate refusing it
     // and not a failure to run (CLI-6).
-    let ending = match declined.iter().any(|d| d.gate == "manifest_plan") {
+    let ending = match declined
+        .iter()
+        .any(|d| d.gate == "manifest_plan" || d.gate == "scheduled_question")
+    {
         true => Ending::Refused,
         false => exit::ending_of(error),
     };
@@ -3701,6 +3715,85 @@ mod tests {
             with_declined(Vec::new(), unattended.declined()).is_empty(),
             "a call the trail holds was listed again"
         );
+    }
+
+    /// SCHEDULE-2: a run `schedule run-now` fires ends its turn at the first question the planner
+    /// asks, keeps that question whole for `schedule pending`, and counts for the refused status.
+    /// The regressions it rejects are a question answered and carried on from, one that is not kept,
+    /// a later question kept over the first, a turn that is not cancelled, and a run that is
+    /// stopped by a confirmer that was never told to stop.
+    #[test]
+    fn a_scheduled_run_stops_at_the_first_question_and_keeps_it() {
+        let first = a_question("Which branch?");
+        let second = a_question("Which remote?");
+
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut shown = Vec::new();
+        let mut stopping =
+            OneShot::new(&b"1\n"[..], &mut shown, true).stopping_at_a_question(cancel.clone());
+        let answers = stopping.ask_user(&first);
+        stopping.ask_user(&second);
+        assert!(cancel.is_cancelled(), "the turn was not ended");
+        assert!(
+            answers.iter().all(|answer| !matches!(
+                answer,
+                bravebot_core::ask::Answer::Chosen(_) | bravebot_core::ask::Answer::Typed(_)
+            )),
+            "the question was answered"
+        );
+        assert_eq!(stopping.asked(), Some(&first));
+        assert!(
+            stopping
+                .declined()
+                .iter()
+                .all(|d| d.gate == "scheduled_question"),
+        );
+        assert!(!stopping.declined().is_empty());
+
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut shown = Vec::new();
+        let mut not_stopping = OneShot::new(&b"1\n"[..], &mut shown, true);
+        not_stopping.ask_user(&first);
+        assert!(!cancel.is_cancelled());
+        assert!(not_stopping.asked().is_none());
+    }
+
+    /// SCHEDULE-2: the turn a scheduled run cancels at its first question ends on the refused
+    /// status, as a plan nobody approved does, and not on the status for a cancelled turn. The fault
+    /// it rejects is a gate name `report_a_failed_turn` does not map, which leaves the status of an
+    /// interrupted run for a run that stopped on purpose.
+    #[test]
+    fn a_run_stopped_at_a_scheduled_question_ends_refused() {
+        let reporter = progress::Progress::new(std::io::stderr());
+        let sink = json::Streaming::new(None);
+        let cancelled = bravebot_agent::TurnError::Cancelled { attempts: None };
+        let stopped_at = [one_shot::Declined {
+            gate: "scheduled_question",
+            reason: "a scheduled run cannot be asked",
+            in_the_trail: false,
+        }];
+        let refused = format!("{:?}", ExitCode::from(Ending::Refused.status()));
+
+        let stopped = report_a_failed_turn(&cancelled, None, false, &reporter, &sink, &stopped_at);
+        assert_eq!(format!("{stopped:?}"), refused);
+
+        let interrupted = report_a_failed_turn(&cancelled, None, false, &reporter, &sink, &[]);
+        assert_ne!(
+            format!("{interrupted:?}"),
+            refused,
+            "a cancelled turn with no question is not a refusal"
+        );
+    }
+
+    fn a_question(text: &str) -> bravebot_core::ask::Asking {
+        bravebot_core::ask::Asking {
+            prompts: vec![bravebot_core::ask::Prompt {
+                header: "Pick".to_string(),
+                question: text.to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
     }
 
     /// A pipe or a redirected stderr is nobody, and then a plan is refused like every other

@@ -25,6 +25,7 @@ fr:cli-acp-sessions-still-working
 fr:cli-acp-takes-nothing-else
 fr:cli-acp-unreadable-line
 fr:cli-usage-acp
+fr:cli-usage-schedule
 fr:cli-usage-skill-eval
 fr:command-lsp
 fr:command-outputs
@@ -76,6 +77,19 @@ fr:outputs-hint
 fr:outputs-none
 fr:panel-rename-line-in-use
 fr:run-allow-and-remember-explained
+fr:schedule-already-paused
+fr:schedule-cleared
+fr:schedule-not-paused
+fr:schedule-nothing-to-clear
+fr:schedule-paused-now
+fr:schedule-pending-header
+fr:schedule-pending-none
+fr:schedule-resumed
+fr:schedule-skipped-paused
+fr:schedule-skipped-running
+fr:schedule-state-active
+fr:schedule-state-paused
+fr:schedule-stopped-at-question
 fr:session-link-not-opened
 fr:session-path-not-a-file
 fr:session-preview-denied

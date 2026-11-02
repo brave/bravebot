@@ -30,6 +30,11 @@ session holds ([LOOP-16](#LOOP-16)). What the repeated line is, where the interv
 a tick fires, which loop's tick goes next, and what ends a loop. A turn that asks to be asked
 again starts one too ([LOOP-14](#LOOP-14)), and everything here holds for that loop as well.
 
+A recurring run that outlives a session is a stored entry of `bravebot schedule`
+([CLI-42](cli.md#CLI-42)). It is a separate mechanism: [LOOP-12](#LOOP-12) says a loop is never
+written down, and does not forbid an entry a person wrote at the command line, which the operating
+system starts and no session holds.
+
 Not what a tick then does, which is a turn like any other. The tool a turn uses to say when it
 should be asked again is [tools/schedule-next.md](tools/schedule-next.md), and what the planner
 is told about being inside a loop is a skill, in [skills.md](skills.md). That a `/` line is a

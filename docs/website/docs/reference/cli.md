@@ -76,7 +76,7 @@ Usage:
 | `bravebot sessions delete <id>` | delete one session recorded for this directory, with its trail and search index ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot sessions purge [--dry-run] [-y]` | delete every session recorded for this directory, asking first unless `-y` is given ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot stats [--days <n>] [--models] [--project [<dir>]]` | total the sessions, turns and tokens, read and written, the recorded sessions spent, for every project or one ([below](#stats)) |
-| `bravebot schedule add\|list\|remove\|run-now\|history` | run a prompt from a cron expression as a one-shot run, started by your crontab, a launchd job or a systemd timer ([below](#schedule)) |
+| `bravebot schedule add\|list\|remove\|run-now\|history\|pause\|resume\|pending\|clear` | run a prompt from a cron expression as a one-shot run, started by your crontab, a launchd job or a systemd timer ([below](#schedule)) |
 | `bravebot skill eval <name> [--model <model>] [--max-rounds <n>] [--max-tokens <n>] [--trust-workspace]` | run a skill's saved cases with the skill and without it and report both scores ([below](#skill-eval)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
@@ -1207,6 +1207,10 @@ bravebot schedule list
 bravebot schedule remove <id>
 bravebot schedule run-now <id>
 bravebot schedule history [<id>]
+bravebot schedule pause <id>
+bravebot schedule resume <id>
+bravebot schedule pending [<id>]
+bravebot schedule clear <id>
 ```
 
 Runs a prompt on a repeating schedule with no session open. `add` writes an entry and has your
@@ -1238,6 +1242,16 @@ launchd job or systemd timer holds each time the expression gives, so an express
 than a launchd job can hold is refused for those two. Where both the day of the month and the day of
 the week are given, a run starts on a day that matches either, as cron does. Only Unix systems are
 supported: there is no Windows scheduler yet.
+
+The expression is checked against the range of each field: minutes 0 to 59, hours 0 to 23, days of
+the month 1 to 31, months 1 to 12 and days of the week 0 to 7, with a step greater than zero.
+
+`pause <id>` stops an entry from running and keeps its line and its prompt. `resume <id>` lets it
+run again, and `list` shows `paused` or `active` for each entry. A run started for an entry stops at
+the first question it is asked, since nobody is there to answer, and exits with status 4 after
+keeping the question. `pending` shows it and `clear <id>` deletes it. A firing that finds the previous
+firing of the same entry still running is skipped. The behaviour is in
+[schedule.md](https://github.com/brave/bravebot/blob/main/docs/specs/schedule.md).
 
 ## `skill eval`
 

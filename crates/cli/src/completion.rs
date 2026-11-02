@@ -47,6 +47,11 @@ const SESSIONS: [&str; 4] = ["list", "stop", "import", "search"];
 /// What follows `skill`.
 const SKILL: [&str; 1] = ["eval"];
 
+/// What follows `schedule`.
+const SCHEDULE: [&str; 9] = [
+    "add", "list", "remove", "run-now", "history", "pause", "resume", "pending", "clear",
+];
+
 /// A flag, as the usage table spells it: the long form, the short form where there is one, and
 /// whether a value follows.
 struct Flag {
@@ -163,6 +168,7 @@ fn bash() -> String {
             mcp) COMPREPLY=($(compgen -W "{mcp}" -- "$cur")); return 0 ;;
             permissions) COMPREPLY=($(compgen -W "{permissions}" -- "$cur")); return 0 ;;
             sessions) COMPREPLY=($(compgen -W "{sessions}" -- "$cur")); return 0 ;;
+            schedule) COMPREPLY=($(compgen -W "{schedule}" -- "$cur")); return 0 ;;
             skill) COMPREPLY=($(compgen -W "{skill}" -- "$cur")); return 0 ;;
             completion|shell-init) COMPREPLY=($(compgen -W "{shells}" -- "$cur")); return 0 ;;
         esac
@@ -184,6 +190,7 @@ complete -o default -F _bravebot bravebot
         permissions = PERMISSIONS.join(" "),
         sessions = SESSIONS.join(" "),
         skill = SKILL.join(" "),
+        schedule = SCHEDULE.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -200,6 +207,7 @@ _bravebot() {{
             mcp) compadd -- {mcp}; return ;;
             permissions) compadd -- {permissions}; return ;;
             sessions) compadd -- {sessions}; return ;;
+            schedule) compadd -- {schedule}; return ;;
             skill) compadd -- {skill}; return ;;
             completion|shell-init) compadd -- {shells}; return ;;
         esac
@@ -224,6 +232,7 @@ fi
         permissions = PERMISSIONS.join(" "),
         sessions = SESSIONS.join(" "),
         skill = SKILL.join(" "),
+        schedule = SCHEDULE.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -241,6 +250,7 @@ fn fish() -> String {
         ("mcp", MCP.join(" ")),
         ("permissions", PERMISSIONS.join(" ")),
         ("sessions", SESSIONS.join(" ")),
+        ("schedule", SCHEDULE.join(" ")),
         ("skill", SKILL.join(" ")),
         ("completion", SHELLS.join(" ")),
         ("shell-init", SHELLS.join(" ")),
