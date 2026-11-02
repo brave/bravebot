@@ -128,6 +128,10 @@ fn added(scratch: &Scratch, extra: &[&str]) -> Output {
         "--prompt",
         "list merged pull requests",
     ];
+    // Each test names the scheduler it asserts on, so the host's usual one does not change it.
+    if !extra.contains(&"--scheduler") {
+        arguments.extend_from_slice(&["--scheduler", "crontab"]);
+    }
     arguments.extend_from_slice(extra);
     scratch.run_at_a_terminal(&arguments)
 }
@@ -143,6 +147,8 @@ fn an_entry_cannot_be_added_without_a_terminal() {
         "0 9 * * *",
         "--prompt",
         "hello",
+        "--scheduler",
+        "crontab",
     ]);
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(scratch.table(), "");
@@ -206,8 +212,16 @@ fn no_command_but_add_accepts_a_write_flag() {
 fn a_cron_expression_that_is_not_five_plain_fields_writes_nothing() {
     let scratch = Scratch::new("schedule-bad-cron");
     for bad in ["0 9 * *", "0 9 * * 1;2", "@daily"] {
-        let output =
-            scratch.run_at_a_terminal(&["schedule", "add", "--cron", bad, "--prompt", "hello"]);
+        let output = scratch.run_at_a_terminal(&[
+            "schedule",
+            "add",
+            "--cron",
+            bad,
+            "--prompt",
+            "hello",
+            "--scheduler",
+            "crontab",
+        ]);
         assert!(!output.status.success(), "{bad}");
         assert_eq!(scratch.table(), "", "{bad}");
     }
@@ -364,6 +378,8 @@ fn a_host_with_no_crontab_refuses_add_and_remove() {
             "0 9 * * *",
             "--prompt",
             "hello",
+            "--scheduler",
+            "crontab",
         ],
         true,
     );
@@ -487,6 +503,42 @@ fn an_entry_is_not_kept_where_launchctl_or_systemctl_refuses_the_job() {
         assert_eq!(left(".config/systemd/user"), 0, "{scheduler}");
         assert_eq!(left(".bravebot/schedules"), 0, "{scheduler}");
     }
+}
+
+/// A scheduler that no longer knows the job does not keep the entry: `remove` still deletes the
+/// files and the entry.
+#[test]
+fn removing_a_job_the_scheduler_fails_to_stop_still_deletes_its_files_and_entry() {
+    let scratch = Scratch::new("schedule-remove-tool-fails");
+    assert!(
+        added(&scratch, &["--scheduler", "launchd"])
+            .status
+            .success()
+    );
+    assert!(
+        added(&scratch, &["--scheduler", "systemd"])
+            .status
+            .success()
+    );
+    let plist = scratch
+        .path
+        .join("home/Library/LaunchAgents/com.brave.bravebot.schedule.1.plist");
+    let units = scratch.path.join("home/.config/systemd/user");
+    assert!(plist.exists());
+    assert!(units.join("bravebot-schedule-2.timer").exists());
+    for id in ["1", "2"] {
+        let mut command = scratch.command(&["schedule", "remove", id]);
+        command.env("TOOL_STATUS", "1");
+        let removal = command.output().unwrap();
+        assert!(removal.status.success(), "{id}: {}", out(&removal));
+        assert!(
+            !scratch.state().join(format!("{id}.entry")).exists(),
+            "{id}"
+        );
+    }
+    assert!(!plist.exists());
+    assert!(!units.join("bravebot-schedule-2.timer").exists());
+    assert!(!units.join("bravebot-schedule-2.service").exists());
 }
 
 /// An entry that is named for one scheduler is refused a name that is none.

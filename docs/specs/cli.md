@@ -2666,6 +2666,7 @@ are not sent anywhere.
 `verified-by: bravebot_cli::schedule::the_session_is_found_outside_the_reply_and_never_inside_it`
 `verified-by: bravebot_cli::scheduled_runs::a_systemd_entry_is_a_timer_and_a_service_and_not_a_crontab_line`
 `verified-by: bravebot_cli::scheduled_runs::a_launchd_entry_is_a_plist_loaded_and_unloaded_by_its_path`
+`verified-by: bravebot_cli::scheduled_runs::removing_a_job_the_scheduler_fails_to_stop_still_deletes_its_files_and_entry`
 `verified-by: bravebot_cli::scheduled_runs::an_entry_is_not_kept_where_launchctl_or_systemctl_refuses_the_job`
 `verified-by: bravebot_cli::scheduled_runs::an_unknown_scheduler_writes_nothing`
 `verified-by: bravebot_cli::schedule::calendar::a_day_and_a_weekday_that_are_both_restricted_run_on_either`
