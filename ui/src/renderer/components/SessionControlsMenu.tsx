@@ -13,17 +13,22 @@ const PERMISSIONS: Record<PermissionMode, Choice> = {
   ask: {
     label: 'Ask',
     icon: 'hand-raised',
-    says: 'Ask before every write and command',
+    says: 'Asks before every write and command',
   },
   acceptEdits: {
     label: 'Accept edits',
     icon: 'edit-pencil',
-    says: 'Write files without asking. Commands and credential writes still ask',
+    says: 'Writes without asking. Commands still ask',
   },
   plan: {
     label: 'Plan',
     icon: 'clipboard',
-    says: 'Write nothing, only read and plan. Commands still ask',
+    says: 'Reads and plans only. Commands still ask',
+  },
+  auto: {
+    label: 'Auto',
+    icon: 'product-brave-leo',
+    says: 'Writes freely. A model checks commands',
   },
 }
 
@@ -127,16 +132,14 @@ export function SessionControlsMenu({
 
   const row = <T extends string>(
     key: T, current: T, choices: Record<T, Choice>, testId: string, onChoose: (key: T) => void,
-    describe = true,
   ) => (
     <leo-menu-item key={key} data-role="menuitemradio" aria-checked={key === current ? 'true' : 'false'}
-      data-tooltip={describe ? undefined : choices[key].says} aria-description={describe ? undefined : choices[key].says}
       data-test={testId} onClick={() => { if (key !== current) onChoose(key) }}>
       <span className="menu-icon-row controls-option">
         <Icon name={choices[key].icon} />
         <span className="controls-option-text">
           <span>{choices[key].label}</span>
-          {describe && <span className="menu-detail">{choices[key].says}</span>}
+          <span className="menu-detail">{choices[key].says}</span>
         </span>
         <span className="menu-check" aria-hidden="true">{key === current && <Icon name="check-normal" />}</span>
       </span>
@@ -147,7 +150,7 @@ export function SessionControlsMenu({
   if (permissions) {
     groups.push(<div key="permission" className="controls-heading" role="presentation">Approvals</div>)
     for (const choice of PERMISSION_MODES) {
-      groups.push(row(choice, permissionMode, PERMISSIONS, `mode-option-${choice}`, onPermissionMode, false))
+      groups.push(row(choice, permissionMode, PERMISSIONS, `mode-option-${choice}`, onPermissionMode))
     }
   }
   if (sandbox) {

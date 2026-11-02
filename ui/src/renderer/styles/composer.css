@@ -131,7 +131,8 @@
   white-space: nowrap;
 }
 .composer .controls-current { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.composer .controls-trigger.permission-acceptEdits {
+.composer .controls-trigger.permission-acceptEdits,
+.composer .controls-trigger.permission-auto {
   --leo-button-color: var(--ink-primary);
   --leo-icon-color: var(--status-warning);
   background: var(--status-warning-bg);
@@ -141,7 +142,7 @@
   --leo-icon-color: var(--status-info);
   background: var(--status-info-bg);
 }
-.composer .controls-trigger.sandbox-strict:not(.permission-acceptEdits, .permission-plan) {
+.composer .controls-trigger.sandbox-strict:not(.permission-acceptEdits, .permission-plan, .permission-auto) {
   --leo-button-color: var(--ink-primary);
   --leo-icon-color: var(--status-success);
   background: var(--status-success-bg);
@@ -554,3 +555,4 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
   .mention-option.active { outline: 2px solid Highlight; outline-offset: -2px; }
 }
 
+  .composer .controls-trigger.permission-auto,

@@ -1720,7 +1720,7 @@ Still open:
   others, so a `deny` rule about a server's tool refuses a plan's call to it in every mode, and an
   `allow` rule or a standing answer decides it as it does a turn's call (MANIFEST-15). A `deny` or
   `ask` rule about anything else does not apply to a plan run.
-- `session.mode` takes `session` and `mode`, one of `ask`, `acceptEdits` or `plan`, and answers
+- `session.mode` takes `session` and `mode`, one of `ask`, `acceptEdits`, `plan` or `auto`, and answers
   `{ permissionMode }`. Any other word, `bypass` included, is `bad_request`: bypassing is reached
   only through the command-line flag (MODE-5). It is accepted while a turn runs and applies to the rest
   of that turn (MODE-8).

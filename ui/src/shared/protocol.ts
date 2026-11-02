@@ -311,13 +311,13 @@ export interface OpenedSession extends SessionSettled {
 /**
  * How much a session's next turn asks before it acts, as `session.mode` names it.
  *
- * Three of the agent's four. Bypassing every check is reachable only through the command-line
+ * Four of the agent's five. Bypassing every check is reachable only through the command-line
  * flag, and the bridge refuses it from a window (MODE-11).
  */
-export type PermissionMode = 'ask' | 'acceptEdits' | 'plan'
+export type PermissionMode = 'ask' | 'acceptEdits' | 'plan' | 'auto'
 
 /** The order the mode shortcut walks, ending back at the first. */
-export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'acceptEdits', 'plan']
+export const PERMISSION_MODES: readonly PermissionMode[] = ['ask', 'acceptEdits', 'plan', 'auto']
 
 /**
  * What a program the agent runs is held to, as `session.sandbox` names it.

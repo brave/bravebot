@@ -90,9 +90,10 @@ try {
   assert.deepEqual(await page.locator('leo-menu-item[data-role="menuitemradio"]').evaluateAll((items) => items.map((item) => [
     item.getAttribute('data-test'), item.querySelector('.controls-option-text > span:first-child')?.textContent, item.querySelector('.menu-detail')?.textContent ?? null, item.getAttribute('aria-checked'),
   ])), [
-    ['mode-option-ask', 'Ask', null, 'true'],
-    ['mode-option-acceptEdits', 'Accept edits', null, 'false'],
-    ['mode-option-plan', 'Plan', null, 'false'],
+    ['mode-option-ask', 'Ask', 'Asks before every write and command', 'true'],
+    ['mode-option-acceptEdits', 'Accept edits', 'Writes without asking. Commands still ask', 'false'],
+    ['mode-option-plan', 'Plan', 'Reads and plans only. Commands still ask', 'false'],
+    ['mode-option-auto', 'Auto', 'Writes freely. A model checks commands', 'false'],
     ['sandbox-option-workspace-write', 'Workspace write', 'Can read most files, but can only make changes inside this workspace', 'true'],
     ['sandbox-option-read-only', 'Read only', 'Can read most files, but can’t change anything', 'false'],
     ['sandbox-option-strict', 'Strict', 'Can only access the files named in the command. Anything else fails', 'false'],
@@ -106,7 +107,6 @@ try {
   assert.ok(roomy.top >= 0 && roomy.bottom <= roomy.height, `the menu is not cropped where the composer sits mid-window: ${JSON.stringify(roomy)}`)
   const background = (selector) => page.locator(selector).first().evaluate((node) => getComputedStyle(node).backgroundColor)
   assert.notEqual(await background('leo-menu-item[aria-checked="true"]'), await background('leo-menu-item[aria-checked="false"]'), 'the chosen item has a background of its own')
-  assert.match(await page.locator('[data-test="mode-option-acceptEdits"]').getAttribute('aria-description') ?? '', /^Write files without asking/, 'an approval row without a visible description carries it for assistive technology')
   await page.getByRole('menuitemradio', { name: /^Accept edits/ }).click()
   await inMode('acceptEdits')
   await page.getByRole('menuitemradio', { name: /^Accept edits/ }).waitFor({ state: 'hidden' })
@@ -142,6 +142,12 @@ try {
   await page.screenshot({ path: join(output, 'mode-plan-dark.png') })
   await page.emulateMedia({ colorScheme: 'light' })
 
+  // The shortcut walks on from planning to auto, drawn with the Brave Leo icon, and then back to asking.
+  await cycle()
+  await inMode('auto')
+  assert.equal(await mode.locator('leo-icon[name="product-brave-leo"]').count(), 1, 'auto is drawn with the Brave Leo icon')
+  assert.equal((await mode.innerText()).trim(), 'Auto')
+  await page.screenshot({ path: join(output, 'mode-auto.png') })
   await cycle()
   await inMode('ask')
   await send('Write later.md')
@@ -190,7 +196,7 @@ try {
   await page.setViewportSize({ width: 1400, height: 1000 })
 
   assert.deepEqual(errors, [])
-  console.log(`PASS: accepting edits writes with no card and still asks about a command, the control works while a turn runs, planning writes nothing and asks nothing, a refused write keeps its path in view and is listed as refused, and the menu shortcut walks back to asking. Screenshots in ${output}/mode-*.png`)
+  console.log(`PASS: accepting edits writes with no card and still asks about a command, the control works while a turn runs, planning writes nothing and asks nothing, a refused write keeps its path in view and is listed as refused, and the menu shortcut walks from planning through auto back to asking. Screenshots in ${output}/mode-*.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'mode-failure.png') }).catch(() => undefined)
   throw error

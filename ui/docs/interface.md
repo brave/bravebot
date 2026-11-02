@@ -151,8 +151,10 @@ scrolls it instead of cropping it.
 
 The **Approvals** group says how much the session asks before it acts: **Ask** (every
 write and command is put to you), **Accept edits** (writes go through, commands and writes that
-would create a credential are still asked about) or **Plan** (nothing is written, commands are still
-asked about). Ask is drawn plainly. The other two are tinted for as long as they hold. Every session
+would create a credential are still asked about), **Plan** (nothing is written, commands are still
+asked about) or **Auto** (writes go through as in Accept edits, and a model decides whether to run
+a command or fetch a URL; anything it does not allow is still put to you, as in Ask). Ask is drawn
+plainly. The other three are tinted for as long as they hold. Every session
 opens in Ask, including a resumed one and a fork. A change while a turn runs applies to the rest
 of that turn. Bypassing every check is not offered here, because it is reached
 only through the terminal's `--dangerously-skip-permissions` flag.
@@ -579,7 +581,7 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 | `⌘L` | View › Focus Composer | Move focus to the message box; needs a session |
 | `⌘↩` | Chat › Send | Send the draft; greyed while a turn runs or the draft is empty |
 | `⌘.` | Chat › Cancel Turn | Cancel the running turn; greyed when nothing is running |
-| `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Ask again; needs a session |
+| `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Auto, then Ask again; needs a session |
 | | Chat › Undo Last Turn… | [Undo](#undo-and-rewind) the latest turn; greyed while a turn runs or with nothing to undo |
 | | Brave Bot › Keep Computer Awake During Turns | A checkbox, off at every launch: while it is on the computer does not sleep while any chat has a turn running. The first time, a dialog says what it does (the screen still locks) and asks to Enable |
 | | Chat › Add Note… | Keep a note on the chat's record, never sent to the model; greyed while a turn runs. The context panel's Notes section lists the notes and has the same Add button |
