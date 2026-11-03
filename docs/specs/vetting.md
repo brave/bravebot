@@ -25,6 +25,7 @@ guards:
   - symbol: Policy::compose_vetting_input
   - symbol: Policy::vetting_verdict
   - symbol: Policy::vetting_did_not_complete
+  - symbol: Policy::vetting_stopped
   - symbol: Policy::promote_vetted
   - symbol: Policy::before_promoting
   - symbol: Policy::compose_vetting_picture
@@ -153,14 +154,17 @@ A reply states its verdict as `safe` or `unsafe`, compared after trimming and lo
 after nothing else. Any other word, a reply that states no verdict, a truncated reply, a timeout
 and a backend error are all **inconclusive**, which says nothing about the content.
 
+A stop is not among them. When the person stops the turn while the request is in flight, the check
+ends with no verdict at all, inconclusive included, and [CHECK-16](#CHECK-16) says what follows.
+
 Where a reply holds more than one candidate answer, the last is read: that is the one a model
 writes after reasoning, and reading the first would let its worked example outrank its conclusion.
 A reply that leaves an object open at its end is a truncated reply, and an earlier complete object
 does not speak for it.
 
-**Why.** Fails closed on every path. The only reply that can reduce a warning is one that answered
-in the form it was asked for, so a check that half worked lands where a check that did not run
-lands.
+**Why.** Fails closed on every path that ends in a verdict. The only reply that can reduce a
+warning is one that answered in the form it was asked for, so a check that half worked lands where
+a check that did not run lands.
 
 `verified-by: bravebot_core::vetting::a_stated_verdict_is_read_with_its_reason`
 `verified-by: bravebot_core::vetting::a_verdict_inside_prose_is_found`
@@ -176,6 +180,7 @@ lands.
 `verified-by: bravebot_core::vetting::a_complete_object_followed_by_a_truncated_one_is_inconclusive`
 `verified-by: bravebot_core::vetting::a_reply_holding_characters_outside_ascii_is_read`
 `verified-by: bravebot_agent::turn::a_check_that_could_not_be_made_falls_back_to_the_question`
+`verified-by: bravebot_agent::turn::a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_refused`
 
 <a id="CHECK-5"></a>
 ### CHECK-5: a verdict is advice, and while auto-vetting is off the only thing it decides is which prompt is drawn
@@ -297,7 +302,8 @@ The audit trail records the word and never the sentence: a trail is read by peop
 assume the driver is talking. Where the word is `inconclusive` the driver's own account of why is
 recorded with it, that account being the driver's sentence and not the check's, so a refusal on a
 check that objected and a refusal on a check that could not be read are told apart afterwards by
-somebody who was never asked either question.
+somebody who was never asked either question. A check the person stopped has no word, so its trail
+line records none ([CHECK-16](#CHECK-16)).
 
 `verified-by: bravebot_core::policy::what_a_check_says_is_as_untrusted_as_what_it_read`
 `verified-by: bravebot_core::policy::the_trail_records_the_verdict_and_never_the_reason`
@@ -462,7 +468,9 @@ keep the output back with no prompt drawn in any mode, including one that asks: 
 the planner calls `read_output`. The planner is told that `read: true` did not return the output and
 nothing of the word. No check is made over a slot that holds no bytes, by this route or by
 `read_output`: there is nothing for a check to read, and the result says the run printed nothing
-([RUN-24](tools/run.md#RUN-24)).
+([RUN-24](tools/run.md#RUN-24)). A check the person stopped is neither a word nor a check that could
+not be made: the turn ends as stopped with the output left quarantined and not refused
+([CHECK-16](#CHECK-16)).
 
 **Where there is nobody to fall back to, the fallback is a refusal.** A run bypassing permissions
 ([MODE-4](permission-modes.md#MODE-4)) puts no prompt to anybody, so a verdict that is not `safe` has
@@ -690,6 +698,47 @@ What the rest of the route costs is in [tools/vet-content.md](tools/vet-content.
 `verified-by: bravebot_agent::turn::a_picture_a_person_opens_and_lets_through_is_attached_after_the_results`
 `verified-by: bravebot_agent::turn::a_pdf_a_person_lets_through_is_attached_as_a_file`
 `verified-by: bravebot_agent::turn::a_picture_a_person_keeps_out_is_never_attached`
+
+<a id="CHECK-16"></a>
+### CHECK-16: a check the person stopped gave no verdict, and nothing is decided about the content
+
+When the person stops the turn while a check's request is in flight, the check ends with no verdict.
+It is not inconclusive ([CHECK-4](#CHECK-4)): an inconclusive check is a failure to learn anything
+that still has to be answered, and a stop is the person ending the turn. This holds for every caller
+of a check, and what each does is the same:
+
+| The caller | What a stop does |
+|---|---|
+| `vet_content` and `read_output` | the call returns a result saying the turn was stopped before the check on that reference finished, so nothing was decided about it, and that it was not refused and can be asked for again |
+| the vouch offer in a read of a file | nobody is asked to vouch, no rule is written, and the next read of the file asks about it again |
+| a `run` that passes `read: true` ([RUN-22](tools/run.md#RUN-22)) | the output is left quarantined, nothing is returned from it, and the turn ends as stopped |
+| a server's tool list | the list is left unasked, and the next turn that lists the server asks about it again |
+
+In every row:
+
+- The trail records one line at the `vetting` gate saying the check was stopped before it finished
+  and gave no verdict. The line holds no verdict word, so a reader does not take it for a check that
+  objected or one that could not be made.
+- No prompt is put to the person, since the turn is over.
+- No refusal is recorded for the slot, the file or the list. The next turn can ask for the same
+  reference again, and the check is made again.
+- The turn ends as stopped, as it does for a stop at any other point.
+
+Only a stop the person made is treated this way. It is told apart from a failure by what the request
+ended with, which is the person's own action. A timeout, a backend error and a reply that cannot be
+read are still inconclusive and still fail closed.
+
+**Why.** Recording a stop as inconclusive would put a refusal on a slot the person never got to
+answer about, in a run where nobody is asked, and the reference would read as kept back for good. A
+stopped turn that still prompted would put a question to a person who had just ended the work.
+Neither branch reads a byte of the content or of the reply: what decides it is whether the request
+ended with the person's stop.
+
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_command_output_is_not_a_refusal`
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_content_is_not_a_refusal`
+`verified-by: bravebot_agent::turn::a_stop_during_a_vouch_check_asks_nobody`
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_during_the_check_on_the_list_leaves_it_to_be_asked_again`
 
 ## Known costs
 

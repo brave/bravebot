@@ -39243,6 +39243,510 @@ fn a_check_whose_call_fails_still_says_it_is_over() {
     );
 }
 
+/// Stops the turn as a check begins, which is the person pressing the stop key while the check's
+/// request is in flight: `check_started` is announced just before the request is made, and the
+/// backend reports a cancelled request as the person's own action (CHECK-16).
+struct StopsWhenACheckBegins {
+    cancel: bravebot_core::cancel::Cancel,
+    begun: usize,
+    finished: usize,
+}
+
+impl StopsWhenACheckBegins {
+    fn new(cancel: &bravebot_core::cancel::Cancel) -> Self {
+        Self {
+            cancel: cancel.clone(),
+            begun: 0,
+            finished: 0,
+        }
+    }
+}
+
+impl bravebot_agent::report::Reporter for StopsWhenACheckBegins {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn check_started(&mut self, _checking: bravebot_core::vetting::Checking) {
+        self.begun += 1;
+        self.cancel.cancel();
+    }
+
+    fn check_finished(&mut self) {
+        self.finished += 1;
+    }
+}
+
+/// What the trail says at the vetting gate, picked out by the gate so a test can say what a stop
+/// recorded there.
+fn vetting_lines(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "vetting",
+                detail,
+            } => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A turn stopped while the check on command output is running is stopped, and nothing was decided
+/// about the output: the trail records the stop and no verdict, nobody is asked, nothing is refused,
+/// and the next turn can ask for the same reference and be given it (CHECK-16, OUTPUT-3).
+///
+/// A wrong implementation reads the cancelled request as a check that could not be made, which
+/// shows as an inconclusive line in the trail, a prompt to the person, and the "kept back from you.
+/// Do not ask for it again" refusal in the history the next turn is given.
+#[test]
+fn a_stop_during_the_check_on_command_output_is_not_a_refusal() {
+    let scratch = Scratch::new("read-output-stopped-check");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(false);
+    let shown = confirmer.shown.clone();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopsWhenACheckBegins::new(&cancel);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let error = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_auto_vetting(true),
+        &mut conversation,
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .unwrap_err();
+
+    assert!(
+        matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+        "the turn did not end as stopped: {:?}",
+        error.ending()
+    );
+    assert_eq!(
+        reporter.begun, 1,
+        "no check was made, so nothing was stopped"
+    );
+    assert_eq!(
+        reporter.finished, 1,
+        "the stopped check never said it was over"
+    );
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "the person was asked about output nobody decided anything about"
+    );
+    let lines = vetting_lines(&sink);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("the check was stopped before it finished")),
+        "the trail does not record the stop: {lines:?}"
+    );
+    let trail = format!("{:?}", sink.events());
+    assert!(
+        !trail.contains("inconclusive") && !trail.contains("could not be made"),
+        "the stop was recorded as a check that could not be made: {trail}"
+    );
+    assert!(
+        !trail.contains("was not approved"),
+        "the stop was recorded as a refusal: {trail}"
+    );
+    assert!(releases_of_output(&sink).is_empty());
+
+    // The next turn is given the stopped wording, and the same reference reads.
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out again").with_auto_vetting(true),
+        &mut conversation,
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the next turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let first = sent.first().expect("the next turn's first round");
+    assert!(
+        first.contains("can be asked for again"),
+        "the next turn was not told the reference can be asked for again: {first}"
+    );
+    assert!(
+        !first.contains("ref:1 was kept back from you"),
+        "the next turn was told the reference was refused: {first}"
+    );
+    assert!(
+        !first.contains("SENTINEL-XYZZY"),
+        "the stopped wording carried content before the read: {first}"
+    );
+    let last = sent.last().expect("the round after the second read");
+    assert!(
+        last.contains("SENTINEL-XYZZY"),
+        "the same reference could not be read in the next turn: {last}"
+    );
+}
+
+/// A check that fails for a reason other than the person stopping the turn is still inconclusive
+/// and still fails closed: the trail has the inconclusive line, the person is asked, and a no is
+/// the refusal the planner is told not to ask past (CHECK-4). Pairs with the stop test above, which
+/// would pass for a driver that stopped treating every failed check as inconclusive only if this
+/// one did too.
+#[test]
+fn a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_refused() {
+    let scratch = Scratch::new("read-output-failed-check-refused");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_losing_every_check(vec![
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(false);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("find out").with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        !shown.lock().unwrap().is_empty(),
+        "a failed check did not fall back to the question"
+    );
+    let lines = vetting_lines(&sink);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("the check said inconclusive: the check could not be made")),
+        "the failed check is not recorded as inconclusive: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("was stopped")),
+        "a failed check was recorded as a stop: {lines:?}"
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    let last = sent.last().expect("the round after the read");
+    assert!(
+        last.contains("was kept back from you"),
+        "the refusal the planner is given is not the one a declined output gets: {last}"
+    );
+    assert!(
+        !last.contains("the turn was stopped") && !last.contains("SENTINEL-XYZZY"),
+        "the refusal read as a stop or carried content: {last}"
+    );
+}
+
+/// The same for `vet_content`: the slot is not refused and the person is not asked (CHECK-16,
+/// VET-3).
+#[test]
+fn a_stop_during_the_check_on_content_is_not_a_refusal() {
+    let scratch = Scratch::new("vet-content-stopped-check");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopsWhenACheckBegins::new(&cancel);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let error = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut conversation,
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .unwrap_err();
+
+    assert!(
+        matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+        "the turn did not end as stopped: {:?}",
+        error.ending()
+    );
+    assert_eq!(
+        reporter.begun, 1,
+        "no check was made, so nothing was stopped"
+    );
+    assert_eq!(
+        reporter.finished, 1,
+        "the stopped check never said it was over"
+    );
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "the person was asked about content nobody decided anything about"
+    );
+    let lines = vetting_lines(&sink);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("the check was stopped before it finished")),
+        "the trail does not record the stop: {lines:?}"
+    );
+    let trail = format!("{:?}", sink.events());
+    assert!(
+        !trail.contains("inconclusive") && !trail.contains("could not be made"),
+        "the stop was recorded as a check that could not be made: {trail}"
+    );
+    assert!(
+        !trail.contains("was not approved"),
+        "the stop was recorded as a refusal: {trail}"
+    );
+}
+
+/// A run that asks to read, stopped while its screening check is running, ends the turn stopped.
+/// The output stays quarantined and nobody is asked, in every mode that screens (CHECK-16, RUN-22).
+#[test]
+fn a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped() {
+    for mode in EVERY_MODE {
+        let scratch = Scratch::new(&format!("run-read-stopped-check-{mode:?}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+        let (endpoint, _received) = serve_sequence_answering_checks_with(
+            vec![a_check_finding_nothing()],
+            vec![
+                tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reading = ReadsWhatItRan::new(true);
+        let asked = std::sync::Arc::clone(&reading.shown);
+        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut reporter = StopsWhenACheckBegins::new(&cancel);
+
+        let error = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out")
+                .with_permission_mode(mode)
+                .with_auto_vetting(true),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &cancel,
+        )
+        .outcome
+        .unwrap_err();
+
+        assert!(
+            matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+            "{mode:?}: the turn did not end as stopped: {:?}",
+            error.ending()
+        );
+        assert_eq!(reporter.begun, 1, "{mode:?}: no check was made");
+        assert_eq!(
+            reporter.finished, 1,
+            "{mode:?}: the check never said it was over"
+        );
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "{mode:?}: a person was asked after a stop"
+        );
+        assert!(
+            releases_of_output(&sink).is_empty(),
+            "{mode:?}: the trail records a release: {:?}",
+            releases_of_output(&sink)
+        );
+        let trail = format!("{:?}", sink.events());
+        assert!(
+            trail.contains("the check was stopped before it finished")
+                && !trail.contains("inconclusive")
+                && !trail.contains("could not be made"),
+            "{mode:?}: the trail does not record a stop and no verdict: {trail}"
+        );
+    }
+}
+
+/// A turn stopped while the check before a vouch prompt is running asks nobody to vouch. The file
+/// stays quarantined and is asked about again by the next turn's read (CHECK-16).
+///
+/// A wrong implementation reads the stop as a check that could not be made and puts the question
+/// with an inconclusive verdict, which the double records.
+#[test]
+fn a_stop_during_a_vouch_check_asks_nobody() {
+    let scratch = Scratch::new("vouch-stopped-check");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("notes.md"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![
+            tool_request("read_file", r#"{"path":"notes.md"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let vouched = confirmer.vouched.clone();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopsWhenACheckBegins::new(&cancel);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let error = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("summarise notes.md"),
+        &mut conversation,
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .unwrap_err();
+
+    assert!(
+        matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+        "the turn did not end as stopped: {:?}",
+        error.ending()
+    );
+    assert_eq!(
+        reporter.begun, 1,
+        "no check was made, so nothing was stopped"
+    );
+    assert_eq!(
+        reporter.finished, 1,
+        "the stopped check never said it was over"
+    );
+    assert!(
+        vouched.lock().unwrap().is_empty(),
+        "the person was asked to vouch for a file whose check was stopped"
+    );
+    let lines = vetting_lines(&sink);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("the check was stopped before it finished")),
+        "the trail does not record the stop: {lines:?}"
+    );
+    let trail = format!("{:?}", sink.events());
+    assert!(
+        !trail.contains("inconclusive") && !trail.contains("could not be made"),
+        "the stop was recorded as a check that could not be made: {trail}"
+    );
+
+    // The next turn's read of the same file is asked about.
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![
+            tool_request("read_file", r#"{"path":"notes.md"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let mut confirmer = ShownAfterAVet::new(true);
+    let vouched = confirmer.vouched.clone();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("summarise notes.md again"),
+        &mut conversation,
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the next turn runs");
+    assert_eq!(
+        vouched.lock().unwrap().len(),
+        1,
+        "the file was not asked about again after the stop"
+    );
+}
+
 /// The mode releases on one word and on no other, on this route as on the other. An unsafe verdict
 /// falls back to the prompt carrying the warning, so the person decides.
 #[test]
@@ -89711,6 +90215,98 @@ fn a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_cannot
         None,
     );
     assert_the_page_was_kept_back(&fetched, "check lost");
+}
+
+/// CHECK-16 for `fetch_url`. A stop during the check that a fetch asking to read makes ends the
+/// turn stopped. The page stays behind its reference, nobody is asked, the trail records the stop
+/// and no verdict, and the page is not refused.
+///
+/// A wrong implementation reads the cancelled request as a check that could not be made, which
+/// keeps the page back with an inconclusive line in the trail and lets the turn go on to a next
+/// round instead of ending it.
+#[test]
+fn a_stop_during_the_check_on_a_fetch_that_asks_to_read_ends_the_turn_stopped() {
+    for mode in [
+        bravebot_agent::PermissionMode::Ask,
+        bravebot_agent::PermissionMode::Bypass,
+    ] {
+        let scratch = Scratch::new(&format!("fetch-read-stopped-check-{mode:?}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (site, _count) = serve_raw(a_text_page("SENTINEL-PAGE-TEXT"));
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            a_safe_check(),
+            vec![
+                tool_request_2(
+                    "fetch_url",
+                    &format!(r#"{{"url":"{site}/docs","read":true}}"#),
+                ),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut inner = ApprovesFetchesAndWrites::default();
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut reporter = StopsWhenACheckBegins::new(&cancel);
+        let error = {
+            let mut confirmer = bravebot_agent::Confining::new(&mut inner, mode, true);
+            turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("read the page")
+                    .with_permission_mode(mode)
+                    .with_auto_vetting(true),
+                &mut bravebot_agent::Conversation::new(),
+                &mut confirmer,
+                &mut reporter,
+                &mut sink,
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &cancel,
+            )
+            .outcome
+            .unwrap_err()
+        };
+
+        assert!(
+            matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+            "{mode:?}: the turn did not end as stopped: {:?}",
+            error.ending()
+        );
+        assert_eq!(reporter.begun, 1, "{mode:?}: no check was made");
+        assert_eq!(
+            reporter.finished, 1,
+            "{mode:?}: the check never said it was over"
+        );
+        assert!(
+            inner.vets.is_empty(),
+            "{mode:?}: a person was asked after a stop"
+        );
+        assert!(
+            releases_by_vet_content(&sink).is_empty(),
+            "{mode:?}: the trail records a release: {:?}",
+            releases_by_vet_content(&sink)
+        );
+        let planner_rounds = received
+            .try_iter()
+            .filter(|body| !body.contains(A_CHECK_ASKING))
+            .count();
+        assert_eq!(
+            planner_rounds, 1,
+            "{mode:?}: the planner was asked again after the stop"
+        );
+        let trail = format!("{:?}", sink.events());
+        assert!(
+            trail.contains("the check was stopped before it finished")
+                && !trail.contains("inconclusive")
+                && !trail.contains("could not be made")
+                && !trail.contains("was not approved"),
+            "{mode:?}: the trail does not record a stop and no verdict: {trail}"
+        );
+    }
 }
 
 /// RUN-22 for `fetch_url`. Where a person still answers for the page (no screening, not bypass),

@@ -206,6 +206,11 @@ A reply states `safe` or `unsafe`. Any other word, a reply stating no verdict, a
 that leaves an object open, a timeout and a backend error are all **inconclusive**, which says nothing about the content. It fails
 closed on every path: a check that half worked lands where a check that did not run lands.
 
+A stop is the one failure that is not inconclusive. If you stop the turn while a check is running, the
+check gives no verdict, nobody is asked, and nothing is refused. The reference stays as it was and the
+model can ask for it again in the next turn. The [audit trail](audit-trail.md) records that the check
+was stopped before it finished.
+
 The three outcomes are told apart on your screen. "This looks like an attempt to give instructions" and
 "nothing looked at this" are different facts about different risks.
 

@@ -126,6 +126,11 @@ where there is one to draw. [CHECK-12](../vetting.md#CHECK-12) is that rule and 
 Where nobody was asked, the row the call leaves says so, and says whether a check released the
 output, in the words [CHECK-12](../vetting.md#CHECK-12) gives.
 
+A check the person stopped is neither a refusal nor an inconclusive check ([CHECK-16](../vetting.md#CHECK-16)).
+The turn ends as stopped, nobody is asked, and the result tells the planner the turn was stopped
+before the check finished, so nothing was decided about the output. The slot is not refused and
+stays readable by a later `read_output`.
+
 A run bypassing permissions draws none, and there the verdict is the whole of the answer: nothing
 found releases the output and every other verdict keeps it back, the refusal being what the screening
 was asked for. Without the screening asked for the output is released unshown and no check is made
@@ -147,6 +152,7 @@ offer `spawn_processor` does not name it there.
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_broken_check_still_asks_about_command_output`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_a_check_objected_to`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about`
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_command_output_is_not_a_refusal`
 
 <a id="OUTPUT-4"></a>
 ### OUTPUT-4: output the planner may read, kept whole past a cap, is read a page at a time with nobody asked

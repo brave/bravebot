@@ -4047,7 +4047,7 @@ where
             }
             policy.call_ended(&call.function.name);
             let took = ran_at.elapsed();
-            let cancellation = output.cancelled;
+            let mut cancellation = output.cancelled;
             // The conversation holds it as it holds a write tool asked for, so a stopped turn's
             // next prompt still has it and a completed one does not (TURN-3).
             if output.run_may_change_files {
@@ -4437,6 +4437,12 @@ where
                             state.spent.inference += interval.duration();
                         }
                         state.account.add_usage(released.usage);
+                        // A stop during the check ends the turn once this run's result is
+                        // recorded. The slot stays quarantined and unrefused, so the next turn
+                        // can ask for it again.
+                        if released.stopped.is_some() {
+                            cancellation = released.stopped;
+                        }
                         reporter.spent(crate::outcome::Spent {
                             timing: state.spent.finish(),
                             ..state.account

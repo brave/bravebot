@@ -3756,7 +3756,12 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             )
         });
         let (verdict, (reason, reason_label)) = match checked {
-            Some((checked, elapsed)) => {
+            // A stop is not a verdict: nobody is asked to vouch, and the file is asked about
+            // again by the next read.
+            Some((Err(stopped), elapsed)) => {
+                return check_stopped(&shown_path, &stopped).waiting(elapsed);
+            }
+            Some((Ok(checked), elapsed)) => {
                 spent = checked.usage;
                 waited = elapsed;
                 let said = released_reason(policy, checked.reason);
@@ -7518,8 +7523,14 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         Some(spec) => {
             let asked_at = std::time::Instant::now();
             let checked = crate::vet::run(policy, &mut tools.chat, reporter, spec);
-            spent = checked.usage;
             waited = Some(crate::timing::Interval::since(asked_at));
+            // A stop is not a verdict: no prompt, no refusal on the record, and the slot stays
+            // as it was so the next turn can ask for it again.
+            let checked = match checked {
+                Ok(checked) => checked,
+                Err(stopped) => return check_stopped(&slot, &stopped).waiting(waited),
+            };
+            spent = checked.usage;
             let said = released_reason(policy, checked.reason);
             (checked.verdict, said)
         }
@@ -7786,6 +7797,27 @@ pub(crate) struct ReadInTheResult {
     pub usage: Usage,
     /// How long the turn waited on the check. `None` where none was made.
     pub waited: Option<crate::timing::Interval>,
+    /// Set where the person stopped the turn while the check ran. `text` is `None` then too, and
+    /// the turn ends as stopped once the run's own result is recorded.
+    pub stopped: Option<crate::outcome::Cancellation>,
+}
+
+/// What a read is told when the person stopped the turn while its check ran, with the cost of the
+/// attempts that completed.
+///
+/// The words are the driver's, and say nothing about the content or the check: only the person can
+/// cause a stop. The reference can be asked for again, since nothing was refused. The stop is
+/// carried beside the words so the turn ends as stopped rather than failed (TOOL-4).
+fn check_stopped(subject: impl std::fmt::Display, stopped: &crate::vet::Stopped) -> Produced {
+    let mut produced = Produced::problem(format!(
+        "stopped: the turn was stopped before the check on {subject} finished, so nothing was \
+         decided about it. {subject} was not refused and can be asked for again."
+    ))
+    .costing(stopped.usage);
+    produced.cancelled = Some(crate::outcome::Cancellation {
+        attempts: stopped.attempts,
+    });
+    produced
 }
 
 /// What a run that asked to read what it printed is handed in the same result, where the answer
@@ -7824,6 +7856,7 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         text,
         usage: Usage::default(),
         waited: None,
+        stopped: None,
     };
     if !mode.checks_before_promoting(auto_vetting) {
         return nothing(
@@ -7849,6 +7882,20 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     let asked_at = std::time::Instant::now();
     let checked = crate::vet::run(policy, chat, reporter, &spec);
     let waited = Some(crate::timing::Interval::since(asked_at));
+    // A stop leaves the slot quarantined and unrefused, and the turn ends stopped.
+    let checked = match checked {
+        Ok(checked) => checked,
+        Err(stopped) => {
+            return ReadInTheResult {
+                text: None,
+                usage: stopped.usage,
+                waited,
+                stopped: Some(crate::outcome::Cancellation {
+                    attempts: stopped.attempts,
+                }),
+            };
+        }
+    };
     let usage = checked.usage;
     // Before `release_output`, which would put anything but `safe` to the person: nobody is
     // shown this output here.
@@ -7873,6 +7920,7 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         text,
         usage,
         waited,
+        stopped: None,
     }
 }
 
@@ -8197,6 +8245,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         text,
         usage: Usage::default(),
         waited: None,
+        stopped: None,
     };
     let release = |policy: &mut Policy<'_, S>,
                    confirmer: &mut C,
@@ -8233,6 +8282,20 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     let asked_at = std::time::Instant::now();
     let checked = crate::vet::run(policy, chat, reporter, &spec);
     let waited = Some(crate::timing::Interval::since(asked_at));
+    // A stop leaves the slot quarantined and unrefused, and the turn ends stopped.
+    let checked = match checked {
+        Ok(checked) => checked,
+        Err(stopped) => {
+            return ReadInTheResult {
+                text: None,
+                usage: stopped.usage,
+                waited,
+                stopped: Some(crate::outcome::Cancellation {
+                    attempts: stopped.attempts,
+                }),
+            };
+        }
+    };
     let usage = checked.usage;
     // Before `release_vetted_text`, which would put anything but `safe` to the person: nobody is
     // shown this result here.
@@ -8245,6 +8308,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         text,
         usage,
         waited,
+        stopped: None,
     }
 }
 
@@ -8352,8 +8416,13 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         Some(spec) => {
             let asked_at = std::time::Instant::now();
             let checked = crate::vet::run(policy, &mut tools.chat, reporter, spec);
-            spent = checked.usage;
             waited = Some(crate::timing::Interval::since(asked_at));
+            // A stop is not a verdict, so nobody is asked and nothing is refused (`read_output`).
+            let checked = match checked {
+                Ok(checked) => checked,
+                Err(stopped) => return check_stopped(&slot, &stopped).waiting(waited),
+            };
+            spent = checked.usage;
             said = checked.reason;
             checked.verdict
         }

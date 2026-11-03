@@ -1864,6 +1864,10 @@ it would have been without `read`. The result then says that `read: true` did no
 and that `read_output` is the way to see it ([RUN-14](#RUN-14)), and nothing of the word or the
 reason the check wrote ([CHECK-9](../vetting.md#CHECK-9)).
 
+A check the person stops is neither of those ([CHECK-16](../vetting.md#CHECK-16)). The turn ends as
+stopped once the run's result is recorded, the output stays quarantined and is not refused, and
+`read_output` can be called for it in a later turn.
+
 [RUN-21](#RUN-21)'s cap bounds the release, where it does not bound `read_output`. A `read_output`
 call is made by a planner that has seen the reference and the size it states, and `read` is asked
 before there is a size to see. Output longer than the cap stays behind its reference, and the
@@ -1921,6 +1925,7 @@ decide it.
 
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`

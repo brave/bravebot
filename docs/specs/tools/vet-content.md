@@ -107,6 +107,11 @@ puts no prompts to anybody, that is the refusal above. The result the planner re
 every case: it is told the bytes or told they are not coming, and never which of the three answered
 or what the check said, so nothing it writes can be aimed at one path rather than another.
 
+A check the person stopped is neither a refusal nor an inconclusive check
+([CHECK-16](../vetting.md#CHECK-16)). The turn ends as stopped, nobody is asked, and the result says
+the turn was stopped before the check on the slot finished, so nothing was decided about it. The
+slot is not refused and can be asked for again.
+
 A picture is answered the same way and comes back differently: the result says it is attached
 rather than holding it as text, and [VET-4](#VET-4) says where it goes instead.
 
@@ -118,6 +123,7 @@ rather than holding it as text, and [VET-4](#VET-4) says where it goes instead.
 `verified-by: bravebot_agent::turn::a_picture_a_person_keeps_out_is_never_attached`
 `verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_yes_whoever_gave_it_and_whatever_the_check_said`
 `verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_refusal_whoever_gave_it_and_whatever_the_check_said`
+`verified-by: bravebot_agent::turn::a_stop_during_the_check_on_content_is_not_a_refusal`
 
 <a id="VET-4"></a>
 ### VET-4: a picture or a PDF is vetted as text is, and put to a person as a file to open

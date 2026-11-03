@@ -6186,6 +6186,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         verdict
     }
 
+    /// Record that a check was stopped before it finished.
+    ///
+    /// Not a verdict, so nothing is returned and the trail line holds no word from
+    /// [`crate::vetting::Verdict`]: the person ended the turn, nothing was learned about the
+    /// content, and a reader of the trail must not take the line for a check that objected or one
+    /// that could not be made. The slot is not marked refused, so it can be asked for again.
+    pub fn vetting_stopped(&mut self, spec: &crate::vetting::VettingSpec) {
+        self.allow(
+            "vetting",
+            format!(
+                "{}: the check was stopped before it finished and gave no verdict",
+                Self::describe_check(spec)
+            ),
+        );
+    }
+
     /// Take the word of whoever endorsed one slot's content and give the planner those bytes.
     ///
     /// **Not a relabel, and not a claim about a file.** The slot keeps the label it was
