@@ -582,6 +582,11 @@ wrote are on the screen beside the bytes. The check runs before the question rat
 answer, and nothing it wrote goes back to the planner either way. No expectation is sent with it: the
 planner asked for the output to be read, not for it to be judged. See [Vetting](../security/vetting.md).
 
+**Being shown output closes processors.** Output you let through is private content, so once the
+planner has been shown some, [`spawn_processor`](#spawn_processor) is refused for it and for every
+delegate it starts afterwards. The tool's description says so where `spawn_processor` is offered, and
+leaves it out where it is not.
+
 **Output the planner may already read is not asked about.** Where a command's output was one the
 planner may read and too long for one result, it saw the beginning and the end, and `read_output`
 hands back the rest a page at a time from `offset`. Each page is no longer than
@@ -882,11 +887,12 @@ came from when you are asked about that call.
 **Refused once the model has been shown private content.** After [`read_output`](#read_output) or
 [`vet_content`](#vet_content) has shown it something private, or a delegate has reported something
 private, what it writes is private too, and a processor takes no private instruction, so every
-`spawn_processor` call is refused for the rest of the conversation. `run`, `read_output` and the
-file tools keep working. Quarantined results made from then on do not suggest a
-processor, and the refusal names what still works: a filter such as `grep` or `tail` run with
-`stdin_ref` set to the reference, then `read_output` on what it printed, or `vet_content` for a
-reference that holds no text.
+`spawn_processor` call is refused for the rest of the conversation. This includes every delegate it
+starts afterwards, which begins holding the same private content, is not offered `spawn_processor`
+and is told so. `run`, `read_output` and the file tools keep working. Quarantined results made from
+then on do not suggest a processor, and the refusal names what still works, only where the run is
+offered it: a filter such as `grep` or `tail` run with `stdin_ref` set to the reference, then
+`read_output` on what it printed, or `vet_content` for a reference that holds no text.
 
 Everything before the document marker in a processor's reply is a remark for you: it reaches your
 screen and stops there, is part of no file, and cannot be another processor's input. An answer with no
@@ -928,6 +934,11 @@ asked again.
 
 A name that is neither a kind nor a definition is refused, and the refusal lists the names that would
 have worked.
+
+A delegate started after the planner has been shown private content (by `read_output` or
+`vet_content`, or in a delegate's report) starts holding it too, so it cannot run a processor and is
+not offered `spawn_processor`. Start a task that needs a picture or a file looked at before then, or
+leave it to the person. A delegate that is told it cannot say so in its report.
 
 A call that names a kind the run was not offered because it does not hold what the kind needs is
 still answered by the same rules. A delegate started that way is narrowed to what the run holds, and

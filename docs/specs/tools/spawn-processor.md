@@ -41,10 +41,13 @@ name nothing holds.
 ### SPAWN-2: the instruction comes from the planner and may not be private
 
 It is the only thing steering the call, and it comes from a context holding nothing an attacker
-wrote.
+wrote. A context that holds private content cannot start a processor, and that includes a delegate
+started while its parent's context held some ([PROC-4](../processors.md#PROC-4)); such a delegate is
+not offered `spawn_processor`.
 
 `verified-by: bravebot_core::policy::a_private_instruction_cannot_direct_a_processor`
 `verified-by: bravebot_agent::tools::a_processor_cannot_be_started_from_a_context_that_met_untrusted_content`
+`verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_not_offered_processors_and_is_told_why`
 
 <a id="SPAWN-3"></a>
 ### SPAWN-3: the result is a reference, never text

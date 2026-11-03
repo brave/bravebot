@@ -15926,7 +15926,8 @@ mod tests {
              whom. Call the text a summary in your final message only if a processor wrote one. \
              Once your context \
              holds private content, as it does after read_output or vet_content shows you some, \
-             after a delegate reports some, and in a conversation resumed with some, every later \
+             after a delegate reports some, in a conversation resumed with some, and in a \
+             delegate started while its parent's context held some, every later \
              spawn_processor call is refused for the rest of the conversation: what you write is \
              private from then on, and a processor takes no private instruction. run, \
              read_output and the file tools keep working."
@@ -15938,7 +15939,9 @@ mod tests {
              run's output is quarantined by default, so `which`, `find`, `uname` and the like \
              tell you nothing until you ask for the result. Ask for the errors too when a run \
              fails, or you will not know why it failed and must not claim it succeeded. Only for \
-             output from run; a quarantined file is not readable this way. For anything else you \
+             output from run; a quarantined file is not readable this way. Being shown output \
+             closes spawn_processor for you and for every delegate you start afterwards. For \
+             anything else you \
              are holding a reference to, vet_content is the question to ask. Output you were \
              shown the beginning and end of, because the whole was too long for one result, is \
              the exception: you may read all of it, so nobody is asked, and it comes back a page \
@@ -15996,15 +15999,60 @@ mod tests {
         }
         assert!(
             bare.contains(
-                "as it does after a delegate reports some, and in a conversation resumed with some, \
-                 every later spawn_processor call is refused"
-            ) && bare.ends_with("a processor takes no private instruction. The file tools keep working."),
+                "as it does after a delegate reports some, in a conversation resumed with some, \
+                 and in a delegate started while its parent's context held some, every later \
+                 spawn_processor call is refused"
+            ) && bare.ends_with(
+                "a processor takes no private instruction. The file tools keep working."
+            ),
             "{bare}"
         );
         // Nothing is written, so the description does not say what is written.
         assert!(
             !bare.contains("before it is written") && !bare.contains("contents_ref"),
             "{bare}"
+        );
+    }
+
+    /// A planner is told before it starts a delegate that one started after private content was
+    /// shown cannot run processors, that being shown output is what closes them for it and for
+    /// its delegates, and that a task needing a picture or a file looked at goes first or to the
+    /// person. A reader's kind text does not promise processors without condition.
+    ///
+    /// Rejects: a `spawn_agent` or `read_output` description that is silent about the closure,
+    /// and a kind text that says a reader runs processors with no condition.
+    #[test]
+    fn the_planner_is_told_a_delegate_started_after_private_content_has_no_processors() {
+        let everything = the_table_without(&[]);
+        let spawn = description_of(&everything, "spawn_agent");
+        assert!(
+            spawn.contains("cannot run processors")
+                && spawn.contains("looked at before then, or leave it to the person"),
+            "{spawn}"
+        );
+        let read_output = description_of(&everything, "read_output");
+        assert!(
+            read_output.contains("closes spawn_processor for you and for every delegate you start"),
+            "{read_output}"
+        );
+        // Not told of a tool it is not offered.
+        let without = description_of(&the_table_without(&["spawn_processor"]), "read_output");
+        assert!(!without.contains("spawn_processor"), "{without}");
+
+        let kind = everything
+            .iter()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .expect("spawn_agent is on the list")
+            .function
+            .parameters["properties"]["kind"]["description"]
+            .as_str()
+            .expect("a kind description")
+            .to_string();
+        assert!(
+            kind.contains(
+                "while the context that started it holds nothing private, runs processors"
+            ),
+            "{kind}"
         );
     }
 

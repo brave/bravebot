@@ -43855,6 +43855,126 @@ fn a_planner_given_a_private_report_from_a_delegate_holds_it() {
     );
 }
 
+/// DELEGATE-8, PROC-4. A delegate started by a planner that holds private content holds it from
+/// its first request, so every processor call it made would be refused. It is not offered
+/// `spawn_processor`, is not told it may hand files to processors, and is told why. A delegate
+/// started by a planner that holds nothing private keeps all three, so the first half cannot
+/// pass by removing the tool from every delegate.
+#[test]
+fn a_delegate_started_under_private_content_is_not_offered_processors_and_is_told_why() {
+    /// The requests a delegate sent: those that do not carry the parent's own prompt.
+    fn the_delegates_requests(received: &MockRequests, parent: &str, task: &str) -> Vec<String> {
+        let delegates: Vec<String> = every_request(received)
+            .into_iter()
+            .filter(|body| !body.contains(parent) && body.contains(task))
+            .collect();
+        assert!(!delegates.is_empty(), "no delegate ever asked the model");
+        delegates
+    }
+
+    // The parent is shown a program's output, which makes its context private, then starts a
+    // reader.
+    let scratch = Scratch::new("delegate-private-parent");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-MAIL\n").unwrap();
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-UNDER-PRIVATE",
+            vec![
+                tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+                tool_request("read_output", r#"{"ref":"ref:1"}"#),
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"LOOK-AT-THE-PICTURE"}"#,
+                ),
+                reply_with("waiting on the reader"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("LOOK-AT-THE-PICTURE", vec![reply_with("looked")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("START-UNDER-PRIVATE"),
+        &mut conversation,
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+    for body in the_delegates_requests(&received, "START-UNDER-PRIVATE", "LOOK-AT-THE-PICTURE") {
+        let request: serde_json::Value = serde_json::from_str(&body).expect("a request");
+        assert!(
+            !the_tools_in(&request).contains(&"spawn_processor".to_string()),
+            "a delegate that starts out private was offered spawn_processor"
+        );
+        let prompt = system_prompt_of(&body);
+        assert!(
+            !prompt.contains("hand quarantined files to processors"),
+            "a delegate that starts out private was told it may use processors: {prompt}"
+        );
+        assert!(
+            prompt.contains("You were started holding the private content"),
+            "the delegate was not told why it has no processors: {prompt}"
+        );
+    }
+
+    // The same task from a parent that holds nothing private.
+    let scratch = Scratch::new("delegate-clean-parent");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "START-UNDER-NOTHING",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"LOOK-AT-THE-PICTURE"}"#,
+                ),
+                reply_with("waiting on the reader"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("LOOK-AT-THE-PICTURE", vec![reply_with("looked")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("START-UNDER-NOTHING"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+    for body in the_delegates_requests(&received, "START-UNDER-NOTHING", "LOOK-AT-THE-PICTURE") {
+        let request: serde_json::Value = serde_json::from_str(&body).expect("a request");
+        assert!(
+            the_tools_in(&request).contains(&"spawn_processor".to_string()),
+            "a delegate started under a clean parent lost spawn_processor"
+        );
+        let prompt = system_prompt_of(&body);
+        assert!(
+            prompt.contains("hand quarantined files to processors")
+                && !prompt.contains("You were started holding the private content"),
+            "a delegate started under a clean parent was told it inherited private content: {prompt}"
+        );
+    }
+}
+
 /// A delegate's rounds are the spawning turn's spend, and the cache figure travels with them. A turn
 /// that hands most of its work to delegates keeps one prefix cached across their rounds, and a turn
 /// counting only the requests it made itself would report that as a cache that never hit.

@@ -172,7 +172,7 @@ guards:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 6
       - crates/agent/src/tools/recall.rs: 3
-      - crates/core/src/policy.rs: 26
+      - crates/core/src/policy.rs: 28
   - symbol: Policy::adopt_model_output
     sites:
       - crates/agent/src/advisor.rs: 1
@@ -557,7 +557,9 @@ starts from. Which paths a person vouched for is in [trust-map.md](trust-map.md)
 
 Three carriers a reader may go looking for are absent, none of which takes a first label. A
 delegate's reply is model output, labelled in the delegate's own run by the row for what the planner
-wrote, and a delegate starts out holding what the context that wrote its task held. Content restored
+wrote, and a delegate starts out holding what the context that wrote its task held, so a delegate started
+after the planner's context became private is closed to processors from its first call
+([PROC-4](processors.md#PROC-4)). Content restored
 from a resumed session keeps the labels it was given when it first arrived, and what resuming does
 to the integrity of the context is LABEL-9. What the context held is kept the same way: a resumed,
 forked or compacted session holds whatever the original held, and a session file that does not say

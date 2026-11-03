@@ -185,6 +185,11 @@ pub(super) fn offered_tools<S: Sink>(
     if workspace.checkout().is_some() {
         offered.retain(|tool| tool.function.name != "lsp");
     }
+    // A delegate started holding private content has every processor call refused (PROC-4,
+    // DELEGATE-8), so it is not offered the tool. Read from the policy's own label state.
+    if policy.processors_closed() {
+        offered.retain(|tool| tool.function.name != "spawn_processor");
+    }
     Ok((None, offered))
 }
 
@@ -366,7 +371,8 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
 /// name and gated words of the skill `/mode` keeps applied, which the turn read again (SKILL-21). `memory` is what a
 /// definition's kept memory says, which the caller reads through its policy and so keeps hold of.
 /// `vetting_offered` is whether `vet_content` is among the tools the turn was offered, which
-/// decides whether the planner is sent to it for a reference it has to read.
+/// decides whether the planner is sent to it for a reference it has to read. `processors` is
+/// whether the run can hand a file to a processor, which a delegate's prompt follows.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a value the turn has already resolved, and turn.rs is its only caller"
@@ -382,6 +388,7 @@ pub(super) fn system_prompt(
     started_in: crate::permission_mode::PermissionMode,
     kept_facts: &str,
     vetting_offered: bool,
+    processors: crate::delegate::Processors,
     memory: impl Fn(bool, &str) -> String,
 ) -> Prompt {
     let mode = started_in.instruction().unwrap_or_default();
@@ -399,6 +406,7 @@ pub(super) fn system_prompt(
                     spec.prompt(),
                     &memory(spec.keeps_memory(), spec.definition()),
                     delegate_may_delegate(spec, delegates),
+                    processors,
                 ),
             );
             system.push(Provenance::Driver, checkout_notice);
@@ -446,6 +454,7 @@ pub(super) fn system_prompt(
                     crate::delegate::addressed_prompt(
                         addressed,
                         &memory(addressed.keeps_memory(), addressed.name()),
+                        processors,
                     ),
                 );
             }

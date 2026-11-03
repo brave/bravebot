@@ -131,9 +131,15 @@ found releases the output and every other verdict keeps it back, the refusal bei
 was asked for. Without the screening asked for the output is released unshown and no check is made
 ([MODE-4](../permission-modes.md#MODE-4)).
 
+Output shown to the planner is private content, so the description says that being shown output
+closes `spawn_processor` for the planner and for every delegate it starts afterwards
+([PROC-4](../processors.md#PROC-4), [DELEGATE-8](../delegation.md#DELEGATE-8)). A list that does not
+offer `spawn_processor` does not name it there.
+
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
 `verified-by: bravebot_agent::turn::with_auto_vetting_the_row_says_a_check_released_the_output_unasked`
 `verified-by: bravebot_agent::turn::the_row_for_output_a_person_read_names_no_check`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_started_after_private_content_has_no_processors`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_says_on_the_row_that_nothing_checked_the_output`
 `verified-by: bravebot_tui::confirm::vet::the_output_prompt_says_what_a_check_found`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_releases_command_output_unasked`

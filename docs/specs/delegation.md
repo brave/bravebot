@@ -539,9 +539,22 @@ Confidentiality goes both ways ([LABEL-8](labels.md#LABEL-8)). A delegate starts
 whatever private content its parent's context held, so what it writes is private from its first
 round. A parent shown a private report holds it from then on.
 
+A delegate that starts out holding private content is closed to processors from its first call
+([PROC-4](processors.md#PROC-4)). It is not offered `spawn_processor`, its prompt does not say it
+may hand files to processors and says instead that it was started holding the private content of
+the context that asked it, and the planner is told in the `spawn_agent` description that such a
+delegate cannot run processors. A task that needs a picture or a file looked at is started before
+the planner's context is private, or is left to the person.
+
 `verified-by: bravebot_agent::turn::a_delegates_report_reaches_the_planner_that_asked_for_it`
 `verified-by: bravebot_agent::turn::a_planner_given_a_private_report_from_a_delegate_holds_it`
 `verified-by: bravebot_core::policy::a_delegate_starts_out_holding_what_its_parent_held`
+`verified-by: bravebot_core::policy::the_refusal_to_a_delegate_started_private_says_so_and_names_only_what_it_is_offered`
+`verified-by: bravebot_agent::delegate::a_delegate_started_closed_is_told_it_inherited_the_private_content`
+`verified-by: bravebot_agent::delegate::a_delegate_is_told_it_may_use_processors_only_where_it_may`
+`verified-by: bravebot_agent::delegate::the_processors_state_follows_the_context_before_the_tool_list`
+`verified-by: bravebot_agent::tools::the_planner_is_told_a_delegate_started_after_private_content_has_no_processors`
+`verified-by: bravebot_agent::turn::a_delegate_started_under_private_content_is_not_offered_processors_and_is_told_why`
 `verified-by: bravebot_agent::turn::what_a_delegate_reported_reaches_the_person_watching`
 
 <a id="DELEGATE-9"></a>

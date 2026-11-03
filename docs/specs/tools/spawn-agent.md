@@ -35,6 +35,11 @@ The list offered to a run is narrowed by the capabilities that run holds: a run 
 is not offered the kind that writes ([DELEGATE-32](../delegation.md#DELEGATE-32)). The offer is
 advisory, and a name outside the resolved set is refused ([DELEGATE-3](../delegation.md#DELEGATE-3)).
 
+The description says that a delegate started after the planner was shown private content cannot run
+processors, and that a task needing a picture or a file looked at goes first or to the person. The
+`reader` kind text does not promise processors without condition
+([DELEGATE-8](../delegation.md#DELEGATE-8)).
+
 `verified-by: bravebot_core::policy::a_kind_nobody_enumerated_is_refused`
 `verified-by: bravebot_core::delegate::a_kind_is_selected_from_the_enumerated_set_and_nothing_else`
 `verified-by: bravebot_core::delegate::a_run_is_offered_the_kinds_its_own_capabilities_reach`

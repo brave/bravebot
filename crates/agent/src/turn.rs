@@ -2839,6 +2839,10 @@ where
     // `read_output` only where the list holds them, and so do the descriptions of the tools that
     // name others. A delegate is never offered the first and a reader the third, and a
     // definition's tools line or the command line can leave any of them out of a turn's.
+    let processors = crate::delegate::Processors::of(
+        policy.processors_closed(),
+        offered_names(&offered, "spawn_processor"),
+    );
     if !offers_vet_content {
         policy.without_vetting();
     }
@@ -2896,6 +2900,7 @@ where
         started_in,
         &kept_facts,
         offers_vet_content,
+        processors,
         memory,
     );
     let system_text = system.text();
