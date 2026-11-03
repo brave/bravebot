@@ -276,6 +276,7 @@ dependencies = [
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-session",
+ "bravebot-signing",
  "bravebot-skus",
  "bravebot-stamp",
  "bravebot-tui",

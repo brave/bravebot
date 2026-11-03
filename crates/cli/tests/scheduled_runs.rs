@@ -196,6 +196,10 @@ fn no_command_but_add_accepts_a_write_flag() {
             vec!["schedule", "list"],
             vec!["schedule", "remove", "1"],
             vec!["schedule", "run-now", "1"],
+            vec!["schedule", "pause", "1"],
+            vec!["schedule", "resume", "1"],
+            vec!["schedule", "pending"],
+            vec!["schedule", "clear", "1"],
             vec!["schedule", "history"],
             vec!["schedule", "history", "1"],
         ] {
@@ -222,7 +226,7 @@ fn a_cron_expression_that_is_not_five_plain_fields_writes_nothing() {
             "--scheduler",
             "crontab",
         ]);
-        assert!(!output.status.success(), "{bad}");
+        assert_eq!(output.status.code(), Some(2), "{bad}");
         assert_eq!(scratch.table(), "", "{bad}");
     }
 }
@@ -283,6 +287,175 @@ fn a_removed_entrys_id_is_not_given_to_the_next_entry() {
     assert!(!history.contains("status "), "{history}");
 }
 
+#[test]
+fn a_cron_field_outside_its_range_writes_nothing() {
+    let scratch = Scratch::new("schedule-cron-range");
+    for bad in [
+        "60 * * * *",
+        "* 24 * * *",
+        "* * 0 * *",
+        "* * * 13 *",
+        "* * * * 8",
+        "*/0 * * * *",
+    ] {
+        let output =
+            scratch.run_at_a_terminal(&["schedule", "add", "--cron", bad, "--prompt", "hello"]);
+        assert_eq!(output.status.code(), Some(2), "{bad}");
+        assert_eq!(scratch.table(), "", "{bad}");
+        assert!(!scratch.state().join("1.entry").exists(), "{bad}");
+    }
+}
+
+/// SCHEDULE-1: a paused entry keeps its crontab line, is listed as paused, and a firing of it is
+/// skipped without a run being recorded; resuming lets the next firing run.
+#[test]
+fn a_paused_entry_keeps_its_line_and_its_firing_is_skipped_until_it_is_resumed() {
+    let scratch = Scratch::new("schedule-pause");
+    added(&scratch, &[]);
+    added(&scratch, &[]);
+    let line = scratch.table();
+
+    let paused = scratch.run(&["schedule", "pause", "1"]);
+    assert!(paused.status.success());
+    assert!(
+        out(&paused).contains("Paused schedule 1."),
+        "{}",
+        out(&paused)
+    );
+    assert_eq!(scratch.table(), line, "the crontab line stays");
+    let listed = out(&scratch.run(&["schedule", "list"]));
+    let rows: Vec<&str> = listed.lines().collect();
+    assert!(
+        rows[0].starts_with("1  ") && rows[0].ends_with("paused"),
+        "{listed}"
+    );
+    assert!(
+        rows[1].starts_with("2  ") && rows[1].ends_with("active"),
+        "{listed}"
+    );
+    assert_eq!(
+        scratch.run(&["schedule", "pause", "1"]).status.code(),
+        Some(2),
+        "pausing a paused entry"
+    );
+
+    let skipped = scratch.run(&["schedule", "run-now", "1"]);
+    assert_eq!(skipped.status.code(), Some(4));
+    assert!(String::from_utf8_lossy(&skipped.stderr).contains("paused"));
+    assert!(
+        !scratch.state().join("1.history").exists(),
+        "a skipped firing is not a run"
+    );
+
+    let resumed = scratch.run(&["schedule", "resume", "1"]);
+    assert!(
+        out(&resumed).contains("Resumed schedule 1."),
+        "{}",
+        out(&resumed)
+    );
+    assert_eq!(
+        scratch.run(&["schedule", "resume", "1"]).status.code(),
+        Some(2),
+        "resuming an entry that is not paused"
+    );
+    assert!(out(&scratch.run(&["schedule", "run-now", "1"])).contains("schedule 1 ran"));
+    assert_eq!(
+        scratch.run(&["schedule", "pause", "9"]).status.code(),
+        Some(2),
+        "an entry that is not set"
+    );
+
+    // Removing an entry takes the mark with it, so the next entry of that number starts active.
+    scratch.run(&["schedule", "pause", "2"]);
+    scratch.run(&["schedule", "remove", "2"]);
+    assert!(!scratch.state().join("2.paused").exists());
+}
+
+/// SCHEDULE-3: `pending` prints the question a firing stopped at, `clear` deletes it and takes
+/// no answer, and neither touches the entry.
+#[test]
+fn a_stored_question_is_shown_by_pending_and_deleted_by_clear() {
+    let scratch = Scratch::new("schedule-pending");
+    added(&scratch, &[]);
+    added(&scratch, &[]);
+    assert!(out(&scratch.run(&["schedule", "pending"])).contains("No schedule is waiting"));
+    std::fs::write(
+        scratch.state().join("1.pending"),
+        "Pick: Which branch?\n1. main\n2. dev\n",
+    )
+    .unwrap();
+
+    let all = out(&scratch.run(&["schedule", "pending"]));
+    assert!(all.contains("Schedule 1 stopped at a question"), "{all}");
+    assert!(
+        all.contains("Pick: Which branch?") && all.contains("2. dev"),
+        "{all}"
+    );
+    assert!(!all.contains("Schedule 2"), "{all}");
+    let one = out(&scratch.run(&["schedule", "pending", "1"]));
+    assert!(one.contains("Which branch?"), "{one}");
+    assert!(out(&scratch.run(&["schedule", "pending", "2"])).contains("No schedule is waiting"));
+    assert_eq!(
+        scratch.run(&["schedule", "pending", "9"]).status.code(),
+        Some(2)
+    );
+
+    // Clearing takes no text and reads nothing: an answer word is a usage error.
+    assert_eq!(
+        scratch
+            .run(&["schedule", "clear", "1", "main"])
+            .status
+            .code(),
+        Some(2)
+    );
+    assert!(scratch.state().join("1.pending").exists());
+    let before = scratch.table();
+    let cleared = scratch.run(&["schedule", "clear", "1"]);
+    assert!(
+        out(&cleared).contains("Cleared the question schedule 1"),
+        "{}",
+        out(&cleared)
+    );
+    assert!(!scratch.state().join("1.pending").exists());
+    assert!(scratch.state().join("1.entry").exists());
+    assert_eq!(scratch.table(), before);
+    assert!(out(&scratch.run(&["schedule", "clear", "1"])).contains("no question to clear"));
+    assert_eq!(
+        scratch.run(&["schedule", "clear", "9"]).status.code(),
+        Some(2)
+    );
+
+    // A question left by an earlier firing is dropped when the entry runs again.
+    std::fs::write(scratch.state().join("1.pending"), "Pick: old?\n").unwrap();
+    scratch.run(&["schedule", "run-now", "1"]);
+    assert!(!scratch.state().join("1.pending").exists());
+}
+
+/// SCHEDULE-4: a firing that finds the previous firing of the same entry still running does
+/// nothing. The hold is a lock on a file, so the test takes it itself.
+#[test]
+fn a_firing_is_skipped_while_the_previous_one_of_the_entry_still_runs() {
+    let scratch = Scratch::new("schedule-overlap");
+    added(&scratch, &[]);
+    added(&scratch, &[]);
+    let holder = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(scratch.state().join("1.lock"))
+        .unwrap();
+    holder.try_lock().unwrap();
+
+    let skipped = scratch.run(&["schedule", "run-now", "1"]);
+    assert!(skipped.status.success());
+    assert!(out(&skipped).contains("still running"), "{}", out(&skipped));
+    assert!(!scratch.state().join("1.history").exists());
+    // Another entry is not held.
+    assert!(out(&scratch.run(&["schedule", "run-now", "2"])).contains("schedule 2 ran"));
+
+    drop(holder);
+    assert!(out(&scratch.run(&["schedule", "run-now", "1"])).contains("schedule 1 ran"));
+}
+
 /// The state directory the sessions of the entry's directory are kept in.
 fn sessions_of(scratch: &Scratch, id: &str) -> PathBuf {
     let entry = std::fs::read_to_string(scratch.state().join(format!("{id}.entry"))).unwrap();
@@ -331,6 +504,43 @@ fn history_is_newest_first_and_shows_the_tokens_the_session_spent() {
         rows[1].contains("status 0") && rows[1].contains("tokens -"),
         "{history}"
     );
+}
+
+/// MODE-5, CLI-42: a settings layer that made the bypass mode unreachable refuses
+/// `--dangerously-skip-permissions` at `schedule add`, because `main` refuses the flag for every
+/// command before it dispatches. Nothing is stored. A firing of an entry that holds the bypass mode,
+/// stored before the layer or edited in by hand, starts a run that carries the flag and is refused
+/// the same way (status 2, recorded in the history).
+#[test]
+fn a_layer_that_made_the_bypass_unreachable_refuses_it_at_add_and_at_a_firing() {
+    let scratch = Scratch::new("schedule-bypass-unreachable");
+    let settings = scratch.path.join("home/.bravebot");
+    std::fs::create_dir_all(&settings).unwrap();
+    assert!(
+        out(&added(&scratch, &["--dangerously-skip-permissions"])).contains("Added schedule 1.")
+    );
+
+    std::fs::write(
+        settings.join("settings.json"),
+        r#"{"permissions": {"bypassUnreachable": true}}"#,
+    )
+    .unwrap();
+    let refused = added(&scratch, &["--dangerously-skip-permissions"]);
+    assert!(
+        out(&refused).contains("permissions.bypassUnreachable"),
+        "{}",
+        out(&refused)
+    );
+    assert!(
+        !out(&refused).contains("Added schedule"),
+        "{}",
+        out(&refused)
+    );
+    assert!(!scratch.state().join("2.entry").exists());
+    assert_eq!(scratch.table().lines().count(), 1);
+
+    let fired = out(&scratch.run(&["schedule", "run-now", "1"]));
+    assert!(fired.contains("schedule 1 ran, status 2"), "{fired}");
 }
 
 /// An entry is kept only where the line was installed.

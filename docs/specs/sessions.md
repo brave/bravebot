@@ -367,6 +367,10 @@ the total, and clearing the conversation resets it. A record written before the 
 neither figure, and a session continued from one holds the split of its later turns only, so the two
 can total less than the tokens. `bravebot stats` reports the difference ([CLI-37](cli.md#CLI-37)).
 
+A run that `bravebot schedule` started ([CLI-42](cli.md#CLI-42)) writes an ordinary session record
+like any other one-shot run. The entry's `<id>.history` file holds one line for it, naming that
+session, and `schedule history` reads the tokens it spent from the record.
+
 A `/btw` question asked while a turn runs ([CMD-8](commands.md#CMD-8)) is charged to that turn, in
 the total, the breakdown and the split. The status line and the turn's clock are the turn's own and
 the question adds nothing to them.

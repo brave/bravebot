@@ -10,7 +10,7 @@ use std::io::Write;
 pub(crate) const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
 
 /// The subcommands, as the usage table lists them.
-pub(crate) const COMMANDS: [&str; 16] = [
+pub(crate) const COMMANDS: [&str; 17] = [
     "acp",
     "doctor",
     "update",
@@ -22,6 +22,7 @@ pub(crate) const COMMANDS: [&str; 16] = [
     "stats",
     "schedule",
     "skill",
+    "trigger",
     "attach",
     "reply",
     "import-providers",
@@ -47,6 +48,14 @@ const SESSIONS: [&str; 4] = ["list", "stop", "import", "search"];
 /// What follows `skill`.
 const SKILL: [&str; 1] = ["eval"];
 
+/// What follows `schedule`.
+const SCHEDULE: [&str; 9] = [
+    "add", "list", "remove", "run-now", "history", "pause", "resume", "pending", "clear",
+];
+
+/// What follows `trigger`.
+const TRIGGER: [&str; 6] = ["add", "list", "remove", "pending", "clear", "serve"];
+
 /// A flag, as the usage table spells it: the long form, the short form where there is one, and
 /// whether a value follows.
 struct Flag {
@@ -59,7 +68,7 @@ const fn flag(long: &'static str, short: Option<char>, value: bool) -> Flag {
     Flag { long, short, value }
 }
 
-const FLAGS: [Flag; 54] = [
+const FLAGS: [Flag; 56] = [
     flag("interactive", Some('i'), true),
     flag("plain", None, false),
     flag("handle-uri", None, true),
@@ -98,6 +107,8 @@ const FLAGS: [Flag; 54] = [
     flag("json-stream", None, false),
     flag("input-format", None, true),
     flag("trust-input-lines", None, false),
+    flag("approve-input-lines", None, false),
+    flag("event", None, true),
     flag("output-schema", None, true),
     flag("goal", None, true),
     flag("max-rounds", None, true),
@@ -163,7 +174,9 @@ fn bash() -> String {
             mcp) COMPREPLY=($(compgen -W "{mcp}" -- "$cur")); return 0 ;;
             permissions) COMPREPLY=($(compgen -W "{permissions}" -- "$cur")); return 0 ;;
             sessions) COMPREPLY=($(compgen -W "{sessions}" -- "$cur")); return 0 ;;
+            schedule) COMPREPLY=($(compgen -W "{schedule}" -- "$cur")); return 0 ;;
             skill) COMPREPLY=($(compgen -W "{skill}" -- "$cur")); return 0 ;;
+            trigger) COMPREPLY=($(compgen -W "{trigger}" -- "$cur")); return 0 ;;
             completion|shell-init) COMPREPLY=($(compgen -W "{shells}" -- "$cur")); return 0 ;;
         esac
     fi
@@ -184,6 +197,8 @@ complete -o default -F _bravebot bravebot
         permissions = PERMISSIONS.join(" "),
         sessions = SESSIONS.join(" "),
         skill = SKILL.join(" "),
+        schedule = SCHEDULE.join(" "),
+        trigger = TRIGGER.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -200,7 +215,9 @@ _bravebot() {{
             mcp) compadd -- {mcp}; return ;;
             permissions) compadd -- {permissions}; return ;;
             sessions) compadd -- {sessions}; return ;;
+            schedule) compadd -- {schedule}; return ;;
             skill) compadd -- {skill}; return ;;
+            trigger) compadd -- {trigger}; return ;;
             completion|shell-init) compadd -- {shells}; return ;;
         esac
     fi
@@ -224,6 +241,8 @@ fi
         permissions = PERMISSIONS.join(" "),
         sessions = SESSIONS.join(" "),
         skill = SKILL.join(" "),
+        schedule = SCHEDULE.join(" "),
+        trigger = TRIGGER.join(" "),
         shells = SHELLS.join(" "),
         flags = flag_words(),
         commands = COMMANDS.join(" "),
@@ -241,7 +260,9 @@ fn fish() -> String {
         ("mcp", MCP.join(" ")),
         ("permissions", PERMISSIONS.join(" ")),
         ("sessions", SESSIONS.join(" ")),
+        ("schedule", SCHEDULE.join(" ")),
         ("skill", SKILL.join(" ")),
+        ("trigger", TRIGGER.join(" ")),
         ("completion", SHELLS.join(" ")),
         ("shell-init", SHELLS.join(" ")),
     ] {

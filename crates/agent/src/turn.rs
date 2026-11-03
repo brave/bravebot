@@ -611,6 +611,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             mcp: None,
             jobs: &mut jobs,
             permission_mode: task.permission_mode.clone(),
+            vouched_channel: task.vouched_channel,
             auto_vetting: task.auto_vetting,
             run_directory: &mut run_directory,
             confined_failures: &mut confined_failures,

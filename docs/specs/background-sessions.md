@@ -261,7 +261,9 @@ person's. A terminal that attaches while the prompt is held is given all of it, 
 not the part that fits in what is kept for a late terminal. A prompt that ends because its process
 ended is gone, and the session is `interrupted`.
 
-**Why.** A one-shot run declines every prompt because nobody can be asked. A background session can
+**Why.** A one-shot run declines every prompt because nobody can be asked, other than a write, a run
+and a fetch in a run that reads input lines and was started with `--approve-input-lines`
+([cli.md](cli.md#CLI-36)). A background session can
 be asked later, and declining on the person's behalf while they are away would cancel work they
 expect to find waiting. Answering would make the absent person's answer a guess made in their name.
 Holding the prompt is the only choice that does neither. A prompt begins with what it is about and

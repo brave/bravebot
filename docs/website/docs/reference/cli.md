@@ -76,10 +76,12 @@ Usage:
 | `bravebot sessions delete <id>` | delete one session recorded for this directory, with its trail and search index ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot sessions purge [--dry-run] [-y]` | delete every session recorded for this directory, asking first unless `-y` is given ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot stats [--days <n>] [--models] [--project [<dir>]]` | total the sessions, turns and tokens, read and written, the recorded sessions spent, for every project or one ([below](#stats)) |
-| `bravebot schedule add\|list\|remove\|run-now\|history` | run a prompt from a cron expression as a one-shot run, started by your crontab, a launchd job or a systemd timer ([below](#schedule)) |
+| `bravebot schedule add\|list\|remove\|run-now\|history\|pause\|resume\|pending\|clear` | run a prompt from a cron expression as a one-shot run, started by your crontab, a launchd job or a systemd timer ([below](#schedule)) |
 | `bravebot skill eval <name> [--model <model>] [--max-rounds <n>] [--max-tokens <n>] [--trust-workspace]` | run a skill's saved cases with the skill and without it and report both scores ([below](#skill-eval)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
+| `bravebot trigger add <name> --event <event> [--workspace <dir>] -- <prompt>` | store a prompt to run when a delivery signed for that event arrives, and print the secret that signs it once ([below](#trigger)) |
+| `bravebot trigger list [--json]`, `remove <name>`, `pending`, `clear <name>`, `serve [--port <n>]` | list the stored triggers, remove one with its secret, show and clear the question a run stopped at, and listen on `127.0.0.1` for deliveries ([below](#trigger)) |
 | `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
 | `bravebot shell-init <shell>` | print a shell hook that gives `@bravebot` the commands you ran ([below](#shell-init)) |
 | `bravebot acp` | serve an editor over the Agent Client Protocol on standard input and output ([below](#acp)) |
@@ -121,6 +123,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--json-stream` | write one event per line as the run goes, then the result object ([below](#--json-stream)) |
 | `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line, for as many turns as it is sent; implies `--json-stream` ([below](#--input-format-lines)) |
 | `--trust-input-lines` | with `--input-format lines`, treat the lines as your own words and not a program's ([below](#--input-format-lines)) |
+| `--approve-input-lines` | with `--input-format lines`, let the program sending the lines approve or decline each write, run or fetch ([below](#--input-format-lines)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
 | `--tools <a,b,c>` | offer the agent only the named tools; a tool a setting removed stays removed, and no MCP server's tools are offered ([below](#--tools-abc-and---no-shell)) |
@@ -629,7 +632,7 @@ is one JSON object with a `type`:
 |---|---|---|
 | `prompt` | `text` | starts a turn with those words; one that arrives while a turn runs waits for its turn |
 | `steer` | `text` | reaches the turn that is running at its next round, as a line typed mid-turn does; one sent while no turn runs, or that the turn ended without taking, starts a turn of its own |
-| `answer` | `id`, `choices` | answers the `question` event with that `id`; `choices` is one array of choice positions for each question, an empty array declining it |
+| `answer` | `id`, `choices` or `text` | answers the `question` or `permission` event with that `id`; `choices` is one array of choice positions for each question, an empty array declining it; `text` answers a question of one prompt in words, and is taken only with `--trust-input-lines` |
 | `stop` | none | ends the turn that is running and leaves the prompts behind it to run |
 
 The words on the command line are the first turn, and `--file` and `--session-ref` attach to it
@@ -645,7 +648,8 @@ before any prompt arrived is a run with no task and exits on status 2.
 reference to it and never the words, and a `steer` waits for a turn of its own. With the flag the
 lines are your words, a `prompt` is the prompt of its turn and a `steer` is delivered to the turn
 running. The flag vouches for the words and nothing else. A write, a command, a fetch and every
-other question are still refused, as in any run nobody is watching, and no line approves one.
+other question are still refused, as in any run nobody is watching, and no line approves one
+unless you also typed `--approve-input-lines`.
 
 **Questions.** A question the planner asks is written as a `question` event and the turn waits for the
 answer:
@@ -658,20 +662,43 @@ answer:
 {"type":"answer","id":1,"choices":[[1]]}
 ```
 
-An answer is positions among the choices the planner offered and no words, sent after the `question`
-event it names. It is refused when no question with that `id` is waiting or the positions do not fit
-the question. A question still waiting
+An answer is positions among the choices the planner offered, sent after the `question` event it
+names. With `--trust-input-lines` it can instead hold `text`, the words you want to give for a
+question of one prompt, and a line with both is taken as its `choices`. Without the flag a line with
+`text` is refused as `not_vouched` and the question keeps waiting. A line is refused when no question
+with that `id` is waiting or the positions do not fit the question. A question still waiting
 when stdin closes, or when the turn is stopped, is declined.
+
+**Approving a write, a command or a fetch.** With `--approve-input-lines` a write, a run or a fetch
+that would ask you is written as a `permission` event and the turn waits for the answer:
+
+```json
+{"schema":1,"event":"permission","id":2,"kind":"run","call":{"command":"make test","directory":"."},"choices":[{"label":"reject"},{"label":"approve"}]}
+```
+
+```json
+{"type":"answer","id":2,"choices":[[1]]}
+```
+
+`kind` is `write`, `run` or `fetch`, and `call` holds the words that say what the call is: `path` and
+`contents` for a write, `command` and `directory` for a run, `url` and `host` for a fetch. `[[1]]`
+approves that one call and `[[0]]` declines it. Nothing is remembered, so the next call is a new
+`permission` event, and nothing is added to your trust map or permission rules. A write to a protected
+path or to which the credential scan found a value, and a command that asks for credential scopes or
+to run unconfined, are not put to the program and stay refused. A decline, stdin closing and a stop
+each decline it, and a decline ends the run on the status for a refusal.
 
 **A line that is not taken** is written as an `input_refused` event with `line`, its number counted
 from 1, and `reason`: `unreadable` (over the size cap of piped input, or not UTF-8), `not_json`,
-`unknown_type`, `bad_field`, `no_such_question` or `too_much_waiting` (the prompts waiting for a turn
+`unknown_type`, `bad_field`, `no_such_question`, `not_vouched` (an `answer` with `text` where nobody
+typed `--trust-input-lines`) or `too_much_waiting` (the prompts waiting for a turn
 already hold as many bytes as that cap). The event holds nothing the line said. A blank
 line is ignored, and a field a line's type does not use is skipped.
 
 The flags are refused with status 2 before stdin is read when `--input-format` names anything but
-`lines` and with `--mode manifest`, and when `--trust-input-lines` comes without
-`--input-format lines`.
+`lines` and with `--mode manifest`, and when `--trust-input-lines` or `--approve-input-lines` comes
+without `--input-format lines`. `--approve-input-lines` is also refused with `--accept-edits`,
+`--auto` and `--dangerously-skip-permissions`, which already answer what it would.
 
 Under `--incognito` no record is written, so each turn is carried on from the conversation held in
 memory for as long as the process runs. Every result names no session.
@@ -1207,6 +1234,10 @@ bravebot schedule list
 bravebot schedule remove <id>
 bravebot schedule run-now <id>
 bravebot schedule history [<id>]
+bravebot schedule pause <id>
+bravebot schedule resume <id>
+bravebot schedule pending [<id>]
+bravebot schedule clear <id>
 ```
 
 Runs a prompt on a repeating schedule with no session open. `add` writes an entry and has your
@@ -1239,6 +1270,16 @@ than a launchd job can hold is refused for those two. Where both the day of the 
 the week are given, a run starts on a day that matches either, as cron does. Only Unix systems are
 supported: there is no Windows scheduler yet.
 
+The expression is checked against the range of each field: minutes 0 to 59, hours 0 to 23, days of
+the month 1 to 31, months 1 to 12 and days of the week 0 to 7, with a step greater than zero.
+
+`pause <id>` stops an entry from running and keeps its line and its prompt. `resume <id>` lets it
+run again, and `list` shows `paused` or `active` for each entry. A run started for an entry stops at
+the first question it is asked, since nobody is there to answer, and exits with status 4 after
+keeping the question. `pending` shows it and `clear <id>` deletes it. A firing that finds the previous
+firing of the same entry still running is skipped. The behaviour is in
+[schedule.md](https://github.com/brave/bravebot/blob/main/docs/specs/schedule.md).
+
 ## `skill eval`
 
 ```sh
@@ -1264,6 +1305,56 @@ A name that matches no skill, including one only in a project you have not vouch
 you can load, a skill with no accepted case and a case file that is not valid are refused with status
 2. A run that ended on an error other than its limit makes the command end on status 1 after the
 report. Stdout holds the report and nothing else.
+
+## `trigger`
+
+```sh
+bravebot trigger add <name> --event <event> [--workspace <dir>] [--max-concurrent <n>] [--max-per-hour <n>] [--dangerously-skip-permissions] -- <prompt>
+bravebot trigger list [--json]
+bravebot trigger remove <name>
+bravebot trigger pending
+bravebot trigger clear <name>
+bravebot trigger serve [--port <n>]
+```
+
+`add` stores the prompt under a name and an event and prints a secret once. `serve` listens on
+`127.0.0.1` (port 7471 unless `--port` says otherwise, and `0` lets the system choose) and, for a
+`POST /<name>` whose signature verifies, starts the stored prompt as a one-shot `bravebot -p` run in
+the trigger's directory. The body of the delivery is written to the run's standard input, where it
+is untrusted and private as any piped input is, and the prompt is told only that a delivery arrived.
+Nothing of bravebot runs between deliveries unless `serve` is running.
+
+A sender signs `hmac_sha256(secret, event + "\n" + body)` and sends it as
+`X-Bravebot-Signature: sha256=<lowercase hex>`. The event is the one given to `add`, so a delivery
+signed for another event does not verify, and no header selects it. GitHub's `X-Hub-Signature-256`
+signs the body alone, so a GitHub webhook cannot be pointed at `serve` directly.
+
+| Subcommand | What it does |
+|---|---|
+| `add <name>` | check the name, event, limits, prompt and directory, then store the entry and a secret only your account can read. A name in use is refused and keeps its secret |
+| `list [--json]` | print each trigger's name, event, directory, whether a run `can write` or `reads only`, and its prompt, shortened. The secret is never printed |
+| `remove <name>` | delete the entry, its secret and the question it kept |
+| `pending` | print the question each trigger's last run stopped at, with its numbered choices |
+| `clear <name>` | delete the question a trigger stopped at and keep the trigger. It takes no answer |
+| `serve [--port <n>]` | listen and start runs. Every refusal is the same `404` page, so a sender learns neither which names are stored nor what failed. Otherwise `202` started, `413` body over 1 MiB, `429` over the limits, `500` the run could not start |
+
+A name is lowercase letters, digits and hyphens, does not start with a hyphen and is at most 64
+characters. An event is letters, digits and `. _ : -`, at most 64. `--max-concurrent` takes 1 to 4
+(default 1) and `--max-per-hour` takes 1 to 120 (default 6); a delivery over either is answered
+`429` and starts nothing. A prompt that is blank, or one word starting with `-`, is refused.
+`--workspace` defaults to the current directory and must exist. The prompt follows `--`. No option
+selects a delivery by what its body says.
+
+A run reads and reports. It can write only if you typed `--dangerously-skip-permissions` beside
+`add`, which is the only flag an entry stores and is shown by `list`; `add` refuses it where a
+settings layer made that mode unreachable, and every other subcommand refuses it. A run the planner
+asks a question stops at the first one, with or without that flag, exits with status 4 and keeps the
+question for `pending`. Entries and secrets are kept under the state directory. A run started with
+`--sandbox off` can start `bravebot trigger add`, and a confined one cannot.
+
+The listener accepts a connection from any program on this machine, and nothing else. To receive a
+delivery from another machine, forward it to the port yourself. See
+[Running on an event](../using/headless.md#running-on-an-event).
 
 ## `completion`
 

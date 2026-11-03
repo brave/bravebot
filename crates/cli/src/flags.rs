@@ -28,7 +28,7 @@ pub(crate) const AUTO: &str = "--auto";
 
 /// The flags that begin a one-shot run when one leads the line, so that `main` dispatches on this
 /// list and [`is_a_one_shot`] reads the same one.
-pub(crate) const TASK_FLAGS: [&str; 20] = [
+pub(crate) const TASK_FLAGS: [&str; 21] = [
     "-p",
     "--print",
     "--mode",
@@ -45,6 +45,7 @@ pub(crate) const TASK_FLAGS: [&str; 20] = [
     "--json-stream",
     "--input-format",
     "--trust-input-lines",
+    "--approve-input-lines",
     "--output-schema",
     "--goal",
     "--max-rounds",
@@ -53,7 +54,7 @@ pub(crate) const TASK_FLAGS: [&str; 20] = [
 
 /// The commands that start neither a session nor a task, so a flag that shapes one is refused
 /// beside them rather than taken and ignored, for the reason CLI-13 gives about a settings file.
-const NON_SESSION_COMMANDS: [&str; 17] = [
+const NON_SESSION_COMMANDS: [&str; 18] = [
     "acp",
     "doctor",
     "update",
@@ -65,6 +66,7 @@ const NON_SESSION_COMMANDS: [&str; 17] = [
     "stats",
     "schedule",
     "skill",
+    "trigger",
     "attach",
     "reply",
     "import-leo-creds",
@@ -681,11 +683,11 @@ mod tests {
     }
 
     #[test]
-    fn exactly_the_seventeen_commands_that_start_no_session_are_named() {
+    fn exactly_the_eighteen_commands_that_start_no_session_are_named() {
         for command in NON_SESSION_COMMANDS {
             assert_eq!(starts_neither_a_session_nor_a_task(command), Some(command));
         }
-        assert_eq!(NON_SESSION_COMMANDS.len(), 17);
+        assert_eq!(NON_SESSION_COMMANDS.len(), 18);
         for other in ["", "-p", "--resume", "resume", "Doctor", "doctor "] {
             assert_eq!(
                 starts_neither_a_session_nor_a_task(other),

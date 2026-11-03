@@ -1,5 +1,6 @@
-//! `bravebot schedule add|list|remove|run-now|history`: recurring one-shot runs started by the
-//! operating system's scheduler: `crontab`, a launchd job or a systemd timer (CLI-42).
+//! `bravebot schedule add|list|remove|pause|resume|pending|clear|run-now|history`: recurring
+//! one-shot runs started by the operating system's scheduler: `crontab`, a launchd job or a
+//! systemd timer (CLI-42, SCHEDULE-1 to SCHEDULE-6).
 //!
 //! An entry is written by a person at a terminal and holds a cron expression, a prompt, a directory
 //! and the permission mode the person typed. It is kept as two files under the state directory, the
@@ -11,6 +12,8 @@
 mod calendar;
 
 use crate::exit::{Ending, fail};
+use crate::firing::{self, FIRING_VARIABLE};
+use bravebot_core::ask::Asking;
 use bravebot_i18n::t;
 use bravebot_session::{search, sessions};
 use std::io::{IsTerminal, Write};
@@ -167,6 +170,11 @@ pub(crate) fn command(args: &[String], typed: &Typed) -> ExitCode {
         }
         [word] if word == "list" => list(),
         [word, id] if word == "remove" => remove(id),
+        [word, id] if word == "pause" => pause(id, true),
+        [word, id] if word == "resume" => pause(id, false),
+        [word] if word == "pending" => pending(None),
+        [word, id] if word == "pending" => pending(Some(id)),
+        [word, id] if word == "clear" => clear(id),
         [word, id] if word == "run-now" => run_now(id),
         [word] if word == "history" => history(None),
         [word, id] if word == "history" => history(Some(id)),
@@ -202,27 +210,74 @@ fn read_addition(words: &[String], mode: Mode) -> Option<Addition> {
     })
 }
 
+/// The lowest and highest value of each of the five cron fields, in order: minute, hour, day of
+/// the month, month, day of the week (where 0 and 7 are both Sunday).
+const FIELD_RANGES: [(u32, u32); 5] = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 7)];
+
+/// A cron number: one to four digits.
+fn cron_number(text: &str) -> Option<u32> {
+    if text.is_empty() || text.len() > 4 || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// Whether `field` is a comma-separated list of `*`, a number or an `a-b` range inside
+/// `low..=high`, each with an optional `/step` that is not zero (SCHEDULE-5).
+fn field_in_range(field: &str, (low, high): (u32, u32)) -> bool {
+    field.split(',').all(|part| {
+        let (span, step) = match part.split_once('/') {
+            Some((span, step)) => (span, Some(step)),
+            None => (part, None),
+        };
+        if step.is_some_and(|step| cron_number(step).is_none_or(|n| n == 0)) {
+            return false;
+        }
+        if span == "*" {
+            return true;
+        }
+        match span.split_once('-') {
+            Some((from, to)) => matches!(
+                (cron_number(from), cron_number(to)),
+                (Some(from), Some(to)) if low <= from && from <= to && to <= high
+            ),
+            None => cron_number(span).is_some_and(|n| low <= n && n <= high),
+        }
+    })
+}
+
 /// The expression with its fields separated by one space, or `None` where it is not five fields
-/// of digits and `* / , -`.
+/// of digits and `* / , -` with every number in the range its field allows and no step of zero.
 ///
 /// Held to that alphabet because the expression is written into a crontab line: nothing else it
 /// could hold would be an instruction to the shell, and a name such as `mon` or a `@daily` is
-/// not read.
+/// not read. Held to the ranges because a value outside them is one the scheduler would reject
+/// or read in its own way after the entry was stored.
 fn checked_cron(expression: &str) -> Option<String> {
     let fields: Vec<&str> = expression.split_whitespace().collect();
-    if fields.len() != 5 {
+    if fields.len() != FIELD_RANGES.len() {
         return None;
     }
-    let plain = |field: &str| {
+    fields
+        .iter()
+        .zip(FIELD_RANGES)
+        .all(|(field, range)| field_in_range(field, range))
+        .then(|| fields.join(" "))
+}
+
+/// The expression with its fields separated by one space, or `None` where it is not five fields
+/// of digits and `* / , -`. The reading side of an entry: an entry stored before ranges were
+/// checked still loads, and the alphabet still keeps anything but a cron field out of the
+/// crontab line (COMPAT-001).
+fn stored_cron(expression: &str) -> Option<String> {
+    let fields: Vec<&str> = expression.split_whitespace().collect();
+    let plain = |field: &&str| {
         !field.is_empty()
             && field
                 .chars()
                 .all(|c| c.is_ascii_digit() || matches!(c, '*' | '/' | ',' | '-'))
     };
-    fields
-        .iter()
-        .all(|field| plain(field))
-        .then(|| fields.join(" "))
+    (fields.len() == FIELD_RANGES.len() && fields.iter().all(plain)).then(|| fields.join(" "))
 }
 
 /// A prompt an entry may hold: not empty, not so long that it is a file, and not one a one-shot
@@ -270,7 +325,7 @@ fn read_entry(id: &str, text: &str, prompt: String) -> Option<Entry> {
     for line in text.lines() {
         let (key, value) = line.split_once('=')?;
         match key {
-            "cron" => cron = checked_cron(value),
+            "cron" => cron = stored_cron(value),
             "dir" => directory = Some(PathBuf::from(value)),
             "mode" => mode = Mode::named(value),
             "scheduler" => scheduler = Scheduler::named(value),
@@ -664,6 +719,12 @@ fn next_id(store: &Path) -> String {
 fn forget(store: &Path, id: &str) {
     ignored(std::fs::remove_file(store.join(format!("{id}.entry"))));
     ignored(std::fs::remove_file(store.join(format!("{id}.prompt"))));
+    firing::Store::at(store).forget(id);
+}
+
+/// The files kept beside the entries, in the directory `list` reads them from.
+fn kept_beside(store: &Path) -> firing::Store {
+    firing::Store::at(store)
 }
 
 /// `bravebot schedule list`.
@@ -673,11 +734,13 @@ fn list() -> ExitCode {
         println!("{}", t!(schedule_none));
         return ExitCode::SUCCESS;
     }
+    let kept = store_to_read().map(|store| kept_beside(&store));
     let mut out = std::io::stdout().lock();
     for entry in &entries {
+        let paused = kept.as_ref().is_some_and(|kept| kept.is_paused(&entry.id));
         ignored(writeln!(
             out,
-            "{}",
+            "{}  {}",
             t!(
                 schedule_row,
                 id = entry.id.as_str(),
@@ -686,10 +749,137 @@ fn list() -> ExitCode {
                 directory = crate::progress::printable_path(&entry.directory),
                 limit = entry.mode.limit(),
                 prompt = search::clean(&entry.prompt, LONGEST_PROMPT)
-            )
+            ),
+            if paused {
+                t!(schedule_state_paused)
+            } else {
+                t!(schedule_state_active)
+            }
         ));
     }
     ExitCode::SUCCESS
+}
+
+/// The directory to write marks and questions in, and the entry `id`, for a command that changes
+/// what is kept beside an entry.
+fn writable_entry(id: &str) -> Result<(PathBuf, Entry), ExitCode> {
+    let entry = store_to_read()
+        .and_then(|store| entry_named(&store, id))
+        .ok_or_else(|| fail(Ending::Argument, t!(schedule_missing, id = id)))?;
+    match store() {
+        Some(store) => Ok((store, entry)),
+        None => Err(fail(Ending::Failed, t!(schedule_no_store))),
+    }
+}
+
+/// `bravebot schedule pause|resume <id>`: mark the entry paused or take the mark off. The
+/// crontab line stays; a firing of a paused entry is skipped by `run-now` (SCHEDULE-1).
+fn pause(id: &str, pausing: bool) -> ExitCode {
+    let (store, _) = match writable_entry(id) {
+        Ok(held) => held,
+        Err(code) => return code,
+    };
+    let kept = kept_beside(&store);
+    if kept.is_paused(id) == pausing {
+        return fail(
+            Ending::Argument,
+            if pausing {
+                t!(schedule_already_paused, id = id)
+            } else {
+                t!(schedule_not_paused, id = id)
+            },
+        );
+    }
+    let changed = if pausing {
+        kept.mark_paused(id)
+    } else {
+        kept.unmark_paused(id)
+    };
+    if changed.is_err() {
+        return fail(Ending::Failed, t!(schedule_failed));
+    }
+    println!(
+        "{}",
+        if pausing {
+            t!(schedule_paused_now, id = id)
+        } else {
+            t!(schedule_resumed, id = id)
+        }
+    );
+    ExitCode::SUCCESS
+}
+
+/// `bravebot schedule pending [<id>]`: the question each entry's last firing stopped at. Reads
+/// only, and prints the lines the firing wrote as they are.
+fn pending(only: Option<&String>) -> ExitCode {
+    let wanted: Vec<Entry> = entries()
+        .into_iter()
+        .filter(|entry| only.is_none_or(|id| &entry.id == id))
+        .collect();
+    if let Some(id) = only
+        && wanted.is_empty()
+    {
+        return fail(Ending::Argument, t!(schedule_missing, id = id.as_str()));
+    }
+    let kept = store_to_read().map(|store| kept_beside(&store));
+    let mut out = std::io::stdout().lock();
+    let mut shown = 0;
+    for entry in &wanted {
+        let Some(lines) = kept.as_ref().and_then(|kept| kept.pending(&entry.id)) else {
+            continue;
+        };
+        shown += 1;
+        ignored(writeln!(
+            out,
+            "{}",
+            t!(schedule_pending_header, id = entry.id.as_str())
+        ));
+        for line in lines {
+            ignored(writeln!(out, "  {line}"));
+        }
+    }
+    if shown == 0 {
+        ignored(writeln!(out, "{}", t!(schedule_pending_none)));
+    }
+    ExitCode::SUCCESS
+}
+
+/// `bravebot schedule clear <id>`: delete the question the entry's last firing stopped at. Nothing
+/// is read from the file and no answer is taken: the prompt is fixed when the entry is written, so
+/// a person who wants the run to go on with an answer removes the entry and adds it again with a
+/// prompt that holds the answer (SCHEDULE-3).
+fn clear(id: &str) -> ExitCode {
+    let (store, _) = match writable_entry(id) {
+        Ok(held) => held,
+        Err(code) => return code,
+    };
+    if kept_beside(&store).clear_pending(id) {
+        println!("{}", t!(schedule_cleared, id = id));
+    } else {
+        println!("{}", t!(schedule_nothing_to_clear, id = id));
+    }
+    ExitCode::SUCCESS
+}
+
+/// The stored entry the running process was fired for, when the variable `run-now` sets names one.
+/// A value that names no stored entry changes nothing.
+pub(crate) fn firing() -> Option<String> {
+    firing::named_by(std::env::var(FIRING_VARIABLE).ok(), |value| {
+        is_an_id(value)
+            && store_to_read()
+                .and_then(|store| entry_named(&store, value))
+                .is_some()
+    })
+}
+
+/// Keep the question a firing of `id` stopped at, where it stopped at one, and say so on stderr.
+pub(crate) fn record_firing(id: &str, asked: Option<&Asking>) {
+    if let Some(store) = bravebot_agent::home::writable().map(|state| state.join("schedules")) {
+        firing::record_firing(&firing::Store::at(&store), id, asked);
+    }
+    if asked.is_some() {
+        eprintln!("{}", t!(schedule_stopped_at_question, id = id));
+    }
 }
 
 /// `bravebot schedule remove <id>`.
@@ -741,6 +931,16 @@ fn session_of(result: &str) -> Option<String> {
     None
 }
 
+/// The arguments of the one-shot run an entry starts: the result flag, the mode flag the person
+/// typed when writing the entry, and the stored prompt as the one word after `-p`, unchanged.
+fn run_arguments(entry: &Entry) -> Vec<String> {
+    let mut arguments = vec!["--json".to_string()];
+    arguments.extend(entry.mode.flag().map(str::to_string));
+    arguments.push("-p".to_string());
+    arguments.push(entry.prompt.clone());
+    arguments
+}
+
 /// `bravebot schedule run-now <id>`: the entry's one-shot run, started now, and recorded.
 fn run_now(id: &str) -> ExitCode {
     let Some(store) = store_to_read() else {
@@ -749,6 +949,24 @@ fn run_now(id: &str) -> ExitCode {
     let Some(entry) = entry_named(&store, id) else {
         return fail(Ending::Argument, t!(schedule_missing, id = id));
     };
+    // The crontab line of a paused entry stays, so the firing that reaches here is skipped
+    // (SCHEDULE-1). A person who wants the run now resumes the entry first.
+    let kept = kept_beside(&store);
+    if kept.is_paused(id) {
+        return fail(Ending::Refused, t!(schedule_skipped_paused, id = id));
+    }
+    // Held until this function returns, and released by the operating system if the process is
+    // killed. A firing that finds the previous one still running is skipped (SCHEDULE-4).
+    let _hold = match kept.hold(id) {
+        Ok(Some(held)) => held,
+        Ok(None) => {
+            println!("{}", t!(schedule_skipped_running, id = id));
+            return ExitCode::SUCCESS;
+        }
+        Err(_) => return fail(Ending::Failed, t!(schedule_failed)),
+    };
+    // The question an earlier firing stopped at is no longer the one this run is waiting on.
+    kept.clear_pending(id);
     let Ok(me) = bravebot_sandbox::programs::Resolved::own_executable() else {
         return fail(Ending::Failed, t!(schedule_failed));
     };
@@ -759,11 +977,10 @@ fn run_now(id: &str) -> ExitCode {
         bravebot_sandbox::programs::Inherits::All,
         bravebot_sandbox::programs::SearchPath::Inherited,
     );
-    command.arg("--json");
-    command.args(entry.mode.flag());
+    command.args(run_arguments(&entry));
+    // Names the entry, so the run stops at its first question and keeps it (SCHEDULE-2).
+    command.env(FIRING_VARIABLE, id);
     command
-        .arg("-p")
-        .arg(&entry.prompt)
         .current_dir(&entry.directory)
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -892,6 +1109,134 @@ mod tests {
             "",
         ] {
             assert_eq!(checked_cron(refused), None, "{refused}");
+        }
+    }
+
+    #[test]
+    fn an_entry_stored_with_a_field_outside_its_range_still_reads() {
+        let entry = read_entry(
+            "1",
+            "cron=* * 0 * *\ndir=/work\nmode=read\n",
+            "hello".to_string(),
+        );
+        assert_eq!(entry.map(|e| e.cron).as_deref(), Some("* * 0 * *"));
+        assert!(read_entry("1", "cron=* * $(x) * *\ndir=/w\nmode=read\n", String::new()).is_none());
+        assert!(read_entry("1", "cron=* * * *\ndir=/w\nmode=read\n", String::new()).is_none());
+    }
+
+    #[test]
+    fn a_cron_field_outside_its_range_or_with_a_zero_step_is_refused() {
+        for kept in [
+            "0 0 1 1 0",
+            "59 23 31 12 7",
+            "*/5 */2 */3 */4 */7",
+            "0-59 0-23 1-31 1-12 0-7",
+            "0,30 9-17 * * 1-5",
+        ] {
+            assert_eq!(checked_cron(kept).as_deref(), Some(kept), "{kept}");
+        }
+        for refused in [
+            "60 * * * *",
+            "* 24 * * *",
+            "* * 0 * *",
+            "* * 32 * *",
+            "* * * 0 *",
+            "* * * 13 *",
+            "* * * * 8",
+            "*/0 * * * *",
+            "* * * * */0",
+            "5-1 * * * *",
+            "1-60 * * * *",
+            "1- * * * *",
+            "-1 * * * *",
+            "*/ * * * *",
+            "1,,2 * * * *",
+            "1,60 * * * *",
+            "*/-1 * * * *",
+            "00000 * * * *",
+        ] {
+            assert_eq!(checked_cron(refused), None, "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_stored_run_carries_one_of_three_modes_and_never_an_approval_flag() {
+        // `add` reads the cron, the prompt and the directory and refuses any other word, so the
+        // flag that lets a program approve a write is not stored (SCHEDULE-6).
+        let base = ["--cron", "0 9 * * *", "--prompt", "hi"];
+        for flag in [
+            "--approve-input-lines",
+            "--auto",
+            "--bypass-approvals-and-sandbox",
+        ] {
+            let words: Vec<String> = base.iter().chain(&[flag]).map(|s| s.to_string()).collect();
+            assert!(read_addition(&words, Mode::Read).is_none(), "{flag}");
+        }
+        assert_eq!(Mode::Read.flag(), None);
+        assert_eq!(Mode::AcceptEdits.flag(), Some(crate::flags::ACCEPT_EDITS));
+        assert_eq!(Mode::Bypass.flag(), Some(crate::flags::SKIP_PERMISSIONS));
+    }
+
+    #[test]
+    fn the_stored_prompt_is_the_one_word_after_dash_p_unchanged() {
+        // The prompt is the person's own words (CLI-42): it reaches the run as one argument, with
+        // nothing added to it, left out of it or read out of it.
+        for prompt in [
+            "list merged pull requests",
+            "  spaces and 'quotes' and \"doubles\" ",
+            "line one\nline two $(id) `id` ; rm -rf / %",
+            "ünïcode ✓",
+        ] {
+            for mode in [Mode::Read, Mode::AcceptEdits, Mode::Bypass] {
+                let entry = Entry {
+                    id: "1".to_string(),
+                    cron: "0 9 * * *".to_string(),
+                    directory: PathBuf::from("/work"),
+                    mode,
+                    scheduler: Scheduler::Crontab,
+                    prompt: prompt.to_string(),
+                };
+                let arguments = run_arguments(&entry);
+                let at = arguments.len() - 2;
+                assert_eq!(arguments[at], "-p", "{prompt:?}");
+                assert_eq!(arguments[at + 1], prompt, "{prompt:?}");
+                assert_eq!(arguments[0], "--json");
+                assert_eq!(arguments.len(), 3 + usize::from(mode.flag().is_some()));
+            }
+        }
+    }
+
+    #[test]
+    fn a_typed_line_stores_no_approval_flag_whatever_mode_it_carries() {
+        // The line `main` hands `add` carries the mode flags in `Typed` and the words after `add`.
+        // The mode a `Typed` gives is one of the three, and the flag that lets a program approve a
+        // write is refused in the words under each of them and is no mode's flag (SCHEDULE-6).
+        let base = ["--cron", "0 9 * * *", "--prompt", "hi"];
+        let typed_lines = [
+            Typed {
+                bypass: None,
+                starts_in: None,
+            },
+            Typed {
+                bypass: Some(crate::flags::SKIP_PERMISSIONS),
+                starts_in: None,
+            },
+            Typed {
+                bypass: None,
+                starts_in: Some(bravebot_agent::PermissionMode::AcceptEdits),
+            },
+        ];
+        for typed in &typed_lines {
+            let mode = typed.mode().expect("one of the three modes");
+            assert_ne!(mode.flag(), Some("--approve-input-lines"));
+            let plain: Vec<String> = base.iter().map(|s| s.to_string()).collect();
+            assert_eq!(read_addition(&plain, mode).map(|a| a.mode), Some(mode));
+            let approving: Vec<String> = base
+                .iter()
+                .chain(&["--approve-input-lines"])
+                .map(|s| s.to_string())
+                .collect();
+            assert!(read_addition(&approving, mode).is_none());
         }
     }
 

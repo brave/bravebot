@@ -56,14 +56,16 @@ data, so it is used everywhere legitimately, and only a reader can say which is 
 that count and `make check-spec` fails until somebody records it, which puts the question in front
 of a reviewer without answering it.
 
-Nine places do branch on untrusted bytes, deliberately. Three are in the kernel, the fourth is
+Ten places do branch on untrusted bytes, deliberately. Three are in the kernel, the fourth is
 the search in `bravebot-agent`, the fifth is the wording of the `lsp` diagnostics sentence from
 the counts a server computed, in `crates/agent/src/lsp.rs`, the sixth is `read_git`, also in
 `bravebot-agent`, the seventh is the text-or-binary sniff and decoding of a read of an unvouched
 file, in `Workspace::survey`, `Workspace::read` and `Workspace::page`, the eighth is the
 choice of which parts of a tool result are taken, in `ToolResult::output` and `ContentBlock::picture`
-in `crates/mcp/src/protocol.rs`, and the ninth is the read of a processor's answer for one number,
-in `bravebot_choice::number_in` in `crates/choice/src/number.rs`. All nine are named under
+in `crates/mcp/src/protocol.rs`, the ninth is the read of a processor's answer for one number,
+in `bravebot_choice::number_in` in `crates/choice/src/number.rs`, and the tenth is the trigger
+listener's reading of a request's framing, path, signature and body length, in
+`crates/cli/src/trigger.rs`. All ten are named under
 Known costs in [specs/labels.md](../specs/labels.md), because an unlisted exception is
 indistinguishable from a violation. A further one that mints a witness of its own moves a pinned count and so cannot arrive
 quietly. One added inside a function that already holds a counted `declassify` moves nothing: the
@@ -102,8 +104,15 @@ the planner for any value of it, or a reader whose failure depends on what the a
 violation of shape 1. A second function that releases an answer's text to another crate's function
 is one of shape 3 and moves a pinned count. A `Carried` turned into a number in `bravebot-core` or
 `bravebot-agent` is one of shape 3 as well, and moves the count of `Carried::into_wire`.
+The tenth is the trigger listener in `crates/cli/src/trigger.rs`, which is not the driver and holds
+no `declassify`. It decides from the request line and headers only: the framing refusals of
+`parse_head` (method, version, `Transfer-Encoding`, `Content-Length`, a path that is not a name),
+the `Content-Length` against the cap, the path as a name among the person's own entries, and the
+signature against the person's secret. The body is carried to the run's standard input and read by
+nothing, so a branch on any byte of the body, or a header or path suffix that selects a trigger, an
+event, a flag, a directory or a limit, is a violation of shape 1.
 
-A count that comes from file-type metadata is not one of the nine. A listing or a search tells the
+A count that comes from file-type metadata is not one of the ten. A listing or a search tells the
 planner how many symbolic links its walk did not enter. The walk reads each directory entry's file
 type, which is not file content, and counts the links. The planner is given a number with no name
 and nothing to branch on, and nothing in the driver branches on it: the count is released beside

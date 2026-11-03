@@ -748,7 +748,10 @@ the key holds where a reviewer reads it, and the audit can hold the code to it.
 ### PROMPT-9: where nobody can be asked, the answer is no
 
 A one-shot run refuses effects rather than applying them unseen, and declines every question
-rather than inventing an answer. A closed channel refuses a run and answers no
+rather than inventing an answer. The exception is a run given `--input-format lines` and
+`--approve-input-lines` by the person, which puts each write, run and fetch to the program sending
+its lines and applies the one call that program approves ([cli.md](cli.md#CLI-36)). It puts that
+program no other permission. A closed channel refuses a run and answers no
 question, and it refuses to promote a slot however the check that read it answered: a word from a
 model is not a person having read something. A plan is refused too, so a manifest run with nobody to ask stops before its first step
 rather than walking a program nobody read.
@@ -778,6 +781,7 @@ it is not the check this paragraph's first sentence rules out.
 `verified-by: bravebot_tui::remote_confirm::a_refusal_travels_back_too`
 `verified-by: bravebot_agent::turn::an_unattended_run_declines_every_question_in_the_series`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_reaches_the_planner_unasked`
+`verified-by: bravebot_cli::running::a_program_approves_a_write_it_was_shown_and_declines_another`
 `verified-by: bravebot_agent::manifest::a_plan_nobody_approved_runs_nothing`
 `verified-by: bravebot_cli::running::an_auto_run_runs_a_command_the_classifier_allows_and_refuses_one_it_does_not`
 

@@ -158,13 +158,14 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
 - **The model being wrong.** Approval prompts exist because the planner can propose something you do
   not want, and reviewing the diff is the mechanism that catches it.
 
-## Nine deliberate exceptions
+## Ten deliberate exceptions
 
-Brave Bot looks at untrusted bytes to decide something in nine places, three in the policy layer,
+Brave Bot looks at untrusted bytes to decide something in ten places, three in the policy layer,
 four in the agent, the search, the diagnostics sentence, reading a repository's history and telling
 a text file from a binary one, one in the MCP client, the choice of which parts of a tool
-result are taken, and one in the crate that reads a processor's answer for the number it chose, all
-written down rather than left to be found.
+result are taken, one in the crate that reads a processor's answer for the number it chose, and one
+in the listener `bravebot trigger serve` starts, which decides from a request's line and headers
+and never from its body, all written down rather than left to be found.
 
 **Splitting a processor's answer.** A processor returns one piece of text holding two things: a remark
 for the person watching, and the document to be written. It marks where the document begins, and the

@@ -67,9 +67,25 @@ pub(crate) fn print_help() {
             t!(cli_usage_sessions_import),
         ),
         ("bravebot stats [options]", t!(cli_usage_stats)),
+        ("bravebot schedule <verb> [<id>]", t!(cli_usage_schedule)),
         (
             "bravebot skill eval <name> [options]",
             t!(cli_usage_skill_eval),
+        ),
+        (
+            "bravebot trigger add <name> --event <event> [--workspace <dir>] [--max-concurrent <n>] [--max-per-hour <n>] -- <prompt>",
+            t!(cli_usage_trigger_add),
+        ),
+        ("bravebot trigger list [--json]", t!(cli_usage_trigger_list)),
+        (
+            "bravebot trigger remove <name>",
+            t!(cli_usage_trigger_remove),
+        ),
+        ("bravebot trigger pending", t!(cli_usage_trigger_pending)),
+        ("bravebot trigger clear <name>", t!(cli_usage_trigger_clear)),
+        (
+            "bravebot trigger serve [--port <n>]",
+            t!(cli_usage_trigger_serve),
         ),
         ("bravebot --bg <prompt>", t!(cli_usage_bg)),
         ("bravebot attach <id>", t!(cli_usage_attach)),
@@ -175,6 +191,7 @@ pub(crate) fn print_help() {
         ("--json-stream", t!(cli_option_json_stream)),
         ("--input-format <format>", t!(cli_option_input_format)),
         ("--trust-input-lines", t!(cli_option_trust_input_lines)),
+        ("--approve-input-lines", t!(cli_option_approve_input_lines)),
         ("--output-schema <path>", t!(cli_option_output_schema)),
         ("--goal <condition>", t!(cli_option_goal)),
         ("--max-rounds <n>", t!(cli_option_max_rounds)),

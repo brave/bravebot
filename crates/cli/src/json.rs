@@ -260,6 +260,40 @@ pub fn question_event(id: u64, asking: &Asking) -> String {
     )
 }
 
+/// A write, run or fetch put to whatever sends the input lines, when the person typed
+/// `--approve-input-lines` (CLI-36).
+///
+/// `details` are the words that say what the call is, as the kernel released them to be shown to
+/// somebody, and `choices` are the two the driver fixed. `id` is what an `answer` line names, and
+/// the choice is answered by its position in `choices`.
+pub fn permission_event(
+    id: u64,
+    kind: &str,
+    details: &[(&str, String)],
+    choices: &[&str],
+) -> String {
+    let call = object(
+        &details
+            .iter()
+            .map(|(name, value)| (*name, quoted(value)))
+            .collect::<Vec<_>>(),
+    );
+    let choices = object_list(
+        choices
+            .iter()
+            .map(|label| object(&[("label", quoted(label))])),
+    );
+    event(
+        "permission",
+        vec![
+            ("id", id.to_string()),
+            ("kind", quoted(kind)),
+            ("call", call),
+            ("choices", choices),
+        ],
+    )
+}
+
 /// A line of the input stream was not taken (CLI-36).
 ///
 /// Names the line by its number and the cause by a fixed word, and nothing of what the line said:

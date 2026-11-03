@@ -164,7 +164,9 @@ EOF
 turn over the conversation the last one left, a `steer` reaches the turn that is running, an `answer`
 replies to a question the agent asked, and a `stop` ends the turn in flight. Each turn ends with its
 own result object. Where nobody typed `--trust-input-lines`, the text of a line is a program's words
-and the agent is given a reference to it, never the words. [The reference](../reference/cli.md#--input-format-lines)
+and the agent is given a reference to it, never the words. With `--approve-input-lines` as well, the
+program is also shown each write, command and fetch that would ask you, and approves or declines it
+with an `answer`. [The reference](../reference/cli.md#--input-format-lines)
 has the lines and the events.
 
 ## Sending a follow-up to an earlier run
@@ -196,6 +198,55 @@ change one key without restating a whole configuration.
 Given twice, the last file wins. A path naming no file, and a blank path, are refused by name and the
 run stops before it starts. A named file that did not parse leaves the layers below it in force, and is
 visible by its absence from what [`doctor`](../reference/cli.md) lists.
+
+## Running on a schedule
+
+```sh
+bravebot schedule add --cron "0 9 * * 1-5" --prompt "summarize the pull requests merged yesterday"
+bravebot schedule list
+bravebot schedule history 1
+```
+
+`schedule add` writes an entry and one line in your crontab that runs `bravebot schedule run-now <id>`
+at the times the expression gives. Each run is a one-shot run in the entry's directory (this one
+unless you gave `--dir`), with the stored prompt as its task, and it is recorded as a session like
+any other run. Nothing of bravebot's keeps running between runs, and a background job a run started
+ends with it. `add` has to be typed at a terminal, so a command a session runs cannot add one.
+
+A run has nobody to ask, so it reads and reports, and writes only if you typed `--accept-edits` or
+`--dangerously-skip-permissions` when you ran `add`. A run that the planner asks a question stops at
+the first one, exits with status 4 and keeps the question for `schedule pending`, which `schedule
+clear <id>` deletes. `schedule pause <id>` keeps an entry and its line and stops it from running, and
+`schedule resume <id>` lets it run again. A firing that finds the previous firing of the same entry
+still running is skipped. `history` lists each run with its exit status, the session it recorded and
+the tokens it spent. [The reference](../reference/cli.md#schedule) has the options.
+
+## Running on an event
+
+```sh
+bravebot trigger add on-push --event push -- "summarise this delivery and say whether it needs a person"
+bravebot trigger list
+bravebot trigger serve
+```
+
+`trigger add` stores the prompt under a name and an event and prints a secret once. `trigger serve`
+listens on `127.0.0.1:7471`. A sender signs the event and the body with the secret and posts them to
+`/on-push` with the header `X-Bravebot-Signature: sha256=<hex>`; `add` prints how. A delivery that
+verifies starts the prompt as a one-shot run in the directory you named. The body of the delivery
+is on the run's standard input, untrusted and private, so the planner is told that a delivery
+arrived and reads the content only through a processor, never as instructions.
+
+Every delivery that does not verify, names a trigger that is not stored, or is malformed gets the
+same `404` page and starts nothing. Each trigger runs one delivery at a time and at most six an
+hour unless `add` was given `--max-concurrent` or `--max-per-hour`, and a delivery over the limit
+is answered `429`. A run has nobody to ask, so it reads and reports, and writes only if you typed
+`--dangerously-skip-permissions` when you ran `add`. A run that the planner asks a question stops at
+the first one, exits with status 4 and keeps the question for `trigger pending`, which `trigger clear
+<name>` deletes.
+
+The listener is on the loopback address only. To receive a delivery from a service on another
+machine, forward a port to it yourself. [The reference](../reference/cli.md#trigger) has the options
+and the answers.
 
 ## Planning the whole run first
 
@@ -279,6 +330,7 @@ the wrong thing to search for.
 | `--json-stream` | one event per line on stdout as the run goes, then the result object |
 | `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line; implies `--json-stream` |
 | `--trust-input-lines` | treat those lines as your own words and not a program's |
+| `--approve-input-lines` | let the program sending those lines approve or decline each write, run or fetch |
 | `--output-schema <path>` | hold the reply to a JSON Schema; a reply off it ends on status 6, one that conforms is also `structured` under `--json` |
 | `--goal <condition>` | keep working until a judge says the condition holds; a condition that never does ends on status 7 |
 | `--max-rounds <n>` | stop the run when the agent asks for a round of tool calls past this many; ends on status 8 |

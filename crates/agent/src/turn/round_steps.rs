@@ -1599,6 +1599,7 @@ pub(super) fn tools_for_a_call<'a>(
         mcp: state.mcp.as_ref().map(|(offer, _)| offer),
         jobs: &mut *state.jobs,
         permission_mode: task.permission_mode.clone(),
+        vouched_channel: task.vouched_channel,
         auto_vetting: task.auto_vetting,
         run_directory: &mut state.run_directory,
         confined_failures: &mut state.confined_failures,
