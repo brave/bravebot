@@ -155,6 +155,9 @@ pub struct Request<'a> {
     /// place of what the repository's configuration asks for. A directory of new files is then
     /// not one entry that names no file in it.
     pub every_untracked: bool,
+    /// Which of the tools an answer's sentences point at the turn's list holds, so a sentence
+    /// names `run` or `read_file` only where the planner has it.
+    pub beside: crate::tools::Beside,
     pub deadline: Instant,
 }
 
@@ -311,6 +314,7 @@ impl Repository {
             listing: None,
             listing_partial: false,
             every_untracked: request.every_untracked,
+            beside: request.beside,
         };
         let filter = match request.path {
             None => None,
@@ -496,6 +500,7 @@ mod tests {
             since: None,
             until: None,
             every_untracked: false,
+            beside: crate::tools::Beside::every(),
             deadline: later(),
         }
     }
@@ -2688,6 +2693,50 @@ mod tests {
         )));
     }
 
+    /// TOOL-6. The note for a file past the size cap points at `read_file` and `run` only where
+    /// the turn's list holds them, and says only the size where it holds neither. The control is
+    /// the full list, whose text is what was written before the list was consulted. The
+    /// regression it rejects is a note that names both tools whatever the turn was offered.
+    #[test]
+    fn the_note_for_a_file_past_the_size_cap_names_only_the_tools_the_turn_holds() {
+        let repo = Repo::new("large-beside");
+        let size = usize::try_from(MAX_BLOB).expect("fits") + 1;
+        let large = repo.object(Kind::Blob, &vec![b'x'; size]);
+        let commit = repo.commit(repo.tree(&[("100644", "big", large)]), &[], T1, "big");
+        repo.point("refs/heads/main", commit);
+        let every = crate::tools::Beside::every();
+        for (beside, said) in [
+            (every, "; use read_file on the working copy, or run"),
+            (
+                crate::tools::Beside::every().without(crate::tools::Named::Run),
+                "; use read_file on the working copy",
+            ),
+            (
+                crate::tools::Beside::every().without(crate::tools::Named::ReadFile),
+                "; use run",
+            ),
+            (
+                crate::tools::Beside::every()
+                    .without(crate::tools::Named::Run)
+                    .without(crate::tools::Named::ReadFile),
+                "",
+            ),
+        ] {
+            let mut asked = request(Query::Show, Some("HEAD:big"), None);
+            asked.beside = beside;
+            let answer = repo
+                .opened()
+                .expect("opened")
+                .answer(&asked, &|_| false)
+                .expect("answered");
+            assert_eq!(
+                answer.text,
+                format!("(big is {size} bytes, more than read_git shows{said})\n"),
+                "{beside:?}"
+            );
+        }
+    }
+
     /// A submodule's commit lives in another repository, which read_git does not open, so it is
     /// shown as the id git records for it and never read as a commit here.
     #[test]
@@ -3512,6 +3561,53 @@ mod tests {
                 answer.contains("\n   b.bin\n"),
                 "core.autocrlf was not read: {answer}"
             );
+        }
+
+        /// TOOL-6. The heading over the files git status would convert points at `run` only where
+        /// the turn's list holds it. The control is the full list, whose line is the one written
+        /// before the list was consulted. The regression it rejects is a heading that names `run`
+        /// whatever the turn was offered.
+        #[test]
+        fn the_not_compared_heading_names_run_only_where_the_turn_holds_it() {
+            let repo = Repo::new("status-attributes-beside");
+            let text_blob = repo.blob("line\n");
+            let attributes = repo.blob("*.txt text=auto\n");
+            commit(
+                &repo,
+                &[(".gitattributes", attributes), ("a.txt", text_blob)],
+            );
+            write(&repo, ".gitattributes", "*.txt text=auto\n");
+            write(&repo, "a.txt", "LINE\n");
+            index(
+                &repo,
+                &[
+                    (".gitattributes", FILE, attributes, 0, false),
+                    ("a.txt", FILE, text_blob, 0, false),
+                ],
+            );
+            let said = |run| {
+                let mut asked = request(Query::Status, None, None);
+                asked.beside = match run {
+                    true => crate::tools::Beside::every(),
+                    false => crate::tools::Beside::every().without(crate::tools::Named::Run),
+                };
+                repo.opened()
+                    .expect("opened")
+                    .answer(&asked, &|_| false)
+                    .expect("answered")
+                    .text
+            };
+            let with = said(true);
+            assert!(
+                with.contains("changed while being read; use run with git status for these:\n"),
+                "{with}"
+            );
+            let without = said(false);
+            assert!(
+                without.contains("changed while being read:\n   a.txt\n"),
+                "{without}"
+            );
+            assert!(!without.contains("run"), "{without}");
         }
 
         #[test]

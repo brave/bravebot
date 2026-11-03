@@ -322,6 +322,7 @@ impl Workspace {
                 since: None,
                 until: None,
                 every_untracked: true,
+                beside: crate::tools::Beside::every(),
                 deadline,
             };
             let withheld = |inside: &str| self.denies_in_repository(policy, ".", inside);

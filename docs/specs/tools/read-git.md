@@ -316,7 +316,9 @@ A log lists 20 commits, a list of tags 20 tags and a search 20 lines unless the 
 count, and never more than 200. An answer holds at most 2,000 lines and each line at most 2,000
 characters. A file past 1 MiB is described by its size, read from the object's header alone, and
 not searched. An answer stops at the search deadline. An answer cut
-by any of these says it was cut, and one that was not makes no such claim.
+by any of these says it was cut, and one that was not makes no such claim. The description of a file
+past the size cap names what can still read it from the tools the turn's list holds: `read_file`
+on the working copy, `run`, both, or neither ([TOOL-6](tool-surface.md#TOOL-6)).
 
 **Why.** A repository's history is as large as the repository, and a planner handed part of it as
 though it were the whole draws conclusions from what is missing.
@@ -352,6 +354,8 @@ file is a type change, and a path under a directory that is now a symbolic link 
 than followed. Ignore files are read as git reads them, per directory with `info/exclude` beneath
 them, and so are attributes files. A file an attribute or `core.autocrlf` would convert on its way
 into the index, and a submodule, is listed under a heading as not compared rather than guessed at.
+The heading points at `git status` through `run` only where the turn's list holds `run`
+([TOOL-6](tool-surface.md#TOOL-6)).
 An ignore or attributes file the trust map withholds is not guessed at either: nothing untracked
 beneath a withheld ignore file is listed, though an untracked directory holding one is, as git lists
 it for the ignore file itself, and a withheld attributes file leaves every file beneath its
@@ -390,6 +394,8 @@ and an index this reader does not parse in full lists entries it cannot see.
 `verified-by: bravebot_agent::git::a_git_file_makes_a_nested_repository_and_a_quote_or_backslash_is_escaped`
 `verified-by: bravebot_agent::git::a_withheld_attributes_or_ignore_file_is_not_guessed_at`
 `verified-by: bravebot_agent::git::a_withheld_rule_counts_only_where_a_file_it_withholds_is_read`
+`verified-by: bravebot_agent::git::the_not_compared_heading_names_run_only_where_the_turn_holds_it`
+`verified-by: bravebot_agent::git::the_note_for_a_file_past_the_size_cap_names_only_the_tools_the_turn_holds`
 `verified-by: bravebot_agent::turn::read_git_answers_status_and_refuses_a_query_off_the_list`
 
 <a id="GIT-11"></a>

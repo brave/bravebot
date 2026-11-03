@@ -42,6 +42,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
+/// Whether the turn's tool list holds `request_path` (TOOL-6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestPath {
+    Listed,
+    Unlisted,
+}
+
 /// What the proxies decided for one foreground run (SANDBOX-24).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostsSeen {
@@ -116,6 +123,11 @@ pub struct Confinement {
     /// confinement exists only where runs are confined in a mode other than `off`, so the cause
     /// left for it to be off is a workspace that is not trusted.
     requests_offered: bool,
+    /// Whether the turn's tool list holds `request_path`, which decides whether a failure sentence
+    /// names it (TOOL-6). On unless the caller says the list lacks it, so the sentence is the one
+    /// written for a turn offered every tool. A `--tools run` turn, a delegate and a definition
+    /// whose tools line leaves it out are not offered it.
+    request_path: RequestPath,
     /// The key the person chose for each owner's repositories (`git.identities`), offered by a
     /// `git` stage whose argv names an ssh address of that owner (SANDBOX-16).
     identities: Identities,
@@ -128,6 +140,11 @@ pub struct Confinement {
 }
 
 impl Confinement {
+    /// Whether a failure sentence names `request_path`, which the turn's tool list decides.
+    fn names_request_path(&self) -> bool {
+        self.request_path == RequestPath::Listed
+    }
+
     /// The confinement for a session on this machine, or `None` where the platform has no base to
     /// build one on. Every platform the agent runs on has one.
     ///
@@ -218,6 +235,7 @@ impl Confinement {
             host_grants: Vec::new(),
             requested: Vec::new(),
             requests_offered: false,
+            request_path: RequestPath::Listed,
             identities: Identities::default(),
             chosen_keys: Vec::new(),
             #[cfg(test)]
@@ -756,6 +774,18 @@ impl Confinement {
     #[must_use]
     pub fn with_requests_offered(mut self, offered: bool) -> Self {
         self.requests_offered = offered;
+        self
+    }
+
+    /// This confinement with whether the turn's tool list holds `request_path`, which decides
+    /// whether a failure sentence names it (TOOL-6).
+    #[must_use]
+    pub fn with_request_path_listed(mut self, listed: bool) -> Self {
+        self.request_path = if listed {
+            RequestPath::Listed
+        } else {
+            RequestPath::Unlisted
+        };
         self
     }
 
@@ -1486,7 +1516,11 @@ impl Confinement {
             "{}{source}{refusal}{}{commit}{git}{launch}{listing}{}",
             self.reach(steps),
             self.identity_sentence(steps, unconfined_offered, environment),
-            credential_locations_sentence(self.mode, self.requests_offered),
+            credential_locations_sentence(
+                self.mode,
+                self.requests_offered,
+                self.names_request_path()
+            ),
         )
     }
 
@@ -1739,19 +1773,30 @@ impl Confinement {
         let rules = match requested_paths.allow_read + requested_paths.allow_write {
             0 => rules,
             asked => format!(
-                "{rules} The person also let programs reach {asked} path{} through request_path \
+                "{rules} The person also let programs reach {asked} path{} through {} \
                  this session.",
                 if asked == 1 { "" } else { "s" },
+                if self.names_request_path() {
+                    "request_path"
+                } else {
+                    "a request"
+                },
             ),
         };
         if self.reads_the_machine() {
             let writes = match (self.writes_without_a_request(), self.mode) {
-                (true, _) => "write every path a request_path with write set would be granted, \
+                (true, _) => format!(
+                    "write every path {} would be granted, \
                      which is everything the account can write except the places that hold a \
                      credential and the person's own denyRead and denyWrite paths, with no new \
                      entry made directly in the home directory, a directory above it, or a \
-                     directory that holds a credential location"
-                    .to_string(),
+                     directory that holds a credential location",
+                    if self.names_request_path() {
+                        "a request_path with write set"
+                    } else {
+                        "a request for write access"
+                    },
+                ),
                 (false, SandboxMode::ReadOnly) => format!(
                     "write the temporary directory and the paths the person's own `allowWrite` \
                      entries and remembered write grants name, and nothing else of {} or the \
@@ -1807,7 +1852,10 @@ impl Confinement {
     /// The same words follow every failure of the line, the exit code not among its inputs.
     fn menu_sentence(&self) -> String {
         match self.names_requests() {
-            true => format!(" {}", requests_menu_sentence(self.mode)),
+            true => format!(
+                " {}",
+                requests_menu_sentence(self.mode, self.names_request_path())
+            ),
             false => String::new(),
         }
     }
@@ -2130,12 +2178,25 @@ pub fn stated_to_the_planner(
     mode: SandboxMode,
     requests_offered: bool,
 ) -> Option<String> {
-    let said = stated(
+    stated_to_the_planner_for(confine_runs, mode, requests_offered, true)
+}
+
+/// [`stated_to_the_planner`] for a turn whose list holds `request_path` (`request_path_listed`) or
+/// does not. Where it does not, no sentence names the tool and each says what the person can do
+/// instead, or nothing (TOOL-6).
+pub fn stated_to_the_planner_for(
+    confine_runs: bool,
+    mode: SandboxMode,
+    requests_offered: bool,
+    request_path_listed: bool,
+) -> Option<String> {
+    let said = stated_listing(
         confine_runs,
         Prelude::current(),
         bravebot_config::run_network(),
         mode,
         requests_offered,
+        request_path_listed,
     )?;
     Some(with_temporary_held_back_said(
         said,
@@ -2153,14 +2214,21 @@ pub fn stated_to_the_planner(
 /// of the file tools, of `scopes` or of `unconfined`: the first two do not apply to programs that
 /// start with no profile, and the last two are accepted and ignored there (SANDBOX-26). It is built
 /// from the two arguments and nothing a program printed or a file held.
+///
+/// A turn whose list lacks `request_path` (`request_path_listed`) is told nothing of it, since a
+/// tool it cannot call needs no refusal: it gets no sentence, and a mode that confines gets the
+/// text without the sentences that name the tool.
 pub fn stated_in_the_description(
     confine_runs: bool,
     mode: SandboxMode,
     requests_offered: bool,
+    request_path_listed: bool,
 ) -> Option<String> {
     match !confine_runs || mode == SandboxMode::Off {
-        true => Some(REQUEST_PATH_REFUSED_SENTENCE.to_string()),
-        false => stated_to_the_planner(confine_runs, mode, requests_offered),
+        true => request_path_listed.then(|| REQUEST_PATH_REFUSED_SENTENCE.to_string()),
+        false => {
+            stated_to_the_planner_for(confine_runs, mode, requests_offered, request_path_listed)
+        }
     }
 }
 
@@ -2180,6 +2248,9 @@ const REQUEST_PATH_REFUSED_SENTENCE: &str =
 /// named, is now refused. A turn that confines none of its runs was never told of a boundary, so it
 /// is told nothing.
 ///
+/// `request_path_listed` says the turn's list holds `request_path`. Where it does not, the notice
+/// for `off` does not say the tool is now refused, and a confining mode is stated without it.
+///
 /// Built from the two modes and the platform alone, so it carries nothing a program printed or a
 /// file held.
 pub fn change_notice(
@@ -2187,23 +2258,34 @@ pub fn change_notice(
     from: SandboxMode,
     to: SandboxMode,
     requests_offered: bool,
+    request_path_listed: bool,
 ) -> Option<String> {
     if !confine_runs || from == to {
         return None;
     }
     let said = match to {
-        SandboxMode::Off => " Programs `run` starts from now on start with no sandbox profile, so \
-             the limits its description states do not apply to them. The `request_path` tool is \
-             now refused and nobody is asked."
-            .to_string(),
-        mode => stated_to_the_planner(confine_runs, mode, requests_offered)
-            .map(|stated| {
-                format!(
-                    " It applies to the programs `run` starts from now on, in place of anything \
+        SandboxMode::Off => format!(
+            " Programs `run` starts from now on start with no sandbox profile, so the limits its \
+             description states do not apply to them.{}",
+            if request_path_listed {
+                " The `request_path` tool is now refused and nobody is asked."
+            } else {
+                ""
+            },
+        ),
+        mode => stated_to_the_planner_for(
+            confine_runs,
+            mode,
+            requests_offered,
+            request_path_listed,
+        )
+        .map(|stated| {
+            format!(
+                " It applies to the programs `run` starts from now on, in place of anything \
                      the `run` description says of them. {stated}"
-                )
-            })
-            .unwrap_or_default(),
+            )
+        })
+        .unwrap_or_default(),
     };
     Some(format!(
         "The user changed the sandbox mode to `{}` while this turn was running.{said} A program \
@@ -2246,6 +2328,12 @@ const READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location su
      read is asked for with the `request_path` tool: the person is asked, and a yes lasts for this \
      session. A request for a path to write is refused in this mode before anyone is asked.";
 
+/// The fixed text of [`CREDENTIAL_LOCATIONS_SENTENCE`] up to the sentence that names `request_path`,
+/// which is all of it for a turn whose list lacks that tool, under either mode.
+const CREDENTIAL_LOCATIONS_WITHOUT_REQUEST_PATH_SENTENCE: &str = " A credential location such as \
+     `~/.ssh`, `~/.aws` or `~/.kube` cannot be added with `/add-dir` or `--add-dir`. Where the \
+     mode accepts a request, a credential scope is how a line reaches one.";
+
 /// Said in place of the sentences that name the `scopes` menu and `request_path` where the session
 /// would accept neither (SANDBOX-19, PATHREQ-5). Names the routes the person has instead, and no
 /// argument the session would turn down.
@@ -2254,16 +2342,22 @@ const READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE: &str = " A credential location su
 /// reached: a description or a failure sentence is written only for a turn that confines its runs
 /// in a mode other than `off`. Under `read-only` a directory is added to read, and a request to
 /// read a path is the one a trusted workspace accepts (SANDBOX-22).
-fn requests_refused_sentence(mode: SandboxMode) -> String {
+///
+/// `request_path_listed` says the turn's list holds the tool, which is named only then.
+fn requests_refused_sentence(mode: SandboxMode, request_path_listed: bool) -> String {
     let (directory, request) = match mode {
         SandboxMode::ReadOnly => ("a directory to read", "a request to read a path"),
         _ => ("a directory", "a request"),
     };
+    let refused = match request_path_listed {
+        true => " and the `request_path` tool is refused, and nobody is asked",
+        false => "",
+    };
     format!(
-        " This workspace is not trusted, so `run` accepts no `scopes` argument and the \
-         `request_path` tool is refused, and nobody is asked. Say which path or credential the \
-         command needs and what for: the person can trust the workspace, so that {request} is \
-         accepted, or add {directory} with `/add-dir` or `--add-dir`."
+        " This workspace is not trusted, so `run` accepts no `scopes` argument{refused}. \
+         Say which path or credential the command needs and what for: the person can trust the \
+         workspace, so that {request} is accepted, or add {directory} with `/add-dir` or \
+         `--add-dir`."
     )
 }
 
@@ -2273,13 +2367,21 @@ const CREDENTIAL_LOCATIONS_NOT_ADDABLE_SENTENCE: &str = " A credential location 
      `~/.aws` or `~/.kube` cannot be added with `/add-dir` or `--add-dir`.";
 
 /// The fixed text that ends every profile line under `mode`, where the session would accept a
-/// request (`requests_offered`) or would not.
-fn credential_locations_sentence(mode: SandboxMode, requests_offered: bool) -> Cow<'static, str> {
+/// request (`requests_offered`) or would not, and where the turn's list holds `request_path`
+/// (`request_path_listed`) or does not.
+fn credential_locations_sentence(
+    mode: SandboxMode,
+    requests_offered: bool,
+    request_path_listed: bool,
+) -> Cow<'static, str> {
     match (requests_offered, mode) {
         (false, _) => Cow::Owned(format!(
             "{CREDENTIAL_LOCATIONS_NOT_ADDABLE_SENTENCE}{}",
-            requests_refused_sentence(mode)
+            requests_refused_sentence(mode, request_path_listed)
         )),
+        (true, _) if !request_path_listed => {
+            Cow::Borrowed(CREDENTIAL_LOCATIONS_WITHOUT_REQUEST_PATH_SENTENCE)
+        }
         (true, SandboxMode::ReadOnly) => Cow::Borrowed(READ_ONLY_CREDENTIAL_LOCATIONS_SENTENCE),
         (true, _) => Cow::Borrowed(CREDENTIAL_LOCATIONS_SENTENCE),
     }
@@ -2583,32 +2685,49 @@ const IDENTITY_UNCONFINED_WAY_OUT: &str = " A push refused for permission can al
      person is asked to approve and which runs with no sandbox.";
 
 /// The sentence that names the menu, for the planner, and the person is asked about every time.
-fn requests_menu_sentence(mode: SandboxMode) -> String {
-    let paths = match mode {
-        SandboxMode::ReadOnly => {
-            "A path outside the workspace that a command needs to read is asked for with the \
+fn requests_menu_sentence(mode: SandboxMode, request_path_listed: bool) -> String {
+    let paths = match (mode, request_path_listed) {
+        (_, false) => "",
+        (SandboxMode::ReadOnly, true) => {
+            " A path outside the workspace that a command needs to read is asked for with the \
              `request_path` tool instead, and a yes lasts for the session; a request for a path to \
              write is refused in this mode before anyone is asked."
         }
-        _ => {
-            "A path outside the workspace that a command needs is asked for with the \
+        (_, true) => {
+            " A path outside the workspace that a command needs is asked for with the \
              `request_path` tool instead, and a yes lasts for the session."
         }
     };
     format!(
         "A line that needs more can ask for it with `run`'s `scopes` argument, by name from this \
          list: {}. The person is asked about the line every time, and no answer to it is \
-         remembered. {paths}",
+         remembered.{paths}",
         bravebot_sandbox::scope::Requested::MENU.join(", ")
     )
 }
 
+/// [`stated_listing`] for a turn whose list holds `request_path`, which is the text the tests
+/// below were written against.
+#[cfg(test)]
 fn stated(
     confine_runs: bool,
     prelude: Option<Prelude>,
     network: Network,
     mode: SandboxMode,
     requests_offered: bool,
+) -> Option<String> {
+    stated_listing(confine_runs, prelude, network, mode, requests_offered, true)
+}
+
+/// The statement of a turn's programs for a turn whose list holds `request_path`
+/// (`request_path_listed`) or does not.
+fn stated_listing(
+    confine_runs: bool,
+    prelude: Option<Prelude>,
+    network: Network,
+    mode: SandboxMode,
+    requests_offered: bool,
+    request_path_listed: bool,
 ) -> Option<String> {
     if !confine_runs || mode == SandboxMode::Off {
         return None;
@@ -2684,9 +2803,9 @@ fn stated(
         match requests_offered {
             true => {
                 said.push(' ');
-                said.push_str(&requests_menu_sentence(mode));
+                said.push_str(&requests_menu_sentence(mode, request_path_listed));
             }
-            false => said.push_str(&requests_refused_sentence(mode)),
+            false => said.push_str(&requests_refused_sentence(mode, request_path_listed)),
         }
     }
     // The three sentences that ask for `loopback` are said where `run` accepts a `scopes`
@@ -3345,14 +3464,18 @@ mod tests {
     fn the_planner_is_told_of_a_sandbox_mode_chosen_while_its_turn_runs() {
         use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
 
-        assert_eq!(change_notice(true, Strict, Strict, true), None, "no change");
         assert_eq!(
-            change_notice(false, Strict, Off, true),
+            change_notice(true, Strict, Strict, true, true),
+            None,
+            "no change"
+        );
+        assert_eq!(
+            change_notice(false, Strict, Off, true, true),
             None,
             "a turn that confines none of its runs"
         );
 
-        let off = change_notice(true, WorkspaceWrite, Off, true).expect("told of off");
+        let off = change_notice(true, WorkspaceWrite, Off, true, true).expect("told of off");
         assert!(
             off.contains("to `off`") && off.contains("no sandbox profile"),
             "{off}"
@@ -3361,15 +3484,15 @@ mod tests {
         assert!(!off.contains(&stated), "{off}");
 
         for to in [Strict, ReadOnly, WorkspaceWrite] {
-            let notice = change_notice(true, Off, to, true).expect("told");
+            let notice = change_notice(true, Off, to, true, true).expect("told");
             let stated = stated_to_the_planner(true, to, true).expect("stated");
             assert!(
                 notice.contains(&format!("to `{}`", to.name())) && notice.contains(&stated),
                 "{notice}"
             );
         }
-        let strict = change_notice(true, Off, Strict, true).expect("told");
-        let workspace_write = change_notice(true, Off, WorkspaceWrite, true).expect("told");
+        let strict = change_notice(true, Off, Strict, true, true).expect("told");
+        let workspace_write = change_notice(true, Off, WorkspaceWrite, true, true).expect("told");
         assert!(!strict.contains("may read this machine"), "{strict}");
         assert!(
             workspace_write.contains("may read this machine"),
@@ -3388,21 +3511,21 @@ mod tests {
         use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
 
         for from in [Strict, ReadOnly, WorkspaceWrite] {
-            let off = change_notice(true, from, Off, true).expect("told of off");
+            let off = change_notice(true, from, Off, true, true).expect("told of off");
             assert!(
                 off.contains("The `request_path` tool is now refused and nobody is asked."),
                 "{from:?}: {off}"
             );
         }
         for to in [Strict, ReadOnly, WorkspaceWrite] {
-            let notice = change_notice(true, Off, to, true).expect("told");
+            let notice = change_notice(true, Off, to, true, true).expect("told");
             assert!(!notice.contains("is now refused"), "{to:?}: {notice}");
             assert!(
                 notice.contains("asked for with the `request_path` tool"),
                 "{to:?}: {notice}"
             );
         }
-        assert_eq!(change_notice(false, WorkspaceWrite, Off, true), None);
+        assert_eq!(change_notice(false, WorkspaceWrite, Off, true, true), None);
     }
 
     fn step(resolved: &str, args: &[&str]) -> Step {
@@ -5681,7 +5804,7 @@ mod tests {
                     let closed = network.is_closed() || mode == SandboxMode::ReadOnly;
                     let said = stated(true, Some(prelude), network, mode, true)
                         .expect("says something")
-                        .replace(&requests_menu_sentence(mode), "");
+                        .replace(&requests_menu_sentence(mode, true), "");
                     let at = format!("{prelude:?} {mode:?} {network:?}");
                     assert!(!said.contains("listen on and connect to"), "{at}: {said}");
                     match prelude {
@@ -5707,13 +5830,13 @@ mod tests {
                         stated(true, Some(prelude), network, mode, false).expect("says something");
                     assert!(!refused.contains("loopback"), "{at}: {refused}");
                     assert!(
-                        refused.contains(&requests_refused_sentence(mode)),
+                        refused.contains(&requests_refused_sentence(mode, true)),
                         "{at}: {refused}"
                     );
                     let without_the_asks = accepted
                         .replacen(
-                            &format!(" {}", requests_menu_sentence(mode)),
-                            &requests_refused_sentence(mode),
+                            &format!(" {}", requests_menu_sentence(mode, true)),
+                            &requests_refused_sentence(mode, true),
                             1,
                         )
                         .replace(
@@ -6282,7 +6405,7 @@ mod tests {
         for offered in [true, false] {
             described.push((
                 "off",
-                stated_in_the_description(true, SandboxMode::Off, offered),
+                stated_in_the_description(true, SandboxMode::Off, offered, true),
             ));
             for mode in [
                 SandboxMode::Strict,
@@ -6292,7 +6415,7 @@ mod tests {
             ] {
                 described.push((
                     "not confined",
-                    stated_in_the_description(false, mode, offered),
+                    stated_in_the_description(false, mode, offered, true),
                 ));
             }
         }
@@ -6332,7 +6455,8 @@ mod tests {
             SandboxMode::WorkspaceWrite,
         ] {
             for offered in [true, false] {
-                let said = stated_in_the_description(true, mode, offered).expect("says something");
+                let said =
+                    stated_in_the_description(true, mode, offered, true).expect("says something");
                 let at = format!("{mode:?} offered={offered}");
                 assert!(
                     !said.contains(REQUEST_PATH_REFUSED_SENTENCE),
@@ -6348,7 +6472,8 @@ mod tests {
                     "{at}: a confining mode's description is the one it had"
                 );
             }
-            let accepted = stated_in_the_description(true, mode, true).expect("says something");
+            let accepted =
+                stated_in_the_description(true, mode, true, true).expect("says something");
             assert!(
                 accepted.contains("asked for with the `request_path` tool"),
                 "{mode:?}: {accepted}"
@@ -6391,7 +6516,7 @@ mod tests {
                     assert!(!refused.contains(name), "{at}: {name} in {refused}");
                 }
                 assert!(
-                    refused.ends_with(&requests_refused_sentence(mode)),
+                    refused.ends_with(&requests_refused_sentence(mode, true)),
                     "{at}: {refused}"
                 );
                 for route in ["`/add-dir`", "`--add-dir`", "trust the workspace"] {
@@ -6441,7 +6566,7 @@ mod tests {
                     assert!(!refused.contains(route), "{at}: {route} in {refused}");
                 }
                 assert!(
-                    refused.contains(&requests_refused_sentence(mode)),
+                    refused.contains(&requests_refused_sentence(mode, true)),
                     "{at}: {refused}"
                 );
                 if prelude == Prelude::MacOs {
@@ -6452,6 +6577,152 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// TOOL-6: a turn whose list lacks `request_path`, such as a `--tools run` turn, is told of no
+    /// sentence that names it: not the route to a path, not the refusal under `off` or where runs are
+    /// not confined (the sentence is dropped, and nothing replaces it), not the failure sentences, not
+    /// the notice for a move to `off`, and not the line that says how many paths it let through. The
+    /// scopes menu, which names no tool, is kept. The control is the same text for a list that holds
+    /// the tool, which is the text before the change. The faults it rejects are a sentence that
+    /// names the tool whatever the list holds, and one gated on the wrong fact (the session accepting
+    /// requests) so that a list holding the tool loses the sentence.
+    #[test]
+    fn no_sentence_names_request_path_where_the_list_lacks_it() {
+        use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+
+        // The refusal sentence of the programs that have no profile: said for a list that holds the
+        // tool and not said, in place of nothing, for one that does not.
+        for offered in [true, false] {
+            assert_eq!(
+                stated_in_the_description(true, Off, offered, true).as_deref(),
+                Some(REQUEST_PATH_REFUSED_SENTENCE),
+            );
+            assert_eq!(stated_in_the_description(true, Off, offered, false), None);
+            for mode in [Strict, ReadOnly, WorkspaceWrite, Off] {
+                assert_eq!(
+                    stated_in_the_description(false, mode, offered, true).as_deref(),
+                    Some(REQUEST_PATH_REFUSED_SENTENCE),
+                );
+                assert_eq!(
+                    stated_in_the_description(false, mode, offered, false),
+                    None,
+                    "{mode:?}"
+                );
+            }
+        }
+
+        // The statement of a confined turn.
+        for prelude in [Prelude::Linux, Prelude::MacOs, Prelude::Windows] {
+            for mode in [Strict, ReadOnly, WorkspaceWrite] {
+                for offered in [true, false] {
+                    let at = format!("{prelude:?} {mode:?} offered={offered}");
+                    let listed =
+                        stated_listing(true, Some(prelude), Network::Open, mode, offered, true)
+                            .expect("says something");
+                    let unlisted =
+                        stated_listing(true, Some(prelude), Network::Open, mode, offered, false)
+                            .expect("says something");
+                    assert!(listed.contains("`request_path`"), "{at}: {listed}");
+                    assert!(!unlisted.contains("request_path"), "{at}: {unlisted}");
+                    assert_eq!(
+                        listed,
+                        stated(true, Some(prelude), Network::Open, mode, offered).unwrap(),
+                        "{at}: the full list reads the text it always did"
+                    );
+                    // What is left of the menu and the refusal is still said.
+                    assert!(unlisted.contains("`scopes`"), "{at}: {unlisted}");
+                    assert_eq!(
+                        unlisted.contains("A line that needs more can ask"),
+                        offered,
+                        "{at}: {unlisted}"
+                    );
+                    assert_eq!(
+                        unlisted.contains("This workspace is not trusted"),
+                        !offered,
+                        "{at}: {unlisted}"
+                    );
+                }
+            }
+        }
+
+        // The fixed ending of the profile line.
+        for mode in [Strict, ReadOnly, WorkspaceWrite] {
+            for offered in [true, false] {
+                let unlisted = credential_locations_sentence(mode, offered, false);
+                assert!(!unlisted.contains("request_path"), "{mode:?}: {unlisted}");
+                assert!(
+                    unlisted.contains("cannot be added with `/add-dir`"),
+                    "{mode:?}: {unlisted}"
+                );
+                let listed = credential_locations_sentence(mode, offered, true);
+                assert_eq!(offered, listed.contains("`request_path` tool: the person"));
+            }
+        }
+
+        // The notice for a move to `off` and to a confining mode.
+        let off = change_notice(true, WorkspaceWrite, Off, true, false).expect("told of off");
+        assert!(off.contains("no sandbox profile"), "{off}");
+        assert!(!off.contains("request_path"), "{off}");
+        let off_listed = change_notice(true, WorkspaceWrite, Off, true, true).expect("told of off");
+        assert!(off_listed.contains("The `request_path` tool is now refused"));
+        for to in [Strict, ReadOnly, WorkspaceWrite] {
+            let notice = change_notice(true, Off, to, true, false).expect("told");
+            assert!(!notice.contains("request_path"), "{to:?}: {notice}");
+            assert!(notice.contains("`scopes`"), "{to:?}: {notice}");
+        }
+    }
+
+    /// TOOL-6: the profile line that follows a failed step names `request_path` only where the list
+    /// holds it: not in the route to a path, not in the count of paths the person let programs
+    /// reach, and not in the sentence of a bypass stage that writes everything. The control is the
+    /// same confinement before the fact is set, which keeps the text it always had. The fault it
+    /// rejects is a profile line that names the tool whatever the list holds.
+    #[test]
+    fn the_profile_line_names_request_path_only_where_the_list_holds_it() {
+        let granted = [crate::workspace::PathReach {
+            path: PathBuf::from("/data/out"),
+            write: true,
+            why: "the build needs it".to_string(),
+        }];
+        let script = step("/bin/sh", &["-c", "false"]);
+        for mode in [
+            SandboxMode::Strict,
+            SandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite,
+        ] {
+            for offered in [true, false] {
+                let session = reading_confinement(Prelude::Linux, &["/work/project"])
+                    .with_mode(mode)
+                    .with_path_reach(&granted)
+                    .with_requests_offered(offered);
+                let at = format!("{mode:?} offered={offered}");
+                let held = session.profile(&[&script]);
+                let unlisted = session
+                    .clone()
+                    .with_request_path_listed(false)
+                    .profile(&[&script]);
+                assert!(held.contains("`request_path`") || held.contains("through request_path"));
+                assert!(!unlisted.contains("request_path"), "{at}: {unlisted}");
+                assert!(unlisted.contains("cannot be added"), "{at}: {unlisted}");
+            }
+        }
+
+        let (home, beside) = unasked_places("listed");
+        let root = beside.join("project");
+        let bypass = bypass_confinement(Prelude::MacOs, &home, &root);
+        let step = step("/bin/cat", &["f"]);
+        let listed = bypass.profile(&[&step]);
+        let unlisted = bypass.with_request_path_listed(false).profile(&[&step]);
+        assert!(
+            listed.contains("write every path a request_path with write set would be granted"),
+            "{listed}"
+        );
+        assert!(!unlisted.contains("request_path"), "{unlisted}");
+        assert!(
+            unlisted.contains("write every path a request for write access would be granted"),
+            "{unlisted}"
+        );
     }
 
     /// A tool's own scope lifts its own directory and no other, and a stage that names none keeps
@@ -7888,7 +8159,7 @@ mod tests {
     /// not a claim about what the programs can reach.
     #[test]
     fn a_turn_that_does_not_confine_states_no_boundary_in_the_description() {
-        let described = stated_in_the_description(false, SandboxMode::WorkspaceWrite, true)
+        let described = stated_in_the_description(false, SandboxMode::WorkspaceWrite, true, true)
             .expect("says the one sentence");
         assert_eq!(described, REQUEST_PATH_REFUSED_SENTENCE);
         for boundary in [

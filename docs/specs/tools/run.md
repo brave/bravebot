@@ -845,7 +845,11 @@ where it also cannot tell success from failure.
 Where the output could not be shown, the planner is also told how to see this result and how to
 stop being asked: it calls `read_output` with the reference, and a person vouching for every stage
 of the exact command makes what it prints visible from then on. It is also pointed at `read_file`
-for a file. Who answers a `read_output` call is a fact about the session, so it is said once, in the
+for a file. Each of these names is said only where the turn's list holds the tool
+([TOOL-6](tool-surface.md#TOOL-6)): `read_output` for the reference, `spawn_processor` for working
+with the output, `read_file` for a file. Where the list holds none of them the planner is told only
+that the quarantine is about the command and not about running programs, and, where it applies, the
+vouching sentence, which names no tool. Who answers a `read_output` call is a fact about the session, so it is said once, in the
 `read_output` description, and not in each result (below). Only where a command produced the result: a quarantined read carries no advice about
 `read_output` or about vouching for a command nobody ran. The advice about vouching is left out where
 a record already stops the asking for that exact line ([RUN-19](#RUN-19)), since no prompt will
@@ -929,6 +933,13 @@ with its own three wordings ([VET-5](vet-content.md#VET-5)).
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_says_how_to_stop_being_asked`
 `verified-by: bravebot_agent::turn::what_an_ended_job_from_a_remembered_line_printed_says_nothing_about_vouching`
 `verified-by: bravebot_agent::turn::the_process_listing_sentence_follows_the_account_of_the_ending_whether_or_not_the_output_is_shown`
+`verified-by: bravebot_agent::turn::sentences::a_list_holding_every_tool_reads_the_text_it_always_did`
+`verified-by: bravebot_agent::turn::sentences::a_list_without_read_output_is_not_pointed_at_it_in_any_arm`
+`verified-by: bravebot_agent::turn::sentences::a_list_without_read_file_is_not_pointed_at_it`
+`verified-by: bravebot_agent::turn::a_quarantined_run_result_names_no_tool_the_definition_was_not_offered`
+`verified-by: bravebot_agent::turn::what_an_ended_job_printed_names_no_tool_the_definition_was_not_offered`
+`verified-by: bravebot_agent::tools::the_run_description_on_watching_names_only_the_tools_the_list_holds`
+`verified-by: bravebot_agent::tools::the_run_read_argument_names_read_output_only_where_the_list_holds_it`
 
 <a id="RUN-15"></a>
 ### RUN-15: a pipeline may be left running, and what started it ends it

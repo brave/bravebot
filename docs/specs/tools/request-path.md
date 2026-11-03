@@ -100,9 +100,10 @@ back the writes the mode withholds. The result says the request is not accepted,
 asked. A session that accepts no request does not point the planner at the route. Under `off`, and
 on a turn that confines no run, the `run` description says that `request_path` is refused and
 nobody is asked, in every permission mode, and says nothing of `scopes`, which is accepted and
-dropped there. In an untrusted workspace under a mode that confines, the `run` description and the
+dropped there. A turn whose list lacks `request_path` is told nothing of the tool in any of these
+sentences, since a tool it cannot call needs no refusal ([TOOL-6](tool-surface.md#TOOL-6)). In an untrusted workspace under a mode that confines, the `run` description and the
 sentence after a failed step name no route to a request and say that `run` accepts no `scopes`
-argument and `request_path` is refused ([SANDBOX-19](../sandboxing.md#SANDBOX-19)). The mode that answers every question
+argument and, where the list holds `request_path`, that `request_path` is refused ([SANDBOX-19](../sandboxing.md#SANDBOX-19)). The mode that answers every question
 does not give the programs of such a session the rows a request would have added either: a write
 beside the session's directories is refused by the operating system, and the sentence, the trail and
 `/status` say nothing of a reach through `request_path`
@@ -114,6 +115,10 @@ beside the session's directories is refused by the operating system, and the sen
 `verified-by: bravebot_agent::turn::under_read_only_a_request_to_write_is_refused_and_one_to_read_is_not`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
+`verified-by: bravebot_agent::tools::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::confine::no_sentence_names_request_path_where_the_list_lacks_it`
+`verified-by: bravebot_agent::confine::the_profile_line_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::turn::a_turn_not_offered_request_path_never_names_it`
 
 <a id="PATHREQ-6"></a>
 ### PATHREQ-6: a delegate has no such tool

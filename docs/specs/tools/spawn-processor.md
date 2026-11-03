@@ -134,6 +134,11 @@ A turn whose list holds no `run` is told which tool writes such text, to name th
 call the text a summary. The rest of the list names a script, a run line or `stdin_ref`, so it is
 left out for that turn. The `run` description's pointer at the processor is in [run.md](run.md).
 
+The pointers the tool writes into its own results follow the list the same way. The error for a
+call that names nothing in `reads` says to write the file with `write_file` only where the list
+holds `write_file`, and the description of `vet_content` names `spawn_processor` only where the list
+holds it ([TOOL-6](tool-surface.md#TOOL-6)).
+
 **What stays true.** A processor is still given only the references named in `reads` and an
 instruction from a context holding nothing private, still holds no tools, and its answer is still
 never shown to the planner. The answer is labelled by taint over its inputs, so the file it is

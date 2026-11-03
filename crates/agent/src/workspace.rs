@@ -150,6 +150,8 @@ pub struct GitQuestion<'a> {
     pub messages: bool,
     pub since: Option<i64>,
     pub until: Option<i64>,
+    /// Which tools the turn's list holds, which the answer's sentences read before they name one.
+    pub beside: crate::tools::Beside,
 }
 
 /// How far a read of a file may reach.
@@ -3104,6 +3106,7 @@ impl Workspace {
             messages,
             since,
             until,
+            beside,
         } = *question;
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
@@ -3179,6 +3182,7 @@ impl Workspace {
                 since,
                 until,
                 every_untracked: false,
+                beside,
                 deadline,
             };
             let withheld = |inside: &str| self.denies_in_repository(policy, &named, inside);
@@ -3527,6 +3531,7 @@ impl Workspace {
                 since: None,
                 until: None,
                 every_untracked: true,
+                beside: crate::tools::Beside::every(),
                 deadline,
             };
             let withheld = |inside: &str| {
@@ -5826,6 +5831,7 @@ mod tests {
                 messages: false,
                 since: None,
                 until: None,
+                beside: crate::tools::Beside::every(),
             };
             let answer = workspace.read_git(&mut policy, &question).expect("git");
             let proof = policy.authorise_content_release("test", "answer");

@@ -172,7 +172,7 @@ guards:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 6
       - crates/agent/src/tools/recall.rs: 3
-      - crates/core/src/policy.rs: 28
+      - crates/core/src/policy.rs: 29
   - symbol: Policy::adopt_model_output
     sites:
       - crates/agent/src/advisor.rs: 1

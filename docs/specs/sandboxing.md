@@ -1695,7 +1695,7 @@ that choosing another sandbox mode lets programs write the project. It also says
 write nothing in that mode and that a line redirecting output into a file is refused. On a turn
 that does not confine runs, and under the mode `off`, it states no boundary, since a planner told of a boundary its
 programs do not have stops reaching for paths they can reach. It says one sentence there instead: "The
-`request_path` tool is refused in this session and nobody is asked, so do not call it." The words are
+`request_path` tool is refused in this session and nobody is asked, so do not call it." That sentence is said only where the turn's list holds `request_path`; a list without it gets no sentence ([TOOL-6](tools/tool-surface.md#TOOL-6)). The words are
 the same in every permission mode, in a trusted workspace and in one that is not, because the tool
 is refused in all of them ([PATHREQ-5](tools/request-path.md#PATHREQ-5)). They say nothing of the file tools, which
 [PATHREQ-7](tools/request-path.md#PATHREQ-7) lets reach outside the workspace under bypass, and nothing of `scopes` or
@@ -1719,7 +1719,7 @@ accepts a request only in a workspace the person has trusted ([TRUST-7](trust-ma
 [PATHREQ-5](tools/request-path.md#PATHREQ-5)), so in any other the description and this sentence
 name neither the menu nor `request_path`, and on macOS do not tell the planner to ask for
 `loopback`. They say instead that `run` accepts no `scopes` argument
-and `request_path` is refused, that nobody is asked, and that the person can trust the workspace or
+and, where the list holds `request_path`, that `request_path` is refused, that nobody is asked, and that the person can trust the workspace or
 add a directory with `/add-dir` or `--add-dir`, a directory to read under `read-only`. Under `off`, or
 on a turn that confines no run, an untrusted workspace gets the sentence above and nothing more, so the
 two never say different things. The description
@@ -1735,7 +1735,9 @@ and that where the mode accepts a request, a credential scope is how a line reac
 says that any other path a command needs is asked for with the `request_path` tool
 ([SANDBOX-28](#SANDBOX-28)), the person is asked, and a yes lasts for the session. Under
 `read-only` it says that of a path a command needs to read, and that a request for a path to write
-is refused in that mode before anyone is asked ([SANDBOX-22](#SANDBOX-22)). A planner
+is refused in that mode before anyone is asked ([SANDBOX-22](#SANDBOX-22)). On a turn whose list
+lacks `request_path` the text stops after the sentence on credential scopes
+([TOOL-6](tools/tool-surface.md#TOOL-6)). A planner
 that meets a refusal on such a location otherwise has no other account of it, and asks the person
 for an `/add-dir` that does nothing. The text is the same for every failure and for exit 1 and
 exit 2. The menu sentence ends the same way, and the `run` description's
@@ -1864,6 +1866,10 @@ read them and are offered fewer tools than the lead ([TOOL-6](tools/tool-surface
 `verified-by: bravebot_agent::confine::a_session_that_accepts_no_request_is_told_of_no_menu_and_no_request_path_in_the_description`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_the_description_and_a_failed_run_name_no_menu_and_no_request_path`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_failed_job_names_no_request_path`
+`verified-by: bravebot_agent::tools::the_confinement_statement_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::confine::no_sentence_names_request_path_where_the_list_lacks_it`
+`verified-by: bravebot_agent::confine::the_profile_line_names_request_path_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::turn::a_turn_not_offered_request_path_never_names_it`
 `verified-by: bravebot_agent::turn::a_run_under_read_only_reads_the_machine_and_cannot_write_the_session`
 `verified-by: bravebot_agent::confine::the_planner_is_told_on_macos_that_only_git_writes_a_git_directory`
 `verified-by: bravebot_agent::confine::a_failed_open_or_osascript_step_on_macos_names_the_unconfined_line_only_where_it_is_accepted`
@@ -2175,7 +2181,8 @@ description the planner received states the mode the turn began in, so before it
 planner is told of the change in words the driver writes from the two modes: for a mode that
 confines, the sentences the description would have carried under it, and for `off`, that programs
 now start with no sandbox profile, so the limits the description states do not apply to them, and that
-the `request_path` tool is now refused and nobody is asked. It is told once for each change, and a turn that confines none of
+the `request_path` tool is now refused and nobody is asked, where the turn's list holds the tool
+and nothing of it otherwise ([TOOL-6](tools/tool-surface.md#TOOL-6)). It is told once for each change, and a turn that confines none of
 its runs is told nothing. A move to `off` is made when it is typed, like a move to any other mode,
 with no question; the reply says that programs then start with no profile, and a reply made while a
 turn runs says that the turn uses the mode for each program it starts from then on. A background job keeps the profile it started under ([RUN-15](tools/run.md#RUN-15)), so a
@@ -2369,6 +2376,7 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_agent::turn::a_delegate_follows_a_sandbox_mode_chosen_while_it_runs`
 `verified-by: bravebot_agent::confine::the_planner_is_told_of_a_sandbox_mode_chosen_while_its_turn_runs`
 `verified-by: bravebot_agent::confine::the_change_notice_for_a_move_to_off_says_request_path_is_refused`
+`verified-by: bravebot_agent::turn::a_mode_change_to_off_names_request_path_only_where_the_turn_was_offered_it`
 `verified-by: bravebot_agent::permission_mode::a_confirmer_follows_the_sandbox_mode_chosen_after_it_was_made`
 
 <a id="SANDBOX-23"></a>

@@ -885,7 +885,8 @@ call, visible in the prompt, and impossible to hide inside an argument.
 Standard input is empty, as it is today, so a program that reads it gets nothing rather than the
 terminal. Beyond that, invocations known to require interaction are refused at compile time with a
 message naming the alternative: `git rebase -i`, `git add -i`, an editor, a pager without
-`--no-pager`, anything that would open `/dev/tty`.
+`--no-pager`, anything that would open `/dev/tty`. The refusal of an editor names `edit_file` as the
+alternative only where the turn's list holds it ([TOOL-6](tool-surface.md#TOOL-6)).
 
 `git commit` is refused when it supplies no message, because git then opens an editor. A message
 source lets it through: `-m`, `-F`, `-C`, `--message`, `--file`, `--reuse-message` or `--no-edit`. A
@@ -900,6 +901,7 @@ deadline and returns what it printed, which is the same outcome by a slower road
 `verified-by: bravebot_agent::cmdline::a_program_that_wants_a_terminal_is_refused_before_it_starts`
 `verified-by: bravebot_agent::cmdline::a_line_that_names_the_terminal_device_is_refused`
 `verified-by: bravebot_agent::cmdline::the_same_program_without_the_interactive_part_is_not_refused`
+`verified-by: bravebot_agent::cmdline::the_refusal_of_an_editor_names_edit_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::exec::a_stage_that_reads_stdin_is_given_nothing_rather_than_the_terminal`
 
 <a id="CMDLINE-16"></a>

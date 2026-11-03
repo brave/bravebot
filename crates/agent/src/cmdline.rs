@@ -263,6 +263,9 @@ pub enum Reason {
     NotOnePath,
     /// An invocation that would want a terminal, with what to do instead.
     Interactive(&'static str),
+    /// An editor in command position. Worded apart from the other interactive refusals because it
+    /// names `edit_file`, which a turn's list may not hold: [`Refused::said`] leaves it out then.
+    Editor,
     /// More commands in one line than a plan can put to a person at once.
     TooManySteps { cap: usize },
     /// Groups nested deeper than the grammar goes.
@@ -379,6 +382,7 @@ impl fmt::Display for Reason {
                 "a redirection has to name exactly one file. A destination worked out from what is on disk is a destination that moves when the tree does",
             ),
             Self::Interactive(alternative) => f.write_str(alternative),
+            Self::Editor => f.write_str(EDITOR_WITH_EDIT_FILE),
             Self::TooManySteps { cap } => write!(
                 f,
                 "a line may hold at most {cap} commands. A plan longer than that is a prompt nobody reads"
@@ -395,6 +399,20 @@ impl fmt::Display for Reason {
     }
 }
 
+impl Refused {
+    /// The refusal as the planner is told it, naming `edit_file` only where `editing_offered`
+    /// says the turn's list holds it. What a list that holds it reads is what `Display` writes.
+    pub fn said(&self, editing_offered: bool) -> String {
+        match self.reason {
+            Reason::Editor if !editing_offered => format!(
+                "`{}` at offset {}: {EDITOR_WITHOUT_EDIT_FILE}",
+                self.text, self.span.start
+            ),
+            _ => self.to_string(),
+        }
+    }
+}
+
 impl fmt::Display for Refused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -406,6 +424,13 @@ impl fmt::Display for Refused {
 }
 
 impl std::error::Error for Refused {}
+
+/// What to do instead of opening an editor, for a list that holds `edit_file`.
+const EDITOR_WITH_EDIT_FILE: &str = "an editor needs a terminal. Use `edit_file`, or a program that takes what it needs on the command line";
+
+/// The same, for a list that does not.
+const EDITOR_WITHOUT_EDIT_FILE: &str =
+    "an editor needs a terminal. Use a program that takes what it needs on the command line";
 
 /// How many commands one line may hold.
 ///
@@ -2187,11 +2212,11 @@ impl Compiler<'_, '_> {
 
         // Before the name is looked up, so that the answer does not depend on whether the editor
         // in question happens to be installed on this machine.
-        if let Some(alternative) = wants_a_terminal(program, command) {
+        if let Some(reason) = wants_a_terminal(program, command) {
             return Err(Refused {
                 span: command.span,
                 text: program.clone(),
-                reason: Reason::Interactive(alternative),
+                reason,
             }
             .into());
         }
@@ -2335,7 +2360,7 @@ impl Compiler<'_, '_> {
 /// A convenience rather than a guarantee. Something interactive that is not named here reaches
 /// the deadline and comes back with what it printed, which is the same outcome by a slower road,
 /// so this list is allowed to be short and is not a safety property.
-fn wants_a_terminal(program: &str, command: &Command) -> Option<&'static str> {
+fn wants_a_terminal(program: &str, command: &Command) -> Option<Reason> {
     let name = Path::new(program)
         .file_name()?
         .to_string_lossy()
@@ -2346,33 +2371,31 @@ fn wants_a_terminal(program: &str, command: &Command) -> Option<&'static str> {
         .collect();
     match name.as_str() {
         "vi" | "vim" | "nvim" | "emacs" | "nano" | "pico" | "ed" | "micro" | "helix" | "hx"
-        | "kak" => Some(
-            "an editor needs a terminal. Use `edit_file`, or a program that takes what it needs on the command line",
-        ),
-        "less" | "more" | "most" => Some(
+        | "kak" => Some(Reason::Editor),
+        "less" | "more" | "most" => Some(Reason::Interactive(
             "a pager needs a terminal. Narrow the output in the line instead, with `head`, `tail` or `sed -n`",
-        ),
-        "top" | "htop" | "btop" => {
-            Some("this draws over a terminal. Ask for one reading instead, such as `ps`")
-        }
+        )),
+        "top" | "htop" | "btop" => Some(Reason::Interactive(
+            "this draws over a terminal. Ask for one reading instead, such as `ps`",
+        )),
         "git" => git_wants_a_terminal(&args),
         _ => None,
     }
 }
 
-fn git_wants_a_terminal(args: &[String]) -> Option<&'static str> {
+fn git_wants_a_terminal(args: &[String]) -> Option<Reason> {
     let subcommand = args.iter().find(|arg| !arg.starts_with('-'))?;
     let has = |flags: &[&str]| args.iter().any(|arg| flags.contains(&arg.as_str()));
     match subcommand.as_str() {
-        "rebase" if has(&["-i", "--interactive"]) => Some(
+        "rebase" if has(&["-i", "--interactive"]) => Some(Reason::Interactive(
             "`git rebase -i` opens an editor. Name the rewrite outright, with `--onto` or an explicit sequence",
-        ),
-        "add" if has(&["-i", "--interactive", "-p", "--patch"]) => {
-            Some("`git add -i` and `git add -p` need a terminal. Name the paths to stage instead")
-        }
-        "commit" if !carries_a_message(args) => {
-            Some("`git commit` with no message opens an editor. Pass `-m`")
-        }
+        )),
+        "add" if has(&["-i", "--interactive", "-p", "--patch"]) => Some(Reason::Interactive(
+            "`git add -i` and `git add -p` need a terminal. Name the paths to stage instead",
+        )),
+        "commit" if !carries_a_message(args) => Some(Reason::Interactive(
+            "`git commit` with no message opens an editor. Pass `-m`",
+        )),
         _ => None,
     }
 }
@@ -3994,11 +4017,41 @@ mod tests {
             assert!(
                 matches!(
                     compile_refused(line, &tree.root).reason,
-                    Reason::Interactive(_)
+                    Reason::Interactive(_) | Reason::Editor
                 ),
                 "`{line}` was not refused as interactive"
             );
         }
+    }
+
+    /// TOOL-6. The refusal of an editor names `edit_file` only where the turn's list holds it. A
+    /// list holding it reads the words the refusal always had. The regression it rejects is the
+    /// refusal naming the tool to a turn that was never offered it.
+    #[test]
+    fn the_refusal_of_an_editor_names_edit_file_only_where_the_list_holds_it() {
+        let tree = Tree::new("editor-list");
+        let refused = compile_refused("vim notes.txt", &tree.root);
+        assert!(matches!(refused.reason, Reason::Editor));
+
+        let with = refused.said(true);
+        assert_eq!(with, refused.to_string(), "a full list reads other words");
+        assert_eq!(
+            with,
+            "`vim` at offset 0: an editor needs a terminal. Use `edit_file`, or a program that \
+             takes what it needs on the command line"
+        );
+
+        let without = refused.said(false);
+        assert!(!without.contains("edit_file"), "{without}");
+        assert_eq!(
+            without,
+            "`vim` at offset 0: an editor needs a terminal. Use a program that takes what it \
+             needs on the command line"
+        );
+
+        // A refusal that is not about an editor reads the same either way.
+        let pager = compile_refused("less notes.txt", &tree.root);
+        assert_eq!(pager.said(false), pager.to_string());
     }
 
     /// Standard input is empty so that a program reading it gets nothing rather than the terminal,

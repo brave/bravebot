@@ -73,7 +73,10 @@ into a context nobody at the keyboard is watching. The rows a person is shown fo
 delegate holds do not suggest it either: they say what the delegate's tools can do with the
 picture ([VIEW-3](../terminal-transcript.md#VIEW-3)). Nor does the reference the delegate is handed:
 a reference names `vet_content` only to a run whose list of tools holds it, so a turn whose
-definition or command line left it out is not sent to it either.
+definition or command line left it out is not sent to it either. The refusal of `read_output` for
+a reference no program printed names `vet_content` on the same condition, and the description of
+`vet_content` names `spawn_processor` only where the list holds it
+([TOOL-6](tool-surface.md#TOOL-6)).
 
 `verified-by: bravebot_core::policy::a_check_over_nothing_is_refused`
 `verified-by: bravebot_core::policy::a_picture_is_never_promoted_as_text_whoever_endorsed_it`
@@ -86,6 +89,8 @@ definition or command line left it out is not sent to it either.
 `verified-by: bravebot_core::policy::a_reference_names_vet_content_exactly_when_the_run_is_offered_it`
 `verified-by: bravebot_core::reference::a_reference_made_for_a_run_without_vetting_names_no_vet_content_and_keeps_the_other_moves`
 `verified-by: bravebot_agent::turn::an_unread_reference_to_a_picture_is_opened_as_a_picture`
+`verified-by: bravebot_agent::tools::a_refused_read_of_a_non_output_reference_does_not_name_vet_content_off_the_list`
+`verified-by: bravebot_agent::tools::the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds`
 
 <a id="VET-3"></a>
 ### VET-3: the result is the bytes, or a refusal that says to work without them
