@@ -33,6 +33,7 @@ import type { Drop, DropOutcome } from '../shared/drops'
 import type { Paste, PasteOutcome } from '../shared/pastes'
 import type { Composed, SaveOutcome } from '../shared/bug-report'
 import type { PageName } from '../shared/update'
+import type { Attempt, KeyAnswer, KeyNotice, KeyWay, SignInAnswer, SignInCurrent, SignInNotice, SignInWay } from '../shared/accounts'
 
 /** The appearance in force: System, Light, or Dark. */
 export interface ThemeState {
@@ -586,6 +587,63 @@ const api = {
     const handler = (_event: IpcRendererEvent, active: boolean) => listener(active === true)
     ipcRenderer.on('bravebot:window:active', handler)
     return () => ipcRenderer.off('bravebot:window:active', handler)
+  },
+
+  /**
+   * Ask to sign in to the ChatGPT or the xAI account, or to the AWS account a Bedrock row names by
+   * its `id` (CHATGPT-15, XAI-20, BACKEND-70).
+   *
+   * Only an ask: the main process decides whether to answer it with a dialog of its own, and only
+   * a yes there starts the sign-in. `null` is an ask that was dropped or answered no. Nothing here
+   * says whether a sign-in is stored; the main process learns that from the bridge.
+   */
+  signIn(way: SignInWay, id: string | null = null, session?: string): Promise<SignInAnswer> {
+    return ipcRenderer.invoke('bravebot:signIn', way, id, session) as Promise<SignInAnswer>
+  },
+  /** The sign-in running, for a page that reloaded while it waits. */
+  signInCurrent(): Promise<SignInCurrent | null> {
+    return ipcRenderer.invoke('bravebot:signIn:current') as Promise<SignInCurrent | null>
+  },
+  cancelSignIn(attempt: Attempt): Promise<void> {
+    return ipcRenderer.invoke('bravebot:signIn:cancel', attempt) as Promise<void>
+  },
+  /** Bring back the window that shows the sign-in's URL or code. */
+  showSignInWindow(): Promise<boolean> {
+    return ipcRenderer.invoke('bravebot:signIn:show') as Promise<boolean>
+  },
+  /**
+   * Listen for a sign-in starting to wait and ending. Returns an unsubscribe. The URL, the address
+   * and the code are not in what crosses (CHATGPT-16, XAI-21).
+   */
+  onSignIn(listener: (notice: SignInNotice) => void): () => void {
+    const handler = (_event: IpcRendererEvent, notice: SignInNotice) => listener(notice)
+    ipcRenderer.on('bravebot:signIn:event', handler)
+    return () => ipcRenderer.off('bravebot:signIn:event', handler)
+  },
+
+  /**
+   * Ask to enter the Brave Premium key or a gateway's key (PREM-16, CRED-24).
+   *
+   * Only an ask: the main process checks with the bridge that a key can be kept and opens a key
+   * window of its own, where the key is typed. The key never comes to this page. `null` is an ask
+   * that was dropped.
+   */
+  enterKey(way: KeyWay, id: string | null, session?: string): Promise<KeyAnswer> {
+    return ipcRenderer.invoke('bravebot:enterKey', way, id, session) as Promise<KeyAnswer>
+  },
+  /** The key window open, for a page that reloaded meanwhile. */
+  enterKeyCurrent(): Promise<{ way: KeyWay; id: string | null } | null> {
+    return ipcRenderer.invoke('bravebot:enterKey:current') as Promise<{ way: KeyWay; id: string | null } | null>
+  },
+  /** Bring back the key window. */
+  showKeyWindow(): Promise<boolean> {
+    return ipcRenderer.invoke('bravebot:enterKey:show') as Promise<boolean>
+  },
+  /** Listen for the key window opening and ending. Returns an unsubscribe. The key is not in what crosses. */
+  onKeyEntry(listener: (notice: KeyNotice) => void): () => void {
+    const handler = (_event: IpcRendererEvent, notice: KeyNotice) => listener(notice)
+    ipcRenderer.on('bravebot:enterKey:event', handler)
+    return () => ipcRenderer.off('bravebot:enterKey:event', handler)
   },
 
   /** Listen for everything the agent announces. Returns an unsubscribe. */

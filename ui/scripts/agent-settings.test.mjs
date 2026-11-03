@@ -111,3 +111,252 @@ test('a failure of the ChatGPT account is worded from the sentence the bridge se
     assert.deepEqual(failureSummary('model-unconfigured', null, none), failureSummary('model-unconfigured'), String(none))
   }
 })
+
+// The Accounts block (CHATGPT-15, XAI-20, BACKEND-70): what each row says, and what can be done from it.
+const React = require('react')
+const { renderToStaticMarkup } = require('react-dom/server')
+const { loadComponents } = await import('./render-support.mjs')
+const { AccountRowView, SignOutConfirm } = await loadComponents('src/renderer/components/Accounts.tsx')
+const { ModelWarnings } = await loadComponents('src/renderer/components/ModelWarnings.tsx')
+const { parseAccounts, signInWayOf } = load('src/shared/accounts.ts')
+
+const account = (fields) => ({ way: 'gateway', id: null, name: 'Row', standing: 'notSignedIn', keyFrom: null, detail: null, command: null, canSignOut: false, host: null, ...fields })
+const noop = () => {}
+const rowProps = (row, more = {}) => ({ row, waiting: null, busy: false, signingOut: false, onSignIn: noop, onSignOut: noop, onShow: noop, onCancel: noop, ...more })
+const drawRow = (row, more) => renderToStaticMarkup(React.createElement('ul', null, React.createElement(AccountRowView, rowProps(row, more))))
+const standing = (html) => /data-test="account-standing">([^<]*)</.exec(html)?.[1]
+
+/** The elements a component returned, depth first, without rendering anything that has hooks. */
+function* elements(node) {
+  if (Array.isArray(node)) { for (const each of node) yield* elements(each); return }
+  if (!node || typeof node !== 'object' || !('props' in node)) return
+  yield node
+  yield* elements(node.props.children)
+  for (const value of Object.values(node.props)) if (value && typeof value === 'object' && 'props' in value) yield* elements(value)
+}
+const byTest = (tree, name) => [...elements(tree)].find((each) => each.props['data-test'] === name)
+
+test('each row says its standing, and a key says where it comes from', () => {
+  assert.equal(standing(drawRow(account({ way: 'chatgpt', name: 'ChatGPT', standing: 'signedIn' }))), 'Signed in')
+  assert.equal(standing(drawRow(account({ way: 'xai', standing: 'signedIn', keyFrom: 'stored' }))), 'Signed in')
+  assert.equal(standing(drawRow(account({ way: 'bedrock', standing: 'signedIn' }))), 'Signed in')
+  assert.equal(standing(drawRow(account({ way: 'brave', standing: 'signedIn', keyFrom: 'stored' }))), 'Key stored')
+  assert.equal(standing(drawRow(account({ standing: 'signedIn', keyFrom: 'stored' }))), 'Key stored')
+  assert.equal(standing(drawRow(account({ standing: 'signedIn', keyFrom: 'environment' }))), 'Key from the environment')
+  assert.equal(standing(drawRow(account({ standing: 'signedIn', keyFrom: 'none' }))), 'No key needed')
+  assert.equal(standing(drawRow(account({ standing: 'notSignedIn' }))), 'Not signed in')
+  const unusable = drawRow(account({ way: 'xai', standing: 'unusable', detail: 'The stored xAI sign-in cannot be read.' }))
+  assert.equal(standing(unusable), 'Can&#x27;t be used')
+  assert.match(unusable, /<leo-alert data-test="account-detail">The stored xAI sign-in cannot be read\.<\/leo-alert>/)
+  const misconfigured = drawRow(account({ standing: 'misconfigured', detail: 'settings.json is not JSON.' }))
+  assert.equal(standing(misconfigured), 'The configuration can&#x27;t be read')
+  assert.match(misconfigured, /<leo-alert data-test="account-detail">settings\.json is not JSON\.<\/leo-alert>/)
+  assert.match(drawRow(account({ standing: 'notSignedIn', detail: 'There is no home directory.' })), /<span class="settings-caption" data-test="account-detail">There is no home directory\.<\/span>/)
+})
+
+test('ChatGPT, xAI and AWS sign in from the window; every other row shows its command', () => {
+  for (const way of ['chatgpt', 'xai', 'bedrock']) {
+    for (const standing of ['notSignedIn', 'unusable']) {
+      const html = drawRow(account({ way, standing, command: `bravebot auth login ${way}` }))
+      assert.match(html, /data-test="account-sign-in"/, `${way} ${standing}`)
+      assert.doesNotMatch(html, /account-command/)
+    }
+    assert.doesNotMatch(drawRow(account({ way, standing: 'signedIn', command: `bravebot auth login ${way}` })), /account-sign-in|account-command/)
+  }
+  // The bridge gives an AWS row no command where signing in is not the remedy: no AWS CLI, or a
+  // profile it does not have.
+  assert.doesNotMatch(drawRow(account({ way: 'bedrock', id: 'work', standing: 'unusable', command: null, detail: 'The AWS CLI is not installed.' })), /account-sign-in/)
+  const asked = []
+  const tree = AccountRowView(rowProps(account({ way: 'bedrock', id: 'work', command: 'bravebot auth login bedrock' }), { onSignIn: (...args) => asked.push(args) }))
+  byTest(tree, 'account-sign-in').props.onClick()
+  assert.deepEqual(asked, [['bedrock', 'work']], 'the AWS row asks for its own profile')
+  const gateway = drawRow(account({ id: 'openrouter', command: 'bravebot auth login gateway openrouter' }))
+  assert.doesNotMatch(gateway, /account-sign-in/)
+  assert.match(gateway, /With the bravebot command-line tool:<\/span> <span class="account-command-text"><code>bravebot auth login gateway openrouter<\/code>/)
+  assert.doesNotMatch(drawRow(account({ way: 'brave', standing: 'signedIn', keyFrom: 'stored', command: 'bravebot auth login brave' })), /account-command/)
+})
+
+test('every row carries its mark, hidden from assistive technology, and its standing as a label', () => {
+  const row = (fields) => AccountRowView(rowProps(account(fields)))
+  const logo = (fields) => byTest(row(fields), 'account-logo')?.props
+  const marks = [[{ way: 'chatgpt' }, 'openai'], [{ way: 'xai' }, 'xai'], [{ way: 'brave' }, 'brave-icon-release-color'], [{ way: 'bedrock' }, 'amazon-color'],
+    [{ way: 'gateway', id: 'openrouter' }, 'openrouter'], [{ way: 'gateway', id: 'work' }, 'key'], [{ way: 'gateways' }, 'key']]
+  for (const [fields, name] of marks) {
+    assert.equal(logo(fields)?.name, name, JSON.stringify(fields))
+    assert.equal(logo(fields)?.['aria-hidden'], 'true')
+  }
+  const colors = { signedIn: 'green', notSignedIn: 'neutral', unusable: 'yellow', misconfigured: 'red' }
+  for (const [standing, color] of Object.entries(colors)) assert.equal(byTest(row({ standing }), 'account-standing').props.color, color, standing)
+  assert.match(drawRow(account({ way: 'xai', name: 'xAI' })), /<span class="account-name">xAI<\/span><leo-label data-test="account-standing">Not signed in<\/leo-label>/)
+})
+
+// The key window (PREM-16, CRED-24): a row only asks for one, and the key never comes to the page.
+const keyEntry = (more = {}) => ({ open: false, busy: false, onEnter: noop, onShow: noop, ...more })
+
+test('a row that can take a key asks for its key window, and one with a key stored asks to replace it', () => {
+  const asked = []
+  const enter = (row) => byTest(AccountRowView(rowProps(row, { keyEntry: keyEntry({ onEnter: (...args) => asked.push(args) }) })), 'account-enter-key')
+  const openrouter = enter(account({ id: 'openrouter', name: 'OpenRouter', canEnterKey: true }))
+  assert.equal(openrouter.props.kind, 'filled')
+  openrouter.props.onClick()
+  const brave = enter(account({ way: 'brave', standing: 'signedIn', keyFrom: 'stored', canSignOut: true, canEnterKey: true }))
+  assert.equal(brave.props.kind, 'outline')
+  brave.props.onClick()
+  assert.deepEqual(asked, [['gateway', 'openrouter'], ['brave', null]], 'the row says only which way, never a key')
+  assert.match(drawRow(account({ id: 'openrouter', canEnterKey: true }), { keyEntry: keyEntry() }), /data-test="account-enter-key"[^>]*>Enter key</)
+  assert.match(drawRow(account({ way: 'brave', canSignOut: true, canEnterKey: true }), { keyEntry: keyEntry() }), /data-test="account-enter-key"[^>]*>Replace key</)
+  for (const row of [account({ canEnterKey: false }), account({ way: 'chatgpt', canEnterKey: true }), account({ way: 'bedrock', canEnterKey: true })]) {
+    assert.doesNotMatch(drawRow(row, { keyEntry: keyEntry() }), /account-enter-key/, JSON.stringify(row))
+  }
+  assert.doesNotMatch(drawRow(account({ canEnterKey: true })), /account-enter-key/, 'nothing is offered without the gate')
+  const command = 'bravebot auth login gateway openrouter'
+  assert.doesNotMatch(drawRow(account({ id: 'openrouter', canEnterKey: true, command }), { keyEntry: keyEntry() }), /account-command/, 'Enter key stands in for the command')
+  assert.match(drawRow(account({ id: 'openrouter', canEnterKey: true, command })), /account-command/, 'without the gate the command is still shown')
+  assert.equal(enter(account({ canEnterKey: true, id: 'gw' })).props.isDisabled, false)
+  assert.equal(byTest(AccountRowView(rowProps(account({ canEnterKey: true, id: 'gw' }), { keyEntry: keyEntry({ busy: true }) })), 'account-enter-key').props.isDisabled, true)
+})
+
+test('while its key window is open a row says so, brings it back, and is not signed out of', () => {
+  let shown = 0
+  const row = account({ way: 'brave', standing: 'signedIn', keyFrom: 'stored', canSignOut: true, canEnterKey: true })
+  const tree = AccountRowView(rowProps(row, { keyEntry: keyEntry({ open: true, busy: true, onShow: () => { shown += 1 } }) }))
+  assert.equal(byTest(tree, 'account-enter-key'), undefined)
+  assert.equal(byTest(tree, 'account-key-open').props.children, 'Enter the key in its window.')
+  byTest(tree, 'account-key-show').props.onClick()
+  assert.equal(shown, 1)
+  assert.equal(byTest(tree, 'account-sign-out').props.isDisabled, true)
+})
+
+test('what a key window came to is said with the row\'s name, and a key stored but not sent is a warning', async () => {
+  const { KeyResultAlert } = await loadComponents('src/renderer/components/Accounts.tsx')
+  const alert = (result) => renderToStaticMarkup(React.createElement(KeyResultAlert, { result: { way: 'gateway', id: 'openrouter', ...result }, name: 'OpenRouter' }))
+  assert.match(alert({ outcome: 'stored', sentence: null }), /<leo-alert[^>]*>Key stored for OpenRouter\.<\/leo-alert>/)
+  assert.match(alert({ outcome: 'stored', sentence: 'The key is stored, but…' }), /Key stored for OpenRouter\. The key is stored, but…/)
+  assert.match(alert({ outcome: 'failed', sentence: 'An incognito session keeps nothing on disk.' }), /Couldn&#x27;t store the key for OpenRouter\. An incognito session/)
+  const type = (result) => KeyResultAlert({ result: { way: 'brave', id: null, ...result }, name: 'Brave' }).props.type
+  assert.deepEqual([type({ outcome: 'stored', sentence: null }), type({ outcome: 'stored', sentence: 'x' }), type({ outcome: 'failed', sentence: 'x' })], ['success', 'warning', 'error'])
+})
+
+test('an AWS row waits on its own sign-in, and coming back to the window reads no AWS row again', async () => {
+  const source = readFileSync('src/renderer/components/Accounts.tsx', 'utf8')
+  assert.match(source, /if \(rowsNow\.current\?\.some\(\(row\) => row\.way === 'bedrock'\)\) return/)
+  assert.match(source, /signIn\.waiting\?\.way === row\.way && \(row\.way !== 'bedrock' \|\| signIn\.waiting\.id === row\.id\)/)
+  const { signInSentence } = await loadComponents('src/renderer/components/SignInButton.tsx')
+  assert.equal(signInSentence({ way: 'bedrock', id: null, outcome: 'signedIn', sentence: null }, 'AWS Bedrock'), 'Signed in to AWS Bedrock.')
+  assert.equal(signInSentence({ way: 'bedrock', id: null, outcome: 'signedIn', sentence: 'Your settings set BRAVEBOT_USE_BEDROCK=1 now.' }, 'AWS Bedrock'),
+    'Signed in to AWS Bedrock. Your settings set BRAVEBOT_USE_BEDROCK=1 now.')
+})
+
+test('Copy command copies exactly the command', () => {
+  const command = 'bravebot auth login gateway openrouter'
+  const copy = byTest(AccountRowView(rowProps(account({ command }))), 'account-copy')
+  assert.equal(copy.props.text(), command)
+  assert.equal(copy.props.label, 'Copy command')
+})
+
+test('Sign out is offered only where something is stored, and only asks', () => {
+  for (const fields of [{ way: 'brave', standing: 'signedIn', keyFrom: 'stored' }, { standing: 'notSignedIn' }, { way: 'xai', standing: 'unusable' }]) {
+    assert.match(drawRow(account({ ...fields, canSignOut: true })), /data-test="account-sign-out"/)
+  }
+  for (const fields of [{ standing: 'signedIn', keyFrom: 'environment' }, { standing: 'signedIn', keyFrom: 'none' }, { way: 'bedrock', standing: 'signedIn' }]) {
+    assert.doesNotMatch(drawRow(account({ ...fields, canSignOut: false })), /account-sign-out/)
+  }
+  let asked = 0
+  const tree = AccountRowView(rowProps(account({ standing: 'signedIn', keyFrom: 'stored', canSignOut: true }), { onSignOut: () => { asked += 1 } }))
+  byTest(tree, 'account-sign-out').props.onClick()
+  assert.equal(asked, 1, 'the button opens the question, and AccountRowView sends nothing itself')
+})
+
+test('the sign-out question forgets nothing unless it is answered Sign out', async () => {
+  const row = account({ id: 'openrouter', name: 'OpenRouter', standing: 'signedIn', keyFrom: 'stored', canSignOut: true, host: 'openrouter.ai' })
+  const html = renderToStaticMarkup(React.createElement(SignOutConfirm, { row, busy: false, onConfirm: noop, onCancel: noop }))
+  assert.match(html, /data-title="Sign out of OpenRouter\?"/)
+  assert.match(html, /bravebot forgets this sign-in on this computer\./)
+  assert.match(html, /The key still works at openrouter\.ai until you revoke it there\./)
+  assert.doesNotMatch(renderToStaticMarkup(React.createElement(SignOutConfirm, { row: { ...row, way: 'chatgpt', host: null }, busy: false, onConfirm: noop, onCancel: noop })), /sign-out-host/)
+
+  const said = []
+  const { Modal } = await loadComponents({ contents: "export { Modal } from './src/renderer/components/Modal'" }, [])
+  const tree = SignOutConfirm({ row, busy: false, onConfirm: () => said.push('confirm'), onCancel: () => said.push('cancel') })
+  assert.equal(tree.type.name, Modal.name)
+  tree.props.onClose()
+  byTest(tree, 'sign-out-cancel').props.onClick()
+  assert.deepEqual(said, ['cancel', 'cancel'], 'Escape and Cancel only close it')
+  byTest(tree, 'sign-out-confirm').props.onClick()
+  assert.deepEqual(said, ['cancel', 'cancel', 'confirm'])
+})
+
+test('the list is read only where the answer is one', () => {
+  const good = { accounts: [account({ way: 'chatgpt', name: 'ChatGPT', command: 'bravebot auth login chatgpt' })] }
+  assert.equal(parseAccounts(good).length, 1)
+  // A bridge from before the key window says nothing of it, which is no.
+  assert.equal(parseAccounts(good)[0].canEnterKey, false)
+  assert.equal(parseAccounts({ accounts: [{ ...good.accounts[0], canEnterKey: true }] })[0].canEnterKey, true)
+  assert.deepEqual(parseAccounts({ accounts: [] }), [])
+  for (const bad of [{}, null, undefined, { accounts: {} }, { accounts: [null] },
+    { accounts: [{ ...good.accounts[0], way: 'chatgpt-2' }] }, { accounts: [{ ...good.accounts[0], standing: 'expired' }] },
+    { accounts: [{ ...good.accounts[0], keyFrom: 'keychain' }] }, { accounts: [{ ...good.accounts[0], canSignOut: 'yes' }] },
+    { accounts: [{ ...good.accounts[0], name: undefined }] }, { accounts: [{ ...good.accounts[0], detail: 4 }] }]) {
+    assert.equal(parseAccounts(bad), null, JSON.stringify(bad))
+  }
+})
+
+test('Sign in is offered beside a command the window can run itself, and no other', () => {
+  assert.equal(signInWayOf('bravebot auth login chatgpt'), 'chatgpt')
+  assert.equal(signInWayOf('bravebot auth login xai'), 'xai')
+  for (const command of [null, undefined, '', 'bravebot auth login brave', 'bravebot auth login bedrock', 'bravebot auth login gateway xai', 'bravebot auth login xai --device', 'run bravebot auth login chatgpt']) {
+    assert.equal(signInWayOf(command), null, String(command))
+  }
+  const html = renderToStaticMarkup(React.createElement(ModelWarnings, {
+    warnings: ['Sign in to xAI: bravebot auth login xai', 'The gateway needs a key: bravebot auth login gateway g'],
+    commands: ['bravebot auth login xai', 'bravebot auth login gateway g'],
+  }))
+  assert.equal(html.match(/data-test="sign-in-xai"/g)?.length, 1)
+  assert.doesNotMatch(html, /sign-in-gateway/)
+})
+
+test('setting up a model service starts with the sign-ins and keys under Accounts, which is below it', async () => {
+  const { SetupRoutes } = await loadComponents('src/renderer/components/AgentSettings.tsx')
+  const html = renderToStaticMarkup(React.createElement(SetupRoutes))
+  const headings = [...html.matchAll(/<h4>([^<]*)<\/h4>/g)].map((m) => m[1])
+  assert.deepEqual(headings, ['Sign in to a service', 'A local model or another service', 'AWS Bedrock'])
+  assert.match(html, /data-test="settings-setup-accounts">Sign in to a ChatGPT, xAI or AWS account, or enter a key for Brave Premium, OpenRouter or another gateway, under Accounts, below\.</)
+  assert.match(html, /data-test="settings-setup-gateway-key">For a service that needs a key, enter it on its row under Accounts, or name/)
+  const page = readFileSync('src/renderer/components/AgentSettings.tsx', 'utf8')
+  assert.ok(page.indexOf('<SetupRoutes />') < page.indexOf('<Accounts '), 'Accounts is drawn after the routes that point to it')
+})
+
+test('AWS Bedrock is set up by naming the account and signing in to it', async () => {
+  const { SetupRoutes } = await loadComponents('src/renderer/components/AgentSettings.tsx')
+  const html = renderToStaticMarkup(React.createElement(SetupRoutes))
+  assert.doesNotMatch(html, /<pre>BRAVEBOT_USE_BEDROCK/, 'signing in records the switch, so it is not the first line to copy')
+  assert.match(html, /data-test="settings-setup-bedrock">Then sign in to the profile under Accounts, which turns Bedrock on\. Where the profile needs no sign-in, set <code>BRAVEBOT_USE_BEDROCK=1<\/code> as well\./)
+})
+
+test('a sign-in or a key stored under Accounts reads the connection again as well as the models', () => {
+  const page = readFileSync('src/renderer/components/AgentSettings.tsx', 'utf8')
+  assert.match(page, /<Accounts session=\{session\} refresh=\{refresh\} onChanged=\{\(\) => \{ onChanged\(\); void load\(\) \}\} \/>/)
+})
+
+test('a sign-in from a picker warning lists the models again, in the session the picker lists for', async () => {
+  const signedIn = () => {}
+  const tree = ModelWarnings({ warnings: ['Sign in to xAI'], commands: ['bravebot auth login xai'], session: 's1', onSignedIn: signedIn })
+  const button = [...elements(tree)].find((each) => each.type?.name === 'SignInButton')
+  assert.equal(button.props.onSignedIn, signedIn)
+  assert.equal(button.props.session, 's1')
+  const picker = readFileSync('src/renderer/components/ModelPicker.tsx', 'utf8')
+  assert.match(picker, /<ModelWarnings [^>]*session=\{session\} onSignedIn=\{\(\) => setRevision\(\(n\) => n \+ 1\)\} \/>/)
+})
+
+test('a waiting sign-in announces its words and not its buttons', async () => {
+  const { SignInWaiting } = await loadComponents('src/renderer/components/SignInButton.tsx')
+  const html = renderToStaticMarkup(React.createElement(SignInWaiting, { waiting: { attempt: 'a1', way: 'chatgpt', id: null, started: true, port: null, until: null }, onShow: noop, onCancel: noop }))
+  assert.equal(html.match(/role="status"/g)?.length, 1)
+  assert.match(html, /<span role="status">[^<]*<\/span>/)
+})
+
+test('an ending for a row no longer listed is named for its account, not its way', () => {
+  const source = readFileSync('src/renderer/components/Accounts.tsx', 'utf8')
+  assert.match(source, /\?\? \(keyed\.way === 'brave' \? 'Brave Premium' : keyed\.id \?\? keyed\.way\)/)
+  assert.match(source, /\?\? SIGN_IN_NAMES\[ended\.way\]/)
+})

@@ -37,6 +37,8 @@ bravebot-sandbox = { path = "../sandbox" }
 bravebot-core = { path = "../core" }
 # Session records, state storage, and audit trails are shared with the terminal UI.
 bravebot-session = { path = "../session" }
+# The ChatGPT and xAI sign-ins the window starts, from one file (accounts.rs).
+bravebot-skus = { path = "../skus" }
 # Which build wrote a record. The stamp is a crate of its own, so naming the build no longer
 # costs a front end that draws nothing a dependency on the terminal library.
 bravebot-stamp = { path = "../stamp" }

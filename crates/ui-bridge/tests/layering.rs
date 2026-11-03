@@ -48,6 +48,13 @@ fn the_state_directory_is_written_only_through_the_crate_that_owns_it() {
     let mut offences = Vec::new();
 
     visit(&source, &mut |path, text| {
+        // A file that is a test module of its own is declared elsewhere with `mod x_tests;`.
+        if path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().ends_with("_tests.rs"))
+        {
+            return;
+        }
         for (number, line) in outside_tests(text) {
             let code = line.split("//").next().unwrap_or("");
             for forbidden in [

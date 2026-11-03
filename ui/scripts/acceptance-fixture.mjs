@@ -76,6 +76,14 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
       ],
       commands: [{ program: '/usr/bin/git', args: ['status'], display: 'git status' }],
     },
+    // One sign-in of each standing, as `accounts.list` reports them. No row carries a key or a token.
+    accounts: [
+      { way: 'brave', id: null, name: 'Brave Premium', standing: 'signedIn', keyFrom: 'stored', detail: null, command: 'bravebot auth login brave', canSignOut: true, host: null },
+      { way: 'gateway', id: 'openrouter', name: 'OpenRouter', standing: 'notSignedIn', keyFrom: null, detail: null, command: 'bravebot auth login gateway openrouter', canSignOut: false, host: 'openrouter.ai' },
+      { way: 'gateway', id: 'broken', name: 'Broken gateway', standing: 'misconfigured', keyFrom: null, detail: 'The gateway block in settings.json names no address.', command: null, canSignOut: false, host: null },
+      { way: 'chatgpt', id: null, name: 'ChatGPT', standing: 'notSignedIn', keyFrom: null, detail: null, command: 'bravebot auth login chatgpt', canSignOut: false, host: null },
+      { way: 'xai', id: null, name: 'xAI', standing: 'unusable', keyFrom: null, detail: 'The stored xAI sign-in cannot be read. Sign in again.', command: 'bravebot auth login xai', canSignOut: true, host: null },
+    ],
   }
   const replace = (name, fn) => {
     ipcMain.removeHandler(name)
@@ -190,6 +198,13 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
       if (p.kind === 'path') ux.grants.paths = ux.grants.paths.filter((g) => g.path !== p.path)
       else ux.grants.commands = []
       return { ok: ux.grants }
+    }
+    if (method === 'accounts.list') return { ok: { accounts: ux.accounts } }
+    if (method === 'accounts.signOut') {
+      ux.accounts = ux.accounts.map((row) => row.way === p.way && row.id === (p.id ?? null) && row.canSignOut
+        ? { ...row, standing: 'notSignedIn', keyFrom: null, detail: null, canSignOut: false }
+        : row)
+      return { ok: { accounts: ux.accounts } }
     }
     return { ok: {} }
   })

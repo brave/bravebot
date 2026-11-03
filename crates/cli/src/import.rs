@@ -906,45 +906,23 @@ fn unset_line(provider: &Provider, file: &Path, later: bool) -> String {
     }
 }
 
-/// Put the destination on disk, whole, in place of the file it was read from.
-///
-/// Written beside it under a name of its own at STATE-1's mode, then renamed over it, so a failed
-/// write leaves the old file as it was and no copy of a key is readable by another user in between.
-/// Through a link rather than over it, so a settings file kept among somebody's dotfiles stays
-/// where they keep it. `unwritable` words a refusal of the document for the command writing it.
+/// Put the destination on disk, whole, in place of the file it was read from, as
+/// [`bravebot_agent::accounts::write_settings`] does. `unwritable` words a refusal of the document
+/// for the command writing it.
 pub(crate) fn write(
     destination: &Destination,
     unwritable: fn(import::Unwritable, &Path) -> String,
 ) -> Result<(), String> {
+    use bravebot_agent::accounts::SettingsNotWritten;
     let path = destination.path();
-    let said = |problem: String| {
-        t!(
+    bravebot_agent::accounts::write_settings(destination).map_err(|failure| match failure {
+        SettingsNotWritten::Unwritable(why) => unwritable(why, path),
+        SettingsNotWritten::Refused(problem) => t!(
             import_not_written,
             file = printable(&path.display().to_string()),
             problem = problem
-        )
-    };
-    // The questions take as long as the person does, and another program may write the file
-    // meanwhile.
-    if destination.changed() {
-        return Err(unwritable(import::Unwritable::Changed, path));
-    }
-    let text = destination
-        .text()
-        .map_err(|why| unwritable(why, destination.path()))?;
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let Some(parent) = target.parent() else {
-        return Err(said(target.display().to_string()));
-    };
-    bravebot_agent::home::create_directory(parent).map_err(|err| said(err.to_string()))?;
-    let temporary = parent.join(format!(".settings.json.import-{}", std::process::id()));
-    let written = bravebot_agent::home::write_file(&temporary, text.expose().as_bytes())
-        .and_then(|()| std::fs::rename(&temporary, &target));
-    if let Err(err) = written {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(said(err.to_string()));
-    }
-    Ok(())
+        ),
+    })
 }
 
 #[cfg(test)]

@@ -394,6 +394,185 @@ pub fn sign_in_if_needed(
     login(profile, say)
 }
 
+/// A way to end a sign-in started by [`sign_in_if_needed_until`] from another thread.
+///
+/// Holds the CLI's process while it runs, so [`Stop::stop`] ends it at once and nothing is
+/// signalled by number once it has been waited for, when the number may belong to another program.
+#[derive(Default)]
+pub struct Stop {
+    state: std::sync::Mutex<Stopping>,
+}
+
+#[derive(Default)]
+struct Stopping {
+    stopped: bool,
+    child: Option<std::process::Child>,
+}
+
+impl Stop {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// End the sign-in. The CLI is killed now, and one not started yet never starts.
+    pub fn stop(&self) {
+        let mut state = self.lock();
+        state.stopped = true;
+        if let Some(child) = state.child.as_mut() {
+            kill(child);
+        }
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.lock().stopped
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Stopping> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// The CLI and every program in the group it leads. A browser the CLI opens is started in a session
+/// of its own by Python's `webbrowser`, so it is not in the group and stays open.
+fn kill(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    if let Some(group) = rustix::process::Pid::from_raw(child.id().cast_signed()) {
+        rustix::process::kill_process_group(group, rustix::process::Signal::KILL)
+            .unwrap_or_default();
+    }
+    child.kill().unwrap_or_default();
+}
+
+/// How a sign-in [`sign_in_if_needed_until`] ran did not end signed in.
+#[derive(Debug)]
+pub enum Stopped {
+    /// [`Stop::stop`] was called before the CLI finished.
+    Cancelled,
+    Failed(CredentialError),
+}
+
+/// [`sign_in_if_needed`], for a caller that may end it before the person has finished in the
+/// browser: a window, which has no Ctrl-C for the program it started.
+///
+/// The CLI leads a process group of its own, so the worker the installed CLI forks goes with it on
+/// a stop. A CLI that finished signed in before the stop reached it is reported signed in, since it
+/// is.
+pub fn sign_in_if_needed_until(
+    profile: Option<&str>,
+    say: impl FnMut(String),
+    stop: &Stop,
+) -> Result<(), Stopped> {
+    if is_signed_in(profile) {
+        return Ok(());
+    }
+    if let Some(absent) = absent_from(profile, profiles()) {
+        return Err(Stopped::Failed(absent));
+    }
+    let command = login_command(profile);
+    if absent(&command) {
+        return Err(Stopped::Failed(CredentialError::NotInstalled));
+    }
+    login_until(command, say, stop)
+}
+
+fn login_until(
+    mut command: Command,
+    mut say: impl FnMut(String),
+    stop: &Stop,
+) -> Result<(), Stopped> {
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+
+    let mut state = stop.lock();
+    if state.stopped {
+        return Err(Stopped::Cancelled);
+    }
+    let mut child = start_piped(&mut command)
+        .map_err(|e| started_badly(&e))
+        .map_err(Stopped::Failed)?;
+    let arriving = read_lines_of(&mut child);
+    state.child = Some(child);
+    drop(state);
+
+    // Not until the streams close, as `login` waits: a program the CLI started may hold them open
+    // after it has gone, and a stop has to end the wait without them.
+    let status = loop {
+        match arriving.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(line) => {
+                say(line);
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        }
+        let mut state = stop.lock();
+        let Some(child) = state.child.as_mut() else {
+            return Err(Stopped::Cancelled);
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                state.child = None;
+                break status;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                kill(child);
+                child.wait().ok();
+                state.child = None;
+                return Err(Stopped::Failed(CredentialError::Refused {
+                    detail: e.to_string(),
+                }));
+            }
+        }
+    };
+    // The readers may not have passed on the last lines yet; a program still holding the streams
+    // open is waited for no longer than this.
+    let drained = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while let Ok(line) =
+        arriving.recv_timeout(drained.saturating_duration_since(std::time::Instant::now()))
+    {
+        say(line);
+    }
+
+    if status.success() {
+        Ok(())
+    } else if stop.stopped() {
+        Err(Stopped::Cancelled)
+    } else {
+        Err(Stopped::Failed(CredentialError::Refused {
+            detail: "the sign-in did not complete".to_string(),
+        }))
+    }
+}
+
+fn started_badly(e: &std::io::Error) -> CredentialError {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
+        _ => CredentialError::Refused {
+            detail: e.to_string(),
+        },
+    }
+}
+
+/// Both of the child's output streams, drained on a thread apiece and merged over one channel, so
+/// neither blocks against a pipe nobody is reading and the lines arrive in the order they were
+/// written. The channel closes once both streams have.
+fn read_lines_of(child: &mut std::process::Child) -> mpsc::Receiver<String> {
+    let (lines, arriving) = mpsc::channel::<String>();
+    for stream in [
+        child.stdout.take().map(Reading::Out),
+        child.stderr.take().map(Reading::Err),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let lines = lines.clone();
+        std::thread::spawn(move || stream.read_lines_into(&lines));
+    }
+    arriving
+}
+
 /// Start `command` with no input and both output streams piped, under the spawn gate. The wait for
 /// the program to finish belongs to the caller and is taken outside the gate, so a slow CLI holds up
 /// no other start.
@@ -507,36 +686,12 @@ fn login(profile: Option<&str>, mut say: impl FnMut(String)) -> Result<(), Crede
     // person who cannot see it is stuck either way. Nothing is typed at this: the code goes into a
     // browser, and the terminal belongs to whoever called, so a program left able to read stdin
     // would fight for the keys.
-    let mut child = start_piped(&mut command).map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
-        _ => CredentialError::Refused {
-            detail: e.to_string(),
-        },
-    })?;
-
-    // Drained on a thread apiece and merged over one channel, so neither stream blocks against a
-    // pipe nobody is reading and the lines arrive in the order they were written.
-    let (lines, arriving) = mpsc::channel::<String>();
-    let readers: Vec<_> = [
-        child.stdout.take().map(Reading::Out),
-        child.stderr.take().map(Reading::Err),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|stream| {
-        let lines = lines.clone();
-        std::thread::spawn(move || stream.read_lines_into(&lines))
-    })
-    .collect();
-    drop(lines);
+    let mut child = start_piped(&mut command).map_err(|e| started_badly(&e))?;
 
     // Every line is passed on as it arrives. The loop ends when both readers have finished, which
     // is when the command has closed its streams.
-    for line in arriving {
+    for line in read_lines_of(&mut child) {
         say(line);
-    }
-    for reader in readers {
-        let _ = reader.join();
     }
 
     let status = child.wait().map_err(|e| CredentialError::Refused {
@@ -1448,5 +1603,105 @@ mod tests {
     #[test]
     fn a_very_long_failure_is_bounded() {
         assert!(first_line("x".repeat(10_000).as_bytes()).chars().count() <= 200);
+    }
+
+    /// A shell standing in for the CLI: it prints what the CLI prints, then waits, with a worker of
+    /// its own holding the same output open, as the installed CLI's forked worker does.
+    #[cfg(unix)]
+    fn a_waiting_cli(pid_file: &Path) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "echo 'https://device.sso.us-east-1.amazonaws.com/'; echo 'ABCD-EFGH'; sleep 60 & echo $! > \"$0\"; wait",
+        ]);
+        command.arg(pid_file);
+        command
+    }
+
+    #[cfg(unix)]
+    fn alive(pid: i32) -> bool {
+        rustix::process::Pid::from_raw(pid)
+            .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
+    }
+
+    /// A stop while the CLI waits for the browser ends the sign-in cancelled, and ends the CLI and
+    /// what it started along with it, without waiting for either to close its output.
+    #[cfg(unix)]
+    #[test]
+    fn a_stop_while_the_cli_waits_kills_it_and_its_worker() {
+        let directory = fresh_directory("credentials-stop-waiting");
+        let pid_file = directory.join("worker");
+        let stop = std::sync::Arc::new(Stop::new());
+        let (said, heard) = mpsc::channel();
+        let running = {
+            let stop = std::sync::Arc::clone(&stop);
+            let command = a_waiting_cli(&pid_file);
+            std::thread::spawn(move || login_until(command, |line| drop(said.send(line)), &stop))
+        };
+        let lines: Vec<String> = heard.iter().take(2).collect();
+        assert_eq!(
+            lines,
+            ["https://device.sso.us-east-1.amazonaws.com/", "ABCD-EFGH"]
+        );
+        let worker = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|text| text.trim().parse::<i32>().ok())
+            {
+                break pid;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert!(alive(worker));
+
+        let asked = std::time::Instant::now();
+        stop.stop();
+        let ended = running.join().unwrap();
+
+        assert!(matches!(ended, Err(Stopped::Cancelled)), "{ended:?}");
+        assert!(asked.elapsed() < std::time::Duration::from_secs(5));
+        let gone = (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            !alive(worker)
+        });
+        assert!(gone, "the worker outlived the stop");
+        assert!(stop.lock().child.is_none(), "the CLI was not waited for");
+    }
+
+    /// A stop that came first starts nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_stop_before_the_cli_starts_starts_nothing() {
+        let directory = fresh_directory("credentials-stop-first");
+        let pid_file = directory.join("worker");
+        let stop = Stop::new();
+        stop.stop();
+        let ended = login_until(a_waiting_cli(&pid_file), |_| {}, &stop);
+        assert!(matches!(ended, Err(Stopped::Cancelled)), "{ended:?}");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!pid_file.exists());
+    }
+
+    /// A CLI that finishes is the sign-in's answer, every line it wrote is passed on, and a stop
+    /// after that changes nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_that_finishes_is_the_answer_whether_or_not_it_succeeded() {
+        let mut lines = Vec::new();
+        let stop = Stop::new();
+        let mut finishing = Command::new("/bin/sh");
+        finishing.args(["-c", "echo one; echo two >&2"]);
+        assert!(login_until(finishing, |line| lines.push(line), &stop).is_ok());
+        lines.sort();
+        assert_eq!(lines, ["one", "two"]);
+        stop.stop();
+
+        let mut failing = Command::new("/bin/sh");
+        failing.args(["-c", "exit 3"]);
+        let ended = login_until(failing, |_| {}, &Stop::new());
+        assert!(
+            matches!(ended, Err(Stopped::Failed(CredentialError::Refused { .. }))),
+            "{ended:?}"
+        );
     }
 }

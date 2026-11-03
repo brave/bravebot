@@ -237,6 +237,7 @@ dependencies = [
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-signing",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "tempfile",

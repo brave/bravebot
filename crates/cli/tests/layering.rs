@@ -705,21 +705,30 @@ fn names_the_chatgpt_sign_in(text: &str) -> bool {
         || (text.contains("chatgpt as ") && text.contains("sign_in("))
 }
 
-/// CHATGPT-1 says only a command a person types signs in. The flow is `bravebot_skus::chatgpt`'s
-/// `sign_in`, which opens a browser, holds a port and ends with a credential on disk, so a tool, a
-/// hook, a slash command or a background host that called it would start that on content's say. The
-/// one caller is the command's own file, and a file that names the module and `sign_in` together is
-/// a second, as is one that names the module and calls `sign_in` through the crate's alias. A file a
-/// test module declares is a test, and is not read. A file that only reads the sign-in file, as the
-/// agent's does to tell a first run what is configured, names neither.
+/// CHATGPT-1 says only a command a person types, or the desktop window's main process after its
+/// person said yes (CHATGPT-15), signs in. The flow is `bravebot_skus::chatgpt`'s `sign_in`, which
+/// opens a browser, holds a port and ends with a credential on disk, so a tool, a hook, a slash
+/// command or a background host that called it would start that on content's say. The callers are
+/// the command's own file and the bridge's accounts file, and a file that names the module and
+/// `sign_in` together is a second, as is one that names the module and calls `sign_in` through the
+/// crate's alias. A file a test module declares is a test, and is not read. A file that only reads
+/// the sign-in file, as the agent's does to tell a first run what is configured, names neither.
 #[test]
 fn the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else() {
-    let callers: Vec<String> = shipped::sources()
+    let callers: BTreeSet<String> = shipped::sources()
         .iter()
         .filter(|source| names_the_chatgpt_sign_in(&source.without_test_modules))
         .map(|source| source.name.clone())
         .collect();
-    assert_eq!(callers, ["crates/cli/src/chatgpt.rs"]);
+    assert_eq!(
+        callers,
+        [
+            "crates/cli/src/chatgpt.rs",
+            "crates/ui-bridge/src/accounts.rs"
+        ]
+        .map(String::from)
+        .into()
+    );
 }
 
 /// The scan above reads the way a file names the flow, so the ways it can be named are held here:
@@ -764,20 +773,27 @@ fn names_the_xai_sign_in(text: &str) -> bool {
         || (text.contains("xai as ") && text.contains("sign_in("))
 }
 
-/// XAI-7 says only a command a person types signs in. The flow is `bravebot_skus::xai`'s `sign_in`,
-/// which shows a code, waits for it to be used for as long as it lasts and ends with a credential on
-/// disk, so a tool, a hook, a slash command or a background host that called it would start that on
-/// content's say. The one caller is the command's own file, and a file that names the module and
-/// `sign_in` together is a second. A file a test module declares is a test, and is not read. A file
-/// that only reads the sign-in file or words its failures names the module and not `sign_in`.
+/// XAI-7 says only a command a person types, or the desktop window's main process after its person
+/// said yes (XAI-20), signs in. The flow is `bravebot_skus::xai`'s `sign_in`, which shows a code,
+/// waits for it to be used for as long as it lasts and ends with a credential on disk, so a tool, a
+/// hook, a slash command or a background host that called it would start that on content's say. The
+/// callers are the command's own file and the bridge's accounts file, and a file that names the
+/// module and `sign_in` together is a second. A file a test module declares is a test, and is not
+/// read. A file that only reads the sign-in file or words its failures names the module and not
+/// `sign_in`.
 #[test]
 fn the_xai_sign_in_is_started_by_the_command_and_nothing_else() {
-    let callers: Vec<String> = shipped::sources()
+    let callers: BTreeSet<String> = shipped::sources()
         .iter()
         .filter(|source| names_the_xai_sign_in(&source.without_test_modules))
         .map(|source| source.name.clone())
         .collect();
-    assert_eq!(callers, ["crates/cli/src/xai.rs"]);
+    assert_eq!(
+        callers,
+        ["crates/cli/src/xai.rs", "crates/ui-bridge/src/accounts.rs"]
+            .map(String::from)
+            .into()
+    );
 }
 
 /// The scan above reads the way a file names the flow, so the ways it can be named are held here:
@@ -808,6 +824,33 @@ fn the_scan_for_the_xai_sign_in_finds_each_way_to_name_it_and_not_a_read_of_the_
     ] {
         assert!(!names_the_xai_sign_in(reads), "{reads}");
     }
+}
+
+/// BACKEND-70 says the window's AWS sign-in is started by its main process after its person said
+/// yes. The sign-in that can be stopped from another thread is that one: the agent's wrapper names
+/// it to reach the AWS crate, and the bridge's file for the AWS row is its only caller. The sign-in
+/// a turn makes before it starts (BACKEND-9) and the command's own are the other, uncancellable
+/// one.
+#[test]
+fn the_cancellable_aws_sign_in_is_started_by_the_window_and_nothing_else() {
+    let callers = shipped::sources()
+        .iter()
+        .filter(|source| {
+            let text = &source.without_test_modules;
+            text.contains("sign_in_to_until") || text.contains("sign_in_if_needed_until")
+        })
+        .map(|source| source.name.clone())
+        .collect::<BTreeSet<String>>();
+    assert_eq!(
+        callers,
+        [
+            "crates/agent/src/backend.rs",
+            "crates/bedrock/src/credentials.rs",
+            "crates/ui-bridge/src/accounts_bedrock.rs"
+        ]
+        .map(String::from)
+        .into()
+    );
 }
 
 /// The scan that holds the kernel to no I/O has to see each way of reaching out, or the test

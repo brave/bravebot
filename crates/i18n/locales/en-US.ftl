@@ -1373,6 +1373,7 @@ chatgpt-failed-listener =
     could not listen for the browser on the loopback address, so no browser was opened and nothing was changed
 chatgpt-failed-timed-out =
     the browser did not return to bravebot in time, so the sign-in stopped and nothing was stored; a browser on another machine reaches this machine's loopback port only if the port named above is forwarded to it
+chatgpt-failed-cancelled = the sign-in was cancelled, so nothing was stored
 chatgpt-failed-no-code =
     the browser returned no authorization code, so the sign-in stopped and nothing was stored; run bravebot auth login chatgpt to try again
 chatgpt-failed-no-client =
@@ -1464,6 +1465,7 @@ xai-failed-expired =
     the code stopped working before it was used, so nothing was stored; run bravebot auth login xai to try again
 xai-failed-timed-out =
     the code was not used within the time bravebot waits for one, so the sign-in stopped and nothing was stored; run bravebot auth login xai to try again
+xai-failed-cancelled = the sign-in was cancelled, so nothing was stored
 xai-failed-code = xAI did not give a code to sign in with: { $reason }; nothing was stored
 xai-failed-exchange = the sign-in could not be completed: { $reason }; nothing was stored
 xai-failed-clock =
@@ -4052,6 +4054,84 @@ desktop-xai-renewal-transport = The xAI sign-in could not be renewed because xAI
 desktop-xai-fell-back-rate-limited = This turn moves from { $from } to { $to } because the xAI sign-in could not be renewed while xAI is limiting requests.
 desktop-xai-fell-back-unavailable = This turn moves from { $from } to { $to } because the xAI sign-in could not be renewed while xAI is unavailable.
 desktop-xai-fell-back = This turn moves from { $from } to { $to } because the xAI account could not be used.
+# The Accounts block of the desktop window's agent settings, and the sign-ins it starts. Each
+# sentence is chosen from a reason alone and repeats nothing a service, a file or the AWS CLI wrote.
+desktop-accounts-name-brave = Brave premium service
+desktop-accounts-name-bedrock = Amazon Bedrock
+desktop-accounts-name-bedrock-profile = Amazon Bedrock ({ $profile })
+desktop-accounts-name-gateways = Gateways
+desktop-accounts-name-chatgpt = ChatGPT account
+desktop-accounts-name-xai = xAI account
+desktop-accounts-misconfigured = The settings could not be read, so this could not be checked.
+desktop-accounts-nowhere = This computer has no bravebot state directory to keep a sign-in in.
+desktop-accounts-brave-unreadable = The stored premium key could not be read, so sign out, then enter it again.
+desktop-accounts-chatgpt-unreadable = The stored ChatGPT sign-in could not be read, so sign in again or sign out.
+desktop-accounts-xai-unreadable = The stored xAI sign-in could not be read, so sign in again or sign out.
+desktop-accounts-bedrock-lapsed = The AWS session has ended, so sign in again.
+desktop-accounts-bedrock-no-profile = The AWS CLI has no profile by this name.
+desktop-accounts-bedrock-no-cli = The AWS CLI is not installed.
+desktop-accounts-bedrock-undecodable = The AWS CLI's answer could not be read.
+desktop-accounts-bedrock-timed-out = The AWS CLI did not answer in time, so refresh to ask again.
+desktop-accounts-gateway-none-configured = This computer's managed settings allow no gateway.
+desktop-accounts-gateway-unrecorded = A key is stored for this service, but no settings name it, so no session sends it.
+desktop-accounts-gateway-absent = No key is set for this gateway.
+desktop-accounts-keys-unreadable = The file of gateway keys could not be read, so it was left as it is.
+desktop-accounts-not-checked = Not checked.
+desktop-accounts-not-removed = The sign-in could not be removed from this computer.
+desktop-accounts-sign-in-nowhere = Nothing can be stored on this computer, so the sign-in did not start.
+desktop-accounts-sign-in-misconfigured = The settings could not be read, so the sign-in did not start.
+desktop-accounts-sign-in-chatgpt-is-a-gateway = A gateway in the settings is named chatgpt, so the ChatGPT account cannot be signed in to as well.
+desktop-accounts-sign-in-xai-is-a-gateway = A gateway in the settings is named xai, so the xAI account cannot be signed in to as well.
+desktop-accounts-sign-in-stored = A sign-in is already stored, so it was left as it is.
+desktop-accounts-openai-refused = OpenAI refused the sign-in, so nothing was stored.
+desktop-accounts-openai-rate-limited = OpenAI is limiting requests, so nothing was stored. Try again later.
+desktop-accounts-openai-unavailable = OpenAI's sign-in service is unavailable, so nothing was stored. Try again later.
+desktop-accounts-openai-incomplete = The reply from OpenAI was incomplete, so nothing was stored.
+desktop-accounts-openai-transport = OpenAI could not be reached, so nothing was stored. Check the connection and try again.
+desktop-accounts-chatgpt-listener = The browser could not be listened for on this computer, so the sign-in did not start.
+desktop-accounts-chatgpt-timed-out = The browser did not come back in time, so nothing was stored.
+desktop-accounts-chatgpt-not-completed = The browser did not complete the sign-in, so nothing was stored. Try again.
+desktop-accounts-chatgpt-client-changed = The browser returned a different client from the one stored, so nothing was changed. Sign out, then sign in again.
+desktop-accounts-chatgpt-no-use-scope = The sign-in did not allow bravebot to use the subscription, so nothing was stored. Sign in again and allow it.
+desktop-accounts-xai-refused = xAI refused the sign-in, so nothing was stored.
+desktop-accounts-xai-rate-limited = xAI is limiting requests, so nothing was stored. Try again later.
+desktop-accounts-xai-unavailable = xAI is unavailable, so nothing was stored. Try again later.
+desktop-accounts-xai-incomplete = The reply from xAI could not be read, so nothing was stored.
+desktop-accounts-xai-transport = xAI could not be reached, so nothing was stored. Check the connection and try again.
+desktop-accounts-xai-denied = xAI denied the sign-in, so nothing was stored.
+desktop-accounts-xai-expired = The code was not used in time, so nothing was stored.
+desktop-accounts-clock = This computer's clock is set before 1970, so nothing was stored. Set the clock and try again.
+desktop-accounts-not-stored = The sign-in could not be stored on this computer.
+desktop-accounts-cancelled = Sign-in cancelled.
+# The window's own key entry, said in its key window or under the row that asked. None names a path
+# or repeats what a file holds.
+desktop-accounts-key-incognito = An incognito session keeps nothing on disk, so no key can be stored.
+desktop-accounts-key-nowhere = This computer has no bravebot state directory to keep a key in.
+desktop-accounts-key-brave-unreadable = The stored premium key could not be read, so it was left as it is. Sign out to remove it, then enter the key again.
+desktop-accounts-key-misconfigured = The settings could not be read, so no key can be stored.
+desktop-accounts-key-not-offered = These settings offer no gateway by this name to store a key for.
+desktop-accounts-key-cannot-record = A key for this service is sent only once your settings name it, and they cannot be changed to name it, so no key was asked for.
+desktop-accounts-key-empty = No key was typed, so nothing was stored.
+desktop-accounts-key-stored-already = A key is stored already, so it was left as it is.
+desktop-accounts-key-not-stored = The key could not be stored on this computer.
+desktop-accounts-key-not-recorded = The key is stored, but your settings could not be changed to name this service, so no session sends it until they do.
+
+# The window's sign-in to an AWS account, which runs aws sso login. The switch is
+# BRAVEBOT_USE_BEDROCK, the region AWS_REGION, and the tiers the variables that name a model.
+desktop-accounts-sign-in-bedrock-pinned-off = This computer's managed settings turn Bedrock off for every user, and no amazon-bedrock provider block names an AWS account, so there is nothing to sign in to.
+desktop-accounts-sign-in-bedrock-off = { $switch } is set to something other than 1, which turns Bedrock off, and no amazon-bedrock provider block names an AWS account, so there is nothing to sign in to.
+desktop-accounts-sign-in-no-aws-account = No AWS account is configured for Bedrock, so there is nothing to sign in to. Set { $region } and a model in one of { $tiers }.
+desktop-accounts-sign-in-aws-gone = The settings no longer name this AWS account, so the sign-in did not start.
+desktop-accounts-aws-no-cli = The AWS CLI is not installed, so the sign-in did not start.
+desktop-accounts-aws-no-profile = The AWS CLI has no profile by this name, so the sign-in did not start.
+desktop-accounts-aws-not-completed = The AWS sign-in did not complete.
+desktop-accounts-aws-undecodable = The AWS CLI's answer could not be read, so the session could not be checked.
+desktop-accounts-aws-still-signed-out = The AWS CLI finished signing in, and the profile still gives no credentials to sign a request with.
+desktop-accounts-bedrock-recorded = Your settings set { $switch }=1 now, so a session uses Bedrock without it being exported.
+desktop-accounts-bedrock-not-recorded = { $switch }=1 could not be written to your settings, so it still has to be exported for a session to use Bedrock.
+desktop-accounts-bedrock-not-recorded-incognito = An incognito session records nothing, so { $switch }=1 still has to be exported for a session to use Bedrock.
+desktop-accounts-bedrock-overruled = A settings file sets { $switch } to something other than 1, so a session uses Bedrock only where { $switch }=1 is exported.
+desktop-accounts-bedrock-left = Your settings already name { $switch }, so they were left as they are, and a session uses Bedrock only where { $switch }=1 is exported or a project's settings set it.
 
 
 ## Repeating a prompt
@@ -5448,6 +5528,49 @@ ui-settings-language-unsaved = Couldn't save the language.
 ui-settings-language-unread = Couldn't read the language setting.
 ui-settings-restart = Restart
 ui-settings-restart-running = A turn is still running. Restart once it has finished or been stopped.
+ui-accounts-heading = Accounts
+ui-accounts-signed-in = Signed in
+ui-accounts-key-stored = Key stored
+ui-accounts-key-from-environment = Key from the environment
+ui-accounts-no-key-needed = No key needed
+ui-accounts-not-signed-in = Not signed in
+ui-accounts-unusable = Can't be used
+ui-accounts-misconfigured = The configuration can't be read
+ui-accounts-with-cli = With the bravebot command-line tool:
+ui-accounts-copy-command = Copy command
+ui-accounts-sign-out = Sign out
+ui-accounts-sign-out-title = Sign out of { $name }?
+ui-accounts-sign-out-body = bravebot forgets this sign-in on this computer. Turns that use it stop until you sign in again.
+ui-accounts-sign-out-gateway-body = The key still works at { $host } until you revoke it there.
+ui-accounts-signed-out = Signed out of { $name }.
+ui-accounts-sign-out-failed = Couldn't sign out of { $name }.
+ui-accounts-environment-note = These are the sign-ins this app sees. A key set only in a terminal's environment isn't seen here.
+ui-accounts-unread = The agent did not list its sign-ins. Rebuild or reinstall the app, then refresh.
+ui-accounts-sign-in = Sign in
+ui-accounts-waiting = Waiting for you to finish signing in…
+ui-accounts-requesting-code = Requesting a code…
+ui-accounts-port = Port { $port }
+ui-accounts-stops-waiting = Stops waiting at { $time }.
+ui-accounts-show-sign-in-window = Show sign-in window
+ui-accounts-cancel = Cancel
+ui-accounts-cancelled = Sign-in cancelled.
+ui-accounts-signed-in-to = Signed in to { $name }.
+ui-accounts-sign-in-failed = Couldn't sign in to { $name }.
+ui-accounts-sign-in-busy = Another sign-in is already running.
+ui-accounts-setup-heading = Sign in to a service
+ui-accounts-setup-pointer = Sign in to a ChatGPT, xAI or AWS account, or enter a key for Brave Premium, OpenRouter or another gateway, under Accounts, below.
+ui-accounts-enter-key = Enter key
+ui-accounts-replace-key = Replace key
+ui-accounts-key-window-open = Enter the key in its window.
+ui-accounts-show-key-window = Show key window
+ui-accounts-key-stored-for = Key stored for { $name }.
+ui-accounts-key-not-stored-for = Couldn't store the key for { $name }.
+ui-unconfigured-title = Connect a model service
+ui-unconfigured-subtitle = The agent has no model service it can use yet. You can keep browsing conversations and writing drafts.
+ui-unconfigured-body = Sign in to an account, or set up a gateway or AWS Bedrock, in Agent settings.
+ui-unconfigured-open-settings = Open Agent settings
+ui-unconfigured-continue = Continue browsing
+ui-unconfigured-details = Technical details
 gcloud-not-installed = The Google Cloud CLI (`gcloud`) was not found. Install it and run `gcloud auth application-default login`, or set GOOGLE_API_KEY to use Google Vertex AI with a key.
 gcloud-refused = The Google Cloud CLI gave no access token ({ $detail }). Run `gcloud auth application-default login`.
 gcloud-no-token = the reply was not a token

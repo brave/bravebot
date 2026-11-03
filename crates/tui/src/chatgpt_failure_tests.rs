@@ -231,6 +231,7 @@ fn a_child_that_makes_the_run_and_folds_each_failure() {
             done: "You can close this tab.",
             not_found: "Not found.",
         },
+        &std::sync::atomic::AtomicBool::new(false),
         |announcement| {
             std::fs::write(&url_file, announcement.url).expect("the address is written");
             chatgpt_stand_in::browse(announcement.url);

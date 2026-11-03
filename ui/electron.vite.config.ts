@@ -42,15 +42,18 @@ export function leoIcons(): Plugin {
 
 export default defineConfig({
   main: { build: { rollupOptions: { input: resolve(__dirname, 'src/main/index.ts') } } },
-  // Two preloads and two pages: the window somebody types in, and the offscreen one a PDF
-  // is printed from. Rollup names each chunk after its key, which is what puts them at the
-  // paths `src/main/export.ts` loads them from.
+  // Four preloads and four pages: the window somebody types in, the offscreen one a PDF is
+  // printed from, the one a sign-in's URL or code is shown in, and the one a key is typed in.
+  // Rollup names each chunk after its key, which is what puts them at the paths
+  // `src/main/export.ts` loads them from.
   preload: {
     build: {
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/preload/index.ts'),
           export: resolve(__dirname, 'src/preload/export.ts'),
+          'sign-in': resolve(__dirname, 'src/preload/sign-in.ts'),
+          'key-window': resolve(__dirname, 'src/preload/key-window.ts'),
         },
       },
     },
@@ -62,6 +65,8 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
           export: resolve(__dirname, 'src/renderer/export.html'),
+          'sign-in': resolve(__dirname, 'src/renderer/sign-in.html'),
+          'key-window': resolve(__dirname, 'src/renderer/key-window.html'),
         },
       },
     },

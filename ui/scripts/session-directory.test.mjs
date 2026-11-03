@@ -85,6 +85,7 @@ const TAKES_NO_DIRECTORY = [
   'mcp-move.reply', 'host.reply', 'ask.reply', 'trust.reply', 'permissions.list', 'permissions.revoke',
   'doctor', 'changelog.read', 'hooks.inspect', 'language.get', 'language.set', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
   'settings.inspect', 'watches.list', 'watches.add', 'watches.stop', 'update.status',
+  'accounts.list', 'accounts.signOut',
 ]
 
 function allowedMethods(index) {

@@ -329,6 +329,12 @@ use of and that only Brave's premium service revokes, which is the Held tier.
 `verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_config::lib::a_premium_key_is_a_credential_this_configuration_holds`
 `verified-by: bravebot_cli::running::doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at`
+`verified-by: bravebot_agent::key_entry::a_brave_key_is_stored_private_replacing_the_one_there`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_key_is_refused_in_order_before_it_is_typed`
+`verified-by: bravebot_ui_bridge::key_entry_tests::an_unreadable_file_is_refused_and_left_as_it_is`
+`verified-by: bravebot_ui_bridge::key_entry_tests::a_brave_key_is_stored_and_one_stored_is_replaced_only_when_asked`
+`verified-by: bravebot_ui_bridge::accounts::the_window_stores_a_typed_key_and_says_nothing_of_it`
+`verified-by: by-construction (the main process is not a crate this workspace compiles, so ui/scripts/key-entry.test.mjs drives its own key gate with a stand-in bridge and key window: an ask is dropped for a way that takes no key, a foreign sender, an unfocused window, a row the bridge does not mark as taking a key, a second ask while a key window is open and in the seconds after a cancel; the bridge is asked before anything is typed; whether to replace comes from the bridge and not the page; the key goes to the bridge alone and the page is told only how the key window ended; a refusal keeps the key window open; and closing it, the main window closing or quitting stores nothing; make check-ui runs the test)`
 
 <a id="PREM-15"></a>
 ### PREM-15: `import-leo-creds` is retired, says so, and starts no work
@@ -381,6 +387,19 @@ prints one line, never the key:
 A turn reads a file that cannot be read as no key, so its premium requests go to the free endpoint.
 `bravebot doctor` says so on a `premium key` line that names the file and ends in failure.
 
+**The window's key window.** The desktop window's Accounts settings store the same key in the same
+file, through the store the command uses, from a key window its main process owns. The page that
+draws the Brave Premium row may only ask. The main process asks the bridge, before anything is
+typed, whether a key can be kept, and the refusals are the command's, in the same order and with
+sentences of the window's own that name no file: an incognito session, nowhere to keep a key, and a
+file that cannot be read as a key, which is left as it is. The conditions about a terminal do not
+apply, since the key window is where the key is typed. The key is typed in a field that draws
+nothing of it, goes from the key window to the main process and from there to the bridge on its
+standard input ([CRED-24](credential-protection.md#CRED-24)), and is never sent to the page. A key
+that is stored is replaced only where the key window said so before it was typed, and whether one
+is stored is learned from the bridge, never from the page; the button that saves says Replace key
+there, which is the yes. Nothing typed stores nothing. No answer the bridge gives carries the key.
+
 **Why.** The key is typed at a hidden prompt rather than passed as an argument or read from a
 variable, because an argument is readable by other programs on the machine and kept in the shell's
 history, and a variable is inherited by every program started. A key asked for on a redirected stream
@@ -396,8 +415,8 @@ that never used the premium tier has no use for the file, and `doctor` is where 
 `verified-by: bravebot_cli::brave::a_yes_and_no_key_typed_leaves_the_stored_key`
 `verified-by: bravebot_cli::brave::an_unreadable_file_is_refused_and_left`
 `verified-by: bravebot_cli::brave::the_sign_in_is_refused_where_a_key_cannot_be_asked_for_or_kept`
-`verified-by: bravebot_cli::brave::forgetting_removes_the_file_and_is_repeatable`
-`verified-by: bravebot_cli::brave::the_standing_follows_the_file`
+`verified-by: bravebot_agent::accounts::forgetting_removes_only_the_credential_named`
+`verified-by: bravebot_agent::accounts::the_brave_key_stands_as_its_file_does`
 `verified-by: bravebot_cli::running::auth_login_brave_is_refused_where_a_key_cannot_be_typed_or_kept`
 `verified-by: bravebot_cli::running::auth_logout_brave_forgets_the_key_and_only_that_one`
 `verified-by: bravebot_cli::running::auth_status_brave_with_no_key_is_not_signed_in_and_exits_nonzero`
@@ -407,10 +426,11 @@ that never used the premium tier has no use for the file, and `doctor` is where 
 ## Requirements and limits
 
 - The build must reach a Brave backend, which gives it the premium host compiled in
-  ([PREM-11](#PREM-11)), and a key must be stored with `bravebot auth login brave`. Without both,
-  premium is unavailable and requests go to the free endpoint.
-- Storing a key needs a terminal and nothing else: no browser, no Brave profile and no desktop
-  session. A platform that has neither a file mode nor an access-control list to restrict the file
+  ([PREM-11](#PREM-11)), and a key must be stored with `bravebot auth login brave` or the desktop
+  window's key window ([PREM-16](#PREM-16)). Without both, premium is unavailable and requests go to
+  the free endpoint.
+- Storing a key needs a terminal or the desktop window, and nothing else: no browser and no Brave
+  profile. A platform that has neither a file mode nor an access-control list to restrict the file
   to the account has the key refused ([PREM-14](#PREM-14)).
 - The key is a bearer secret in a file the account owns. It is not encrypted at rest, and anything
   running as the person can read it, as it can read the gateway keys.

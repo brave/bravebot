@@ -30,6 +30,7 @@
 )]
 
 mod account_words;
+mod accounts;
 pub mod acp;
 pub mod acp_loop;
 pub mod allowlist;
@@ -52,6 +53,7 @@ pub mod help;
 pub mod hooks;
 #[cfg(unix)]
 pub mod host;
+mod key_entry;
 pub mod language;
 pub mod manifest;
 pub mod mentions;
