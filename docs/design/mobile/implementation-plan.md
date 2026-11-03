@@ -51,15 +51,6 @@ Never cut authentication, scope checks, labels, complete approval details, exact
 
 ## Stages
 
-The first Rust block is complete: negotiated fresh-session view, typed row/status updates,
-existing approval semantics, and real stdio tests. The TypeScript package now has the session
-lifecycle (capability refusal, framing and correlation fixtures, view application, trust, send,
-cancel and close) and approval replies for `confirm`, `run`, `fetch` and `ask`, tested against a
-real `bravebot-rpc` (see
-[the implemented client](client-contract.md#implemented-typescript-client)). The local client
-program, composed-workflow and save-failure evidence, and the record of the U1 investigation
-complete stages 1–2a. No native or listener work is included.
-
 ### 1. Define the common client and fixtures
 
 Status: complete.

@@ -6,7 +6,7 @@ Status: proposal. Q2 is resolved, and U1 is decided for host-launched clients. T
 
 ## What can proceed
 
-Stages 1–2a and 3a–3c are built; Q2 records the placement of the view. U1 is decided for host-launched clients, and the Linux and host-process checks it lists still block real-session control; U2 and U3 block authenticated network exposure. The restricted stage-3d synthetic experiment can proceed under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). Device UI, real credentials, distribution, and dependency additions have the separate checkpoints below.
+Each question below names the capability that needs its answer. Work that does not depend on it can proceed. The restricted stage-3d synthetic experiment runs under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). See the [README](README.md) for what is built.
 
 ## Unresolved security decisions
 

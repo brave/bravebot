@@ -27,15 +27,7 @@ The first deliverable is the local client proof. The [first secure remote checkp
 
 ## Current mobile status
 
-The [android-shell](https://github.com/brave/bravebot/tree/android-shell) branch contains an unmerged proof of concept with:
-
-- On-device Rust execution through JNI and an Android app using the renderer in a WebView.
-- Phone navigation, drawers, sheets, and touch-layout work.
-- Host input checks, source-consistency and layout tests, and build guidance.
-
-Build on this work when implementing native integration and mobile interactions. Review branch progress before stage 2b and later work that uses it, record the selected revision, and preserve contributor attribution.
-
-The current source reference is [`9635f16b`](https://github.com/brave/bravebot/tree/9635f16b49798624e6174b0d15818227773e81a8), separate from the plan's main baseline. Integrate and validate against current main; existing checks do not establish JNI or Kotlin runtime coverage. See the [source findings](README.md#current-mobile-status).
+See the [README](README.md#current-mobile-status) for what is built and for the unmerged `android-shell` proof of concept.
 
 ## Known limits and open decisions
 
