@@ -491,7 +491,9 @@ when the run that asked can act on it.
 That reasoning concerns the depth and the ceiling on running delegates, which are bounds on the
 tree. It does not extend to the rounds one delegate may make: the text of the tool's `kind`
 parameter names each kind's own round limit ([DELEGATE-6](#DELEGATE-6)), so that the planner can
-size a task to it, and the tool's description stays without a number.
+size a task to it, and the tool's description stays without a number. The text of the `each`
+parameter likewise states the most one call starts ([AGENT-5](tools/spawn-agent.md#AGENT-5)), which
+is a limit on a call and not on the tree.
 
 Every level is gated as the first is. [DELEGATE-2](#DELEGATE-2) refuses a run whose own context
 has met something untrusted, at whatever depth it sits, and [DELEGATE-4](#DELEGATE-4) narrows

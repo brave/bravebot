@@ -4,7 +4,7 @@
 //! None of it takes a `Labelled` value, a `Policy`, a `SlotStore` or a `Sink`: the tool bodies that
 //! read, label or declassify content stay in `tools.rs`.
 
-use super::{WHY, offer_runs};
+use super::{MAX_FANOUT, WHY, offer_runs};
 use crate::confine::LOOPBACK_CONNECT_RULE;
 use bravebot_aichat::protocol::Tool;
 use bravebot_core::todo::Status;
@@ -1620,13 +1620,16 @@ fn table(
                     },
                     "each": {
                         "type": "array",
-                        "description": "Optional. Start one delegate per entry instead of one \
-                                        in total, each told the task followed by its own entry. \
-                                        Put what they share in task and only the differing part \
-                                        here, e.g. one path per entry. Writing the same \
-                                        paragraph out four times costs you the seconds it takes \
-                                        to say it, and the delegates cannot start until you \
-                                        have.",
+                        "description": format!(
+                            "Optional. Start one delegate per entry instead of one in total, \
+                             each told the task followed by its own entry. Put what they share \
+                             in task and only the differing part here, e.g. one path per \
+                             entry. One call starts at most {MAX_FANOUT} delegates and a call \
+                             with more entries is refused; for more, make a further call with \
+                             the same task and the next entries. Writing the same paragraph \
+                             out four times costs you the seconds it takes to say it, and the \
+                             delegates cannot start until you have."
+                        ),
                         "items": {"type": "string"}
                     },
                     "isolation": {

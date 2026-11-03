@@ -103,7 +103,9 @@ from the label the delegate's own context earned.
 `each` names one delegate per entry. Each is told the shared `task` followed by its own entry,
 and is otherwise a delegate like any other: it passes the same gate, takes its own number, and
 holds its own copy of what a person has vouched for. A call naming more than eight, or naming
-none, is refused and starts nothing. A call that meets the turn's ceiling on delegates
+none, is refused and starts nothing. The text of `each` says that one call starts at most that
+many and that a further call with the same `task` starts more, and takes the figure from the one
+the refusal enforces. A call that meets the turn's ceiling on delegates
 ([DELEGATE-7](../delegation.md#DELEGATE-7)) part-way starts the ones that fit and says how many did
 not start, and why.
 
@@ -122,6 +124,7 @@ field turning one sentence into an unbounded number of runs at once is worth a b
 `verified-by: bravebot_agent::turn::a_fan_out_past_the_ceiling_is_refused_and_starts_nothing`
 `verified-by: bravebot_agent::turn::a_fan_out_that_meets_the_turns_ceiling_starts_what_fits_and_says_what_did_not`
 `verified-by: bravebot_agent::turn::a_fan_out_that_names_no_delegate_is_refused_and_starts_nothing`
+`verified-by: bravebot_agent::tools::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`
 
 <a id="AGENT-6"></a>
 ### AGENT-6: `mcp_servers` lists the servers a worker keeps, and can only take servers away
@@ -206,7 +209,10 @@ delegate. A task sized to a figure it was never given ends with the delegate's t
 way through.
 
 **Why only the parameter text.** The tool's description names neither of the bounds on the tree
-([DELEGATE-7](../delegation.md#DELEGATE-7)), and a delegate's own rounds are not one of them.
+([DELEGATE-7](../delegation.md#DELEGATE-7)), and a delegate's own rounds are not one of them. The
+most one call starts ([AGENT-5](#AGENT-5)) is a limit on a call and not a bound on the tree, and is
+stated in the text of `each`.
 
 `verified-by: bravebot_agent::tools::each_kind_the_planner_may_pick_names_the_rounds_it_allows`
 `verified-by: bravebot_agent::tools::the_way_to_delegate_is_described_without_the_numbers_that_bound_it`
+`verified-by: bravebot_agent::tools::the_each_field_says_one_call_starts_at_most_the_fan_out_limit`

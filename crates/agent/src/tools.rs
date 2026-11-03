@@ -17298,6 +17298,64 @@ mod tests {
         }
     }
 
+    /// AGENT-5: a planner told the most one call starts splits a fan-out into calls of that size,
+    /// where one told nothing sends a call that is refused and then sends the shared task again.
+    /// The figure in the text of `each` is the one `tasks_in` refuses past, and the text says a
+    /// further call starts more.
+    ///
+    /// Rejects: a description with no limit, one that gives the limit and not what to do past it,
+    /// and a figure written into the text that differs from the one the refusal enforces.
+    #[test]
+    fn the_each_field_says_one_call_starts_at_most_the_fan_out_limit() {
+        let tools = for_planner(
+            Scheduling::ArrangingALook,
+            crate::watch::Arming::Unavailable,
+            &bravebot_core::delegate::Definitions::default(),
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let spawn = tools
+            .iter()
+            .find(|tool| tool.function.name == "spawn_agent")
+            .expect("a planner is offered a way to delegate");
+        let described = spawn.function.parameters["properties"]["each"]["description"]
+            .as_str()
+            .expect("a description");
+
+        let named: usize = described
+            .split(|c: char| !c.is_ascii_digit())
+            .find(|word| !word.is_empty())
+            .unwrap_or_else(|| panic!("no limit in the text of each: {described}"))
+            .parse()
+            .expect("a count");
+        assert!(
+            described.contains(&format!("at most {named} delegates")),
+            "the limit is not stated as the most one call starts: {described}"
+        );
+        assert!(
+            described.contains("further call"),
+            "the text does not say a further call starts more: {described}"
+        );
+
+        let entries = |count: usize| json!({"task": "t", "each": vec!["e"; count]});
+        assert_eq!(
+            tasks_in(&entries(named)).map(|tasks| tasks.len()),
+            Ok(named),
+            "the text names a count the call does not accept"
+        );
+        assert!(
+            tasks_in(&entries(named + 1)).is_err(),
+            "the text names a count below what the call accepts"
+        );
+        assert_eq!(named, MAX_FANOUT);
+
+        let tool_text = &spawn.function.description;
+        assert!(
+            !tool_text.chars().any(|c| c.is_ascii_digit()),
+            "the limit belongs in the text of each, not the tool's description: {tool_text}"
+        );
+    }
+
     /// CHECKOUT-1, CHECKOUT-23: the planner is offered two values for `isolation`, and told that the
     /// second also carries the working directory's changes and what for.
     #[test]

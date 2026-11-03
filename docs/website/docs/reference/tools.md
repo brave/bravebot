@@ -909,7 +909,7 @@ of capabilities, and gets back one report.
 |---|---|
 | `kind` | `reader`, `checker` or `worker`, or the name of a [definition](../customize/agents.md). Only the kinds the run's own capabilities reach are offered: a `checker` is not offered the `worker`, and a `spawns:` line in a definition narrows the list further |
 | `task` | the whole of what the delegate is told |
-| `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
+| `each` | optional; starts one delegate per entry, each told `task` followed by its own entry. One call starts at most eight; a further call with the same `task` starts more |
 | `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
 | `budget` | optional; the most tokens each delegate may spend, as `500000`, `500k` or `2m`. Every request counts the whole conversation so far, so a figure buys a few dozen requests, not a few dozen thousand tokens of reading: `2m` is about thirty requests at 70k tokens each. It can only lower the budget a [definition](../customize/agents.md) sets |
 | `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in, and `checkout_with_changes` also copies into it the changes your working tree has now |
