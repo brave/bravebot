@@ -85502,9 +85502,11 @@ fn a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_withou
     let home = Scratch::new("reach-fan-out-home");
     define(&home, "checker-lead", "kind: checker\n", "LEAD-BODY");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    // The delegates answer only once the planner has asked a second time, so the planner is
-    // never told what came back in a round the script does not hold a reply for.
-    let (endpoint, received, _) = serve_by_marker_in(
+    // The first delegate answers once the planner has asked a second time and the second once it
+    // has asked a third time. The turn asks the planner again as soon as one delegate ends, so
+    // delegates released together can end apart and cause a request the script holds no reply for.
+    // Staggered, the planner is told about one delegate and then the other every time.
+    let (endpoint, received, staggered) = serve_by_marker_in(
         vec![
             (
                 "FAN-TASK",
@@ -85514,13 +85516,14 @@ fn a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_withou
                         r#"{"kind":"worker","task":"SHARED-HALF","each":["ENTRY-ONE","ENTRY-TWO"]}"#,
                     ),
                     reply_with("waiting"),
+                    reply_with("one is back"),
                     reply_with("delegates finished"),
                 ],
             ),
             ("ENTRY-ONE", vec![reply_with("one")]),
             ("ENTRY-TWO", vec![reply_with("two")]),
         ],
-        Order::Staged(&[("ENTRY-ONE", "FAN-TASK", 2), ("ENTRY-TWO", "FAN-TASK", 2)]),
+        Order::Staged(&[("ENTRY-ONE", "FAN-TASK", 2), ("ENTRY-TWO", "FAN-TASK", 3)]),
     );
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
 
@@ -85537,6 +85540,10 @@ fn a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_withou
     )
     .expect("turn runs");
 
+    assert!(
+        staggered.load(Ordering::SeqCst),
+        "the delegates were not held until the planner's second and third requests"
+    );
     assert_eq!(reporter.delegated.len(), 2, "both delegates should start");
     let requests: Vec<String> = received.try_iter().collect();
     let told = requests
