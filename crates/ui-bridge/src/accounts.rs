@@ -360,9 +360,8 @@ fn refusal(account: Account, before: &Before, replace: bool) -> Option<&'static 
     if !before.writable {
         return Some(t!(desktop_accounts_sign_in_nowhere));
     }
-    let config = match &before.config {
-        Ok(config) => config,
-        Err(_) => return Some(t!(desktop_accounts_sign_in_misconfigured)),
+    let Ok(config) = &before.config else {
+        return Some(t!(desktop_accounts_sign_in_misconfigured));
     };
     match account {
         Account::ChatGpt if !config.offers_chatgpt_account() => {
@@ -427,12 +426,7 @@ impl SignIns {
             stored: loaded.stored,
         };
         if let Some(refused) = refusal(account, &before, replace) {
-            emitter.send(ended(
-                &attempt,
-                account,
-                "failed",
-                Some(refused.to_string()),
-            ));
+            emitter.send(ended(&attempt, account, "failed", Some(refused)));
             return Ok(json!({ "attempt": attempt }));
         }
         let stop = Arc::new(AtomicBool::new(false));
@@ -457,7 +451,7 @@ impl SignIns {
             {
                 *running = None;
             }
-            emitter.send(ended(&id, account, outcome, sentence));
+            emitter.send(ended(&id, account, outcome, sentence.as_deref()));
         });
         Ok(json!({ "attempt": attempt }))
     }
@@ -485,7 +479,7 @@ impl SignIns {
     }
 }
 
-fn ended(attempt: &str, account: Account, outcome: &str, sentence: Option<String>) -> Event {
+fn ended(attempt: &str, account: Account, outcome: &str, sentence: Option<&str>) -> Event {
     Event::global(
         "accounts.signIn.ended",
         json!({

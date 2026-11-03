@@ -233,6 +233,8 @@ pub fn list(inputs: Inputs, which: Which) -> Result<Vec<Row>, ListError> {
         xai,
     } = inputs;
     let all = which == Which::All;
+    let with_chatgpt = all || which == Which::ChatGpt;
+    let with_xai = all || which == Which::Xai;
     let mut rows = Vec::new();
     if all || which == Which::Brave {
         rows.push(brave(directory.as_deref()));
@@ -267,19 +269,25 @@ pub fn list(inputs: Inputs, which: Which) -> Result<Vec<Row>, ListError> {
             },
         ));
     }
-    let named = match &which {
-        Which::Gateways(named) => Some(named.as_deref()),
+    let named = match which {
+        Which::Gateways(named) => Some(named),
         Which::All => Some(None),
         _ => None,
     };
     if let Some(named) = named {
         let stored = directory.as_deref().map_or(Ok(Keys::default()), Keys::read);
-        rows.extend(gateways(config, &managed, &stored, named, lookup)?);
+        rows.extend(gateways(
+            config,
+            &managed,
+            &stored,
+            named.as_deref(),
+            lookup,
+        )?);
     }
-    if all || which == Which::ChatGpt {
+    if with_chatgpt {
         rows.push(account(Way::ChatGpt, chatgpt));
     }
-    if all || which == Which::Xai {
+    if with_xai {
         rows.push(account(Way::Xai, xai));
     }
     Ok(rows)
@@ -616,7 +624,7 @@ pub fn write_settings(
     let written = home::write_file(&temporary, text.expose().as_bytes())
         .and_then(|()| std::fs::rename(&temporary, &target));
     if let Err(err) = written {
-        let _ = std::fs::remove_file(&temporary);
+        std::fs::remove_file(&temporary).unwrap_or_default();
         return Err(SettingsNotWritten::Refused(err.to_string()));
     }
     Ok(())

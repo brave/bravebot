@@ -147,6 +147,7 @@ dependencies = [
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-signing",
+ "rustix",
  "serde",
  "serde_json",
 ]

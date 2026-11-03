@@ -439,9 +439,10 @@ impl Stop {
 fn kill(child: &mut std::process::Child) {
     #[cfg(unix)]
     if let Some(group) = rustix::process::Pid::from_raw(child.id().cast_signed()) {
-        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        rustix::process::kill_process_group(group, rustix::process::Signal::KILL)
+            .unwrap_or_default();
     }
-    let _ = child.kill();
+    child.kill().unwrap_or_default();
 }
 
 /// How a sign-in [`sign_in_if_needed_until`] ran did not end signed in.
@@ -489,7 +490,7 @@ fn login_until(
         return Err(Stopped::Cancelled);
     }
     let mut child = start_piped(&mut command)
-        .map_err(started_badly)
+        .map_err(|e| started_badly(&e))
         .map_err(Stopped::Failed)?;
     let arriving = read_lines_of(&mut child);
     state.child = Some(child);
@@ -517,7 +518,7 @@ fn login_until(
             Ok(None) => {}
             Err(e) => {
                 kill(child);
-                let _ = child.wait();
+                child.wait().ok();
                 state.child = None;
                 return Err(Stopped::Failed(CredentialError::Refused {
                     detail: e.to_string(),
@@ -545,7 +546,7 @@ fn login_until(
     }
 }
 
-fn started_badly(e: std::io::Error) -> CredentialError {
+fn started_badly(e: &std::io::Error) -> CredentialError {
     match e.kind() {
         std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
         _ => CredentialError::Refused {
@@ -685,7 +686,7 @@ fn login(profile: Option<&str>, mut say: impl FnMut(String)) -> Result<(), Crede
     // person who cannot see it is stuck either way. Nothing is typed at this: the code goes into a
     // browser, and the terminal belongs to whoever called, so a program left able to read stdin
     // would fight for the keys.
-    let mut child = start_piped(&mut command).map_err(started_badly)?;
+    let mut child = start_piped(&mut command).map_err(|e| started_badly(&e))?;
 
     // Every line is passed on as it arrives. The loop ends when both readers have finished, which
     // is when the command has closed its streams.

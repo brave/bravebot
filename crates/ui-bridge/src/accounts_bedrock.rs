@@ -162,7 +162,7 @@ impl SignIns {
         let planned = match planned {
             Ok(planned) => planned,
             Err(refused) => {
-                emitter.send(ended(&attempt, id.as_deref(), "failed", Some(refused)));
+                emitter.send(ended(&attempt, id.as_deref(), "failed", Some(&refused)));
                 return Ok(json!({ "attempt": attempt }));
             }
         };
@@ -189,14 +189,14 @@ impl SignIns {
                 &number,
                 planned.profile.as_deref(),
                 outcome,
-                sentence,
+                sentence.as_deref(),
             ));
         });
         Ok(json!({ "attempt": attempt }))
     }
 }
 
-fn ended(attempt: &str, id: Option<&str>, outcome: &str, sentence: Option<String>) -> Event {
+fn ended(attempt: &str, id: Option<&str>, outcome: &str, sentence: Option<&str>) -> Event {
     Event::global(
         "accounts.signIn.ended",
         json!({
