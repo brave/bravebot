@@ -55,6 +55,9 @@
 /contrib/required-checks.txt @bbondy
 /contrib/affected-checks.py @bbondy
 /Makefile @bbondy
+/ui/scripts/sign-mac.mjs @bbondy
+/ui/build/entitlements.mac.plist @bbondy
+/ui/build/entitlements.mac.none.plist @bbondy
 /contrib/check-pnpm-lockfiles.py @bbondy
 /contrib/measure-mutants.py @bbondy
 /ui/scripts/check-windows-install.mjs @bbondy

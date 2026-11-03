@@ -22,6 +22,12 @@ governs:
   - contrib/package-manifests.py
   - contrib/check-pnpm-lockfiles.py
   - crates/cli/tests/release_instructions.rs
+  - crates/cli/tests/app_signing.rs
+  - ui/scripts/sign-mac.mjs
+  - ui/scripts/sign-mac.test.mjs
+  - ui/scripts/entitlements.test.mjs
+  - ui/build/entitlements.mac.plist
+  - ui/build/entitlements.mac.none.plist
 documented-by:
   - docs/website/docs/quickstart.md
   - docs/website/docs/install.md
@@ -597,6 +603,45 @@ package's key does not decide what is trusted for this one.
 `verified-by: bravebot_cli::release_instructions::the_install_instructions_name_the_served_repositories`
 `verified-by: by-construction (generating, signing and uploading the repositories are steps of the publish job in devops, which this tree does not contain)`
 
+<a id="RELEASE-23"></a>
+### RELEASE-23: the desktop application is signed from the inside out and stapled only after the notary service accepts it
+
+`make app-release-signed` signs each Mac bundle with the Developer ID identity the job gives it,
+then notarises, staples and assesses the bundle, builds the disk images, and does the same for
+each image. `ui/scripts/sign-mac.mjs` signs and notarises, with `@electron/osx-sign` and
+`@electron/notarize`. Every item is signed before the item that contains it, the main executable
+after the rest of the app and the app last. Each signature has the hardened runtime and a secure
+timestamp, and none is made with `--deep`. The app, its main executable, the helper apps and what
+is in them carry `ui/build/entitlements.mac.plist`, and everything else, including the two
+executables in `Contents/Resources`, carries `ui/build/entitlements.mac.none.plist`, which has no
+keys. A submission is stapled only when the status the service returned is `Accepted`, whatever
+the exit status of `notarytool`, and a `stapler` that fails after the acceptance is run again
+without submitting again. The app is assessed with `spctl -a -t exec` and an image with `spctl -a
+-t open --context context:primary-signature`, and each passes only when `spctl` accepts it with
+the source `Notarized Developer ID`. The script stops before it runs a tool when the identity or
+the notary credentials (`APPLE_ID`, `APPLE_ID_PASSWORD` and `APPLE_TEAM_ID`, read from the
+environment) it needs are unset or a bundle or image it works on is missing, and it signs an image
+before it submits it.
+
+**Why.** A signature seals what it contains, so signing a container first and its contents after
+breaks the seal the container made, and `--deep` signs everything with one set of entitlements, so
+the two Rust executables would carry `allow-jit`. Notarisation refuses an unsigned executable, a
+binary without the hardened runtime, and one without a secure timestamp. `notarytool submit
+--wait` exits 0 for a rejected submission, so the status it prints is what decides, and `spctl`
+exits 0 for an Apple or App Store signature, so the source it prints is what decides. The two
+libraries are the ones the packager runs for its `osxSign` and `osxNotarize` options. They find
+the executables in the bundle by reading the files, so a change to where Electron puts them does
+not leave one unsigned. They run after packaging and not as options of the packager, because
+`ui/scripts/package.mjs` sets the fuses after the packager returns and that rewrites the Electron
+binary a signature covers.
+
+`verified-by: bravebot_cli::app_signing::the_apps_are_signed_by_the_script_with_the_identity_the_job_gives`
+`verified-by: bravebot_cli::app_signing::a_notarised_app_is_assessed_as_an_executable`
+`verified-by: bravebot_cli::app_signing::a_notarised_image_is_assessed_as_an_installer`
+`verified-by: bravebot_cli::app_signing::the_sub_targets_run_in_the_order_that_puts_the_ticket_in_the_image`
+`verified-by: bravebot_cli::app_signing::an_item_accepted_from_another_source_stops_the_target`
+`verified-by: by-construction (ui/scripts/sign-mac.test.mjs runs @electron/osx-sign and @electron/notarize against stand-ins for codesign, security, xcrun and ditto, and asserts that every item is signed before the one containing it, that each signature has the hardened runtime, a secure timestamp and the identity and none is deep, which entitlements file each item carries, that a rejected submission is not stapled though notarytool exits 0, that an image is signed and submitted as it is, that a failed stapler is run again without a second submission, that nothing runs when the identity, a notary credential or a path is missing, and that the script runs from another directory with a relative path; ui/scripts/entitlements.test.mjs holds the two entitlements files to their contents; make check-ui-build runs both in the Front end CI job. The identity, the notary credentials and the Apple account are the job's, so whether the real tools accept the result, and whether the notary service accepts the app, is first seen by the job that runs them)`
+
 ## Known costs
 
 - **The apt and dnf repositories are generated, signed and served elsewhere.** Nothing in this
@@ -662,10 +707,13 @@ package's key does not decide what is trusted for this one.
   upgrade, and a later launch is told again. The tap repository this cask belongs in is not named anywhere in
   this tree, so who creates it, and what `brew install` names, is decided where it is published.
 
-- **Publication lives outside this repository.** `bravebot-build` in devops is what signs and
-  attaches assets. A change there can break RELEASE-6 through RELEASE-8 without this tree
-  noticing. RELEASE-9 is `install.sh` and the package script, in this repository: a checksum
-  Jenkins ships in the wrong form is refused here, not accepted.
+- **Publication lives outside this repository.** `bravebot-build` in devops signs and attaches
+  every asset, and is planned to run the signing targets for the desktop application, which it
+  does not yet. A change there can break RELEASE-6 through RELEASE-8 without this tree noticing,
+  and it can stop running the signing targets of RELEASE-23 or run them in another order. The
+  Apple credentials are the job's, so no test here has run `codesign` or `notarytool` for real.
+  RELEASE-9 is `install.sh` and the package script, in this repository: a checksum Jenkins ships
+  in the wrong form is refused here, not accepted.
 
 - **Only the npm publish refuses a release whose Linux checksums carry no signature that verifies.**
   The publish job in devops checks for each binary but not for a signature. The install script
