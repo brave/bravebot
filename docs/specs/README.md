@@ -55,7 +55,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [chatgpt-sign-in.md](chatgpt-sign-in.md) | `CHATGPT` | 17 | signing in to OpenAI with a ChatGPT account through a browser, from a typed command or the window's own sign-in, and offering the account's models in the picker (proposed, built and exercised against a real account; whether OpenAI's terms allow it is undecided, and what that account did not show is listed in the spec) |
 | [xai-sign-in.md](xai-sign-in.md) | `XAI` | 22 | signing in to xAI with a SuperGrok subscription through a code a person enters on any device, from a typed command or the window's own sign-in, the file the tokens are kept in, replacing an access token before it expires, and how the account's models are named (proposed; the command, the turn's request and the account's models are built) |
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 32 | operating-system confinement for processes running code we did not write |
-| [mcp.md](mcp.md) | `MCP` | 15 | tools that come from outside this repository, the prompts such a server offers a person, and what they are allowed to do |
+| [mcp.md](mcp.md) | `MCP` | 16 | tools that come from outside this repository, the prompts such a server offers a person, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 22 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
 | [connectors.md](connectors.md) | `CONNECTOR` | 21 | the installed definitions a connector call is made against, and the client that hands a credential authority one request and reads its one reply |
 | [browser.md](browser.md) | `BROWSER` | 46 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
@@ -110,8 +110,8 @@ the routing-versus-content split they share.
 | [tools/run.md](tools/run.md) | `RUN` | 30 | `run` |
 | [tools/command-line.md](tools/command-line.md) | `CMDLINE` | 16 | `run`'s command line, compiled rather than interpreted |
 | [tools/read-output.md](tools/read-output.md) | `OUTPUT` | 6 | `read_output` |
-| [tools/vet-content.md](tools/vet-content.md) | `VET` | 5 | `vet_content` |
-| [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 8 | `fetch_url` |
+| [tools/vet-content.md](tools/vet-content.md) | `VET` | 6 | `vet_content` |
+| [tools/fetch-url.md](tools/fetch-url.md) | `FETCH` | 9 | `fetch_url` |
 | [tools/download-url.md](tools/download-url.md) | `DOWNLOAD` | 5 | `download_url` |
 | [tools/load-skill.md](tools/load-skill.md) | `LOAD` | 5 | `load_skill` |
 | [tools/search-skills.md](tools/search-skills.md) | `FINDSKILL` | 4 | `search_skills` |

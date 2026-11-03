@@ -266,10 +266,11 @@ pub struct Output {
     /// vouching is advice about a prompt, and no prompt will return here for this line until
     /// somebody deletes the entry.
     pub covered_by_record: bool,
-    /// Whether the planner asked to read what the line printed in this result.
+    /// Whether the planner asked to read what the line printed, or what `fetch_url` or a server's
+    /// tool returned, in this result.
     ///
     /// Acted on by the turn loop, after the slot is minted, and only where nobody would be asked
-    /// before `read_output` handed it over.
+    /// before `read_output` (for a line) or `vet_content` (for the others) handed it over.
     pub read_asked: bool,
     /// The media type, where what this produced is a picture.
     ///
@@ -1449,7 +1450,8 @@ struct Produced {
     /// vouching for every stage would make the output visible is advice about a prompt, and no
     /// prompt will be drawn for this line again until somebody deletes the entry.
     covered_by_record: bool,
-    /// Whether the planner asked to read what the line printed in this result.
+    /// Whether the planner asked to read what the line printed, or what `fetch_url` or a server's
+    /// tool returned, in this result.
     read_asked: bool,
     /// When the planner asked for the next tick of a self-paced loop.
     wakeup: Option<crate::turn::Wakeup>,
@@ -2710,7 +2712,14 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         // A kind's network capability buys the driver's own model call and nothing a delegate can
         // point somewhere, so this one is refused here too: the gate would pass it, since the
         // capability really is held.
-        "fetch_url" if !tools.delegated => fetch_url(policy, tools, confirmer, &arguments),
+        "fetch_url" if !tools.delegated => match read_asked_of(&arguments) {
+            Ok(read_asked) => {
+                let mut produced = fetch_url(policy, tools, confirmer, &arguments);
+                produced.read_asked = read_asked;
+                produced
+            }
+            Err(refusal) => *refusal,
+        },
         // The same refusal for the same reason, and a write on top of it.
         "download_url" if !tools.delegated => download_url(policy, tools, confirmer, &arguments),
         "job_output" => job_output(policy, tools, reporter, &arguments),
@@ -2770,17 +2779,32 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
             }
             Some((offer, alias, tool)) => {
                 let egress = tools.chat.egress;
-                call_server_tool(
-                    policy,
-                    offer,
-                    egress,
-                    confirmer,
-                    reporter,
-                    alias,
-                    tool,
-                    &arguments,
-                    &mut *tools.slots,
-                )
+                // The `read` this process offered is not the server's: it is taken out of the
+                // arguments before the call, so the server is sent what the planner wrote and no
+                // more. A server that lists a `read` of its own is sent it as written.
+                let split = if offer.takes_read(alias, tool) {
+                    split_read(&arguments)
+                } else {
+                    Ok((arguments.clone(), false))
+                };
+                match split {
+                    Ok((sent, read_asked)) => {
+                        let mut produced = call_server_tool(
+                            policy,
+                            offer,
+                            egress,
+                            confirmer,
+                            reporter,
+                            alias,
+                            tool,
+                            &sent,
+                            &mut *tools.slots,
+                        );
+                        produced.read_asked = read_asked;
+                        produced
+                    }
+                    Err(refusal) => *refusal,
+                }
             }
             None => Produced::problem(format!("error: no such tool '{other}'")),
         },
@@ -3180,6 +3204,32 @@ pub(crate) fn keep_the_note<S: Sink>(
         "The user declined this and wrote: "
     };
     policy.record_note(tool, lead, note);
+}
+
+/// Whether a call asked, with a `read` argument, for what it returns to be read in its result.
+///
+/// Absent means no, which leaves the result exactly as it would be without the argument. Present
+/// but not a boolean is refused, so a planner that believed it had asked is not handed a reference
+/// instead. The argument is the planner's own boolean, and nothing it returns is consulted.
+fn read_asked_of(arguments: &Value) -> Result<bool, Box<Produced>> {
+    match arguments.get("read") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(read)) => Ok(*read),
+        Some(_) => Err(Box::new(Produced::problem(
+            "error: 'read' must be true or false",
+        ))),
+    }
+}
+
+/// The arguments of a server's tool less the `read` this process offered it, and whether it asked.
+/// The server is sent what remains, so it never sees an argument it did not declare.
+fn split_read(arguments: &Value) -> Result<(Value, bool), Box<Produced>> {
+    let read_asked = read_asked_of(arguments)?;
+    let mut sent = arguments.clone();
+    if let Some(object) = sent.as_object_mut() {
+        object.remove(crate::mcp::READ_ARGUMENT);
+    }
+    Ok((sent, read_asked))
 }
 
 /// A tool's own words about something that did happen, with what to show for it.
@@ -7788,6 +7838,252 @@ fn release_output<S: Sink, C: Confirmer>(
     }
 }
 
+/// Put one quarantined slot of text to whoever answers for reading it, and hand the planner the
+/// text if they agree. The half of `vet_content` that comes after the reference is accepted and
+/// the check has spoken, returning the text, how many lines it holds and who released it, or the
+/// result to hand back instead.
+///
+/// Shared by `vet_content` and by a read made in the result of the call that produced the slot, so
+/// the prompt, the grant and the kernel's release are one piece of code and the label and the trail
+/// cannot differ between the two routes. `expects` is what the planner claimed the slot holds, and
+/// is `None` where no claim was made, which the prompt shows as empty.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy and confirmer are `&mut` borrows of the turn while the rest is read-only state of one read, so bundling them would split one borrow across two values"
+)]
+fn release_vetted_text<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    slots: &SlotStore,
+    mode: crate::PermissionMode,
+    auto_vetting: bool,
+    confirmer: &mut C,
+    slot: &SlotId,
+    verdict: Verdict,
+    said: Option<Labelled<String>>,
+    spec: Option<&bravebot_core::vetting::VettingSpec>,
+    expects: Option<&Labelled<String>>,
+) -> Result<(Labelled<String>, usize, Endorsed), Box<Produced>> {
+    // Who the trail is credited to, which the mode decides along with the verdict. The one branch
+    // on a verdict that decides more than which sentence a person reads first is inside it, and it
+    // is reachable only where somebody turned auto-vetting on: `Safe` is the only word that answers
+    // there, and unsafe, and every way a check can fail to complete, fall through to the prompt
+    // with the banner they would have carried anyway. Written down as the third known cost in
+    // `docs/specs/labels.md`.
+    let endorsed = mode.released_by(auto_vetting, verdict);
+
+    // How many lines the planner is told it got: the check's count where one was made, and what
+    // the prompt was built over where none was. The two are the same slot and agree.
+    let mut counted = spec.map_or(0, |spec| spec.lines());
+
+    // A `match` rather than an `if`, so a fourth way of endorsing cannot be added and default to
+    // skipping the prompt: a new variant stops compiling here until somebody says which it is.
+    // Bypassing with nothing screening asks in the sense that the request is built and put to a
+    // confirmer; what answers it is the mode, which is why it is credited as itself below.
+    let ask = match endorsed {
+        Endorsed::ByAPerson | Endorsed::ByBypassing => true,
+        Endorsed::ByASafeVerdict => false,
+    };
+    if ask {
+        // Released for the person to read, which is the whole of what a prompt here is for. A
+        // display release cannot feed an effect, and both of these feed a screen. Inside the
+        // branch because there is no screen on the other one: releasing for a display nobody is
+        // looking at would put a declassification in the trail with no audience for it.
+        //
+        // Bypassing is the standing exception, as it was before screening existed: the mode answers
+        // this without drawing anything, so the branch means a prompt would be drawn wherever there
+        // is anybody to draw it for, and never that somebody read what was released.
+        // Counted inside the reshape, as `read_output` counts what it shows, and for the same
+        // reason: the bytes below are released for a screen and nothing in this crate may read
+        // them, a count included.
+        let (shown, lines, hidden, label) = {
+            let content = match policy.resolve("vet_content", slot, slots) {
+                Ok(content) => content,
+                Err(denial) => {
+                    return Err(Box::new(Produced::problem(format!("refused: {denial}"))));
+                }
+            };
+            // Counted and spelled in the reshape, as `release_output` does and for the same
+            // reason: the person reads the copy with the characters that draw as nothing written
+            // out, and the planner is handed the slot's own bytes.
+            let measured = policy.render_in_place("vet_content", &content, |text| {
+                let lines = text.lines().count();
+                let spelled = bravebot_core::invisible::spelled(text);
+                (spelled.text, lines, spelled.hidden)
+            });
+            let label = measured.label().to_string();
+            let proof = policy.authorise_display_release("content the planner asked to be shown");
+            let (shown, lines, hidden) = measured.declassify(&proof);
+            (shown, lines, hidden, label)
+        };
+        let (reason, reason_label) = released_reason(policy, said);
+
+        // The origin comes off the kernel's own record either way, rather than off the spec on
+        // the branch that has one: a slot's address is untrusted content, so reading it out here
+        // would be a second, uncounted way for one to leave `bravebot-core`. The gate records the
+        // release, and it answers what the spec was built from.
+        //
+        // The words are released for a display rather than checked public as `before_vetting`
+        // checks them, because what that refusal is about is a private string becoming a second
+        // model's prompt, and there is no second model on this branch. What is left is the
+        // person's own content going to the person's own screen, which is what a display release
+        // is for. It reaches that screen and stops: no gate reads it.
+        //
+        // A processor's output is recorded as the planner's copy of its origin, which names
+        // references. The person has no use for `ref:0`, so they are put back as the files they
+        // name, as the reporter's line for the same slot does (VET-1).
+        let origin = policy.release_where_a_slot_came_from(slot, slots);
+        let origin = name_files(&origin, &policy.names_for_display(slots));
+        let expects = match (spec, expects) {
+            (Some(spec), _) => spec.expects().unwrap_or_default().to_string(),
+            (None, Some(expects)) => {
+                let proof =
+                    policy.authorise_display_release("what the planner expects a slot to hold");
+                expects.clone().declassify(&proof)
+            }
+            (None, None) => String::new(),
+        };
+
+        counted = lines;
+
+        let request = crate::confirm::VetRequest {
+            origin,
+            expects,
+            content: shown,
+            label: Some(label),
+            lines,
+            hidden,
+            verdict,
+            reason,
+            reason_label,
+            picture: None,
+        };
+
+        // Says the bytes are not coming and not who decided that, for the reason `read_output`
+        // carries: under bypass with screening asked for the answer came from a check rather than
+        // from a person, and neither fact is the planner's to be told.
+        if confirmer.confirm_vetted_read(&request) == Decision::Reject {
+            policy.refuse_unapproved_release("vet_content", &slot.to_string());
+            return Err(Box::new(Produced::problem(format!(
+                "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
+                 you have, pass {slot} to spawn_processor, or say in your reply what you needed \
+                 from it."
+            ))));
+        }
+    }
+
+    // The endorsement is what makes these bytes readable, and it is bound to this exact reference
+    // whichever of the two answered.
+    policy.issue_grant("vet_content", "ref", slot.to_string());
+
+    match policy.promote_vetted(slot, slots, endorsed) {
+        Ok(text) => Ok((text, counted, endorsed)),
+        Err(denial) => Err(Box::new(Produced::problem(format!("refused: {denial}")))),
+    }
+}
+
+/// The result of a `vet_content` call that released text.
+fn vetted_text(
+    slot: &SlotId,
+    text: Labelled<String>,
+    counted: usize,
+    endorsed: Endorsed,
+) -> Produced {
+    let lines = tally(counted, "line", "lines");
+    Produced::new(
+        text,
+        format!("what {slot} held"),
+        released_note(format!("{lines}, read"), endorsed),
+    )
+    .of_content()
+}
+
+/// What a call that asked to read what it returned is handed in the same result, where the answer
+/// `vet_content` would get does not need a person: bypassing permissions with no screening asked
+/// for, or a check whose word is `safe` where screening was asked for.
+///
+/// The release is `vet_content`'s own, down to the check that precedes it, the confirmer the mode
+/// answers and the trail entry crediting whoever released, so the label and the record cannot
+/// differ between the two routes and only the round between them is gone. The planner's flag
+/// decides whether this is called, and it was set before the result existed. The check is made
+/// without a claim about what the slot holds, as the one `read_in_the_result` makes is.
+///
+/// Where screening was asked for, any word other than `safe` leaves the slot quarantined and
+/// draws no prompt: the planner has not seen the size or the shape of what was returned, and the
+/// person is asked when it calls `vet_content`, as it would have been without the flag. The same
+/// holds where the check could not be made. The slot is always text: a server's reply that holds
+/// a picture is presented as references only and is never read in its result (MCP-16).
+///
+/// The only branch on the check is on its word, the one `release_vetted_text` already makes.
+/// Nothing here reads a byte of the result, the reason the check wrote, or whether the server
+/// called the result a failure.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy, confirmer, chat and reporter are `&mut` borrows of the turn while the rest is read-only state of one read, so bundling them would split one borrow across two values"
+)]
+pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    slots: &SlotStore,
+    mode: crate::PermissionMode,
+    auto_vetting: bool,
+    confirmer: &mut C,
+    chat: &mut Chat<'_>,
+    reporter: &mut R,
+    slot: &SlotId,
+) -> ReadInTheResult {
+    let nothing = |text| ReadInTheResult {
+        text,
+        usage: Usage::default(),
+        waited: None,
+    };
+    let release = |policy: &mut Policy<'_, S>,
+                   confirmer: &mut C,
+                   verdict: Verdict,
+                   spec: Option<&bravebot_core::vetting::VettingSpec>| {
+        release_vetted_text(
+            policy,
+            slots,
+            mode,
+            auto_vetting,
+            confirmer,
+            slot,
+            verdict,
+            None,
+            spec,
+            None,
+        )
+        .ok()
+        .map(|(text, _, _)| text)
+    };
+    if !mode.checks_before_promoting(auto_vetting) {
+        return nothing(release(
+            policy,
+            confirmer,
+            Verdict::Inconclusive("the check was not made"),
+            None,
+        ));
+    }
+
+    let Ok(spec) = policy.before_vetting(slot, None, slots) else {
+        return nothing(None);
+    };
+    let asked_at = std::time::Instant::now();
+    let checked = crate::vet::run(policy, chat, reporter, &spec);
+    let waited = Some(crate::timing::Interval::since(asked_at));
+    let usage = checked.usage;
+    // Before `release_vetted_text`, which would put anything but `safe` to the person: nobody is
+    // shown this result here.
+    let text = if checked.verdict.is_safe() {
+        release(policy, confirmer, checked.verdict, Some(&spec))
+    } else {
+        None
+    };
+    ReadInTheResult {
+        text,
+        usage,
+        waited,
+    }
+}
+
 /// Check one quarantined slot, show it to the user with what the check said, and give it to the
 /// planner if they agree.
 ///
@@ -7899,9 +8195,28 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         }
     };
 
-    // How many lines the planner is told it got: the check's count where one was made, and what
-    // the prompt was built over where none was. The two are the same slot and agree.
-    let mut counted = spec.as_ref().map_or(0, |spec| spec.lines());
+    // Text is released by the route a read in the result takes as well, so the prompt, the grant
+    // and the kernel's release are written once. A picture is put in front of the person as a copy
+    // and attached, which only this call does.
+    let Some(media) = picture.as_deref() else {
+        return match release_vetted_text(
+            policy,
+            tools.slots,
+            mode,
+            tools.auto_vetting,
+            confirmer,
+            &slot,
+            verdict,
+            said,
+            spec.as_ref(),
+            Some(&expects),
+        ) {
+            Ok((text, counted, endorsed)) => vetted_text(&slot, text, counted, endorsed)
+                .costing(spent)
+                .waiting(waited),
+            Err(refusal) => (*refusal).costing(spent).waiting(waited),
+        };
+    };
 
     // Who the trail is credited to, which the mode decides along with the verdict. The one branch
     // on a verdict that decides more than which sentence a person reads first is inside it, and it
@@ -7938,36 +8253,18 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // at all where the mode answers without drawing anything: bypassing answers this from the
         // verdict alone, so a copy there would be a file written for nobody to open, and a machine
         // naming no cache directory would refuse what the mode answers yes.
-        let (shown, lines, hidden, shown_picture, label) = match &picture {
-            None => {
-                let content = match policy.resolve("vet_content", &slot, tools.slots) {
-                    Ok(content) => content,
-                    Err(denial) => return Produced::problem(format!("refused: {denial}")),
-                };
-                // Counted and spelled in the reshape, as `release_output` does and for the same
-                // reason: the person reads the copy with the characters that draw as nothing
-                // written out, and the planner is handed the slot's own bytes.
-                let measured = policy.render_in_place("vet_content", &content, |text| {
-                    let lines = text.lines().count();
-                    let spelled = bravebot_core::invisible::spelled(text);
-                    (spelled.text, lines, spelled.hidden)
-                });
-                let label = measured.label().to_string();
-                let proof =
-                    policy.authorise_display_release("content the planner asked to be shown");
-                let (shown, lines, hidden) = measured.declassify(&proof);
-                (shown, lines, hidden, None, Some(label))
-            }
-            Some(_) if mode == crate::PermissionMode::Bypass => (String::new(), 0, 0, None, None),
-            Some(media) => match copy_a_picture(policy, tools.slots, tools.cache, &slot, media) {
+        let shown_picture = if mode == crate::PermissionMode::Bypass {
+            None
+        } else {
+            match copy_a_picture(policy, tools.slots, tools.cache, &slot, media) {
                 Ok((copy, bytes)) => {
                     let shown = crate::confirm::PictureShown {
                         path: copy.path().to_path_buf(),
-                        media: media.clone(),
+                        media: media.to_string(),
                         bytes,
                     };
                     _copy = Some(copy);
-                    (String::new(), 0, 0, Some(shown), None)
+                    Some(shown)
                 }
                 Err(detail) => {
                     return Produced::refused_with_a_note(
@@ -7981,7 +8278,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                     .costing(spent)
                     .waiting(waited);
                 }
-            },
+            }
         };
         let (reason, reason_label) = released_reason(policy, said);
 
@@ -8012,15 +8309,13 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             }
         };
 
-        counted = lines;
-
         let request = crate::confirm::VetRequest {
             origin,
             expects,
-            content: shown,
-            label,
-            lines,
-            hidden,
+            content: String::new(),
+            label: None,
+            lines: 0,
+            hidden: 0,
             verdict,
             reason,
             reason_label,
@@ -8049,41 +8344,25 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
     // whichever of the two answered.
     policy.issue_grant("vet_content", "ref", slot.to_string());
 
-    match &picture {
-        None => match policy.promote_vetted(&slot, tools.slots, endorsed) {
-            Ok(text) => {
-                let lines = tally(counted, "line", "lines");
-                Produced::new(
-                    text,
-                    format!("what {slot} held"),
-                    released_note(format!("{lines}, read"), endorsed),
-                )
-                .of_content()
-                .costing(spent)
-                .waiting(waited)
-            }
-            Err(denial) => Produced::problem(format!("refused: {denial}")),
-        },
+    match policy.promote_vetted_picture(&slot, tools.slots, endorsed) {
         // The result is the driver's words and not the file: a picture is looked at, and a data
         // URI in the text of a result is read as characters. The turn attaches it after the round's
         // results, in a message of its own (VET-4).
-        Some(media) => match policy.promote_vetted_picture(&slot, tools.slots, endorsed) {
-            Ok(attached) => {
-                let kind = kind_of_file(media);
-                Produced::new(
-                    Labelled::trusted(format!(
-                        "{slot} was let through. It is {kind}, and it is attached to the message \
-                         after these results, where you can look at it."
-                    )),
-                    format!("what {slot} held"),
-                    released_note(format!("{kind}, attached"), endorsed),
-                )
-                .attaching(attached)
-                .costing(spent)
-                .waiting(waited)
-            }
-            Err(denial) => Produced::problem(format!("refused: {denial}")),
-        },
+        Ok(attached) => {
+            let kind = kind_of_file(media);
+            Produced::new(
+                Labelled::trusted(format!(
+                    "{slot} was let through. It is {kind}, and it is attached to the message \
+                     after these results, where you can look at it."
+                )),
+                format!("what {slot} held"),
+                released_note(format!("{kind}, attached"), endorsed),
+            )
+            .attaching(attached)
+            .costing(spent)
+            .waiting(waited)
+        }
+        Err(denial) => Produced::problem(format!("refused: {denial}")),
     }
 }
 
@@ -9364,15 +9643,7 @@ fn run_call<S: Sink>(
     // would be handed a reference instead, and the way it would ask again is to run the line again.
     // Refused beside a background line for the reason a reference is: nothing is waited for there,
     // so this result holds nothing the line printed to read.
-    let read_asked = match arguments.get("read") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(read)) => *read,
-        Some(_) => {
-            return Err(Box::new(Produced::problem(
-                "error: 'read' must be true or false",
-            )));
-        }
-    };
+    let read_asked = read_asked_of(arguments)?;
     if read_asked && in_the_background {
         return Err(Box::new(Produced::problem(
             "error: a background command has printed nothing into this result, so there is \
@@ -15534,6 +15805,87 @@ mod tests {
             .map(|tool| tool.function.description.clone())
             .collect();
         assert_eq!(kept, after, "a list without vet_content was changed");
+    }
+
+    /// VET-6, MODE-3 and CHECK-9: `fetch_url` is offered `read` only on a list that holds
+    /// `vet_content`, and what it says about the argument is the same on every turn that has it.
+    /// It names no mode and no word a check answers with, so it cannot be read as saying which of
+    /// them will answer, and a list without `vet_content` is told nothing about either.
+    #[test]
+    fn fetch_url_is_offered_read_only_where_vet_content_is_and_names_no_mode_or_check_word() {
+        let properties_of = |offered: &[bravebot_aichat::protocol::Tool]| {
+            offered
+                .iter()
+                .find(|tool| tool.function.name == "fetch_url")
+                .expect("fetch_url is offered")
+                .function
+                .parameters["properties"]
+                .clone()
+        };
+        let words_of = |text: &str| -> Vec<String> {
+            text.to_ascii_lowercase()
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+                .map(str::to_string)
+                .collect()
+        };
+
+        let with = the_table_without(&[]);
+        let properties = properties_of(&with);
+        assert_eq!(
+            properties["read"]["type"], "boolean",
+            "a list holding vet_content was not offered read"
+        );
+
+        let without = the_table_without(&["vet_content"]);
+        let kept = properties_of(&without);
+        assert!(
+            kept.get("read").is_none(),
+            "read was offered on a list with no vet_content: {kept}"
+        );
+        assert!(
+            kept.get("url").is_some() && kept.get("why").is_some(),
+            "the other arguments were lost with read: {kept}"
+        );
+        assert!(
+            !names_the_tool(&description_of(&without, "fetch_url"), "vet_content"),
+            "a list without vet_content was pointed at it"
+        );
+        assert!(
+            !names_the_tool(&properties_of(&without).to_string(), "vet_content"),
+            "an argument of a list without vet_content names it"
+        );
+
+        let mentioned = format!(
+            "{} {}",
+            description_of(&with, "fetch_url"),
+            properties["read"]["description"].as_str().unwrap_or("")
+        );
+        assert!(
+            mentioned.contains("vet_content"),
+            "read does not say which tool it asks the release of: {mentioned}"
+        );
+        let words = words_of(&mentioned);
+        for forbidden in [
+            "bypass",
+            "bypassing",
+            "bypassed",
+            "auto-vetting",
+            "screening",
+            "screened",
+            "permissions",
+            "plan",
+            "safe",
+            "unsafe",
+            "inconclusive",
+            "verdict",
+            "classifier",
+            "injection",
+        ] {
+            assert!(
+                !words.iter().any(|word| word == forbidden),
+                "the fetch_url text names '{forbidden}': {mentioned}"
+            );
+        }
     }
 
     /// The words a description names a tool with: the tool's name as a word of its own.

@@ -199,6 +199,34 @@ pub(super) fn run_advice(
     }
 }
 
+/// What a result says when `read: true` was asked of `fetch_url` or a server's tool and the
+/// content still came back as a reference.
+///
+/// Where a person would be asked at `vet_content` anyway, `read` has nothing to answer and nothing
+/// is said. Elsewhere the planner asked for the content in this result, so the result says it was
+/// not returned and where to go instead, rather than reading as a quarantined result with no
+/// explanation. A slot of 0 bytes is not named here: the trail says no check was made, and
+/// there is nothing to see. `bytes` is the size the slot states, and `cap` is the largest result
+/// a read may hold.
+pub(super) fn read_not_returned(
+    read_asked: bool,
+    vet_content_is: ReadOutputIs,
+    bytes: Option<usize>,
+    cap: usize,
+) -> &'static str {
+    match (read_asked, vet_content_is, bytes) {
+        (false, _, _) | (_, ReadOutputIs::Asked, _) | (_, _, Some(0)) => "",
+        (true, _, Some(bytes)) if bytes <= cap => {
+            "\n\nYour read: true did not return it in this result, so vet_content is the way to \
+             see it."
+        }
+        (true, _, _) => {
+            "\n\nIt is longer than a result may hold, so it was left out of this one. \
+             vet_content is the way to see it."
+        }
+    }
+}
+
 /// Where git ran in a directory whose repository `read_git` opens: the output of git log or show
 /// is what `read_git` answers with nobody asked, and for any other program, or a repository it
 /// declines, the sentence is noise. `ran_git` is decided by the caller and not when the line ran,
@@ -414,6 +442,57 @@ mod tests {
                 "{ABOUT} To stop being asked, a person vouching for every stage of the exact command makes what it prints visible from then on. To read a file, use read_file."
             )
         );
+    }
+
+    const NOT_RETURNED: &str = "\n\nYour read: true did not return it in this result, so vet_content is the way to see it.";
+    const TOO_LONG: &str = "\n\nIt is longer than a result may hold, so it was left out of this one. vet_content is the way to see it.";
+
+    /// The regression it rejects: a sentence about a flag the planner did not pass, or about a
+    /// content that was handed over, either of which tells the planner something false; and
+    /// naming the flag where a person is asked at `vet_content` anyway, which the flag does not
+    /// change.
+    #[test]
+    fn nothing_is_said_of_a_read_that_was_not_asked_or_has_nothing_to_answer() {
+        for gate in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
+            assert_eq!(read_not_returned(false, gate, Some(5), 10), "");
+            assert_eq!(read_not_returned(false, gate, None, 10), "");
+        }
+        for bytes in [Some(0), Some(5), Some(11), None] {
+            assert_eq!(
+                read_not_returned(true, ReadOutputIs::Asked, bytes, 10),
+                "",
+                "a person is asked anyway, so the flag has nothing to answer ({bytes:?})"
+            );
+        }
+        assert_eq!(
+            read_not_returned(true, ReadOutputIs::ByACheck, Some(0), 10),
+            ""
+        );
+        assert_eq!(
+            read_not_returned(true, ReadOutputIs::Unasked, Some(0), 10),
+            ""
+        );
+    }
+
+    /// The regression it rejects: the size sentence used where the content fitted (the planner
+    /// is then told to shorten a result that was not too long), or the cap compared with `<`
+    /// so that a result of exactly the cap is called too long.
+    #[test]
+    fn a_read_that_fit_and_was_not_returned_says_so_and_names_vet_content() {
+        for gate in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
+            assert_eq!(read_not_returned(true, gate, Some(1), 10), NOT_RETURNED);
+            assert_eq!(read_not_returned(true, gate, Some(10), 10), NOT_RETURNED);
+        }
+    }
+
+    /// The regression it rejects: a result past the cap, or one whose size is not known, being
+    /// told it was merely not returned, which sends the planner to ask again for the same thing.
+    #[test]
+    fn a_read_past_the_cap_or_of_unknown_size_says_it_is_too_long_for_a_result() {
+        for gate in [ReadOutputIs::Unasked, ReadOutputIs::ByACheck] {
+            assert_eq!(read_not_returned(true, gate, Some(11), 10), TOO_LONG);
+            assert_eq!(read_not_returned(true, gate, None, 10), TOO_LONG);
+        }
     }
 
     #[test]

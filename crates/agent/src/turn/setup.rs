@@ -205,8 +205,18 @@ fn delegate_may_delegate(
 /// has no tool to be pointed at. The mode is read once for each answer and asked again
 /// wherever it is used, since the person can leave bypassing while the turn runs.
 pub(super) fn read_output_is(task: &Task, offers_read_output: bool) -> ReadOutputIs {
+    released_is(task, offers_read_output)
+}
+
+/// Who answers a read of what `fetch_url` or a server's tool returned: the same answer as
+/// [`read_output_is`], asked of `vet_content`, which is the release that read makes a round early.
+pub(super) fn vet_content_is(task: &Task, offers_vet_content: bool) -> ReadOutputIs {
+    released_is(task, offers_vet_content)
+}
+
+fn released_is(task: &Task, offered: bool) -> ReadOutputIs {
     let mode = task.permission_mode.get();
-    if !offers_read_output {
+    if !offered {
         ReadOutputIs::Asked
     } else if !mode.checks_before_promoting(task.auto_vetting) {
         ReadOutputIs::Unasked
@@ -463,6 +473,10 @@ pub(super) fn system_prompt(
 ///
 /// The offer with what settling it spent, which is this turn's since this turn is what asked.
 /// Adding the offer's tools to the turn's own is the caller's.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a value the turn has already resolved, and turn.rs is its only caller"
+)]
 pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
     inputs: Inputs<'_>,
     addressed: Option<&Addressed>,
@@ -471,6 +485,7 @@ pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
     reporter: &mut R,
     subscription: &mut Option<crate::shared::Spending<'_>>,
     notices: &mut Vec<crate::skills::Notice>,
+    offers_vet_content: bool,
 ) -> Option<(crate::mcp::Offer, bravebot_aichat::protocol::Usage)> {
     let Inputs {
         config,
@@ -518,6 +533,12 @@ pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
         }
         (_, None) => None,
     };
+    // A server's tool is offered a `read` argument only where `vet_content` is on the list, since
+    // that is the release the argument asks for. Set before the size is weighed, so the weight is
+    // that of the definitions the planner is sent.
+    if let Some((offer, _)) = &mut mcp {
+        *offer = offer.clone().reading(offers_vet_content);
+    }
     // Past the size the settings name, the tools are offered by name under one `load_tool`
     // and a definition joins `offered` when the planner loads it (SERVERS-16).
     if let (Some((offer, _)), Some(threshold)) = (&mut mcp, config.defer_mcp_tools_above) {

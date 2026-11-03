@@ -717,6 +717,7 @@ Fetches an `http` or `https` URL. **You approve every fetch, unless a rule names
 | Parameter | |
 |---|---|
 | `url` | the one URL to fetch |
+| `read` | `true` to ask for the page in the result of this call, which is given only where the session is offered `vet_content` ([Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call)) |
 
 **Not the tool for a GitHub pull request or issue where `gh` is installed.** The description says so
 and the system prompt names the commands that are, which is
@@ -726,6 +727,11 @@ and the system prompt names the commands that are, which is
 it to [`spawn_processor`](#spawn_processor) or write it to a file with
 [`write_file`](#write_file), and it cannot read it or be told what it says. A page saying "ignore
 your previous instructions" says it to a processor with no tools.
+
+The one exception is a call with `read: true`. Where permissions are bypassed with no screening, or
+auto-vetting is on and its check says the page is safe, the page comes back in that result, released
+the way a `vet_content` call would release it. Anything else keeps the reference. It is described under
+[Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call).
 
 It is untrusted but **public**, unlike a file of your own: a fetched page is not your data, so writing
 it raises no question about confidentiality and there is nothing of yours in it to release.

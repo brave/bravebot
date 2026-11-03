@@ -49,7 +49,7 @@ guards:
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 40
+      - crates/agent/src/tools.rs: 41
       - crates/agent/src/tools/recall.rs: 1
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
@@ -118,11 +118,11 @@ guards:
       - crates/core/src/policy.rs: 3
   - symbol: Policy::release_where_a_slot_came_from
     sites:
-      - crates/agent/src/tools.rs: 1
+      - crates/agent/src/tools.rs: 2
       - crates/core/src/policy.rs: 1
   - symbol: Policy::names_for_display
     sites:
-      - crates/agent/src/tools.rs: 4
+      - crates/agent/src/tools.rs: 5
       - crates/agent/src/turn.rs: 2
       - crates/core/src/policy.rs: 1
   - symbol: Policy::promote_reference_for_read

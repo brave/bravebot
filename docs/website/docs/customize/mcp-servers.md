@@ -416,7 +416,12 @@ what it was called with. Where nothing can be written, as in an incognito sessio
 not offered.
 
 What the server returns is untrusted and private. You see it behind the margin; the model is handed
-a reference to it and the word that it is quarantined, and none of what it says. It is private
+a reference to it and the word that it is quarantined, and none of what it says. A call can ask for the
+reply in the same result with `read: true`, where permissions are bypassed with no screening or an
+auto-vetting check says it is safe. Anything else keeps the reference. A tool that lists an argument
+named `read` of its own keeps it, and `read` is not offered at all to a session without `vet_content`.
+See [Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call).
+It is private
 because what a server read may be your own mail or calendar, so a command fed that reference is put
 to you whatever you [vouched for](../security/permissions.md#vouching-for-a-command), as one fed a
 file is. The words a server describes its tools with stay public, since it hands the same list to

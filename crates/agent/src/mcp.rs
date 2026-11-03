@@ -785,6 +785,7 @@ impl Session {
             round: Round::default(),
             deferred: false,
             loaded: Vec::new(),
+            reading: false,
         }
     }
 
@@ -1495,9 +1496,41 @@ pub struct Offer {
     /// The wire names loaded so far this turn, in the order they were loaded. Always names this
     /// offer holds, since [`Offer::load`] takes a name only by finding it in `tools`.
     loaded: Vec<String>,
+    /// Whether each tool is offered a `read` argument, which asks for what the call returns to be
+    /// checked and released in its result. Set where `vet_content` is on the turn's list, since
+    /// that is the release the argument asks for a round early.
+    reading: bool,
 }
 
+/// The name of the argument that asks for what a call returned to be read in its result.
+pub const READ_ARGUMENT: &str = "read";
+
 impl Offer {
+    /// This offer with each tool given a `read` argument, or without one.
+    pub fn reading(mut self, reading: bool) -> Self {
+        self.reading = reading;
+        self
+    }
+
+    /// Whether the call to the tool `tool` of the server `alias` takes a `read` argument of this
+    /// process's own: the offer gives tools one, and the server did not list an argument of that
+    /// name itself. A server's own `read` is the server's, and a call that gives it is sent as
+    /// written.
+    pub fn takes_read(&self, alias: &str, tool: &str) -> bool {
+        self.reading
+            && self
+                .tools
+                .iter()
+                .find(|offered| offered.alias == alias && offered.drawn.name == tool)
+                .is_some_and(|offered| {
+                    !offered
+                        .drawn
+                        .arguments
+                        .iter()
+                        .any(|argument| argument.name == READ_ARGUMENT)
+                })
+    }
+
     /// The functions a backend is sent, one per tool.
     ///
     /// The description is the server's words, which a person read and let through, so it is sent
@@ -1546,6 +1579,21 @@ impl Offer {
                                  made, in place of {argument}. Give {argument} or this, not both. \
                                  The user is shown the number and asked before the call is made."
                             ),
+                        }),
+                    );
+                }
+                if self.takes_read(&tool.alias, &tool.drawn.name) {
+                    properties.insert(
+                        READ_ARGUMENT.to_string(),
+                        json!({
+                            "type": "boolean",
+                            "description": "Ask to have what this call returns checked and \
+                                            released in this result, as vet_content would, so \
+                                            there is no vet_content call to make. Where it \
+                                            would be kept back, or the content is too long \
+                                            for one result, it still comes back as a \
+                                            reference. Not sent to the server. Defaults to \
+                                            false.",
                         }),
                     );
                 }
@@ -1757,6 +1805,7 @@ pub(crate) fn offer_for_test(entries: &[(&str, &str, &str)]) -> Offer {
         round: Round::default(),
         deferred: false,
         loaded: Vec::new(),
+        reading: false,
     }
 }
 

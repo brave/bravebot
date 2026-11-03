@@ -57528,6 +57528,9 @@ struct ApprovesFetchesAndWrites {
     hop_urls: Vec<String>,
     /// Words sent with each answer to a write.
     note: Option<&'static str>,
+    /// Every question about letting vetted content through, which it refuses. A test of a release
+    /// nobody is asked about reads this to say no question was put.
+    vets: Vec<bravebot_agent::confirm::VetRequest>,
 }
 
 impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
@@ -57572,8 +57575,9 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
 
     fn confirm_vetted_read(
         &mut self,
-        _request: &bravebot_agent::confirm::VetRequest,
+        request: &bravebot_agent::confirm::VetRequest,
     ) -> bravebot_agent::confirm::Decision {
+        self.vets.push(request.clone());
         bravebot_agent::confirm::Decision::Reject
     }
 
@@ -88015,4 +88019,617 @@ fn a_read_the_person_does_not_agree_to_is_recorded_as_a_refusal() {
         "an approved read was recorded as refused"
     );
     assert!(clean, "a turn whose read was approved read as unclean");
+}
+
+/// What a turn that fetched one page with `read` in its arguments left behind.
+struct FetchedAskingToRead {
+    /// Every request the model double received, the checks included.
+    sent: Vec<String>,
+    sink: RecordingSink,
+    /// How many times the confirmer was asked to let vetted content through.
+    vets: usize,
+    /// How many requests the page's server was sent.
+    fetched: usize,
+}
+
+impl FetchedAskingToRead {
+    /// The request that carries the fetch's result to the planner: the last one that is not a check.
+    fn after_the_fetch(&self) -> &str {
+        self.sent
+            .iter()
+            .rev()
+            .find(|body| !body.contains(A_CHECK_ASKING))
+            .expect("a request after the fetch")
+    }
+
+    fn checks_made(&self) -> usize {
+        self.sent
+            .iter()
+            .filter(|body| body.contains(A_CHECK_ASKING))
+            .count()
+    }
+}
+
+/// Every release `vet_content` makes in the trail, as [`releases_of_output`] has it for
+/// `read_output`, so a test can say none was made without the helper panicking on the count.
+fn releases_by_vet_content(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "vet_content",
+                detail,
+            } if detail.contains("so the planner is given") => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Run a turn in `mode` whose planner fetches one page from a server answering `reply`, with
+/// `arguments_tail` after the URL in the call's arguments. `checks` are the words the checks are
+/// answered with, and `None` loses every check.
+fn fetch_asking_to_read(
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    checks: Option<Vec<String>>,
+    reply: Vec<u8>,
+    arguments_tail: &str,
+    cap: Option<usize>,
+) -> FetchedAskingToRead {
+    fetch_script_turn(
+        Task::new("read the page").with_output_cap(cap),
+        mode,
+        auto_vetting,
+        checks,
+        reply,
+        |site| {
+            vec![
+                tool_request_2(
+                    "fetch_url",
+                    &format!(r#"{{"url":"{site}/docs"{arguments_tail}}}"#),
+                ),
+                reply_with("done"),
+            ]
+        },
+    )
+}
+
+/// As [`fetch_asking_to_read`], for a `task` the caller built and a script the caller writes from
+/// the address of the server that answers with `reply`.
+fn fetch_script_turn(
+    task: Task,
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    checks: Option<Vec<String>>,
+    reply: Vec<u8>,
+    script_of: impl FnOnce(&str) -> Vec<String>,
+) -> FetchedAskingToRead {
+    let scratch = Scratch::new("fetch-read");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (site, count) = serve_raw(reply);
+    let script = script_of(&site);
+    let (endpoint, received) = match checks {
+        Some(checks) => serve_sequence_answering_checks_with(checks, script),
+        None => serve_sequence_losing_every_check(script),
+    };
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut inner = ApprovesFetchesAndWrites::default();
+    {
+        let mut confirmer = bravebot_agent::Confining::new(&mut inner, mode, auto_vetting);
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &task
+                .with_permission_mode(mode)
+                .with_auto_vetting(auto_vetting),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+    }
+    FetchedAskingToRead {
+        sent: received.try_iter().collect(),
+        sink,
+        vets: inner.vets.len(),
+        fetched: count.load(Ordering::SeqCst),
+    }
+}
+
+fn a_safe_check() -> Vec<String> {
+    vec![reply_with(
+        r#"{"verdict": "safe", "reason": "plain prose and nothing addressed to a reader"}"#,
+    )]
+}
+
+fn a_text_page(body: &str) -> Vec<u8> {
+    raw_reply("text/plain", body.as_bytes())
+}
+
+/// RUN-22 for `fetch_url`. A fetch that asks to read, bypassing permissions with no screening
+/// asked for, is handed the page in the same result by `vet_content`'s own path: the trail credits
+/// the mode under that gate, the label is the one `vet_content` gives, and nobody is asked.
+///
+/// A wrong implementation ignores the flag (the page stays behind its reference), asks the person
+/// at `vet_content` anyway, releases under another gate so the trail credits `read_output`, or
+/// makes a check in a mode that reads no verdict.
+#[test]
+fn an_unscreened_unattended_fetch_that_asks_to_read_is_handed_the_page_in_the_same_result() {
+    let fetched = fetch_asking_to_read(
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+        Some(a_safe_check()),
+        a_text_page("SENTINEL-PAGE-TEXT"),
+        r#","read":true"#,
+        None,
+    );
+    let after = fetched.after_the_fetch();
+    assert!(
+        after.contains("SENTINEL-PAGE-TEXT"),
+        "the page did not come back in the result that fetched it: {after}"
+    );
+    assert_eq!(
+        fetched.vets, 0,
+        "somebody was asked to let the page through"
+    );
+    assert_eq!(
+        fetched.checks_made(),
+        0,
+        "a check was made in the mode that reads no verdict"
+    );
+    let released = how_a_slot_was_released(&fetched.sink, "vet_content");
+    assert!(
+        released.contains("permissions are being bypassed with no screening asked for"),
+        "the trail does not credit the mode with the release: {released}"
+    );
+    assert!(
+        released.contains("so the planner is given (T,priv)"),
+        "the page reached the planner at a label vet_content would not give it: {released}"
+    );
+    assert!(
+        releases_of_output(&fetched.sink).is_empty(),
+        "the release was credited to read_output: {:?}",
+        releases_of_output(&fetched.sink)
+    );
+}
+
+/// RUN-22 for `fetch_url`. With auto-vetting on, a check that answers `safe` releases the page in
+/// the same result and the trail credits the check, with nobody asked.
+///
+/// A wrong implementation asks the person after a safe word, credits the mode instead of the check,
+/// or never makes the check and releases.
+#[test]
+fn a_screened_fetch_that_asks_to_read_is_handed_the_page_where_the_check_finds_nothing() {
+    let fetched = fetch_asking_to_read(
+        bravebot_agent::PermissionMode::Ask,
+        true,
+        Some(a_safe_check()),
+        a_text_page("SENTINEL-PAGE-TEXT"),
+        r#","read":true"#,
+        None,
+    );
+    let after = fetched.after_the_fetch();
+    assert!(
+        after.contains("SENTINEL-PAGE-TEXT"),
+        "the page did not come back in the result that fetched it: {after}"
+    );
+    assert_eq!(fetched.vets, 0, "somebody was asked after a safe word");
+    assert_eq!(
+        fetched.checks_made(),
+        1,
+        "the page was released without a check"
+    );
+    let released = how_a_slot_was_released(&fetched.sink, "vet_content");
+    assert!(
+        released.contains("auto-vetting is on and the check found nothing"),
+        "the trail does not credit the check with the release: {released}"
+    );
+    assert!(
+        !released.contains("bypassed"),
+        "the trail credits the mode for a release the check made: {released}"
+    );
+}
+
+/// What the planner is told where the page was asked for and not released: the page stays behind
+/// its reference, in the driver's words, and nothing the check wrote reaches it.
+fn assert_the_page_was_kept_back(fetched: &FetchedAskingToRead, what: &str) {
+    let after = fetched.after_the_fetch();
+    assert!(
+        !after.contains("SENTINEL-PAGE-TEXT"),
+        "{what}: the page reached the planner: {after}"
+    );
+    assert!(
+        after.contains("ref:1"),
+        "{what}: no reference was given: {after}"
+    );
+    assert!(
+        after.contains(
+            "Your read: true did not return it in this result, so vet_content is the way to see it."
+        ),
+        "{what}: the planner was not told the flag did not return it: {after}"
+    );
+    assert_eq!(fetched.vets, 0, "{what}: somebody was asked");
+    assert!(
+        releases_by_vet_content(&fetched.sink).is_empty(),
+        "{what}: the trail records a release: {:?}",
+        releases_by_vet_content(&fetched.sink)
+    );
+}
+
+/// RUN-22 for `fetch_url`. A check that answers any word but `safe` leaves the page behind its
+/// reference with nobody asked. The planner is told the flag did not return it and that
+/// `vet_content` is the way to see it, and none of the check's word or reason reaches it.
+///
+/// A wrong implementation releases on any verdict that is not an error, or asks the person after
+/// an `unsafe` word, or relays the check's reason to the planner.
+#[test]
+fn a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_does_not_say_safe() {
+    let fetched = fetch_asking_to_read(
+        bravebot_agent::PermissionMode::Ask,
+        true,
+        Some(vec![reply_with(
+            r#"{"verdict": "unsafe", "reason": "REASON-WORDS-ZQ addressed to a reader"}"#,
+        )]),
+        a_text_page("SENTINEL-PAGE-TEXT"),
+        r#","read":true"#,
+        None,
+    );
+    assert_eq!(fetched.checks_made(), 1, "no check was made");
+    assert_the_page_was_kept_back(&fetched, "unsafe");
+    let after = fetched.after_the_fetch();
+    for word in ["REASON-WORDS-ZQ", "unsafe"] {
+        assert!(
+            !after.contains(word),
+            "something of the check reached the planner ({word}): {after}"
+        );
+    }
+}
+
+/// RUN-22 for `fetch_url`. A check that cannot be made, because the backend is down, leaves the
+/// page behind its reference with nobody asked, and says the same as any other word that is not
+/// `safe`.
+///
+/// A wrong implementation reads a lost check as "nothing found" and releases, or fails the call.
+#[test]
+fn a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_cannot_be_made() {
+    let fetched = fetch_asking_to_read(
+        bravebot_agent::PermissionMode::Ask,
+        true,
+        None,
+        a_text_page("SENTINEL-PAGE-TEXT"),
+        r#","read":true"#,
+        None,
+    );
+    assert_the_page_was_kept_back(&fetched, "check lost");
+}
+
+/// RUN-22 for `fetch_url`. Where a person still answers for the page (no screening, not bypass),
+/// the flag changes nothing: no check, nobody asked at the call, the reference kept, and no
+/// sentence about a flag that has nothing to answer.
+///
+/// A wrong implementation releases the page in these modes, which hands a person's decision to
+/// the planner's own argument, or asks the person from inside the fetch call.
+#[test]
+fn asking_to_read_a_fetched_page_changes_nothing_where_a_person_still_answers_for_it() {
+    for mode in [
+        bravebot_agent::PermissionMode::Ask,
+        bravebot_agent::PermissionMode::AcceptEdits,
+        bravebot_agent::PermissionMode::Plan,
+    ] {
+        let fetched = fetch_asking_to_read(
+            mode,
+            false,
+            Some(a_safe_check()),
+            a_text_page("SENTINEL-PAGE-TEXT"),
+            r#","read":true"#,
+            None,
+        );
+        let after = fetched.after_the_fetch();
+        assert!(
+            !after.contains("SENTINEL-PAGE-TEXT"),
+            "{mode:?}: the page reached the planner: {after}"
+        );
+        assert!(after.contains("ref:1"), "{mode:?}: no reference: {after}");
+        assert!(
+            !after.contains("Your read: true"),
+            "{mode:?}: the planner was told about a flag a person's answer overrides: {after}"
+        );
+        assert_eq!(fetched.vets, 0, "{mode:?}: a prompt was put at the call");
+        assert_eq!(fetched.checks_made(), 0, "{mode:?}: a check was made");
+        assert!(
+            releases_by_vet_content(&fetched.sink).is_empty(),
+            "{mode:?}: a release was recorded: {:?}",
+            releases_by_vet_content(&fetched.sink)
+        );
+    }
+}
+
+/// RUN-22 for `fetch_url`. A page larger than `task.output_cap` stays behind its reference and the
+/// result says why, in every mode where it would otherwise have been released, and no check is
+/// spent on a page that could not be released.
+///
+/// A wrong implementation ignores the cap and puts a page of any size into the conversation, or
+/// checks it first and then discards the answer.
+#[test]
+fn a_fetch_that_asks_to_read_more_than_one_result_may_hold_keeps_the_page_and_says_why() {
+    for (mode, auto_vetting) in [
+        (bravebot_agent::PermissionMode::Bypass, false),
+        (bravebot_agent::PermissionMode::Ask, true),
+    ] {
+        let page = format!("SENTINEL-PAGE-TEXT {}", "x".repeat(300));
+        let fetched = fetch_asking_to_read(
+            mode,
+            auto_vetting,
+            Some(a_safe_check()),
+            a_text_page(&page),
+            r#","read":true"#,
+            Some(64),
+        );
+        let after = fetched.after_the_fetch();
+        assert!(
+            !after.contains("SENTINEL-PAGE-TEXT"),
+            "{mode:?}: a page past the cap reached the planner: {after}"
+        );
+        assert!(after.contains("ref:1"), "{mode:?}: no reference: {after}");
+        assert!(
+            after.contains("It is longer than a result may hold"),
+            "{mode:?}: the result does not say why the page was left out: {after}"
+        );
+        assert_eq!(
+            fetched.checks_made(),
+            0,
+            "{mode:?}: a check was made over a page too large"
+        );
+        assert_eq!(fetched.vets, 0, "{mode:?}: somebody was asked");
+        assert!(releases_by_vet_content(&fetched.sink).is_empty());
+    }
+}
+
+/// RUN-22 and RUN-24 for `fetch_url`. A page of no bytes makes no check, asks nobody and releases
+/// nothing, in every mode, and the trail says why.
+///
+/// A wrong implementation tests only the size against the cap, which lets 0 through, so it makes
+/// the check or releases an empty text.
+#[test]
+fn a_fetch_that_asks_to_read_a_page_of_no_bytes_makes_no_check() {
+    for (mode, auto_vetting) in [
+        (bravebot_agent::PermissionMode::Bypass, false),
+        (bravebot_agent::PermissionMode::Ask, true),
+        (bravebot_agent::PermissionMode::Plan, true),
+    ] {
+        let fetched = fetch_asking_to_read(
+            mode,
+            auto_vetting,
+            Some(a_safe_check()),
+            a_text_page(""),
+            r#","read":true"#,
+            None,
+        );
+        assert_eq!(
+            fetched.checks_made(),
+            0,
+            "{mode:?}: a check was made over no bytes"
+        );
+        assert_eq!(
+            fetched.vets, 0,
+            "{mode:?}: somebody was asked about no bytes"
+        );
+        assert!(
+            releases_by_vet_content(&fetched.sink).is_empty()
+                && releases_of_output(&fetched.sink).is_empty(),
+            "{mode:?}: a release of nothing was recorded"
+        );
+        let records = empty_output_records(&fetched.sink);
+        assert!(
+            records.len() == 1 && records[0].starts_with("vet_content: ref:1 holds 0 bytes"),
+            "{mode:?}: the trail does not say once that no bytes were found: {records:?}"
+        );
+    }
+}
+
+/// RUN-22 for `fetch_url`. A `read` that is not a boolean is refused before the request goes out,
+/// and the refusal says what it must be.
+///
+/// A wrong implementation reads a string as false and fetches anyway, so the server is sent a
+/// request the planner's call did not validly ask for.
+#[test]
+fn a_fetch_whose_read_is_not_a_boolean_is_refused_before_anything_is_fetched() {
+    let fetched = fetch_asking_to_read(
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+        Some(a_safe_check()),
+        a_text_page("SENTINEL-PAGE-TEXT"),
+        r#","read":"yes""#,
+        None,
+    );
+    assert_eq!(
+        fetched.fetched, 0,
+        "the page was fetched under a call that was refused"
+    );
+    let after = fetched.after_the_fetch();
+    assert!(
+        after.contains("'read' must be true or false"),
+        "the refusal does not say what read must be: {after}"
+    );
+    assert!(!after.contains("SENTINEL-PAGE-TEXT"));
+}
+
+/// The arguments `fetch_url` is offered in the request at `index`, as the planner is shown them.
+fn fetch_url_properties(sent: &[String], index: usize) -> serde_json::Value {
+    let request: serde_json::Value =
+        serde_json::from_str(&sent[index]).expect("the request is JSON");
+    request["tools"]
+        .as_array()
+        .expect("the request offers tools")
+        .iter()
+        .find(|tool| tool["function"]["name"] == "fetch_url")
+        .expect("fetch_url is offered")["function"]["parameters"]["properties"]
+        .clone()
+}
+
+/// VET-6 for `fetch_url`. A definition whose tools leave out `vet_content` is not offered `read`,
+/// and a `read: true` it gives anyway releases nothing and draws no check or prompt, in the mode
+/// that would otherwise have released the page. A `read` that is not a boolean is still refused.
+///
+/// A wrong implementation offers the argument wherever `fetch_url` is, or releases on the flag
+/// because the mode bypasses, which hands a definition the page it was confined away from.
+#[test]
+fn a_fetch_asked_to_read_in_a_turn_without_vet_content_stays_a_reference() {
+    let home = Scratch::new("fetch-read-confined-home");
+    define(
+        &home,
+        "runner",
+        "kind: worker\ntools: fetch_url\n",
+        "FETCH-IT",
+    );
+    let confined = |arguments_tail: &'static str| {
+        let home_path = home.path.clone();
+        let task = Task::new("find out")
+            .with_home(Some(home_path))
+            .with_model(Some("custom-parent-model".to_string()))
+            .addressing(Some("runner".to_string()));
+        fetch_script_turn(
+            task,
+            bravebot_agent::PermissionMode::Bypass,
+            false,
+            Some(a_safe_check()),
+            a_text_page("SENTINEL-PAGE-TEXT"),
+            move |site| {
+                vec![
+                    tool_request_2(
+                        "fetch_url",
+                        &format!(r#"{{"url":"{site}/docs"{arguments_tail}}}"#),
+                    ),
+                    reply_with("done"),
+                ]
+            },
+        )
+    };
+
+    let fetched = confined(r#","read":true"#);
+    let asked = &fetched.sent[0];
+    assert!(
+        !asked.contains(r#""name":"vet_content""#),
+        "the definition was offered vet_content, so this says nothing: {asked}"
+    );
+    let properties = fetch_url_properties(&fetched.sent, 0);
+    assert!(
+        properties.get("url").is_some(),
+        "fetch_url lost its url: {properties}"
+    );
+    assert!(
+        properties.get("read").is_none(),
+        "fetch_url was offered read where nothing can answer it: {properties}"
+    );
+    let after = fetched.after_the_fetch();
+    assert_eq!(fetched.fetched, 1, "the page was not fetched");
+    assert!(
+        !after.contains("SENTINEL-PAGE-TEXT"),
+        "a turn left without vet_content was handed the page: {after}"
+    );
+    assert!(after.contains("ref:1"), "no reference was given: {after}");
+    assert!(
+        !after.contains("Your read: true"),
+        "the planner was told about a flag it was not offered: {after}"
+    );
+    assert_eq!(fetched.vets, 0, "somebody was asked");
+    assert_eq!(fetched.checks_made(), 0, "a check was made");
+    assert!(
+        releases_by_vet_content(&fetched.sink).is_empty(),
+        "the trail records a release: {:?}",
+        releases_by_vet_content(&fetched.sink)
+    );
+
+    let refused = confined(r#","read":"yes""#);
+    assert_eq!(
+        refused.fetched, 0,
+        "the page was fetched under a call that was refused"
+    );
+    assert!(
+        refused
+            .after_the_fetch()
+            .contains("'read' must be true or false"),
+        "a read that is not a boolean went unchecked: {}",
+        refused.after_the_fetch()
+    );
+}
+
+/// FETCH-5 and VET-6 for `fetch_url`. `fetch_url` decodes whatever a server sends as text, so an
+/// image it serves is a text slot and never a picture slot. Asked to be read, it is released as the
+/// same fetch is by `vet_content` without the flag: the same text at the same label, credited the
+/// same way, and never as an attachment.
+///
+/// A wrong implementation treats the body as a picture and attaches it, or releases it at another
+/// label than `vet_content` gives it.
+#[test]
+fn a_fetched_image_asked_to_be_read_is_released_as_vet_content_releases_the_same_fetch() {
+    let image = || {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(b"SENTINEL-INSIDE-AN-IMAGE");
+        raw_reply("image/png", &bytes)
+    };
+    let mode = bravebot_agent::PermissionMode::Bypass;
+
+    let asked = fetch_asking_to_read(
+        mode,
+        false,
+        Some(a_safe_check()),
+        image(),
+        r#","read":true"#,
+        None,
+    );
+    let in_the_result = asked.after_the_fetch();
+    assert!(
+        in_the_result.contains("SENTINEL-INSIDE-AN-IMAGE"),
+        "the fetched image was not released in the result: {in_the_result}"
+    );
+    assert!(
+        !in_the_result.contains("image_url"),
+        "the fetched image was attached as a picture: {in_the_result}"
+    );
+    assert_eq!(asked.vets, 0, "somebody was asked");
+    assert_eq!(asked.checks_made(), 0, "a check was made");
+
+    let later = fetch_script_turn(
+        Task::new("read the page"),
+        mode,
+        false,
+        Some(a_safe_check()),
+        image(),
+        |site| {
+            vec![
+                tool_request_2("fetch_url", &format!(r#"{{"url":"{site}/docs"}}"#)),
+                tool_request_2("vet_content", r#"{"ref":"ref:1","expects":"an image"}"#),
+                reply_with("done"),
+            ]
+        },
+    );
+    assert!(
+        !later.sent[1].contains("SENTINEL-INSIDE-AN-IMAGE"),
+        "the image reached the planner before vet_content was called: {}",
+        later.sent[1]
+    );
+    let after_vet_content = later.after_the_fetch();
+    assert!(
+        after_vet_content.contains("SENTINEL-INSIDE-AN-IMAGE"),
+        "vet_content did not release the fetched image: {after_vet_content}"
+    );
+    assert!(
+        !after_vet_content.contains("image_url"),
+        "vet_content attached the fetched image: {after_vet_content}"
+    );
+    assert_eq!(
+        how_a_slot_was_released(&asked.sink, "vet_content"),
+        how_a_slot_was_released(&later.sink, "vet_content"),
+        "the flag released the image at a different label or on a different account"
+    );
 }

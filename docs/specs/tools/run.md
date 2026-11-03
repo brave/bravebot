@@ -1905,6 +1905,9 @@ existed, and a planner offered `read_output` may call it on any reference it hol
 branch `read_output` makes. No byte the program printed and no reason the check wrote is read to
 decide it.
 
+`fetch_url` and a server's tool take the same argument and release by `vet_content`'s path
+([VET-6](vet-content.md#VET-6)).
+
 `verified-by: bravebot_agent::tools::run_takes_one_command_line_and_nothing_else`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_does_not_ask_to_read_hands_back_a_reference_and_says_how_to`

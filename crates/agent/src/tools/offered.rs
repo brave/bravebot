@@ -372,7 +372,20 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
         match tool.function.name.as_str() {
             "spawn_processor" => tool.function.description = spawn_processor_description(&beside),
             "read_output" => tool.function.description = read_output_description(&beside),
-            "fetch_url" => tool.function.description = fetch_url_description(&beside),
+            "fetch_url" => {
+                tool.function.description = fetch_url_description(&beside);
+                // `read` asks for the release `vet_content` makes, so a list without it has
+                // nothing for the argument to ask.
+                if !beside("vet_content")
+                    && let Some(properties) = tool
+                        .function
+                        .parameters
+                        .pointer_mut("/properties")
+                        .and_then(|properties| properties.as_object_mut())
+                {
+                    properties.remove("read");
+                }
+            }
             "job_output" => tool.function.description = job_output_description(&beside),
             "run" => {
                 tool.function.description = tool.function.description.replacen(
@@ -1656,6 +1669,14 @@ fn table(
                     "url": {
                         "type": "string",
                         "description": "The absolute http or https URL to fetch."
+                    },
+                    "read": {
+                        "type": "boolean",
+                        "description": "Ask to have the page checked and released in this \
+                                        result, as vet_content would, so there is no \
+                                        vet_content call to make. Where it would be kept \
+                                        back, or the page is too long for one result, it \
+                                        still comes back as a reference. Defaults to false."
                     }
                 },
                 "required": ["url"]

@@ -500,7 +500,9 @@ it finds nothing the output comes back in that result with the same label and au
 reference, nobody is asked, and the result says the argument did not return it. The same holds for an
 [agent definition](../customize/agents.md) whose `tools` leave out `read_output`. `read` must be
 `true` or `false`, and it is refused beside `background: true`, since the result that starts a job
-holds nothing the job has printed.
+holds nothing the job has printed. [`fetch_url`](tools.md#fetch_url) and the tools of an
+[MCP server](../customize/mcp-servers.md) take the same argument, described under
+[Asking for the result in the same call](../security/vetting.md#asking-for-the-result-in-the-same-call).
 
 ## Filtering something the agent may not read
 

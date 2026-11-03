@@ -120,9 +120,11 @@ among them.
 
 A slot a run printed that holds no bytes is neither checked, released nor put to anybody
 ([RUN-24](tools/run.md#RUN-24), [OUTPUT-1](tools/read-output.md#OUTPUT-1)), and the trail says so
-as a pass under `read_output`. The entry is fixed words naming the call, `run` or `read_output`,
-and the reference, `ref:N`, and says the slot holds 0 bytes, so no check was made and nothing was
-released. The size is the one the slot states for its reference.
+as a pass under `read_output`. The same holds for a page `fetch_url` returned or a reply a server's
+tool returned when the call asked to read it ([VET-6](tools/vet-content.md#VET-6)). The entry is
+fixed words naming the call, `run`, `read_output` or `vet_content`, and the reference, `ref:N`, and
+says the slot holds 0 bytes, so no check was made and nothing was released. The size is the one the
+slot states for its reference.
 
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
@@ -184,6 +186,7 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::lsp::a_language_server_the_person_does_not_approve_is_recorded_as_a_refusal`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
 `verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
+`verified-by: bravebot_agent::turn::a_fetch_that_asks_to_read_a_page_of_no_bytes_makes_no_check`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
