@@ -4307,12 +4307,25 @@ where
                 // conversation. A read_output call is made by a planner that has seen the
                 // size; this ask was made before there was one to see. The size is the
                 // slot's, as the reference states it, so no byte is read to decide.
+                //
+                // Not for a slot that states 0 bytes either. There is nothing to release and
+                // nothing for a check to read, so the result takes the route of a run that
+                // printed nothing (RUN-24) and the trail says why no check was made.
                 let output_cap = task.output_cap.unwrap_or(tools::OUTPUT_CAP);
+                if output.read_asked
+                    && read_output_is() != ReadOutputIs::Asked
+                    && let Presentation::Quarantined(reference) = &presented
+                    && reference.bytes == Some(0)
+                {
+                    policy.record_empty_output("run", &reference.slot);
+                }
                 let read_from = match &presented {
                     Presentation::Quarantined(reference)
                         if output.read_asked
                             && read_output_is() != ReadOutputIs::Asked
-                            && reference.bytes.is_some_and(|bytes| bytes <= output_cap) =>
+                            && reference
+                                .bytes
+                                .is_some_and(|bytes| bytes != 0 && bytes <= output_cap) =>
                     {
                         let mut chat =
                             crate::processor::Chat::new(config, egress, task.account_session())

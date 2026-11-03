@@ -118,6 +118,12 @@ only by what the driver called it, never by what it held:
 A question whose answer is already recorded, such as a path's reach or a host's grant, is not
 among them.
 
+A slot a run printed that holds no bytes is neither checked, released nor put to anybody
+([RUN-24](tools/run.md#RUN-24), [OUTPUT-1](tools/read-output.md#OUTPUT-1)), and the trail says so
+as a pass under `read_output`. The entry is fixed words naming the call, `run` or `read_output`,
+and the reference, `ref:N`, and says the slot holds 0 bytes, so no check was made and nothing was
+released. The size is the one the slot states for its reference.
+
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
 
@@ -176,6 +182,8 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::a_credential_in_history_is_held_back_until_the_person_agrees`
 `verified-by: bravebot_agent::mcp::a_tool_list_and_a_move_the_person_does_not_approve_are_recorded_as_refusals`
 `verified-by: bravebot_agent::lsp::a_language_server_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
+`verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content

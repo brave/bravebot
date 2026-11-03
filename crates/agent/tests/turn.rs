@@ -37211,6 +37211,205 @@ fn a_screened_run_that_asks_to_read_more_than_one_result_may_hold_makes_no_check
     }
 }
 
+/// What a turn that ran `sed -n p empty.txt` over an empty file left behind, for the tests of what
+/// is done with a slot that holds no bytes.
+struct OverEmptyOutput {
+    /// Every request the model double received, the checks included.
+    sent: Vec<String>,
+    sink: RecordingSink,
+    reporter: bravebot_agent::report::RecordingReporter,
+    /// What the confirmer was asked to release.
+    asked: std::sync::Arc<std::sync::Mutex<Vec<bravebot_agent::confirm::OutputRequest>>>,
+}
+
+/// Run a turn in `mode` whose planner makes the calls in `calls` over an empty file, and answers
+/// every check `safe`, so a check that is made shows as a request carrying `A_CHECK_ASKING`.
+fn over_empty_output(
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    calls: Vec<String>,
+) -> OverEmptyOutput {
+    let scratch = Scratch::new(&format!("empty-output-{mode:?}-{auto_vetting}"));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("empty.txt"), "").unwrap();
+
+    let mut planner = calls;
+    planner.push(reply_with("done"));
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![reply_with(
+            r#"{\"verdict\": \"safe\", \"reason\": \"a single path and nothing else\"}"#,
+        )],
+        planner,
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut reading = ReadsWhatItRan::new(false);
+    let asked = std::sync::Arc::clone(&reading.shown);
+    let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, auto_vetting);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_permission_mode(mode)
+            .with_auto_vetting(auto_vetting),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    OverEmptyOutput {
+        sent: received.try_iter().collect(),
+        sink,
+        reporter,
+        asked,
+    }
+}
+
+/// The trail entries saying a slot held no bytes and so was neither checked nor released.
+fn empty_output_records(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "read_output",
+                detail,
+            } if detail.contains("holds 0 bytes") => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Assert that nothing was checked, released or asked for an empty output, and that the trail says
+/// why.
+fn assert_empty_output_was_neither_checked_nor_released(
+    mode: bravebot_agent::PermissionMode,
+    over: &OverEmptyOutput,
+    tool: &str,
+) {
+    assert!(
+        !over.sent.iter().any(|body| body.contains(A_CHECK_ASKING)),
+        "{mode:?}: a check was made over output that holds no bytes"
+    );
+    assert!(
+        over.reporter.checks.is_empty(),
+        "{mode:?}: a check was announced for output that holds no bytes"
+    );
+    assert!(
+        releases_of_output(&over.sink).is_empty(),
+        "{mode:?}: the trail records a release of nothing: {:?}",
+        releases_of_output(&over.sink)
+    );
+    assert!(
+        over.asked.lock().unwrap().is_empty(),
+        "{mode:?}: somebody was asked about output that holds no bytes"
+    );
+    let records = empty_output_records(&over.sink);
+    assert!(
+        records.len() == 1 && records[0].starts_with(&format!("{tool}: ref:1 holds 0 bytes")),
+        "{mode:?}: the trail does not say once that {tool} found no bytes to check: {records:?}"
+    );
+}
+
+/// RUN-22 and RUN-24. A run that asks to read what it printed, where the slot states 0 bytes, is
+/// handed the answer a run that printed nothing is: it exited, it printed nothing, and no reference.
+/// No check is made and nothing is released, in every mode and with screening on or off, and the
+/// trail says why.
+///
+/// A wrong implementation tests the size only against the cap, which lets 0 through. It makes the
+/// check (a request carrying `A_CHECK_ASKING`, a check announced, a `vetting` entry for 0 lines),
+/// or releases the empty text without one, which leaves the reference and the "same output" sentence
+/// in the result and no "It printed nothing."
+#[test]
+fn a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing() {
+    for (mode, auto_vetting) in [
+        (bravebot_agent::PermissionMode::Bypass, true),
+        (bravebot_agent::PermissionMode::Ask, true),
+        (bravebot_agent::PermissionMode::AcceptEdits, true),
+        (bravebot_agent::PermissionMode::Plan, true),
+        (bravebot_agent::PermissionMode::Bypass, false),
+    ] {
+        let over = over_empty_output(
+            mode,
+            auto_vetting,
+            vec![tool_request(
+                "run",
+                r#"{"command":"sed -n p empty.txt","read":true}"#,
+            )],
+        );
+        let [_asked_to_run, after_the_run] = over.sent.as_slice() else {
+            panic!(
+                "{mode:?}/{auto_vetting}: the turn took {} requests, not two: {:#?}",
+                over.sent.len(),
+                over.sent
+            );
+        };
+        let told = message_from(after_the_run, "Result of run");
+        assert!(
+            told.contains("It exited 0.") && told.contains("It printed nothing."),
+            "{mode:?}/{auto_vetting}: the planner was not told the run printed nothing: {told}"
+        );
+        for advice in ["ref:", "read_output", "The same output"] {
+            assert!(
+                !told.contains(advice),
+                "{mode:?}/{auto_vetting}: the result for output that is not there holds \
+                 {advice:?}: {told}"
+            );
+        }
+        assert_empty_output_was_neither_checked_nor_released(mode, &over, "run");
+    }
+}
+
+/// OUTPUT-1 and RUN-24. `read_output` over a slot that holds no bytes makes no check, asks nobody
+/// and releases nothing, and answers in the driver's words that there is nothing to read. Held to
+/// in every mode where a check is made, and in the mode where a person would otherwise be asked.
+///
+/// A wrong implementation makes the zero-line check the call made before, or puts the person a
+/// prompt to release nothing.
+#[test]
+fn read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody() {
+    for (mode, auto_vetting) in [
+        (bravebot_agent::PermissionMode::Bypass, true),
+        (bravebot_agent::PermissionMode::Ask, true),
+        (bravebot_agent::PermissionMode::AcceptEdits, true),
+        (bravebot_agent::PermissionMode::Plan, true),
+        (bravebot_agent::PermissionMode::Ask, false),
+        (bravebot_agent::PermissionMode::Bypass, false),
+    ] {
+        let over = over_empty_output(
+            mode,
+            auto_vetting,
+            vec![
+                tool_request("run", r#"{"command":"sed -n p empty.txt"}"#),
+                tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            ],
+        );
+        let [_asked_to_run, _after_the_run, after_the_read] = over.sent.as_slice() else {
+            panic!(
+                "{mode:?}/{auto_vetting}: the turn took {} requests, not three: {:#?}",
+                over.sent.len(),
+                over.sent
+            );
+        };
+        let told = message_from(after_the_read, "Result of read_output");
+        assert!(
+            told.contains("ref:1 printed nothing, so there is nothing to read."),
+            "{mode:?}/{auto_vetting}: read_output did not say the slot is empty: {told}"
+        );
+        assert_empty_output_was_neither_checked_nor_released(mode, &over, "read_output");
+    }
+}
+
 /// Everywhere a person still answers for reading a run's output, asking to read it in the same
 /// result changes nothing: the output is quarantined, nobody is asked, and no check is made. A
 /// person asked would be a prompt the planner did not request with `read_output`.

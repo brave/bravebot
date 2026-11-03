@@ -574,6 +574,9 @@ the other tools that take a reference name refuse an unknown name the same way. 
 screening, nobody is shown it and it comes back at once, and [`read` on `run`](run-tool.md#reading-the-output-in-the-same-result)
 makes the same release without the extra call.
 
+**Output that holds no bytes is not read.** A `ref` whose output is empty makes no check, asks you
+nothing and releases nothing, and the planner is told the command printed nothing.
+
 **A confined check reads the output before you are asked**, and the word it gave and the sentence it
 wrote are on the screen beside the bytes. The check runs before the question rather than after your
 answer, and nothing it wrote goes back to the planner either way. No expectation is sent with it: the

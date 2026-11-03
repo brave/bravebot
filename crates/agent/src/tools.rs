@@ -7267,6 +7267,18 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         ));
     }
 
+    // A slot that holds no bytes has nothing for a check to read or for anybody to be asked about,
+    // so no check is made and nothing is released (RUN-24). Answered from the figure the slot
+    // states for its reference, which the planner was shown, so no byte is read to decide. The
+    // answer is the driver's own sentence and names no reference.
+    if tools.slots.holds_no_bytes(&slot) {
+        policy.record_empty_output("read_output", &slot);
+        return confirmed(
+            format!("{slot} printed nothing, so there is nothing to read."),
+            "0 bytes, nothing to read",
+        );
+    }
+
     // The second opinion, before the question rather than after it. No `expects`: the planner asked
     // for the output to be read, not for it to be checked, and it has said nothing about what the
     // command printed.

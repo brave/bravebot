@@ -446,7 +446,10 @@ return it.
 
 A command that printed nothing, such as a `mkdir`, has nothing to keep back. The planner is told it
 printed nothing, with no reference and no advice, and the transcript does not mark it as kept from
-the planner. That is decided from the size of the output alone.
+the planner. That is decided from the size of the output alone. The same holds when the call passed
+`read: true`, or when the planner calls `read_output` on such a reference: no check is made, nobody
+is asked and nothing is released for output that holds no bytes, and the result says the command
+printed nothing.
 
 **Every result says how the run ended**, in front of what the program printed: that every step
 exited zero, which step did not and with what code, or that the line outstayed

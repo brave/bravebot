@@ -62,6 +62,14 @@ have made it. Where a check makes it, the check is made at the run and nobody is
 Only output from `run` can be read this way. A file's worth is the trust map's answer, and a second
 route to it would be a way to disagree with the first.
 
+**Nothing is released from a slot that holds no bytes.** `read_output` on a slot whose size is 0 makes
+no check, draws no prompt in any mode, writes no release, and answers in the driver's own words that
+the slot printed nothing. The size is the one the slot states for its reference ([LABEL-4](../labels.md#LABEL-4)),
+which the planner was shown, so no byte is read to decide. The trail records under `read_output`
+that the slot holds 0 bytes, so no check was made and nothing was released. A run that asked with
+`read` ([RUN-22](run.md#RUN-22)) over such a slot gets the same treatment in its own result
+([RUN-24](run.md#RUN-24)).
+
 **Why.** This is the strongest assertion in the system and the only one made about bytes rather
 than about a prediction: vouching guesses at output that does not exist yet, while this is a
 statement about text in front of the reader. Errors count: a run that failed put its explanation on
@@ -77,6 +85,7 @@ stderr, and a planner that cannot see it will report that the command worked.
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_credits_the_mode_for_the_output`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_a_check_finds_nothing_is_handed_its_output_in_the_same_result`
+`verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
 `verified-by: bravebot_agent::turn::output_a_person_refuses_stays_out_of_the_planner`

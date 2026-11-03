@@ -1863,6 +1863,13 @@ of it without the line being run again. The size is tested before any check
 is made, so no model call is spent on output that cannot be returned. The size is the slot's, as its
 reference states it, so no byte the program printed is read to decide.
 
+A slot whose size is 0 is not released and no check is made over it, whether the mode or screening
+would have answered. There is nothing to read and nothing for a check to read, so the run takes
+[RUN-24](#RUN-24)'s route: the result says how the line ended and that it printed nothing, names no
+reference and gives none of [RUN-14](#RUN-14)'s advice. The trail records, under `read_output`, that
+the slot holds 0 bytes and so no check was made and nothing was released, and it names the slot and
+nothing the program printed. No model call is made and nothing is announced as a check.
+
 Everywhere else `read` changes nothing. Where a person answers `read_output` and screening was not
 asked for, the output is quarantined, nobody is asked and no check is made, since a prompt made here
 would be spent on output the planner has not called `read_output` for. Where the turn was not offered
@@ -1908,6 +1915,7 @@ decide it.
 `verified-by: bravebot_agent::turn::asking_to_read_does_not_hand_output_to_a_definition_left_without_read_output`
 `verified-by: bravebot_agent::turn::asking_to_read_more_than_one_result_may_hold_hands_back_the_reference_and_says_why`
 `verified-by: bravebot_agent::turn::a_screened_run_that_asks_to_read_more_than_one_result_may_hold_makes_no_check`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
 `verified-by: bravebot_agent::turn::sentences::a_check_answering_says_where_the_rest_is_for_output_past_the_cap`
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference`
 `verified-by: bravebot_agent::turn::a_read_that_was_refused_is_not_asked_for_again`
@@ -2008,7 +2016,14 @@ the reference would have put in front of the planner as `0 bytes`
 ([LABEL-4](../labels.md#LABEL-4)). "It printed nothing" is that same number in other words, and a
 program choosing to print nothing chose what the planner is told no more than it did before.
 
+The same holds where the planner asked to read what it printed. `read: true` on a run whose slot
+holds no bytes gets this result and not a release of nothing ([RUN-22](#RUN-22)), and `read_output`
+on such a slot answers that it printed nothing, with no check and no question to anybody
+([OUTPUT-1](read-output.md#OUTPUT-1)).
+
 `verified-by: bravebot_agent::turn::a_run_that_printed_nothing_says_so_and_hands_back_no_reference`
+`verified-by: bravebot_agent::turn::a_run_that_asks_to_read_what_printed_nothing_makes_no_check_and_says_it_printed_nothing`
+`verified-by: bravebot_agent::turn::read_output_over_a_slot_that_holds_no_bytes_checks_nothing_and_asks_nobody`
 `verified-by: bravebot_agent::turn::a_look_at_a_job_that_printed_nothing_new_says_so_and_hands_back_no_reference`
 `verified-by: bravebot_agent::turn::an_empty_look_after_earlier_looks_lists_them_and_hands_back_no_reference`
 

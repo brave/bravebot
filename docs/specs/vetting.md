@@ -460,7 +460,9 @@ where screening is asked for makes the check `read_output` would make on its slo
 round early, so it is not a fourth kind of grant. Any other word, and a check that could not be made,
 keep the output back with no prompt drawn in any mode, including one that asks: the person is asked when
 the planner calls `read_output`. The planner is told that `read: true` did not return the output and
-nothing of the word.
+nothing of the word. No check is made over a slot that holds no bytes, by this route or by
+`read_output`: there is nothing for a check to read, and the result says the run printed nothing
+([RUN-24](tools/run.md#RUN-24)).
 
 **Where there is nobody to fall back to, the fallback is a refusal.** A run bypassing permissions
 ([MODE-4](permission-modes.md#MODE-4)) puts no prompt to anybody, so a verdict that is not `safe` has

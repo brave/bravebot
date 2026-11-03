@@ -7936,6 +7936,26 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         );
     }
 
+    /// Record that a slot a program printed holds 0 bytes, so no check was made over it and nothing
+    /// was released or put to anybody ([RUN-22], [RUN-24], [OUTPUT-1]).
+    ///
+    /// `tool` is the call that would otherwise have read the output, `run` or `read_output`. The
+    /// size is the one the slot states for its reference, which the planner is shown for output it
+    /// may not read, so no byte is read to know it. The text is fixed and names only the slot.
+    ///
+    /// [RUN-22]: ../../../docs/specs/tools/run.md
+    /// [RUN-24]: ../../../docs/specs/tools/run.md
+    /// [OUTPUT-1]: ../../../docs/specs/tools/read-output.md
+    pub fn record_empty_output(&mut self, tool: &str, slot: &SlotId) {
+        self.allow(
+            "read_output",
+            format!(
+                "{tool}: {slot} holds 0 bytes, so no check was made and nothing was released or \
+                 put to anybody"
+            ),
+        );
+    }
+
     /// The note [`Policy::record_note`] kept, once.
     pub fn take_note(&mut self) -> Option<Labelled<String>> {
         self.told.take()
