@@ -13461,7 +13461,7 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         }
     };
 
-    let relative = if operation.needs_position() {
+    let (relative, landed) = if operation.needs_position() {
         let Some(proposed) = argument(arguments, "path") else {
             return Produced::problem(format!(
                 "error: 'path' is required for {}",
@@ -13481,9 +13481,17 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         if let Err(refusal) = refuse_denied_path(policy, tools.workspace, Purpose::Read, &named) {
             return Produced::problem(refusal);
         }
-        named
+        // The path is asked about as a read is: a path that lands outside the workspace is refused
+        // here, before a server is started or the person is asked about one, and the refusal is
+        // recorded in the trail (LSP-4, TRACE-1). The promotion above says only that the planner
+        // chose it. Worded about the name typed, since the landing can come from a link.
+        let landed = match tools.workspace.resolve(&named) {
+            Ok(landed) => landed,
+            Err(e) => return file_tool_problem(policy, "lsp", "path", &e, &named),
+        };
+        (named, Some(landed))
     } else {
-        String::new()
+        (String::new(), None)
     };
 
     let Some(servers) = tools.servers.as_deref_mut() else {
@@ -13501,10 +13509,10 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         );
     };
 
-    // The server is given the path it can open, which is the resolved one. What the planner is
-    // shown is rendered back against the root by the lsp module.
+    // The server is given the path it can open, which is the one the workspace resolved. What the
+    // planner is shown is rendered back against the root by the lsp module.
     let root = servers.root().to_path_buf();
-    let file = root.join(&relative);
+    let file = landed.unwrap_or_else(|| root.join(&relative));
     let absolute = if relative.is_empty() {
         String::new()
     } else {
