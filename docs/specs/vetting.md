@@ -704,7 +704,9 @@ What the rest of the route costs is in [tools/vet-content.md](tools/vet-content.
   in the confined conversation even where the person then says no, and the refusal keeps the bytes
   out of the planner rather than off the wire. That is a real widening of what a `read_file` on a
   quarantined path does, and it is the price of the person being told something before they answer.
-  It is bounded by the offer being made once per path per turn, by never being made for a picture
+  It is bounded by the offer being made once per path per turn (again after an answer thrown away
+  because the file changed or a program started while the question was open; each repeat is
+  answered by the person, or by the mode under bypass), by never being made for a picture
   or a directory, and by the confined conversation holding no tools, no memory and no destination.
 
 - **The check is a model, so it is wrong sometimes, in both directions.** A safe verdict on

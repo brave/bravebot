@@ -614,6 +614,10 @@ pub struct Policy<'sink, S: Sink> {
     /// map and needs no remembering; a no is worth honouring for the rest of the turn so a planner
     /// retrying a read does not put the same question up twice, but it is not a standing refusal
     /// and the next turn may ask again.
+    ///
+    /// A path leaves the set when [`Policy::vouch_if_unchanged`] throws an answer away, because
+    /// the question was about text that is gone and the person has not answered about what the
+    /// file holds now. The next read of it asks again.
     vouch_asked: std::collections::BTreeSet<String>,
     /// The files a person agreed to have read despite what the scan found in them.
     ///
@@ -2200,7 +2204,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// True once per path per turn, and only where the path is quarantined and so the offer would
     /// change something. Records the asking, so a planner retrying a read does not put the same
-    /// question up twice.
+    /// question up twice. A yes thrown away by [`Policy::vouch_if_unchanged`] does not count as the
+    /// asking, so the path is offered again.
     ///
     /// This offers the trust map's own decision at the moment it bites. It is not a second route
     /// to trusting content: what a yes writes is a rule in the map, the same rule `@` and the
@@ -7138,6 +7143,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// a file they just trusted come back quarantined with nothing saying why, and the caller needs
     /// the answer to say so.
     ///
+    /// A refused answer also frees `path` for [`Policy::should_offer_vouch`], so the read the
+    /// caller tells the planner to make puts the question again, about what the file holds then.
+    /// Nothing is freed when the answer is spent. A no never reaches this method, so it keeps the
+    /// path asked about for the rest of the turn.
+    ///
     /// `answered_by` is the name of the mode that answered, or `None` for a person. The rule
     /// written is the same either way. The trail credits the user with naming the file only for
     /// the second (TRACE-7).
@@ -7163,6 +7173,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             true
         });
         if !vouched {
+            self.vouch_asked.remove(path);
             self.allow(
                 "trust",
                 format!("{path} not trusted: it changed while the question was being answered"),
@@ -22603,6 +22614,52 @@ five
                 "an answer about the version in front of the person was not spent on it"
             );
             assert!(policy.trust().is_trusted("vendor/lib.js"));
+        }
+
+        /// A path is offered once per turn, except after an answer that was thrown away.
+        ///
+        /// A thrown-away answer was about text that is gone, so the person has not answered about
+        /// the file as it is, and the read the planner is told to make has to put the question
+        /// again. A no, and a yes that was spent, keep the path asked about, so a planner retrying
+        /// a read does not put the same question up twice. The three cases are one policy each so
+        /// that none of them can borrow another's state.
+        #[test]
+        fn a_path_is_offered_again_only_after_an_answer_was_thrown_away() {
+            // Thrown away: a program started while the question was open.
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
+            policy.file_authority().note_program_started();
+            assert!(!policy.vouch_if_unchanged("vendor/lib.js", shown_at, None));
+            assert!(
+                policy.should_offer_vouch("vendor/lib.js"),
+                "a thrown-away answer left the path unasked about"
+            );
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js"),
+                "the offer made after a thrown-away answer was made twice"
+            );
+
+            // A no: the confirmer is never asked to vouch, so nothing frees the path.
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js"),
+                "a path the person said no to was offered again"
+            );
+
+            // A yes that was spent: the path is trusted, so there is nothing left to offer.
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
+            assert!(policy.vouch_if_unchanged("vendor/lib.js", shown_at, None));
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js"),
+                "a path the person vouched for was offered again"
+            );
         }
 
         /// TRACE-7: the offer to vouch for a file is recorded as a person's only where a person was

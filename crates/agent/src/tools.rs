@@ -3658,7 +3658,9 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // file, which is the defect this covers.
     //
     // Asked once per path per turn, and only for a path that is quarantined, so a planner retrying
-    // a read does not put the same question up twice.
+    // a read does not put the same question up twice. An answer thrown away because the file
+    // changed while the person was answering frees the path (`vouch_if_unchanged`), so the read
+    // the result below invites asks again.
     //
     // Never asked about a picture. What a yes grants is that a file's *text* may be read, and the
     // branch below hands a picture back as a reference whatever the trust map says, so the
@@ -31130,8 +31132,9 @@ mod tests {
         use bravebot_core::file_authority::FileAuthority;
         use bravebot_core::policy::{ReleasePlan, Routing};
 
-        /// Answers a vouch question yes, after starting a `run` line when it holds an authority to
-        /// start one on. Counts the questions it was asked. Every other question is Unattended's.
+        /// Answers a vouch question yes, after starting a `run` line on the first question when it
+        /// holds an authority to start one on. Counts the questions it was asked. Every other
+        /// question is Unattended's.
         struct SaysYes {
             starts_a_program_on: Option<FileAuthority>,
             asked: usize,
@@ -31140,7 +31143,7 @@ mod tests {
         impl Confirmer for SaysYes {
             fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
                 self.asked += 1;
-                if let Some(authority) = &self.starts_a_program_on {
+                if let Some(authority) = self.starts_a_program_on.take() {
                     authority.note_program_started();
                 }
                 Decision::Approve
@@ -31207,10 +31210,11 @@ mod tests {
             }
         }
 
-        /// Reads `note.txt`, which nobody vouched for, with a person who answers yes, in bypass so
-        /// that no confined check is made. Returns what the planner was told, whether the file is
-        /// still quarantined afterwards, and how many times the person was asked.
-        fn read_while(starts_a_program: bool) -> (String, bool, usize) {
+        /// Reads `note.txt`, which nobody vouched for, `reads` times in one turn with a person who
+        /// answers yes, in bypass so that no confined check is made. Returns what the planner was
+        /// told by each read, whether the file is still quarantined afterwards, and how many times
+        /// the person was asked, and the trail.
+        fn read_note(starts_a_program: bool, reads: usize) -> (Vec<String>, bool, usize, String) {
             let scratch = Scratch::new("vouch-after-program");
             std::fs::write(scratch.path.join("note.txt"), "a line\n").unwrap();
             let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -31237,18 +31241,39 @@ mod tests {
             }))
             .expect("a call");
 
-            let output = with_tools(&workspace, |tools| {
+            let outputs = with_tools(&workspace, |tools| {
                 tools.permission_mode.set(crate::PermissionMode::Bypass);
-                dispatch(
-                    &mut policy,
-                    tools,
-                    &mut person,
-                    &mut crate::report::IgnoreReports,
-                    &call,
-                )
+                (0..reads)
+                    .map(|_| {
+                        dispatch(
+                            &mut policy,
+                            tools,
+                            &mut person,
+                            &mut crate::report::IgnoreReports,
+                            &call,
+                        )
+                    })
+                    .collect::<Vec<_>>()
             });
-            let said = told(&mut policy, &output.text);
-            (said, policy.read_is_quarantined("note.txt"), person.asked)
+            let said = outputs
+                .iter()
+                .map(|output| told(&mut policy, &output.text))
+                .collect();
+            let still_quarantined = policy.read_is_quarantined("note.txt");
+            drop(policy);
+            (
+                said,
+                still_quarantined,
+                person.asked,
+                format!("{:?}", sink.events()),
+            )
+        }
+
+        /// One read of `note.txt`: what the planner was told, whether the file is still
+        /// quarantined, and how many times the person was asked.
+        fn read_while(starts_a_program: bool) -> (String, bool, usize) {
+            let (mut said, still_quarantined, asked, _) = read_note(starts_a_program, 1);
+            (said.remove(0), still_quarantined, asked)
         }
 
         /// The regression it rejects: `read_file` passing the vouch only the path's revision, or
@@ -31274,6 +31299,45 @@ mod tests {
             assert!(
                 said.contains("changed while the user was being asked about it"),
                 "the planner was not told the answer was thrown away: {said}"
+            );
+        }
+
+        /// The regression it rejects: a read after a thrown-away answer asking nobody. The result of
+        /// the first read tells the planner to read again and says the person will be asked, so the
+        /// second read has to put the question, and a yes with no program started in between has to
+        /// trust the file. An implementation that keeps the path marked as asked about leaves the
+        /// second read quarantined with `asked` still 1.
+        #[test]
+        fn a_read_after_a_thrown_away_answer_asks_the_person_again() {
+            let (said, still_quarantined, asked, trail) = read_note(true, 2);
+            assert!(
+                said[0].contains("changed while the user was being asked about it"),
+                "the first answer was not thrown away: {}",
+                said[0]
+            );
+            assert_eq!(
+                asked, 2,
+                "the second read did not put the question again: {}",
+                said[1]
+            );
+            assert!(
+                !still_quarantined,
+                "a yes given to the second question was not spent: {}",
+                said[1]
+            );
+            assert!(
+                !said[1].contains("changed while the user was being asked about it"),
+                "the second answer was thrown away too: {}",
+                said[1]
+            );
+            assert_eq!(
+                trail
+                    .matches(
+                        "note.txt: quarantined, so the user is offered the chance to vouch for it"
+                    )
+                    .count(),
+                2,
+                "the trail does not show the second offer: {trail}"
             );
         }
     }

@@ -319,7 +319,8 @@ asking or checking".
 - **A read of a quarantined file now sends the file, before anybody has agreed to anything.** The check in
   front of the vouch prompt reads the whole file, so reading a path nobody vouched for puts those bytes on
   the wire even where you then say no. Refusing keeps the bytes out of the planner rather than off the
-  wire. It is bounded by the offer being made once per path per turn, never for a picture or a directory,
+  wire. It is bounded by the offer being made once per path per turn (again after an answer thrown away
+  because the file changed while you were answering), never for a picture or a directory,
   and by the checking conversation holding no tools, no memory and no destination.
 - **The check is a model, so it is wrong sometimes, in both directions.** A safe verdict on content that
   is an attack draws the quiet banner under bytes you still read; an unsafe verdict on an ordinary page

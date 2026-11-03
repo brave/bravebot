@@ -362,7 +362,10 @@ when the preview was drawn, so a changed path cannot spend the old approval. A v
 against the path's stamp, which is that revision and the number of `run` lines started, both
 taken when the preview was drawn and compared as numbers. A `run` line that starts while the
 person is asked voids a vouch, because a program opens files its line does not name and moves no
-revision. A vouch answered after that is thrown away and the read says so. A change to another
+revision. A vouch answered after that is thrown away and the read says so. A path whose answer was
+thrown away is offered again by the next read of it, about the file as it is then, so the read's
+own advice to read again is true. An answer that was spent, and a no, keep the path asked about for
+the rest of the turn. A change to another
 path invalidates neither an approval nor a vouch, but any `run` line that started voids a vouch.
 The count is compared only for a vouch and for the write-back exception in
 [WRITE-4](tools/write-file.md#WRITE-4), which compares it separately. A backup records the trust
@@ -401,6 +404,8 @@ no second writer to the one file is let in.
 `verified-by: bravebot_core::policy::a_vouch_is_not_spent_on_a_version_nobody_was_shown`
 `verified-by: bravebot_core::policy::a_vouch_is_not_spent_after_a_program_started_while_the_question_was_open`
 `verified-by: bravebot_agent::tools::a_yes_is_not_spent_when_a_program_started_while_the_person_was_asked`
+`verified-by: bravebot_agent::tools::a_read_after_a_thrown_away_answer_asks_the_person_again`
+`verified-by: bravebot_core::policy::a_path_is_offered_again_only_after_an_answer_was_thrown_away`
 
 **Why writing trusted data never asks.** Trusted data means the turn observed nothing untrusted,
 so it holds no byte an attacker influenced, and the destination only ever gains trust. There is
