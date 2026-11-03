@@ -59,6 +59,7 @@ help:
 	@echo "  make check-maintenance     Dead, repeated, deeply nested, coupled or untested code, as candidates for the maintenance skill"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-versions        Whether every file stating the version states the same one"
+	@echo "  make check-code-selectors  Whether each variable gcloud runs code from has its tests"
 	@echo "  make check-lint-increase   Whether this branch adds sites of the clippy lints held to the base"
 	@echo "  make check-narration       Whether this branch's commits and lines narrate their writer's process [BASE=ref]"
 	@echo "  make check-docs            Build the documentation website under docs/website"
@@ -174,7 +175,18 @@ check:
 	@python3 contrib/check-lint-increase.py
 	RUST_TEST_THREADS="$(RUST_TEST_THREADS)" cargo test --all --locked
 	@python3 contrib/check-versions.py
+	@python3 contrib/check-code-selectors.py --selftest
+	@python3 contrib/check-code-selectors.py
 	@python3 contrib/check-toolchain.py
+
+# Whether every variable gcloud's launcher reads to choose code to run, as listed in
+# CODE_SELECTORS in crates/agent/src/gcloud.rs, has a test that keeps a safe value and a test that
+# removes one a stage may write. It cannot tell that the list is complete: that is PATH-008 in
+# docs/best-practices/paths.md. Run by `check` and by CI.
+.PHONY: check-code-selectors
+check-code-selectors:
+	@python3 contrib/check-code-selectors.py --selftest
+	@python3 contrib/check-code-selectors.py
 
 # Whether every file that states the version states the same one: the workspace manifest, the
 # published wrapper and its lockfile, and the desktop application and its lockfile. The tagging

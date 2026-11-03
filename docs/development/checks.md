@@ -365,6 +365,11 @@ check` runs it and so does CI, because the tagging path's own refusal fires on r
 is long after the pull request that moved one file and not the others. It carries a `--selftest`,
 which `make check-versions` runs first.
 
+`make check-code-selectors` holds each variable in `CODE_SELECTORS` in `crates/agent/src/gcloud.rs`
+to a test that keeps a safe value and a test that removes one a stage may write. `make check` runs
+it and so does CI. It cannot tell that the list is complete, which
+[PATH-008](../best-practices/paths.md#PATH-008) leaves to a reviewer.
+
 `make check-narration` fails a pull request whose commit messages, title, body or added lines
 contain a first-person phrase from a fixed list, which is the rule in [commits.md](commits.md)
 against writing about your own process. The list is in
