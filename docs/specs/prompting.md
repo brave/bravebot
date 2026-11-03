@@ -129,10 +129,17 @@ rules, of the directories a settings file named, of the `sandbox.filesystem` pat
 that wrote them draw the spelled fields the bridge sends beside each (`shownDeny`, `shownAsk`,
 `shownAllow`, `shownRule`, `shownDirectories`, `shownPath`, `shownFile`) and never the value as
 held, and the sentence about an entry that is not a rule quotes the entry spelled. A name that is
-empty, is only whitespace, has a space at either end of it or of a directory in it, or holds a character
+empty, is only whitespace, has a space at either end of it or of a directory in it, holds a character
 that draws as nothing (a zero-width character, a bidirectional control, a tag character, a variation
-selector, a no-break space) or as a blank cell (the blank braille pattern) is drawn quoted with each
-such character spelled, so it cannot read as another name. The terminal and the desktop window also
+selector, a no-break space) or as a blank cell (the blank braille pattern), or holds a literal `"`
+or a literal character from the Control Pictures block (U+2400 to U+243F), is drawn quoted with each
+such character spelled, so it cannot read as another name: left as itself, a `"` or a Control
+Pictures character reads back as the quoting or the picture this paragraph just described, so a
+name holding one as ordinary text would draw the same as a different name whose marking produced
+that spelling. A literal `\` is spelled `\\` once a name is quoted for one of these reasons, for
+the same cause, but is not by itself one of them: left alone in a name that is otherwise plain, such
+as a Windows path, it is not confusable with anything, so such a name is drawn as it is. The
+terminal and the desktop window also
 spell a byte of a path that is not part of a UTF-8 character as `\xNN`, so two paths that differ
 only in such bytes are not drawn alike. Any other name is drawn as it is. The one-line description a
 front end draws in place of the prompt, such as the question in lines and an editor's title, names
@@ -202,6 +209,9 @@ bound to the arguments as held.
 `verified-by: bravebot_ui_bridge::wire::a_write_and_a_credential_read_carry_the_name_spelled_for_a_person`
 `verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown-name.test.mjs renders the write, credential-read, vouch and run cards, the startup question, the notice and the list of what is kept, the list of proposed rules, a tool line and the Context lists of files read and written through react-dom and asserts each draws the name the agent spelled and not the name as written, ui/scripts/drive-remembered-trust.mjs asks the startup question in the real window about a directory whose name ends in a space and about a long directory in a 900x560 window, and make check-ui runs them)`
 `verified-by: bravebot_agent::confirm::a_name_that_draws_as_nothing_is_shown_as_what_it_is`
+`verified-by: bravebot_agent::confirm::a_name_that_spells_the_marking_is_not_drawn_the_same_as_what_the_marking_draws`
+`verified-by: bravebot_agent::confirm::a_space_after_a_backslash_is_part_of_the_name_where_a_backslash_is_not_a_separator`
+`verified-by: bravebot_agent::confirm::a_path_holding_only_the_hosts_own_separator_is_shown_unquoted`
 `verified-by: bravebot_agent::confirm::a_directory_in_a_path_that_starts_or_ends_in_a_space_is_shown_as_what_it_is`
 `verified-by: bravebot_agent::confirm::a_byte_that_is_not_text_is_shown_as_the_byte_and_not_as_another_name`
 `verified-by: bravebot_core::invisible::only_the_blank_braille_pattern_is_a_cell_with_no_mark`
