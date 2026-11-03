@@ -433,6 +433,16 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn confirm_vouch_noting_the_mode(
+        &mut self,
+        request: &VouchRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.asked(
+            |held| held.confirm_vouch_noting_the_mode(request),
+            |refuse| refuse.confirm_vouch_noting_the_mode(request),
+        )
+    }
+
     fn confirm_exposing_read(&mut self, request: &crate::confirm::ExposureRequest) -> Decision {
         self.asked(
             |held| held.confirm_exposing_read(request),

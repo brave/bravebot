@@ -282,6 +282,14 @@ promotion prompts, so the check is made there; the vouch offer and a server's li
 this mode whatever was asked for, so no check is made before either. This is the only exemption
 from that clause.
 
+**The trail names the mode for the vouch offer.** The bypassing mode answers the offer to vouch for a
+file without showing the person anything, so the trail records the mode's answer and not a person's
+([TRACE-7](trace.md#TRACE-7)): one `approval` entry that names the mode and says nobody was asked,
+and a `trust` entry that says the mode answered and the user did not name the file. No entry says the
+user was offered the chance, and none says the head of the file was shown. The mode reports its name
+with the answer, so the entry is written for the answer that was given, and a delegate lent the
+session's confirmer is recorded the same way ([MODE-9](#MODE-9)).
+
 **Why.** The mode is for a place where the blast radius is bounded by something other than these
 prompts, which in practice means a container with no network and nothing in it worth losing. It is
 the wrong mode everywhere else, and it is named `--dangerously-skip-permissions` for that reason.
@@ -333,6 +341,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::turn::a_flagged_read_bypass_mode_let_through_is_recorded_as_the_modes_answer`
 `verified-by: bravebot_agent::turn::a_flagged_read_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
 `verified-by: bravebot_agent::permission_mode::bypassing_names_itself_for_a_flagged_read_and_no_other_mode_does`
+`verified-by: bravebot_agent::turn::a_vouch_bypass_mode_answered_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::turn::a_vouch_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer`
+`verified-by: bravebot_agent::permission_mode::bypassing_names_itself_for_the_offer_to_vouch_and_no_other_mode_does`
 
 ## Choosing one
 

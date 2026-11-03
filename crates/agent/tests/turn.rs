@@ -72023,6 +72023,215 @@ fn a_flagged_read_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer() {
     assert!(questions.lock().unwrap().is_empty());
 }
 
+/// The `gate` entries of the trail whose text holds `needle`, in order.
+fn trail_entries(sink: &RecordingSink, wanted: &str, needle: &str) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed { gate, detail } if *gate == wanted && detail.contains(needle) => {
+                Some(detail.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// One turn in which the planner reads `note.txt`, a file the trust map says nothing about, with
+/// `confirmer` answering the offer to vouch for it. Returns the trail.
+fn a_turn_reading_an_unvouched_note<C: bravebot_agent::confirm::Confirmer + Send>(
+    name: &str,
+    mode: bravebot_agent::PermissionMode,
+    confirmer: &mut C,
+) -> RecordingSink {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("note.txt"), "SENTINEL-NOTE: hello\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"note.txt"}"#),
+        reply_with("done"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read the note").with_permission_mode(mode),
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+    sink
+}
+
+const OFFERED_LINE: &str =
+    "note.txt: quarantined, so the user is offered the chance to vouch for it";
+const BYPASS_APPROVAL_LINE: &str = "note.txt: answered by bypass mode, nobody was asked";
+const BYPASS_TRUST_LINE: &str =
+    "note.txt trusted: bypass mode answered the offer to vouch for it, the user did not name it";
+const USER_NAMED_LINE: &str = "note.txt trusted: the user named it in their own line";
+
+/// TRACE-7, MODE-4. Bypass mode answers the offer to vouch for a file, so nobody was offered
+/// anything, nothing was shown and nobody named the file. The trail has the mode's approval line
+/// and a trust line naming the mode, and none of the three lines a person's yes writes. The inner
+/// confirmer refuses, so the vouch in the trail can only be the mode's.
+#[test]
+fn a_vouch_bypass_mode_answered_is_recorded_as_the_modes_answer() {
+    let mut inner = VouchesForFiles::new(false);
+    let offered = inner.offered.clone();
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut inner, bravebot_agent::PermissionMode::Bypass, false);
+    let sink = a_turn_reading_an_unvouched_note(
+        "vouch-bypass-trail",
+        bravebot_agent::PermissionMode::Bypass,
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        trail_entries(&sink, "approval", "note.txt"),
+        [BYPASS_APPROVAL_LINE]
+    );
+    assert_eq!(
+        trail_entries(&sink, "trust", "note.txt trusted:"),
+        [BYPASS_TRUST_LINE]
+    );
+    assert!(
+        trail_entries(&sink, "display", "quarantined file").is_empty(),
+        "the trail says a head was shown to a user in the mode that shows nobody anything: {:#?}",
+        sink.events()
+    );
+    assert!(
+        offered.lock().unwrap().is_empty(),
+        "bypass mode put the question to the confirmer"
+    );
+}
+
+/// TRACE-7. A person's yes keeps the three lines it always wrote, under a bare confirmer and under
+/// each mode that leaves the question to them. A trail naming a mode for a person's answer would be
+/// the opposite defect, and a record that said "bypass" for every yes would pass the test above and
+/// fail this.
+#[test]
+fn a_vouch_a_person_agrees_to_is_recorded_as_the_user_naming_the_file() {
+    for mode in [
+        None,
+        Some(bravebot_agent::PermissionMode::Ask),
+        Some(bravebot_agent::PermissionMode::AcceptEdits),
+        Some(bravebot_agent::PermissionMode::Plan),
+    ] {
+        let mut person = VouchesForFiles::new(true);
+        let offered = person.offered.clone();
+        let sink = match mode {
+            None => a_turn_reading_an_unvouched_note(
+                "vouch-person-trail",
+                bravebot_agent::PermissionMode::Ask,
+                &mut person,
+            ),
+            Some(mode) => a_turn_reading_an_unvouched_note(
+                "vouch-person-trail-mode",
+                mode,
+                &mut bravebot_agent::Confining::new(&mut person, mode, false),
+            ),
+        };
+
+        assert_eq!(
+            trail_entries(&sink, "approval", "note.txt"),
+            [OFFERED_LINE],
+            "mode {mode:?}"
+        );
+        assert_eq!(
+            trail_entries(&sink, "trust", "note.txt trusted:"),
+            [USER_NAMED_LINE],
+            "mode {mode:?}"
+        );
+        assert_eq!(
+            trail_entries(&sink, "display", "head of a quarantined file").len(),
+            1,
+            "mode {mode:?}: the head shown to the user is not in the trail"
+        );
+        assert_eq!(
+            offered.lock().unwrap().len(),
+            1,
+            "mode {mode:?}: asked once"
+        );
+    }
+}
+
+/// A person's no writes the offered and display lines and no trust line, and no line crediting a
+/// mode: the lines are written for the question having been put, whatever the answer.
+#[test]
+fn a_vouch_a_person_declines_leaves_the_offer_and_no_trust_line() {
+    let mut person = VouchesForFiles::new(false);
+    let sink = a_turn_reading_an_unvouched_note(
+        "vouch-person-declined-trail",
+        bravebot_agent::PermissionMode::Ask,
+        &mut person,
+    );
+    assert_eq!(trail_entries(&sink, "approval", "note.txt"), [OFFERED_LINE]);
+    assert!(trail_entries(&sink, "trust", "note.txt trusted:").is_empty());
+}
+
+/// MODE-9. A delegate is lent the turn's confirmer, so its offer to vouch is answered by the same
+/// mode and recorded the same way. A wrapper between the delegate and the mode that did not forward
+/// the mode's name would fall back to the default and record a person naming the file.
+#[test]
+fn a_vouch_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer() {
+    let scratch = Scratch::new("vouch-bypass-delegate");
+    std::fs::write(scratch.path.join("note.txt"), "SENTINEL-NOTE: hello\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-READ",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"READ-THE-NOTE"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "READ-THE-NOTE",
+            vec![
+                tool_request("read_file", r#"{"path":"note.txt"}"#),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let mut inner = VouchesForFiles::new(false);
+    let offered = inner.offered.clone();
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut inner, bravebot_agent::PermissionMode::Bypass, false);
+    let mut sink = RecordingSink::new();
+    turns::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-THE-READ")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        trail_entries(&sink, "approval", "note.txt"),
+        [BYPASS_APPROVAL_LINE]
+    );
+    assert_eq!(
+        trail_entries(&sink, "trust", "note.txt trusted:"),
+        [BYPASS_TRUST_LINE]
+    );
+    assert!(trail_entries(&sink, "display", "quarantined file").is_empty());
+    assert!(offered.lock().unwrap().is_empty());
+}
+
 /// The other end of the same round trip. A caller carrying the answer in puts no question at all,
 /// which is what makes the field on the outcome worth having: a turn that took the list and
 /// ignored it would pass the test above and still ask on every message.

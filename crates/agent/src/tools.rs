@@ -3672,10 +3672,10 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // reach of anything read.
     //
     // `should_offer_vouch` is last because it is the only one of these that does anything: it marks
-    // the path asked about and writes the trail line saying so. Every test that could still call
-    // the prompt off has to come before it, or the path spends its one question of the turn on a
-    // prompt nobody sees and the trail records an offer that was never made. That is the defect
-    // this block was rewritten to fix, and the order is what holds it fixed.
+    // the path asked about. Every test that could still call the prompt off has to come before
+    // it, or the path spends its one question of the turn on a prompt nobody sees and the trail
+    // records an offer that was never made. That is the defect this block was rewritten to fix,
+    // and the order is what holds it fixed.
 
     // The name the map holds a rule about this file under, which is the relative one where the
     // planner spelled a file in the project by its absolute path. Every question below is about the
@@ -3715,7 +3715,20 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             (head.join("\n"), text.lines().nth(VOUCH_PREVIEW).is_some())
         });
         let label = shaped.label().to_string();
-        let (preview, truncated) = {
+
+        // Read here once, and used for the preview and the check below alike, so those two agree
+        // with each other (MODE-8). The confirmer reads the mode again when it answers, so the mode
+        // can change between the two reads.
+        //
+        // Bypassing answers the question without showing anybody anything, so no preview is
+        // released and the trail does not record one as shown to the user (TRACE-7). If the mode
+        // changes to one that asks before the answer, the prompt says the file has nothing to show
+        // in place of the preview. If it changes to bypass, the preview was released and the check
+        // ran, and the answer is recorded as the mode's.
+        let bypassing = tools.permission_mode.get() == crate::PermissionMode::Bypass;
+        let (preview, truncated) = if bypassing {
+            (String::new(), false)
+        } else {
             let proof = policy.authorise_display_release("the head of a quarantined file");
             shaped.declassify(&proof)
         };
@@ -3732,7 +3745,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         // The plain mode test and not the one the two promotion gates ask, because screening does not
         // answer a vouch: it is a standing rule about a path rather than one slot's bytes, so under
         // bypass nobody reads this word however the run was started.
-        let checked = (tools.permission_mode.get() != crate::PermissionMode::Bypass).then(|| {
+        let checked = (!bypassing).then(|| {
             let spec = policy.before_vetting_a_path(&proposed_path, body);
             let asked_at = std::time::Instant::now();
             (
@@ -3763,8 +3776,16 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             reason,
             reason_label,
         };
-        if confirmer.confirm_vouch(&request) == Decision::Approve {
-            approval_outlived = !policy.vouch_if_unchanged(&keyed, preview_stamp);
+        // The trail line for the offer is written once the answer says who gave it: a person was
+        // offered the chance, and a mode that approved offered nobody anything (TRACE-7). The name
+        // is the mode's own fixed word, so nothing read reaches the trail through it.
+        let (decision, answered_by) = confirmer.confirm_vouch_noting_the_mode(&request);
+        match answered_by {
+            None => policy.note_vouch_offered(&keyed),
+            Some(mode) => policy.record_vouch_answered_by_mode(&keyed, mode),
+        }
+        if decision == Decision::Approve {
+            approval_outlived = !policy.vouch_if_unchanged(&keyed, preview_stamp, answered_by);
             // A record that outlived the yes would take it back on the next turn (MEMORY-5).
             if !approval_outlived {
                 crate::memory::trusted_again(

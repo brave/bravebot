@@ -2205,16 +2205,40 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// This offers the trust map's own decision at the moment it bites. It is not a second route
     /// to trusting content: what a yes writes is a rule in the map, the same rule `@` and the
     /// startup question write, so the answer stays consistent for every later read of that path.
+    ///
+    /// Writes nothing to the trail itself. The caller writes the line for a person with
+    /// [`Policy::note_vouch_offered`], and for a mode that answered with
+    /// [`Policy::record_vouch_answered_by_mode`] (TRACE-7).
     pub fn should_offer_vouch(&mut self, path: &str) -> bool {
         if !self.read_is_quarantined(path) || self.vouch_asked.contains(path) {
             return false;
         }
         self.vouch_asked.insert(path.to_string());
+        true
+    }
+
+    /// Record that the question whether to vouch for `path` is being put to a person.
+    ///
+    /// Written only for the path of a question that goes to the confirmer, after
+    /// [`Policy::should_offer_vouch`] said to ask. A mode that approves draws no prompt, so
+    /// writing it there would record a person offered something they were never shown (TRACE-7).
+    pub fn note_vouch_offered(&mut self, path: &str) {
         self.allow(
             "approval",
             format!("{path}: quarantined, so the user is offered the chance to vouch for it"),
         );
-        true
+    }
+
+    /// Record that a mode answered the offer to vouch for `path` and nobody was asked.
+    ///
+    /// `mode` is the mode's own fixed name, so the entry holds no text but the path. It is the
+    /// wording [`Policy::allow_exposing_read`] and a language server's start use for the same
+    /// thing (TRACE-7).
+    pub fn record_vouch_answered_by_mode(&mut self, path: &str, mode: &'static str) {
+        self.allow(
+            "approval",
+            format!("{path}: answered by {mode} mode, nobody was asked"),
+        );
     }
 
     /// Record that the user vouched for this exact command, in this exact tree, its side effects
@@ -7071,6 +7095,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// and a rule on the file is more specific than any rule on the tree around it, so a
     /// referenced file is trusted inside a directory nobody vouched for.
     pub fn vouch_for_named_path(&mut self, path: &str) {
+        self.vouch_recording(path, "the user named it in their own line");
+    }
+
+    /// Publish a rule trusting `path` and record `how` as the reason in the trail.
+    fn vouch_recording(&mut self, path: &str, how: &str) {
         if !self.trust.publish(path, Integrity::Trusted) {
             self.allow(
                 "trust",
@@ -7078,10 +7107,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             );
             return;
         }
-        self.allow(
-            "trust",
-            format!("{path} trusted: the user named it in their own line"),
-        );
+        self.allow("trust", format!("{path} trusted: {how}"));
     }
 
     /// Record that `path` is untrusted because a write in an earlier session left it so.
@@ -7111,16 +7137,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Refusing is recorded and reported. A yes that quietly does nothing leaves a person watching
     /// a file they just trusted come back quarantined with nothing saying why, and the caller needs
     /// the answer to say so.
+    ///
+    /// `answered_by` is the name of the mode that answered, or `None` for a person. The rule
+    /// written is the same either way. The trail credits the user with naming the file only for
+    /// the second (TRACE-7).
     pub fn vouch_if_unchanged(
         &mut self,
         path: &str,
         shown_at: crate::file_authority::Stamp,
+        answered_by: Option<&'static str>,
     ) -> bool {
         let vouched = self.capture_files(|policy, capture| {
             if capture.stamp_of(path) != shown_at {
                 return false;
             }
-            policy.vouch_for_named_path(path);
+            match answered_by {
+                Some(mode) => policy.vouch_recording(
+                    path,
+                    &format!(
+                        "{mode} mode answered the offer to vouch for it, the user did not name it"
+                    ),
+                ),
+                None => policy.vouch_for_named_path(path),
+            }
             true
         });
         if !vouched {
@@ -22529,7 +22568,7 @@ five
                 effect.complete(Integrity::Untrusted);
 
                 (
-                    policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                    policy.vouch_if_unchanged("vendor/lib.js", shown_at, None),
                     policy.trust().is_trusted("vendor/lib.js"),
                 )
             };
@@ -22560,10 +22599,137 @@ five
             let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
 
             assert!(
-                policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                policy.vouch_if_unchanged("vendor/lib.js", shown_at, None),
                 "an answer about the version in front of the person was not spent on it"
             );
             assert!(policy.trust().is_trusted("vendor/lib.js"));
+        }
+
+        /// TRACE-7: the offer to vouch for a file is recorded as a person's only where a person was
+        /// asked. A mode that answered it is named, nobody is said to have been offered anything and
+        /// nobody is said to have named the file. Both write the same rule. Each entry is asserted
+        /// present for its own case and absent for the other, since a record that reads the same
+        /// for a mode and a person is the defect. Deciding whether to ask writes nothing: the
+        /// entry for a person waits for the caller, so a mode's answer cannot be preceded by a
+        /// line saying somebody was offered the chance.
+        #[test]
+        fn the_trail_says_who_answered_the_offer_to_vouch() {
+            let by_a_person = (
+                "vendor/lib.js: quarantined, so the user is offered the chance to vouch for it",
+                "vendor/lib.js trusted: the user named it in their own line",
+            );
+            let by_bypass = (
+                "vendor/lib.js: answered by bypass mode, nobody was asked",
+                "vendor/lib.js trusted: bypass mode answered the offer to vouch for it, the user did not name it",
+            );
+            for (answered_by, (approval, trust), (other_approval, other_trust)) in [
+                (Some("bypass"), by_bypass, by_a_person),
+                (None, by_a_person, by_bypass),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut policy = open_policy(&mut sink);
+                let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
+                assert!(policy.should_offer_vouch("vendor/lib.js"));
+                match answered_by {
+                    None => policy.note_vouch_offered("vendor/lib.js"),
+                    Some(mode) => policy.record_vouch_answered_by_mode("vendor/lib.js", mode),
+                }
+                assert!(policy.vouch_if_unchanged("vendor/lib.js", shown_at, answered_by));
+                assert!(
+                    policy.trust().is_trusted("vendor/lib.js"),
+                    "{answered_by:?} wrote no rule"
+                );
+                drop(policy);
+
+                let entries = |wanted: &str| -> Vec<String> {
+                    sink.events()
+                        .iter()
+                        .filter_map(|event| match event {
+                            crate::event::Event::GatePassed { gate, detail } if *gate == wanted => {
+                                Some(detail.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                };
+                assert_eq!(
+                    entries("approval"),
+                    [approval],
+                    "{answered_by:?}: the approval entry"
+                );
+                assert_eq!(
+                    entries("trust"),
+                    [trust],
+                    "{answered_by:?}: the trust entry"
+                );
+                let trail = format!("{:?}", sink.events());
+                assert!(
+                    !trail.contains(other_approval) && !trail.contains(other_trust),
+                    "{answered_by:?} left the other case's entry: {trail}"
+                );
+            }
+        }
+
+        /// Deciding to put the question writes no entry, and asks about a path once. A trail line
+        /// written here would be there for a mode that never put the question to anybody.
+        #[test]
+        fn deciding_to_offer_a_vouch_writes_nothing_and_asks_once() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js"),
+                "a path was offered twice in one turn"
+            );
+            drop(policy);
+            // Beginning a policy writes its precommit entry; nothing else is written.
+            assert!(
+                sink.events().iter().all(|event| matches!(
+                    event,
+                    crate::event::Event::GatePassed {
+                        gate: "precommit",
+                        ..
+                    }
+                )),
+                "deciding to ask wrote to the trail: {:?}",
+                sink.events()
+            );
+        }
+
+        /// A mode's answer that arrives after the file changed is refused like a person's, and the
+        /// trail does not credit the mode with a rule that was never written.
+        #[test]
+        fn a_vouch_a_mode_answered_is_not_spent_on_a_version_nobody_was_shown() {
+            let mut sink = RecordingSink::new();
+            let mut writer_sink = RecordingSink::new();
+            let (spent, trusted) = {
+                let mut policy = open_policy(&mut sink);
+                let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
+                let mut writer =
+                    open_policy(&mut writer_sink).with_file_authority(policy.file_authority());
+                let effect = writer
+                    .capture_files(|_, capture| capture.begin("vendor/lib.js"))
+                    .expect("the path is free");
+                effect.complete(Integrity::Untrusted);
+                (
+                    policy.vouch_if_unchanged("vendor/lib.js", shown_at, Some("bypass")),
+                    policy.trust().is_trusted("vendor/lib.js"),
+                )
+            };
+            assert!(
+                !spent,
+                "a mode's answer was spent on a version it was not given for"
+            );
+            assert!(!trusted, "a changed file came back trusted");
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                trail.contains("changed while the question was being answered"),
+                "nothing says why the file stayed quarantined: {trail}"
+            );
+            assert!(
+                !trail.contains("bypass mode answered the offer to vouch"),
+                "the mode was credited with a rule that was refused: {trail}"
+            );
         }
 
         /// A `run` line that starts while the question is open voids the answer, whatever the line
@@ -22592,7 +22758,7 @@ five
                     "a program starting moved the path's revision"
                 );
                 (
-                    policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                    policy.vouch_if_unchanged("vendor/lib.js", shown_at, None),
                     policy.trust().is_trusted("vendor/lib.js"),
                 )
             };
