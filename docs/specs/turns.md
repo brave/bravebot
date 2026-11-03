@@ -846,3 +846,39 @@ cannot read, and the line is then a request spent on a list that was right.
 `verified-by: bravebot_agent::turn::a_turn_with_no_tools_left_is_not_reminded_about_the_list`
 `verified-by: bravebot_agent::turn::a_turn_many_times_the_threshold_long_gets_one_reminder_for_its_list`
 `verified-by: bravebot_agent::turn::a_list_left_open_by_an_earlier_turn_is_reminded_about_in_a_later_turn_of_many_rounds`
+
+<a id="TURN-16"></a>
+### TURN-16: the planner is told how to read a quarantined reference by the tools it was offered and by who can answer
+
+The system prompt of a session turn ends its guidance on a quarantined reference with text built by
+`reading_a_reference` in [`prompts.rs`](../../crates/agent/src/turn/prompts.rs). It is built from
+the driver's own facts and never from content: whether `vet_content` is among the tools the turn
+was offered, whether a check already answers for it ([`vetting::auto`](tools/vet-content.md)), and
+whether the run was started where a question reaches nobody.
+
+**`vet_content` is named only where it is offered.** A turn offered `vet_content` is told to call it
+for a reference the task needs read, and to say a file needs vouching for only where it was refused.
+A turn not offered it, because a definition's `tools:` line or the command line left it out, is told
+nothing about it. A delegate is never offered it ([VET-2](tools/vet-content.md)) and is given none
+of this text.
+
+**A run nobody answers is told what to write.** A one-shot run that is not reading lines
+([ASK-7](tools/ask-user.md#ASK-7)) is told not to end its reply on a question, and to say in its
+reply how the person can lift the quarantine on another run: `--trust-workspace` for the whole
+directory and `--file` for one file. `--vet` is added only where `vet_content` is offered and no
+check already answers for it. A run that can be answered gets none of this.
+
+Only a one-shot run is told. The terminal session, the desktop and the editor protocol
+([ACP-5](acp.md#ACP-5)) end a turn with a reply a person reads, and the person answers it with the
+next prompt, so a planner ending its reply there is not a dead end. A scheduled firing and a trigger
+firing run as `bravebot -p` with no `--input-format lines`, so they are one-shot runs and are told.
+
+**The shared guidance does not say the quarantine cannot be lifted.** The text every turn and every
+delegate is given about a quarantined file says that another read or a search will not show what is
+in it, and that the person can vouch for a file or a directory. It does not say that asking will not
+show it, because a person can answer, and it sends a planner to say a file needs vouching for only
+where nothing offered to it can show the file.
+
+`verified-by: bravebot_agent::turn::the_planner_is_told_how_to_read_a_reference_by_the_tools_it_is_offered_and_who_can_answer`
+`verified-by: bravebot_agent::turn::a_delegate_is_not_told_to_call_vet_content_or_to_name_the_flags`
+`verified-by: bravebot_cli::running::only_a_run_nobody_answers_is_told_to_say_how_to_lift_the_quarantine`

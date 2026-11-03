@@ -12,6 +12,7 @@ use bravebot_core::event::Sink;
 use bravebot_core::policy::{Denial, Policy, Routing};
 use bravebot_i18n::t;
 
+use super::prompts::reading_a_reference;
 use super::{FOR_A_PERSON, Inputs, OPENING, PLANNING, ReadOutputIs, Task, TurnError, held};
 use crate::confirm::Confirmer;
 use crate::report::Reporter;
@@ -364,6 +365,8 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
 /// turn resolved, which may differ from the one the task carries (INSTR-12). `skill_mode` is the
 /// name and gated words of the skill `/mode` keeps applied, which the turn read again (SKILL-21). `memory` is what a
 /// definition's kept memory says, which the caller reads through its policy and so keeps hold of.
+/// `vetting_offered` is whether `vet_content` is among the tools the turn was offered, which
+/// decides whether the planner is sent to it for a reference it has to read.
 #[expect(
     clippy::too_many_arguments,
     reason = "each argument is a value the turn has already resolved, and turn.rs is its only caller"
@@ -378,6 +381,7 @@ pub(super) fn system_prompt(
     preamble: &crate::preamble::Preamble,
     started_in: crate::permission_mode::PermissionMode,
     kept_facts: &str,
+    vetting_offered: bool,
     memory: impl Fn(bool, &str) -> String,
 ) -> Prompt {
     let mode = started_in.instruction().unwrap_or_default();
@@ -430,6 +434,11 @@ pub(super) fn system_prompt(
             }
             system.push(Provenance::Driver, PLANNING);
             system.push(Provenance::Driver, FOR_A_PERSON);
+            let reading =
+                reading_a_reference(vetting_offered, task.auto_vetting, task.nobody_answers);
+            if !reading.is_empty() {
+                system.push(Provenance::Driver, format!("\n\n{reading}"));
+            }
             system.push(Provenance::Driver, preamble.for_a_person.clone());
             if let Some(addressed) = addressed {
                 system.push(

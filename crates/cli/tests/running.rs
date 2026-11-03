@@ -21640,6 +21640,45 @@ fn the_command_lines_own_prompt_is_the_first_turn() {
     assert!(sent[1].contains("COMMAND-WORDS") && sent[1].contains("LINE-WORDS"));
 }
 
+/// TURN-16, ASK-7: a one-shot run puts no question to anybody, so the planner is told to say in its
+/// reply how the person can lift a quarantine, and a run reading lines sends its questions to the
+/// program feeding it, so it is not told that. The same prompt is sent both ways and only the input
+/// format differs. The faults this rejects: a one-shot run that is never told (the planner ends on a
+/// question nobody receives), and a run reading lines that is told nobody can answer when a program
+/// is answering.
+#[test]
+fn only_a_run_nobody_answers_is_told_to_say_how_to_lift_the_quarantine() {
+    const TOLD: &str = "Nobody is available to answer a question in this run";
+
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-turn16-one-shot").with_settings(&settings_for(&gateway));
+    let output = bravebot(&scratch.path, AT_A_GATEWAY, &["-p", "ONE-SHOT-WORDS"]);
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let sent = bodies(&gateway);
+    assert!(!sent.is_empty(), "the one-shot run reached no gateway");
+    assert!(
+        sent.iter().all(|body| body.contains(TOLD)
+            && body.contains("--trust-workspace")
+            && body.contains("--file")),
+        "a one-shot run was not told nobody answers: {sent:?}"
+    );
+
+    let gateway = a_gateway_numbering_its_replies();
+    let scratch = Scratch::new("cli-turn16-lines").with_settings(&settings_for(&gateway));
+    let run = LinesRun::start(&scratch, &["--trust-input-lines", "-p", "LINES-WORDS"]);
+    let first = run.until(|line| line.get("event").is_none());
+    let (_, status, stderr) = run.finish();
+    assert_eq!(results(&first)[0]["ok"], true, "{first:?}");
+    assert_eq!(status, Some(0), "{stderr}");
+    let sent = bodies(&gateway);
+    assert!(!sent.is_empty(), "the run reading lines reached no gateway");
+    assert!(
+        sent.iter().all(|body| !body.contains(TOLD)),
+        "a run whose questions reach a program was told nobody answers: {sent:?}"
+    );
+}
+
 /// CLI-3 and CLI-36: a line on a pipe is the launching program's words, so the planner is given a
 /// reference to them and never the words, until a person typed the flag that says they are theirs.
 /// The same prompt is sent both ways and only the flag differs, so what the request holds is what

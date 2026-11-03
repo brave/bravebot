@@ -81,6 +81,10 @@ pub struct Task {
     /// Whether the driver wrote this prompt and no person typed it, which the view of the request
     /// says of it. Set only by a caller that composed the line itself.
     pub driver_wrote_the_prompt: bool,
+    /// Whether a question put to this run reaches nobody, as in a one-shot run (ASK-7). Set only by
+    /// a caller that knows, from how it was started, that it has no one to ask; the system prompt
+    /// then tells the planner to say in its reply what the person can do on another run (TURN-16).
+    pub nobody_answers: bool,
     /// What the planner is told at the start of the turn about the open loops of earlier ones,
     /// where they changed since it was last told (OPEN-4).
     pub open_loops: Option<String>,
@@ -553,6 +557,7 @@ impl Task {
             // A line somebody typed until a caller says what composed it.
             composed: None,
             driver_wrote_the_prompt: false,
+            nobody_answers: false,
             open_loops: None,
             shows_open_loops: false,
             injected_facts: std::collections::BTreeSet::new(),
@@ -727,6 +732,13 @@ impl Task {
     /// (CLI-36), so the trail records them as that.
     pub fn with_vouched_channel(mut self) -> Self {
         self.vouched_channel = true;
+        self
+    }
+
+    /// Say that nobody can answer a question put to this run, so the planner is told what to say
+    /// in its reply in the place of asking (TURN-16).
+    pub fn with_nobody_answering(mut self) -> Self {
+        self.nobody_answers = true;
         self
     }
 

@@ -2895,6 +2895,7 @@ where
         &preamble,
         started_in,
         &kept_facts,
+        offers_vet_content,
         memory,
     );
     let system_text = system.text();

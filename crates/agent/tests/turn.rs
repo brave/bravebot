@@ -88633,3 +88633,114 @@ fn a_fetched_image_asked_to_be_read_is_released_as_vet_content_releases_the_same
         "the flag released the image at a different label or on a different account"
     );
 }
+
+/// The system prompt of the first request of a turn of `task`, which may be addressed to a
+/// definition written as `fields`.
+fn first_system_prompt(tag: &str, definition: Option<&str>, task: Task) -> String {
+    let scratch = Scratch::new(&format!("reading-a-reference-{tag}"));
+    let home = Scratch::new(&format!("reading-a-reference-{tag}-home"));
+    std::fs::write(scratch.path.join("notes.txt"), "plain words").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut task = task.with_home(Some(home.path.clone()));
+    if let Some(fields) = definition {
+        define(&home, "looker", fields, "LOOK-BY-DEFINITION");
+        task = task.addressing(Some("looker".to_string()));
+    }
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    run_turn_saying_notices(
+        &config_for(&endpoint),
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        &task,
+    );
+    system_prompt_of(&received.recv().expect("a request"))
+}
+
+/// TURN-16: what the planner is told about reading a quarantined reference follows the tools the
+/// turn is offered and whether anybody can answer it. `vet_content` is named exactly where it is
+/// offered, the three ways to lift the quarantine are named only to a run nobody answers, and `--vet`
+/// is named only where `vet_content` is offered and no check already answers for it.
+///
+/// Rejects: a prompt that names `vet_content` to a run that was not offered it, one that leaves it
+/// out for a run that was, and one that tells an attended run to say how to vouch on another run.
+#[test]
+fn the_planner_is_told_how_to_read_a_reference_by_the_tools_it_is_offered_and_who_can_answer() {
+    for (tag, definition, nobody, auto, names_vet_content, lifts, names_vet_flag) in [
+        ("attended", None, false, false, true, false, false),
+        ("unattended", None, true, false, true, true, true),
+        ("checked", None, true, true, true, true, false),
+        (
+            "no-tool",
+            Some("kind: worker\ntools: read_file, spawn_processor\n"),
+            true,
+            false,
+            false,
+            true,
+            false,
+        ),
+        (
+            "no-tool-attended",
+            Some("kind: worker\ntools: read_file, spawn_processor\n"),
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
+    ] {
+        let mut task = Task::new("LOOK-AT-THE-NOTES");
+        task.nobody_answers = nobody;
+        task.auto_vetting = auto;
+        let system = first_system_prompt(tag, definition, task);
+        assert_eq!(
+            names(&system, "vet_content"),
+            names_vet_content,
+            "{tag}: the prompt and the tools offered disagree about vet_content: {system}"
+        );
+        for flag in ["--trust-workspace", "--file"] {
+            assert_eq!(system.contains(flag), lifts, "{tag}: {flag}: {system}");
+        }
+        assert_eq!(system.contains("--vet"), names_vet_flag, "{tag}: {system}");
+        assert!(!system.contains("not asking"), "{tag}: {system}");
+    }
+}
+
+/// VET-2 and TURN-16: a delegate shares the planner's guidance and is never offered `vet_content`,
+/// so what it is told about a reference does not name it, or the flags of a command line it has no
+/// part in.
+#[test]
+fn a_delegate_is_not_told_to_call_vet_content_or_to_name_the_flags() {
+    let scratch = Scratch::new("delegate-reading-a-reference");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "LOOK-AT-THE-NOTES",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"READ-THE-NOTES"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("noted"),
+            ],
+        ),
+        ("READ-THE-NOTES", vec![reply_with("it is held")]),
+    ]);
+    let mut task = Task::new("LOOK-AT-THE-NOTES");
+    task.nobody_answers = true;
+
+    run_turn_saying_notices(
+        &config_for(&endpoint),
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        &task,
+    );
+
+    let (session, delegate): (Vec<String>, Vec<String>) = every_request(&received)
+        .into_iter()
+        .partition(|body| body.contains("LOOK-AT-THE-NOTES"));
+    assert!(names(&system_prompt_of(&session[0]), "vet_content"));
+    let system = system_prompt_of(delegate.first().expect("the delegate made a request"));
+    assert!(!names(&system, "vet_content"), "{system}");
+    assert!(!system.contains("--trust-workspace"), "{system}");
+}
