@@ -38,7 +38,6 @@
 /mobile/pnpm-lock.yaml @bbondy
 /ui/pnpm-workspace.yaml @bbondy
 /docs/website/pnpm-workspace.yaml @bbondy
-/packages/agent-client/pnpm-workspace.yaml @bbondy
 /mobile/pnpm-workspace.yaml @bbondy
 /mobile/package.json @bbondy
 /mobile/metro.config.js @bbondy

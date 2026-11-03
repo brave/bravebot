@@ -20,7 +20,7 @@ This is not an exhaustive list of edge cases. Record discoveries as implementati
 
 The alternatives were a native WebView shell reusing the desktop renderer and a browser/PWA for remote control. A WebView offers more screen reuse, but we choose native controls for the mobile interaction model. A browser-only PWA does not supply the planned embedded Rust and OS integration. Neither alternative is a required competing implementation or benchmark for this plan.
 
-`android-shell` is an unmerged proof of concept. Only its Rust/JNI binding is relevant, and only to stage 2b; see [Current mobile status](README.md#current-mobile-status). Preserve attribution for code reused.
+`android-shell` is an unmerged proof of concept. Its Rust/JNI binding and its Kotlin host's input restrictions are relevant to stage 2b; see [Current mobile status](README.md#current-mobile-status). Preserve attribution for code reused.
 
 At the first stage-2b or stage-3d device work, validate a transcript, composer, and complete approval card. Record responsiveness, keyboard and scrolling behavior, screen-reader and text-size checks, label spoofing checks, and lifecycle behavior. Fix gaps before expanding the screens and record untested platforms. This checkpoint validates the chosen implementation; React Native selection is settled for this plan.
 
