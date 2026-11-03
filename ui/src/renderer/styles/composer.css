@@ -554,16 +554,10 @@ button.fresh-project:disabled { cursor: default; color: inherit; }
 }
 .welcome { width: min(560px, 100%); display: flex; flex-direction: column; gap: var(--leo-spacing-l); }
 .welcome-mark {
-  display: grid;
-  place-items: center;
+  display: block;
   width: var(--leo-spacing-5xl);
   height: var(--leo-spacing-5xl);
   margin-bottom: var(--leo-spacing-m);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-card);
-  background: var(--surface-raised);
-  --leo-icon-size: var(--icon-hero);
-  --leo-icon-color: var(--ink-secondary);
 }
 .welcome h1 { margin: 0; font: var(--leo-font-heading-h2); color: var(--ink-primary); }
 .welcome-lede { margin: 0; font: var(--type-body); color: var(--ink-secondary); }
