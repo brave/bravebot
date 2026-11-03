@@ -127,7 +127,7 @@ try {
     await page.setViewportSize(size)
     assert((await page.evaluate(() => window.innerWidth)) <= size.width, `the window is at ${where}`)
     await trigger.click()
-    const warning = page.locator('.model-notices p.model-status').filter({ hasText: 'Could not load models from ChatGPT' })
+    const warning = page.locator('.model-notices .model-status').filter({ hasText: 'Could not load models from ChatGPT' })
     await warning.waitFor()
     // The window can start this sign-in itself, so "Sign in" follows the sentence (XAI-19).
     assert.equal((await warning.innerText()).replace(/\s*Sign in$/, ''), WARNING, `${where}: the warning is the sentence the bridge sent`)

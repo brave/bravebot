@@ -201,10 +201,10 @@ Refresh retries discovery if a provider is unavailable; the configured default r
 selectable. Choosing a model does not change the agent's global default.
 
 Where the models of a service could not be listed, the picker says so above the list, one sentence
-for each service, in the picker's status type. The bridge words each sentence. A sentence that names
+for each service, as a small warning alert. The bridge words each sentence. A sentence that names
 a command to run, such as the one that signs in to ChatGPT again, has that command drawn as code. The
 bridge sends it beside the sentence (`warningCommands`, in the order of `warnings`), so the picker does
-not read a sentence to find it. A warning that names no command is a plain line.
+not read a sentence to find it. A warning that names no command is a plain sentence in the alert.
 
 ### Turn notices, usage and audit
 

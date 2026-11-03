@@ -31,7 +31,7 @@
 
 .model-notices { display: flex; flex-direction: column; gap: var(--leo-spacing-s); padding: var(--leo-spacing-s) 0; }
 .model-notices:empty { display: none; }
-.model-status { margin: 0; padding: var(--leo-spacing-s) var(--leo-spacing-xl); font: var(--type-caption); color: var(--ink-tertiary); }
+.model-status { margin: 0 var(--leo-spacing-m); }
 /* A command a picker warning names is code, in the code type role like the rest of the window's code. */
 .model-status code { font: var(--type-code); overflow-wrap: anywhere; }
 
