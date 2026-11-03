@@ -43,29 +43,11 @@ The React Native app, the TypeScript client, the shared Rust view and the local 
 
 The [android-shell](https://github.com/brave/bravebot/tree/android-shell) branch is an unmerged Android proof of concept, six commits by Aubrey Keus and far behind `main`. Only its Rust/JNI binding, which runs the agent and UI bridge inside the Android app, is relevant, and only to stage 2b. Its WebView renderer, layout and source-consistency tests are superseded by the React Native app and `main`'s tests. When stage 2b starts, check whether the binding still applies, take it by cherry-pick or merge where feasible to keep authorship, and otherwise credit the original author and commits in the adaptation.
 
-## Project findings
+## Desktop behavior that stage 5b changes
 
-Since that review, `main` gained the shared session view, action targets, `bravebot-host`, the TypeScript client and the `mobile/` app shell. The table below describes the bridge and Desktop at the review revisions: its "Live sessions", "Approvals" and "Input restrictions" rows are partly addressed by the host (see [local-host.md](../../specs/local-host.md)), and reassess it when stage 2b starts.
-
-The review covered the Rust UI bridge, Electron integration, session storage, and the relevant security specs. Source paths below are relative to the [repository root](../../../) at the cited review revisions; Android paths resolve in the pinned prototype tree above. The checkout HEAD recorded when documenting the findings was `837c25b0ffe618f72e557641af32a211f868b724`. A follow-up review checked lifecycle operations and Android UI code at `9635f16b49798624e6174b0d15818227773e81a8`. The main-side claims below were also checked by source review against `c8fed64c89b5f9073c05ddd368936605662a2463`; Android claims remain pinned to `9635f16b49798624e6174b0d15818227773e81a8`. These are source findings, not runtime evidence or a full audit.
-
-| Area | Existing capability or behavior | Consequence for the proposal |
-|---|---|---|
-| Agent interface | `crates/ui-bridge/src/bridge.rs` exposes session listing, creation, resumption, turns, cancellation, and typed approval replies through `Bridge::dispatch`. | Reuse the bridge and agent engine. Add remote coordination around them. |
-| Transport | `crates/ui-bridge/src/bin/bravebot-rpc.rs` carries newline-delimited JSON over stdin/stdout. The bridge library emits events through a callback. | Reuse stdio for the first client test. The proposed persistent Rust listener owns the bridge library in-process; it does not supervise another RPC child. |
-| Desktop lifecycle | `ui/src/main/bridge.ts` owns a child process. `ui/src/main/index.ts` disposes the bridge when its window closes. | Running sessions are currently tied to the desktop window's lifetime. |
-| Saved sessions | `crates/session/src/sessions.rs` and `docs/specs/sessions.md` define records shared by desktop and terminal. Bridge resumption writes back to the resumed record. | Existing record interoperability is useful later. The prototype uses an isolated store and excludes saved-record import; its desktop mode attaches through the service. |
-| Live sessions | `session.open` loads a record and creates a new in-memory handle. It does not attach to another process's active session. | Shared storage alone does not provide remote control. Independent writers can create conflicting histories. |
-| Queues | `ui/src/renderer/App.tsx` holds and dispatches follow-up messages. The bridge rejects another turn while one is running. | Shared queues are deferred. Prototype sessions reject sends while busy and retain local unsent drafts. Ordinary desktop queues keep their existing behavior. |
-| Approvals | `crates/ui-bridge/src/running.rs` matches reply IDs and kinds and consumes pending answers. IDs may recur in later turns, as documented in `ui/docs/security.md`. | Remote replies need identity that remains unambiguous across reconnects and host restarts. |
-| Input restrictions | Electron's main process allowlists methods and strip raw file lists from renderer turn requests. | A remote endpoint must enforce equivalent restrictions on the host. Exposing the raw dispatcher would bypass an existing boundary. |
-| Display security | `docs/specs/layering.md` and `ui/docs/security.md` require content labels and marked presentation of released untrusted content. | The mobile UI must retain these distinctions and approval details. |
-
-## Existing versus proposed
-
-Existing components provide agent execution, policy gates, session persistence, request/reply shapes, event emission, and much of the display UI. The shared store supports resumption between front ends.
-
-The following are proposed additions: a React Native UI, shared session interface and portable fixtures, embedded and remote adapters, a direct Rust host, isolated session storage, live attachment and explicit control handoff, device pairing/revocation, a restricted API, bounded display recovery, and duplicate-send protection. The existing Android runtime and UI work inform the new React Native integration; stage 2b assesses and adapts the relevant code and tests. The review did not find an existing mobile remote-session service to enable through configuration.
+- `ui/src/main/bridge.ts` runs `bravebot-rpc` as one child process for the app, and `ui/src/main/index.ts` disposes it when the window closes or the app quits. Desktop sessions end with the window.
+- The renderer holds and dispatches follow-up messages (`ui/src/renderer/use-turn.ts`) and inserts submitted prompts into its own transcript. The bridge rejects a turn while another runs. Prototype sessions reject a busy send and keep the draft; ordinary desktop queues keep their behavior.
+- Electron's main process allowlists bridge methods and strips raw file lists from renderer turn requests. The host enforces its own allowlist ([local-host.md](../../specs/local-host.md)); Electron's list is not reused for it.
 
 ## Recommendation
 
