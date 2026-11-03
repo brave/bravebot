@@ -227,6 +227,10 @@ program is started with the run's output on its standard input, for at most 60 s
 nothing else about the run changes. The output goes only to that program, and nothing can answer a
 question the run stopped at. [The reference](../reference/cli.md#schedule) has the options.
 
+In a session, `/schedule list`, `/schedule add ...` and the other subcommands do the same through the
+same code ([`/schedule`](../reference/commands.md#schedule-subcommand)); an entry added there reads
+and reports only.
+
 ## Running on an event
 
 ```sh

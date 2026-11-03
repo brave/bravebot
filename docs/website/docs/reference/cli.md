@@ -1255,7 +1255,9 @@ The expression is five fields of digits and `*`, `/`, `,` and `-`: names such as
 shortcuts such as `@daily` are not read. A run has nobody to ask, so it can read and report and
 cannot write unless the `add` line carries `--accept-edits` (edits are accepted and nothing else is
 answered) or `--dangerously-skip-permissions` (every question is answered yes). `list` states which
-for each entry. `add` must be typed at a terminal, so a command a session runs cannot add one. Cron
+for each entry. `add` must be typed at a terminal, so a command a session runs cannot add one. In a
+session, [`/schedule`](commands.md#schedule-subcommand) runs the same subcommands for a line you
+type and stores read mode only. Cron
 starts a job with almost none of your environment, so a run that needs a credential reads it from
 the sign-in kept in `~/.bravebot`. `history` lists each recorded run with its exit status, the
 session it recorded and the tokens that session spent. A run that ended before it recorded a

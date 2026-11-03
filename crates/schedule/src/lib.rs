@@ -6,5 +6,6 @@
 mod calendar;
 pub mod firing;
 mod schedule;
+pub mod words;
 
 pub use schedule::*;

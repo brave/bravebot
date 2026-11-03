@@ -4,6 +4,12 @@ title: Scheduled runs: pause, stop at a question, overlap
 status: normative
 governs:
   - crates/schedule/src/firing.rs
+  - crates/schedule/src/lib.rs
+  - crates/schedule/src/schedule.rs
+  - crates/schedule/src/words.rs
+  - crates/tui/src/state/scheduling.rs
+  - crates/ui-bridge/src/schedule_command.rs
+  - ui/src/shared/schedule.ts
 documented-by:
   - docs/website/docs/reference/cli.md
   - docs/website/docs/using/headless.md
@@ -17,12 +23,11 @@ entry does when nobody is there: pausing it, what a firing does when the planner
 what happens when the previous firing has not ended, which expressions and flags an entry may
 hold, and where the result of a run goes.
 
-There is no `/schedule` command in a session. A session's own repeating prompt is `/loop`
-([LOOP-12](loop.md#LOOP-12)), which lasts as long as the session, and a stored entry is made and
-changed only at the command line by a person at a terminal. A command that could write an entry from
-inside a session would be reachable by a turn's own request, and what an entry may do is decided
-when it is written (see [cli.md](cli.md)). An in-session command is tracked as brave/bravebot#3681. The set of
-commands in [commands.md](commands.md) is unchanged.
+A session has `/schedule` ([SCHEDULE-8](#SCHEDULE-8)), which runs the same subcommands through the
+same code for a line a person typed. A session's own repeating prompt is `/loop`
+([LOOP-12](loop.md#LOOP-12)), which lasts as long as the session. A turn cannot write an entry:
+only a typed line reaches the code that does ([CMD-1](commands.md#CMD-1)), and what an entry may do
+is decided when it is written (see [cli.md](cli.md)).
 
 ## Clauses
 
@@ -224,3 +229,74 @@ the person's authority at the next delivery. This is accepted.
 `verified-by: bravebot_cli::scheduled_runs::a_run_stopped_at_a_question_delivers_its_stdout_and_not_the_kept_question`
 `verified-by: bravebot_cli::scheduled_runs::the_destination_is_started_without_the_agents_own_credentials`
 `verified-by: bravebot_cli::scheduled_runs::a_trigger_firing_delivers_nothing_to_a_schedule_entrys_destination`
+
+<a id="SCHEDULE-8"></a>
+### SCHEDULE-8: `/schedule` in a session runs the subcommands of `bravebot schedule` for a typed line
+
+`/schedule list|add|remove|pause|resume|pending|clear|history|run-now` typed into the terminal's or
+the window's box is carried out by `bravebot_schedule::in_session`, the code `bravebot schedule`
+uses, with the same arguments, the same checks and the same refusal sentences. Only a line a person
+typed ([CMD-1](commands.md#CMD-1)) reaches it. A reply that reads `/schedule add ...` is text, no
+tool the planner is offered adds, removes or runs an entry, and `schedule.command`, the bridge method
+the window sends, is denied to clients of the host.
+
+`add` from a session stores read mode whatever mode the session is in, in the session's directory
+unless `--dir` names another. A mode word on an `add` line is refused with the sentence that sends
+the person to the command line, where the flags are typed ([SCHEDULE-6](#SCHEDULE-6)). The
+environment variable of [SCHEDULE-2](#SCHEDULE-2) is set on the run `run-now` starts and not in the
+session.
+
+`run-now` is a background job. The session answers at once that it is running and draws the
+`schedule_ran` line when the run ends. The run's result goes to the entry's destination
+([SCHEDULE-7](#SCHEDULE-7)) and to nothing in the session. The lines a command answers are drawn in
+the transcript as notes with control characters pictured. They are not drawn behind the quarantine
+margin: a stored question, a history line or a run's result is shown only to the person who typed
+the command, who asked to see it, and is never in the conversation the planner reads, so it
+releases nothing and carries nothing to a decision. While a turn runs, `list`, `pending`,
+`history` and the bare word are carried out as typed and every other form waits
+([CMD-8](commands.md#CMD-8)). A line with an unclosed quote is refused and nothing is run.
+
+The box completes the subcommand word: Tab after `/schedule ` finishes a started word, or carries
+it as far as the words that fit it agree ([CMD-22](commands.md#CMD-22)). The words are the ones the
+command line takes and come from `bravebot_schedule::words::SUBCOMMANDS`. Only those words are
+completed. Nothing is read to complete one, so an entry's id or an expression is not completed.
+The hold of [SCHEDULE-4](#SCHEDULE-4) that a `run-now` takes is let go when the run is recorded,
+whether the session still receives the reply or has ended.
+
+**Why.** A person in a session should not have to leave it to manage what runs while nobody is
+there, and two clients that cut a line differently would disagree about what is refused. The result
+of a run, the kept question and a destination's name are text a program chose, so they are shown and
+never read by the driver.
+
+**Known cost.** `add` in a session cannot store a run that writes. That needs the command line.
+
+`verified-by: bravebot_schedule::schedule::a_session_adds_in_read_mode_in_its_own_directory`
+`verified-by: bravebot_schedule::schedule::a_mode_word_in_a_session_add_is_refused_with_the_command_line_sentence`
+`verified-by: bravebot_schedule::schedule::a_session_refuses_a_line_in_the_words_the_command_line_does`
+`verified-by: bravebot_cli::scheduled_runs::a_session_is_refused_in_the_words_the_command_line_prints`
+`verified-by: bravebot_schedule::schedule::the_firing_variable_is_set_on_the_child_only`
+`verified-by: bravebot_schedule::schedule::no_tool_the_planner_is_offered_writes_a_schedule_entry`
+`verified-by: bravebot_schedule::words::a_quoted_cron_expression_and_prompt_are_one_word_each`
+`verified-by: bravebot_schedule::words::an_unclosed_quote_is_not_guessed_at`
+`verified-by: bravebot_schedule::words::only_the_three_readers_and_the_bare_word_are_carried_out_while_a_turn_runs`
+`verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
+`verified-by: bravebot_tui::app::a_refusal_from_the_shared_function_is_drawn_as_a_refusal_in_its_own_words`
+`verified-by: bravebot_tui::app::a_session_draws_the_sentence_the_command_line_prints_for_the_same_words`
+`verified-by: bravebot_tui::app::a_session_in_accept_edits_or_bypass_stores_read_and_refuses_a_mode_word`
+`verified-by: bravebot_tui::app::a_control_character_in_a_reply_is_pictured_in_the_note`
+`verified-by: bravebot_tui::app::a_reply_that_reads_schedule_add_is_text_and_reaches_nothing`
+`verified-by: bravebot_tui::app::run_now_answers_when_the_run_ends_and_not_before`
+`verified-by: bravebot_schedule::schedule::a_run_now_from_a_session_lets_go_of_the_hold_when_it_ends_and_when_nobody_listens`
+`verified-by: bravebot_tui::command_table::tab_completes_the_schedule_subcommands`
+`verified-by: bravebot_schedule::words::every_reader_is_offered_for_completion_once`
+`verified-by: bravebot_tui::app::a_run_now_that_never_answers_is_forgotten`
+`verified-by: bravebot_tui::app::an_unclosed_quote_is_refused_before_anything_is_run`
+`verified-by: bravebot_tui::app::mid_turn_schedule_reads_are_answered_and_every_other_form_waits`
+`verified-by: bravebot_ui_bridge::allowlist::schedule_command_is_denied_to_a_client_of_the_host`
+`verified-by: bravebot_ui_bridge::schedule_command::control_characters_in_a_reply_are_pictured`
+`verified-by: bravebot_ui_bridge::schedule_command::a_reply_is_shown_as_its_lines_then_its_sentence_then_its_notice`
+`verified-by: bravebot_ui_bridge::schedule_command::the_outcome_marks_a_refusal_and_its_sentence_is_shown`
+`verified-by: bravebot_ui_bridge::schedule_command::while_a_turn_runs_only_the_reads_are_carried_out`
+`verified-by: bravebot_ui_bridge::schedule_command::an_unclosed_quote_reaches_nothing`
+`verified-by: bravebot_ui_bridge::schedule_command::run_now_answers_at_once_and_reports_its_line_as_an_event`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/schedule-command.test.mjs holds that only the command word, alone or with an argument, is the command, that a result arriving later is drawn as a row with its lines kept, that a refused answer is marked, that the row is plain text that is not sent to the model, and that the composer asks only from text a person typed; make check-ui runs it)`

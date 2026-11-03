@@ -2716,7 +2716,8 @@ the sandbox, are refused. With neither flag the run reads and reports, and `list
 for each entry. No other command accepts either flag.
 
 `add` is refused with the status for an argument unless standard input and standard error are a
-terminal, so a program a turn runs cannot add an entry. An expression is five fields of digits and
+terminal, so a program a turn runs cannot add an entry. A session's `/schedule` runs the same
+subcommands for a typed line and stores read mode only ([SCHEDULE-8](schedule.md#SCHEDULE-8)). An expression is five fields of digits and
 `*`, `/`, `,` and `-` only, so it is never an instruction to the shell, and a prompt is refused when
 it is empty, over 64 KiB or begins with `-`. The crontab is read and replaced through the `crontab`
 program, `launchctl` and `systemctl` are run for the other two, each found as

@@ -354,6 +354,7 @@ impl Bridge {
             "language.get" => Ok(crate::language::get(request)),
             "language.set" => crate::language::set(request),
             "changelog.read" => Ok(crate::help::changelog()),
+            "schedule.command" => self.schedule_command(request),
             "caffeinate.confirmed" => {
                 Ok(json!({"confirmed": bravebot_session::store::load_caffeinate_confirmed()}))
             }
@@ -2301,6 +2302,28 @@ impl Bridge {
             // cannot be revoked here: editing the file changes them for the next session.
             "settingsRules": state.answers.rules.json(),
         }))
+    }
+
+    /// `schedule.command`: `/schedule <argument>` typed into the composer of a session.
+    ///
+    /// The window sends it only for a line a person typed (CMD-1). The session's sandbox mode is
+    /// not read: an entry added here holds read mode whatever mode the session is in.
+    fn schedule_command(&mut self, request: &Request) -> Result<Value, Failure> {
+        let handle = request.string("session")?;
+        self.reap(&handle);
+        let argument = request.string("argument")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        crate::schedule_command::run(
+            &argument,
+            &handle,
+            &open.project,
+            open.running.is_some(),
+            &self.emitter,
+            bravebot_schedule::in_session,
+        )
     }
 
     fn watches(&mut self, request: &Request) -> Result<Value, Failure> {

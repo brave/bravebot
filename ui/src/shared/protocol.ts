@@ -1050,6 +1050,8 @@ export interface EventMap {
   'enhance.done': { status: 'ready' | 'untrusted' | 'unusable' | 'stopped' | 'failed'; text?: string; removed?: number; limit?: number; message?: string }
   'watch.fired': { number: number; path: string }
   'watch.ended': { number: number; reason: string; message?: string }
+  /** The result of a `/schedule run-now` the window started (SCHEDULE-8). Shown, never sent to the model. */
+  'schedule.ran': import('./schedule').ScheduleAnswer
   phase: { phase: Phase }
   composing: { call: string | null }
   /** What the model has thought since the last one, never empty. A delegate's is not sent (VIEW-34). */

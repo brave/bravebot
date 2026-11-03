@@ -144,6 +144,82 @@ fn added(scratch: &Scratch, extra: &[&str]) -> Output {
     scratch.run_at_a_terminal(&arguments)
 }
 
+/// The words of a line as a session's `/schedule` is given them.
+fn words(line: &[&str]) -> Vec<String> {
+    line.iter().map(|word| word.to_string()).collect()
+}
+
+/// The sentence `bravebot schedule` prints for a refused line is the sentence a session draws for
+/// the same words, since both come from `bravebot_schedule`. None of these lines reads or
+/// writes the state directory, so the test process's own home is not touched.
+#[test]
+fn a_session_is_refused_in_the_words_the_command_line_prints() {
+    let scratch = Scratch::new("schedule-parity");
+    for line in [
+        vec!["frobnicate"],
+        vec!["remove"],
+        vec!["pause", "1", "2"],
+        vec!["history", "1", "2"],
+    ] {
+        let mut arguments = vec!["schedule"];
+        arguments.extend_from_slice(&line);
+        let printed = scratch.run(&arguments);
+        assert_eq!(printed.status.code(), Some(2), "{line:?}");
+        let on_the_line = String::from_utf8_lossy(&printed.stderr).into_owned();
+        let in_a_session = match bravebot_schedule::in_session(
+            &words(&line),
+            bravebot_schedule::TypedLine::of_a_person(),
+            Path::new("."),
+        ) {
+            bravebot_schedule::InSession::Ended(reply) => reply,
+            bravebot_schedule::InSession::Running(_) => panic!("{line:?} started a run"),
+        };
+        assert_eq!(in_a_session.outcome, bravebot_schedule::Outcome::Argument);
+        let sentence = in_a_session.err.expect("a refusal has its sentence");
+        assert!(!sentence.is_empty(), "{line:?}");
+        assert!(
+            on_the_line.contains(sentence.trim_end()),
+            "{line:?}: the command line printed {on_the_line:?}, a session draws {sentence:?}"
+        );
+    }
+    // A cron expression outside its range is refused by the same function, before the state
+    // directory is read.
+    let bad = "61 9 * * *";
+    let printed = scratch.run_at_a_terminal(&[
+        "schedule",
+        "add",
+        "--cron",
+        bad,
+        "--prompt",
+        "list merged pull requests",
+        "--scheduler",
+        "crontab",
+    ]);
+    assert_eq!(printed.status.code(), Some(2));
+    // Under `script` the terminal carries both streams.
+    let on_the_line = out(&printed);
+    let in_a_session = match bravebot_schedule::in_session(
+        &words(&[
+            "add",
+            "--cron",
+            bad,
+            "--prompt",
+            "list merged pull requests",
+        ]),
+        bravebot_schedule::TypedLine::of_a_person(),
+        Path::new("."),
+    ) {
+        bravebot_schedule::InSession::Ended(reply) => reply,
+        bravebot_schedule::InSession::Running(_) => panic!("add started a run"),
+    };
+    let sentence = in_a_session.err.expect("a refusal has its sentence");
+    assert!(
+        on_the_line.contains(sentence.trim_end()),
+        "the command line printed {on_the_line:?}, a session draws {sentence:?}"
+    );
+    assert_eq!(scratch.table(), "");
+}
+
 /// A run's tool has no terminal, so nothing a turn starts can add an entry that runs again.
 #[test]
 fn an_entry_cannot_be_added_without_a_terminal() {

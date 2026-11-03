@@ -2006,7 +2006,7 @@ function Card({
       )
 
     case 'narration':
-      return <div className="narration"><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
+      return <div className={entry.refused ? 'narration refused' : 'narration'}><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
 
     case 'ask-settled':
       // The kernel's words for each question and what became of it, in the register of the other
