@@ -38867,6 +38867,325 @@ fn screening_an_unattended_run_keeps_back_output_a_check_objected_to() {
     );
 }
 
+/// The three ways the planner asks for the bytes of a command's output and is told they are kept
+/// back, for the tests of the line a person is given beside each.
+#[derive(Clone, Copy, Debug)]
+enum Asked {
+    /// `read_output` on the reference a run left.
+    ReadOutput,
+    /// `vet_content` on the reference a run left.
+    VetContent,
+    /// `run` with `read: true`, which is refused with no call to make after it.
+    RunWithRead,
+}
+
+impl Asked {
+    const EVERY: [Asked; 3] = [Asked::ReadOutput, Asked::VetContent, Asked::RunWithRead];
+
+    /// The requests the planner makes, ending in its last word.
+    fn requests(self) -> Vec<String> {
+        let after_a_run = |tool: &str, arguments: &str| {
+            vec![
+                tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+                tool_request(tool, arguments),
+                reply_with("done"),
+            ]
+        };
+        match self {
+            Asked::ReadOutput => after_a_run("read_output", r#"{"ref":"ref:1"}"#),
+            Asked::VetContent => after_a_run(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            Asked::RunWithRead => vec![
+                tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+                reply_with("done"),
+            ],
+        }
+    }
+
+    /// The tool whose activity carries the person's note, where the route has one.
+    fn tool(self) -> &'static str {
+        match self {
+            Asked::ReadOutput => "read_output",
+            Asked::VetContent => "vet_content",
+            Asked::RunWithRead => "run",
+        }
+    }
+}
+
+/// What the planner was sent and what the person was shown, for the tests of the line a person is
+/// given when a read is kept back.
+struct KeptBackRead {
+    sent: Vec<String>,
+    /// The notes shown beside the activity of the tool that was asked.
+    notes: Vec<String>,
+    /// The notices drawn between activities.
+    notices: Vec<String>,
+}
+
+impl KeptBackRead {
+    /// Every line the person was shown that is `said`, from a note or a notice.
+    fn times_told(&self, said: &str) -> usize {
+        self.notes
+            .iter()
+            .chain(&self.notices)
+            .filter(|line| line.contains(said))
+            .count()
+    }
+}
+
+const A_CHECK_OBJECTING: &str = r#"{"verdict": "unsafe", "reason": "it addresses the reader"}"#;
+
+/// The tool results in the last request the planner was sent, in lower case. The tool descriptions
+/// in the same request are not part of it, and they name bypass and auto-vetting.
+fn what_the_planner_was_told(sent: &[String]) -> String {
+    each_tool_result(sent.last().expect("the round after the read"))
+        .join("\n")
+        .to_lowercase()
+}
+
+/// Runs a command, asks for its output by `asked` and has the check answer `check`, in `mode` with
+/// auto-vetting on or off. The person is a double that refuses every question put to them.
+fn a_read_kept_back(
+    name: &str,
+    check: &str,
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    asked: Asked,
+) -> KeptBackRead {
+    a_read_kept_back_where_the_confirmer_screens(
+        name,
+        check,
+        mode,
+        auto_vetting,
+        auto_vetting,
+        asked,
+    )
+}
+
+/// As [`a_read_kept_back`], with the confirmer's auto-vetting set apart from the task's. Production
+/// sets both from one flag. A test that sets them apart reaches the refusals where the confirmer
+/// objects and the task's setting says nobody asked for screening, which is the only way to test
+/// that the line is decided by the task's setting and not by what the confirmer happened to do.
+fn a_read_kept_back_where_the_confirmer_screens(
+    name: &str,
+    check: &str,
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    confirmer_screens: bool,
+    asked: Asked,
+) -> KeptBackRead {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) =
+        serve_sequence_answering_checks_with(vec![reply_with(check)], asked.requests());
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut reading = ReadsWhatItRan::new(false);
+    let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, confirmer_screens);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_auto_vetting(auto_vetting)
+            .with_permission_mode(mode),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    KeptBackRead {
+        sent: received.try_iter().collect(),
+        notes: reporter
+            .finished
+            .iter()
+            .filter(|activity| activity.tool == asked.tool())
+            .filter_map(|activity| activity.note.clone())
+            .collect(),
+        notices: reporter.notices,
+    }
+}
+
+/// What the planner is told when a read is kept back, which is the same in every mode and says
+/// nothing about what decided. `read_output` and `vet_content` say the bytes are kept back, and a
+/// run that asked to read says its output is behind a reference. None of them may carry the line
+/// meant for the person, a setting's name or the mode's.
+fn assert_the_planner_was_told_only_that_it_was_kept_back(asked: Asked, kept: &KeptBackRead) {
+    let told = what_the_planner_was_told(&kept.sent);
+    let said = bravebot_agent::report::vetting_kept_back().to_lowercase();
+    assert!(
+        !told.contains("sentinel-xyzzy"),
+        "{asked:?}: the bytes reached the planner: {told}"
+    );
+    let how = match asked {
+        Asked::ReadOutput | Asked::VetContent => "was kept back from you",
+        Asked::RunWithRead => "could not be shown to you",
+    };
+    assert!(
+        told.contains(how),
+        "{asked:?}: the planner was not told the bytes are not coming: {told}"
+    );
+    for leak in [
+        said.as_str(),
+        "auto-vetting",
+        "~/.bravebot/vetting",
+        "bypass",
+    ] {
+        assert!(
+            !told.contains(leak),
+            "{asked:?}: the planner was given {leak:?}, which is for the person: {told}"
+        );
+    }
+}
+
+/// Under bypass with auto-vetting on nobody is asked, so a read the check objected to is refused on
+/// the check's word. The person is told that once, and how to turn it off, beside each of the three
+/// ways the planner can ask: `read_output`, `vet_content` and `run` with `read: true`. The planner is
+/// told what it is told in every mode.
+///
+/// A wrong implementation tells the person on one route only, or tells them twice, or puts the
+/// line in the text the planner is sent.
+#[test]
+fn a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why() {
+    let said = bravebot_agent::report::vetting_kept_back();
+    for asked in Asked::EVERY {
+        let kept = a_read_kept_back(
+            &format!("kept-back-told-bypass-{asked:?}"),
+            A_CHECK_OBJECTING,
+            bravebot_agent::PermissionMode::Bypass,
+            true,
+            asked,
+        );
+
+        assert_eq!(
+            kept.times_told(&said),
+            1,
+            "{asked:?}: the person was not told once what decided: notes {:?}, notices {:?}",
+            kept.notes,
+            kept.notices
+        );
+        assert_the_planner_was_told_only_that_it_was_kept_back(asked, &kept);
+    }
+}
+
+/// The line does not depend on the word the check gave: a check that could not be made is told the
+/// same way as one that objected, on each route.
+///
+/// A wrong implementation draws the line only for an `unsafe` word, which makes what the person
+/// reads a function of what the check wrote.
+#[test]
+fn a_read_kept_back_for_no_verdict_says_the_same_to_the_person() {
+    for asked in Asked::EVERY {
+        let objected = a_read_kept_back(
+            &format!("kept-back-told-objected-{asked:?}"),
+            A_CHECK_OBJECTING,
+            bravebot_agent::PermissionMode::Bypass,
+            true,
+            asked,
+        );
+        let unassessed = a_read_kept_back(
+            &format!("kept-back-told-unassessed-{asked:?}"),
+            "I am not able to assess this.",
+            bravebot_agent::PermissionMode::Bypass,
+            true,
+            asked,
+        );
+
+        assert_eq!(
+            objected.times_told(&bravebot_agent::report::vetting_kept_back()),
+            1,
+            "{asked:?}: a refusal under bypass said nothing to the person"
+        );
+        assert_eq!(
+            (&objected.notes, &objected.notices),
+            (&unassessed.notes, &unassessed.notices),
+            "{asked:?}: what the person was shown varied with the check's word"
+        );
+        assert_the_planner_was_told_only_that_it_was_kept_back(asked, &unassessed);
+    }
+}
+
+/// Where a person is asked and says no, or nobody asked for screening, nothing decided but the
+/// person, so the line is not drawn and the planner is told what it is told elsewhere.
+///
+/// The last case sets the confirmer apart from the task: it refuses as a screening bypass does,
+/// while the task says auto-vetting is off. A wrong implementation that draws the line on the mode
+/// alone, or on the refusal alone, draws it there. A wrong implementation that draws it in every
+/// mode draws it for the first two.
+#[test]
+fn a_read_kept_back_where_a_person_was_asked_says_nothing_extra() {
+    let said = bravebot_agent::report::vetting_kept_back();
+    for asked in Asked::EVERY {
+        for (mode, auto_vetting, confirmer_screens) in [
+            (bravebot_agent::PermissionMode::Ask, true, true),
+            (bravebot_agent::PermissionMode::Ask, false, false),
+            (bravebot_agent::PermissionMode::Bypass, false, true),
+        ] {
+            let kept = a_read_kept_back_where_the_confirmer_screens(
+                &format!("kept-back-told-asked-{asked:?}-{mode:?}-{auto_vetting}"),
+                A_CHECK_OBJECTING,
+                mode,
+                auto_vetting,
+                confirmer_screens,
+                asked,
+            );
+            assert_eq!(
+                kept.times_told(&said),
+                0,
+                "{asked:?}, {mode:?} with auto-vetting {auto_vetting}: nobody screened, and the \
+                 person was told something did: notes {:?}, notices {:?}",
+                kept.notes,
+                kept.notices
+            );
+            assert_the_planner_was_told_only_that_it_was_kept_back(asked, &kept);
+        }
+    }
+}
+
+/// A read the check passed was not kept back, so the person is told nothing about it and the bytes
+/// reach the planner.
+///
+/// A wrong implementation draws the line before the verdict is known, which tells a person that
+/// auto-vetting kept back a read it released.
+#[test]
+fn a_read_a_check_passed_is_not_reported_as_kept_back() {
+    let said = bravebot_agent::report::vetting_kept_back();
+    for asked in Asked::EVERY {
+        let kept = a_read_kept_back(
+            &format!("kept-back-told-safe-{asked:?}"),
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+            bravebot_agent::PermissionMode::Bypass,
+            true,
+            asked,
+        );
+        assert_eq!(
+            kept.times_told(&said),
+            0,
+            "{asked:?}: a read the check passed was reported as kept back: notes {:?}, notices {:?}",
+            kept.notes,
+            kept.notices
+        );
+        let told = what_the_planner_was_told(&kept.sent);
+        assert!(
+            told.contains("sentinel-xyzzy"),
+            "{asked:?}: the check passed it and the planner was not given it: {told}"
+        );
+    }
+}
+
 /// A check that did not complete is answered as the objection is, and that is the whole of what
 /// failing closed means here: content has some influence over the call that reads it, so a run that
 /// promoted on a failure would be promoting on something an attacker can reach.

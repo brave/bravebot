@@ -7820,6 +7820,25 @@ fn check_stopped(subject: impl std::fmt::Display, stopped: &crate::vet::Stopped)
     produced
 }
 
+/// A refusal of a read the planner is told was kept back, with the line the person reads beside
+/// it.
+///
+/// The planner's `text` is the same in every mode and says nothing about what decided. Where the
+/// mode is bypass and auto-vetting is on, nobody was asked and a check's word answered, so the
+/// person is also told that, and which setting lifts it. The condition is the two facts the
+/// session was started with and never the verdict, the reason or a byte of the content, so an
+/// unsafe word and a check that could not be made read alike. Elsewhere a person was asked and
+/// said no, so there is nothing to add.
+fn kept_back(mode: crate::PermissionMode, auto_vetting: bool, text: String) -> Produced {
+    match mode == crate::PermissionMode::Bypass && auto_vetting {
+        true => {
+            let note = format!("{text} {}", crate::report::vetting_kept_back());
+            Produced::refused_with_a_note(text, note)
+        }
+        false => Produced::problem(text),
+    }
+}
+
 /// What a run that asked to read what it printed is handed in the same result, where the answer
 /// `read_output` would get does not need a person: bypassing permissions with no screening asked
 /// for, or a check whose word is `safe` where screening was asked for.
@@ -7914,6 +7933,12 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         .ok()
         .map(|(text, _, _)| text)
     } else {
+        // Nothing is returned and the planner is told only that `read: true` did not return the
+        // output, so the person is told here what decided, as `read_output` tells them beside its
+        // refusal. The condition is the mode and the setting, never the word the check gave.
+        if mode == crate::PermissionMode::Bypass && auto_vetting {
+            reporter.notice(crate::report::vetting_kept_back());
+        }
         None
     };
     ReadInTheResult {
@@ -8030,10 +8055,11 @@ fn release_output<S: Sink, C: Confirmer>(
         // false claim and naming the check would hand the planner the word it must not read.
         if confirmer.confirm_read_output(&request) == Decision::Reject {
             policy.refuse_unapproved_release("read_output", &slot.to_string());
-            return Err(Box::new(Produced::problem(format!(
+            let text = format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, or say in your reply what you needed from it."
-            ))));
+            );
+            return Err(Box::new(kept_back(mode, auto_vetting, text)));
         }
     }
 
@@ -8173,11 +8199,12 @@ fn release_vetted_text<S: Sink, C: Confirmer>(
         // from a person, and neither fact is the planner's to be told.
         if confirmer.confirm_vetted_read(&request) == Decision::Reject {
             policy.refuse_unapproved_release("vet_content", &slot.to_string());
-            return Err(Box::new(Produced::problem(format!(
+            let text = format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, {}or say in your reply what you needed from it.",
                 pass_to_a_processor(beside, slot)
-            ))));
+            );
+            return Err(Box::new(kept_back(mode, auto_vetting, text)));
         }
     }
 
@@ -8562,13 +8589,14 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // from a person, and neither fact is the planner's to be told.
         if confirmer.confirm_vetted_read(&request) == Decision::Reject {
             policy.refuse_unapproved_release("vet_content", &slot.to_string());
-            return Produced::problem(format!(
+            let text = format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, {}or say in your reply what you needed from it.",
                 pass_to_a_processor(tools.beside, &slot)
-            ))
-            .costing(spent)
-            .waiting(waited);
+            );
+            return kept_back(mode, tools.auto_vetting, text)
+                .costing(spent)
+                .waiting(waited);
         }
     }
 

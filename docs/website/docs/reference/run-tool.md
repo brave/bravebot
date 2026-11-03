@@ -497,7 +497,8 @@ you are asked only when the planner calls `read_output`. Where screening is aske
 ([`--vet`](../security/permission-modes.md#bypassing)), the check reads the output at the run, and when
 it finds nothing the output comes back in that result with the same label and audit entry
 `read_output` would have written. When it does not, or cannot be made, the output stays behind its
-reference, nobody is asked, and the result says the argument did not return it. The same holds for an
+reference, nobody is asked, and the result says the argument did not return it. Under bypass the
+person is also told that auto-vetting kept the output back. The same holds for an
 [agent definition](../customize/agents.md) whose `tools` leave out `read_output`. `read` must be
 `true` or `false`, and it is refused beside `background: true`, since the result that starts a job
 holds nothing the job has printed. [`fetch_url`](tools.md#fetch_url) and the tools of an

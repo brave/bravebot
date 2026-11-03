@@ -3144,6 +3144,10 @@ session-vetting-on =
     demander (~/.bravebot/vetting)
 session-vetting-in-force =
     une vérification qui ne trouve rien donne le contenu au modèle sans vous demander
+session-vetting-in-bypass =
+    le contournement est actif avec la vérification automatique : le contenu qu'une vérification juge dangereux ou ne peut pas évaluer est refusé, et non soumis à votre décision
+vetting-kept-back =
+    la vérification automatique a retenu ceci : le contournement ne demande rien à personne et refuse ce qu'une vérification juge dangereux ou ne peut pas évaluer. Quitter le contournement vous poserait la question. Pour désactiver la vérification automatique, écrivez off dans ~/.bravebot/vetting et ne passez pas --vet
 update-available =
     une version plus récente de bravebot est disponible (celle-ci est { $running }) ; pour la
     mettre à jour : { $command }

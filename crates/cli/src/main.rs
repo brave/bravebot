@@ -1431,10 +1431,10 @@ fn reach_the_servers(
     // where nobody may be reading: a run that wrote to the tree without asking should leave a record
     // of having been told not to ask.
     if skip_permissions {
-        eprintln!(
-            "{}",
-            t!(cli_notice, notice = t!(session_permissions_skipped))
-        );
+        let auto_vetting = bravebot_session::store::auto_vetting(settings);
+        for line in progress::bypass_notices(true, auto_vetting) {
+            eprintln!("{line}");
+        }
     }
     reached
 }
@@ -2190,14 +2190,10 @@ fn task_from_the_settings(
         .with_confined_runs(true)
         .with_sandbox_mode(bravebot_config::sandbox::in_force().mode)
         // Whether a check that finds nothing answers in a person's place. Resolved here, once, out
-        // of the three routes: `bravebot_core::vetting::auto` is the rule and nothing below reads
+        // of the three routes by `bravebot_session::store::auto_vetting`, and nothing below reads
         // any of the three again. A run nobody is watching has no prompt to fall back to, so
         // without this every check on this path ends in a refusal.
-        .with_auto_vetting(bravebot_core::vetting::auto(
-            bravebot_core::vetting::asked_for(),
-            bravebot_session::store::load_vetting(),
-            settings.auto_vetting(),
-        ))
+        .with_auto_vetting(bravebot_session::store::auto_vetting(settings))
 }
 
 /// The schema a path names, read and vetted, or the sentence that says why it cannot be used.

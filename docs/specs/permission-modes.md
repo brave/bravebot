@@ -246,7 +246,11 @@ check objected to, which is the one thing the screening was asked for to stop. R
 a check that did not complete gets as well as one that objected, because content has some influence
 over the call that reads it and an answer that promoted on a failure is an answer an attacker can
 reach. The planner is told the bytes were kept back and is told nothing about what decided that, as
-[CHECK-9](vetting.md#CHECK-9) requires of every route.
+[CHECK-9](vetting.md#CHECK-9) requires of every route. The person is told, beside the refusal, that
+auto-vetting kept it back, since in this mode nobody was asked and the transcript would otherwise
+show only the planner's sentence. That line is drawn from the mode and the setting and never from
+the word, so an unsafe word and a check that could not be made read alike; it is for the person
+only ([CHECK-9](vetting.md#CHECK-9)).
 
 **A release this mode made is recorded as this mode's.** The two promotions are the only answers
 here that are written into the audit trail as somebody's word about bytes, and where nothing
@@ -322,6 +326,9 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_promotes_content_a_check_found_nothing_in`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_a_check_objected_to`
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_no_check_could_be_made_about`
+`verified-by: bravebot_agent::turn::a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why`
+`verified-by: bravebot_agent::turn::a_read_kept_back_for_no_verdict_says_the_same_to_the_person`
+`verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
 `verified-by: bravebot_tui::trust_prompt::bypassing_trusts_the_workspace_instead_of_asking`
 `verified-by: bravebot_tui::trust_prompt::every_other_mode_leaves_the_question_to_the_person`
 `verified-by: bravebot_tui::app::bypassing_opens_the_directories_a_file_named_without_asking`
@@ -354,7 +361,11 @@ The key walks asking, accepting edits, planning, auto and bypassing, in that ord
 in every session. `--dangerously-skip-permissions` does not put the mode on the ladder; it opens the
 session in it. Without the flag a session opens asking and reaches bypass by pressing the key four
 times. Nothing is asked when it gets there: the line under the input box draws the mode in colour
-([INPUT-13](terminal-input.md#INPUT-13)), and that is the only notice.
+([INPUT-13](terminal-input.md#INPUT-13)), and that is the only notice, except where auto-vetting is
+on: the step that enters bypass then adds one line to the transcript, that a read a check does not
+pass is refused and not asked about ([CHECK-11](vetting.md#CHECK-11)). A session opened in bypass
+by the flag says the same line at its top when auto-vetting is on, and the plain and one-shot
+clients print it after the notice that permissions are skipped.
 
 The flag is taken out of the arguments before anything dispatches on it, so it composes with a
 bare invocation, `-p`, `--resume`, `--continue`, `--mode` and `--incognito` alike, and repeating it
@@ -387,7 +398,8 @@ Where the flag was given, moving the key off bypass does not leave the screen bl
 the input box and `/status` name asking, which they do for no session started without the flag: there
 asking is what has always happened, and here it is the answer to whether the session stopped skipping
 permissions. A session that reached bypass with the key draws nothing when it leaves, as it drew
-nothing before it entered. Leaving the mode prints nothing in the transcript.
+nothing before it entered, except the line above where auto-vetting was on. Leaving the mode prints
+nothing in the transcript, and neither does any other step of the key.
 
 **Why.** The key is pressed by a person looking at the line that draws the mode, so it is as much a
 choice as the flag is. Gating the key behind the flag would make a person who decides mid-session to
@@ -403,6 +415,13 @@ read and where the key is read, so the two cannot disagree about whether the mod
 `verified-by: bravebot_cli::running::the_skip_permissions_flag_is_refused_where_a_layer_made_bypass_unreachable`
 `verified-by: bravebot_tui::app::the_key_reaches_bypass_without_the_flag`
 `verified-by: bravebot_tui::app::the_key_cannot_reach_bypass_where_a_layer_made_it_unreachable`
+`verified-by: bravebot_tui::state::entering_bypass_with_auto_vetting_on_says_what_bypass_refuses`
+`verified-by: bravebot_tui::state::entering_bypass_with_auto_vetting_off_says_nothing_extra`
+`verified-by: bravebot_tui::state::leaving_bypass_and_other_steps_say_nothing_about_vetting`
+`verified-by: bravebot_tui::state::a_session_opened_in_bypass_with_auto_vetting_says_what_bypass_refuses`
+`verified-by: bravebot_cli::progress::bypass_with_auto_vetting_says_what_bypass_refuses_after_the_flags_line`
+`verified-by: bravebot_cli::progress::bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra`
+`verified-by: bravebot_cli::running::a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on`
 `verified-by: bravebot_tui::app::a_session_in_bypass_is_put_back_to_asking_when_a_layer_takes_bypass_away`
 `verified-by: bravebot_tui::app::reading_the_rules_of_a_checkout_that_forbids_bypassing_takes_bypass_away`
 `verified-by: bravebot_tui::app::the_flag_opens_the_session_in_bypass_and_can_be_cycled_out_of`

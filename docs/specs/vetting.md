@@ -305,6 +305,18 @@ check that objected and a refusal on a check that could not be read are told apa
 somebody who was never asked either question. A check the person stopped has no word, so its trail
 line records none ([CHECK-16](#CHECK-16)).
 
+**A read kept back under bypass tells the person what kept it, and the planner reads what it
+always did.** The sentence the planner is given for a read that was kept back is the same in every
+mode and says nothing about what decided. Where the mode is bypass and auto-vetting is on, nobody
+was asked and a check's word answered, so the person is also told, beside the refusal, that
+auto-vetting kept the read back, that bypass refuses what a check objects to or cannot assess, and
+which setting lifts it (`off` in `~/.bravebot/vetting`, with `--vet` not passed). This is said for a
+`vet_content` refusal, a `read_output` refusal and a `run` that passed `read: true` and was not
+handed its output ([RUN-22](tools/run.md#RUN-22)). The condition is the mode and the setting the
+session started with, never the word, the sentence or a byte of the content, so an unsafe word and
+a check that could not be made read alike, and the line is for the person only: it is in no tool
+result. Where a person was asked and said no, nothing is added.
+
 `verified-by: bravebot_core::policy::what_a_check_says_is_as_untrusted_as_what_it_read`
 `verified-by: bravebot_core::policy::the_trail_records_the_verdict_and_never_the_reason`
 `verified-by: bravebot_core::policy::the_trail_tells_an_objection_apart_from_a_check_that_said_nothing`
@@ -412,6 +424,16 @@ prompt appearing has to be readable at the moment they wonder why. That is the r
 [permission-modes.md](permission-modes.md)'s own modes follow, and a session that is asking says
 nothing, since a line reporting the ordinary state is a line people learn to skim.
 
+**Entering bypass with the mode on says what bypass refuses.** Bypass puts no prompt to anybody, so
+with the mode on a read a check does not pass is refused and never asked about
+([CHECK-12](#CHECK-12)), and the line above says only that a check that finds nothing reads without
+asking. One more line says so, with the same wording on every surface: in the terminal when the key
+steps from another mode into bypass, and at the top of a session that opened in bypass with
+`--dangerously-skip-permissions`; in the plain client and on the other command-line path, after
+the notice that permissions are skipped ([CLI-15](cli.md#CLI-15)). It is not said on the other steps
+of the key, on leaving bypass, or with the mode off, and the desktop window has no line because it
+cannot enter bypass. The condition is the mode and the setting, which are the person's own choices.
+
 **The settings key is read from the home layer and no other.** A project `.bravebot/settings.json`
 naming it, a machine-local one, and a file the command line named are each reported by `doctor` and
 not obeyed. Every other name in those files configures where a request goes or how the interface
@@ -448,6 +470,13 @@ does not know, and a value that is not a boolean, are no answer at all rather th
 `verified-by: bravebot_ui_bridge::vetting::a_session_says_auto_vetting_is_off_when_nobody_turned_it_on`
 `verified-by: bravebot_ui_bridge::vetting::a_checkout_cannot_have_a_session_open_with_auto_vetting_on`
 `verified-by: bravebot_ui_bridge::vetting::auto_vetting_is_reported_when_a_session_opens_and_held_for_the_rest_of_it`
+`verified-by: bravebot_tui::state::entering_bypass_with_auto_vetting_on_says_what_bypass_refuses`
+`verified-by: bravebot_tui::state::entering_bypass_with_auto_vetting_off_says_nothing_extra`
+`verified-by: bravebot_tui::state::leaving_bypass_and_other_steps_say_nothing_about_vetting`
+`verified-by: bravebot_tui::state::a_session_opened_in_bypass_with_auto_vetting_says_what_bypass_refuses`
+`verified-by: bravebot_cli::progress::bypass_with_auto_vetting_says_what_bypass_refuses_after_the_flags_line`
+`verified-by: bravebot_cli::progress::bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra`
+`verified-by: bravebot_cli::running::a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on`
 
 <a id="CHECK-12"></a>
 ### CHECK-12: with it on, a safe verdict promotes one slot, and nothing else does
@@ -466,7 +495,9 @@ where screening is asked for makes the check `read_output` would make on its slo
 round early, so it is not a fourth kind of grant. Any other word, and a check that could not be made,
 keep the output back with no prompt drawn in any mode, including one that asks: the person is asked when
 the planner calls `read_output`. The planner is told that `read: true` did not return the output and
-nothing of the word. No check is made over a slot that holds no bytes, by this route or by
+nothing of the word. Under bypass nobody will be asked, so there the person is also told that
+auto-vetting kept the output back ([CHECK-9](#CHECK-9)); in a mode that asks, they are asked later
+and nothing is added. No check is made over a slot that holds no bytes, by this route or by
 `read_output`: there is nothing for a check to read, and the result says the run printed nothing
 ([RUN-24](tools/run.md#RUN-24)). A check the person stopped is neither a word nor a check that could
 not be made: the turn ends as stopped with the output left quarantined and not refused
@@ -476,7 +507,9 @@ not be made: the turn ends as stopped with the output left quarantined and not r
 ([MODE-4](permission-modes.md#MODE-4)) puts no prompt to anybody, so a verdict that is not `safe` has
 nothing to hand the question to. The bytes are kept back rather than promoted with a warning drawn on
 a screen nobody is reading, and the planner is told the slot was kept from it and nothing more. The
-same two prompts and no others: a vouch offer is not one of them here either.
+person is told what the planner is not: that auto-vetting kept it back and which setting lifts that
+([CHECK-9](#CHECK-9)), because the transcript would otherwise show a refusal with no sign of what
+made it. The same two prompts and no others: a vouch offer is not one of them here either.
 
 **It covers the promotions and not the rule.** The four prompts a check runs for divide two to two:
 
@@ -550,6 +583,9 @@ owns the content gains from this, which is the reason it is off by default.
 `verified-by: bravebot_agent::turn::a_run_that_asks_to_read_where_the_check_cannot_be_made_leaves_the_output_quarantined`
 `verified-by: bravebot_agent::turn::a_screened_run_that_asks_to_read_more_than_one_result_may_hold_makes_no_check`
 `verified-by: bravebot_agent::turn::sentences::a_check_answering_says_where_the_rest_is_for_output_past_the_cap`
+`verified-by: bravebot_agent::turn::a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why`
+`verified-by: bravebot_agent::turn::a_read_kept_back_for_no_verdict_says_the_same_to_the_person`
+`verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
 
 <a id="CHECK-13"></a>
 ### CHECK-13: every surface a promotion prompt reaches is given the verdict, and none of them is given an answer

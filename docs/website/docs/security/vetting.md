@@ -196,6 +196,14 @@ would be a model call whose word nobody reads, so the verdict is filled in as in
 nothing. That holds when the run asked for no screening. With `--vet` the check is made on the two
 prompts that release one slot, because its word is what answers.
 
+With auto-vetting on, bypassing keeps back a read the check does not pass and asks nobody. The
+planner is told only that the bytes were kept back. You are also told, as a line of your own beside
+the refusal, that auto-vetting kept it back and which setting lifts that; the line comes from the
+mode and the setting and never from what the check said. The same sentence is shown once when
+bypassing is entered with auto-vetting on: by the Shift-Tab step into it, at the top of a session
+started with `--dangerously-skip-permissions`, and after the notice that permissions are skipped in
+`--plain` and `-p` runs. It is not shown on leaving bypassing or on the other steps of the key.
+
 A check takes a moment, so the interface says when one begins, with how many lines it was given (or
 that it is a picture or a PDF), and says when it is over, including when it ended in a failure. The
 notice carries nothing of the content and nothing of the verdict.

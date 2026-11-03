@@ -1862,7 +1862,12 @@ and a check that could not be made, leaves the output behind its reference with 
 mode that asks as in one that does not: the person is asked when the planner calls `read_output`, as
 it would have been without `read`. The result then says that `read: true` did not return the output
 and that `read_output` is the way to see it ([RUN-14](#RUN-14)), and nothing of the word or the
-reason the check wrote ([CHECK-9](../vetting.md#CHECK-9)).
+reason the check wrote ([CHECK-9](../vetting.md#CHECK-9)). Where the mode is bypass and auto-vetting
+is on, nobody will be asked when the planner calls `read_output`, so the person is also told, as a
+notice of the driver's own and not in the result, that auto-vetting kept the output back and which
+setting lifts that. The notice is drawn from the mode and the setting and never from the word, so a
+word other than `safe` and a check that could not be made read alike. In a mode that asks nothing is
+added.
 
 A check the person stops is neither of those ([CHECK-16](../vetting.md#CHECK-16)). The turn ends as
 stopped once the run's result is recorded, the output stays quarantined and is not refused, and
@@ -1939,6 +1944,8 @@ decide it.
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_in_part_by_a_filter_fed_its_reference`
 `verified-by: bravebot_agent::turn::a_read_that_was_refused_is_not_asked_for_again`
 `verified-by: bravebot_agent::turn::a_read_that_is_not_true_or_false_is_refused_before_the_line_runs`
+`verified-by: bravebot_agent::turn::a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why`
+`verified-by: bravebot_agent::turn::a_read_kept_back_where_a_person_was_asked_says_nothing_extra`
 
 <a id="RUN-23"></a>
 ### RUN-23: how long a command may run is configurable

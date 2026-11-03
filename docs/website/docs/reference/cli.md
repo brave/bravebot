@@ -926,7 +926,9 @@ and only where a check completed and found nothing.
 Paired with `--dangerously-skip-permissions` it is also what lets a check refuse. That mode releases
 those two slots unshown on its own; with this flag the check's word is what answers instead, so a
 verdict that objects, or a check that did not complete, keeps the bytes back and the model is told the
-slot was kept from it. That is the way to screen a run nobody is watching. It costs a model call per
+slot was kept from it. The model reads the same refusal it reads in every mode, and the person is also
+told, on the run's output, that auto-vetting kept the bytes back. That is the way to screen a run
+nobody is watching. It costs a model call per
 release, in the run's own critical path, and the bytes reach the backend to be checked whether or not
 they are then released.
 

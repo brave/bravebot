@@ -3843,6 +3843,18 @@ session-vetting-on =
 # transcript, so it has to be said before the first slot reaches it.
 session-vetting-in-force =
     a check that finds nothing reads content to the model without asking you
+# Said when the mode becomes bypass with auto-vetting on, once for each time the mode is entered,
+# and at the top of a session that opened in bypass with it on. Bypass asks nobody, so what a
+# check objects to or cannot assess has no question to fall back to: it is refused, and the
+# transcript would otherwise show only the planner's sentence about it.
+session-vetting-in-bypass =
+    bypass is on with auto-vetting: content a check objects to or cannot assess is refused and not asked about
+# Drawn beside a read that was kept back under bypass with auto-vetting on, for the person only.
+# The planner is told that the reference was kept back and nothing about what decided it, so this
+# is the one place the transcript says that a check and the mode did, and how to change that.
+# `off` is the word the standing file takes, and `--vet` outranks it, so the flag is named.
+vetting-kept-back =
+    auto-vetting kept this back: bypass asks nobody, and refuses what a check objects to or cannot assess. Leaving bypass would ask you instead. To turn auto-vetting off, write off in ~/.bravebot/vetting and do not pass --vet
 # Said once at the top of a session when a newer release has been published. The command is
 # passed in rather than written here: it is a line somebody pastes into a shell, and which one it
 # is depends on how this copy was installed, so it is not a translator's to reword. The newer

@@ -16393,6 +16393,50 @@ fn a_recorded_run(scratch: &Scratch, arguments: &[&str]) -> (Output, String, Str
     (output, stdout, stderr)
 }
 
+/// CLI-15: a one-shot run in bypass with auto-vetting on says on stderr, after the line about the
+/// flag, that bypass refuses content a check objects to or cannot assess instead of asking. The
+/// same run without `--vet` says the flag's line and nothing about vetting. A property of the
+/// process: the standing setting is resolved from the flag, the home file and the settings, and
+/// only a run through the entry point shows that the lines follow it. Rejects a one-shot path that
+/// prints the vetting line whenever the flag is present, or never.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on() {
+    let run_with = |name: &str, extra: &[&str]| {
+        let gateway = a_gateway(r#"["tools"]"#, answered("all done"));
+        let scratch = Scratch::new(name).with_settings(&settings_for(&gateway));
+        let mut arguments = vec!["--dangerously-skip-permissions"];
+        arguments.extend_from_slice(extra);
+        arguments.extend(["-p", "say something"]);
+        let output = bravebot(&scratch.path, AT_A_GATEWAY, &arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(0), "{extra:?}: {stderr}");
+        assert!(stdout.contains("all done"), "{extra:?}: {stdout}");
+        stderr
+    };
+    let flag_line = "--dangerously-skip-permissions: nothing will be asked";
+    let vetting_line = "bypass is on with auto-vetting";
+
+    let vetted = run_with("cli-running-bypass-vet", &["--vet"]);
+    let flag = vetted
+        .find(flag_line)
+        .unwrap_or_else(|| panic!("the flag's line was not said: {vetted}"));
+    let screens = vetted
+        .find(vetting_line)
+        .unwrap_or_else(|| panic!("the vetting line was not said: {vetted}"));
+    assert!(
+        flag < screens,
+        "the lines came in the wrong order: {vetted}"
+    );
+
+    let plain = run_with("cli-running-bypass-no-vet", &[]);
+    assert!(plain.contains(flag_line), "{plain}");
+    assert!(
+        !plain.contains(vetting_line),
+        "a run without auto-vetting said what auto-vetting refuses: {plain}"
+    );
+}
+
 /// CLI-25: a one-shot run is written down, and its result object names the record. A script reads
 /// the id out of one run and hands it to the next, so a run that wrote nothing, or wrote it and
 /// said nothing, leaves the script restating everything each time.
