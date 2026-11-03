@@ -150,3 +150,54 @@ fn a_checkouts_level_outranks_the_pick_and_the_window_is_told() {
     assert_eq!(answers[2]["ok"]["outranked"], false);
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// A checkout naming a word that is no level still outranks the pick, and a turn there asks for
+/// none, so the window is told the pick is outranked while no level is in force.
+#[test]
+fn a_checkouts_unknown_level_word_outranks_the_pick_and_leaves_none_in_force() {
+    let home = home("outranked-unknown");
+    let checkout = home.join("checkout");
+    std::fs::create_dir_all(checkout.join(".bravebot")).expect("a checkout");
+    std::fs::write(
+        checkout.join(".bravebot/settings.json"),
+        r#"{"effort": "highest"}"#,
+    )
+    .expect("the checkout's settings");
+    let answers = ask(
+        &home,
+        &[
+            ("effort.set", json!({"level": "low"})),
+            ("effort.get", json!({"directory": checkout})),
+        ],
+    );
+    assert_eq!(answers[1]["ok"]["recorded"], "low", "{}", answers[1]);
+    assert_eq!(answers[1]["ok"]["inForce"], Value::Null, "{}", answers[1]);
+    assert_eq!(answers[1]["ok"]["outranked"], true, "{}", answers[1]);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A level that could not be written is reported as a failure, and the record is left as it was,
+/// so the picker rolls its choice back and says why instead of showing a level no turn will use.
+#[test]
+fn a_level_that_could_not_be_saved_is_reported_and_not_claimed() {
+    let home = home("unwritable");
+    // A file where the directory should be: nothing can be recorded beneath it.
+    std::fs::write(home.join(".bravebot"), "not a directory").expect("a file in the way");
+    let answers = ask(
+        &home,
+        &[
+            ("effort.set", json!({"level": "high"})),
+            ("effort.get", json!({})),
+        ],
+    );
+    assert!(answers[0]["ok"].is_null(), "{}", answers[0]);
+    assert!(
+        answers[0]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("could not be saved")),
+        "{}",
+        answers[0]
+    );
+    assert_eq!(answers[1]["ok"]["recorded"], Value::Null, "{}", answers[1]);
+    let _ = std::fs::remove_dir_all(&home);
+}

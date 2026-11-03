@@ -543,10 +543,11 @@ impl Bridge {
             .then(|| json!({ "known": true, "rules": rules_json(&opening.trust) }));
         // Held from here for as long as the session stays open, so a record a terminal holds is
         // refused in the words the terminal uses (SESSION-38).
-        let state = match State::resumed(&directory, &record, opening.trust) {
+        let mut state = match State::resumed(&directory, &record, opening.trust) {
             Ok(state) => state,
             Err(held) => return Ok(Stored::Refused(held)),
         };
+        state.account = self.account_session(&directory);
 
         let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(Open::opened(
@@ -645,6 +646,17 @@ impl Bridge {
             .get(handle)
             .and_then(|open| open.state.lock().ok().map(|state| state.scratch.report()))
             .unwrap_or(Value::Null)
+    }
+
+    /// A ChatGPT account session, which is sent one level for the whole of a session (BACKEND-22), begun with
+    /// the level a turn in `project` would ask for: the recorded pick, ranked against the settings
+    /// of that project and of the file selected in the window as BACKEND-43 ranks them.
+    fn account_session(
+        &self,
+        project: &std::path::Path,
+    ) -> bravebot_agent::chatgpt::AccountSession {
+        let settings = crate::settings::layers(Some(project), self.settings.as_deref());
+        bravebot_agent::chatgpt::AccountSession::begin_with(recorded_effort(&settings))
     }
 
     fn auto_vetting(&self, project: &std::path::Path) -> bool {
@@ -779,6 +791,7 @@ impl Bridge {
         let opening = Opening::of(&directory, None);
         let reported = opening.json(&directory);
         let mut state = State::fresh(opening.trust);
+        state.account = self.account_session(&directory);
         state.directories = additional;
         let handle = self.mint(Open::opened(
             directory.clone(),
@@ -958,6 +971,7 @@ impl Bridge {
                 );
                 // The map is the parent's, so what the mode answered in it is still the mode's.
                 forked.answered_by_mode = by_mode;
+                forked.account = self.account_session(&project);
                 forked
             },
             // Inherited along with the map itself: the same person, in the same directory, in

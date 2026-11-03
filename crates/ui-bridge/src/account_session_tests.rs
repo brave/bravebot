@@ -319,3 +319,136 @@ fn a_desktop_turn_and_plan_run_ask_for_the_level_they_were_given() {
         ]
     );
 }
+
+/// Send `method` to `bridge` and answer what it did, trying again while the session's earlier turn
+/// is still ending, since a worker notices that its predecessor finished only when asked.
+fn dispatch_when_idle(bridge: &mut Bridge, method: &str, params: Value) -> Value {
+    let line = json!({"id": 1, "method": method, "params": params}).to_string();
+    let request = Request::parse(&line).expect("a request");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match bridge.dispatch(&request) {
+            Err(failure)
+                if failure.code == crate::protocol::ErrorCode::TurnInFlight
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => {
+                return other.unwrap_or_else(|failure| panic!("{method}: {}", failure.message));
+            }
+        }
+    }
+}
+
+/// Wait until the workers have built `count` tasks and answer the levels they were built asking for.
+fn levels_after(count: usize) -> Vec<(&'static str, Option<&'static str>)> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while built_in::levels().len() < count && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    built_in::levels()
+}
+
+/// A turn and a plan run started through the bridge ask for the level `effort.set` recorded, and
+/// for the level of the project's own settings where those outrank it (BACKEND-43). The regression
+/// it rejects is a handler that stops reading the record, or reads it without the project's
+/// settings, so that the picker shows one level and the request carries another. The workers are
+/// tested with a level given to them above; this goes through the handlers that decide it.
+#[test]
+fn a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_level() {
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    // A service that needs no credential, so that a request can be built; it is never answered.
+    let home = bravebot_agent::home::directory().expect("the profile's state directory");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("settings.json"),
+        r#"{"provider":{"local":{"options":{"baseURL":"http://127.0.0.1:9/v1"},"models":{"m":{}}}},"model":"local/m"}"#,
+    )
+    .unwrap();
+    let (directory, workspace, trust) = project();
+    let mut bridge = Bridge::new(Box::new(|_| {}));
+    let handle = bridge.mint(Open::opened(
+        workspace.root().to_path_buf(),
+        State::fresh(trust),
+        true,
+        None,
+        false,
+    ));
+    let mut call = |method: &str, params: Value| dispatch_when_idle(&mut bridge, method, params);
+
+    call("effort.set", json!({"level": "high"}));
+    call(
+        "turn.send",
+        json!({"session": handle, "prompt": "say hello"}),
+    );
+    assert_eq!(levels_after(1), [("turn", Some("high"))]);
+    call(
+        "manifest.run",
+        json!({"session": handle, "task": "tidy the notes"}),
+    );
+    assert_eq!(
+        levels_after(2),
+        [("turn", Some("high")), ("manifest", Some("high"))]
+    );
+
+    // The project's own file outranks the pick, for the turn and the run alike.
+    std::fs::create_dir_all(directory.path().join(".bravebot")).unwrap();
+    std::fs::write(
+        directory.path().join(".bravebot/settings.json"),
+        r#"{"effort": "max"}"#,
+    )
+    .unwrap();
+    call(
+        "turn.send",
+        json!({"session": handle, "prompt": "say hello"}),
+    );
+    call(
+        "manifest.run",
+        json!({"session": handle, "task": "tidy the notes"}),
+    );
+    assert_eq!(
+        levels_after(4)[2..],
+        [("turn", Some("max")), ("manifest", Some("max"))]
+    );
+}
+
+/// The ChatGPT account is sent one level for a whole session (BACKEND-22), so a session opened in a
+/// project whose own settings name a level begins with that level, and not with the pick the
+/// picker reports as outranked. The regression it rejects is a session that begins with the record
+/// alone, which holds the account at `low` while every task asks for `max`.
+#[test]
+fn a_session_opens_with_the_level_its_project_settles_on() {
+    use bravebot_session::store::Effort;
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    let outranking = tempfile::tempdir().expect("a project directory");
+    std::fs::create_dir_all(outranking.path().join(".bravebot")).unwrap();
+    std::fs::write(
+        outranking.path().join(".bravebot/settings.json"),
+        r#"{"effort": "max"}"#,
+    )
+    .unwrap();
+    let plain = tempfile::tempdir().expect("a project directory");
+    let mut bridge = Bridge::new(Box::new(|_| {}));
+    bridge
+        .dispatch(
+            &Request::parse(r#"{"id":1,"method":"effort.set","params":{"level":"low"}}"#).unwrap(),
+        )
+        .unwrap();
+    let mut open = |directory: &std::path::Path| {
+        let line = json!({"id": 1, "method": "session.new", "params": {"directory": directory}});
+        let made = bridge
+            .dispatch(&Request::parse(&line.to_string()).unwrap())
+            .expect("a session opens");
+        made["session"].as_str().unwrap().to_string()
+    };
+    let outranked = open(outranking.path());
+    let free = open(plain.path());
+    let level = |handle: &str| bridge.open[handle].state.lock().unwrap().account.effort();
+    assert_eq!(level(&outranked), Some(Effort::Max));
+    assert_eq!(level(&free), Some(Effort::Low));
+}

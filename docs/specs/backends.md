@@ -2893,8 +2893,11 @@ level picked with `/effort` in the session that is running. Whatever answers is 
 asks for: the interface, a session in lines, a one-shot run, and every turn and plan run of the desktop
 window. The window's model picker records a level in the record `/effort` keeps, or removes it for
 Default, and reads it back with whether a checkout's file outranks it in the folder of the session it
-is open for, so it can say a pick changes nothing there. The ChatGPT account is sent one level for a
-whole session, so a window's session begins with the level recorded when it opens.
+is open for, so it can say a pick changes nothing there. A checkout's file naming a word that is no
+level still outranks the pick, so the picker is told it is outranked while no level is in force. A
+record the window could not write is an error to the picker, which then shows the level it had.
+The ChatGPT account is sent one level for a whole session, so a window's session begins with the
+level a turn in its folder asks for when it opens, ranked as above, and not with the record alone.
 
 The word is read on the terms [SESSION-15](sessions.md#SESSION-15) reads the recorded one on, by the
 same rule and in one place. A word this program does not define is no level at all rather than a
@@ -2949,6 +2952,10 @@ what drifting costs is a word no service defines in a request field.
 `verified-by: bravebot_ui_bridge::effort::a_level_picked_in_the_window_is_recorded_where_the_terminal_reads_it`
 `verified-by: bravebot_ui_bridge::effort::a_word_naming_no_level_is_refused_and_nothing_is_recorded`
 `verified-by: bravebot_ui_bridge::effort::a_checkouts_level_outranks_the_pick_and_the_window_is_told`
+`verified-by: bravebot_ui_bridge::effort::a_checkouts_unknown_level_word_outranks_the_pick_and_leaves_none_in_force`
+`verified-by: bravebot_ui_bridge::effort::a_level_that_could_not_be_saved_is_reported_and_not_claimed`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_desktop_turn_and_plan_run_started_through_the_bridge_ask_for_the_recorded_level`
+`verified-by: bravebot_ui_bridge::account_session_tests::a_session_opens_with_the_level_its_project_settles_on`
 `verified-by: bravebot_ui_bridge::account_session_tests::a_desktop_turn_and_plan_run_ask_for_the_level_they_were_given`
 `verified-by: bravebot_config::managed::a_name_outside_the_pinnable_set_pins_nothing`
 

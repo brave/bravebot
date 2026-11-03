@@ -242,9 +242,10 @@ impl State {
             question_answers: Arc::default(),
             moments: None,
             roster: Arc::default(),
-            // The ChatGPT account is sent one level for the whole of a session (BACKEND-22), so
-            // it begins with the level recorded when the session opens, as the terminal's does. A
-            // level picked later applies to the next session the account sees.
+            // The ChatGPT account is sent one level for the whole of a session (BACKEND-22). The
+            // bridge replaces this with the level the session's project settles on when it opens
+            // the session, since a project's settings can outrank the pick. A level picked later
+            // applies to the next session the account sees.
             account: bravebot_agent::chatgpt::AccountSession::begin_with(
                 bravebot_session::store::load_effort(),
             ),
