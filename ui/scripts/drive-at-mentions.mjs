@@ -142,6 +142,25 @@ try {
   await valueIs('read @My\\ Documents/notes.md ')
   await field.fill('')
 
+  // ---- NAME-4: a marked file and a marked directory draw their own marking, and a marked
+  // directory's own trailing slash lands outside the quoting marking it added -------------------
+  mkdirSync(join(project, 'marked'))
+  writeFileSync(join(project, 'marked', 'a​b.md'), 'Marked file.\n')
+  mkdirSync(join(project, 'marked', 'a​c'))
+  await field.fill('Open @marked')
+  await list.waitFor()
+  await page.keyboard.press('Tab')
+  await valueIs('Open @marked/')
+  await page.keyboard.type('a')
+  await page.waitForFunction(() => document.querySelectorAll('[data-test="mention-option"]').length === 2)
+  assert.deepEqual(
+    await offered(),
+    ['"marked/a\\u{200b}c"/', '"marked/a\\u{200b}b.md"'],
+    'a marked directory and a marked file each draw their own marking, the slash outside any quoting'
+  )
+  await page.keyboard.press('Escape')
+  await field.fill('')
+
   // ---- a name outside the project is refused at send, and nothing goes -------------------------
   await field.fill('Read @../outside.txt')
   await field.press('Enter')
