@@ -4236,6 +4236,13 @@ this agent's own credentials taken off its environment, and no value from a sett
 workspace reaches it ([BACKEND-1](#BACKEND-1), [SANDBOX-30](sandboxing.md#SANDBOX-30)). It is not named by
 a file. `GOOGLE_APPLICATION_CREDENTIALS` is read by the CLI and not by bravebot.
 
+Two variables the CLI reads name code it then runs: `CLOUDSDK_PYTHON`, the interpreter its launcher
+executes, and `CLOUDSDK_CONFIG`, whose `virtenv/bin/activate` the launcher sources when it has no
+interpreter of its own. Each is taken off the environment the program is started with unless its value is
+an absolute path outside every directory a stage may write, with links followed. `CLOUDSDK_PYTHON` given
+as a bare name is kept, since the program's `PATH` leaves those directories out. A relative path, and a path
+to something that does not exist, are taken off. The rest of the environment is left as it is.
+
 The sign-in is asked for before work starts, and only for a model this service answers
 ([BACKEND-9](#BACKEND-9)): where the CLI gives no token, `gcloud auth application-default login` is run and
 each line it writes is shown as it arrives. A CLI that is missing, or that gives no token, ends the request before
@@ -4268,6 +4275,10 @@ check before a turn is one more run of the program.
 `verified-by: bravebot_agent::gcloud::a_refusal_reports_the_first_line_of_stderr_and_never_a_token_it_printed`
 `verified-by: bravebot_agent::gcloud::a_reply_that_is_not_one_token_is_refused_and_not_quoted`
 `verified-by: bravebot_agent::gcloud::a_gcloud_a_stage_may_write_is_not_the_one_run`
+`verified-by: bravebot_agent::gcloud::an_interpreter_a_stage_may_write_is_not_the_one_gcloud_is_told_to_run`
+`verified-by: bravebot_agent::gcloud::an_interpreter_with_no_directory_is_kept_and_a_relative_or_missing_one_is_not`
+`verified-by: bravebot_agent::gcloud::a_config_directory_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read`
+`verified-by: bravebot_agent::gcloud::a_cloudsdk_value_that_selects_no_code_is_left_as_set`
 `verified-by: bravebot_agent::gcloud::the_sign_in_reports_each_line_the_cli_writes_and_its_failure`
 
 <a id="BACKEND-68"></a>

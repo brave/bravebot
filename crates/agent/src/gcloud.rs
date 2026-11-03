@@ -10,6 +10,11 @@
 //! is can be workspace content, so the lookup leaves out the directories a stage may write
 //! ([`bravebot_sandbox::programs::find_on`]).
 //!
+//! Two of the variables the CLI reads name code it then runs: `CLOUDSDK_PYTHON` is the interpreter
+//! its launcher executes, and the launcher sources `$CLOUDSDK_CONFIG/virtenv/bin/activate` when it
+//! has no interpreter of its own. [`CODE_SELECTORS`] lists them, and one whose value is a path a
+//! stage may write is taken off the environment the CLI is started with.
+//!
 //! The token is a credential. [`Secret`] keeps it out of a `Debug` render, the bytes the CLI
 //! printed are cleared once read, and the only use made of it is the `authorization` header of a
 //! request to the host built from the project and location.
@@ -19,7 +24,7 @@
 
 use bravebot_config::Secret;
 use bravebot_i18n::t;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,6 +32,27 @@ use std::sync::mpsc;
 
 /// The program asked for a token, looked for on `PATH` as any command a person runs is.
 const GCLOUD: &str = "gcloud";
+
+/// A variable the CLI reads to choose code to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Names {
+    /// A program: a bare name is looked up on the reduced `PATH`, and anything with a separator is
+    /// a file.
+    Program,
+    /// A directory the CLI may source a script from.
+    Directory,
+}
+
+/// The variables the CLI reads that name code it runs, and what each names.
+///
+/// A value is kept only when it is outside every directory a stage may write
+/// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)). A variable that selects code and
+/// is not listed here reaches the CLI as the person set it, so one added to the CLI's launcher
+/// belongs in this list.
+const CODE_SELECTORS: [(&str, Names); 2] = [
+    ("CLOUDSDK_PYTHON", Names::Program),
+    ("CLOUDSDK_CONFIG", Names::Directory),
+];
 
 /// Why no token could be had.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,14 +83,51 @@ fn installed_in(path: &OsStr) -> PathBuf {
 }
 
 /// A command for `program` with this agent's own credentials taken off it
-/// ([CRED-14](../../../docs/specs/credential-protection.md#CRED-14)). The rest of the environment
-/// stays, since `GOOGLE_APPLICATION_CREDENTIALS` and `CLOUDSDK_*` are what the CLI is run to read.
+/// ([CRED-14](../../../docs/specs/credential-protection.md#CRED-14)) and each of
+/// [`CODE_SELECTORS`] that names a path a stage may write. The rest of the environment stays, since
+/// `GOOGLE_APPLICATION_CREDENTIALS` and the other `CLOUDSDK_*` values are what the CLI is run to
+/// read.
 fn command_for(program: &Path) -> Command {
-    bravebot_sandbox::programs::start(
+    command_for_with(
+        program,
+        |name| std::env::var_os(name),
+        bravebot_sandbox::programs::outside_stage_writable,
+    )
+}
+
+/// [`command_for`] against a given environment and a given judgment of which files are outside the
+/// directories a stage may write.
+fn command_for_with(
+    program: &Path,
+    held: impl Fn(&str) -> Option<OsString>,
+    outside_stage_writable: impl Fn(&Path) -> bool,
+) -> Command {
+    let mut command = bravebot_sandbox::programs::start(
         &bravebot_sandbox::programs::Resolved::found_earlier(program),
         bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
         bravebot_sandbox::programs::SearchPath::Reduced,
-    )
+    );
+    for (name, names) in CODE_SELECTORS {
+        if let Some(value) = held(name)
+            && !may_be_run(names, Path::new(&value), &outside_stage_writable)
+        {
+            command.env_remove(name);
+        }
+    }
+    command
+}
+
+/// Whether the CLI may be left to run what `value` names.
+///
+/// A program given by a bare name is looked up on the `PATH` the CLI is started with, which leaves
+/// out the directories a stage may write. Any other value must be an absolute path to something
+/// that exists outside them, with its links followed. A relative path is read from the directory the
+/// session writes in, and one that does not exist is made by whoever writes it first.
+fn may_be_run(names: Names, value: &Path, outside_stage_writable: &impl Fn(&Path) -> bool) -> bool {
+    if names == Names::Program && value.components().count() == 1 && !value.is_absolute() {
+        return true;
+    }
+    value.is_absolute() && outside_stage_writable(value)
 }
 
 fn token_command(program: &Path) -> Command {
@@ -338,6 +401,113 @@ mod tests {
                 .find(|(name, _)| *name == OsStr::new("PATH"));
             assert!(path.is_some(), "PATH is left as inherited");
         }
+    }
+
+    /// Whether `name` is taken off the environment a `gcloud` is started with, when the person's
+    /// environment holds `value` for it and `writable` is the directory a stage may write.
+    fn withheld(name: &str, value: &Path, writable: &Path) -> bool {
+        let row = writable.to_path_buf();
+        let rows = std::slice::from_ref(&row);
+        let command = command_for_with(
+            Path::new("/usr/bin/gcloud"),
+            |asked| (asked == name).then(|| value.as_os_str().to_os_string()),
+            |file| bravebot_sandbox::programs::outside_stage_writable_with(file, rows, &[]),
+        );
+        command
+            .get_envs()
+            .any(|(set, now)| set == OsStr::new(name) && now.is_none())
+    }
+
+    /// A file or directory a stage can plant, under a row it holds, and a genuine one beside it that
+    /// is outside every row.
+    fn planted_and_genuine(name: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let session = scratch_dir(&format!("{name}-session"));
+        let safe = scratch_dir(&format!("{name}-safe"));
+        for dir in [&session, &safe] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        let planted_bin = session.join(".venv").join("bin");
+        let genuine_bin = safe.join("venv").join("bin");
+        for dir in [&planted_bin, &genuine_bin] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let planted = planted_bin.join("python");
+        let genuine = genuine_bin.join("python");
+        for file in [&planted, &genuine] {
+            std::fs::write(file, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        (session, safe, planted, genuine)
+    }
+
+    /// The regression it rejects: starting `gcloud` with `CLOUDSDK_PYTHON` as the person set it, so
+    /// the launcher executes an interpreter a stage wrote, outside confinement.
+    #[test]
+    fn an_interpreter_a_stage_may_write_is_not_the_one_gcloud_is_told_to_run() {
+        let (session, _safe, planted, genuine) = planted_and_genuine("gcloud-python");
+        let linked = scratch_dir("gcloud-python-linked");
+        let _ = std::fs::remove_dir_all(&linked);
+        std::fs::create_dir_all(&linked).unwrap();
+        let link = linked.join("python");
+        std::os::unix::fs::symlink(&planted, &link).unwrap();
+
+        assert!(withheld("CLOUDSDK_PYTHON", &planted, &session));
+        assert!(withheld("CLOUDSDK_PYTHON", &link, &session));
+        assert!(!withheld("CLOUDSDK_PYTHON", &genuine, &session));
+    }
+
+    /// A bare interpreter name is looked up on the reduced `PATH`, so it is left alone. A relative
+    /// path, and a path that names nothing yet, are read from or made in a directory a stage writes.
+    #[test]
+    fn an_interpreter_with_no_directory_is_kept_and_a_relative_or_missing_one_is_not() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("gcloud-python-spellings");
+
+        assert!(!withheld("CLOUDSDK_PYTHON", Path::new("python3"), &session));
+        assert!(withheld(
+            "CLOUDSDK_PYTHON",
+            Path::new("./python3"),
+            &session
+        ));
+        assert!(withheld(
+            "CLOUDSDK_PYTHON",
+            Path::new("venv/bin/python"),
+            &session
+        ));
+        assert!(withheld(
+            "CLOUDSDK_PYTHON",
+            &safe.join("venv").join("bin").join("not-yet-written"),
+            &session
+        ));
+    }
+
+    /// The regression it rejects: starting `gcloud` with `CLOUDSDK_CONFIG` as the person set it, so
+    /// the launcher sources `virtenv/bin/activate` from a directory a stage wrote.
+    #[test]
+    fn a_config_directory_a_stage_may_write_is_not_the_one_gcloud_is_told_to_read() {
+        let (session, safe, _planted, _genuine) = planted_and_genuine("gcloud-config");
+        let planted = session.join(".venv");
+        let genuine = safe.join("venv");
+        let linked = scratch_dir("gcloud-config-linked");
+        let _ = std::fs::remove_file(&linked);
+        std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&planted, &linked).unwrap();
+
+        assert!(withheld("CLOUDSDK_CONFIG", &planted, &session));
+        assert!(withheld("CLOUDSDK_CONFIG", &linked, &session));
+        assert!(!withheld("CLOUDSDK_CONFIG", &genuine, &session));
+    }
+
+    /// A variable of the CLI's that selects no code is left as the person set it, whatever it names.
+    #[test]
+    fn a_cloudsdk_value_that_selects_no_code_is_left_as_set() {
+        let (session, _safe, planted, _genuine) = planted_and_genuine("gcloud-other-values");
+
+        assert!(!withheld("CLOUDSDK_CORE_PROJECT", &planted, &session));
+        assert!(!withheld(
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            &planted,
+            &session
+        ));
     }
 
     /// The regression it rejects: starting without the credential removal, so the agent's own keys
