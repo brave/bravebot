@@ -487,13 +487,15 @@ export function typing(): void {
  * face. A bot's row in a list says so, and choosing the bot makes its face giggle. `choosing` is
  * whether the press is on such a control.
  */
-function faceAt(target: EventTarget | null): { entry: Registered; choosing: boolean } | null {
+export function faceAt(target: EventTarget | null): { entry: Registered; choosing: boolean } | null {
   if (!(target instanceof Node)) return null
   const holder = (target instanceof Element ? target : target.parentElement)?.closest('[data-presses-face]')
   for (const entry of registered.values()) {
     if (!entry.detail) continue
-    if (holder?.contains(entry.svg)) return { entry, choosing: true }
+    // A press on the face itself is a press on the face, even where the row around it says that
+    // choosing it touches its face: the third press in a row giggles, not the first.
     if (entry.svg.parentElement?.contains(target)) return { entry, choosing: false }
+    if (holder?.contains(entry.svg)) return { entry, choosing: true }
   }
   return null
 }
