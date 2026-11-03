@@ -276,6 +276,7 @@ dependencies = [
  "bravebot-mcp",
  "bravebot-net",
  "bravebot-sandbox",
+ "bravebot-schedule",
  "bravebot-session",
  "bravebot-signing",
  "bravebot-skus",
@@ -384,6 +385,19 @@ dependencies = [
  "landlock",
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "bravebot-schedule"
+version = "0.20.0"
+dependencies = [
+ "bravebot-agent",
+ "bravebot-config",
+ "bravebot-core",
+ "bravebot-i18n",
+ "bravebot-sandbox",
+ "bravebot-session",
+ "tempfile",
 ]
 
 [[package]]
