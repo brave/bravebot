@@ -31,7 +31,8 @@ try {
       { way: 'gateway', id: 'openrouter-eu', name: 'OpenRouter', standing: 'notSignedIn', keyFrom: null, detail: null, command: null, canSignOut: false, host: 'eu.openrouter.ai', canEnterKey: true },
     ]
     const model = (id, name, providerKey, provider) => ({ id, name, provider, providerKey, readsEffort: true, premium: false, contextWindow: 200000, capabilities: ['text', 'tools'] })
-    const catalogue = { defaultModel: 'bedrock-a', warnings: [], models: [
+    // One listing failed, and its warning names the command that signs in again.
+    const catalogue = { defaultModel: 'bedrock-a', warnings: ['Could not list the ChatGPT account\'s models. Sign in again.'], warningCommands: ['bravebot auth login chatgpt'], models: [
       model('bedrock-a', 'Bedrock A', 'bedrock', 'AWS Bedrock'),
       model('bedrock-b', 'Bedrock B', 'bedrock', 'AWS Bedrock'),
       model('bedrock-c', 'Bedrock C', 'bedrock', 'AWS Bedrock'),
@@ -39,7 +40,7 @@ try {
       model('xai/grok-2', 'Grok two', 'xai', 'xAI'),
     ] }
     const rows = [{ id: 'a', title: 'Providers fixture', directory, project: 'Fixture', branch: null, updated: 1, bytes: 1 }]
-    globalThis.providersFixture = { signOuts: [] }
+    globalThis.providersFixture = { signOuts: [], listings: 0 }
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
     ipcMain.removeHandler('bravebot:request')
     ipcMain.handle('bravebot:request', (_, method, params = {}) => {
@@ -47,7 +48,7 @@ try {
       if (method === 'session.list') return { ok: { sessions: rows } }
       if (method === 'session.new') return { ok: { session: 's-new', directory, shownDirectory: directory, branch: null, model: 'bedrock-a' } }
       if (method === 'session.open') return { ok: { session: `s-${params.id}`, model: 'bedrock-a', record: { ...rows[0], started: 1, turns: 0, tokens: 0, build: 'fixture' }, said: [], todos: {}, context: '', trust: { known: true, rules: [] }, archived: 0 } }
-      if (method === 'models.list') return { ok: catalogue }
+      if (method === 'models.list') { globalThis.providersFixture.listings += 1; return { ok: catalogue } }
       if (method === 'effort.get') return { ok: { recorded: null, inForce: null, outranked: false } }
       if (method === 'settings.inspect') return { ok: report }
       if (method === 'accounts.list') return { ok: { accounts } }
@@ -69,7 +70,7 @@ try {
   await settings.locator('[data-test="settings-page-providers"]').click()
   await settings.getByRole('heading', { name: 'Model service configured', exact: true, level: 2 }).waitFor()
   await settings.getByRole('heading', { name: 'Accounts', exact: true, level: 2 }).waitFor()
-  await settings.getByText('Credentials missing', { exact: true }).waitFor()
+  await settings.getByText('Credentials missing', { exact: true }).first().waitFor()
   console.log('PASS: Providers is second in the list and holds the model service and the accounts')
 
   // The first signed-in account is chosen, and a signed-in account shows its models.
@@ -101,6 +102,31 @@ try {
   await accounts.locator('[data-test="account-xai:"]').waitFor()
   assert.equal(await page.evaluate(() => document.activeElement?.dataset.test), 'provider-xai:', 'focus follows the chosen account')
   console.log('PASS: Fix and the arrow keys choose an account, and one not signed in shows its actions and no models')
+
+  // Reading the rows again, here after signing out of the account chosen since, leaves that account
+  // chosen: the Fix pressed earlier is not applied a second time.
+  await accounts.locator('[data-test="account-xai:"] [data-test="account-sign-out"]').click()
+  await page.locator('[data-test="sign-out-confirm"]').click()
+  await accounts.locator('[data-test="accounts-said"]').waitFor()
+  await page.waitForFunction(() => globalThis.document.querySelector('[data-test="sign-out-confirm"]') === null)
+  await page.waitForTimeout(200)
+  assert.equal(await tab('xai:').getAttribute('aria-selected'), 'true', 'reading the rows again keeps the account chosen after Fix')
+  assert.equal(await tab('gateway:openrouter').getAttribute('aria-selected'), 'false', 'the row Fix chose is not chosen again')
+  const signedOut = (await app.evaluate(() => globalThis.providersFixture.signOuts)).length
+  console.log('PASS: reading the rows again after Fix keeps the account chosen since')
+
+  // A listing that failed is said on the page, with the sign-in its warning names, and Try again
+  // asks for the list again.
+  const warnings = settings.locator('[data-test="providers-warnings"]')
+  await warnings.locator('[data-test="model-warning"]').waitFor()
+  assert.match(await warnings.locator('[data-test="model-warning"]').innerText(), /Could not list the ChatGPT account/)
+  assert.equal(await warnings.locator('[data-test="model-warning"] [slot="actions"] leo-button').count(), 1, 'the warning offers its sign-in')
+  const listedBefore = await app.evaluate(() => globalThis.providersFixture.listings)
+  await warnings.locator('[data-test="providers-warnings-retry"]').click()
+  await page.waitForFunction((before) => globalThis.document.querySelector('[data-test="providers-warnings"]') !== null && before >= 0, listedBefore)
+  await page.waitForTimeout(300)
+  assert.equal(await app.evaluate(() => globalThis.providersFixture.listings), listedBefore + 1, 'Try again asks for the models again')
+  console.log('PASS: a failed listing is said on the Providers page with its sign-in, and Try again lists again')
 
   // Hide one model of Bedrock, move one, and hide xAI altogether.
   await tab('bedrock:work').click()
@@ -164,7 +190,7 @@ try {
   assert.deepEqual(await order(), ['bedrock-a', 'bedrock-b', 'bedrock-c'], 'reset restores the order')
   assert.equal(await accounts.locator('[data-test="provider-model-bedrock-b"] leo-toggle').evaluate((host) => host.shadowRoot?.querySelector('[role="switch"]')?.getAttribute('aria-checked')), 'true', 'reset shows the hidden model again')
   assert.equal(await accounts.locator('[data-test="account-bedrock:work"] [data-test="account-sign-out"]').count(), 1, 'the account is still signed in')
-  assert.deepEqual(await app.evaluate(() => globalThis.providersFixture.signOuts), [], 'reset signs nothing out')
+  assert.equal((await app.evaluate(() => globalThis.providersFixture.signOuts)).length, signedOut, 'reset signs nothing out')
   await tab('xai:').click()
   await accounts.locator('[data-test="provider-models"].provider-hidden').waitFor()
   console.log('PASS: Reset to defaults restores one service and keeps its sign-in and the other service\'s choices')
