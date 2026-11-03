@@ -11,7 +11,7 @@ Each session stays with its chosen execution target. Switching targets never mov
 
 ## Why React Native
 
-The prototype uses React Native for native mobile controls and shared Android/iOS screens. Validate responsiveness, approval legibility, accessibility, keyboard behavior, scrolling, and lifecycle handling in the first device proof before expanding the screens. The unmerged WebView prototype supplies a reference for reusable integration code; it does not determine the mobile UI architecture. See the [UI decision](decisions-and-tradeoffs.md#1-react-native-for-both-mobile-modes). Neither platform has delivery priority.
+The prototype uses React Native for native mobile controls and shared Android/iOS screens. Validate responsiveness, approval legibility, accessibility, keyboard behavior, scrolling, and lifecycle handling in the first device proof before expanding the screens. See the [UI decision](decisions-and-tradeoffs.md#1-react-native-for-both-mobile-modes). Neither platform has delivery priority.
 
 Keep shareable behavior in Rust. Both execution modes call the same Rust session-view and approval code; the thin TypeScript package in `packages/agent-client/` handles transport and UI wiring. Validate the new view capability through a real local RPC process, independently of Electron.
 
