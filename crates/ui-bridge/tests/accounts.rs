@@ -380,6 +380,7 @@ fn the_rows_say_how_each_way_stands_and_hold_no_credential() {
     assert_eq!(gw["host"], "gw.example.invalid");
 
     let openrouter = row(&rows, "gateway", Some("openrouter"));
+    assert_eq!(openrouter["name"], "OpenRouter");
     assert_eq!(openrouter["canSignOut"], true);
     assert!(openrouter["host"].is_string());
 
