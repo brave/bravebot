@@ -65,8 +65,8 @@ export function ProviderModels({ providerKey, name, models, problem, onRetry }: 
 
   return <div className={`provider-models${shown ? '' : ' provider-hidden'}`} data-test="provider-models">
     <div className="provider-models-row">
-      <span className="provider-models-label" id={`${providerKey}-shown`}>Show in model picker</span>
-      <Toggle size="small" checked={shown} aria-labelledby={`${providerKey}-shown`} data-test="provider-shown"
+      <span className="provider-models-label">Show in model picker</span>
+      <Toggle size="small" checked={shown} aria-label={`Show ${name} in the model picker`} data-test="provider-shown"
         onChange={({ checked }) => save(setProviderShown(preferences, providerKey, checked))} />
     </div>
     <h4 className="provider-models-title">Models</h4>

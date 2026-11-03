@@ -33,7 +33,7 @@ export function ProvidersSettings({ session, onChanged }: { session?: string; on
   const [problem, setProblem] = useState('')
   const [busy, setBusy] = useState(false)
   const showLoading = useDelayedFlag(busy && !report)
-  const [pick, setPick] = useState<{ name: string; asked: number } | null>(null)
+  const [pick, setPick] = useState<{ key: string; asked: number } | null>(null)
   const load = async () => {
     setBusy(true); setProblem('')
     try {
@@ -58,10 +58,10 @@ export function ProvidersSettings({ session, onChanged }: { session?: string; on
         <dl>
           <dt>Agent build</dt><dd>{report.build}</dd>
           <dt>Default model</dt><dd>{report.model ?? 'Not configured'}</dd>
-          {report.providers.map((provider) => <div className="settings-dl-row" key={provider.name} data-test="settings-providers">
+          {report.providers.map((provider) => <div className="settings-dl-row" key={provider.key} data-test="settings-providers">
             <dt>{provider.name}</dt>
             <dd><span>{credentialText(provider.credential)}</span>
-              {provider.credential === 'missing' && <Button size="tiny" kind="plain" className="settings-provider-fix" onClick={() => setPick({ name: provider.name, asked: Date.now() })} data-test="settings-provider-fix">Fix</Button>}
+              {provider.credential === 'missing' && <Button size="tiny" kind="plain" className="settings-provider-fix" onClick={() => setPick({ key: provider.key, asked: Date.now() })} data-test="settings-provider-fix">Fix</Button>}
             </dd>
           </div>)}
           {report.brave && <><dt>Brave service</dt><dd>Brave service enabled</dd></>}

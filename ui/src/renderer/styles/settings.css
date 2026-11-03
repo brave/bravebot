@@ -360,6 +360,8 @@ code.connector-summary { font: var(--type-code); overflow: hidden; text-overflow
   color: var(--ink-primary);
 }
 .settings-card h4.provider-models-title { margin: var(--leo-spacing-m) 0 0; font: var(--type-title); }
+.providers-warnings { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-m); }
+.providers-warnings .model-status { margin: 0; }
 .provider-models-problem { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-m); }
 .provider-model-list {
   margin: 0;

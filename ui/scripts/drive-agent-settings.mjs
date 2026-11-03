@@ -18,7 +18,7 @@ try {
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
   await app.evaluate(({ ipcMain, BrowserWindow }, directory) => {
-    const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', credential: 'not required' }], selected: null, layers: [], overrides: [], managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
+    const report = { build: 'bravebot 0.9.0 fixture', configured: true, problem: null, model: 'local/test', brave: false, bedrock: false, providers: [{ name: 'Local', key: 'gateway:local', credential: 'not required' }], selected: null, layers: [], overrides: [], managed: { path: '/etc/bravebot/managed.json', keys: ['provider'] }, network: { roots: ['/test/roots.pem'], problem: null, trustsNothing: false, proxy: 'proxy.example:8080', authenticated: true, unusableProxy: null, noProxy: 'localhost' } }
     // Figures that are not the agent's real ones, so a placeholder that held its own would not match them.
     const defaultFor = { 'turn-started': 41, 'tool-finished': 42, 'turn-finished': 43, 'prompt-shown': 44, 'checkout-made': 46, 'compacted': 47, 'session-started': 45, 'session-ended': 7 }
     const accounts = [

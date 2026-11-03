@@ -20,7 +20,7 @@ try {
   page.on('pageerror', (error) => errors.push(error.message))
   await app.evaluate(({ ipcMain, dialog }, directory) => {
     const report = { build: 'bravebot fixture', configured: true, problem: null, model: 'bedrock-a', brave: false, bedrock: true,
-      providers: [{ name: 'OpenRouter', credential: 'missing' }, { name: 'Local', credential: 'not required' }],
+      providers: [{ name: 'OpenRouter', key: 'gateway:openrouter', credential: 'missing' }, { name: 'OpenRouter', key: 'gateway:openrouter-eu', credential: 'missing' }, { name: 'Local', key: 'gateway:local', credential: 'not required' }],
       selected: null, layers: [], overrides: [], managed: { path: null, keys: [] },
       network: { roots: [], problem: null, trustsNothing: false, proxy: null, authenticated: false, unusableProxy: null, noProxy: null } }
     const accounts = [
@@ -28,6 +28,7 @@ try {
       { way: 'bedrock', id: 'work', name: 'AWS Bedrock (work)', standing: 'signedIn', keyFrom: null, detail: null, command: null, canSignOut: true, host: null, canEnterKey: false },
       { way: 'gateway', id: 'openrouter', name: 'OpenRouter', standing: 'notSignedIn', keyFrom: null, detail: null, command: null, canSignOut: false, host: 'openrouter.ai', canEnterKey: true },
       { way: 'xai', id: null, name: 'xAI', standing: 'signedIn', keyFrom: 'stored', detail: null, command: null, canSignOut: true, host: null, canEnterKey: false },
+      { way: 'gateway', id: 'openrouter-eu', name: 'OpenRouter', standing: 'notSignedIn', keyFrom: null, detail: null, command: null, canSignOut: false, host: 'eu.openrouter.ai', canEnterKey: true },
     ]
     const model = (id, name, providerKey, provider) => ({ id, name, provider, providerKey, readsEffort: true, premium: false, contextWindow: 200000, capabilities: ['text', 'tools'] })
     const catalogue = { defaultModel: 'bedrock-a', warnings: [], models: [
@@ -86,7 +87,11 @@ try {
   await snap('01-bedrock')
 
   // A row not signed in shows its actions and no models; "Fix" on the status table chooses its row.
-  await settings.locator('[data-test="settings-provider-fix"]').click()
+  // Two gateways share a display name, so Fix names the service and not the name.
+  await settings.locator('[data-test="settings-provider-fix"]').nth(1).click()
+  await accounts.locator('[data-test="account-gateway:openrouter-eu"]').waitFor()
+  assert.equal(await tab('gateway:openrouter-eu').getAttribute('aria-selected'), 'true', 'Fix on the second gateway chooses the second gateway')
+  await settings.locator('[data-test="settings-provider-fix"]').first().click()
   await accounts.locator('[data-test="account-gateway:openrouter"]').waitFor()
   assert.equal(await tab('gateway:openrouter').getAttribute('aria-selected'), 'true', 'Fix chooses the account it names')
   await accounts.locator('[data-test="account-gateway:openrouter"] [data-test="account-enter-key"]').waitFor()

@@ -7,6 +7,7 @@ import { useSignIn, type Waiting } from '../use-sign-in'
 import { sameKeyTarget, useKeyEntry, type KeyResult } from '../use-key-entry'
 import { CopyButton } from './CopyButton'
 import { Modal } from './Modal'
+import { ModelWarnings } from './ModelWarnings'
 import { ProviderModels } from './ProviderModels'
 import { SIGN_IN_NAMES, SignInWaiting, signInSentence } from './SignInButton'
 
@@ -130,14 +131,15 @@ export function KeyResultAlert({ result, name }: { result: KeyResult; name: stri
  *
  * `refresh` reads the rows again when it changes. The window coming back reads them too, at most
  * once in `FOCUS_REFRESH_MS`, and not where an AWS Bedrock row is listed: reading that row runs
- * the AWS command-line tool. `pick` chooses the row of that name, for a link elsewhere on the page
- * that points at it.
+ * the AWS command-line tool. `pick` chooses the row of that service, for a link elsewhere on the page
+ * that points at it. A row is named by its service key (`accountProviderKey`), since two gateways
+ * may share a display name.
  */
 export function Accounts({ session, refresh, onChanged, pick }: {
   session?: string
   refresh: number
   onChanged: () => void
-  pick?: { name: string; asked: number } | null
+  pick?: { key: string; asked: number } | null
 }): React.JSX.Element {
   const [rows, setRows] = useState<AccountRow[] | null>(null)
   const [chosen, setChosen] = useState<string | null>(null)
@@ -150,6 +152,7 @@ export function Accounts({ session, refresh, onChanged, pick }: {
   const [leaving, setLeaving] = useState<AccountRow | null>(null)
   const [signingOut, setSigningOut] = useState(false)
   const lastRead = useRef(0)
+  const picked = useRef(0)
   const changed = useRef(onChanged)
   changed.current = onChanged
 
@@ -185,9 +188,12 @@ export function Accounts({ session, refresh, onChanged, pick }: {
     setChosen(rowKey(rows.find((row) => row.standing === 'signedIn') ?? rows[0]!))
   }, [rows, chosen])
   useEffect(() => {
-    if (!pick || !rows) return
-    const row = rows.find((each) => each.name === pick.name)
+    if (!pick || !rows || picked.current === pick.asked) return
+    const row = rows.find((each) => accountProviderKey(each) === pick.key)
     if (!row) return
+    // Each ask applies once. A later read of the rows must not take the selection back from a row
+    // the person has chosen since.
+    picked.current = pick.asked
     setChosen(rowKey(row))
     list.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(rowKey(row))}"]`)?.focus()
   }, [pick, rows])
@@ -244,6 +250,11 @@ export function Accounts({ session, refresh, onChanged, pick }: {
       role={ended.outcome === 'failed' ? 'alert' : 'status'} data-test="accounts-sign-in-result">{signInSentence(ended, endedName)}</Alert>}
     {keyed && <KeyResultAlert result={keyed} name={keyedName} />}
     {unread && <Alert type="warning" size="small" role="alert" data-test="accounts-unread">{t.uiAccountsUnread()}</Alert>}
+    {catalogue && catalogue.warnings.length > 0 && <div className="providers-warnings" data-test="providers-warnings">
+      <ModelWarnings warnings={catalogue.warnings} commands={catalogue.warningCommands} session={session}
+        onSignedIn={() => { void read(); setListed((n) => n + 1); changed.current() }} />
+      <Button size="small" kind="outline" onClick={() => setListed((n) => n + 1)} data-test="providers-warnings-retry">Try again</Button>
+    </div>}
     {rows && <div className="providers-panes">
       <ul ref={list} className="providers-list" role="listbox" aria-label={t.uiAccountsHeading()} data-test="providers-list"
         onKeyDown={(event) => {
