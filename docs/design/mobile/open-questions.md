@@ -1,12 +1,12 @@
 # Mobile prototype open questions
 
-Status: proposal with Q2 resolved for the first Rust block. This is the single record of unresolved decisions and choices awaiting validation. The [decision record](decisions-and-tradeoffs.md) holds settled choices and their reasons; the linked architecture and contract sections hold implementation requirements.
+Status: proposal. Q2 is resolved, and U1 is decided for host-launched clients. This is the single record of unresolved decisions and choices awaiting validation. The [decision record](decisions-and-tradeoffs.md) holds settled choices and their reasons; the linked architecture and contract sections hold implementation requirements.
 
 **Unresolved** means an answer is still needed. **Awaiting validation** means the plan has a proposed answer that needs evidence. Neither status establishes implemented behavior. Each entry names the capability that needs its answer; unrelated work can proceed.
 
 ## What can proceed
 
-Stages 1–2a are complete; Q2 records the placement of the view. U1 blocks real-session listener control; U2 and U3 block authenticated network exposure. The restricted stage-3d synthetic experiment can proceed under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). Device UI, real credentials, distribution, and dependency additions have the separate checkpoints below.
+Each question below names the capability that needs its answer. Work that does not depend on it can proceed. The restricted stage-3d synthetic experiment runs under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). See the [README](README.md) for what is built.
 
 ## Unresolved security decisions
 
@@ -129,7 +129,7 @@ These are not accepted risks or implementation details that can be skipped. The 
 ### Q8. How does the app know a target can list its sessions?
 
 - **Status:** unresolved.
-- **Question and reason:** the app asks for the session list on every change and does not read `TargetInfo.sessionList`. A client that reports `false`, such as the stdio client, rejects every request, the rejection is dropped, and the drawer says "No sessions yet." while a session is open. A failed request on a target that does list keeps the last list without saying so.
+- **Question and reason:** the app asks for the session list when the drawer opens, after a session is picked, and when what a row shows for the session on screen changes (its status, its waiting question, whether it has ended or has a prompt). It does not read `TargetInfo.sessionList`. A client that reports `false`, such as the stdio client, rejects every request, the rejection is dropped, and the drawer says "No sessions yet." while a session is open. A failed request on a target that does list keeps the last list without saying so.
 - **Current assumption:** the first target implements listing, so no gate is needed yet.
 - **Evidence needed:** read `sessionList` once from `describe()`, which can itself reject; hide the list or explain its absence when it is `false`; show a failed load differently from an empty list. Tests with a client that reports `false` and one whose list fails.
 - **Before:** a target built on the stdio client, or any target without listing.

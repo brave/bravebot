@@ -1,7 +1,5 @@
 # Client interface and prototype contract
 
-Status: stages 1–2a are complete: the Rust session view and the stdio TypeScript client in `packages/agent-client`, tested against a real `bravebot-rpc`. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
-
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
 ## Code location and reuse
@@ -117,8 +115,8 @@ A failed request carries an `outcome`: `rejected` when the request was refused a
 `unknown` when it may have reached the bridge (a lost connection, a failed write, a deadline, or the
 bridge reporting an `internal` error), so the
 caller must look at the current state before trying again. At most 256 requests wait for an answer at
-once and one request is at most 8 MiB; beyond that a request is refused before it is written. Cancel
-and close are exempt from the first limit, so a caller can always stop work. Parameters that cannot be
+once and one request line is at most 8 Mi characters; beyond that a request is refused before it is written. Cancel
+and close are exempt from the count of waiting requests, so a caller can always stop work. They are still subject to the size limit and the deadline. Parameters that cannot be
 written fail the request instead of throwing. A request
 unanswered past its deadline (30 seconds by default) ends the connection and stops the
 child, since its outcome cannot be known. Nothing is retried. The cleanup request sent after a
@@ -132,8 +130,10 @@ listeners, other sessions, the rest of the data being read, the request it belon
 shutdown. A diagnostic hook that throws does not lose the message being read.
 
 A startup that breaks the protocol (a malformed or out-of-order initial view, a repeated row id)
-refuses the session for good, even if a valid initial view follows. Startup trust questions are
-held only while a session is being created, and at most 64 sessions' worth are held, earliest first.
+refuses the session for good, even if a valid initial view follows. A startup trust question that
+arrives before the response naming its session is held only while a session is being created. Other
+events for an unknown session are dropped. At most 64 sessions' worth are held, earliest first, and
+at most 256 events for each.
 
 **Local program.** `scripts/local-client.ts` drives one fresh session from a terminal: it requires an
 explicit `--trust yes|no`, answers an approval only as `--decide approve|reject|prompt` says (a
@@ -200,7 +200,7 @@ Local host trust controls and embedded trust remain explicit typed capabilities.
 
 Local OS-user identity is not sufficient proof that a person controls a client: an approved unconfined command can run as the same user. Resolve the [local control boundary](architecture.md#local-control-boundary) before exposing live-session control. The initial local proof does not establish protection against same-user programs.
 
-Define and test the application allowlist before exposing the local listener; add remote field/kind restrictions before enabling remote clients. Do not reuse the broader Electron or Android prototype lists wholesale. The Android work at the [pinned revision](README.md#project-findings) provides input restrictions and Node source-consistency checks to build on; these do not test JNI or Kotlin runtime behavior. Assess their fit for the narrower remote API and add runtime integration coverage. The listener checks the connection role, authorized workspace/session, control epoch, and exact action target before dispatch.
+Define and test the application allowlist before exposing the local listener; add remote field/kind restrictions before enabling remote clients. Do not reuse the broader Electron or Android prototype lists wholesale. The Android work on [android-shell](README.md#current-mobile-status) provides input restrictions and Node source-consistency checks to build on; these do not test JNI or Kotlin runtime behavior. Assess their fit for the narrower remote API and add runtime integration coverage. The listener checks the connection role, authorized workspace/session, control epoch, and exact action target before dispatch.
 
 The initial remote operations are target description, authorized workspace/live-session listing, create, attach, detach, take control, send, supported replies, cancel, close, and message-status lookup. Their names are application operations, not arbitrary bridge method strings. Listing is scoped to explicit authorized project IDs; raw `session.list` across all directories is unavailable. Saved open, forks, watches, manifests, settings, hooks, permissions editing, diagnostics, file operations, exports, and raw bridge dispatch are denied.
 

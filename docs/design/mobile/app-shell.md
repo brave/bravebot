@@ -49,7 +49,7 @@ Opening a session means different things by target. Against a host it attaches t
 - Every field the [client contract](client-contract.md#first-non-stdio-listener-allowlist) lists for the kind is shown: the full command, the program it resolves to and where it runs for `run`; the host the request connects to, apart from the address as sent, for `fetch`; the path, effect, changes, credentials found and notes for `confirm`; the questions and offered choices for `ask`. A write of untrusted text carries a dashed warning band in words.
 - A card taller than its viewport scrolls and says "Scroll to read the rest before you approve" until the end is reached. Approve stays off until then, so a person cannot approve what is below the fold. Reject is always available.
 - Only the pending request can be answered, and a reply carries the request number the card showed. A reply for a request that is no longer on screen is refused by the client and the app shows the refusal.
-- A payload that does not read completely, or that names a request other than the pending one, is shown as unanswerable. Cancel is the only action, and it refuses the question. A question of an unsupported kind is handled the same way.
+- A payload that does not read completely, or that names a request other than the pending one, is shown as unanswerable. The card has no buttons; it says to cancel the turn, and the composer's Cancel control is the only way to refuse the question. A question of an unsupported kind is handled the same way.
 - A command is approved once and the reply never carries `remember`.
 - Every word of a card that came from the agent or from outside is drawn through the escaping text, including the program names and paths of a command, the headings and the choices of a question, and the labels a screen reader speaks. A question takes either a choice or typed text for each prompt: typing clears the choice and choosing clears the text, so what is shown is what is sent.
 
@@ -61,7 +61,7 @@ The composer is the desktop's two-tier object: a message box with a round send c
 |---|---|
 | `awaiting_trust` | The box is disabled, and the trust card is pinned above it. |
 | `idle`, `completed`, `failed`, `cancelled` | Send is available once there is text. |
-| `running`, `waiting` | The round control becomes a stop control labelled Cancel. The draft stays in the field. There is no queue. The control keeps its size, so nothing moves. |
+| `running`, `waiting` | The round control becomes a stop control labelled Cancel. The field stays editable so the draft can be written, but it cannot be sent. There is no queue. The control keeps its size, so nothing moves. |
 | `detached`, or a view that has `ended` | Disabled with the reason (closed, connection lost, sequence gap). No recovery is claimed. |
 
 ### Empty session
