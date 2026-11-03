@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useDelayedFlag } from '../hooks'
-import { Alert, Button, ProgressRing } from '../nala'
+import { Alert, Button } from '../nala'
 import { call } from '../request'
 import { showToast } from '../toasts'
 import { ConfirmDelete } from './ConfirmDelete'
 import { Modal } from './Modal'
 import { plural } from '../plural'
+import { Skeleton } from './Skeleton'
 
 /** What `session.purge` with `dryRun` answers: the records it would remove, and the ids it holds. */
 interface Plan {
@@ -61,7 +62,7 @@ export function PurgeProject({ directory, opened, onConfirm, onClose }: {
       actions={problem ? <Button kind="filled" onClick={onClose}>Close</Button> : undefined}>
       {problem
         ? <Alert type="error" size="small" role="alert">{problem}</Alert>
-        : <p role="status" className="dialog-busy" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Finding the chats…</p>}
+        : <Skeleton label="Finding the chats…" count={3} delayed={!showLoading} />}
     </Modal>
   )
 }

@@ -304,6 +304,95 @@ code.connector-summary { font: var(--type-code); overflow: hidden; text-overflow
   .account-row { grid-template-columns: var(--icon-hero) minmax(0, 1fr); grid-template-areas: "logo head" ". body" ". actions"; }
   .account-actions { justify-content: flex-start; margin-top: var(--leo-spacing-m); }
 }
+/* Providers: the accounts as a list on the left and the one chosen beside it, in one bordered box,
+   with the chosen account's models under its row. */
+.providers-panes {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+.providers-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-right: 1px solid var(--border-subtle);
+}
+.providers-item {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-l);
+  padding: var(--leo-spacing-l);
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background-color var(--motion-fast);
+}
+.providers-item:last-child { border-bottom: 0; }
+.providers-item:hover { background: var(--surface-hover); }
+.providers-item[aria-selected='true'] { background: var(--surface-app); }
+.providers-item:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.providers-item-logo { flex: none; width: var(--icon-account); height: var(--icon-account); --leo-icon-size: var(--icon-account); }
+.providers-item-text { display: flex; flex-direction: column; min-width: 0; }
+.providers-item-name { font: var(--type-body-strong); color: var(--ink-primary); overflow-wrap: anywhere; }
+/* A standing said as a line under the name, in the list and in the detail beside it. */
+.account-standing-line { font: var(--type-meta); }
+.account-standing-line.success { color: var(--status-success-ink); }
+.account-standing-line.tertiary { color: var(--ink-tertiary); }
+.account-standing-line.warning { color: var(--status-warning-ink); }
+.account-standing-line.error { color: var(--status-error-ink); }
+.account-head.stacked { flex-direction: column; align-items: flex-start; gap: 0; }
+.providers-detail { display: flex; flex-direction: column; min-width: 0; }
+.providers-detail > .account-list { border: 0; border-bottom: 1px solid var(--border-subtle); border-radius: 0; }
+.providers-detail > .account-list:last-child { border-bottom: 0; }
+.account-row.no-logo { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "head actions" "body body"; }
+.settings-card dd .settings-provider-fix { margin-inline-start: var(--leo-spacing-s); vertical-align: baseline; }
+
+.provider-models { display: flex; flex-direction: column; gap: var(--leo-spacing-l); padding: 0 var(--leo-spacing-xl) var(--leo-spacing-xl); }
+.provider-models-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--leo-spacing-xl);
+  margin: 0 calc(-1 * var(--leo-spacing-xl));
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  border-bottom: 1px solid var(--border-subtle);
+  font: var(--type-body);
+  color: var(--ink-primary);
+}
+.settings-card h4.provider-models-title { margin: var(--leo-spacing-m) 0 0; font: var(--type-title); }
+.provider-models-problem { display: flex; flex-direction: column; align-items: flex-start; gap: var(--leo-spacing-m); }
+.provider-model-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+/* Every row is one height, so moving one never moves the rows around it by more than a row. */
+.provider-model {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-l);
+  min-height: calc(var(--hit) + 2 * var(--leo-spacing-s));
+  padding: var(--leo-spacing-s) var(--leo-spacing-xl) var(--leo-spacing-s) var(--leo-spacing-s);
+  background: var(--surface-panel);
+}
+.provider-model + .provider-model { border-top: 1px solid var(--border-subtle); }
+.provider-model.dragging { position: relative; z-index: 1; background: var(--surface-raised); box-shadow: var(--shadow-raised); }
+.provider-model-handle { flex: none; display: inline-flex; cursor: grab; touch-action: none; }
+.provider-model.dragging .provider-model-handle { cursor: grabbing; }
+.provider-model-name { flex: 1; min-width: 0; font: var(--type-body); color: var(--ink-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.provider-hidden .provider-model-name { color: var(--ink-disabled); }
+@media (forced-colors: active) {
+  .providers-panes, .providers-list, .providers-item, .provider-model-list, .provider-model + .provider-model { border-color: CanvasText; }
+  .providers-item[aria-selected='true'] { outline: 2px solid Highlight; outline-offset: -2px; }
+}
+@media (max-width: 760px) {
+  .providers-panes { grid-template-columns: minmax(0, 1fr); }
+  .providers-list { border-right: 0; border-bottom: 1px solid var(--border-subtle); }
+}
+
 .account-command {
   display: flex;
   flex-wrap: wrap;

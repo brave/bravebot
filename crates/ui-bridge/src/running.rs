@@ -242,7 +242,12 @@ impl State {
             question_answers: Arc::default(),
             moments: None,
             roster: Arc::default(),
-            account: bravebot_agent::chatgpt::AccountSession::begin(),
+            // The ChatGPT account is sent one level for the whole of a session (BACKEND-22), so
+            // it begins with the level recorded when the session opens, as the terminal's does. A
+            // level picked later applies to the next session the account sees.
+            account: bravebot_agent::chatgpt::AccountSession::begin_with(
+                bravebot_session::store::load_effort(),
+            ),
         }
     }
 
@@ -535,6 +540,22 @@ pub(crate) mod built_in {
     use std::sync::Mutex;
 
     static SEEN: Mutex<Vec<(&'static str, String)>> = Mutex::new(Vec::new());
+    static LEVELS: Mutex<Vec<(&'static str, Option<&'static str>)>> = Mutex::new(Vec::new());
+
+    /// Note the effort level a `kind` of work was built asking for.
+    pub(crate) fn record_level(kind: &'static str, level: Option<bravebot_session::store::Effort>) {
+        if let Ok(mut levels) = LEVELS.lock() {
+            levels.push((kind, level.map(bravebot_session::store::Effort::as_str)));
+        }
+    }
+
+    /// Every level recorded so far.
+    pub(crate) fn levels() -> Vec<(&'static str, Option<&'static str>)> {
+        LEVELS
+            .lock()
+            .map(|levels| levels.clone())
+            .unwrap_or_default()
+    }
 
     /// Note that a `kind` of work, `"turn"` or `"manifest"`, was built in the session `identifier`.
     pub(crate) fn record(kind: &'static str, identifier: &str) {

@@ -295,7 +295,6 @@
   width: var(--hit);
   height: var(--hit);
   border-radius: var(--radius-control);
-  --leo-progressring-size: var(--icon-control);
   --leo-progressring-stroke-width: 2px;
   --leo-progressring-color: var(--ink-tertiary);
   /* The ring is 16px and sits the toolbar's gap from its neighbours. The rest of the 28px target
@@ -304,6 +303,7 @@
 }
 .context-meter:hover { background: var(--surface-hover); }
 .context-meter:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+.context-meter leo-progressring { --leo-progressring-size: var(--icon-control); }
 .context-meter.high { --leo-progressring-color: var(--status-warning); }
 .context-meter.full { --leo-progressring-color: var(--status-error); }
 .meter-ring { display: grid; }

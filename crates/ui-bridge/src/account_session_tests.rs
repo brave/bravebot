@@ -38,6 +38,16 @@ fn identifier_of(state: &Arc<Mutex<State>>) -> String {
 
 /// One turn of the session `state` holds, in the worker a `turn.send` starts.
 fn take_a_turn(state: &Arc<Mutex<State>>, workspace: &Workspace, turn: usize) {
+    take_a_turn_at(state, workspace, turn, None);
+}
+
+/// The same, asking for `effort`.
+fn take_a_turn_at(
+    state: &Arc<Mutex<State>>,
+    workspace: &Workspace,
+    turn: usize,
+    effort: Option<bravebot_session::store::Effort>,
+) {
     let (_answers, receiver) = mpsc::channel();
     work(Work {
         emitter: Emitter::new(Box::new(|_| {})),
@@ -47,6 +57,7 @@ fn take_a_turn(state: &Arc<Mutex<State>>, workspace: &Workspace, turn: usize) {
         config: config(),
         workspace: workspace.clone(),
         attribution: Default::default(),
+        effort,
         output_cap: None,
         download_cap: None,
         deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
@@ -77,6 +88,16 @@ fn take_a_turn(state: &Arc<Mutex<State>>, workspace: &Workspace, turn: usize) {
 
 /// One manifest run in the session `state` holds, in the worker a `manifest.run` starts.
 fn walk_a_run(state: &Arc<Mutex<State>>, workspace: &Workspace, run: usize) {
+    walk_a_run_at(state, workspace, run, None);
+}
+
+/// The same, asking for `effort`.
+fn walk_a_run_at(
+    state: &Arc<Mutex<State>>,
+    workspace: &Workspace,
+    run: usize,
+    effort: Option<bravebot_session::store::Effort>,
+) {
     let (_answers, receiver) = mpsc::channel();
     walk(Walk {
         emitter: Emitter::new(Box::new(|_| {})),
@@ -85,6 +106,7 @@ fn walk_a_run(state: &Arc<Mutex<State>>, workspace: &Workspace, run: usize) {
         state: Arc::clone(state),
         config: config(),
         attribution: Default::default(),
+        effort,
         output_cap: None,
         deadlines: bravebot_agent::exec::Deadlines::BUILT_IN,
         sandbox: bravebot_sandbox::SandboxMode::default(),
@@ -271,4 +293,29 @@ fn a_fresh_resumed_and_forked_state_start_the_unsaved_fields_empty() {
     assert_ne!(identifiers[0], identifiers[1]);
     assert_ne!(identifiers[0], identifiers[2]);
     assert_ne!(identifiers[1], identifiers[2]);
+}
+
+/// The level a window's turn and plan run resolve is the level the task they hand over asks for, so
+/// a level picked in the window's model picker reaches the request. The regression it rejects is a
+/// worker that resolves a level and builds the task without it, which is what every desktop turn did
+/// before the window offered one.
+#[test]
+fn a_desktop_turn_and_plan_run_ask_for_the_level_they_were_given() {
+    use bravebot_session::store::Effort;
+    if !profile::in_isolated_profile() {
+        return;
+    }
+    let (_directory, workspace, trust) = project();
+    let state = Arc::new(Mutex::new(State::fresh(trust)));
+    take_a_turn_at(&state, &workspace, 1, Some(Effort::Xhigh));
+    walk_a_run_at(&state, &workspace, 1, Some(Effort::Low));
+    take_a_turn_at(&state, &workspace, 2, None);
+    assert_eq!(
+        built_in::levels(),
+        [
+            ("turn", Some("xhigh")),
+            ("manifest", Some("low")),
+            ("turn", None)
+        ]
+    );
 }

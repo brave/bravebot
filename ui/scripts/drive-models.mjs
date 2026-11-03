@@ -27,7 +27,7 @@ try {
     const directory = '/tmp/bravebot-model-picker-project'
     const rows = ['A', 'B'].map((id) => ({ id, directory, title: `Conversation ${id}`,
       project: 'model-picker-project', branch: null, updated: 1, bytes: 1 }))
-    globalThis.modelTest = { sent: [], fail: false, loading: false }
+    globalThis.modelTest = { sent: [], fail: false, loading: false, effort: null, efforts: [] }
     // The native picker opens a project; it is answered here rather than through the channel.
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] })
     ipcMain.removeHandler('bravebot:request')
@@ -36,10 +36,16 @@ try {
         if (globalThis.modelTest.fail) return { error: { code: 'offline', message: 'Model listing is offline.' } }
         if (globalThis.modelTest.loading) await new Promise((resolve) => setTimeout(resolve, delay))
         return { ok: { defaultModel, warnings: [warning.sentence], warningCommands: [warning.command], models: [
-          { id: defaultModel, name: 'Claude Haiku 4.5', provider: 'OpenRouter', premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools'] },
-          { id: 'openrouter/anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'OpenRouter', premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools', 'reasoning'] },
-          { id: 'brave-model', name: 'Brave model', provider: 'Brave', premium: false, contextWindow: 24000 },
+          { id: defaultModel, name: 'Claude Haiku 4.5', provider: 'OpenRouter', providerKey: 'gateway:openrouter', readsEffort: true, premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools'] },
+          { id: 'openrouter/anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'OpenRouter', providerKey: 'gateway:openrouter', readsEffort: true, premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools', 'reasoning'] },
+          { id: 'brave-model', name: 'Brave model', provider: 'Brave', providerKey: 'brave', readsEffort: false, premium: false, contextWindow: 24000 },
         ] } }
+      }
+      if (method === 'effort.get') return { ok: { recorded: globalThis.modelTest.effort, inForce: globalThis.modelTest.effort, outranked: false } }
+      if (method === 'effort.set') {
+        globalThis.modelTest.effort = params?.level ?? null
+        globalThis.modelTest.efforts.push(params?.level ?? null)
+        return { ok: { recorded: globalThis.modelTest.effort } }
       }
       if (method === 'session.list') return { ok: { sessions: rows } }
       if (method === 'session.new') {
@@ -88,8 +94,13 @@ try {
   await trigger.click()
   await page.locator('.model-popover').waitFor({ state: 'visible' })
   assert(Date.now() - opened < LISTING_DELAY, 'the menu is drawn before the listing arrives')
-  await page.locator('.model-notices p.model-status:not([data-delayed])').filter({ hasText: 'Loading available models' }).waitFor()
-  assert(Date.now() - opened < LISTING_DELAY, 'the loading line is drawn before the listing arrives')
+  // Placeholder rows, not a spinner, stand in for the models until the listing arrives.
+  await page.locator('[data-test="model-skeleton"]:not([data-delayed])').waitFor()
+  const rail = await page.locator('[data-test="model-rail-all"] > leo-icon').boundingBox()
+  assert.deepEqual([Math.round(rail.width), Math.round(rail.height)], [20, 20], 'the rail\'s marks are 20px')
+  assert(Date.now() - opened < LISTING_DELAY, 'the placeholder rows are drawn before the listing arrives')
+  assert.equal(await page.locator('.model-menu leo-progressring').count(), 0, 'the picker draws no spinner while it loads')
+  await page.screenshot({ path: '/tmp/bravebot-model-skeleton.png' })
   assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('model-search')), true,
     'the search field is focused before the listing arrives')
   assert.deepEqual(await page.locator('.model-menu').getByRole('option').evaluateAll((rows) => rows.map((row) => row.getAttribute('value'))),
@@ -103,12 +114,11 @@ try {
   await page.getByRole('option', { name: /Claude Sonnet/ }).waitFor()
   assert(Date.now() - opened >= LISTING_DELAY, 'the rows arrive with the listing')
   assert.equal(await page.locator('.model-menu').getByRole('option').count(), 1, 'the typed words narrow the rows that arrive')
-  assert.equal(await page.locator('.model-notices p.model-status', { hasText: 'Loading available models' }).count(), 0,
-    'the loading line goes when the rows arrive')
+  assert.equal(await page.locator('[data-test="model-skeleton"]').count(), 0, 'the placeholder rows go when the rows arrive')
   await page.getByRole('combobox', { name: 'Search models' }).press('Escape')
   await page.locator('.model-popover').waitFor({ state: 'hidden' })
   await app.evaluate(() => { globalThis.modelTest.loading = false })
-  console.log('PASS: the picker opens and shows its loading line before the listing arrives, and the typed words narrow the rows that arrive')
+  console.log('PASS: the picker opens and shows placeholder rows before the listing arrives, and the typed words narrow the rows that arrive')
 
   // A warning the model list carries is drawn in the picker with the command it names as code, at the
   // window's size and at its minimum, in the code type role and inside the menu.
@@ -119,7 +129,9 @@ try {
     await trigger.click()
     const warning = page.locator('.model-notices p.model-status').filter({ hasText: 'Could not load models from ChatGPT' })
     await warning.waitFor()
-    assert.equal(await warning.innerText(), WARNING, `${where}: the warning is the sentence the bridge sent`)
+    // The window can start this sign-in itself, so "Sign in" follows the sentence (XAI-19).
+    assert.equal((await warning.innerText()).replace(/\s*Sign in$/, ''), WARNING, `${where}: the warning is the sentence the bridge sent`)
+    assert.equal(await warning.getByRole('button', { name: 'Sign in', exact: true }).count(), 1, `${where}: the warning offers the sign-in it names`)
     assert.equal(await warning.locator('code').count(), 1, `${where}: the command is drawn as code`)
     const code = warning.locator('code')
     assert.equal(await code.innerText(), WARNING_COMMAND, `${where}: the code is the command`)
@@ -136,10 +148,16 @@ try {
     const box = await code.boundingBox()
     const popover = await page.locator('.model-popover').boundingBox()
     assert(box && popover && box.x >= popover.x - 1 && box.x + box.width <= popover.x + popover.width + 1, `${where}: the command stays inside the menu`)
+    // The command can wrap, so its first line is probed rather than the box around both lines,
+    // whose middle can be the button after it.
     assert.equal(await code.evaluate((element) => {
-      const at = element.getBoundingClientRect()
+      const at = element.getClientRects()[0]
       return element.contains(document.elementFromPoint(at.x + at.width / 2, at.y + at.height / 2))
     }), true, `${where}: nothing is drawn over the command`)
+    assert.equal(await page.locator('.model-footnote').evaluate((element) => {
+      const at = element.getBoundingClientRect()
+      return element.contains(document.elementFromPoint(at.x + at.width / 2, at.y + at.height / 2))
+    }), true, `${where}: the menu fits the room it has, footnote and all`)
     await page.screenshot({ path: `/tmp/bravebot-model-warning-${where === 'the minimum size' ? 'minimum' : 'normal'}.png` })
     await page.getByRole('combobox', { name: 'Search models' }).press('Escape')
     await page.locator('.model-popover').waitFor({ state: 'hidden' })
@@ -154,8 +172,6 @@ try {
   await sonnet.hover()
   assert.equal(await page.locator('.model-popover').isVisible(), true, 'hovering a model keeps the menu open')
   assert.equal(await sonnet.isVisible(), true)
-  assert.deepEqual(await sonnet.locator('.model-capability').evaluateAll((badges) => badges.map((badge) => badge.getAttribute('aria-label'))), ['Text', 'Tools'])
-  assert.equal(await page.getByRole('option', { name: /Brave model/ }).locator('.model-capability').count(), 0)
   const search = page.getByRole('combobox', { name: 'Search models' })
   const models = page.locator('.model-menu')
   await search.fill('VISION')
@@ -173,94 +189,105 @@ try {
   assert.match(await trigger.getAttribute('aria-label'), /Sonnet|sonnet/)
   assert.equal(await page.locator('.model-current').innerText(), 'Claude Sonnet 4.5')
 
-  // Collapsible provider sections: ArrowLeft collapses, ArrowRight expands.
+  // The rail: All lists every service's models with each row's mark, a service lists its own
+  // without one, and a search spans every service whichever is chosen.
   await trigger.click()
   await page.getByRole('option', { name: /Claude Haiku/ }).waitFor()
-  // All three models visible: 2 OpenRouter + 1 Brave
-  assert.equal(await models.getByRole('option').count(), 3, 'all models visible on open')
-  // Provider groups are present as collapsible buttons
-  const openrouterGroup = page.locator('[data-test="model-group-OpenRouter"]')
-  const braveGroup = page.locator('[data-test="model-group-Brave"]')
-  await openrouterGroup.waitFor()
-  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'OpenRouter group starts expanded')
-  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'true', 'Brave group starts expanded')
-  // Refusal: ArrowLeft/Right with a non-empty query must not collapse any section.
+  const title = page.locator('[data-test="model-list-title"]')
+  const marks = models.locator('[data-test="model-provider-mark"]')
+  assert.equal(await models.getByRole('option').count(), 3, 'All lists every service\'s models')
+  assert.equal(await title.innerText(), 'All models')
+  assert.equal(await marks.count(), 3, 'every row under All carries its service\'s mark')
+  assert.deepEqual(await page.locator('[data-test="model-rail"] leo-button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('data-test'))),
+    ['model-rail-all', 'model-rail-gateway:openrouter', 'model-rail-brave'], 'the rail is All, then each service that has a model')
+  assert.equal(await page.locator('[data-test="model-rail-all"]').getAttribute('aria-pressed'), 'true', 'the picker opens on All')
+  await page.locator('[data-test="model-rail-brave"]').click()
+  // Leo's button hands its click on a tick later, so the list is waited for rather than read at once.
+  await page.waitForFunction(() => document.querySelector('[data-test="model-list-title"]')?.textContent === 'Brave')
+  assert.equal(await title.innerText(), 'Brave')
+  // The next open starts on the service this one was left on.
+  await search.press('Escape')
+  await page.locator('.model-popover').waitFor({ state: 'hidden' })
+  await trigger.click()
+  await page.waitForFunction(() => document.querySelector('[data-test="model-list-title"]')?.textContent === 'Brave', null, { timeout: 3000 })
+    .catch(() => assert.fail('the picker opens on the service it was closed on'))
+  assert.equal(await page.locator('[data-test="model-rail-brave"]').getAttribute('aria-pressed'), 'true')
+  await page.getByRole('option', { name: /Brave model/ }).waitFor()
+  assert.deepEqual(await models.getByRole('option').evaluateAll((rows) => rows.map((row) => row.getAttribute('value'))), ['brave-model'], 'a service lists its own models')
+  assert.equal(await marks.count(), 0, 'one service\'s rows carry no mark')
   await search.fill('sonnet')
+  assert.equal(await models.getByRole('option').count(), 1, 'a search finds a model of a service other than the one chosen')
+  assert.equal(await title.innerText(), 'Results')
+  assert.equal(await marks.count(), 1, 'a search\'s rows carry their mark')
+  // With text in the field ArrowLeft moves the caret and not the highlight.
   const innerInput = page.locator('.model-search').locator('input')
-  // Position caret at end to give ArrowLeft room to move.
   await innerInput.evaluate((el) => { el.selectionStart = el.selectionEnd = el.value.length })
   const caretBefore = await innerInput.evaluate((el) => el.selectionStart)
   await search.press('ArrowLeft')
-  const caretAfter = await innerInput.evaluate((el) => el.selectionStart)
-  assert.ok(caretAfter < caretBefore, 'ArrowLeft with a query moves the caret rather than collapsing a section')
-  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'query present: ArrowLeft leaves sections expanded')
-  await search.press('ArrowRight')
-  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'query present: ArrowRight leaves sections expanded')
-  // Refusal: Enter with a collapsed section must not choose a model.
+  assert.ok(await innerInput.evaluate((el) => el.selectionStart) < caretBefore, 'ArrowLeft with a query moves the caret')
+  assert.equal(await page.locator('.model-rail-item.active').count(), 0, 'ArrowLeft with a query leaves the rail alone')
   await search.fill('')
-  await search.press('ArrowDown') // Sonnet is first (recently chosen)
-  await search.press('End')       // jump to Brave model (last row)
-  await braveGroup.click()        // collapse Brave so Brave model is hidden
-  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
-  const labelBefore = await trigger.getAttribute('aria-label')
-  await search.press('Enter')     // active row is collapsed — should be ignored
-  assert.equal(await page.locator('.model-popover').isVisible(), true, 'Enter on a collapsed row leaves the menu open')
-  assert.equal(await trigger.getAttribute('aria-label'), labelBefore, 'Enter on a collapsed row does not change the model')
-  await braveGroup.click()        // expand again for the rest of the test
-  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length === 3)
-  // ArrowLeft on a row collapses its provider section. Home puts the highlight
-  // on the first visible row (Sonnet, OpenRouter) regardless of prior state.
-  await search.press('Home')
+  // Leo hands the field's value on a tick later, so the cleared search is waited for before a key
+  // that means something else with text in the field.
+  await page.waitForFunction(() => document.querySelector('[data-test="model-list-title"]')?.textContent === 'Brave')
+  // With the field empty ArrowLeft reaches the rail, where ArrowUp chooses the service above.
   await search.press('ArrowLeft')
-  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
-  assert.equal(await models.getByRole('option').count(), 1, 'ArrowLeft collapses the active provider, hiding its rows')
-  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'false', 'OpenRouter group is now collapsed')
-  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'true', 'Brave group remains expanded')
-  // ArrowRight on a collapsed section expands it
+  await page.locator('.model-rail-item.active').waitFor()
+  await search.press('ArrowUp')
+  await page.waitForFunction(() => document.querySelector('[data-test="model-list-title"]')?.textContent === 'OpenRouter')
+  await search.press('ArrowUp')
+  await page.waitForFunction(() => document.querySelector('[data-test="model-list-title"]')?.textContent === 'All models', null, { timeout: 3000 })
+    .catch(() => assert.fail('ArrowUp in the rail chooses the entry above'))
+  assert.equal(await page.locator('[data-test="model-rail-all"]').getAttribute('aria-pressed'), 'true', 'the entry chosen is pressed')
+  assert.equal(await models.getByRole('option').count(), 3)
   await search.press('ArrowRight')
-  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length === 3)
-  assert.equal(await models.getByRole('option').count(), 3, 'ArrowRight expands the collapsed provider section')
-  assert.equal(await openrouterGroup.getAttribute('aria-expanded'), 'true', 'OpenRouter group is expanded again')
-  // Clicking a provider heading collapses it
-  await braveGroup.click()
-  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
-  assert.equal(await models.getByRole('option').count(), 2, 'clicking a provider heading collapses it')
-  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'false', 'Brave group collapsed by click')
-  // Clicking again expands it
-  await braveGroup.click()
-  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length === 3)
-  assert.equal(await models.getByRole('option').count(), 3, 'clicking again expands the section')
   // PageDown / PageUp / Home / End: with 3 rows and PAGE_SIZE 6, PageDown from row 0 clamps to the last row.
   await search.press('Home')
   await search.press('PageDown')
-  // After Home then PageDown the highlight must be on the last visible row (Brave model, index 2).
-  assert.match(
-    await page.locator('.model-menu leo-option.active').innerText(),
-    /Brave model/,
-    'PageDown from first row clamps to last row',
-  )
-  // PageUp from last row clamps back to first row (Sonnet was chosen, ranks first).
+  assert.match(await page.locator('.model-menu leo-option.active').innerText(), /Brave model/, 'PageDown from the first row clamps to the last row')
   await search.press('PageUp')
-  assert.match(
-    await page.locator('.model-menu leo-option.active').innerText(),
-    /Claude Sonnet/,
-    'PageUp from last row clamps to first row',
-  )
+  assert.match(await page.locator('.model-menu leo-option.active').innerText(), /Claude Haiku/, 'PageUp from the last row clamps to the first row')
   await search.press('End')
-  assert.match(
-    await page.locator('.model-menu leo-option.active').innerText(),
-    /Brave model/,
-    'End key lands on last visible row',
-  )
-  // Search clears collapsed state
-  await braveGroup.click() // collapse Brave
-  await page.waitForFunction(() => document.querySelectorAll('.model-menu leo-option').length < 3)
-  await search.fill('a') // any search
-  await page.waitForFunction(() => document.querySelector('[data-test="model-group-Brave"]')?.getAttribute('aria-expanded') !== 'false')
-  assert.equal(await braveGroup.getAttribute('aria-expanded'), 'true', 'search resets collapsed state')
+  assert.match(await page.locator('.model-menu leo-option.active').innerText(), /Brave model/, 'End lands on the last row')
+  // A click chooses a model and leaves the menu open for the level.
+  await page.getByRole('option', { name: /Claude Haiku/ }).click()
+  assert.equal(await page.locator('.model-popover').isVisible(), true, 'a click on a model keeps the menu open')
+  await page.waitForFunction(() => document.querySelector('.model-trigger')?.getAttribute('aria-label')?.includes('Haiku'))
+  await page.getByRole('option', { name: /Claude Sonnet/ }).click()
+  await page.waitForFunction(() => document.querySelector('.model-trigger')?.getAttribute('aria-label')?.includes('Sonnet'))
+  console.log('PASS: the rail lists every service or one, rows carry marks only beside other services, a search spans every service, and a click keeps the menu open')
+
+  // Reasoning: the recorded level is checked, a pick records it where `/effort` does, Default asks
+  // for none, and a model that takes no level shows the column but records nothing.
+  const level = (name) => page.locator(`[data-test="model-effort-${name}"]`)
+  assert.equal(await level('default').getAttribute('aria-checked'), 'true', 'nothing recorded is Default')
+  await level('xhigh').click()
+  await page.waitForFunction(() => document.querySelector('[data-test="model-effort-xhigh"]')?.getAttribute('aria-checked') === 'true')
+  assert.equal(await app.evaluate(() => globalThis.modelTest.effort), 'xhigh', 'a pick is recorded')
+  assert.equal(await page.locator('.model-popover').isVisible(), true, 'a level keeps the menu open')
+  await search.press('ArrowRight')
+  await search.press('ArrowUp')
+  await search.press('Enter')
+  await page.waitForFunction(() => document.querySelector('[data-test="model-effort-high"]')?.getAttribute('aria-checked') === 'true')
+  assert.equal(await app.evaluate(() => globalThis.modelTest.effort), 'high', 'Enter in the Reasoning column records the level highlighted')
+  await search.press('ArrowLeft')
+  await level('default').click()
+  await page.waitForFunction(() => document.querySelector('[data-test="model-effort-default"]')?.getAttribute('aria-checked') === 'true')
+  assert.equal(await app.evaluate(() => globalThis.modelTest.effort), null, 'Default removes the record')
+  await page.getByRole('option', { name: /Brave model/ }).click()
+  await page.locator('[data-test="model-effort-note"]').filter({ hasText: 'takes no reasoning level' }).waitFor()
+  assert.equal(await level('low').getAttribute('aria-disabled'), 'true', 'a model that takes no level locks the column')
+  const recorded = await app.evaluate(() => globalThis.modelTest.efforts.length)
+  // Forced past the disabled state, which is what a person's click on the row meets.
+  await level('low').click({ force: true })
+  await page.waitForTimeout(200)
+  assert.equal(await app.evaluate(() => globalThis.modelTest.efforts.length), recorded, 'a locked column records nothing')
+  await page.screenshot({ path: '/tmp/bravebot-model-reasoning.png' })
+  await page.getByRole('option', { name: /Claude Sonnet/ }).click()
+  await page.waitForFunction(() => document.querySelector('.model-trigger')?.getAttribute('aria-label')?.includes('Sonnet'))
   await search.press('Escape')
   await page.locator('.model-popover').waitFor({ state: 'hidden' })
-  console.log('PASS: collapsible provider sections (ArrowLeft/ArrowRight/click), PageDown, and search resets collapse')
+  console.log('PASS: the Reasoning column records a level by click and by keyboard, Default removes it, and a model that takes none locks it')
   await page.screenshot({ path: '/tmp/bravebot-model-label.png' })
 
   const entry = page.locator(COMPOSER_INPUT)
@@ -273,7 +300,9 @@ try {
   assert.equal(await entry.inputValue(), 'Use this conversation’s selected model\nOn a second line')
   assert.equal(await app.evaluate(() => globalThis.modelTest.sent.length), 0)
   await entry.press('Enter')
-  assert.equal(await trigger.evaluate((host) => host.shadowRoot?.querySelector('button')?.disabled), true)
+  // Leo writes the disabled state into its shadow root a tick after the render that set it.
+  await page.waitForFunction(() => document.querySelector('.model-trigger')?.shadowRoot?.querySelector('button')?.disabled === true, null, { timeout: 3000 })
+    .catch(() => assert.fail('the picker is disabled while the turn runs'))
   const sent = await app.evaluate(() => globalThis.modelTest.sent)
   assert.equal(sent[0].model, 'openrouter/anthropic/claude-sonnet-4.5')
   assert.equal(sent[0].prompt, 'Use this conversation’s selected model\nOn a second line')
@@ -382,9 +411,16 @@ try {
   assert.equal(stored.model, null)
   assert.equal(stored.avatar, 'v4:diamond/cyan-indigo')
   assert.equal(await botRow.locator('[data-avatar]').getAttribute('data-avatar'), chosenFace)
-  // Opening the bot opens its conversation in its home folder, and the composer there picks the
-  // bot's model.
-  await botRow.locator(BOT_OPEN_BUTTON).click()
+  // Choosing the bot's row, away from its face, squashes the face as a press on it does, and letting
+  // go opens the bot. Opening it opens its conversation in its home folder, and the composer there
+  // picks the bot's model.
+  const squashes = () => botRow.locator('svg').first().evaluate((svg) => svg.getAnimations().filter((each) => each.effect?.getComputedTiming().fill === 'forwards').length)
+  const before = await squashes()
+  const name = await botRow.locator('.bot-name').boundingBox()
+  await page.mouse.move(name.x + name.width / 2, name.y + name.height / 2)
+  await page.mouse.down()
+  assert.ok(await squashes() > before, 'pressing the row squashes the face')
+  await page.mouse.up()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
   await page.getByRole('dialog').waitFor({ state: 'hidden' })
   await page.locator('[data-test="bot-greeting"]').waitFor()
@@ -433,7 +469,7 @@ try {
   await search.fill('sonnet')
   await search.press('Enter')
   await page.waitForFunction(async () => (await window.bravebot.readBots())[0]?.model === 'openrouter/anthropic/claude-sonnet-4.5')
-  await page.waitForFunction(() => /sonnet/.test(document.querySelector('.composer .model-trigger')?.getAttribute('aria-label') ?? ''))
+  await page.waitForFunction(() => /sonnet/i.test(document.querySelector('.composer .model-trigger')?.getAttribute('aria-label') ?? ''))
   await botTrigger.click()
   await search.fill('haiku')
   await search.press('Enter')
@@ -444,7 +480,7 @@ try {
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
   await page.getByRole('dialog').waitFor({ state: 'hidden' })
   await page.locator('[data-test="bot-greeting"]').waitFor()
-  await page.waitForFunction(() => /haiku/.test(document.querySelector('.composer .model-trigger')?.getAttribute('aria-label') ?? ''))
+  await page.waitForFunction(() => /haiku/i.test(document.querySelector('.composer .model-trigger')?.getAttribute('aria-label') ?? ''))
   await page.locator(COMPOSER_INPUT).fill('Use the saved bot model')
   await page.locator(COMPOSER_SEND).click()
   await page.waitForFunction(() => document.querySelector('.composer .model-trigger')?.shadowRoot?.querySelector('button')?.disabled)

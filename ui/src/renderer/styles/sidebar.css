@@ -174,8 +174,8 @@
   height: var(--icon-control);
   --leo-icon-size: var(--icon-control);
 }
+.session-status:has(.session-spinner) { width: var(--spinner); height: var(--spinner); }
 .session-spinner {
-  --leo-progressring-size: 12px;
   --leo-progressring-stroke-width: 2px;
 }
 /* Leo's dot is a radius-2 circle in a 24 box; at 48 it is the 8px mark a status wants. The box

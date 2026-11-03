@@ -750,7 +750,7 @@ test('the code in a failure card, a narration and a picker warning is set in the
   for (const [file, surface, selector] of [
     ['cards.css', '.error-card', '.error-card p code'],
     ['transcript.css', '.plan-detail', '.plan-ended .plan-detail code'],
-    ['menus.css', '.model-status', '.model-status code'],
+    ['models.css', '.model-status', '.model-status code'],
     ['activity.css', '.narration', '.narration code'],
   ]) {
     const setting = rules.filter((rule) => 'font' in rule.declarations || 'font-family' in rule.declarations || 'font-size' in rule.declarations)

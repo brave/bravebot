@@ -67,9 +67,9 @@ export const MODELS: ModelCatalogue = {
   defaultModel: 'sample/fast',
   warnings: [],
   models: [
-    { id: 'sample/fast', name: 'Fast model', provider: 'Sample', premium: false, contextWindow: 200_000, capabilities: ['text', 'tools'] },
-    { id: 'sample/deep', name: 'Deep model', provider: 'Sample', premium: true, contextWindow: 1_000_000, capabilities: ['text', 'tools'] },
-    { id: 'other/small', name: 'Small model', provider: 'Other', premium: false, contextWindow: 32_000, capabilities: ['text'] },
+    { id: 'sample/fast', name: 'Fast model', provider: 'Sample', providerKey: 'gateway:sample', readsEffort: true, premium: false, contextWindow: 200_000, capabilities: ['text', 'tools'] },
+    { id: 'sample/deep', name: 'Deep model', provider: 'Sample', providerKey: 'gateway:sample', readsEffort: true, premium: true, contextWindow: 1_000_000, capabilities: ['text', 'tools'] },
+    { id: 'other/small', name: 'Small model', provider: 'Other', providerKey: 'gateway:other', readsEffort: false, premium: false, contextWindow: 32_000, capabilities: ['text'] },
   ],
 }
 
