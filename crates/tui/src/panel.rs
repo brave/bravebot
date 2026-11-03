@@ -475,10 +475,9 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
         let first = body.len() - count;
         targets.extend((first..first + count).map(|row| Place::on_row(row, Target::Languages)));
     }
-    if !session.servers.started.is_empty() {
-        let rows: Vec<_> = session
-            .servers
-            .started
+    let offered = session.servers.offered();
+    if !offered.is_empty() {
+        let rows: Vec<_> = offered
             .iter()
             .map(|alias| {
                 row(
@@ -1274,6 +1273,46 @@ mod tests {
         assert_eq!(
             target_at(&session, short, short.y + at("notes"), inside),
             None
+        );
+    }
+
+    /// PANEL-14. A server whose list the person answered no to is running and offers the model
+    /// nothing, so it is not listed, and the section goes with the last. Rejects listing every started
+    /// server, which tells a person who declined a server's tools that it is still part of the
+    /// session, and a heading left over an empty section.
+    #[test]
+    fn a_server_whose_tools_were_declined_is_not_listed_and_the_section_goes_with_the_last() {
+        let area = Rect::new(84, 0, WIDTH, 40);
+        let drawn = |session: &Session| -> Vec<String> {
+            lines(session, area.width, area.height)
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        };
+        let mut session = Session::new("none");
+
+        session.servers = crate::mcp_command::tests::holding_a_list_answered(true).servers;
+        let rows = drawn(&session);
+        assert!(
+            rows.iter().any(|row| row.contains(t!(panel_mcp_servers))),
+            "{rows:?}"
+        );
+        assert!(rows.iter().any(|row| row.contains("weather")), "{rows:?}");
+
+        session.servers = crate::mcp_command::tests::holding_a_list_answered(false).servers;
+        assert_eq!(
+            session.servers.started,
+            ["weather"],
+            "the server is still running"
+        );
+        let rows = drawn(&session);
+        assert!(
+            rows.iter().all(|row| !row.contains("weather")),
+            "a declined server is listed: {rows:?}"
+        );
+        assert!(
+            rows.iter().all(|row| !row.contains(t!(panel_mcp_servers))),
+            "an empty section kept its heading: {rows:?}"
         );
     }
 

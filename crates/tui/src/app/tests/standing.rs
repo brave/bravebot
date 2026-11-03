@@ -148,6 +148,7 @@ enum Kind {
     Block,
     Words,
     Queued,
+    Discard,
     Footer,
     Call,
     Delegate,
@@ -164,12 +165,13 @@ enum Kind {
     SessionsScreen,
 }
 
-const KINDS: [Kind; 19] = [
+const KINDS: [Kind; 20] = [
     Kind::Back,
     Kind::Reply,
     Kind::Block,
     Kind::Words,
     Kind::Queued,
+    Kind::Discard,
     Kind::Footer,
     Kind::Call,
     Kind::Delegate,
@@ -193,6 +195,7 @@ fn kind_of(hit: Hit) -> Kind {
         Hit::Block(..) => Kind::Block,
         Hit::Words(_) => Kind::Words,
         Hit::Queued(_) => Kind::Queued,
+        Hit::Discard(_) => Kind::Discard,
         Hit::Footer(_) => Kind::Footer,
         Hit::Call(_) => Kind::Call,
         Hit::Delegate(_) => Kind::Delegate,
@@ -319,6 +322,9 @@ fn expected(name: &str) -> (Kind, Stands) {
         "the marker that leads a reply" => (Kind::Reply, A_TARGET_OF_THE_TRANSCRIPT),
         "the word that copies a fenced block" => (Kind::Block, A_TARGET_OF_THE_TRANSCRIPT),
         "a prompt waiting behind a turn" => (Kind::Queued, A_ROW_OF_THE_PLAIN_FRAME),
+        "the word that removes a waiting prompt" | "the word that removes every waiting prompt" => {
+            (Kind::Discard, A_ROW_OF_THE_PLAIN_FRAME)
+        }
         "the way back of a delegate's view" | "the sentence that closes a delegate's view" => {
             (Kind::Back, THE_WAY_BACK)
         }

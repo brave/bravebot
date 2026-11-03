@@ -1868,8 +1868,8 @@ mcp-record-not-read = it could not be read as text, so it was left as it is
 
 mcp-move-title = declare this server where its reply points?
 mcp-start-title = start { $alias }?
-command-mcp = List MCP servers, start one again, or turn one off
-mcp-command-usage = /mcp takes list, reconnect [alias] or disable <alias>
+command-mcp = List MCP servers, start one again, turn one off, or remove one
+mcp-command-usage = /mcp takes list, reconnect [alias], disable <alias> or remove <alias>
 mcp-command-none = No MCP server is requested here, and none is running
 mcp-command-running = MCP servers running:
 mcp-command-not-running = MCP servers requested here and not running:
@@ -1882,6 +1882,9 @@ mcp-command-reconnected = { $alias } is running. Its tools are put to you before
 mcp-command-disabled = { $alias } is turned off for this session. Nothing was written.
 mcp-command-already-off = { $alias } is already turned off
 mcp-command-needs-an-alias = /mcp { $command } needs the alias of a server
+mcp-command-not-an-alias = { $alias } is not the name of an MCP server
+mcp-command-no-state-directory = There is no state directory, so no MCP server is declared and none can be removed
+mcp-command-remove-hint = /mcp remove <alias> deletes a server's declaration and approval and takes it out of the settings files that ask for it, so no session starts it
 mcp-move-declared = { $alias } is declared at { $url }
 mcp-move-destination = and its reply points to { $url }
 mcp-move-reaching = reaching { $authority }
@@ -4278,6 +4281,11 @@ queued-carried-out-after = after { $line }
 queued-a-prompt = the prompt before it
 # What a waiting command line is called where a command is said to wait behind it.
 queued-a-shell-line = the shell line before it
+# The word at the right of a waiting line that removes it from the queue, and the word on the
+# oldest line that removes every line waiting. Each is drawn in the columns the line leaves, so they
+# stay short.
+queued-remove = remove
+queued-clear-all = clear all
 
 ## Pasting, dropping and attaching
 
@@ -5290,6 +5298,9 @@ hover-back = click to leave this view
 hover-reply = click to copy this reply
 hover-block = click to copy this block
 hover-queued = click to take this prompt back into the box
+hover-queued-command = click to remove this command from the queue
+hover-queued-remove = click to remove this from the queue
+hover-queued-clear = click to remove everything waiting
 hover-call-toggle = click to expand or collapse this call
 hover-call-open = click to open the scroller on this call
 hover-delegate = click to open this delegate's view

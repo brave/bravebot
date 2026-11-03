@@ -354,7 +354,8 @@ and a click over the scroller or a history search asks for nothing. The heading 
 the servers are not targets, nor is a row cut for want of room, and a language server's row is a
 target of its own ([MOUSE-22](#MOUSE-22)). The command stays the way to do it without a mouse, and
 the listing is the session's own, with nothing a tool returned in it
-([PANEL-11](info-panel.md#PANEL-11)).
+([PANEL-11](info-panel.md#PANEL-11)). It ends with the line that names `/mcp remove`
+([SERVERS-19](mcp-servers.md#SERVERS-19)), which is how a click on a server leads to removing it.
 
 `verified-by: bravebot_tui::app::a_click_on_the_panels_mcp_server_row_lists_the_servers`
 `verified-by: bravebot_tui::app::a_drag_over_an_mcp_server_row_or_a_click_in_the_scroller_lists_nothing`
@@ -784,7 +785,7 @@ are the blocks that hold words, whether or not the row has room to draw the word
 `verified-by: bravebot_tui::app::a_typed_block_command_runs_mid_turn_and_counts_the_blocks_that_have_a_word`
 
 <a id="MOUSE-28"></a>
-### MOUSE-28: a click on a prompt waiting behind a turn takes it back into the box
+### MOUSE-28: a click on a prompt waiting behind a turn takes it back into the box, and words on its row remove it
 
 A prompt typed and sent while a turn runs waits beneath the box in two rows, its words and its mark
 ([INPUT-10](terminal-input.md#INPUT-10)). A left click that sweeps nothing on either row takes that
@@ -796,12 +797,28 @@ prompt named is staged again, the prompts stay in the history, and what came bac
 turn's reach, as for the key. A prompt the turn has already been given does not come back, and the
 click leaves the box as it was. It is a take-back and not a cancel: the words are in the box, and
 clearing the box is what cancels them. A command a click on the info panel queued
-([MOUSE-29](#MOUSE-29)) is no prompt anybody typed, so it does not come back: it stays waiting, in its
-place among what is left, since in the box Enter would send it to the planner as words. As for
-[MOUSE-23](#MOUSE-23), the press and the release are
+([MOUSE-29](#MOUSE-29)) is no prompt anybody typed, so it does not come back when the prompts before
+it are taken back: it stays waiting, in its place among what is left, since in the box Enter would
+send it to the planner as words. A click on the rows of such a command removes it from the queue
+instead, since it has nothing to put in the box, and the pointer over them says so.
+
+**Words on the row remove lines and put nothing in the box.** At the right of the first row of each
+waiting line, one column short of the edge, is the word `remove`. A left click that sweeps nothing on
+it removes that line from the queue, whether it is a prompt, a command or a command line. A prompt
+removed is out of the turn's reach, as when it is taken back, so the planner is not given it, and it
+stays in the history. On the oldest line's row, left of `remove`, is the word `clear all` once a
+second line waits. A click on it removes every line waiting, newest first. A prompt the turn has
+already been given is not removed, because it is in the conversation, and a clear stops at the first
+such prompt since the lines before it are older still. A click that removes nothing leaves the queue
+as it was. The box and what is attached to the line in it are left as they were. A row too narrow to
+leave a legible few words of the line draws no word, and `clear all` is left out before `remove`.
+The words are the interface's own and no part of the line: the line is cut short of them.
+
+As for [MOUSE-23](#MOUSE-23), the press and the release are
 on one cell and the press is a single click, so a drag is a selection ([MOUSE-1](#MOUSE-1)). The rows beside the queue, the info panel on the same rows, and a
 picker or a history search open nothing. The rows are recorded as drawn, so a line put away or a file
-attached above the queue moves them with it. The key stays the way to do it without a mouse.
+attached above the queue moves them with it. The keys stay the way to do it without a mouse: Up takes
+the lines back into the box ([INPUT-18](terminal-input.md#INPUT-18)), and clearing the box discards them.
 
 `verified-by: bravebot_tui::app::a_click_on_a_waiting_prompt_takes_it_and_the_ones_after_it_back_into_the_box`
 `verified-by: bravebot_tui::app::a_click_on_the_oldest_waiting_prompt_leaves_what_the_key_leaves`
@@ -815,6 +832,14 @@ attached above the queue moves them with it. The key stays the way to do it with
 `verified-by: bravebot_tui::state::a_click_cannot_take_back_what_the_turn_has_already_been_given`
 `verified-by: bravebot_tui::state::a_command_line_a_click_queued_is_not_given_back_to_the_box`
 `verified-by: bravebot_tui::app::a_click_queued_command_stays_waiting_when_the_prompts_come_back`
+`verified-by: bravebot_tui::app::a_click_on_a_command_a_click_queued_removes_it`
+`verified-by: bravebot_tui::app::the_word_remove_takes_that_prompt_out_of_the_queue_and_out_of_the_turns_reach`
+`verified-by: bravebot_tui::app::the_words_clear_all_remove_every_waiting_line_and_leave_the_box`
+`verified-by: bravebot_tui::app::clear_all_is_drawn_once_two_wait_and_a_narrow_row_draws_no_words`
+`verified-by: bravebot_tui::app::removing_a_prompt_the_turn_took_changes_nothing_and_one_after_it_is_the_one_removed`
+`verified-by: bravebot_tui::state::discarding_removes_a_click_queued_command_and_stops_at_a_prompt_the_turn_took`
+`verified-by: bravebot_agent::interjections::forget_after_drops_the_line_that_many_from_the_newest_and_keeps_the_rest_in_order`
+`verified-by: bravebot_agent::interjections::forget_after_says_false_for_a_line_the_turn_has_taken`
 
 <a id="MOUSE-29"></a>
 ### MOUSE-29: a click that stands for a command does what the command typed would do where it is
@@ -1753,7 +1778,7 @@ nothing of the frame beneath it is a target, and the panel is found where it is 
 says whether a cell is a panel's. The way
 back out of a delegate's view ([MOUSE-24](#MOUSE-24)), the marker that leads a reply
 ([MOUSE-26](#MOUSE-26)), the word that copies a fenced block ([MOUSE-27](#MOUSE-27)), a prompt
-waiting behind a turn ([MOUSE-28](#MOUSE-28)) and each hint on the row under the box, with the
+waiting behind a turn and the words that remove it ([MOUSE-28](#MOUSE-28)) and each hint on the row under the box, with the
 permission mode ([MOUSE-14](#MOUSE-14), [MOUSE-48](#MOUSE-48)), are in the record. The marker and the word are not
 targets in a delegate's view, whose entries are the delegate's and not the session's, or in the files
 state.
@@ -1768,7 +1793,7 @@ last column is the state it is in whichever of those it was opened over.
 | a row of the info panel, the mark of a finished task, the hide row | yes | yes | yes | no | no | no | no |
 | a file's row, the close control, a control of the edit bar and a pane the wheel scrolls, in the files state | yes | yes | yes | no | no | yes | no |
 | a hint under the box, the permission mode included | yes | yes | no | no | no | no | no |
-| a place in the box's text, a prompt waiting behind a turn | yes | yes | yes | no | no | no | no |
+| a place in the box's text, a prompt waiting behind a turn and the words that remove it | yes | yes | yes | no | no | no | no |
 | the track of the scrollbar, a row of the list under the box | yes | yes | yes | no | no | yes | no |
 | a reply's marker, the word that copies a block, a call, a delegate's block | yes | yes | yes | yes | no | no | no |
 | a web address | yes | yes | yes | yes | no | yes | yes |

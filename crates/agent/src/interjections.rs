@@ -208,6 +208,31 @@ impl Interjections {
         forgot
     }
 
+    /// Drop the line that has `after` lines behind it, held or not, for one the person is removing
+    /// from the middle of what is waiting. `0` is the newest line, as in [`Interjections::forget_last`].
+    ///
+    /// Counted from the newest because the turn takes from the oldest end: a line the session still
+    /// shows as waiting has the same number of lines after it in the buffer and in the session's queue
+    /// whether or not the turn has taken the ones before it. `false` where the buffer holds no line
+    /// that far from the end, which is how a caller learns that the turn has already taken this one.
+    pub fn forget_after(&self, after: usize) -> bool {
+        let Ok(mut lines) = self.0.lock() else {
+            self.1.set(false);
+            return false;
+        };
+        let total = lines.waiting.len() + lines.held.len();
+        let forgot = match total.checked_sub(after + 1) {
+            Some(at) if at < lines.waiting.len() => lines.waiting.remove(at).is_some(),
+            Some(at) => {
+                let held = at - lines.waiting.len();
+                lines.held.remove(held).is_some()
+            }
+            None => false,
+        };
+        self.publish(&lines);
+        forgot
+    }
+
     /// Add a line behind everything already in the buffer.
     ///
     /// Held where any line is already held, because the turn taking this one ahead of an older
@@ -351,6 +376,56 @@ mod tests {
         assert!(buffer.forget_last());
         assert_eq!(buffer.take().as_deref(), Some("old"));
         assert!(!buffer.forget_last(), "nothing was left to forget");
+    }
+
+    /// Forgetting a line from the middle drops that line and keeps the order of the others, whether
+    /// it is one the turn may take or one held back. Rejects counting from the oldest, which drops
+    /// the wrong line, and a held line that stays after being removed.
+    #[test]
+    fn forget_after_drops_the_line_that_many_from_the_newest_and_keeps_the_rest_in_order() {
+        let buffer = Interjections::new();
+        for line in ["a", "b", "c", "d"] {
+            buffer.push(line.into());
+        }
+        assert!(buffer.forget_after(1), "`c` was not dropped");
+        assert_eq!(buffer.drain(), vec!["a", "b", "d"]);
+
+        for line in ["a", "b", "c", "d", "e"] {
+            buffer.push(line.into());
+        }
+        buffer.begin_turn(1, true);
+        buffer.push_behind("f".into());
+        assert_eq!(
+            buffer.held(),
+            5,
+            "the lines behind the turn's were not held"
+        );
+        assert!(buffer.forget_after(1), "`e` was not dropped");
+        assert!(buffer.forget_after(3), "`b` was not dropped");
+        assert_eq!(buffer.held(), 3);
+        assert!(
+            !buffer.forget_after(3),
+            "a place past the oldest dropped a line"
+        );
+        buffer.begin_turn(0, false);
+        assert_eq!(buffer.drain(), vec!["c", "d", "f"]);
+    }
+
+    /// The turn taking the oldest lines does not change which line is `after` lines from the newest,
+    /// so a line the session still shows is found, and one the turn took is not.
+    #[test]
+    fn forget_after_says_false_for_a_line_the_turn_has_taken() {
+        let buffer = Interjections::new();
+        for line in ["a", "b", "c"] {
+            buffer.push(line.into());
+        }
+        assert_eq!(buffer.take().as_deref(), Some("a"));
+        assert!(buffer.forget_after(1), "`b` is one from the newest");
+        assert!(
+            !buffer.forget_after(1),
+            "`a` was taken, and nothing is one from the newest"
+        );
+        assert_eq!(buffer.take().as_deref(), Some("c"));
     }
 
     /// A poisoned lock reads as empty and drops an addition, and none of the eight operations

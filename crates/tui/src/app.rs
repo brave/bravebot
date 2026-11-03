@@ -11975,6 +11975,188 @@ mod tests {
         assert_eq!(waiting(&session), ["second question", "third question"]);
     }
 
+    /// MOUSE-28: a click on the row of a command a click queued removes it from the queue. It has no
+    /// words to put in the box, so the click that used to leave it waiting with nothing said, under a
+    /// hover that promised to take it back, is the only way to cancel it.
+    #[test]
+    fn a_click_on_a_command_a_click_queued_removes_it() {
+        let (mut session, _) = panel_of_command_rows(true);
+        let buffer = drawn_at(&mut session, 120, 30);
+        let (row, column) = find_cell(&buffer, "notes-server");
+        click(&mut session, row, column + 1);
+        assert_eq!(waiting(&session), ["/mcp"]);
+
+        // The row above its mark, since the note the click made also names the command.
+        let buffer = drawn_at(&mut session, 120, 30);
+        let (mark, column) = find_cell(&buffer, "carried out after this");
+        assert_eq!(click(&mut session, mark - 1, column), Action::Redraw);
+
+        assert!(waiting(&session).is_empty(), "{:?}", waiting(&session));
+        assert!(session.input().is_empty(), "{:?}", session.input());
+    }
+
+    /// The column of the first `word` on `row` of the frame.
+    fn word_on_row(buffer: &ratatui::buffer::Buffer, row: u16, word: &str) -> u16 {
+        let text: String = (0..buffer.area.width)
+            .map(|x| buffer[(x, row)].symbol().to_string())
+            .collect();
+        let at = text
+            .find(word)
+            .unwrap_or_else(|| panic!("{word:?} not on row {row}: {text:?}"));
+        u16::try_from(text[..at].chars().count()).expect("a column")
+    }
+
+    /// MOUSE-28: the word `remove` on a waiting prompt's row removes that prompt and no other, puts
+    /// nothing in the box, and takes the prompt out of the turn's reach, so the planner is not given
+    /// a prompt the person removed. Rejects a removal that takes the prompt back into the box, one
+    /// that leaves its copy where the turn reads it, and one that removes the neighbour.
+    #[test]
+    fn the_word_remove_takes_that_prompt_out_of_the_queue_and_out_of_the_turns_reach() {
+        let (mut session, buffer) = working_with_three_waiting();
+        let reaching = session.interjections();
+        let (third, _) = find_cell(&buffer, "third question");
+        let column = word_on_row(&buffer, third, "remove");
+
+        assert_eq!(click(&mut session, third, column), Action::Redraw);
+
+        assert_eq!(waiting(&session), ["second question", "fourth question"]);
+        assert!(session.input().is_empty(), "{:?}", session.input());
+        assert_eq!(reaching.take().as_deref(), Some("second question"));
+        assert_eq!(reaching.take().as_deref(), Some("fourth question"));
+        assert_eq!(
+            reaching.take(),
+            None,
+            "the removed prompt is still on its way"
+        );
+    }
+
+    /// MOUSE-28: the words `clear all` are on the oldest prompt's row once a second waits, and remove
+    /// every waiting prompt, typed or queued by a click, leaving the box as it was.
+    #[test]
+    fn the_words_clear_all_remove_every_waiting_line_and_leave_the_box() {
+        let (mut session, _) = panel_of_command_rows(true);
+        for line in ["second question", "third question"] {
+            for c in line.chars() {
+                handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+            }
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+        }
+        let buffer = drawn_at(&mut session, 120, 30);
+        let (row, column) = find_cell(&buffer, "notes-server");
+        click(&mut session, row, column + 1);
+        for c in "half typed".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            waiting(&session),
+            ["second question", "third question", "/mcp"]
+        );
+        let reaching = session.interjections();
+        let buffer = drawn_at(&mut session, 120, 30);
+        let (second, _) = find_cell(&buffer, "second question");
+        let column = word_on_row(&buffer, second, "clear all");
+
+        assert_eq!(click(&mut session, second, column), Action::Redraw);
+
+        assert!(waiting(&session).is_empty(), "{:?}", waiting(&session));
+        assert_eq!(session.input(), "half typed");
+        assert_eq!(
+            reaching.take(),
+            None,
+            "a removed prompt is still on its way"
+        );
+    }
+
+    /// MOUSE-28: `clear all` is drawn on the oldest prompt's row and only once a second waits, a long
+    /// prompt is cut to leave the words on its row, and a row too narrow to leave a legible few words
+    /// of the prompt draws no word. Rejects the word on every row, which a click on the wrong one
+    /// would answer for the whole queue, and a word that pushes the prompt or the row off a narrow
+    /// screen.
+    #[test]
+    fn clear_all_is_drawn_once_two_wait_and_a_narrow_row_draws_no_words() {
+        let rows_of = |buffer: &ratatui::buffer::Buffer| -> Vec<String> {
+            (0..buffer.area.height)
+                .map(|y| {
+                    (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol().to_string())
+                        .collect()
+                })
+                .collect()
+        };
+        let (mut session, _) = two_panes();
+        session.type_char('a');
+        session.submit();
+        for line in ["second question", "third question"] {
+            for c in line.chars() {
+                handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+            }
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+            let rows = rows_of(&drawn_at(&mut session, 120, 30));
+            let with = |word: &str| rows.iter().filter(|row| row.contains(word)).count();
+            assert_eq!(with("remove"), session.queued.len(), "{rows:?}");
+            assert_eq!(
+                with("clear all"),
+                usize::from(session.queued.len() > 1),
+                "{rows:?}"
+            );
+        }
+
+        let long = format!("fourth {}", "word ".repeat(30));
+        for c in long.chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, key(KeyCode::Enter));
+        let rows = rows_of(&drawn_at(&mut session, 60, 40));
+        let fourth = rows
+            .iter()
+            .find(|row| row.contains("fourth"))
+            .unwrap_or_else(|| panic!("the long prompt is not drawn: {rows:?}"));
+        assert!(fourth.contains('…'), "{fourth:?}");
+        assert!(fourth.trim_end().ends_with("remove"), "{fourth:?}");
+        assert_eq!(fourth.chars().count(), 60, "{fourth:?}");
+
+        let rows = rows_of(&drawn_at(&mut session, 20, 40));
+        assert!(
+            rows.iter().any(|row| row.contains("second question")),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().all(|row| !row.contains("remove")),
+            "a word was drawn where the prompt has no room: {rows:?}"
+        );
+    }
+
+    /// MOUSE-28: removing a prompt counts from the newest, so a prompt the turn has taken but the
+    /// session has not yet heard about does not make the removal drop the wrong one, and a prompt the
+    /// turn has taken is not removed at all. Rejects counting from the oldest.
+    #[test]
+    fn removing_a_prompt_the_turn_took_changes_nothing_and_one_after_it_is_the_one_removed() {
+        let (mut session, buffer) = working_with_three_waiting();
+        let reaching = session.interjections();
+        assert_eq!(reaching.take().as_deref(), Some("second question"));
+        let (third, _) = find_cell(&buffer, "third question");
+        let column = word_on_row(&buffer, third, "remove");
+        assert_eq!(click(&mut session, third, column), Action::Redraw);
+        assert_eq!(waiting(&session), ["second question", "fourth question"]);
+        assert_eq!(
+            reaching.take().as_deref(),
+            Some("fourth question"),
+            "the wrong prompt was removed from the turn's reach"
+        );
+
+        let (mut session, buffer) = working_with_three_waiting();
+        let reaching = session.interjections();
+        while reaching.take().is_some() {}
+        let (second, _) = find_cell(&buffer, "second question");
+        let column = word_on_row(&buffer, second, "remove");
+        assert_eq!(click(&mut session, second, column), Action::Copy);
+        assert_eq!(
+            session.queued.len(),
+            3,
+            "a prompt the turn took was removed"
+        );
+    }
+
     /// MOUSE-28: the rows beside the queue, a drag from a waiting prompt, a double click on it, a press
     /// that began elsewhere, the info panel on its row, and a click where nothing waits take nothing
     /// back, each against a fixture where the plain click does.

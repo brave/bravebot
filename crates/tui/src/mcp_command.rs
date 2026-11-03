@@ -1,4 +1,4 @@
-//! `/mcp`: the MCP servers a session holds, listed, started again, or turned off (SERVERS-19).
+//! `/mcp`: the MCP servers a session holds, listed, started again, turned off, or removed (SERVERS-19).
 //!
 //! A person's word and nobody else's: the line is dispatched from the input box like every other
 //! command (CMD-1), and what a server said is never read to decide anything here. The person names
@@ -13,7 +13,7 @@ use ratatui::Terminal;
 use ratatui::backend::Backend;
 use std::path::Path;
 
-use crate::command_table::{MCP_DISABLE, MCP_LIST, MCP_RECONNECT};
+use crate::command_table::{MCP_DISABLE, MCP_LIST, MCP_RECONNECT, MCP_REMOVE};
 use crate::state::{Servers, Session};
 
 /// The terminal's side of the questions a start puts: drawn over the screen, answered by key.
@@ -69,6 +69,46 @@ fn run_on<A: Asker + ?Sized>(
     asker: &mut A,
     machine: &Machine,
 ) {
+    run_with(
+        session,
+        settings,
+        root,
+        argument,
+        asking,
+        asker,
+        &Ways {
+            machine,
+            programs: &through_the_program,
+        },
+    );
+}
+
+/// What `/mcp` reads and does outside the session: the machine's declarations and approvals, and the
+/// program that writes them.
+struct Ways<'a> {
+    machine: &'a Machine,
+    programs: Programs<'a>,
+}
+
+/// Run `bravebot` with the arguments given, in the directory given, and say what came of it.
+type Programs<'a> = &'a dyn Fn(&Path, &[&str]) -> Ran;
+
+/// What a run of the program came to: whether it succeeded, and the lines it printed.
+struct Ran {
+    succeeded: bool,
+    lines: Vec<String>,
+}
+
+fn run_with<A: Asker + ?Sized>(
+    session: &mut Session,
+    settings: &Settings,
+    root: &Path,
+    argument: &str,
+    asking: Asking,
+    asker: &mut A,
+    ways: &Ways<'_>,
+) {
+    let machine = ways.machine;
     let words: Vec<&str> = argument.split_whitespace().collect();
     match words.as_slice() {
         [] => list(session, settings),
@@ -79,10 +119,11 @@ fn run_on<A: Asker + ?Sized>(
         [word, alias] if *word == MCP_RECONNECT => {
             reconnect(session, settings, root, Some(alias), asking, asker, machine)
         }
-        [word] if *word == MCP_DISABLE => {
-            session.note(t!(mcp_command_needs_an_alias, command = MCP_DISABLE))
+        [word] if *word == MCP_DISABLE || *word == MCP_REMOVE => {
+            session.note(t!(mcp_command_needs_an_alias, command = *word))
         }
         [word, alias] if *word == MCP_DISABLE => disable(session, settings, alias),
+        [word, alias] if *word == MCP_REMOVE => remove(session, root, alias, ways),
         _ => session.note(t!(mcp_command_usage)),
     }
 }
@@ -155,6 +196,7 @@ fn list(session: &mut Session, settings: &Settings) {
             session.note(format!("  {row}"));
         }
     }
+    session.note(t!(mcp_command_remove_hint));
 }
 
 fn reconnect<A: Asker + ?Sized>(
@@ -239,6 +281,93 @@ fn disable(session: &mut Session, settings: &Settings, alias: &str) {
     session.note(t!(mcp_command_disabled, alias = alias));
 }
 
+/// Take `alias` out of every settings file that asks for it and delete its declaration and approval,
+/// so no session starts it, and stop it in this one.
+///
+/// `bravebot mcp disable` and `bravebot mcp remove` do the writing, run as the program itself, since
+/// the command line is the one writer of a declaration and of the settings files that request one
+/// (layering). Typing `/mcp remove` is the person's word for it, as typing those is. Nothing a server
+/// said is read: the person names the alias, which has to be one, so it cannot be taken for a flag.
+/// Refused in an incognito session, which writes nothing, and the program is not asked, since it
+/// cannot know the session is incognito.
+fn remove(session: &mut Session, root: &Path, alias: &str, ways: &Ways<'_>) {
+    if !bravebot_config::mcp::is_alias(alias) {
+        session.note(t!(
+            mcp_command_not_an_alias,
+            alias = crate::render::printable(alias)
+        ));
+        return;
+    }
+    let home = &ways.machine.home;
+    if home.directory.is_none() {
+        session.note(t!(mcp_command_no_state_directory));
+        return;
+    }
+    if !home.writable {
+        session.note(t!(mcp_not_while_incognito, command = MCP_REMOVE));
+        return;
+    }
+    // The request first: a declaration removed under a request that stays is reported at the start
+    // of every session as a server nobody declared.
+    let withdrawn = (ways.programs)(root, &["mcp", MCP_DISABLE, alias]);
+    for line in &withdrawn.lines {
+        session.note(crate::render::printable(line));
+    }
+    // A request that stays would be left under a declaration that goes.
+    if !withdrawn.succeeded {
+        return;
+    }
+    let removed = (ways.programs)(root, &["mcp", MCP_REMOVE, alias]);
+    for line in &removed.lines {
+        session.note(crate::render::printable(line));
+    }
+    if !removed.succeeded {
+        return;
+    }
+    if let Some(kept) = session.servers.session.take() {
+        session.servers.session = kept.without(alias);
+    }
+    session.servers.disabled.retain(|off| off != alias);
+    refresh(&mut session.servers);
+}
+
+/// Run this program with `args` in `root`, as a person typing them at a shell would.
+///
+/// No input, so a question it could put is answered no: `disable` and `remove` put none. What it
+/// printed and what it complained of are both kept, in that order.
+fn through_the_program(root: &Path, args: &[&str]) -> Ran {
+    // This program started again, with the environment it has, as `doctor` is for a bug report.
+    let ran = bravebot_sandbox::programs::Resolved::own_executable().and_then(|me| {
+        bravebot_sandbox::programs::start(
+            &me,
+            bravebot_sandbox::programs::Inherits::All,
+            bravebot_sandbox::programs::SearchPath::Inherited,
+        )
+        .args(args)
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .output()
+    });
+    match ran {
+        Ok(output) => Ran {
+            succeeded: output.status.success(),
+            lines: [output.stdout, output.stderr]
+                .iter()
+                .flat_map(|text| {
+                    String::from_utf8_lossy(text)
+                        .lines()
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+        },
+        Err(error) => Ran {
+            succeeded: false,
+            lines: vec![error.to_string()],
+        },
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -313,6 +442,7 @@ pub(crate) mod tests {
                 t!(mcp_command_not_running).to_string(),
                 format!("  {}", t!(mcp_command_not_connected, alias = "weather")),
                 format!("  {}", t!(mcp_command_off, alias = "docs")),
+                t!(mcp_command_remove_hint).to_string(),
             ]
         );
         let again = said(&session).len();
@@ -341,6 +471,10 @@ pub(crate) mod tests {
             (
                 "disable",
                 t!(mcp_command_needs_an_alias, command = MCP_DISABLE).to_string(),
+            ),
+            (
+                "remove",
+                t!(mcp_command_needs_an_alias, command = MCP_REMOVE).to_string(),
             ),
         ] {
             let mut session = Session::new("none");
@@ -689,6 +823,151 @@ pub(crate) mod tests {
         assert!(session.servers.session.is_none());
         assert!(session.servers.started.is_empty());
         assert!(session.servers.disabled.is_empty(), "naming it left it off");
+    }
+
+    /// What `remove` asked the program to do, in the order, and the directory it asked from, for a
+    /// session that holds `weather` and a program that `succeeds` or does not.
+    fn removing(
+        session: &mut Session,
+        argument: &str,
+        machine: &Machine,
+        succeeds: impl Fn(&[&str]) -> bool,
+    ) -> (std::path::PathBuf, Vec<Vec<String>>) {
+        let (settings, root) = requesting("mcp-remove", &["weather"]);
+        let calls = std::cell::RefCell::new(Vec::new());
+        let programs = |directory: &Path, args: &[&str]| {
+            assert_eq!(directory, root, "the program ran somewhere else");
+            calls
+                .borrow_mut()
+                .push(args.iter().map(ToString::to_string).collect::<Vec<_>>());
+            Ran {
+                succeeded: succeeds(args),
+                lines: vec![format!("ran {}", args.join(" "))],
+            }
+        };
+        run_with(
+            session,
+            &settings,
+            &root,
+            argument,
+            Asking::Person,
+            &mut Never,
+            &Ways {
+                machine,
+                programs: &programs,
+            },
+        );
+        (root, calls.into_inner())
+    }
+
+    /// A machine whose state directory may be written, which is what removing needs.
+    fn writable_machine(name: &str) -> Machine {
+        let mut machine = declaring_weather(name);
+        machine.home.writable = true;
+        machine
+    }
+
+    /// SERVERS-19. `/mcp remove` takes the request out first and then deletes the declaration, both
+    /// by the program's own commands, says what each printed, and stops the server in this session.
+    /// Rejects deleting the declaration under a request that stays, which is reported as a server
+    /// nobody declared at every start, and a server left running after it was removed.
+    #[test]
+    fn removing_a_server_withdraws_the_request_then_deletes_the_declaration_and_stops_it() {
+        let machine = writable_machine("mcp-remove-home");
+        let mut session = holding(&["weather"]);
+        session.servers.disabled.push("weather".to_string());
+
+        let (_, calls) = removing(&mut session, "remove weather", &machine, |_| true);
+
+        assert_eq!(
+            calls,
+            [
+                ["mcp", "disable", "weather"].map(String::from).to_vec(),
+                ["mcp", "remove", "weather"].map(String::from).to_vec(),
+            ]
+        );
+        assert_eq!(
+            said(&session),
+            ["ran mcp disable weather", "ran mcp remove weather"]
+        );
+        assert!(session.servers.session.is_none(), "the server still runs");
+        assert!(session.servers.started.is_empty());
+        assert!(session.servers.disabled.is_empty());
+    }
+
+    /// SERVERS-19. A removal the program reports failing leaves the server running and says why.
+    /// Rejects stopping a server whose declaration is still there.
+    #[test]
+    fn a_removal_that_fails_leaves_the_server_running_and_says_why() {
+        let machine = writable_machine("mcp-remove-fails-home");
+        let mut session = holding(&["weather"]);
+
+        removing(&mut session, "remove weather", &machine, |_| false);
+
+        assert_eq!(session.servers.started, ["weather"]);
+        assert!(session.servers.session.is_some());
+        assert_eq!(said(&session), ["ran mcp disable weather"]);
+    }
+
+    /// SERVERS-19. A request the program fails to withdraw leaves the declaration alone, so no
+    /// later session reports a server nobody declared. Rejects deleting it under a request that stays.
+    #[test]
+    fn a_request_that_cannot_be_withdrawn_keeps_the_declaration() {
+        let machine = writable_machine("mcp-remove-disable-fails-home");
+        let mut session = holding(&["weather"]);
+
+        let (_, calls) = removing(&mut session, "remove weather", &machine, |args| {
+            args[1] != "disable"
+        });
+
+        assert_eq!(
+            calls,
+            [["mcp", "disable", "weather"].map(String::from).to_vec()],
+            "remove was called after disable failed"
+        );
+        assert_eq!(session.servers.started, ["weather"]);
+        assert!(session.servers.session.is_some());
+    }
+
+    /// SERVERS-19. A word that is not an alias, a session that writes nothing and a machine with no
+    /// state directory run no program. Rejects a word like `--help` or `../x` reaching the program as
+    /// an argument, and a removal in an incognito session, whose program cannot know it is one.
+    #[test]
+    fn a_removal_runs_no_program_for_a_word_that_is_no_alias_or_where_nothing_may_be_written() {
+        let mut incognito = writable_machine("mcp-remove-incognito-home");
+        incognito.home.writable = false;
+        let mut stateless = writable_machine("mcp-remove-stateless-home");
+        stateless.home.directory = None;
+        for (argument, machine, reply) in [
+            (
+                "remove --help",
+                writable_machine("mcp-remove-flag-home"),
+                t!(mcp_command_not_an_alias, alias = "--help").to_string(),
+            ),
+            (
+                "remove ../weather",
+                writable_machine("mcp-remove-path-home"),
+                t!(mcp_command_not_an_alias, alias = "../weather").to_string(),
+            ),
+            (
+                "remove weather",
+                incognito,
+                t!(mcp_not_while_incognito, command = MCP_REMOVE).to_string(),
+            ),
+            (
+                "remove weather",
+                stateless,
+                t!(mcp_command_no_state_directory).to_string(),
+            ),
+        ] {
+            let mut session = holding(&["weather"]);
+
+            let (_, calls) = removing(&mut session, argument, &machine, |_| true);
+
+            assert!(calls.is_empty(), "{argument}: {calls:?}");
+            assert_eq!(said(&session), [reply], "{argument}");
+            assert_eq!(session.servers.started, ["weather"], "{argument}");
+        }
     }
 
     /// Naming a server that is running starts nothing and asks nothing.

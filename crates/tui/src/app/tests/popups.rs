@@ -250,6 +250,24 @@ pub(super) fn targets() -> Vec<Target> {
             |session, _| waiting(session).len() < 3,
         ),
         Target::plain(
+            "the word that removes a waiting prompt",
+            || {
+                let (session, buffer) = working_with_three_waiting();
+                let cell = find_cell(&buffer, "remove");
+                (session, cell)
+            },
+            |session, _| waiting(session).len() == 2 && session.input().is_empty(),
+        ),
+        Target::plain(
+            "the word that removes every waiting prompt",
+            || {
+                let (session, buffer) = working_with_three_waiting();
+                let cell = find_cell(&buffer, "clear all");
+                (session, cell)
+            },
+            |session, _| waiting(session).is_empty() && session.input().is_empty(),
+        ),
+        Target::plain(
             "the way back of a delegate's view",
             || {
                 let (session, buffer) = a_finished_delegates_view();

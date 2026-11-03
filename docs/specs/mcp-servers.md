@@ -2044,7 +2044,7 @@ This spec cannot land without these. Each is named by what the clause says rathe
   record. A server's stderr is discarded, as the full-screen interface discards it.
 
 <a id="SERVERS-19"></a>
-### SERVERS-19: `/mcp` shows the servers, starts one that is not running, and turns one off for the session
+### SERVERS-19: `/mcp` shows the servers, starts one that is not running, turns one off for the session, and removes one
 
 The full-screen interface has `/mcp`. Bare or as `list`, it names each server the session runs with
 how its tools stand, as `/status` does ([SERVERS-14](#SERVERS-14)), and each server the settings
@@ -2058,7 +2058,21 @@ refuses ([SERVERS-4](#SERVERS-4), [SERVERS-5](#SERVERS-5), [SERVERS-12](#SERVERS
 the person before the next turn plans ([SERVERS-8](#SERVERS-8)). A server the session already runs
 keeps its process and what was answered about its list. `disable <alias>` stops the server's
 process, drops the grant naming it ([SERVERS-9](#SERVERS-9)) and offers none of its tools. It writes
-nothing, so the next session starts the server as before.
+nothing, so the next session starts the server as before. The list ends with a line naming
+`remove <alias>`, which is how a person who declined a server's tools finds the way to stop being
+asked about it.
+
+`remove <alias>` runs `bravebot mcp disable <alias>` and then `bravebot mcp remove <alias>`, the
+program run as itself in the directory the session works in, and says what each printed. The first
+takes the request out of each settings file that asks for the server, the second deletes its
+declaration and approval, so no later session starts it. The request goes first because a
+declaration removed under a request that stays is reported at every start as a server nobody
+declared. When the second succeeds, the server is stopped in this session and its grant dropped as
+`disable` does. When it fails, the server keeps running and the failure is said. The alias must be
+one (letters, digits, `-` and `_`, starting with a letter or digit), so a word such as `--help` is never an argument of the program, and
+nothing is run in an incognito session or where there is no state directory, because the program
+cannot know the session is incognito. The command line stays the one writer of a declaration and of
+the settings files that request one ([layering](layering.md)).
 
 An alias the settings do not request is not started and not turned off by being named. Nothing a
 server sent decides what `/mcp` does: the person names the alias. Typed during a turn, `/mcp` waits
@@ -2082,6 +2096,9 @@ callable that the person turned off.
 `verified-by: bravebot_tui::mcp_command::a_start_the_person_refuses_joins_nothing_and_clears_the_turn_off`
 `verified-by: bravebot_tui::mcp_command::reconnecting_a_running_server_says_so_and_changes_nothing`
 `verified-by: bravebot_tui::mcp_command::turning_off_a_running_server_removes_it_and_the_last_leaves_none`
+`verified-by: bravebot_tui::mcp_command::removing_a_server_withdraws_the_request_then_deletes_the_declaration_and_stops_it`
+`verified-by: bravebot_tui::mcp_command::a_removal_that_fails_leaves_the_server_running_and_says_why`
+`verified-by: bravebot_tui::mcp_command::a_removal_runs_no_program_for_a_word_that_is_no_alias_or_where_nothing_may_be_written`
 `verified-by: bravebot_tui::app::the_mcp_command_carries_its_words_unparsed`
 `verified-by: bravebot_tui::app::the_mcp_command_waits_for_the_turn_in_flight`
 

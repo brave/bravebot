@@ -186,7 +186,15 @@ reconnect` starts every one that is not running, and `/mcp reconnect weather` st
 start reads the declaration again and asks what a session asks as it opens: a server you approved
 starts without a question, and one whose declaration changed is put to you again. `/mcp disable
 weather` stops the server and drops its grant for this session. Nothing is written, so the next
-session starts it as before. Typed during a turn, the command waits for the turn to end.
+session starts it as before. `/mcp remove weather` is the permanent version: it runs `bravebot mcp
+disable weather` and then `bravebot mcp remove weather` for you, so no later session starts the
+server or asks about it, and stops it in this session. The list `/mcp` prints, which is also what a
+click on a server in the info panel prints, ends with a line naming it. Typed during a turn, the
+command waits for the turn to end.
+
+The info panel lists a server only while its tools are offered to the model. If you answer no when
+you are asked whether to offer a server's tools, the server keeps running for the session, is left
+out of the panel, and is still named by `/mcp` and `/status`.
 
 ### An approval is of what you were shown
 
@@ -779,7 +787,8 @@ bravebot mcp remove docs
 
 Removes the declaration and its approval together. An approval another declaration still resolves
 to is kept. A settings file that asks for it still does, and is reported as asking for a server
-nobody declared: `bravebot mcp disable docs` takes that out.
+nobody declared: `bravebot mcp disable docs` takes that out. In the full-screen interface,
+`/mcp remove docs` does both.
 
 ## Refused by an administrator
 

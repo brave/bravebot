@@ -1613,8 +1613,8 @@ mcp-record-not-read = il n'a pas pu être lu comme du texte, il a donc été lai
 
 mcp-move-title = déclarer ce serveur là où pointe sa réponse ?
 mcp-start-title = démarrer { $alias } ?
-command-mcp = Lister les serveurs MCP, en redémarrer un, ou en désactiver un
-mcp-command-usage = /mcp accepte list, reconnect [alias] ou disable <alias>
+command-mcp = Lister les serveurs MCP, en redémarrer un, en désactiver un ou en supprimer un
+mcp-command-usage = /mcp accepte list, reconnect [alias], disable <alias> ou remove <alias>
 mcp-command-none = Aucun serveur MCP n'est demandé ici, et aucun ne fonctionne
 mcp-command-running = Serveurs MCP en cours d'exécution :
 mcp-command-not-running = Serveurs MCP demandés ici et arrêtés :
@@ -1627,6 +1627,9 @@ mcp-command-reconnected = { $alias } fonctionne. Ses outils vous sont présenté
 mcp-command-disabled = { $alias } est désactivé pour cette session. Rien n'a été écrit.
 mcp-command-already-off = { $alias } est déjà désactivé
 mcp-command-needs-an-alias = /mcp { $command } demande l'alias d'un serveur
+mcp-command-not-an-alias = { $alias } n'est pas le nom d'un serveur MCP
+mcp-command-no-state-directory = Il n'y a pas de répertoire d'état, donc aucun serveur MCP n'est déclaré et aucun ne peut être supprimé
+mcp-command-remove-hint = /mcp remove <alias> supprime la déclaration et l'approbation d'un serveur et le retire des fichiers de réglages qui le demandent, si bien qu'aucune session ne le démarre
 mcp-move-declared = { $alias } est déclaré à { $url }
 mcp-move-destination = et sa réponse pointe vers { $url }
 mcp-move-reaching = qui atteint { $authority }
@@ -3524,6 +3527,8 @@ queued-run = lancée dans votre shell
 queued-carried-out-after = après { $line }
 queued-a-prompt = l'invite précédente
 queued-a-shell-line = la ligne de shell précédente
+queued-remove = retirer
+queued-clear-all = tout retirer
 
 
 ## Coller, déposer et joindre
@@ -4367,6 +4372,9 @@ hover-back = cliquer pour quitter cette vue
 hover-reply = cliquer pour copier cette réponse
 hover-block = cliquer pour copier ce bloc
 hover-queued = cliquer pour reprendre cette invite dans la zone de saisie
+hover-queued-command = cliquer pour retirer cette commande de la file
+hover-queued-remove = cliquer pour retirer ceci de la file
+hover-queued-clear = cliquer pour retirer tout ce qui attend
 hover-call-toggle = cliquer pour déplier ou replier cet appel
 hover-call-open = cliquer pour ouvrir le défilement sur cet appel
 hover-delegate = cliquer pour ouvrir la vue de ce délégué
