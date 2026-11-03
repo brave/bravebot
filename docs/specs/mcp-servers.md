@@ -1331,6 +1331,15 @@ digest recorded in `mcp-approved` is that of the declaration written, and it is 
 session then holds for the server, so a second move in the session finds the declaration the first
 one wrote. A server moved as the session starts is started under the declaration written.
 
+The connection a move makes sends the headers and the bearer token the declaration names, as the
+server's first connection did, with the values the environment gave when the session started the
+server. That holds for the handshake at the new address, the call made again there and every later
+call in the session, including after a second move. They go only to the socket the person approved
+([SERVERS-18](#SERVERS-18)), and a declaration that names none sends none. The prompt for a move
+during a turn does not name the headers or the bearer token that will be sent to the new
+destination. The question put to the person about the declaration at the handshake names them. This
+is a known cost.
+
 A project entry in `mcp-projects` answers for what a checkout requests and never for where a server
 went, so it does not answer this question. Where the session writes nothing, the prompt says so and a
 yes moves the server until the session ends. A vouched list is not carried to the new declaration,
@@ -1370,6 +1379,15 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_agent::mcp::a_move_is_recorded_over_the_declaration_asked_about_and_nothing_else`
 `verified-by: bravebot_agent::mcp::a_move_keeps_everything_but_the_address_of_the_declaration_it_replaces`
 `verified-by: bravebot_agent::mcp::a_server_that_moves_a_second_time_is_recorded_over_what_the_first_move_wrote`
+`verified-by: bravebot_agent::mcp::a_server_moved_during_a_turn_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::mcp::a_server_moved_twice_is_reached_with_the_headers_and_token_at_each_destination`
+`verified-by: bravebot_agent::mcp::a_server_declared_without_credentials_is_moved_without_any`
+`verified-by: bravebot_agent::mcp::a_server_moved_with_an_unset_bearer_variable_is_moved_without_a_token`
+`verified-by: bravebot_agent::mcp::a_moved_servers_headers_go_to_the_approved_destination_and_to_no_other_host`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_with_an_unset_bearer_variable_is_moved_without_a_token`
+`verified-by: bravebot_agent::mcp::a_move_leaves_the_tools_the_session_holds_for_the_server_as_they_were`
+`verified-by: bravebot_agent::servers::a_remote_server_is_started_sending_the_headers_its_declaration_names_and_holds_them_for_a_move`
 `verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_keeps_everything_but_its_address`
 `verified-by: bravebot_config::mcp::a_move_changes_the_address_of_a_remote_declaration_and_nothing_else`
 `verified-by: bravebot_agent::servers::a_handshake_redirected_off_its_declaration_is_moved_on_a_yes`
@@ -1675,6 +1693,8 @@ content.
 `verified-by: bravebot_agent::servers::a_declarations_own_timeouts_are_drawn_and_the_defaults_are_not`
 `verified-by: bravebot_agent::mcp::a_call_that_outlasts_its_bound_is_a_failure_the_planner_is_told_timed_out`
 `verified-by: bravebot_agent::mcp::a_move_keeps_the_bounds_the_declaration_it_replaces_gave`
+`verified-by: bravebot_agent::mcp::a_move_to_a_server_slower_than_the_startup_bound_is_not_made`
+`verified-by: bravebot_agent::mcp::a_moved_server_is_held_to_the_call_bound_it_had`
 `verified-by: bravebot_ui_bridge::connectors::editing_a_connector_keeps_the_bounds_its_declaration_gave`
 `verified-by: bravebot_ui_bridge::manifest::a_server_that_never_answers_its_handshake_does_not_hold_up_a_plan_run`
 
@@ -1790,6 +1810,14 @@ persisting secrets in configuration files or leaking them to other origins acros
 `verified-by: bravebot_mcp::http::configured_headers_are_attached_to_requests`
 `verified-by: bravebot_cli::mcp::http_bearer_and_header_env_flags_are_parsed_and_refused_for_stdio`
 `verified-by: bravebot_agent::servers::a_declarations_headers_are_drawn_with_variable_names_and_without_secrets`
+`verified-by: bravebot_agent::servers::a_remote_server_is_started_sending_the_headers_its_declaration_names_and_holds_them_for_a_move`
+`verified-by: bravebot_agent::mcp::a_server_moved_during_a_turn_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::mcp::a_server_moved_twice_is_reached_with_the_headers_and_token_at_each_destination`
+`verified-by: bravebot_agent::mcp::a_server_declared_without_credentials_is_moved_without_any`
+`verified-by: bravebot_agent::mcp::a_server_moved_with_an_unset_bearer_variable_is_moved_without_a_token`
+`verified-by: bravebot_agent::mcp::a_moved_servers_headers_go_to_the_approved_destination_and_to_no_other_host`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_is_reached_with_the_headers_and_token_it_was_declared_with`
+`verified-by: bravebot_agent::servers::a_server_moved_at_its_handshake_with_an_unset_bearer_variable_is_moved_without_a_token`
 
 ## Testing this with the weather server
 
@@ -2265,6 +2293,7 @@ answer 2 for the tool, which gives up the property for that server.
 `verified-by: bravebot_agent::servers::a_local_server_declared_to_ask_every_call_is_held_as_one`
 `verified-by: bravebot_agent::servers::a_server_asked_every_call_is_still_asked_every_call_after_it_moves`
 `verified-by: bravebot_agent::mcp::a_move_keeps_the_declaration_asking_every_call`
+`verified-by: bravebot_agent::mcp::a_server_asked_every_call_is_still_asked_after_it_moves_during_a_turn`
 `verified-by: bravebot_agent::mcp::a_server_asked_every_call_asks_though_a_rule_and_answer_two_allow_it`
 `verified-by: bravebot_agent::mcp::a_deny_rule_refuses_a_call_to_a_server_asked_every_call_before_anybody_is_asked`
 `verified-by: bravebot_agent::mcp::an_answer_that_would_stand_is_not_recorded_for_a_server_asked_every_call`
