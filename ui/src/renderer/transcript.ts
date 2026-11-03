@@ -14,6 +14,7 @@ import type {
   Activity,
   AskAnswer,
   AskRequest,
+  AskSettled,
   Change,
   ConfirmRequest,
   CutOff,
@@ -59,6 +60,12 @@ export type Entry = (
   | { kind: 'assistant'; id: string; text: string }
   /** `command` is the words of `text` that are a command to run, where a notice names one. */
   | { kind: 'narration'; id: string; text: string; command?: string | null }
+  /**
+   * The questions an `ask_user` call put and what became of each, worded by the kernel and drawn
+   * under the call once the series is settled (ASK-13). The words are the kernel's; nothing here
+   * reads a question or an answer to decide how it is drawn.
+   */
+  | { kind: 'ask-settled'; id: string; rows: { question: string; outcome: string }[] }
   /**
    * A file that was put in front of the planner because somebody named it.
    *
@@ -321,6 +328,7 @@ export function summonedAt(entries: Entry[], found: Map<number, string>): Entry[
 }
 export const consolidating = (): Entry => ({ kind: 'consolidation', id: nextId() })
 export const narrated = (text: string, command?: string | null): Entry => ({ kind: 'narration', id: nextId(), text, command })
+export const askSettled = (settled: AskSettled): Entry => ({ kind: 'ask-settled', id: nextId(), rows: settled.rows })
 export const watchFired = (number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
 export const errored = (text: string): Entry => ({ kind: 'error', id: nextId(), text })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })
@@ -664,6 +672,7 @@ export function searchableText(entry: Entry): string {
   switch (entry.kind) {
     case 'turn-start': return ''
     case 'attached': return entry.path
+    case 'ask-settled': return entry.rows.map((row) => `${row.question} ${row.outcome}`).join(' ')
     case 'consolidation': return 'Updating persistent memory'
     case 'tool': return [entry.activity.verb, entry.activity.shownTarget, entry.activity.why, entry.activity.note, ...entry.activity.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
     case 'quarantined': return [entry.shown.origin, entry.shown.label, ...entry.shown.preview].join(' ')

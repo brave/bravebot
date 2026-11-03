@@ -5248,6 +5248,88 @@ mod tests {
             );
         }
 
+        /// ASK-13, VIEW-42: a scroll-back view of an `ask_user` call holds each question and what
+        /// became of it, drawn from the picker's own values with no reply from the planner given,
+        /// and the call's line still counts the questions (ASK-10). The regressions it rejects:
+        /// rows that are only drawn once the planner's result arrives, rows lost when the call
+        /// finishes, and the count line replaced by the rows.
+        #[test]
+        fn a_settled_ask_user_call_shows_each_question_and_its_answer_without_a_reply() {
+            use bravebot_core::ask::{Answer, Choice, Question, Series, asking};
+            let mut session = working();
+            session.start_activity(Activity::running("Ask", "which library"));
+            let series = asking(&Series::new(vec![
+                Question::new(
+                    "Library",
+                    "Which library?",
+                    vec![Choice::new("serde", None), Choice::new("miniserde", None)],
+                    false,
+                ),
+                Question::new("Name", "What to call it?", Vec::new(), false),
+            ]));
+            crate::ask::put(&mut session, &series, |_| {
+                vec![Answer::Chosen(vec![1]), Answer::Typed("own words".into())]
+            });
+            session.finish_activity(
+                Activity::running("Ask", "which library").done("2 questions asked"),
+            );
+
+            let rows: Vec<String> = transcript_lines(&session, 90, 24)
+                .iter()
+                .map(|line| line.to_string())
+                .collect();
+            let at = |needle: &str| {
+                rows.iter()
+                    .position(|row| row.contains(needle))
+                    .unwrap_or_else(|| panic!("{needle:?} is not drawn: {rows:#?}"))
+            };
+            let call = at("Ask(which library)");
+            assert!(rows[call + 1].contains("2 questions asked"), "{rows:#?}");
+            assert!(at("Library: Which library?") > call, "{rows:#?}");
+            assert!(
+                at("chose: miniserde") > at("Library: Which library?"),
+                "{rows:#?}"
+            );
+            assert!(
+                at("Name: What to call it?") > at("chose: miniserde"),
+                "{rows:#?}"
+            );
+            assert!(
+                at("answered: own words") > at("Name: What to call it?"),
+                "{rows:#?}"
+            );
+        }
+
+        /// ASK-13: a series nobody could be asked draws no rows, since "skipped" under each
+        /// question would read as the person's choice. The regression it rejects: rows drawn for
+        /// a reply with no answers in it.
+        #[test]
+        fn a_series_nobody_could_be_asked_draws_no_rows() {
+            use bravebot_core::ask::{Choice, Question, Series, asking};
+            let mut session = working();
+            session.start_activity(Activity::running("Ask", "which library"));
+            let series = asking(&Series::new(vec![Question::new(
+                "Library",
+                "Which library?",
+                vec![Choice::new("serde", None)],
+                false,
+            )]));
+            crate::ask::put(&mut session, &series, |_| Vec::new());
+            session.finish_activity(
+                Activity::running("Ask", "which library").done("1 question asked"),
+            );
+
+            let rows: Vec<String> = transcript_lines(&session, 90, 24)
+                .iter()
+                .map(|line| line.to_string())
+                .collect();
+            assert!(
+                rows.iter()
+                    .all(|row| !row.contains("Which library?") && !row.contains("skipped")),
+                "{rows:#?}"
+            );
+        }
+
         /// VIEW-24: the planner read exactly this, so drawing it in the marked block would say the
         /// opposite of what is true.
         #[test]

@@ -3015,6 +3015,13 @@ ask-key-change = change an answer
 ask-review-title = review your answers
 ask-review-heading = Nothing has been sent yet.
 ask-review-skipped = (skipped)
+# Said under the call once the questions are settled, one block per question the person was put: the
+# question, then what became of it (ASK-13).
+ask-settled-heading = { $tag }: { $question }
+ask-settled-chose = chose: { $labels }
+ask-settled-typed = answered: { $words }
+ask-settled-skipped = skipped
+ask-settled-closed = closed on the clock
 
 
 ## Handing the line to an editor

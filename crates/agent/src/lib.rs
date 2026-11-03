@@ -82,6 +82,7 @@ pub mod sandbox_reason;
 pub mod scratch;
 mod server_calls;
 pub mod servers;
+pub mod settled;
 pub mod shared;
 pub mod shell;
 pub mod skill_eval;

@@ -1017,6 +1017,14 @@ export interface AskRequest {
 }
 
 /**
+ * What became of each question put, worded by the kernel, sent once the series is settled
+ * (ASK-13). For the screen only: nothing here is sent back to the planner.
+ */
+export interface AskSettled {
+  rows: { question: string; outcome: string }[]
+}
+
+/**
  * One answer.
  *
  * Declining is a first-class answer rather than an error: a question nobody wants to answer
@@ -1091,6 +1099,7 @@ export interface EventMap {
   'manifest.done': ManifestDone
   'manifest.error': ManifestError
   'ask.request': AskRequest
+  'ask.settled': AskSettled
   'turn.done': TurnDone
   'turn.error': TurnError
 }

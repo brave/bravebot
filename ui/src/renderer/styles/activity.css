@@ -240,6 +240,11 @@
   font-family: var(--font-mono);
 }
 .attached.consolidation { font-family: inherit; }
+/* The questions an ask_user call put and what became of each: one block per question, wrapped. */
+.attached.ask-settled { font-family: inherit; white-space: normal; overflow: visible; align-items: flex-start; }
+.ask-settled ul { margin: 0; padding: 0; list-style: none; min-width: 0; }
+.ask-settled li { display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.ask-settled-outcome { color: var(--ink-secondary); padding-inline-start: var(--leo-spacing-m); }
 .watch-turn { flex-wrap: wrap; }
 .watch-turn strong { font: var(--type-caption-strong); color: var(--ink-secondary); }
 

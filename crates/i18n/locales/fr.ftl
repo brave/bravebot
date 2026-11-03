@@ -2648,6 +2648,13 @@ ask-key-change = modifier une réponse
 ask-review-title = vérifiez vos réponses
 ask-review-heading = Rien n'a encore été envoyé.
 ask-review-skipped = (passée)
+# Dit sous l'appel une fois les questions réglées, un bloc par question posée : la question, puis
+# ce qu'elle est devenue (ASK-13).
+ask-settled-heading = { $tag } : { $question }
+ask-settled-chose = choisi : { $labels }
+ask-settled-typed = répondu : { $words }
+ask-settled-skipped = passée
+ask-settled-closed = fermée faute de réponse dans le temps imparti
 
 
 ## Confier la ligne à un éditeur

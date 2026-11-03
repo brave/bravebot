@@ -1071,6 +1071,12 @@ something is picked or typed, and sends every answer once the last is settled. A
 place. The line under the call in the transcript counts the questions asked (`3 questions asked`), not the
 answers, so a skipped question is still counted.
 
+Once the questions are settled, each question that was put is drawn under the call with its tag and
+sentence, and under it the option you picked, the words you typed, `skipped` or `closed on the clock`.
+A question answered from memory was not put and has none, and neither does a series nobody could be
+asked. These rows are only on your screen. The agent is not given them and the session does not keep
+them, so a session you resume shows the count line without them.
+
 In the terminal, a series of more than one ends in a review that lists each question beside your
 answer. Nothing has been sent until you press Enter there. Left goes back a question, a number
 reopens that question from the review, and either brings back what you had answered. A single

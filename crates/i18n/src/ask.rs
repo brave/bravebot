@@ -5,7 +5,10 @@
 //! The message is reached by its generated item, which is what [`crate::t!`] expands to: an
 //! exported macro cannot be named by path inside the crate that generates it.
 
-use crate::messages::AskTitleNumbered;
+use crate::messages::{
+    AskSettledChose, AskSettledHeading, AskSettledTyped, AskTitleNumbered, ask_settled_closed,
+    ask_settled_skipped,
+};
 
 /// Where the question at `at` (counted from zero) stands among the `total` being put, in the words
 /// the picker's title uses, or nothing for a lone question.
@@ -14,6 +17,38 @@ use crate::messages::AskTitleNumbered;
 /// among them.
 pub fn place(at: usize, total: usize) -> Option<String> {
     (total > 1).then(|| AskTitleNumbered { at: at + 1, total }.render())
+}
+
+/// The line that names a question under the call once it is settled: its tag and its sentence,
+/// or the sentence alone where it has no tag (ASK-13).
+pub fn settled_heading(tag: &str, question: &str) -> String {
+    if tag.is_empty() {
+        return question.to_string();
+    }
+    AskSettledHeading { tag, question }.render()
+}
+
+/// The line that says which options were picked, `labels` already in the order they were confirmed.
+pub fn settled_chose(labels: &[String]) -> String {
+    AskSettledChose {
+        labels: labels.join(", "),
+    }
+    .render()
+}
+
+/// The line that gives the words the person typed.
+pub fn settled_typed(words: &str) -> String {
+    AskSettledTyped { words }.render()
+}
+
+/// The line for a question that went unanswered.
+pub fn settled_skipped() -> String {
+    ask_settled_skipped().to_string()
+}
+
+/// The line for a question closed on the clock (ASK-9).
+pub fn settled_closed() -> String {
+    ask_settled_closed().to_string()
 }
 
 #[cfg(test)]
@@ -35,5 +70,21 @@ mod tests {
             Some("the agent is asking (3 of 3)"),
             "the last of three"
         );
+    }
+
+    /// Each outcome is worded by its own message. The regressions it rejects: the typed words
+    /// worded as a pick, a skip worded as the close on the clock, and a tag that is missing
+    /// leaving a bare colon in front of the question.
+    #[test]
+    fn each_way_a_question_can_end_has_its_own_words() {
+        assert_eq!(settled_heading("Library", "Which?"), "Library: Which?");
+        assert_eq!(settled_heading("", "Which?"), "Which?");
+        assert_eq!(
+            settled_chose(&["HTTP".to_string(), "Query".to_string()]),
+            "chose: HTTP, Query"
+        );
+        assert_eq!(settled_typed("neither"), "answered: neither");
+        assert_eq!(settled_skipped(), "skipped");
+        assert_eq!(settled_closed(), "closed on the clock");
     }
 }
