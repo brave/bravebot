@@ -28,6 +28,8 @@ governs:
   - crates/cli/src/session_delete.rs
   - crates/cli/src/stats.rs
   - crates/cli/src/schedule.rs
+  - crates/schedule/src/schedule.rs
+  - crates/schedule/src/calendar.rs
   - crates/cli/src/skill_eval.rs
   - crates/cli/src/trigger.rs
   - crates/session/src/stats.rs
@@ -2686,7 +2688,7 @@ of a skill change the tree it is graded in.
 <a id="CLI-42"></a>
 ### CLI-42: `schedule` installs a recurring one-shot run in the person's crontab, launchd or systemd
 
-`bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>] [--scheduler <name>]`
+`bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>] [--scheduler <name>] [--deliver-to <path>]`
 writes an entry and has the scheduler it names run `bravebot schedule run-now <id>` at the times the
 expression gives: one line of the person's crontab for `crontab`, a plist in `~/Library/LaunchAgents`
 loaded with `launchctl load -w` for `launchd`, or a `.service` and a `.timer` in the systemd user
@@ -2714,7 +2716,8 @@ the sandbox, are refused. With neither flag the run reads and reports, and `list
 for each entry. No other command accepts either flag.
 
 `add` is refused with the status for an argument unless standard input and standard error are a
-terminal, so a program a turn runs cannot add an entry. An expression is five fields of digits and
+terminal, so a program a turn runs cannot add an entry. A session's `/schedule` runs the same
+subcommands for a typed line and stores read mode only ([SCHEDULE-8](schedule.md#SCHEDULE-8)). An expression is five fields of digits and
 `*`, `/`, `,` and `-` only, so it is never an instruction to the shell, and a prompt is refused when
 it is empty, over 64 KiB or begins with `-`. The crontab is read and replaced through the `crontab`
 program, `launchctl` and `systemctl` are run for the other two, each found as
@@ -2731,6 +2734,10 @@ and a platform that is not Unix, refuse `add`, and refuse `remove` of a crontab 
 
 The driver reads a run's result for one value, the id of the session it recorded, and accepts it
 only where it is a session name. Nothing a run reads or says reaches an entry or the crontab.
+`--deliver-to <path>` names the program a run's standard output is handed to when `run-now` has
+recorded it, and `list` shows it as `delivers to <path>` or `delivers nowhere`. The bytes are carried
+to that program and not read, so the one read above is the only one, and a destination that fails
+is said on standard error and changes nothing else ([SCHEDULE-7](schedule.md#SCHEDULE-7)).
 
 A run is a one-shot run, so a background job its turn started ends with that turn
 ([RUN-15](tools/run.md#RUN-15)); nothing a job started is left running after the run exits.
@@ -2741,8 +2748,8 @@ Cron runs a job with almost none of the person's environment, so a run that need
 reads it from the state directory, as any run does.
 
 **Known costs.** There is no Windows scheduler. A job that finds no sign-in in the state directory
-ends with the status of the one-shot run and records no session. Results are kept and listed and
-are not sent anywhere.
+ends with the status of the one-shot run and records no session. A result goes only to the
+program named at `add`, and nothing is sent back to a run.
 
 `verified-by: bravebot_cli::scheduled_runs::an_entry_cannot_be_added_without_a_terminal`
 `verified-by: bravebot_cli::scheduled_runs::an_added_entry_is_one_crontab_line_and_listed_with_what_it_may_do`
@@ -2755,18 +2762,18 @@ are not sent anywhere.
 `verified-by: bravebot_cli::scheduled_runs::an_entry_is_not_kept_where_the_crontab_would_not_take_the_line`
 `verified-by: bravebot_cli::scheduled_runs::a_host_with_no_crontab_refuses_add_and_remove`
 `verified-by: bravebot_cli::schedule::the_mode_is_read_only_unless_a_flag_was_typed`
-`verified-by: bravebot_cli::schedule::a_directory_that_is_not_utf8_is_refused_and_not_written_as_its_lookalike`
-`verified-by: bravebot_cli::schedule::a_cron_expression_is_five_fields_of_digits_and_the_four_operators`
-`verified-by: bravebot_cli::schedule::a_table_keeps_every_other_line_and_replaces_only_its_own`
-`verified-by: bravebot_cli::schedule::the_session_is_found_outside_the_reply_and_never_inside_it`
+`verified-by: bravebot_schedule::schedule::a_directory_that_is_not_utf8_is_refused_and_not_written_as_its_lookalike`
+`verified-by: bravebot_schedule::schedule::a_cron_expression_is_five_fields_of_digits_and_the_four_operators`
+`verified-by: bravebot_schedule::schedule::a_table_keeps_every_other_line_and_replaces_only_its_own`
+`verified-by: bravebot_schedule::schedule::the_session_is_found_outside_the_reply_and_never_inside_it`
 `verified-by: bravebot_cli::scheduled_runs::a_systemd_entry_is_a_timer_and_a_service_and_not_a_crontab_line`
 `verified-by: bravebot_cli::scheduled_runs::a_launchd_entry_is_a_plist_loaded_and_unloaded_by_its_path`
 `verified-by: bravebot_cli::scheduled_runs::removing_a_job_the_scheduler_fails_to_stop_still_deletes_its_files_and_entry`
 `verified-by: bravebot_cli::scheduled_runs::an_entry_is_not_kept_where_launchctl_or_systemctl_refuses_the_job`
 `verified-by: bravebot_cli::scheduled_runs::an_unknown_scheduler_writes_nothing`
-`verified-by: bravebot_cli::schedule::calendar::a_day_and_a_weekday_that_are_both_restricted_run_on_either`
-`verified-by: bravebot_cli::schedule::calendar::a_plist_for_more_times_than_the_limit_is_refused`
-`verified-by: bravebot_cli::schedule::calendar::a_service_quotes_the_program_and_doubles_what_systemd_would_expand`
+`verified-by: bravebot_schedule::calendar::a_day_and_a_weekday_that_are_both_restricted_run_on_either`
+`verified-by: bravebot_schedule::calendar::a_plist_for_more_times_than_the_limit_is_refused`
+`verified-by: bravebot_schedule::calendar::a_service_quotes_the_program_and_doubles_what_systemd_would_expand`
 `verified-by: bravebot_cli::flags::exactly_the_eighteen_commands_that_start_no_session_are_named`
 
 <a id="CLI-43"></a>

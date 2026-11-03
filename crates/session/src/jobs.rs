@@ -742,7 +742,7 @@ enum Hold {
 /// Send the terminate signal, or the kill signal, to the process group `pid` leads. `false`
 /// where `pid` names no group.
 #[cfg(unix)]
-fn end_group(pid: u32, hard: bool) -> bool {
+pub fn end_group(pid: u32, hard: bool) -> bool {
     let Some(group) = i32::try_from(pid)
         .ok()
         .and_then(rustix::process::Pid::from_raw)
@@ -760,7 +760,7 @@ fn end_group(pid: u32, hard: bool) -> bool {
 /// Background sessions are not kept where the channel to one cannot be restricted to the person
 /// (BG-1), so there is no process here to end.
 #[cfg(not(unix))]
-fn end_group(_pid: u32, _hard: bool) -> bool {
+pub fn end_group(_pid: u32, _hard: bool) -> bool {
     false
 }
 

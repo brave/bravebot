@@ -299,6 +299,17 @@ uses, rather than by assembling a string of HTML — so a reply's markdown is ga
 to paper by exactly what gates it on screen. See `src/main/export.ts` for why that is worth a
 whole extra window.
 
+### The `/schedule` line
+
+A line that is `/schedule` or `/schedule <argument>`, typed into the composer, lists and manages
+schedule entries through the bridge method `schedule.command`, which runs the code `bravebot schedule`
+runs. The answer is drawn as a note in the transcript, as an error note where the command refused or
+failed, and is never sent to the model. `list`, `pending` and `history` are answered during a turn;
+any other form waits in the queue and is asked again when the turn ends. `run-now` answers at once
+and the line the run ends with arrives later as the `schedule.ran` event. An entry added here holds
+read mode whatever mode the conversation is in. A line from the queue of another kind, a template or
+the model's output is never taken for the command.
+
 ### Bots
 
 The left column has two lists. The **Chats** tab is everything above; the **Bots** tab is the

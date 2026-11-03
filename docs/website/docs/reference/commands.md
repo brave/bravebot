@@ -46,6 +46,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/after` | `<delay> <prompt>` | Send a prompt once, after a delay |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
+| `/schedule` | `[<subcommand>]` | List and manage the entries `bravebot schedule` keeps on this machine |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
 | `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
 | `/sessions` | | Open the Sessions screen: every session on this machine and what each is doing. Left over an empty box does the same |
@@ -766,6 +767,28 @@ Seven things end a watch and each says so: `/watch stop <n>`, Ctrl-C with nothin
 time), the path ceasing to be readable, `/clear` and leaving, and age.
 
 **A watch is never written down**, so `--resume` restores none and none outlives the process.
+
+## `/schedule [<subcommand>]`
+
+Lists and manages the entries [`bravebot schedule`](cli.md#schedule) keeps, through the same code and
+with the same refusals. The subcommands are `list`, `add`, `remove`, `pause`, `resume`, `pending`,
+`clear`, `history` and `run-now`, with the arguments the command line takes. Quote a cron expression
+and a prompt as you would in a shell: `"` and `'` group words, nothing is expanded, and a line with an
+unclosed quote is refused.
+
+```
+/schedule list
+/schedule add --cron "0 9 * * 1-5" --prompt "summarize yesterday's merged pull requests"
+/schedule run-now 1     # starts the run in the background and says when it ends
+```
+
+`add` from a session stores an entry that reads and reports only, whatever mode the session is in,
+and refuses `--accept-edits` and `--dangerously-skip-permissions`: use the command line for an entry
+that writes. The entry's directory is the session's unless `--dir` names another. Only a line you
+type runs it. The model cannot, and a reply that contains the line is text. The answer is drawn on
+the screen and is not sent to the model. While a turn runs, `list`, `pending`, `history` and
+`/schedule` alone answer at once, and every other form waits until the turn ends. The desktop
+window takes the same line in its composer.
 
 ## `/jobs [stop <name> [<delegate>]]`
 

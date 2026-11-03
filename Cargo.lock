@@ -276,6 +276,7 @@ dependencies = [
  "bravebot-mcp",
  "bravebot-net",
  "bravebot-sandbox",
+ "bravebot-schedule",
  "bravebot-session",
  "bravebot-signing",
  "bravebot-skus",
@@ -387,6 +388,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "bravebot-schedule"
+version = "0.20.0"
+dependencies = [
+ "bravebot-agent",
+ "bravebot-approval",
+ "bravebot-config",
+ "bravebot-core",
+ "bravebot-i18n",
+ "bravebot-sandbox",
+ "bravebot-session",
+ "tempfile",
+]
+
+[[package]]
 name = "bravebot-session"
 version = "0.20.0"
 dependencies = [
@@ -445,6 +460,7 @@ dependencies = [
  "bravebot-mentions",
  "bravebot-net",
  "bravebot-sandbox",
+ "bravebot-schedule",
  "bravebot-session",
  "bravebot-skus",
  "bravebot-stamp",
@@ -477,6 +493,7 @@ dependencies = [
  "bravebot-mentions",
  "bravebot-net",
  "bravebot-sandbox",
+ "bravebot-schedule",
  "bravebot-session",
  "bravebot-skus",
  "bravebot-stamp",

@@ -27,6 +27,8 @@ bravebot-i18n = { path = "../i18n" }
 bravebot-mentions = { path = "../mentions" }
 bravebot-net = { path = "../net" }
 bravebot-sandbox = { path = "../sandbox" }
+# The `bravebot schedule` subcommands as functions, so `/schedule` says what the command line says.
+bravebot-schedule = { path = "../schedule" }
 bravebot-session = { path = "../session" }
 bravebot-stamp = { path = "../stamp" }
 # The startup line about a newer release, and the hourly ask behind it, which the desktop bridge

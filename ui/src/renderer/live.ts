@@ -32,6 +32,11 @@ export interface Queued {
    * It goes as a turn of its own whether or not the queue is paused.
    */
   fromInterjection?: boolean
+  /**
+   * Set for a typed `/schedule` line that waits for the turn: its argument. It is asked of the
+   * bridge when the turn ends and is never sent as a prompt (CMD-8).
+   */
+  schedule?: string
 }
 
 /** A line sent into the running turn, kept as written until the turn says it has read it. */

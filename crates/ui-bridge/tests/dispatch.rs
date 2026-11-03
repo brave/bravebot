@@ -857,3 +857,41 @@ fn a_desktop_session_is_given_a_directory_of_its_own() {
         "{reported} outlived the session that was given it"
     );
 }
+
+/// `schedule.command` reaches the shared function through the dispatcher: a session that is not
+/// open is refused, and a form with no such subcommand is answered as a refusal in lines to draw.
+/// The line is one that reads nothing from the schedule store.
+#[test]
+fn schedule_command_is_dispatched_to_the_shared_function() {
+    let (mut bridge, _) = harness();
+    let missing = call(
+        &mut bridge,
+        "schedule.command",
+        json!({ "session": "nobody", "argument": "list" }),
+    );
+    assert_eq!(missing, Err(ErrorCode::NoSuchSession));
+
+    let handle = a_trusting_session(&mut bridge);
+    let answer = call(
+        &mut bridge,
+        "schedule.command",
+        json!({ "session": &handle, "argument": "no-such-subcommand" }),
+    )
+    .expect("answered");
+    assert_eq!(answer["refused"], true, "{answer}");
+    assert_eq!(answer["running"], false, "{answer}");
+    assert!(
+        answer["lines"]
+            .as_array()
+            .is_some_and(|lines| !lines.is_empty()),
+        "{answer}"
+    );
+
+    let unclosed = call(
+        &mut bridge,
+        "schedule.command",
+        json!({ "session": &handle, "argument": "add \"never closed" }),
+    )
+    .expect("answered");
+    assert_eq!(unclosed["refused"], true, "{unclosed}");
+}

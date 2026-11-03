@@ -61,6 +61,7 @@ pub mod models;
 pub mod protocol;
 pub mod rules;
 pub mod running;
+mod schedule_command;
 pub mod settings;
 pub mod store;
 pub mod turn;

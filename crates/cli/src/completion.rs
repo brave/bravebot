@@ -284,3 +284,18 @@ fn fish() -> String {
     }
     script
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_destination_word_of_schedule_add_is_not_offered_as_a_flag_of_the_program() {
+        // Like `--cron` and `--dir`, `--deliver-to` is a word of `schedule add` and not a flag
+        // the usage table lists, so no shell offers it ahead of a command or to a run.
+        let word = bravebot_schedule::DELIVER_TO_WORD.trim_start_matches("--");
+        assert!(FLAGS.iter().all(|flag| flag.long != word));
+        assert!(!flag_words().contains(bravebot_schedule::DELIVER_TO_WORD));
+        assert!(SCHEDULE.contains(&"add"));
+    }
+}

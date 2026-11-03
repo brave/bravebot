@@ -354,6 +354,11 @@ async function request(method: string, params: Record<string, unknown> = {}): Pr
       return ok({ accepted: true })
     }
     case 'turn.cancel': if (session) stop(session.handle); return ok({})
+    case 'schedule.command': {
+      const argument = String(params.argument ?? '').trim()
+      if (!argument || argument === 'list') return ok({ lines: ['No scheduled runs.'], refused: false, running: false })
+      return ok({ lines: ['The playground does not keep a schedule.'], refused: true, running: false })
+    }
     case 'session.fork': {
       if (!session) return failed('no-session', 'That session is closed.')
       const at = session.said.findIndex((entry) => entry.kind === 'user' && entry.prompt === params.prompt)

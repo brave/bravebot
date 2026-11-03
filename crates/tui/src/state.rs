@@ -22,6 +22,7 @@ mod hover;
 mod menu;
 mod open_loops;
 mod queue;
+mod scheduling;
 mod scroller;
 mod sessions_screen;
 mod settings;
@@ -332,6 +333,10 @@ pub struct Addressed {
     /// Resolved as the driver resolves it, or `None` where the definition names no model.
     pub model: Option<String>,
 }
+
+/// What `/schedule` calls with the words after it, the proof a person typed the line, and the
+/// session's directory.
+pub(crate) type ScheduleRuns = bravebot_schedule::SessionRun;
 
 /// Everything the interface needs to draw itself.
 #[derive(Debug)]
@@ -1039,6 +1044,13 @@ pub struct Session {
     /// that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
     watches: watch::Watches,
+    /// What `/schedule` calls with the words after it, the proof a person typed the line, and the
+    /// session's directory. A field so a test names one that touches neither the state directory
+    /// nor the system scheduler.
+    pub(crate) schedule: ScheduleRuns,
+    /// The `run-now` runs started from this session that have not answered yet, each read once
+    /// per pass of the loop so the box is not held for the length of a run.
+    schedule_runs: Vec<std::sync::mpsc::Receiver<bravebot_schedule::Reply>>,
     /// Set when `/init`, `/review` or `/help` hands back its prompt, so the turn that sends it says
     /// the driver wrote it.
     driver_prompt_pending: bool,
@@ -1501,6 +1513,8 @@ impl Session {
             ctrl_enter_arrives: false,
             looping: crate::loops::Loops::default(),
             watches: watch::Watches::new(),
+            schedule: bravebot_schedule::in_session,
+            schedule_runs: Vec::new(),
             driver_prompt_pending: false,
             goal: None,
             work: bravebot_agent::Work::default(),

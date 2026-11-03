@@ -59,7 +59,7 @@ export type Entry = (
   | { kind: 'user'; id: string; text: string; prompt?: number; summoned?: string; interjected?: true }
   | { kind: 'assistant'; id: string; text: string }
   /** `command` is the words of `text` that are a command to run, where a notice names one. */
-  | { kind: 'narration'; id: string; text: string; command?: string | null }
+  | { kind: 'narration'; id: string; text: string; command?: string | null; refused?: true }
   /**
    * The questions an `ask_user` call put and what became of each, worded by the kernel and drawn
    * under the call once the series is settled (ASK-13). The words are the kernel's; nothing here
@@ -329,6 +329,13 @@ export function summonedAt(entries: Entry[], found: Map<number, string>): Entry[
 export const consolidating = (): Entry => ({ kind: 'consolidation', id: nextId() })
 export const narrated = (text: string, command?: string | null): Entry => ({ kind: 'narration', id: nextId(), text, command })
 export const askSettled = (settled: AskSettled): Entry => ({ kind: 'ask-settled', id: nextId(), rows: settled.rows })
+/** What `/schedule` answered, drawn as a narration: for the person to read and never part of the conversation. */
+export const scheduleAnswered = (answer: { lines: string[]; refused: boolean }): Entry => ({
+  kind: 'narration',
+  id: nextId(),
+  text: answer.lines.join('\n'),
+  ...(answer.refused ? { refused: true as const } : {}),
+})
 export const watchFired = (number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
 export const errored = (text: string): Entry => ({ kind: 'error', id: nextId(), text })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })

@@ -24,6 +24,7 @@ governs:
   - crates/tui/src/help_command.rs
   - crates/tui/src/open_command.rs
   - crates/tui/src/prompt_files.rs
+  - crates/tui/src/state/scheduling.rs
 guards:
   - symbol: commands
 documented-by:
@@ -356,8 +357,8 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
-| everything else | every other command, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme`, `/effort` and `/variant` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal; `/schedule` alone and `/schedule list`, `pending` and `history` | carried out as it is typed |
+| everything else | every other command, `/loop <interval> <prompt>`, `/goal <condition>` and every other form of `/schedule` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
 box edits in or what a later start reads (`/theme`, `/config` and `/language`), goes ahead of every line already waiting, and a line behind
@@ -365,6 +366,9 @@ it stays where it was. The exception is a line of the same command already waiti
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
 were typed. `/loop` waits behind a waiting `/after` as well, since that takes the slot a loop takes.
+A `/schedule` that only reads (`list`, `pending`, `history` and the bare word) waits behind a waiting
+`/schedule` that writes, as `/loop stop` waits behind `/loop 5m ...`: a `list` typed after a waiting
+`add` would otherwise answer without the entry the person typed first.
 A command that changes what the session keeps, `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/sandbox`, `/model`, `/effort`, `/advisor` or `/style`, is carried out as it is
 typed unless a line waiting ahead of it could change what it acts on, and otherwise waits behind
@@ -707,6 +711,10 @@ carried out or queued as above.
 `verified-by: bravebot_tui::render::the_rows_carry_no_label_when_nothing_is_running`
 `verified-by: bravebot_tui::app::enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs`
 `verified-by: bravebot_tui::app::a_whole_command_is_still_carried_out_or_queued_while_a_turn_runs`
+`verified-by: bravebot_tui::app::mid_turn_schedule_reads_are_answered_and_every_other_form_waits`
+`verified-by: bravebot_tui::app::a_schedule_read_waits_behind_a_schedule_write_typed_before_it`
+`verified-by: bravebot_schedule::words::only_the_three_readers_and_the_bare_word_are_carried_out_while_a_turn_runs`
+`verified-by: bravebot_tui::app::every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note`
 
 ## What a slash word is offered
 
@@ -1289,7 +1297,7 @@ refusal for an unknown word in step.
 `verified-by: bravebot_tui::app::tab_leaves_a_line_alone_while_the_caret_is_not_at_its_end`
 
 <a id="CMD-22"></a>
-### CMD-22: `/sandbox`, `/limit`, `/review` and `/reach` spell out what they take after the word
+### CMD-22: `/sandbox`, `/limit`, `/review`, `/reach` and `/schedule` spell out what they take after the word
 
 Once `/sandbox ` is typed, the box draws the four modes it takes, `strict`, `read-only`,
 `workspace-write` and `off`, after the caret in place of `[<mode>]`. `/sandbox standard` is read
@@ -1304,7 +1312,9 @@ words, `remove <n>` and `keys`. In each, the words are the ones the parser compa
 from the type or constant it reads, so a mode, scope or target added there appears in the hint.
 The completion list and the table keep the short form, so the description column does not move,
 and `--help` prints the spelled-out form. `/style` and `/theme` list nothing after the word,
-because a name there may come from a file a person wrote.
+because a name there may come from a file a person wrote. `/schedule` completes the subcommand word
+from `bravebot_schedule::words::SUBCOMMANDS` ([SCHEDULE-8](schedule.md#SCHEDULE-8)) and nothing
+after it.
 
 Nothing from the conversation reaches any of them. They read the typed line and fixed sets.
 
@@ -1315,6 +1325,7 @@ apart from the parser drifts from it.
 `verified-by: bravebot_tui::app::the_sandbox_hint_lists_every_mode_and_the_list_stays_short`
 `verified-by: bravebot_tui::app::the_limit_review_and_reach_hints_show_forms_their_parsers_take`
 `verified-by: bravebot_tui::app::tab_finishes_a_mode_started_after_the_sandbox_command`
+`verified-by: bravebot_tui::command_table::tab_completes_the_schedule_subcommands`
 
 <a id="CMD-23"></a>
 ### CMD-23: `/commit-message` puts a draft in the box, and the diff and the draft reach no planner

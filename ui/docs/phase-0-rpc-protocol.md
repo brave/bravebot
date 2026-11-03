@@ -1022,6 +1022,25 @@ instead. The flag exists so the client can be written once against both.
 version; `home` and `defaultModel` may be null. Sent as the
 `agent.ready` event at startup and also available as a request.
 
+#### `schedule.command`
+
+```json
+{ "id": 12, "method": "schedule.command", "params": { "session": "s1", "argument": "list" } }
+→ { "lines": ["1  0 9 * * *  read  active"], "refused": false, "running": false }
+```
+
+Carries out `/schedule <argument>` for a line a person typed into the composer (CMD-1), with the code
+`bravebot schedule` runs (SCHEDULE-8). The bridge cuts `argument` into words; a quote left open is
+answered with `refused: true` and nothing is run. `lines` is what the command printed, then the
+sentence of a refusal, then a notice, each with control characters pictured. `refused` is the
+command's own outcome. The lines are for the transcript and are never sent to the model. `add` stores
+read mode whatever mode the session is in.
+
+`run-now` answers at once with `running: true` and one line saying the run started. The line the run
+ends with arrives later as a `schedule.ran` event. While a turn runs, `list`, `pending` and
+`history` are answered and every other form fails with `turn_in_flight` and runs nothing (CMD-8). An
+unknown `session` is `no_such_session`.
+
 ### 7.4 Error codes
 
 | code | meaning |
@@ -1048,6 +1067,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `turn.started` | `{ turn, mode }` | `turn.send` accepted |
 | `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `enhance.done` | `{ status, text?, removed?, limit?, message? }` | what a `session.enhance` came back with: `ready` (`text`, and `removed` characters that draw as nothing taken out), `untrusted`, `unusable` (empty or past `limit` characters), `stopped`, or `failed` (`message`) |
+| `schedule.ran` | `{ lines, refused, running }`, as `schedule.command` answers | the end of a `/schedule run-now` started by `schedule.command`: the line saying how the run ended, never the run's captured result |
 | `phase` | `{ phase }` | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
 | `thinking` | `{ text }`, the words that arrived since the last | `Reporter::thinking`, **a delegate's and an empty one dropped** |

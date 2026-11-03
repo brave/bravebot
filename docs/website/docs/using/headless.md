@@ -219,7 +219,17 @@ the first one, exits with status 4 and keeps the question for `schedule pending`
 clear <id>` deletes. `schedule pause <id>` keeps an entry and its line and stops it from running, and
 `schedule resume <id>` lets it run again. A firing that finds the previous firing of the same entry
 still running is skipped. `history` lists each run with its exit status, the session it recorded and
-the tokens it spent. [The reference](../reference/cli.md#schedule) has the options.
+the tokens it spent.
+
+To be told what a run printed, give `add` `--deliver-to /path/to/program`. After each run that
+program is started with the run's output on its standard input, for at most 60 seconds, and
+`schedule list` shows where each entry delivers. If it fails, one line on standard error says so and
+nothing else about the run changes. The output goes only to that program, and nothing can answer a
+question the run stopped at. [The reference](../reference/cli.md#schedule) has the options.
+
+In a session, `/schedule list`, `/schedule add ...` and the other subcommands do the same through the
+same code ([`/schedule`](../reference/commands.md#schedule-subcommand)); an entry added there reads
+and reports only.
 
 ## Running on an event
 

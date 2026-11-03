@@ -23,6 +23,8 @@ export function apply(
     switch (message.event) {
       case 'watch.fired':
         return { ...old, entries: [...old.entries, t.watchFired(message.data.number, message.data.path)] }
+      case 'schedule.ran':
+        return { ...old, entries: [...old.entries, t.scheduleAnswered(message.data)] }
       case 'watch.ended':
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':

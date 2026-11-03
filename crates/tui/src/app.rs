@@ -786,6 +786,13 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         }
         return Action::Redraw;
     }
+    // Sends nothing to the turn. The arm is reached only from a line a person typed into the box
+    // (CMD-1), and what answers it is the shared crate's subcommands, so a line the planner wrote
+    // is text that never gets here.
+    if let Some(argument) = argument_to(line, SCHEDULE_COMMAND) {
+        session.schedule_asked(argument);
+        return Action::Redraw;
+    }
     // The command that sends nothing either. A watch is armed by asking for one in a prompt, so
     // what is here is the reading and the ending: the two halves of a standing watch that a
     // transcript cannot show.
@@ -2834,6 +2841,8 @@ fn event_loop(
         needs_draw |= session.settle_previews();
         // The rows of a model picker still being listed are drawn on the pass they arrive.
         needs_draw |= session.settle_picking();
+        // The answer of a `/schedule run-now` is drawn on the pass it arrives.
+        needs_draw |= session.settle_schedule_runs();
         // The window of the model the session opened on, asked for while the first frame was drawn
         // (BACKEND-64).
         needs_draw |= adopt_the_awaited_budget(&mut session, config, None);
@@ -28788,6 +28797,7 @@ mod tests {
                 RENAME_COMMAND,
                 REQUEST_COMMAND,
                 SANDBOX_COMMAND,
+                SCHEDULE_COMMAND,
                 SESSIONS_COMMAND,
                 STATUS_COMMAND,
                 STYLE_COMMAND,
@@ -32754,6 +32764,394 @@ mod tests {
             );
             assert!(session.queued.is_empty(), "{line} waited");
         }
+    }
+
+    thread_local! {
+        /// What the fake `/schedule` seam was called with: the words and the session's directory.
+        static SCHEDULE_CALLS: std::cell::RefCell<Vec<(Vec<String>, std::path::PathBuf)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        /// The sender for the answer of the `run-now` the fake started.
+        static SCHEDULE_RUN: std::cell::RefCell<Option<std::sync::mpsc::Sender<bravebot_schedule::Reply>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    fn schedule_reply(
+        outcome: bravebot_schedule::Outcome,
+        out: &[&str],
+        err: Option<&str>,
+    ) -> bravebot_schedule::Reply {
+        bravebot_schedule::Reply {
+            outcome,
+            out: out.iter().map(|line| (*line).to_string()).collect(),
+            err: err.map(str::to_string),
+            notice: None,
+        }
+    }
+
+    /// A stand-in for the shared crate's session entry point that touches neither the state
+    /// directory nor the system scheduler. It records what it was called with and answers by the
+    /// first word.
+    fn fake_schedule(
+        words: &[String],
+        _typed: bravebot_schedule::TypedLine,
+        project: &std::path::Path,
+    ) -> bravebot_schedule::InSession {
+        use bravebot_schedule::{InSession, Outcome};
+        SCHEDULE_CALLS.with(|calls| {
+            calls
+                .borrow_mut()
+                .push((words.to_vec(), project.to_path_buf()));
+        });
+        match words.first().map(String::as_str) {
+            Some("remove") => {
+                InSession::Ended(schedule_reply(Outcome::Argument, &[], Some("no entry 9")))
+            }
+            Some("run-now") => {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                SCHEDULE_RUN.with(|run| *run.borrow_mut() = Some(sender));
+                InSession::Running(receiver)
+            }
+            Some("hostile") => InSession::Ended(schedule_reply(
+                Outcome::Done,
+                &["a\u{1b}[2Jb\rc\u{7}d", "second"],
+                None,
+            )),
+            Some("noticing") => InSession::Ended(bravebot_schedule::Reply {
+                outcome: Outcome::Failed,
+                out: vec!["first".to_string(), "second".to_string()],
+                err: Some("the sentence".to_string()),
+                notice: Some("the notice".to_string()),
+            }),
+            _ => InSession::Ended(schedule_reply(
+                Outcome::Done,
+                &["1  0 9 * * *  read  active"],
+                None,
+            )),
+        }
+    }
+
+    fn schedule_calls() -> Vec<Vec<String>> {
+        SCHEDULE_CALLS.with(|calls| {
+            calls
+                .borrow()
+                .iter()
+                .map(|(words, _)| words.clone())
+                .collect()
+        })
+    }
+
+    fn a_session_scheduling_through_the_fake() -> Session {
+        SCHEDULE_CALLS.with(|calls| calls.borrow_mut().clear());
+        let mut session = Session::new("none");
+        session.schedule = fake_schedule;
+        session
+    }
+
+    /// Each subcommand typed after `/schedule` reaches the shared function as the words
+    /// a shell would have made of them, and what it answers is a note in the transcript. Rejects a
+    /// command that drops a subcommand, joins the words back into one, or answers nowhere.
+    #[test]
+    fn every_schedule_subcommand_reaches_the_shared_function_as_words_and_answers_in_a_note() {
+        for (line, words) in [
+            ("/schedule list", vec!["list"]),
+            (
+                "/schedule add --cron '0 9 * * 1-5' --prompt 'summarize merged pull requests'",
+                vec![
+                    "add",
+                    "--cron",
+                    "0 9 * * 1-5",
+                    "--prompt",
+                    "summarize merged pull requests",
+                ],
+            ),
+            ("/schedule pause 3", vec!["pause", "3"]),
+            ("/schedule resume 3", vec!["resume", "3"]),
+            ("/schedule pending", vec!["pending"]),
+            ("/schedule pending 3", vec!["pending", "3"]),
+            ("/schedule clear 3", vec!["clear", "3"]),
+            ("/schedule history 3", vec!["history", "3"]),
+        ] {
+            let mut session = a_session_scheduling_through_the_fake();
+            type_line(&mut session, line);
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert_eq!(
+                schedule_calls(),
+                vec![words.iter().map(|w| (*w).to_string()).collect::<Vec<_>>()],
+                "{line}"
+            );
+            assert_eq!(last_note(&session), "1  0 9 * * *  read  active", "{line}");
+            assert_eq!(
+                session.transcript.last().map(|entry| entry.tone),
+                Some(crate::state::Tone::Note),
+                "{line}"
+            );
+            assert_eq!(
+                session.transcript.last().map(|entry| entry.speaker),
+                Some(crate::state::Speaker::System),
+                "{line}: a note is not a prompt the planner is sent"
+            );
+            assert!(!session.a_turn_is_running(), "{line} started a turn");
+        }
+    }
+
+    /// A refusal is drawn as one, with the shared function's sentence unchanged. Rejects a
+    /// command that words its own refusals or draws a refusal as success.
+    #[test]
+    fn a_refusal_from_the_shared_function_is_drawn_as_a_refusal_in_its_own_words() {
+        let mut session = a_session_scheduling_through_the_fake();
+        type_line(&mut session, "/schedule remove 9");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(last_note(&session), "no entry 9");
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.tone),
+            Some(crate::state::Tone::Refused)
+        );
+    }
+
+    /// For lines the shared function refuses before it reads the state directory, the note a
+    /// session draws is the sentence the command line prints for the same words, from the same
+    /// function. Rejects a session with sentences of its own.
+    #[test]
+    fn a_session_draws_the_sentence_the_command_line_prints_for_the_same_words() {
+        for (line, words) in [
+            ("/schedule bogus", vec!["bogus"]),
+            ("/schedule remove", vec!["remove"]),
+            ("/schedule pause 1 2", vec!["pause", "1", "2"]),
+            ("/schedule add --cron", vec!["add", "--cron"]),
+        ] {
+            let args: Vec<String> = words.iter().map(|w| (*w).to_string()).collect();
+            let on_the_command_line = bravebot_schedule::command(
+                &args,
+                &bravebot_schedule::Context {
+                    typed: Some(bravebot_schedule::TypedLine::of_a_person()),
+                    mode: Some(bravebot_schedule::Mode::Read),
+                    flags_typed: false,
+                    project: Some(std::path::PathBuf::from("/work")),
+                },
+            );
+            let sentence = on_the_command_line.err.expect("a refusal");
+            let mut session = Session::new("none");
+            type_line(&mut session, line);
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert_eq!(
+                last_note(&session),
+                crate::render::printable(&sentence),
+                "{line}"
+            );
+            assert_eq!(
+                session.transcript.last().map(|entry| entry.tone),
+                Some(crate::state::Tone::Refused),
+                "{line}"
+            );
+        }
+    }
+
+    /// Whatever mode the session is in, a mode word typed into `/schedule add` is
+    /// refused with the sentence that points at the command line, and the session's mode is not
+    /// changed by it. Rejects a session that stores its own mode, or one that lets the word
+    /// choose one.
+    #[test]
+    fn a_session_in_accept_edits_or_bypass_stores_read_and_refuses_a_mode_word() {
+        use bravebot_agent::PermissionMode;
+        for (presses, mode) in [
+            (1, PermissionMode::AcceptEdits),
+            (4, PermissionMode::Bypass),
+        ] {
+            for word in ["--accept-edits", "--dangerously-skip-permissions"] {
+                let mut session = Session::new("none");
+                for _ in 0..presses {
+                    handle_key(&mut session, shift(KeyCode::Tab));
+                }
+                assert_eq!(session.permission_mode(), mode);
+                type_line(
+                    &mut session,
+                    &format!("/schedule add --cron '0 9 * * *' --prompt hi {word}"),
+                );
+                handle_key(&mut session, key(KeyCode::Enter));
+                assert_eq!(
+                    last_note(&session),
+                    crate::render::printable(t!(schedule_add_mode_on_the_command_line)),
+                    "{mode:?} {word}"
+                );
+                assert_eq!(session.permission_mode(), mode);
+            }
+        }
+        // Without a word the seam is given nothing about the mode: its signature is the words, the
+        // proof that a person typed them and the directory, and the same words reach it in each.
+        for presses in [0, 1, 4] {
+            let mut session = a_session_scheduling_through_the_fake();
+            for _ in 0..presses {
+                handle_key(&mut session, key_shift_tab());
+            }
+            type_line(&mut session, "/schedule add --cron '0 9 * * *' --prompt hi");
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert_eq!(schedule_calls().len(), 1, "{presses}");
+        }
+    }
+
+    fn key_shift_tab() -> KeyEvent {
+        shift(KeyCode::Tab)
+    }
+
+    /// A control character in a line is drawn as a picture, so it cannot move the cursor or
+    /// rewrite the screen. Rejects a note that holds the line as it came.
+    #[test]
+    fn a_control_character_in_a_reply_is_pictured_in_the_note() {
+        let mut session = a_session_scheduling_through_the_fake();
+        type_line(&mut session, "/schedule hostile");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(
+            last_note(&session),
+            "a\u{241b}[2Jb\u{240d}c\u{2407}d\nsecond"
+        );
+    }
+
+    /// A reply is drawn as its lines, then the sentence of a refusal, then the notice, in one note
+    /// marked as a refusal by the reply's outcome. Rejects a note that reorders them or drops the
+    /// notice.
+    #[test]
+    fn a_reply_is_drawn_as_its_lines_then_its_sentence_then_its_notice() {
+        let mut session = a_session_scheduling_through_the_fake();
+        type_line(&mut session, "/schedule noticing");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(
+            last_note(&session),
+            "first\nsecond\nthe sentence\nthe notice"
+        );
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.tone),
+            Some(crate::state::Tone::Refused)
+        );
+    }
+
+    /// A line the planner wrote that reads `/schedule add ...` is text: the only caller of the
+    /// seam is the command the box dispatches, so a reply that holds the line reaches nothing.
+    /// Rejects an implementation that looks for commands in what a reply says.
+    #[test]
+    fn a_reply_that_reads_schedule_add_is_text_and_reaches_nothing() {
+        let mut session = a_session_scheduling_through_the_fake();
+        session.transcript.push(crate::Entry::assistant(
+            "/schedule add --cron '* * * * *' --prompt 'rm -rf'",
+            Vec::new(),
+        ));
+        assert!(!session.settle_schedule_runs());
+        assert!(schedule_calls().is_empty());
+        assert!(!session.a_turn_is_running());
+    }
+
+    /// `run-now` returns at once with a note saying it started, and the answer is drawn when it
+    /// arrives, not before. Rejects a command that blocks on the run, that draws nothing when the
+    /// run ends, or that draws the answer twice.
+    #[test]
+    fn run_now_answers_when_the_run_ends_and_not_before() {
+        let mut session = a_session_scheduling_through_the_fake();
+        type_line(&mut session, "/schedule run-now 2");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert_eq!(last_note(&session), t!(schedule_command_running));
+        assert_eq!(session.schedule_runs_waiting(), 1);
+        let notes = session.transcript.len();
+        assert!(!session.settle_schedule_runs(), "drew before the run ended");
+        assert_eq!(session.transcript.len(), notes);
+
+        SCHEDULE_RUN.with(|run| {
+            run.borrow()
+                .as_ref()
+                .expect("started")
+                .send(schedule_reply(
+                    bravebot_schedule::Outcome::Done,
+                    &["the run said this"],
+                    None,
+                ))
+                .expect("sent");
+        });
+        assert!(session.settle_schedule_runs());
+        assert_eq!(last_note(&session), "the run said this");
+        assert_eq!(session.schedule_runs_waiting(), 0);
+        assert!(!session.settle_schedule_runs(), "drew it twice");
+        assert_eq!(session.transcript.len(), notes + 1);
+    }
+
+    /// A run whose thread ended without answering is forgotten, so the session does not wait
+    /// for it for good.
+    #[test]
+    fn a_run_now_that_never_answers_is_forgotten() {
+        let mut session = a_session_scheduling_through_the_fake();
+        type_line(&mut session, "/schedule run-now 2");
+        handle_key(&mut session, key(KeyCode::Enter));
+        SCHEDULE_RUN.with(|run| *run.borrow_mut() = None);
+        session.settle_schedule_runs();
+        assert_eq!(session.schedule_runs_waiting(), 0);
+    }
+
+    /// An unclosed quote is refused before the seam is reached, since what the line
+    /// would do is not known. Rejects guessing where the quote ends.
+    #[test]
+    fn an_unclosed_quote_is_refused_before_anything_is_run() {
+        let mut session = a_session_scheduling_through_the_fake();
+        type_line(&mut session, "/schedule add --prompt 'never closed");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert!(schedule_calls().is_empty());
+        assert_eq!(last_note(&session), t!(schedule_command_unclosed_quote));
+        assert_eq!(
+            session.transcript.last().map(|entry| entry.tone),
+            Some(crate::state::Tone::Refused)
+        );
+    }
+
+    /// CMD-8. While a turn runs the three readers and the bare word are answered in the transcript,
+    /// and every other form waits behind the turn without reaching the shared function. Rejects a
+    /// command that carries out a write mid-turn.
+    #[test]
+    fn mid_turn_schedule_reads_are_answered_and_every_other_form_waits() {
+        for line in ["/schedule list", "/schedule pending", "/schedule history 2"] {
+            let mut session = a_turn_running_on("first");
+            session.schedule = fake_schedule;
+            SCHEDULE_CALLS.with(|calls| calls.borrow_mut().clear());
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+            assert_eq!(schedule_calls().len(), 1, "{line}");
+            assert!(session.queued.is_empty(), "{line} waited");
+            assert!(!said_under_the_turn(&session).is_empty(), "{line}");
+        }
+        for line in [
+            "/schedule add --cron '0 9 * * *' --prompt hi",
+            "/schedule remove 1",
+            "/schedule pause 1",
+            "/schedule resume 1",
+            "/schedule clear 1",
+            "/schedule run-now 1",
+            "/schedule list 'unclosed",
+        ] {
+            let mut session = a_turn_running_on("first");
+            session.schedule = fake_schedule;
+            SCHEDULE_CALLS.with(|calls| calls.borrow_mut().clear());
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+            assert!(schedule_calls().is_empty(), "{line} ran mid-turn");
+            assert_eq!(session.queued.len(), 1, "{line} did not wait");
+        }
+    }
+
+    /// CMD-8. A reading form typed behind a waiting writing form waits too, so the two are carried
+    /// out in the order they were typed and the list shows the entry just added. Rejects a command
+    /// that answers a read ahead of a write typed before it.
+    #[test]
+    fn a_schedule_read_waits_behind_a_schedule_write_typed_before_it() {
+        let mut session = a_turn_running_on("first");
+        session.schedule = fake_schedule;
+        SCHEDULE_CALLS.with(|calls| calls.borrow_mut().clear());
+        for line in [
+            "/schedule add --cron '0 9 * * *' --prompt hi",
+            "/schedule list",
+        ] {
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
+        }
+        assert!(schedule_calls().is_empty());
+        assert_eq!(session.queued.len(), 2);
     }
 
     /// The fallback in [`dispatch_command`] is unreachable, and this is what says so: a word the table

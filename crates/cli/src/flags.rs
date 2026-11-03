@@ -683,6 +683,21 @@ mod tests {
     }
 
     #[test]
+    fn the_destination_word_is_an_add_word_and_not_a_flag_main_takes_or_a_run_starts_with() {
+        // `--deliver-to` is read by `schedule add` from the words after `add`. It is not
+        // a flag that opens a one-shot run, so a line that leads with it starts nothing, and
+        // `main` does not take it out of the arguments ahead of the command. The wrong
+        // implementation lists it among TASK_FLAGS, which would make it a flag a run is started with.
+        let word = bravebot_schedule::DELIVER_TO_WORD;
+        assert!(!TASK_FLAGS.contains(&word));
+        assert!(!is_a_one_shot(&words(&[word, "/bin/cat"]), false));
+        assert!(starts_neither_a_session_nor_a_task(word).is_none());
+        for taken in [ACCEPT_EDITS, SKIP_PERMISSIONS, AUTO] {
+            assert_ne!(taken, word);
+        }
+    }
+
+    #[test]
     fn exactly_the_eighteen_commands_that_start_no_session_are_named() {
         for command in NON_SESSION_COMMANDS {
             assert_eq!(starts_neither_a_session_nor_a_task(command), Some(command));

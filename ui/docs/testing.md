@@ -94,6 +94,9 @@ matter:
   build: it renders the transcript's own components through `react-dom/server` and asserts
   on the markup, which is what pins the three properties
   [LAYER-5](../../docs/specs/layering.md#LAYER-5) states for this surface.
+  `schedule-command.test.mjs` pins the `/schedule` line in the composer: which typed lines go to the
+  bridge as `schedule.command`, that the answer is drawn as a transcript row and never sent to the
+  model, and that a `schedule.ran` event draws the line a `run-now` ends with.
 - After building, `node scripts/drive-turn-details.mjs`: notices, completed-turn usage,
   live and unavailable audits, background delivery, disclosure persistence, cancellation,
   focus restoration and the narrow context drawer, using an isolated profile and synthetic events.
