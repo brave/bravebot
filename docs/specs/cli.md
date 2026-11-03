@@ -559,6 +559,7 @@ against one.
 <a id="CLI-11"></a>
 ### CLI-11: `--add-dir` makes a directory reachable, and vouches for nothing
 
+`--add-dir <path>` opens a directory outside the working one for the length of the run, and may be
 given more than once. The path may be relative, resolved against the working directory the same
 way `/add-dir` resolves one ([TRUST-9](trust-map.md#TRUST-9)): its leading `.` and `..` are taken
 out against the working directory's own canonical path and the remaining components are appended

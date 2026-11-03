@@ -4191,6 +4191,7 @@ mod tests {
     use super::resolve::refuse_misleading_names;
     use super::volume::{FileId, folds_case_by};
     use super::*;
+    #[cfg(unix)]
     use bravebot_i18n::t;
     use std::collections::HashMap;
     use std::io;
