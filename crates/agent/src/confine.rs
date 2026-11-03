@@ -2116,10 +2116,11 @@ impl Container {
 /// What the planner is told about the programs `run` starts, for a turn that asks for them to be
 /// confined, or `None` for one that does not.
 ///
-/// A turn that does not confine says nothing, so a planner is never told of a boundary its
+/// A turn that does not confine returns `None`, so a planner is never told of a boundary its
 /// programs do not have. Where the platform has no base to confine on, it is told the opposite.
 ///
-/// The `off` mode says nothing either, for the same reason: the programs have no boundary to state.
+/// The `off` mode returns `None` as well, for the same reason: the programs have no boundary to
+/// state. [`stated_in_the_description`] adds the one sentence those two cases do carry.
 ///
 /// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
 /// Where it would not, the description names neither, does not tell the planner on macOS to ask for
@@ -2143,14 +2144,41 @@ pub fn stated_to_the_planner(
     ))
 }
 
+/// What the `run` description says of its programs: [`stated_to_the_planner`], or for a turn that
+/// does not confine its runs and for the mode `off` the one sentence that `request_path` is refused
+/// and nobody is asked (SANDBOX-19).
+///
+/// The sentence is the same in both cases, in every permission mode and whether or not the
+/// workspace is trusted, because the tool is refused in all of them. It says nothing of a boundary,
+/// of the file tools, of `scopes` or of `unconfined`: the first two do not apply to programs that
+/// start with no profile, and the last two are accepted and ignored there (SANDBOX-26). It is built
+/// from the two arguments and nothing a program printed or a file held.
+pub fn stated_in_the_description(
+    confine_runs: bool,
+    mode: SandboxMode,
+    requests_offered: bool,
+) -> Option<String> {
+    match !confine_runs || mode == SandboxMode::Off {
+        true => Some(REQUEST_PATH_REFUSED_SENTENCE.to_string()),
+        false => stated_to_the_planner(confine_runs, mode, requests_offered),
+    }
+}
+
+/// Said in the `run` description where the programs start with no profile, which is the mode `off`
+/// and a turn that does not confine its runs. A `request_path` call is refused there before anyone
+/// is asked (PATHREQ-5), so naming the tool saves the planner a call.
+const REQUEST_PATH_REFUSED_SENTENCE: &str =
+    "The `request_path` tool is refused in this session and nobody is asked, so do not call it.";
+
 /// What the planner is told when the person changes the sandbox mode while its turn runs, or `None`
 /// where there is nothing to say (SANDBOX-22).
 ///
 /// The `run` description the turn began with still states the mode it began in, so this says the
 /// new one. A mode that confines is given the sentences the description would have carried under
-/// it. `off` is given the one fact there is, because the description says nothing under `off` and
-/// the planner has no other way to learn that the boundary it was told of has ended. A turn that
-/// confines none of its runs was never told of a boundary, so it is told nothing.
+/// it. `off` is given the fact that the boundary has ended, because the description the planner
+/// has says nothing of that, and the fact that `request_path`, which that description may have
+/// named, is now refused. A turn that confines none of its runs was never told of a boundary, so it
+/// is told nothing.
 ///
 /// Built from the two modes and the platform alone, so it carries nothing a program printed or a
 /// file held.
@@ -2165,7 +2193,8 @@ pub fn change_notice(
     }
     let said = match to {
         SandboxMode::Off => " Programs `run` starts from now on start with no sandbox profile, so \
-             the limits its description states do not apply to them."
+             the limits its description states do not apply to them. The `request_path` tool is \
+             now refused and nobody is asked."
             .to_string(),
         mode => stated_to_the_planner(confine_runs, mode, requests_offered)
             .map(|stated| {
@@ -3307,7 +3336,7 @@ mod tests {
 
     /// SANDBOX-22: the planner is told of a sandbox mode chosen while its turn runs, in the words
     /// of the mode it moved to, and of nothing that did not change. A move to `off` is told as the
-    /// end of a boundary, since the description says nothing under `off`; a move to a confining
+    /// end of a boundary, since the description states none under `off`; a move to a confining
     /// mode carries what the description would have said under it. The regressions it rejects are
     /// a notice for a change that is not one, one for a turn that was never told of a boundary,
     /// `off` repeating the sentences of the mode it left, and one confining mode's sentences given
@@ -3346,6 +3375,34 @@ mod tests {
             workspace_write.contains("may read this machine"),
             "{workspace_write}"
         );
+    }
+
+    /// SANDBOX-22: a move to `off` while a turn runs tells the planner that `request_path` is now
+    /// refused and nobody is asked, because the `run` description it began with named the tool as
+    /// a route. A move to a mode that confines does not say it, and a turn that confines none of
+    /// its runs was told the tool is refused from the start and is told nothing. The regressions it
+    /// rejects are a notice for `off` that ends the boundary and leaves the tool named as a route,
+    /// and the sentence given for a move to a mode that accepts requests.
+    #[test]
+    fn the_change_notice_for_a_move_to_off_says_request_path_is_refused() {
+        use SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+
+        for from in [Strict, ReadOnly, WorkspaceWrite] {
+            let off = change_notice(true, from, Off, true).expect("told of off");
+            assert!(
+                off.contains("The `request_path` tool is now refused and nobody is asked."),
+                "{from:?}: {off}"
+            );
+        }
+        for to in [Strict, ReadOnly, WorkspaceWrite] {
+            let notice = change_notice(true, Off, to, true).expect("told");
+            assert!(!notice.contains("is now refused"), "{to:?}: {notice}");
+            assert!(
+                notice.contains("asked for with the `request_path` tool"),
+                "{to:?}: {notice}"
+            );
+        }
+        assert_eq!(change_notice(false, WorkspaceWrite, Off, true), None);
     }
 
     fn step(resolved: &str, args: &[&str]) -> Step {
@@ -6211,6 +6268,94 @@ mod tests {
         assert_eq!(told(SandboxMode::Off), None);
     }
 
+    /// SANDBOX-19, PATHREQ-5: where the programs start with no profile, which is the mode `off`
+    /// and a turn that confines none of its runs, the `run` description says that `request_path`
+    /// is refused and nobody is asked, and says it whether or not the session would offer a
+    /// request. It names no menu or `loopback`, no permission mode, no claim that the file tools
+    /// are confined (PATHREQ-7 lets them reach outside the workspace under bypass), and nothing of
+    /// `scopes` or `unconfined`, which are accepted and dropped there. The regressions it rejects
+    /// are a description with no text for these two cases, which leaves the planner to spend a call
+    /// finding the refusal out, and one that claims a boundary the programs do not have.
+    #[test]
+    fn the_description_says_request_path_is_refused_under_off_and_where_runs_are_not_confined() {
+        let mut described = Vec::new();
+        for offered in [true, false] {
+            described.push((
+                "off",
+                stated_in_the_description(true, SandboxMode::Off, offered),
+            ));
+            for mode in [
+                SandboxMode::Strict,
+                SandboxMode::ReadOnly,
+                SandboxMode::WorkspaceWrite,
+                SandboxMode::Off,
+            ] {
+                described.push((
+                    "not confined",
+                    stated_in_the_description(false, mode, offered),
+                ));
+            }
+        }
+        for (case, said) in described {
+            let said = said.unwrap_or_else(|| panic!("{case}: the description says nothing"));
+            assert!(said.contains("`request_path`"), "{case}: {said}");
+            assert!(said.contains("is refused"), "{case}: {said}");
+            assert!(said.contains("nobody is asked"), "{case}: {said}");
+            for absent in [
+                "loopback",
+                "kubernetes",
+                "gradle",
+                "A line that needs more can ask",
+                "permission",
+                "bypass",
+                "file tool",
+                "confined",
+                "unconfined",
+                "not trusted",
+            ] {
+                assert!(!said.contains(absent), "{case}: {absent} in {said}");
+            }
+        }
+    }
+
+    /// SANDBOX-19: the sentence that `request_path` is refused is said only where the programs
+    /// start with no profile. The control is a mode that confines, in a session that accepts a
+    /// request and in one that does not, where the description is what it was before: it names
+    /// `request_path` as a route, or says the workspace is not trusted, and does not carry the
+    /// sentence of the programs that have no profile. A sentence added whatever the session
+    /// accepts fails it.
+    #[test]
+    fn the_description_says_nothing_of_the_refusal_where_requests_are_accepted() {
+        for mode in [
+            SandboxMode::Strict,
+            SandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite,
+        ] {
+            for offered in [true, false] {
+                let said = stated_in_the_description(true, mode, offered).expect("says something");
+                let at = format!("{mode:?} offered={offered}");
+                assert!(
+                    !said.contains(REQUEST_PATH_REFUSED_SENTENCE),
+                    "{at}: {said}"
+                );
+                assert!(
+                    !said.contains("refused in this session and nobody is asked"),
+                    "{at}: {said}"
+                );
+                assert_eq!(
+                    Some(said),
+                    stated_to_the_planner(true, mode, offered),
+                    "{at}: a confining mode's description is the one it had"
+                );
+            }
+            let accepted = stated_in_the_description(true, mode, true).expect("says something");
+            assert!(
+                accepted.contains("asked for with the `request_path` tool"),
+                "{mode:?}: {accepted}"
+            );
+        }
+    }
+
     /// SANDBOX-19, PATHREQ-5: where the session would accept no request, as in a workspace that is
     /// not trusted, the sentence after a failed step names neither the menu nor `request_path`, and
     /// names the routes the person has. The control is the same line where requests are accepted,
@@ -7738,9 +7883,26 @@ mod tests {
     }
 
     /// A planner told of a boundary its programs do not have would stop reaching for paths they
-    /// can reach, so a turn that does not confine says nothing, whatever the platform.
+    /// can reach, so a turn that does not confine states no boundary, whatever the platform. The
+    /// only thing its description says is that `request_path` is refused (SANDBOX-19), which is
+    /// not a claim about what the programs can reach.
     #[test]
-    fn a_turn_that_does_not_confine_says_nothing_of_confinement() {
+    fn a_turn_that_does_not_confine_states_no_boundary_in_the_description() {
+        let described = stated_in_the_description(false, SandboxMode::WorkspaceWrite, true)
+            .expect("says the one sentence");
+        assert_eq!(described, REQUEST_PATH_REFUSED_SENTENCE);
+        for boundary in [
+            "confined",
+            "boundary",
+            "profile",
+            "may read this machine",
+            "network",
+            "`/add-dir`",
+            "`scopes`",
+            "loopback",
+        ] {
+            assert!(!described.contains(boundary), "{boundary} in {described}");
+        }
         assert_eq!(
             stated(
                 false,

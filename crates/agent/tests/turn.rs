@@ -30655,9 +30655,10 @@ fn a_run_that_succeeded_on_a_confining_turn_carries_no_profile_line() {
 }
 
 /// A turn that does not confine runs its programs with the person's own access, so neither the
-/// description nor a failed result may claim otherwise.
+/// description nor a failed result may claim otherwise. The description does say that `request_path`
+/// is refused (SANDBOX-19), which claims nothing about what the programs reach.
 #[test]
-fn a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_failure() {
+fn a_turn_that_does_not_confine_runs_states_no_boundary_in_the_description_or_a_failure() {
     let (first, second, _) = requests_for_one_run("run-unconfined-failed", "sh -c 'exit 1'", false);
 
     assert!(!first.contains(TOLD_CONFINED), "{first}");
@@ -30665,6 +30666,109 @@ fn a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_
     let result = message_from(&second, "Result of run");
     assert!(result.contains("exited 1"), "{result}");
     assert!(!result.contains("Confinement:"), "{result}");
+}
+
+/// What the `run` description must say where the programs start with no profile (SANDBOX-19).
+const REQUEST_PATH_REFUSED: &str =
+    "The `request_path` tool is refused in this session and nobody is asked, so do not call it.";
+
+/// Words the `run` description of a session whose programs start with no profile must not carry:
+/// a menu to ask from, a boundary the programs do not have, a claim about the file tools
+/// (PATHREQ-7), a permission mode, and the way `scopes` and `unconfined` are used.
+const NOT_SAID_WHERE_NO_PROFILE_APPLIES: [&str; 10] = [
+    "confined",
+    "loopback",
+    "A line that needs more can ask",
+    "asked for with the `request_path` tool",
+    "may read this machine",
+    "bypass",
+    "permission mode",
+    "file tool",
+    "'unconfined': true",
+    "not trusted",
+];
+
+/// SANDBOX-19, PATHREQ-5: under the sandbox mode `off` the `run` description says that
+/// `request_path` is refused and nobody is asked, so the planner does not spend a call finding it
+/// out. It names no menu and states no boundary. The control is the same turn under
+/// `workspace-write` in a trusted workspace, which names `request_path` as a route and does not say
+/// it is refused, so a sentence added whatever the mode fails it. The control needs a platform that
+/// confines and is skipped elsewhere.
+#[test]
+fn the_run_description_says_request_path_is_refused_under_off() {
+    let (first, second) = requests_for_one_run_in(
+        "run-description-off",
+        "sh -c 'exit 1'",
+        bravebot_sandbox::SandboxMode::Off,
+    );
+    let description = run_description(&first);
+
+    assert!(description.contains(REQUEST_PATH_REFUSED), "{description}");
+    assert_eq!(
+        description.matches("request_path").count(),
+        1,
+        "{description}"
+    );
+    assert!(!description.contains(TOLD_CONFINED), "{description}");
+    for absent in NOT_SAID_WHERE_NO_PROFILE_APPLIES {
+        assert!(!description.contains(absent), "{absent} in {description}");
+    }
+    let result = message_from(&second, "Result of run");
+    assert!(result.contains("exited 1"), "{result}");
+    assert!(!result.contains("Confinement:"), "{result}");
+
+    if cannot_confine_here() {
+        return;
+    }
+    let (first, _) = requests_for_one_run_in(
+        "run-description-off-control",
+        "sh -c 'exit 1'",
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+    );
+    let control = run_description(&first);
+    assert!(!control.contains(REQUEST_PATH_REFUSED), "{control}");
+    assert!(
+        control.contains("asked for with the `request_path` tool"),
+        "{control}"
+    );
+}
+
+/// SANDBOX-19, PATHREQ-5: on a turn that confines none of its runs, reached with
+/// `with_confined_runs(false)`, the `run` description says what it says under `off` and states no
+/// boundary. The control is a turn that confines its runs, which states the boundary and does not
+/// say the tool is refused, so a sentence added whatever the turn does fails it. The control needs
+/// a platform that confines and is skipped elsewhere.
+#[test]
+fn the_run_description_says_request_path_is_refused_where_runs_are_not_confined() {
+    let (first, second, _) =
+        requests_for_one_run("run-description-unconfined", "sh -c 'exit 1'", false);
+    let description = run_description(&first);
+
+    assert!(description.contains(REQUEST_PATH_REFUSED), "{description}");
+    assert_eq!(
+        description.matches("request_path").count(),
+        1,
+        "{description}"
+    );
+    assert!(!description.contains(TOLD_CONFINED), "{description}");
+    assert!(
+        !description.contains("not confined on this platform"),
+        "{description}"
+    );
+    for absent in NOT_SAID_WHERE_NO_PROFILE_APPLIES {
+        assert!(!description.contains(absent), "{absent} in {description}");
+    }
+    let result = message_from(&second, "Result of run");
+    assert!(result.contains("exited 1"), "{result}");
+
+    if cannot_confine_here() {
+        return;
+    }
+    let (first, _, _) =
+        requests_for_one_run("run-description-confined-control", "sh -c 'exit 1'", true);
+    let control = run_description(&first);
+    assert!(control.contains(TOLD_CONFINED), "{control}");
+    assert!(!control.contains(REQUEST_PATH_REFUSED), "{control}");
 }
 
 /// As [`requests_for_one_run`], for a turn that confines runs under `mode`.

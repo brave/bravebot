@@ -1178,7 +1178,7 @@ not asked: `~`, `/`, a drive root, your home directory and any directory above i
 `~/.bravebot`, the credential locations and any directory that holds one, such as `~/.config`. A request to read `~/.bravebot/sessions` or a path inside it is the one exception, and a request to write there is refused like the rest of `~/.bravebot`. A path your `denyRead` or `denyWrite` entries cover is
 refused as well. Nothing is accepted under the sandbox mode `off`, in a workspace you have not
 trusted, in a run with nobody to ask, or in the desktop app, which has no question for it yet. No
-settings file can allow one in advance. A request to write is also refused, whatever the mode, under
+settings file can allow one in advance. Under the sandbox mode `off` and in a session that confines no `run`, the description of `run` tells the planner that `request_path` is refused and nobody is asked, so it does not spend a call finding that out. A request to write is also refused, whatever the mode, under
 the sandbox mode `read-only`, and for the shell startup files, the user job directories and git's
 global configuration that [the security page](../security/security.md#confinement) lists. A refused
 request to write says what is true of the path: it holds credentials, a write there could leave code

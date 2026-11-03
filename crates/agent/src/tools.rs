@@ -25821,7 +25821,21 @@ mod tests {
                 true,
             );
 
-            assert_eq!(described(&not_confining), plain);
+            let not_confining = described(&not_confining);
+            assert_eq!(not_confining.len(), plain.len());
+            for ((name, before), (_, after)) in plain.iter().zip(&not_confining) {
+                if name == "run" {
+                    assert_eq!(
+                        after,
+                        &format!(
+                            "{before} The `request_path` tool is refused in this session and \
+                             nobody is asked, so do not call it."
+                        )
+                    );
+                } else {
+                    assert_eq!(after, before, "{name} was changed");
+                }
+            }
             let confining = described(&confining);
             assert_eq!(confining.len(), plain.len());
             for ((name, before), (_, after)) in plain.iter().zip(&confining) {
@@ -25868,7 +25882,11 @@ mod tests {
             };
             assert_eq!(
                 said(bravebot_sandbox::SandboxMode::Off),
-                Some(String::new())
+                Some(
+                    "The `request_path` tool is refused in this session and nobody is asked, so do \
+                     not call it."
+                        .to_string()
+                )
             );
             let strict = said(bravebot_sandbox::SandboxMode::Strict).expect("appended");
             let workspace_write =
