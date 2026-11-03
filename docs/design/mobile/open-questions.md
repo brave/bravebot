@@ -127,11 +127,7 @@ These are not accepted risks or implementation details that can be skipped. The 
 
 ### Q8. How does the app know a target can list its sessions?
 
-- **Status:** unresolved.
-- **Question and reason:** the app asks for the session list when the drawer opens, after a session is picked, and when what a row shows for the session on screen changes (its status, its waiting question, whether it has ended or has a prompt). It does not read `TargetInfo.sessionList`. A client that reports `false`, such as the stdio client, rejects every request, the rejection is dropped, and the drawer says "No sessions yet." while a session is open. A failed request on a target that does list keeps the last list without saying so.
-- **Current assumption:** the first target implements listing, so no gate is needed yet.
-- **Evidence needed:** read `sessionList` once from `describe()`, which can itself reject; hide the list or explain its absence when it is `false`; show a failed load differently from an empty list. Tests with a client that reports `false` and one whose list fails.
-- **Before:** a target built on the stdio client, or any target without listing.
+- **Status:** resolved. The app reads `TargetInfo.sessionList` from `describe()` before its first list request, and asks again on the next refresh if that question fails. For a target that reports `false`, the drawer says "This target does not keep a list of sessions." and never requests a list. A failed list request, or a failed `describe()`, shows "Sessions could not be listed." when no list has arrived, and otherwise keeps the last list with a note that it could not be refreshed, until a request newer than the failure succeeds. An empty list still says "No sessions yet." Tests: `mobile/src/__tests__/sessionList.test.tsx`.
 - **Issue:** [#2771](https://github.com/brave/bravebot/issues/2771), "Show the mobile sessions drawer by target capability, and tell a person when listing fails".
 
 ## Keeping this record current

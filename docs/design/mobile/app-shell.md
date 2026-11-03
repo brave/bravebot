@@ -86,7 +86,7 @@ Portrait only. Landscape is unsupported: Android ignores a rotation request, and
 
 A `Target` (`mobile/src/targets.ts`) is an id, a label, a description, the suggested prompts and a `create` function that returns an `AgentClient`. `App` takes its targets as a prop and uses the first one. With none, it shows the blank slate: the usual frame with "Nothing is connected", a composer that is disabled and says "No target is connected.", and no menu, target pill or calls control. Choosing between several targets is not built.
 
-The app lists and opens sessions through `listSessions()` and `openSession(id)`, which are capability-gated additions to the common interface. `TargetInfo.sessionList` says whether a target has them. `RpcAgentClient` reports `sessionList: false` and rejects both with `UnsupportedError`, so a target that cannot list shows an empty list. Hiding the drawer for such a target waits for the first one.
+The app lists and opens sessions through `listSessions()` and `openSession(id)`, which are capability-gated additions to the common interface. `TargetInfo.sessionList` says whether a target has them. `RpcAgentClient` reports `sessionList: false` and rejects both with `UnsupportedError`. The app reads `sessionList` before its first list request; for a target that cannot list, the drawer says so in place of the list and asks for none. A failed list request is shown as a failure, not as an empty list ([Q8](open-questions.md#q8-how-does-the-app-know-a-target-can-list-its-sessions)).
 
 The tests run the app against `FakeClient` and `FakeSession` in `mobile/src/__tests__/support/`. A test sets the session's view directly and records what the app asked of the session, so the screens are tested for what they show and send, not for what a target does with it.
 
@@ -105,7 +105,7 @@ pnpm works with Metro when `nodeLinker` is `hoisted`. Gradle also needs the hois
 ## Done when
 
 - The app builds reproducibly on the Android emulator or a device and on the iOS simulator, and imports `@brave/agent-client`.
-- Against a fake client, the drawer lists sessions and opens one in its recorded state, and the approval cards work for all four kinds with approve and reject outcomes.
+- Against a fake client, the drawer lists sessions and opens one in its recorded state, says when a target does not list sessions or a list request fails, and the approval cards work for all four kinds with approve and reject outcomes.
 - A session whose content contains a forged label, control and bidirectional characters, or a very long line, displays labelled, escaped plain text, and nothing it contains changes the surrounding layout or markings.
 - The Calls made drawer lists the session's calls, one row per call.
 - The dependency review, lockfile checks, affected-check selection and CODEOWNERS entries exist for the new paths (decision 9). CI runs type checks, unit tests and dependency checks. Device builds are not part of CI yet.

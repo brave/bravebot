@@ -18,6 +18,18 @@ const STATUS_LABEL: Record<Status, string> = {
   detached: 'Closed',
 }
 
+/**
+ * Where the session list stands. `checking` until the target says whether it lists sessions, `unsupported` when it does not,
+ * and `failed` when the newest request failed, which keeps any list that arrived before it.
+ */
+export type Listing = 'checking' | 'unsupported' | 'listed' | 'failed'
+
+const EMPTY: Record<Exclude<Listing, 'unsupported'>, string> = {
+  checking: 'Listing sessions…',
+  listed: 'No sessions yet.',
+  failed: 'Sessions could not be listed.',
+}
+
 export interface DrawerTarget {
   label: string
   description: string
@@ -63,6 +75,7 @@ export function Drawer({
   onClose,
   target,
   sessions,
+  listing = 'listed',
   workspaces,
   workspace,
   onWorkspace,
@@ -75,6 +88,7 @@ export function Drawer({
   onClose: () => void
   target: DrawerTarget
   sessions: readonly SessionSummary[]
+  listing?: Listing
   workspaces: readonly { id: string; name: string }[]
   workspace: string
   onWorkspace: (id: string) => void
@@ -136,16 +150,35 @@ export function Drawer({
         )}
       </View>
       <Divider />
-      <FlatList
-        testID="session-list"
-        data={sessions}
-        keyExtractor={(session) => session.id}
-        renderItem={({ item }) => (
-          <SessionRow session={item} workspaceName={workspaceName(workspaces, item.workspace)} active={item.id === activeId} onOpen={onOpenSession} />
-        )}
-        ListHeaderComponent={<Caption style={styles.listHeading}>Sessions</Caption>}
-        ListEmptyComponent={<Meta style={styles.empty}>No sessions yet.</Meta>}
-      />
+      {listing === 'unsupported' ? (
+        <Meta testID="session-list-unsupported" style={styles.empty}>
+          This target does not keep a list of sessions.
+        </Meta>
+      ) : (
+        <FlatList
+          testID="session-list"
+          data={sessions}
+          keyExtractor={(session) => session.id}
+          renderItem={({ item }) => (
+            <SessionRow session={item} workspaceName={workspaceName(workspaces, item.workspace)} active={item.id === activeId} onOpen={onOpenSession} />
+          )}
+          ListHeaderComponent={
+            <View>
+              <Caption style={styles.listHeading}>Sessions</Caption>
+              {listing === 'failed' && sessions.length > 0 && (
+                <Meta testID="session-list-stale" accessibilityLiveRegion="polite" style={[styles.stale, { color: theme.status.error }]}>
+                  The list could not be refreshed. It shows the sessions last listed.
+                </Meta>
+              )}
+            </View>
+          }
+          ListEmptyComponent={
+            <Meta testID="session-list-empty" style={[styles.empty, listing === 'failed' ? { color: theme.status.error } : undefined]}>
+              {EMPTY[listing]}
+            </Meta>
+          }
+        />
+      )}
     </SidePanel>
   )
 }
@@ -163,4 +196,5 @@ const styles = StyleSheet.create({
   rowText: { flex: 1, gap: 2 },
   rowTitle: { fontWeight: '500' },
   empty: { paddingHorizontal: space.xl, paddingTop: space.l },
+  stale: { paddingHorizontal: space.xl, paddingBottom: space.s },
 })
