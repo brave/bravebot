@@ -1,12 +1,12 @@
 # Mobile prototype open questions
 
-Status: proposal with Q2 resolved for the first Rust block. This is the single record of unresolved decisions and choices awaiting validation. The [decision record](decisions-and-tradeoffs.md) holds settled choices and their reasons; the linked architecture and contract sections hold implementation requirements.
+Status: proposal. Q2 is resolved, and U1 is decided for host-launched clients. This is the single record of unresolved decisions and choices awaiting validation. The [decision record](decisions-and-tradeoffs.md) holds settled choices and their reasons; the linked architecture and contract sections hold implementation requirements.
 
 **Unresolved** means an answer is still needed. **Awaiting validation** means the plan has a proposed answer that needs evidence. Neither status establishes implemented behavior. Each entry names the capability that needs its answer; unrelated work can proceed.
 
 ## What can proceed
 
-Stages 1–2a are complete; Q2 records the placement of the view. U1 blocks real-session listener control; U2 and U3 block authenticated network exposure. The restricted stage-3d synthetic experiment can proceed under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). Device UI, real credentials, distribution, and dependency additions have the separate checkpoints below.
+Stages 1–2a and 3a–3c are built; Q2 records the placement of the view. U1 is decided for host-launched clients, and the Linux and host-process checks it lists still block real-session control; U2 and U3 block authenticated network exposure. The restricted stage-3d synthetic experiment can proceed under its [development transport limits](implementation-plan.md#3d-run-a-thin-phone-experiment). Device UI, real credentials, distribution, and dependency additions have the separate checkpoints below.
 
 ## Unresolved security decisions
 

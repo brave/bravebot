@@ -1,6 +1,6 @@
 # Mobile agent and remote-control prototypes
 
-Status: stages 1–2a are complete: the Rust session view and the stdio TypeScript client in `packages/agent-client`, tested against a real `bravebot-rpc`. Later mobile stages remain proposed. See [current local scope](client-contract.md#implemented-typescript-client).
+Status: stages 1–2a, 3a, 3b and 3c are built: the Rust session view, the stdio TypeScript client in `packages/agent-client`, exact action targets, and the local host `bravebot-host` with controller loss and takeover after a client leaves. The React Native app in `mobile/` has its shell and session screens, tested against a fake client, with no target connected. Stages 2b, 4a, 4b, 5a, 5b and 6–8 remain proposed, and 3d has no device observations yet. See [current local scope](client-contract.md#implemented-typescript-client).
 
 Start with the [executive summary](executive-summary.md). It is written to stand alone for readers who need the goal, design choices, implementation sequence, and prototype limits.
 
@@ -55,6 +55,8 @@ The source findings here use [`9635f16b`](https://github.com/brave/bravebot/tree
 ## Project findings
 
 **Source revision:** Android paths and findings below refer to [`9635f16b`](https://github.com/brave/bravebot/tree/9635f16b49798624e6174b0d15818227773e81a8) (`9635f16b49798624e6174b0d15818227773e81a8`) on [android-shell](https://github.com/brave/bravebot/tree/android-shell). The `main` baseline is `c8fed64c89b5f9073c05ddd368936605662a2463`; it does not include that Android integration. See [Current mobile status](#current-mobile-status) for its contributions and the plan to follow its progress.
+
+Since that review, `main` gained the shared session view, action targets, `bravebot-host`, the TypeScript client and the `mobile/` app shell. The table below describes the bridge and Desktop at the review revisions: its "Live sessions", "Approvals" and "Input restrictions" rows are partly addressed by the host (see [local-host.md](../../specs/local-host.md)), and its "Android prototype" rows are unchanged. Reassess it when stage 2b starts.
 
 The review covered the Rust UI bridge, Electron integration, Android shell, session storage, and the relevant security specs. Source paths below are relative to the [repository root](../../../) at the cited review revisions; Android paths resolve in the pinned prototype tree above. The checkout HEAD recorded when documenting the findings was `837c25b0ffe618f72e557641af32a211f868b724`. A follow-up review checked lifecycle operations and Android UI code at `9635f16b49798624e6174b0d15818227773e81a8`. The main-side claims below were also checked by source review against `c8fed64c89b5f9073c05ddd368936605662a2463`; Android claims remain pinned to `9635f16b49798624e6174b0d15818227773e81a8`. These are source findings, not runtime evidence or a full audit.
 
