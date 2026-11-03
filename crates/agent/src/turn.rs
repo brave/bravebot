@@ -2346,11 +2346,17 @@ struct Plan<'p> {
 }
 
 /// What the rounds change, and what the answer step reads once they are over.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate fact about what the turn has already said or done, set and read on its own"
+)]
 struct State<'s> {
     steps: usize,
     reminded: round_steps::Reminded,
     worked: Worked,
     may_call_tools: bool,
+    /// Whether a delegate has been warned that it is near its token budget (DELEGATE-29).
+    warned_of_token_budget: bool,
     account: crate::outcome::Spent,
     shown_before: u64,
     may_compact: bool,
@@ -3337,6 +3343,7 @@ where
         // runs out, so the last request goes out with none offered and the turn ends with an answer
         // rather than with the driver's apology.
         may_call_tools: true,
+        warned_of_token_budget: false,
         // What this turn's requests did, summed from zero: not what the session has done, which the
         // session adds up itself. `output_tokens` is tracked apart from the total because it is what
         // the live count reports, and adding a round's output to a running total that also holds

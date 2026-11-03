@@ -174,7 +174,9 @@ definition's `budget:` ([DELEGATE-29](../delegation.md#DELEGATE-29)), and of wha
 left under its own, so a call without the field leaves the definition's in force and a figure above
 the definition's changes nothing. In a fan-out the figure applies to each delegate separately, and
 one delegate's spend is not another's. A delegate that spends it loses its tools and answers with
-what it has, and the planner is told so beside the report.
+what it has, and the planner is told so beside the report. Every request counts the whole
+conversation so far, so a figure buys a few dozen requests and not a few dozen thousand tokens of
+reading, and the field's description says so.
 
 A value that is not a count of tokens above zero is refused with what the field takes, and nothing
 starts. The figure must be public and is read only after the integrity gate has passed, as `kind`

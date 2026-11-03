@@ -1663,7 +1663,11 @@ fn table(
                         "description": "Optional. The most tokens each delegate may spend, \
                                         written as \"500000\", \"500k\" or \"2m\". A delegate that has spent it \
                                         loses its tools and answers with what it has, and you \
-                                        are told so beside its report. It can only lower the \
+                                        are told so beside its report. Every request counts \
+                                        the whole conversation so far, so a figure buys a few \
+                                        dozen requests, not a few dozen thousand tokens of \
+                                        reading: 2m is about thirty requests at 70k tokens \
+                                        each. It can only lower the \
                                         bound the delegate's definition sets. Leave it out to \
                                         set none."
                     }

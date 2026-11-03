@@ -261,7 +261,9 @@ two counts the driver holds:
   tools, and asks it to leave the working tree consistent (complete or abort a rebase, merge or
   cherry-pick in progress, commit or discard its edits) and to answer with what it did, what is
   left and the state it left the tree in. A delegate that has no tools left for another reason
-  ([DELEGATE-25](#DELEGATE-25), [DELEGATE-29](#DELEGATE-29)) is not sent it.
+  ([DELEGATE-25](#DELEGATE-25), [DELEGATE-29](#DELEGATE-29)) is not sent it. A delegate with a
+  token budget is warned of that too, as [DELEGATE-29](#DELEGATE-29) says, and one near both is
+  sent both.
 - The notice on the limiting round says the delegate has used all its rounds.
 
 Only a delegate is warned. A run that is not a delegate and carries a round limit
@@ -374,6 +376,24 @@ with what it has, as it does on its limiting round ([DELEGATE-6](#DELEGATE-6)). 
 the session limit's question ([TURN-8](turns.md#TURN-8)): that question goes to a person, and a
 delegate has none.
 
+**The warning ahead of it.** A delegate with a budget is warned once, in the request after the
+first round at which its total is within a fifth of the budget, or leaves fewer tokens than two
+requests at its current context size cost, since every request counts the whole context again. The
+total is the one above, the context size is the figure its backend last reported, and the budget is
+the delegate's own, so the comparison reads three numbers and no reply or tool result. The warning
+gives the tokens spent and the budget, says that every request counts the whole conversation again
+and that it may have only a few more requests before it has no tools, and asks what the rounds
+warning asks
+([DELEGATE-6](#DELEGATE-6)): leave the working tree consistent, and answer with what it did, what is
+left and the state it left the tree in. It is made after the delegates the round started are
+collected, so what a child spent counts toward it. It is not sent to a delegate that has no tools
+left, so the round at which the budget is spent has the notice above and not this one, and a run a
+person started is not sent it, whatever limit it carries ([TURN-14](turns.md#TURN-14)). The
+delegate's prompt says its tokens are bounded and that a warning comes before they are spent, only
+when it has a budget and without a figure. The `budget` of `spawn_agent` says each request counts
+the whole conversation, so a figure buys a few dozen requests
+([AGENT-7](tools/spawn-agent.md#AGENT-7)).
+
 The driver says so beside the report, as [DELEGATE-26](#DELEGATE-26) does for rounds. The planner's
 message and the person's note name the budget and say the work may not be finished, and a delegate
 that spent its budget and then did not answer is told of in the same terms as one that spent its
@@ -421,6 +441,14 @@ decision is taken from untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::a_backend_reporting_no_usage_does_not_trip_the_token_budget`
 `verified-by: bravebot_agent::turn::a_delegate_that_spent_its_token_budget_and_failed_says_the_budget_was_spent`
 `verified-by: bravebot_agent::turn::a_quarantined_report_carries_the_sentence_about_a_spent_token_budget`
+`verified-by: bravebot_agent::turn::a_delegate_is_warned_once_when_four_fifths_of_its_token_budget_are_spent`
+`verified-by: bravebot_agent::turn::a_delegate_whose_context_leaves_under_two_requests_is_warned_before_four_fifths`
+`verified-by: bravebot_agent::turn::a_delegate_that_spent_its_token_budget_is_not_also_warned_of_nearing_it`
+`verified-by: bravebot_agent::turn::a_delegate_near_its_rounds_and_its_tokens_is_warned_of_both`
+`verified-by: bravebot_agent::turn::a_backend_reporting_no_usage_does_not_warn_of_the_token_budget`
+`verified-by: bravebot_agent::turn::a_turn_near_its_own_token_limit_is_not_warned_as_a_delegate_is`
+`verified-by: bravebot_agent::turn::a_delegate_whose_childs_spend_takes_it_near_its_token_budget_is_warned`
+`verified-by: bravebot_agent::delegate::only_a_delegate_with_a_token_budget_is_told_of_it_and_without_a_figure`
 `verified-by: bravebot_agent::turn::a_child_carries_what_its_parent_has_left_and_its_spend_counts_against_the_parent`
 
 <a id="DELEGATE-7"></a>

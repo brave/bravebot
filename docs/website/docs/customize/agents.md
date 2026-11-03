@@ -215,6 +215,13 @@ the delegate to leave the working tree consistent, by completing or aborting a r
 started and committing or discarding its edits, and to answer with what is left. A delegate bound
 to one round is not warned, and neither is a turn you run yourself.
 
+**`budget` sets how many tokens the delegate may spend.** Every request counts the whole
+conversation so far, so a budget buys a few dozen requests and not a few dozen thousand tokens of
+reading. A delegate with a budget is told its tokens are bounded, and it is warned once, in the
+request after the round at which it has spent four fifths of the budget or has less left than two
+requests at its current context size cost. The warning asks it to leave the working tree
+consistent and to answer with what it did and what is left. A turn you run yourself is not warned.
+
 A definition written for a long job, a staged refactor say, can ask for more, up to its kind's
 ceiling: 120 for a `reader`, 160 for a `checker` and 200 for a
 `worker`, which is the bound on a one-shot run nobody is watching. Asking for more than that gives

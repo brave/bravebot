@@ -407,6 +407,7 @@ pub(super) fn system_prompt(
                     &memory(spec.keeps_memory(), spec.definition()),
                     delegate_may_delegate(spec, delegates),
                     processors,
+                    spec.budget().is_some(),
                 ),
             );
             system.push(Provenance::Driver, checkout_notice);

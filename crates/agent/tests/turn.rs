@@ -48364,6 +48364,348 @@ fn a_delegate_that_spent_its_token_budget_is_not_warned_ahead_in_the_same_round(
     );
 }
 
+/// The requests of a delegate bounded to `budget` tokens and 40 rounds that makes `rounds` rounds
+/// of `read_file` calls, each reporting `prompt` and `completion` tokens, and then answers.
+fn token_budgeted_requests(
+    name: &str,
+    budget: u64,
+    rounds: usize,
+    prompt: u64,
+    completion: u64,
+) -> Vec<String> {
+    let mut script: Vec<String> = (0..rounds)
+        .map(|_| {
+            tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, prompt, completion)
+        })
+        .collect();
+    script.push(reply_with("what the budget bought"));
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    bounded_delegate_requests(name, 40, Some(budget), script, &mut reporter)
+}
+
+fn carried_tools(body: &str) -> bool {
+    let request: serde_json::Value = serde_json::from_str(body).expect("a request");
+    request["tools"]
+        .as_array()
+        .is_some_and(|tools| !tools.is_empty())
+}
+
+/// DELEGATE-29: a delegate is warned once, in the request after the round at which four fifths of
+/// its budget are spent, and the warning asks for the tree to be left consistent. The request that
+/// follows the spent budget has no tools.
+///
+/// Rejects: no warning, a warning at half the budget or only once the budget is spent, a warning
+/// repeated each round, and a warning that does not ask for open work to be finished or undone and
+/// for an account of what is left.
+#[test]
+fn a_delegate_is_warned_once_when_four_fifths_of_its_token_budget_are_spent() {
+    // 1500 tokens a request against 10000: 9000 after the sixth round is the first total at or
+    // over 8000, and the seventh round passes the budget.
+    let delegate = token_budgeted_requests("delegate-token-warned", 10_000, 7, 1000, 500);
+    assert_eq!(delegate.len(), 8, "seven rounds of calls and the answer");
+
+    let warning = "You have spent 9000 of your 10000 tokens.";
+    let warned_in: Vec<usize> = delegate
+        .iter()
+        .enumerate()
+        .filter(|(_, body)| body.contains(warning))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        warned_in,
+        [6, 7],
+        "the warning was not first carried by the request after the round that reached four \
+         fifths and kept in the conversation after it"
+    );
+    for (index, body) in delegate.iter().enumerate() {
+        assert_eq!(
+            body.matches("of your 10000 tokens.").count(),
+            usize::from(index >= 6),
+            "request {index} holds the warning a wrong number of times"
+        );
+    }
+    let told = &delegate[6];
+    assert!(
+        told.contains("complete or abort a rebase")
+            && told.contains("commit or discard edits")
+            && told.contains("what is left"),
+        "the warning does not ask for a consistent tree and a report of what is left: {told}"
+    );
+    assert!(
+        delegate[..7].iter().all(|body| carried_tools(body)),
+        "a request before the budget was spent carried no tools"
+    );
+    assert!(
+        !carried_tools(&delegate[7]) && delegate[7].contains("You have spent your budget of 10000"),
+        "the request after the budget was spent still offered tools: {}",
+        delegate[7]
+    );
+}
+
+/// DELEGATE-29: a large context brings the warning earlier than four fifths, since the next
+/// request counts all of it again. Fewer than two requests of that size left is near.
+///
+/// Rejects: a rule that is only a share of the budget, which would send nothing here until the
+/// budget was spent.
+#[test]
+fn a_delegate_whose_context_leaves_under_two_requests_is_warned_before_four_fifths() {
+    // 4100 a request against 10000: after one round 5900 is left, under twice the 4000 context.
+    let delegate = token_budgeted_requests("delegate-token-context", 10_000, 3, 4000, 100);
+    assert_eq!(delegate.len(), 4, "three rounds of calls and the answer");
+    let warned_in: Vec<usize> = delegate
+        .iter()
+        .enumerate()
+        .filter(|(_, body)| body.contains("You have spent 4100 of your 10000 tokens."))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(warned_in, [1, 2, 3]);
+}
+
+/// DELEGATE-29: a delegate that goes past its budget in one round is told only that the budget is
+/// spent.
+///
+/// Rejects: both notices in the one round.
+#[test]
+fn a_delegate_that_spent_its_token_budget_is_not_also_warned_of_nearing_it() {
+    let delegate = token_budgeted_requests("delegate-token-spent-unwarned", 1000, 1, 800, 300);
+    assert_eq!(delegate.len(), 2);
+    assert!(
+        delegate
+            .iter()
+            .all(|body| !body.contains("You have spent 1100 of your")),
+        "a delegate that spent its budget was also told it was near it"
+    );
+    assert!(!carried_tools(&delegate[1]));
+}
+
+/// DELEGATE-29 and DELEGATE-6: the warning of a token budget and the warning of the rounds limit
+/// are independent, so a delegate near both is sent both, in the same request.
+///
+/// Rejects: one warning suppressing the other.
+#[test]
+fn a_delegate_near_its_rounds_and_its_tokens_is_warned_of_both() {
+    let scratch = Scratch::new("delegate-both-warned");
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let home = Scratch::new("delegate-both-warned-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("bounded.md"),
+        "---\nname: bounded\ndescription: Looks.\nkind: reader\nrounds: 3\nbudget: 10000\n---\n\nLook.\n",
+    )
+    .expect("write the definition");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "BOTH-TURN",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"bounded","task":"BOTH-TASK"}"#),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "BOTH-TASK",
+            vec![
+                tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, 6000, 3000),
+                tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, 100, 100),
+                reply_with("both"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("BOTH-TURN").with_home(Some(home.path.clone())),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let delegate: Vec<String> = every_request(&received)
+        .into_iter()
+        .filter(|body| body.contains("BOTH-TASK") && !body.contains("BOTH-TURN"))
+        .collect();
+    assert_eq!(delegate.len(), 3);
+    assert!(
+        delegate[1].contains("You have 2 rounds left of your 3.")
+            && delegate[1].contains("You have spent 9000 of your 10000 tokens."),
+        "the request after the first round lacks one of the warnings: {}",
+        delegate[1]
+    );
+}
+
+/// DELEGATE-29: a backend that reports no usage is counted from the words of its replies, which
+/// are far beneath the budget, so the delegate is not warned.
+///
+/// Rejects: a warning from a count of zero or of rounds.
+#[test]
+fn a_backend_reporting_no_usage_does_not_warn_of_the_token_budget() {
+    let mut script: Vec<String> = (0..6)
+        .map(|_| tool_request("read_file", r#"{"path":"notes.txt"}"#))
+        .collect();
+    script.push(reply_with("no figure"));
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let delegate = bounded_delegate_requests(
+        "delegate-token-no-usage",
+        40,
+        Some(1000),
+        script,
+        &mut reporter,
+    );
+    assert_eq!(delegate.len(), 7);
+    assert!(
+        delegate
+            .iter()
+            .all(|body| !body.contains("of your 1000 tokens.")),
+        "a delegate whose backend reported no usage was warned"
+    );
+}
+
+/// DELEGATE-29 and TURN-14: a turn a person started under a limit on tokens is not sent the
+/// warning a delegate gets for its token budget. The limit ends the run and nobody is told it is
+/// near.
+///
+/// Rejects: a warning built from the run's own limit on tokens, which would reach a turn that is
+/// not a delegate once four fifths of the limit are spent.
+#[test]
+fn a_turn_near_its_own_token_limit_is_not_warned_as_a_delegate_is() {
+    let scratch = Scratch::new("turn-token-limit-unwarned");
+    std::fs::write(scratch.path.join("notes.txt"), "a line\n").expect("write the file");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    // 1500 tokens a request against a limit of 10000: 9000 after the sixth round is over four
+    // fifths, and the seventh round passes the limit.
+    let mut script: Vec<String> = (0..8)
+        .map(|_| tool_request_with_usage("read_file", r#"{"path":"notes.txt"}"#, 1000, 500))
+        .collect();
+    script.push(reply_with("not reached"));
+    let (endpoint, received) = serve_by_marker(vec![("TOKEN-LIMITED-TURN", script)]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let ended = turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("TOKEN-LIMITED-TURN").with_run_limits(bravebot_agent::turn::RunLimits {
+            rounds: None,
+            tokens: Some(10_000),
+        }),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(
+        matches!(
+            ended,
+            Err(bravebot_agent::TurnError::LimitReached(
+                bravebot_agent::turn::LimitReached::Tokens { most: 10_000, .. }
+            ))
+        ),
+        "the run did not end at its limit on tokens"
+    );
+    let asked = every_request(&received);
+    assert_eq!(asked.len(), 7, "seven rounds of calls, then the limit");
+    assert!(
+        asked
+            .iter()
+            .all(|body| !body.contains("of your 10000 tokens.")),
+        "a turn that is not a delegate was warned of its limit on tokens"
+    );
+}
+
+/// DELEGATE-29: what a child spent counts toward the warning of the delegate that started it. The
+/// parent has spent 1500 of 10000 itself, and its child's 7000 collected with the child's report
+/// take it past four fifths and not past the budget.
+///
+/// Rejects: a warning decided before the children of the round are collected, which would count
+/// only the parent's own 1500 and send nothing.
+#[test]
+fn a_delegate_whose_childs_spend_takes_it_near_its_token_budget_is_warned() {
+    let scratch = Scratch::new("delegate-budget-child-warned");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-WORK",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"DO-THE-WORK","budget":10000}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "DO-THE-WORK",
+            vec![
+                tool_request_with_usage(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"READ-DEEPER"}"#,
+                    1000,
+                    500,
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        (
+            "READ-DEEPER",
+            vec![reply_with_usage("DEEPER-REPORT", 6000, 1000)],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("DELEGATE-THE-WORK"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let parent: Vec<String> = every_request(&received)
+        .into_iter()
+        .filter(|body| body.contains("DO-THE-WORK") && !body.contains("DELEGATE-THE-WORK"))
+        .collect();
+    let first = parent.first().expect("the parent's first request");
+    assert!(
+        !first.contains("of your 10000 tokens."),
+        "the parent was warned before any child had spent anything"
+    );
+    let with_report = parent
+        .iter()
+        .find(|body| body.contains("DEEPER-REPORT"))
+        .expect("a request of the parent that carries its child's report");
+    assert_eq!(
+        with_report.matches("of your 10000 tokens.").count(),
+        1,
+        "the request that first carries the child's report did not carry the warning its spend \
+         brought on: {with_report}"
+    );
+    assert!(
+        carried_tools(with_report),
+        "the parent's tools were taken away although its budget was not spent"
+    );
+}
+
 /// DELEGATE-26 where the delegate spent its bound and then did not answer at all. This is the
 /// common way the bound is reached rather than a corner of it: a delegate held to a tight bound
 /// loses its tools and is asked to answer, and where it asks for a tool instead there is no answer

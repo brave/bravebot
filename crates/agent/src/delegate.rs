@@ -70,6 +70,15 @@ you have no tools and can only answer. If you have more than one round you are w
 so that you can leave the working tree consistent and report what is left; plan the work to fit, and do not start \
 something you could not finish or undo in the rounds you have.";
 
+/// What a delegate that carries a token budget is told about it, after the paragraph on rounds.
+///
+/// Names no figure, since a definition's `budget:` and the call's may differ, and the warning
+/// states the count (DELEGATE-29).
+const BUDGETED: &str = "\n\n\
+Your tokens are bounded too. Every request counts the whole conversation so far again, so the \
+budget buys a few dozen requests and not a few dozen thousand tokens of reading. You are warned \
+once before it is spent, and after that you have no tools and can only answer.";
+
 /// What a delegate above the bottom of the tree is told about delegating in turn.
 ///
 /// The ceiling and the floor are said without their numbers. Both are the kernel's to keep, and a
@@ -456,14 +465,16 @@ pub fn prompt_for(
     memory: &str,
     may_delegate: bool,
     processors: Processors,
+    has_token_budget: bool,
 ) -> String {
     let delegating = if may_delegate {
         MAY_DELEGATE
     } else {
         MAY_NOT_DELEGATE
     };
+    let budgeted = if has_token_budget { BUDGETED } else { "" };
     format!(
-        "{DELEGATED}{delegating}{NO_FETCH}{}{}{memory}{}",
+        "{DELEGATED}{budgeted}{delegating}{NO_FETCH}{}{}{memory}{}",
         turn::PLANNING,
         standing(standing_instruction),
         limits(held, processors)
@@ -904,7 +915,14 @@ mod tests {
     fn every_kind_is_told_the_guidance_the_planner_is_told() {
         for name in Kind::NAMES {
             let kind = Kind::from_name(name).expect("enumerated");
-            let prompt = prompt_for(&kind.capabilities(), "", "", false, Processors::Offered);
+            let prompt = prompt_for(
+                &kind.capabilities(),
+                "",
+                "",
+                false,
+                Processors::Offered,
+                false,
+            );
             assert!(
                 prompt.contains(turn::PLANNING),
                 "a {name} was told something other than what the planner is told"
@@ -922,6 +940,7 @@ mod tests {
             "",
             false,
             Processors::Offered,
+            false,
         );
         assert!(reader.contains("You cannot write a file"));
         assert!(reader.contains("you cannot run a program"));
@@ -932,6 +951,7 @@ mod tests {
             "",
             false,
             Processors::Offered,
+            false,
         );
         assert!(checker.contains("You cannot write a file"));
         assert!(checker.contains("and run programs"));
@@ -942,6 +962,7 @@ mod tests {
             "",
             false,
             Processors::Offered,
+            false,
         );
         assert!(worker.contains("write files"));
         assert!(!worker.contains("You cannot write a file"));
@@ -962,6 +983,7 @@ mod tests {
                 "",
                 may_delegate,
                 Processors::Offered,
+                false,
             );
             assert!(
                 prompt.contains("there is nobody to ask"),
@@ -995,6 +1017,7 @@ mod tests {
                 "",
                 may_delegate,
                 Processors::Offered,
+                false,
             );
             assert!(
                 prompt.contains(
@@ -1005,6 +1028,55 @@ mod tests {
             assert!(
                 prompt.contains("If you have more than one round you are warned before that"),
                 "a {name} was not told a warning comes ahead of the limit"
+            );
+        }
+    }
+
+    /// A delegate with a token budget is told it exists and that a warning comes first, and one
+    /// without a budget gets the prompt it always had (DELEGATE-29). No figure is named, since the
+    /// definition's and the call's may differ.
+    ///
+    /// Rejects: the sentence sent to every delegate, never sent, or naming a number.
+    #[test]
+    fn only_a_delegate_with_a_token_budget_is_told_of_it_and_without_a_figure() {
+        for (name, may_delegate) in Kind::NAMES
+            .iter()
+            .flat_map(|name| [(name, true), (name, false)])
+        {
+            let kind = Kind::from_name(name).expect("enumerated");
+            let without = prompt_for(
+                &kind.capabilities(),
+                "",
+                "",
+                may_delegate,
+                Processors::Offered,
+                false,
+            );
+            let with = prompt_for(
+                &kind.capabilities(),
+                "",
+                "",
+                may_delegate,
+                Processors::Offered,
+                true,
+            );
+            assert!(
+                !without.contains("Your tokens are bounded"),
+                "a {name} with no budget was told of one"
+            );
+            assert!(
+                with.contains("Your tokens are bounded too.")
+                    && with.contains("You are warned once before it is spent"),
+                "a {name} with a budget was not told of it and of the warning: {with}"
+            );
+            assert_eq!(
+                with.replace(super::BUDGETED, ""),
+                without,
+                "the sentence changed more of the {name} prompt than itself"
+            );
+            assert!(
+                !super::BUDGETED.chars().any(|c| c.is_ascii_digit()),
+                "the budget sentence names a figure"
             );
         }
     }
@@ -1025,6 +1097,7 @@ mod tests {
                 "",
                 may_delegate,
                 Processors::Offered,
+                false,
             );
             assert!(
                 !prompt.contains("Before each round of tool calls"),
@@ -1041,7 +1114,14 @@ mod tests {
         for name in Kind::NAMES {
             let kind = Kind::from_name(name).expect("enumerated");
 
-            let above = prompt_for(&kind.capabilities(), "", "", true, Processors::Offered);
+            let above = prompt_for(
+                &kind.capabilities(),
+                "",
+                "",
+                true,
+                Processors::Offered,
+                false,
+            );
             assert!(
                 above.contains("delegates of your own with spawn_agent"),
                 "a {name} above the bottom was not told it may delegate"
@@ -1051,7 +1131,14 @@ mod tests {
                 "a {name} above the bottom was told it cannot delegate"
             );
 
-            let bottom = prompt_for(&kind.capabilities(), "", "", false, Processors::Offered);
+            let bottom = prompt_for(
+                &kind.capabilities(),
+                "",
+                "",
+                false,
+                Processors::Offered,
+                false,
+            );
             assert!(
                 bottom.contains("You cannot delegate."),
                 "a {name} at the bottom was not told it cannot delegate"
@@ -1070,7 +1157,14 @@ mod tests {
     fn no_kind_is_told_it_may_reach_the_network() {
         for name in Kind::NAMES {
             let kind = Kind::from_name(name).expect("enumerated");
-            let prompt = prompt_for(&kind.capabilities(), "", "", false, Processors::Offered);
+            let prompt = prompt_for(
+                &kind.capabilities(),
+                "",
+                "",
+                false,
+                Processors::Offered,
+                false,
+            );
             assert!(
                 prompt.contains("You cannot fetch a URL"),
                 "a {name} was not told it cannot reach the network"
@@ -1094,6 +1188,7 @@ mod tests {
             "",
             false,
             Processors::Offered,
+            false,
         );
 
         assert!(
@@ -1121,6 +1216,7 @@ mod tests {
             "",
             false,
             Processors::Offered,
+            false,
         );
 
         let guidance = prompt
@@ -1145,6 +1241,7 @@ mod tests {
             memory,
             false,
             Processors::Offered,
+            false,
         );
 
         let body = prompt.find(standing).expect("the body is in the prompt");
@@ -1163,7 +1260,7 @@ mod tests {
     #[test]
     fn a_narrowed_delegate_is_told_what_it_holds_rather_than_what_its_kind_holds() {
         let reading = CapabilitySet::from_iter([Capability::WebFetch, Capability::FileRead]);
-        let prompt = prompt_for(&reading, "", "", false, Processors::Offered);
+        let prompt = prompt_for(&reading, "", "", false, Processors::Offered, false);
         assert!(
             prompt.contains("You cannot write a file") && prompt.contains("cannot run a program"),
             "a delegate holding only reading was told it could write or run: {prompt}"
@@ -1176,7 +1273,7 @@ mod tests {
             Capability::FileRead,
             Capability::ShellExec,
         ]);
-        let prompt = prompt_for(&running, "", "", false, Processors::Offered);
+        let prompt = prompt_for(&running, "", "", false, Processors::Offered, false);
         assert!(
             prompt.contains("and run programs"),
             "a delegate holding shell_exec was not told it could run one: {prompt}"
@@ -1378,9 +1475,17 @@ mod tests {
                     "   \n  ",
                     "",
                     false,
-                    Processors::Offered
+                    Processors::Offered,
+                    false
                 ),
-                prompt_for(&kind.capabilities(), "", "", false, Processors::Offered),
+                prompt_for(
+                    &kind.capabilities(),
+                    "",
+                    "",
+                    false,
+                    Processors::Offered,
+                    false
+                ),
                 "a {name} with an empty body was told something a blank line wrote"
             );
         }
