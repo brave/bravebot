@@ -234,6 +234,28 @@ notebook cell, and `edit_file` for a notebook, `write_file` names `spawn_process
 `contents_ref` argument, `edit_file` names `write_file`, `repo_map` and `lsp` name `read_file`, and
 `vet_content` names `spawn_processor`, each only where the list holds it.
 
+Two refusals that took their sentence from the policy's general denial are written from the list as
+well. That denial ends "Use a reference to it instead", which neither tool can follow: neither
+returns a reference at the point of refusal, and a turn offered no processor cannot use one. The
+refusal of `read_file` with `output_of` for a notebook the driver may not examine says the outputs
+are closed to `read_file`, prints the label the driver assigned, and names the routes the turn is
+offered: a plain read of the file for a reference to give to `spawn_processor`, said only where the
+turn is offered a processor and holds no private content ([PROC-4](../processors.md#PROC-4)), and `run`,
+said only where the turn is offered it. The refusal of `read_git` for an answer the driver may not
+examine says the answer is closed to `read_git`, prints the label, and names `run` only where the
+turn is offered it. Both name the person vouching for the path or the repository on every turn, a
+delegate's included, and a turn offered none of the other routes is told that only the person can
+open it. Neither names `read_output`, which refuses a reference no program printed. Both are fixed
+text about the state of the path, with no byte of the file and no name from it. Neither is reached
+while the trust map is unchanged: a read of a path nobody vouched for is answered with a reference
+before `output_of` is looked at ([READ-1](read-file.md#READ-1)), and `read_git` examines only an
+answer labelled trusted. The refusals are built by functions of their own so that a test can give
+them a label the call site would not.
+
+The general denial itself, which about thirty callers inside the driver receive as an error and do
+not show, is unchanged. Any other tool that shows a planner that denial in a result still says "Use a
+reference to it instead" without reading the list.
+
 The turn settles its list once and writes these from it ([VET-2](vet-content.md#VET-2)), so a
 delegate, a definition's tools line and the command line's `--tools` all give the same result. A
 run offered every tool is told every one of these names, in each of these texts.
@@ -305,6 +327,10 @@ tool as the control.
 `verified-by: bravebot_agent::tools::the_read_file_description_names_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::the_write_file_reference_argument_names_spawn_processor_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::the_edit_file_description_names_write_file_only_where_the_list_holds_it`
+`verified-by: bravebot_agent::tools::the_notebook_refusal_names_only_the_routes_the_turn_holds`
+`verified-by: bravebot_agent::tools::a_notebook_nobody_vouched_for_is_refused_in_the_helpers_words`
+`verified-by: bravebot_agent::tools::the_git_refusal_names_run_only_where_the_turn_holds_it`
+`verified-by: bravebot_agent::tools::an_untrusted_git_answer_is_refused_in_the_helpers_words`
 `verified-by: bravebot_agent::tools::the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds`
 `verified-by: bravebot_agent::tools::an_empty_old_text_names_write_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::tools::the_confinement_statement_names_request_path_only_where_the_list_holds_it`

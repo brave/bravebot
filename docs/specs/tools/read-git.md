@@ -152,6 +152,14 @@ the workspace root, so a repository in `sub` shows `sub/<path>`. An answer showi
 distrusts is as untrusted as that file, and reaches the planner as a reference, however trusted the
 `.git` it came out of. A log naming no path showed none and is labelled by `.git` alone.
 
+Only an answer labelled trusted is examined for credentials. If the driver may not examine an
+answer, which happens only if the trust map changes between the label and the examination, the
+refusal is worded by the driver ([TOOL-6](tool-surface.md#TOOL-6)): it says the answer is closed to
+`read_git`, prints the label, and names `run` only where the turn is offered it and the person
+vouching for the repository on every turn. A turn offered no `run` is told that only the person
+can open it. The tool returns no reference at that point, so the refusal does not say to use one,
+and it holds no byte of the answer.
+
 A path is held against the map only where it names one file one way. A path written through `..`,
 `.` or a doubled slash is refused, a tree entry git would not check out, `..` or a name holding a
 `/`, is not read, a name that is not UTF-8 is left out as [GIT-4](#GIT-4) leaves out a withheld
@@ -161,6 +169,8 @@ one, and a tree or file named by its id alone, with no path, is refused.
 than by what it holds, a file the map distrusts would reach the planner through its history.
 
 `verified-by: bravebot_agent::turn::a_history_answer_showing_a_distrusted_path_is_quarantined`
+`verified-by: bravebot_agent::tools::the_git_refusal_names_run_only_where_the_turn_holds_it`
+`verified-by: bravebot_agent::tools::an_untrusted_git_answer_is_refused_in_the_helpers_words`
 `verified-by: bravebot_agent::workspace::a_repository_below_the_root_is_read_under_the_rules_on_its_own_path`
 `verified-by: bravebot_core::policy::a_repository_answer_is_untrusted_where_a_path_it_showed_is`
 `verified-by: bravebot_core::policy::a_repository_answer_is_untrusted_where_anything_under_git_is`
