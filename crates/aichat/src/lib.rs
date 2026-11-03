@@ -472,6 +472,18 @@ pub struct AichatClient<'a> {
     config: &'a Config,
     egress: &'a Egress,
     subscription: Option<&'a mut dyn Subscription>,
+    /// Whether a request of this client was routed to the premium host with a key from the
+    /// subscription source. Set by [`Self::route`] once the source has produced the key, and never
+    /// from a reply. It stays false where no premium host is configured, where no source was lent,
+    /// and where the source could not produce a key (that request fails as
+    /// [`ChatError::Subscription`], which names the key by its own variant). It is not cleared
+    /// between requests, and the decision not to is deliberate: the configuration and whether a
+    /// source was lent are fixed for the life of a client, and with both a premium host and a
+    /// source `route` sends premium or fails, so a client never sends a premium request and a free
+    /// one. Once a request carried the key the flag stays set, so a later request in the same call
+    /// that finds the source empty still reports the key an earlier one carried. A request through
+    /// a gateway does not call `route` and does not set it.
+    premium_key: bool,
     gateway: Option<Gateway<'a>>,
     /// What this service has refused for the model of the call in progress.
     ///
@@ -531,6 +543,12 @@ impl<'a> AichatClient<'a> {
         self.spent.attempts
     }
 
+    /// Whether a request of this client was routed to the premium host with the stored key, which
+    /// is set when the key is produced and before the reply is known.
+    pub fn presented_a_premium_key(&self) -> bool {
+        self.premium_key
+    }
+
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<protocol::Usage> {
@@ -548,6 +566,7 @@ impl<'a> AichatClient<'a> {
             config,
             egress,
             subscription: None,
+            premium_key: false,
             gateway: None,
             refusals: Refusals::default(),
             cache_key: None,
@@ -679,7 +698,10 @@ impl<'a> AichatClient<'a> {
 
         match self.subscription.as_mut() {
             Some(source) => match source.next_credential() {
-                Ok(credential) => Ok((premium_url, Some(credential))),
+                Ok(credential) => {
+                    self.premium_key = true;
+                    Ok((premium_url, Some(credential)))
+                }
                 Err(detail) => Err(ChatError::Subscription(detail)),
             },
             // Premium is configured but no key is held, which is not an error: a caller with none

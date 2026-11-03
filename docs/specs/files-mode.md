@@ -50,6 +50,12 @@ the row draws under one name stay two rows. Names the workspace resolves to one 
 `./a.rs`) are one row, drawn under the name of the first call
 that wrote it. The resolved name is a key only and is never drawn.
 
+A write into the session's own directory is listed like any other, because the state shows what the
+session's write calls changed and not what is left to build. It does not count toward the unbuilt
+changes of [OPEN-1](open-loops.md#OPEN-1). The paths a resumed session reloads
+([OPEN-6](open-loops.md#OPEN-6)) include it, and they are compared with `HEAD` only for files in
+the repository, so it opens no loop there either.
+
 `verified-by: bravebot_tui::files_mode::a_file_is_listed_once_a_write_call_has_changed_it`
 `verified-by: bravebot_tui::files_mode::a_refused_failed_or_running_write_lists_nothing`
 `verified-by: bravebot_tui::files_mode::a_second_write_keeps_the_files_row_and_adds_an_edit`
@@ -59,6 +65,9 @@ that wrote it. The resolved name is a key only and is never drawn.
 `verified-by: bravebot_agent::turn::a_write_file_call_that_created_a_file_carries_its_counts`
 `verified-by: bravebot_agent::turn::an_edit_whose_lines_were_held_back_still_carries_its_counts`
 `verified-by: bravebot_agent::manifest::a_write_step_carries_its_counts_and_the_file_it_landed_on`
+`verified-by: bravebot_tui::state::open_loops::unfinished_does_not_list_a_file_in_the_session_directory_as_unbuilt`
+`verified-by: bravebot_agent::tools::a_write_into_the_session_directory_is_not_a_changed_file`
+`verified-by: bravebot_agent::open_loops::a_written_file_outside_the_repository_is_not_uncommitted`
 
 <a id="FILES-2"></a>
 ### FILES-2: counts and line numbers are made with the diff

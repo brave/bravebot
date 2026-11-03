@@ -191,9 +191,15 @@ the opposite reason:
 that line is about what the planner tried to do, and these two are about what the person is
 about to act on. A `run` line that [TURN-3](#TURN-3) counts as a write tried is a changed file here
 only when the workspace tree differs after it ([GROUND-1](grounding.md#GROUND-1)), and is a program
-run only when one started, so a line the person declined counts for TURN-3 and not for this. A turn
-whose only changes were made by `run` lines has run a program, so it is neither asked the question
-nor told the closing line: both are about a turn that ran no program.
+run only when one started, so a line the person declined counts for TURN-3 and not for this. A write
+that landed in the session's own directory leaves nothing to build either: that directory is for
+the turn's own use, outside the project and gone when the session ends. The write is not counted,
+and a turn whose only writes landed there is neither asked the question nor told the closing line.
+The work record's writes ([GROUND-1](grounding.md#GROUND-1)) leave it out as well. For a write
+call it is decided on where the write landed, so a link in the project that lands in that
+directory is not counted. Applying a kept checkout writes into the source tree and counts. A turn
+whose only changes were made by `run` lines has run a program, so it is neither asked the
+question nor told the closing line: both are about a turn that ran no program.
 
 **Work a delegate did.** A delegate working in the turn's own workspace writes and runs there, so
 a file it changed and a program it ran count as the turn's from the round the turn takes it back
@@ -215,6 +221,7 @@ In the terminal app the person's line is the open-loops line of [OPEN-3](open-lo
 
 `verified-by: bravebot_agent::turn::a_turn_that_writes_without_running_is_asked_about_it`
 `verified-by: bravebot_agent::turn::a_turn_that_wrote_and_ran_is_not_asked_about_it`
+`verified-by: bravebot_agent::turn::a_turn_that_only_writes_in_the_session_directory_leaves_nothing_unbuilt`
 `verified-by: bravebot_agent::turn::a_write_the_person_refused_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_write_plan_mode_refused_is_not_reported_as_a_change_that_was_never_built`
 `verified-by: bravebot_agent::turn::a_run_the_person_refused_leaves_the_change_reported_as_never_built`

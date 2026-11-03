@@ -181,6 +181,10 @@ reads "the premium key could not be used", gives the reason, and says to run
 `bravebot auth login brave` to replace the key or `bravebot auth logout brave` to send requests to
 the free endpoint instead. It does not mention an AWS sign-in.
 
+A request that carried the key and was refused with a 401 or a 403 is said with the same two
+commands, after its status and its count of tries ([BACKEND-37](backends.md#BACKEND-37)). Whether a
+request carried the key is known to the client that made it, and is not read from the reply.
+
 **Why.** The free endpoint answers a premium model name by substituting a weaker model rather than
 by failing, with a 200 and an ordinary reply. A request that silently lost its key would therefore
 still return something that reads like an answer, and the only other symptom of the downgrade is the
@@ -191,6 +195,9 @@ the premium host chose, and the key is a bearer secret meant for the host it was
 `verified-by: bravebot_aichat::client::an_unusable_premium_key_fails_rather_than_downgrading`
 `verified-by: bravebot_aichat::client::a_redirect_from_the_premium_host_is_a_failure_and_goes_nowhere`
 `verified-by: bravebot_agent::backend::each_backend_keeps_its_own_explanation`
+`verified-by: bravebot_session::sessions::a_refused_premium_key_names_the_commands_that_replace_or_forget_it`
+`verified-by: bravebot_aichat::client::a_client_reports_the_premium_key_only_when_a_request_carried_it`
+`verified-by: bravebot_agent::backend::a_401_from_the_premium_host_is_marked_as_the_premium_keys_through_the_backend`
 
 <a id="PREM-11"></a>
 ### PREM-11: the premium host is compiled in, an override that is malformed is not used, and the key is held only with a host

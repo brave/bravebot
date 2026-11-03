@@ -162,6 +162,40 @@ tool list is written out a second time as a refusal.
 `verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
 `verified-by: bravebot_agent::mcp::a_worker_is_offered_only_the_servers_its_parent_holds`
 
+<a id="DELEGATE-31"></a>
+### DELEGATE-31: a run that holds no writing is refused a write at once, and told where its content goes
+
+A reader and a checker are not offered a way to write a file, and a call that names `write_file` or
+`edit_file` anyway is refused before anything else is done with it: the path is not read, the body
+is not scanned for credentials, no change is displayed, nobody is asked and no grant is issued. The
+same holds for a worker or a definition whose held set leaves writing out
+([DELEGATE-5](#DELEGATE-5)). The refusal says that this kind of delegate writes nothing and that
+its content belongs in its report to the run that started it, and tells it not to retry. It names
+no capability.
+
+The trail records the refusal once, as a denial under the capability principle, in the place the
+refusals of a write in a mode that refuses writes and in a read-only sandbox are recorded: before
+the credential scan, the display, the approval and the endpoint grant, none of which the call
+reaches.
+
+A run that holds writing has its write scanned, shown and put to a person as
+[WRITE-3](tools/write-file.md#WRITE-3) and [EDIT-3](tools/edit-file.md#EDIT-3) say.
+
+**Why.** A capability check placed after the question asks a person to approve a write that cannot
+land, and in a mode that asks nothing the trail shows a scan, a display and an approval before the
+denial. A refusal that says only that a capability is not granted gives the delegate no way
+forward, so it retries.
+
+**What the check reads.** The capabilities the run was started with, which the driver fixed before
+the run ([DELEGATE-4](#DELEGATE-4)). It reads nothing the run met, so no decision is taken from
+untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
+
+`verified-by: bravebot_agent::turn::a_reader_or_checker_delegate_naming_a_write_tool_is_refused_before_anyone_is_asked`
+
+`the_main_session_and_an_addressed_worker_still_write_after_the_capability_check` and
+`a_delegates_write_is_approved_on_its_own` in `crates/agent/tests/turn.rs` are the controls for a
+run that holds writing.
+
 <a id="DELEGATE-5"></a>
 ### DELEGATE-5: the prompt belongs to the definition, and the planner writes no word of it
 
@@ -1298,6 +1332,72 @@ the set down and never add to it, so it grants nothing ([DELEGATE-19](#DELEGATE-
 `verified-by: bravebot_agent::turn::an_addressed_definition_is_offered_spawn_agent_only_with_delegates_it_may_start`
 `verified-by: bravebot_agent::turn::a_definition_lets_its_delegate_start_only_the_delegates_it_names`
 `verified-by: bravebot_agent::turn::a_delegate_whose_spawns_names_resolve_to_nothing_is_not_offered_spawn_agent`
+
+<a id="DELEGATE-32"></a>
+### DELEGATE-32: a run is offered the kinds its own capabilities reach
+
+The kinds `spawn_agent` lists to a run are the ones whose capabilities that run holds itself. A
+checker is not offered the `worker`, because it could only start one narrowed to what the checker
+holds, and a run that cannot write is not offered a kind described as one that writes. This holds
+for a delegate at every depth and for the planner of a turn whose capabilities exclude a kind's.
+
+A definition is judged by the kind it names, as [DELEGATE-4](#DELEGATE-4) fixes its capabilities.
+MCP grants are not compared, since a worker holds a server only where its parent does. The
+`reader` is always offered. Where the entries left are none, as when a `spawns:` line names only
+kinds the run does not reach, the entries are offered as written, because the tool is never
+offered with an empty set of kinds ([DELEGATE-30](#DELEGATE-30)) and the kernel narrows whatever
+is started. The offered kinds are the `spawns:` list intersected with the kinds the run's
+capabilities reach.
+
+The list is advisory. A call naming a kind that was not offered is answered by the same rules as
+any other call: [DELEGATE-3](#DELEGATE-3) refuses a name outside the resolved set and names what the set
+holds, and [DELEGATE-4](#DELEGATE-4) starts a kind the run reaches only in part, narrowed. The set
+resolved before the turn is never added to.
+
+**What the comparison reads.** The capability set the run holds and the capabilities of a kind
+name. Both are driver state, so no decision is taken from untrusted bytes
+([LABEL-5](labels.md#LABEL-5)).
+
+`verified-by: bravebot_core::delegate::a_run_is_offered_the_kinds_its_own_capabilities_reach`
+`verified-by: bravebot_core::policy::a_delegate_records_what_it_was_started_without`
+`verified-by: bravebot_agent::tools::a_delegate_is_offered_a_way_to_delegate_only_above_the_bottom_of_the_tree`
+`verified-by: bravebot_agent::turn::a_turn_whose_run_cannot_write_is_not_offered_the_worker`
+`verified-by: bravebot_agent::turn::a_spawns_list_is_intersected_with_the_kinds_the_run_reaches`
+`verified-by: bravebot_agent::turn::a_worker_started_by_a_checker_is_offered_no_worker_and_each_depth_is_told_what_was_dropped`
+`verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`
+
+<a id="DELEGATE-33"></a>
+### DELEGATE-33: the start message names the capabilities the delegate was started without
+
+When the kernel starts a delegate whose definition asks for a capability the run starting it does
+not hold ([DELEGATE-4](#DELEGATE-4)), the message that tells the planner the delegate has started
+carries one sentence of the driver's naming what it was started without and that the run that
+started it does not hold it. Where nothing was taken away the message has no such sentence. In a
+fan-out ([AGENT-5](tools/spawn-agent.md#AGENT-5)) every delegate of a call names one kind and starts
+from one run's set, so the sentence is the same for each and says so once.
+
+The sentence is built from capability values the kernel compared when it approved the delegate and
+carried to the message on the delegate's spec. The trail records the same narrowing for a
+person ([TRACE-1](trace.md#TRACE-1)). No word of the sentence comes from a delegate, a definition
+file or the planner.
+
+The refusal of a call that needs a capability the delegate was started without carries the same
+fact: it says the capability was not granted, that the delegate was started without it, and that
+the run that started it does not hold it. It is chosen by comparing the refused capability with
+the list on the delegate's spec, which is driver state, so no byte a delegate or a file wrote
+decides it. A capability the delegate was never asked to hold, and a run that is not a delegate,
+are refused in the plain words.
+
+**Why.** The kernel knows when it starts a delegate that the delegate cannot write. Leaving the
+planner to learn it from a refused `write_file` spends a delegate and a round on a fact the driver
+held at the start.
+
+`verified-by: bravebot_agent::tools::the_start_message_names_what_a_delegate_was_started_without`
+`verified-by: bravebot_core::policy::a_delegate_records_what_it_was_started_without`
+`verified-by: bravebot_core::policy::a_refusal_names_why_a_delegate_was_started_without_the_capability`
+`verified-by: bravebot_agent::turn::a_checker_is_not_offered_the_worker_and_a_worker_it_starts_anyway_is_said_to_lack_writing`
+`verified-by: bravebot_agent::turn::a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_without_writing`
+`verified-by: bravebot_agent::turn::a_worker_started_by_a_checker_is_offered_no_worker_and_each_depth_is_told_what_was_dropped`
 
 ## Known costs
 

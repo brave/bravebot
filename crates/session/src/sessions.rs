@@ -828,6 +828,18 @@ pub fn failure_reason(
     if let Some(attempts) = diagnosis.attempts.filter(|count| *count > 1) {
         said = t!(failure_with_attempts, what = said, attempts = attempts);
     }
+    // After the status and the count, so a refused credential says what was refused first and
+    // what to do about it last. The commands are this program's own words, chosen by the category
+    // and by whether the request carried the premium key, and nothing the service wrote is in them
+    // (BACKEND-37).
+    if diagnosis.category == Category::Unauthorized {
+        let next: std::borrow::Cow<'_, str> = if diagnosis.premium_key {
+            t!(failure_premium_key_next).into()
+        } else {
+            t!(failure_unauthorized_next).into()
+        };
+        said = t!(failure_with_next, what = said, next = next);
+    }
     t!(session_error, problem = said)
 }
 
@@ -4319,7 +4331,9 @@ mod tests {
                     .after(3),
                 None
             ),
-            "error: the service would not accept the credentials (HTTP 401), after 3 attempts"
+            "error: the service would not accept the credentials (HTTP 401), after 3 attempts. Run \
+             `bravebot auth status` to see the sign-in or key in use, and `bravebot doctor` to see \
+             the endpoint"
         );
         assert_eq!(
             failure_reason(Diagnosis::of(Category::Refused), None),
@@ -4329,6 +4343,97 @@ mod tests {
             failure_reason(Diagnosis::of(Category::Transport).after(0), None),
             "error: the request did not get through"
         );
+    }
+
+    /// BACKEND-37: an unauthorized failure names the commands that show the credential and the
+    /// endpoint, in the driver's own words, after the status and the count of tries. A failure of
+    /// any of the other eleven categories names neither command.
+    ///
+    /// The regressions it rejects are a remedy added to every category, one dropped when the
+    /// status or the count is present, and one placed before the status.
+    #[test]
+    fn an_unauthorized_failure_names_the_commands_that_show_the_credential_and_the_endpoint() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let remedy = "Run `bravebot auth status` to see the sign-in or key in use, and \
+                      `bravebot doctor` to see the endpoint";
+        for diagnosis in [
+            Diagnosis::of(Category::Unauthorized),
+            Diagnosis::of(Category::Unauthorized).with_status(403),
+            Diagnosis::of(Category::Unauthorized)
+                .with_status(401)
+                .after(1),
+        ] {
+            let line = failure_reason(diagnosis, None);
+            assert!(line.ends_with(remedy), "{line}");
+        }
+        assert_eq!(
+            failure_reason(
+                Diagnosis::of(Category::Unauthorized)
+                    .with_status(403)
+                    .after(2),
+                None
+            ),
+            format!(
+                "error: the service would not accept the credentials (HTTP 403), after 2 \
+                 attempts. {remedy}"
+            )
+        );
+        for category in [
+            Category::RateLimited,
+            Category::Unavailable,
+            Category::Refused,
+            Category::Transport,
+            Category::Incomplete,
+            Category::Undecodable,
+            Category::TooLong,
+            Category::Unconfigured,
+            Category::Blocked,
+            Category::Workspace,
+            Category::Internal,
+        ] {
+            let line = failure_reason(Diagnosis::of(category).with_status(401), None);
+            assert!(
+                !line.contains("bravebot auth status"),
+                "{category:?}: {line}"
+            );
+            assert!(!line.contains("bravebot doctor"), "{category:?}: {line}");
+        }
+    }
+
+    /// BACKEND-37, PREM-10: a refused request that carried the premium key names the commands that
+    /// replace the key or send requests to the free endpoint, and not the generic pair.
+    ///
+    /// The regressions it rejects are the generic sentence for a premium key, the premium sentence
+    /// for every unauthorized failure, and one that drops the status or the count.
+    #[test]
+    fn a_refused_premium_key_names_the_commands_that_replace_or_forget_it() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        let line = failure_reason(
+            Diagnosis::of(Category::Unauthorized)
+                .with_status(401)
+                .after(3)
+                .with_premium_key(),
+            None,
+        );
+        assert_eq!(
+            line,
+            "error: the service would not accept the credentials (HTTP 401), after 3 attempts. \
+             Run `bravebot auth login brave` to replace the premium key, or `bravebot auth logout \
+             brave` to send requests to the free endpoint instead. `bravebot auth status` shows \
+             the key in use"
+        );
+        let generic = failure_reason(
+            Diagnosis::of(Category::Unauthorized)
+                .with_status(401)
+                .after(3),
+            None,
+        );
+        assert!(!generic.contains("auth login brave"), "{generic}");
+        // A premium key on a failure of another category adds nothing.
+        let other = failure_reason(Diagnosis::of(Category::Transport).with_premium_key(), None);
+        assert_eq!(other, "error: the request did not get through");
     }
 
     /// A reply stopped part way through a call and one stopped while it was thinking want

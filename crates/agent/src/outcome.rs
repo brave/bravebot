@@ -88,6 +88,14 @@ pub struct Diagnosis {
     /// words a category, and the category beside it stays the class the failure belongs to. Absent
     /// for every failure that did not come from the account, and never given to the planner.
     pub account: Option<AccountFailure>,
+    /// Whether the request was made with the stored premium key, or needed one it could not get.
+    ///
+    /// Set by the client that made the request, from which host it addressed and whether it
+    /// attached the key, and never from anything the service said. A front end uses it to word a
+    /// refused credential as the premium key's own sentence
+    /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)). False for every failure of a
+    /// request that carried no premium key, and never given to the planner.
+    pub premium_key: bool,
 }
 
 /// A wait a service asked for, in the minutes a person is told, rounded up so a limit that lifts in
@@ -106,6 +114,7 @@ impl Diagnosis {
             ceiling: None,
             retry_after: None,
             account: None,
+            premium_key: false,
         }
     }
 
@@ -130,6 +139,12 @@ impl Diagnosis {
     /// The same, with which failure of a ChatGPT account it was.
     pub fn with_account(mut self, account: AccountFailure) -> Self {
         self.account = Some(account);
+        self
+    }
+
+    /// The same, marked as a failure of a request that carried the premium key.
+    pub fn with_premium_key(mut self) -> Self {
+        self.premium_key = true;
         self
     }
 

@@ -890,7 +890,7 @@ of capabilities, and gets back one report.
 
 | Parameter | |
 |---|---|
-| `kind` | `reader`, `checker` or `worker`, or the name of a [definition](../customize/agents.md) |
+| `kind` | `reader`, `checker` or `worker`, or the name of a [definition](../customize/agents.md). Only the kinds the run's own capabilities reach are offered: a `checker` is not offered the `worker`, and a `spawns:` line in a definition narrows the list further |
 | `task` | the whole of what the delegate is told |
 | `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
 | `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
@@ -917,6 +917,12 @@ asked again.
 
 A name that is neither a kind nor a definition is refused, and the refusal lists the names that would
 have worked.
+
+A call that names a kind the run was not offered because it does not hold what the kind needs is
+still answered by the same rules. A delegate started that way is narrowed to what the run holds, and
+the message that says it has started names what it was started without, for example "It was started
+without writing files, because the run that started it does not hold it." For a call with `each`
+the sentence is said once and begins "Each was".
 
 The planner is told how many rounds a delegate of each kind makes before it has to answer, so it can
 size the task: 60 for a `reader`, 80 for a `checker` and 120 for a `worker`. A round is one reply

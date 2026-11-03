@@ -112,8 +112,9 @@ pub(super) fn offered_tools<S: Sink>(
             true => tools::Running::Offered,
             false => tools::Running::Withheld,
         };
+        let reached_before = policy.delegates_reached_from(delegates);
         let mut offered =
-            tools::for_planner(scheduling, arming, delegates, task.deadlines, running);
+            tools::for_planner(scheduling, arming, &reached_before, task.deadlines, running);
         if advisor.is_some() {
             tools::offer_advisor(&mut offered);
         }
@@ -142,20 +143,17 @@ pub(super) fn offered_tools<S: Sink>(
             // table only in that case.
             //
             // So is the kinds `spawn_agent` offers where the definition named the delegates it
-            // may start, since the person's turn then starts only those (DELEGATE-30).
+            // may start, since the person's turn then starts only those (DELEGATE-30), and where
+            // it narrowed what the turn holds, since the kinds offered are the ones the turn's own
+            // capabilities reach (DELEGATE-32).
             let without_run = !addressed.tools().iter().any(|tool| tool == "run");
-            if without_run || policy.delegates() != delegates {
+            let reached = policy.delegates_reached_from(policy.delegates());
+            if without_run || reached != reached_before {
                 let running = match without_run {
                     true => tools::Running::Withheld,
                     false => running,
                 };
-                offered = tools::for_planner(
-                    scheduling,
-                    arming,
-                    policy.delegates(),
-                    task.deadlines,
-                    running,
-                );
+                offered = tools::for_planner(scheduling, arming, &reached, task.deadlines, running);
                 if advisor.is_some() {
                     tools::offer_advisor(&mut offered);
                 }

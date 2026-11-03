@@ -54,7 +54,9 @@ choosing where an effect lands.
 A write needs a person's approval, which mints a single-use endorsement bound to that exact path,
 so it cannot be replayed or redirected. Where nobody can be asked, writes are refused rather than
 applied unseen. A path the workspace does not reach is refused before anybody is asked, since no
-answer makes it reachable ([TRUST-10](../trust-map.md#TRUST-10)).
+answer makes it reachable ([TRUST-10](../trust-map.md#TRUST-10)). A run that holds no writing, such
+as a reader or a checker delegate, is refused before the path is read and before anybody is asked
+([DELEGATE-31](../delegation.md#DELEGATE-31)).
 
 **Why.** The wrong file destroys work rather than wasting a step.
 

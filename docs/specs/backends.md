@@ -2277,7 +2277,26 @@ refused and, at a 429, the wait its `Retry-After` asked for, as any other refusa
 in an event of a stream reports neither. A refusal of the model reports neither. The planner is told the
 category and the request count and no more, as for every failure.
 
+A failure of the category unauthorized is said with the commands to run after its status and its count
+of tries: `bravebot auth status` shows the sign-in or key in use and `bravebot doctor` shows the
+endpoint. Every source of that category says it the same way: a status of 401 or 403, a token the
+Google Cloud CLI would not give, a sign-in AWS would not resolve, and a refusal the service reported
+as one of authentication, permission or billing. A failure of a request that carried the stored
+premium key, or of a key that could not be presented, reports that as a closed flag beside its
+category, set by the step that made the request and never read from a reply, and its line names the
+commands of [PREM-10](premium-credentials.md#PREM-10) in place of the pair. The words are the
+driver's own, so no text from a reply, header, URL or credential is in them, and a failure of the
+account of a ChatGPT or an xAI sign-in keeps its own sentence. The flag and the commands are for the
+person only: the planner is told the category and the request count and no more.
+
 `verified-by: bravebot_agent::backend::each_status_a_service_answers_with_is_reported_as_what_it_means`
+`verified-by: bravebot_agent::backend::each_source_of_a_refused_credential_is_diagnosed_as_unauthorized`
+`verified-by: bravebot_agent::backend::a_refusal_of_the_premium_key_is_marked_through_the_count_of_attempts`
+`verified-by: bravebot_agent::backend::a_401_from_the_premium_host_is_marked_as_the_premium_keys_through_the_backend`
+`verified-by: bravebot_aichat::client::a_client_reports_the_premium_key_only_when_a_request_carried_it`
+`verified-by: bravebot_session::sessions::an_unauthorized_failure_names_the_commands_that_show_the_credential_and_the_endpoint`
+`verified-by: bravebot_session::sessions::a_refused_premium_key_names_the_commands_that_replace_or_forget_it`
+`verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
 `verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_is_reported_as_unconfigured`
 `verified-by: bravebot_agent::backend::aws_refusing_the_credentials_it_was_signed_with_is_reported_as_unauthorized`
 `verified-by: bravebot_agent::backend::a_hop_refused_for_leaving_https_is_reported_as_a_gate_rather_than_a_failed_request`

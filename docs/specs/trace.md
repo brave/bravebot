@@ -38,7 +38,10 @@ write call the permission mode refuses before the tool runs
 refusals under `permission_mode`, naming the tool, or the step and its tool, and the mode. The
 sandbox mode `read-only` ([SANDBOX-22](sandboxing.md#SANDBOX-22)) is recorded the same way, under
 `sandbox`, for a write call it refuses before the tool runs, a planned run it refuses for a step
-that writes, and a `run` line it refuses for redirecting output into a file.
+that writes, and a `run` line it refuses for redirecting output into a file. A write call by a run
+that holds no `file_write` capability ([DELEGATE-31](delegation.md#DELEGATE-31)) is recorded once
+as a refusal under `capability`, naming the tool and saying that the run holds no `file_write`
+capability, so nothing was written and nobody was asked.
 
 The first reach of the file tools into a directory outside the workspace that the permission mode
 gave ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is recorded as a `path_reach` permission naming

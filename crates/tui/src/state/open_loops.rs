@@ -79,9 +79,16 @@ impl Session {
         let mut said = Vec::new();
         if loops.unbuilt_changes {
             said.push(t!(unfinished_unbuilt).to_string());
+            // A file in the session's own directory leaves nothing to build, so it is not listed
+            // beside the ones that do (OPEN-1). Decided on where the write landed.
+            // `Written.landed` is canonical for a real write: the workspace resolves it with
+            // `destination`, which canonicalizes the longest existing prefix, and the session
+            // directory is canonicalized when it is made, so a temp dir under a link (macOS
+            // `/var` to `/private/var`) compares equal.
             said.extend(
                 since_the_last_command
                     .iter()
+                    .filter(|path| !workspace.reaches_scratch(path))
                     .map(|path| format!("  {}", path.display())),
             );
         }
@@ -336,6 +343,49 @@ mod tests {
             )
         );
         assert!(session.open_loops_for_the_planner().is_some());
+    }
+
+    /// OPEN-1. `/unfinished` lists the files written since the last command under unbuilt changes,
+    /// and leaves out one that landed in the session's own directory, which leaves nothing to build.
+    /// The regression it rejects: listing every landed path, so a scratch file the planner wrote
+    /// for its own use is offered as an unbuilt change beside the project file.
+    #[test]
+    fn unfinished_does_not_list_a_file_in_the_session_directory_as_unbuilt() {
+        let (mut session, mut workspace) = session_in("unfinished-scratch");
+        let root = workspace.root().canonicalize().expect("canonical");
+        let scratch = root.join("session-scratch");
+        std::fs::create_dir_all(&scratch).expect("scratch");
+        let scratch = scratch.canonicalize().expect("canonical");
+        workspace.open_scratch(bravebot_agent::ScratchDirectory::observed(scratch.clone()));
+        let wrote = |landed: std::path::PathBuf| {
+            let diff = bravebot_agent::diff::Diff::compute("", "x\n");
+            crate::state::Entry::tool(
+                bravebot_agent::report::Activity::running("Create", "f")
+                    .of_tool("write_file")
+                    .with_written(Some(bravebot_agent::report::Written {
+                        landed,
+                        added: diff.added(),
+                        removed: diff.removed(),
+                        numbers: diff.condensed_numbers(3),
+                    }))
+                    .done("done"),
+            )
+        };
+        session.transcript.push(wrote(scratch.join("note.txt")));
+        session.transcript.push(wrote(root.join("out.txt")));
+        let mut work = bravebot_agent::Work::default();
+        work.count(true, false, false);
+        session.worked(work);
+        session.report_unfinished(&workspace);
+        let said = notes(&session).last().cloned().unwrap_or_default();
+        assert!(
+            said.contains("out.txt"),
+            "the project file is missing: {said}"
+        );
+        assert!(
+            !said.contains("note.txt"),
+            "the scratch file is listed: {said}"
+        );
     }
 
     /// OPEN-5, OPEN-1. `/unfinished` lists each open loop with what to act on, a paused goal

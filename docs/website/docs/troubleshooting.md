@@ -62,7 +62,7 @@ and an editor say the sentence alone.
 
 | What it says | What it means |
 |---|---|
-| the service would not accept the credentials | the credential is wrong for this deployment, or has lapsed |
+| the service would not accept the credentials | the credential is wrong for this deployment, or has lapsed. The line ends with the commands to run: `bravebot auth status` shows the sign-in or key in use and `bravebot doctor` shows the endpoint. When the request carried your premium key, it names `bravebot auth login brave` to replace the key and `bravebot auth logout brave` to send requests to the free endpoint instead |
 | the service asked for fewer requests | rate limited, so wait and ask again |
 | the service could not answer | the service is unavailable at the moment |
 | the service rejected the request | the request was refused as invalid |

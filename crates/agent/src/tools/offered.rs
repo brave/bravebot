@@ -1939,7 +1939,9 @@ pub fn for_delegate(
     .filter(|tool| offers(tool.function.name.as_str()))
     .collect();
     if let Some(delegates) = delegating {
-        offer_kinds(&mut tools, delegates);
+        // The kinds this delegate's own capabilities reach, so a checker is not offered a worker
+        // it could only start narrowed to what it holds itself (DELEGATE-32).
+        offer_kinds(&mut tools, &delegates.offered_to(capabilities));
     }
     tools
 }

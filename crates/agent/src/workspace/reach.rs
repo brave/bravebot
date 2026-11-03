@@ -173,7 +173,7 @@ impl Workspace {
     ///
     /// Not a directory that holds it: the temporary directory it sits in is one a person may open by
     /// name, and the answer they give about that is theirs to give.
-    pub(super) fn reaches_scratch(&self, canonical: &Path) -> bool {
+    pub fn reaches_scratch(&self, canonical: &Path) -> bool {
         self.scratch()
             .is_some_and(|directory| canonical.starts_with(directory))
     }

@@ -157,7 +157,10 @@ list: a file in a repository you cloned cannot hand an agent a shell it was neve
 as a list: a coordinator written `spawns: reader, checker` is offered those two by `spawn_agent`, is
 refused a `worker`, and the delegates it starts are held to the same list. Absent, it may start any
 the turn resolved; an empty line, none. The list only takes names away, so a later file of the same
-name can shorten it and cannot lengthen it. A turn you start with `/agent` is held to it too. A name
+name can shorten it and cannot lengthen it. A turn you start with `/agent` is held to it too. What
+`spawn_agent` offers is that list met with the kinds the delegate itself can reach: a `checker`
+is not offered the `worker` whatever the list says, since it could only start one without writing.
+A list naming only kinds the delegate cannot reach is offered as written. A name
 no definition goes by picks nothing, and the turn says so:
 
 ```

@@ -155,6 +155,13 @@ impl Kind {
     }
 
     /// What to tell the planner this kind is for, in the tool's own schema.
+    ///
+    /// One text for every run, and it says what the kind does without regard to what the run
+    /// asking holds. A run that cannot write is not offered the kind that writes instead, so the
+    /// text is read only by runs that hold what it describes (DELEGATE-32). The exception is a
+    /// `spawns:` list naming only kinds the run does not reach, which leaves the entries as they
+    /// were; a kind started then is narrowed, and the start message says what it was without
+    /// (DELEGATE-33).
     pub fn purpose(self) -> &'static str {
         match self {
             Self::Reader => {
@@ -909,6 +916,36 @@ impl Definitions {
         }
     }
 
+    /// The entries a run holding `held` is offered to start: those whose kind's capabilities it
+    /// holds itself, so a run that cannot write is not offered a kind that writes (DELEGATE-32).
+    ///
+    /// Judged by the kind an entry names and not by what its file confined it to, which is how
+    /// DELEGATE-4 fixes capabilities, and MCP grants take no part: a worker holds a server only
+    /// where its parent does, whichever parent that is. A `reader` is always offered, so a run
+    /// that holds only reading still has a delegate to start. Where the entries left are none,
+    /// which is a `spawns:` line naming only kinds this run cannot match, the whole set comes
+    /// back: the tool is never offered with an empty set of kinds (DELEGATE-30), and the kernel
+    /// narrows whatever is started (DELEGATE-4). Only ever a part of the set or the set itself.
+    pub fn offered_to(&self, held: &CapabilitySet) -> Self {
+        let reached: Vec<Definition> = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                let kind = entry.kind();
+                kind == Kind::Reader
+                    || kind
+                        .capabilities()
+                        .iter()
+                        .all(|capability| held.contains(&capability))
+            })
+            .cloned()
+            .collect();
+        if reached.is_empty() {
+            return self.clone();
+        }
+        Self { entries: reached }
+    }
+
     /// Whether a definition may go by this name, which is any name but a kind's own.
     ///
     /// Asked by the loader before the kernel is, so a file claiming one is reported to whoever
@@ -1246,6 +1283,10 @@ pub struct DelegateSpec {
     writes: Vec<Permissions>,
     task: String,
     capabilities: CapabilitySet,
+    /// What its definition asks to hold that the run starting it does not, so the report of its
+    /// start can say what it was started without and the trail is not the only place it is
+    /// written (DELEGATE-33). Capabilities the driver compared, never a word from a file.
+    without: Vec<Capability>,
     rounds: usize,
     /// The most tokens it may spend, where one is fixed: the least of its definition's figure,
     /// the call's and what its parent had left.
@@ -1295,6 +1336,7 @@ impl DelegateSpec {
             writes: Vec::new(),
             task: task.into(),
             capabilities,
+            without: Vec::new(),
             rounds,
             budget: definition.budget(),
             place: std::sync::Arc::new(place),
@@ -1305,6 +1347,20 @@ impl DelegateSpec {
     pub(crate) fn holding(mut self, held: Confidentiality) -> Self {
         self.holds = held;
         self
+    }
+
+    /// Record the capabilities its definition asks for that the run starting it does not hold, so
+    /// the start message and a later refusal can name them (DELEGATE-33). Set from the kernel's own
+    /// comparison of capability sets, never from a byte a delegate or a definition file wrote.
+    pub(crate) fn started_without(mut self, without: Vec<Capability>) -> Self {
+        self.without = without;
+        self
+    }
+
+    /// The capabilities its definition asks for that the run starting it does not hold, which it
+    /// was started without (DELEGATE-33). Empty where it holds all it asked for.
+    pub fn without(&self) -> &[Capability] {
+        &self.without
     }
 
     /// Lower the budget to this figure where it is below the one it carries. A figure from the
@@ -1608,6 +1664,68 @@ mod tests {
     /// A place in a tree of its own, for a spec a test builds by hand.
     fn a_place() -> Place {
         Tree::default().claim().expect("a new tree has room")
+    }
+
+    /// DELEGATE-32: a run is offered the kinds its own capabilities reach. Rejects offering by
+    /// name or position (a checker offered the worker), comparing a kind by what its file
+    /// confined it to, and an empty set when a `spawns:` list names only unreached kinds.
+    #[test]
+    fn a_run_is_offered_the_kinds_its_own_capabilities_reach() {
+        let all = Definitions::default();
+        let offered = |held: &CapabilitySet| all.offered_to(held).names().join(",");
+
+        assert_eq!(
+            offered(&Kind::Worker.capabilities()),
+            "reader,checker,worker"
+        );
+        assert_eq!(offered(&Kind::Checker.capabilities()), "reader,checker");
+        assert_eq!(offered(&Kind::Reader.capabilities()), "reader");
+        // A run holding nothing is still offered the reader, whose grant every run has.
+        assert_eq!(offered(&CapabilitySet::none()), "reader");
+        // No kind holds reading and running programs alone: a checker also holds a language server,
+        // which goes with running programs (LSP-5). A run holding the first two and not the third
+        // does not reach the checker, since a kind is reached only by its whole set.
+        assert_eq!(
+            offered(&CapabilitySet::from_iter([
+                Capability::WebFetch,
+                Capability::FileRead,
+                Capability::ShellExec,
+            ])),
+            "reader"
+        );
+        // An MCP grant is no part of the comparison.
+        let mut with_server = Kind::Checker.capabilities().iter().collect::<Vec<_>>();
+        with_server.push(Capability::McpCall(ServerAlias::new("weather")));
+        assert_eq!(
+            offered(&with_server.into_iter().collect::<CapabilitySet>()),
+            "reader,checker"
+        );
+
+        // A definition is judged by the kind it names.
+        let mut named = Definitions::default();
+        named.insert(Definition::from_file(
+            "builder",
+            "Builds.",
+            Kind::Worker,
+            None,
+            "",
+            ".bravebot/agents/builder.md",
+        ));
+        assert_eq!(
+            named
+                .offered_to(&Kind::Checker.capabilities())
+                .names()
+                .join(","),
+            "reader,checker"
+        );
+        // Left empty by a `spawns:` list, the set is not narrowed to nothing.
+        let only_worker = named.only(&["worker".to_string()]);
+        assert_eq!(
+            only_worker
+                .offered_to(&Kind::Checker.capabilities())
+                .names(),
+            vec!["worker"]
+        );
     }
 
     /// A record writes a delegate's number down and reads it back, and what it reads is checked as

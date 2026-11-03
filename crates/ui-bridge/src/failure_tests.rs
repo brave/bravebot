@@ -269,6 +269,36 @@ fn a_failure_on_a_named_file_is_sent_as_the_workspace_kind_with_no_name() {
     );
 }
 
+/// BACKEND-37: the window words an unauthorized failure from its category and sends nothing of
+/// the terminal's commands, which a window has no place to run, so a refusal of the premium key
+/// is sent as every other unauthorized failure is, with its status and no account.
+///
+/// The faults this rejects: a premium key changing the category the window titles the card by,
+/// and the flag the terminal words its commands from being sent as a field of its own.
+#[test]
+fn a_refused_premium_key_is_sent_as_any_other_unauthorized_failure() {
+    let refused = || {
+        ChatError::Egress(bravebot_net::EgressError::Status {
+            url: "https://premium.example.invalid/v1/chat".to_string(),
+            status: 401,
+            retry_after: None,
+            body: None,
+        })
+    };
+    let marked = failed_with(BackendError::PremiumKey(Box::new(BackendError::from(
+        refused(),
+    ))));
+    let plain = failed_with(BackendError::from(refused()));
+    assert_eq!(marked, plain, "{marked}");
+    assert_eq!(marked["category"], "unauthorized", "{marked}");
+    assert_eq!(marked["status"], 401, "{marked}");
+    assert_eq!(marked["account"], Value::Null, "{marked}");
+
+    let unusable = failed_with(ChatError::Subscription("not held".to_string()));
+    assert_eq!(unusable["category"], "unauthorized", "{unusable}");
+    assert_eq!(unusable["accountMessage"], Value::Null, "{unusable}");
+}
+
 /// CHATGPT-8: what is sent about a failure is the fixed names and the counts, and nothing a
 /// reply, a request or a settings file held. The keys are `kind`, `message`, `category`, `attempts` and
 /// `status`, and the name, the sentence and the command of the account's failure.
