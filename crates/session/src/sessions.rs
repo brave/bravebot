@@ -867,11 +867,6 @@ pub fn failure_reason_with_model(
     {
         said = t!(failure_with_model, what = said, model = model_words(model));
     }
-    // Said only where there was more than one, since "after 1 attempts" is a worse sentence than
-    // the silence it replaces, and one attempt is what an unremarkable failure took.
-    if let Some(attempts) = diagnosis.attempts.filter(|count| *count > 1) {
-        said = t!(failure_with_attempts, what = said, attempts = attempts);
-    }
     // The request fields the call left out after the service refused the request, in the order it
     // gave them up, so the last is the one the service was refusing when the call ended. Each is a
     // word of this program's, named by the closed set of fields it can leave out, and none of it
@@ -884,6 +879,11 @@ pub fn failure_reason_with_model(
             .collect::<Vec<_>>()
             .join(", ");
         said = t!(failure_with_conceded, what = said, fields = fields);
+    }
+    // Said only where there was more than one, since "after 1 attempts" is a worse sentence than
+    // the silence it replaces, and one attempt is what an unremarkable failure took.
+    if let Some(attempts) = diagnosis.attempts.filter(|count| *count > 1) {
+        said = t!(failure_with_attempts, what = said, attempts = attempts);
     }
     if diagnosis.category == Category::Refused {
         said = t!(
@@ -4460,7 +4460,7 @@ mod tests {
     }
 
     /// BACKEND-37: a refused request says which backend it went to and which request fields the
-    /// retries left out, in the order they were given up, after the status and the count, and ends
+    /// retries left out, in the order they were given up, after the status and before the count, and ends
     /// with the next step. The words are the driver's own.
     ///
     /// The regressions it rejects are the fields printed for a category other than refused, the
@@ -4487,9 +4487,9 @@ mod tests {
             .on_backend(BackendKind::Bedrock);
         assert_eq!(
             failure_reason(refused, None),
-            "error: the service rejected the request (HTTP 400), sent to AWS Bedrock, after 4 \
-             attempts, with the retries leaving out shown thinking, the effort level (/effort), \
-             the assumed reply limit (BRAVEBOT_OUTPUT_BUDGET). Choose another model with \
+            "error: the service rejected the request (HTTP 400), sent to AWS Bedrock, with \
+             the retries leaving out shown thinking, the effort level (/effort), the assumed reply \
+             limit (BRAVEBOT_OUTPUT_BUDGET), after 4 attempts. Choose another model with \
              `/model`, or run `bravebot doctor` to see the endpoint and where the diagnostic log \
              is kept"
         );

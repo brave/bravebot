@@ -2258,8 +2258,9 @@ character that draws as nothing or moves the cursor as a visible picture or code
 line is stored or shown, and every front end gets the same safe text. A turn with no model name
 says no model. Only the refused category names the model and the backend.
 
-The note to the planner after a failed turn is unchanged and holds the category and the count only.
-The desktop and editor front ends are left as they were.
+The note to the planner after a failed turn holds the category and the count only. The desktop
+bridge stores a failed turn's reason through the same line, with the configured model, so the
+desktop's stored reason names the model and the backend of a refused turn as the line above says.
 
 Cancellation is distinct from failure. A processor carries cancellation and its attempt count
 separately from its tool-result text, so the parent can report the stop without parsing that text.
