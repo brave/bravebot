@@ -1336,6 +1336,7 @@ mod tests {
         assert!(answered.iter().all(|row| row.standing.usable()));
     }
 
+    /// Asked one after another, a few slow profiles would push the listing past its deadline.
     #[test]
     fn every_aws_account_is_asked_at_once() {
         let slow: Session = Arc::new(|_| {
@@ -1359,6 +1360,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(1100));
     }
 
+    /// A hung `aws` restarted on every listing would pile up processes until the app quits.
     #[test]
     fn an_aws_check_still_running_is_not_started_again() {
         let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));

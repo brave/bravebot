@@ -92,10 +92,8 @@ const KNOWN_FIRST: &[&str] = &["openrouter"];
 /// Each of [`KNOWN_FIRST`] that a key can be stored for and has no row, as a gateway with no key,
 /// before the ChatGPT row.
 fn with_known_first(rows: &mut Vec<Row>, config: &Result<Config, ConfigError>, managed: &Managed) {
-    let providers = match config {
-        Ok(config) => config.providers.as_slice(),
-        Err(ConfigError::Missing(_) | ConfigError::Empty(_)) => &[],
-        Err(_) => return,
+    let Ok(providers) = bravebot_agent::key_entry::configured_gateways(config) else {
+        return;
     };
     let offers = accounts::offered(providers, managed);
     for id in KNOWN_FIRST {
