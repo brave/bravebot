@@ -83,16 +83,6 @@ The host track is client contract and shared screen state, local stdio proof, ex
 
 The proposal includes React Native for both remote control and embedded execution. Embedded real-backend use requires the [credential lifecycle](architecture.md#embedded-model-credentials); iOS capability and distribution claims require the [platform checks](architecture.md#ios-capability-and-distribution-limits). New packages follow the [dependency plan](decisions-and-tradeoffs.md#9-mobile-dependencies-and-builds). Source findings do not establish demonstrated behavior.
 
-## Bridge limits found in review
-
-The source review above found these limits in the bridge. Their current state:
-
-- Closed by 3a ([RPCVIEW-6](../../specs/session-view.md#RPCVIEW-6)): approval replies lacked a session-wide question number, cancellation named only a session, and a repeated startup-trust reply could replace trust and wait on the running state lock.
-- Closed in the host ([local-host.md](../../specs/local-host.md)): controller loss now refuses the waiting question (HOST-7), and `closed` waits for the session's workers to stop, with saving reported as unknown.
-- Open: `session.attach` gives a returning client the session's status and pending question with no rows (HOST-11), so there is still no history snapshot (stage 4a). The desktop renderer still adds submitted prompts locally, which matters for stage 5b. Resumed records restore additional directories and trusted-program grants, which matters only if saved-record import is added.
-
-The architecture and client contract describe the planned additions for the open items. They are not existing guarantees.
-
 ## Document ownership
 
 Maintain this proposal in `docs/design/mobile/`. Earlier notebook drafts are historical copies. Update these documents as implementation resolves open choices, and add normative specs and test evidence with the behavior they govern.
