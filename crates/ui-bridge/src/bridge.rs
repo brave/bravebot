@@ -3275,7 +3275,12 @@ fn work(work: Work) {
     state.turns = turn;
     let ended = match &outcome {
         Ok(_) => bravebot_session::sessions::StoredOutcome::Completed,
-        Err(error) => bravebot_session::sessions::StoredOutcome::ended_by(turn, error),
+        Err(error) => bravebot_session::sessions::StoredOutcome::ended_by(
+            turn,
+            error,
+            // The configured name, as `chosen` below is, and never one a reply reported.
+            Some(task.model.as_deref().unwrap_or(&config.default_model)),
+        ),
     };
     record_turn(
         &mut state,

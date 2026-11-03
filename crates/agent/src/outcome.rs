@@ -2,7 +2,27 @@
 
 use crate::timing::Timing;
 use bravebot_aichat::AccountFailure;
+use bravebot_aichat::call::Conceded;
 use bravebot_aichat::protocol::{Cached, Usage};
+
+/// Which backend a request was sent to, as a closed set of words.
+///
+/// Chosen by this program from the variant of [`crate::backend::Backend`] that made the request,
+/// so it names no host, address or account and nothing the service wrote
+/// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendKind {
+    /// The Brave endpoint.
+    Aichat,
+    /// AWS Bedrock.
+    Bedrock,
+    /// A gateway the settings configure.
+    Gateway,
+    /// A ChatGPT account.
+    Chatgpt,
+    /// An xAI account.
+    Xai,
+}
 
 /// Fixed failure categories, distinguished by what the user can do about them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +116,19 @@ pub struct Diagnosis {
     /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)). False for every failure of a
     /// request that carried no premium key, and never given to the planner.
     pub premium_key: bool,
+    /// The request fields the call left out of its later requests after the service refused them,
+    /// in the order it gave them up
+    /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    ///
+    /// Written by the call driver from the status of a refusal and from what the request carried,
+    /// one of a closed set of six, and never from a reply. Empty for every failure that tried
+    /// nothing without, and never given to the planner.
+    pub conceded: Conceded,
+    /// Which backend the request went to, where the backend that made it said so.
+    ///
+    /// Set from the variant that sent the request and never from a reply or an address. Never
+    /// given to the planner.
+    pub backend: Option<BackendKind>,
 }
 
 /// A wait a service asked for, in the minutes a person is told, rounded up so a limit that lifts in
@@ -115,7 +148,21 @@ impl Diagnosis {
             retry_after: None,
             account: None,
             premium_key: false,
+            conceded: Conceded::default(),
+            backend: None,
         }
+    }
+
+    /// The same, with the request fields the call left out after the service refused them.
+    pub fn with_conceded(mut self, conceded: Conceded) -> Self {
+        self.conceded = conceded;
+        self
+    }
+
+    /// The same, with the backend that sent the request.
+    pub fn on_backend(mut self, backend: BackendKind) -> Self {
+        self.backend = Some(backend);
+        self
     }
 
     /// The same, with the status a service answered with.

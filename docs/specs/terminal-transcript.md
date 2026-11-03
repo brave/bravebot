@@ -664,7 +664,11 @@ which is drawn before any file this program reads has been looked for.
 ### VIEW-22: failed and cancelled turns have distinct visible status
 
 A failed turn shows a reason below its status and in its transcript entry. The reason uses fixed
-text and the backend's known status and request count. It remains visible with the audit expanded
+text and the backend's known status and request count. A refused request also names the backend
+that sent it, the model the turn ran on and the request fields the retries left out, and ends
+with the next step ([BACKEND-37](backends.md#BACKEND-37)); those words are the program's own,
+except the model, which is the name the person configured and is written with control characters
+made visible. It remains visible with the audit expanded
 or collapsed, after resizing, and while reading older scrollback. Long reasons wrap within the
 available space. Terminal control characters are not drawn.
 
@@ -685,6 +689,7 @@ The live session's export includes its failure and cancellation entries.
 `verified-by: bravebot_tui::frame::an_export_of_a_failed_turn_says_why_it_failed`
 `verified-by: bravebot_tui::frame::an_export_attaches_each_reason_to_the_turn_that_had_it`
 `verified-by: bravebot_tui::frame::an_export_of_a_cancelled_turn_says_it_was_cancelled`
+`verified-by: bravebot_tui::app::a_rejected_request_is_said_with_the_configured_model_in_the_transcript`
 `verified-by: bravebot_tui::failure_history::turn_endings_keep_the_visible_history_anchor`
 `verified-by: bravebot_tui::outcome_colours::what_a_successful_turn_cost_is_not_drawn_in_the_failure_colour`
 `verified-by: bravebot_tui::outcome_colours::failure_label_uses_failure_colour`

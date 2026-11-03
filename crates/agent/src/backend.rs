@@ -10,9 +10,10 @@
 //! environment and the user's own settings file before any turn starts, and nothing a model says can
 //! reach it.
 
-use crate::outcome::{Category, Diagnosis};
+use crate::outcome::{BackendKind, Category, Diagnosis};
 use bravebot_aichat::anthropic::AnthropicClient;
 use bravebot_aichat::anthropic::protocol::Failure;
+use bravebot_aichat::call::Conceded;
 use bravebot_aichat::generate_content::GenerateContentClient;
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::responses::ResponsesClient;
@@ -67,6 +68,11 @@ pub enum BackendError {
         attempts: u32,
         usage: Option<Usage>,
         context_tokens: Option<u64>,
+        /// The request fields the call left out after the service refused the request, in the
+        /// order it gave them up ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+        conceded: Conceded,
+        /// The backend that sent the requests, where the caller said so.
+        backend: Option<BackendKind>,
         cause: Box<BackendError>,
     },
 }
@@ -129,11 +135,15 @@ impl BackendError {
                 attempts,
                 usage,
                 context_tokens,
+                conceded,
+                backend,
                 cause,
             } => Self::Attempted {
                 attempts: attempts.saturating_add(earlier),
                 usage,
                 context_tokens,
+                conceded,
+                backend,
                 cause,
             },
             other => other.counted(earlier, None, None),
@@ -151,7 +161,55 @@ impl BackendError {
             attempts,
             usage,
             context_tokens,
+            conceded: Conceded::default(),
+            backend: None,
             cause: Box::new(self),
+        }
+    }
+
+    /// This failure with the request fields the call gave up after refusals. A failure that
+    /// counted no requests has none to record and is returned as it was.
+    pub(crate) fn conceding(self, given_up: Conceded) -> Self {
+        match self {
+            Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                backend,
+                cause,
+                ..
+            } => Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded: given_up,
+                backend,
+                cause,
+            },
+            other => other,
+        }
+    }
+
+    /// This failure marked as sent by `kind`, which is the variant of [`Backend`] that made the
+    /// request and never anything a reply or an address said.
+    pub(crate) fn sent_by(self, kind: BackendKind) -> Self {
+        match self {
+            Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded,
+                cause,
+                ..
+            } => Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                conceded,
+                backend: Some(kind),
+                cause,
+            },
+            other => other,
         }
     }
 
@@ -175,8 +233,18 @@ impl BackendError {
     pub fn diagnosis(&self) -> Diagnosis {
         let category = match self {
             Self::Attempted {
-                attempts, cause, ..
-            } => return cause.diagnosis().after(*attempts),
+                attempts,
+                conceded,
+                backend,
+                cause,
+                ..
+            } => {
+                let diagnosis = cause.diagnosis().after(*attempts).with_conceded(*conceded);
+                return match backend {
+                    Some(kind) => diagnosis.on_backend(*kind),
+                    None => diagnosis,
+                };
+            }
             Self::PremiumKey(cause) => return cause.diagnosis().with_premium_key(),
             Self::NoGatewayToken { .. } => return Diagnosis::of(Category::Unconfigured).after(0),
             // A missing CLI is a machine that is not set up, as a missing token variable is. A CLI
@@ -989,22 +1057,27 @@ fn counted_aichat(client: &AichatClient<'_>, error: ChatError) -> BackendError {
     } else {
         error
     };
-    error.counted(
-        client.attempts(),
-        client.completed_usage(),
-        client.last_request_tokens(),
-    )
+    error
+        .counted(
+            client.attempts(),
+            client.completed_usage(),
+            client.last_request_tokens(),
+        )
+        .conceding(client.conceded())
+        .sent_by(BackendKind::Aichat)
 }
 
 /// The failure of a call to `client`, with the requests it took and what they cost.
 macro_rules! counted {
     ($client:expr, $result:expr) => {
         $result.map_err(|error| {
-            BackendError::from(error).counted(
-                $client.attempts(),
-                $client.completed_usage(),
-                $client.last_request_tokens(),
-            )
+            BackendError::from(error)
+                .counted(
+                    $client.attempts(),
+                    $client.completed_usage(),
+                    $client.last_request_tokens(),
+                )
+                .conceding($client.conceded())
         })
     };
 }
@@ -1285,8 +1358,30 @@ impl<'a> Backend<'a> {
         self
     }
 
+    /// Which backend this is, as the closed word a failure line names it
+    /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    fn kind(&self) -> BackendKind {
+        match self {
+            Self::Aichat { .. } => BackendKind::Aichat,
+            Self::Bedrock { .. } => BackendKind::Bedrock,
+            Self::Gateway { .. } => BackendKind::Gateway,
+            Self::Account { .. } => BackendKind::Chatgpt,
+            Self::XaiAccount { .. } => BackendKind::Xai,
+        }
+    }
+
     /// Send a request and wait for the whole reply.
     pub fn complete<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        request: &ChatRequest,
+    ) -> Result<Completion, BackendError> {
+        let kind = self.kind();
+        self.send(policy, request)
+            .map_err(|error| error.sent_by(kind))
+    }
+
+    fn send<S: Sink>(
         &mut self,
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
@@ -1357,6 +1452,17 @@ impl<'a> Backend<'a> {
 
     /// Send a request and read the reply as it arrives.
     pub fn complete_streaming<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        request: &ChatRequest,
+        progress: impl FnMut(Progress),
+    ) -> Result<Completion, BackendError> {
+        let kind = self.kind();
+        self.send_streaming(policy, request, progress)
+            .map_err(|error| error.sent_by(kind))
+    }
+
+    fn send_streaming<S: Sink>(
         &mut self,
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
@@ -4703,6 +4809,8 @@ mod tests {
                 attempts,
                 usage,
                 context_tokens,
+                conceded: _,
+                backend: _,
                 cause,
             } = &error
             else {
@@ -4747,6 +4855,8 @@ mod tests {
                 attempts,
                 usage,
                 context_tokens,
+                conceded: _,
+                backend: _,
                 cause,
             } = &error
             else {
@@ -4825,6 +4935,8 @@ mod tests {
                 attempts,
                 usage,
                 context_tokens,
+                conceded: _,
+                backend: _,
                 cause,
             } = &error
             else {
@@ -5740,6 +5852,43 @@ mod tests {
         );
         assert_eq!(failure.diagnosis().category, Category::Transport);
         assert_eq!(failure.diagnosis().attempts, Some(3));
+    }
+
+    /// BACKEND-37: the fields a call gave up and the backend that sent the requests reach the
+    /// diagnosis from the failure's own record, and a failure that counted no requests carries
+    /// neither. The regressions it rejects are a diagnosis that drops either field, and a backend
+    /// word set on an error that was never counted.
+    #[test]
+    fn the_fields_given_up_and_the_backend_reach_the_diagnosis_of_a_counted_failure() {
+        use bravebot_aichat::call::Concession;
+        let status = || bravebot_net::EgressError::Status {
+            url: "https://service.example/v1".to_string(),
+            status: 400,
+            retry_after: None,
+            body: None,
+        };
+        let mut given = Conceded::default();
+        given.push(Concession::Effort);
+        given.push(Concession::Ceiling);
+        let failure = BackendError::from(ChatError::Egress(status()))
+            .counted(3, None, None)
+            .conceding(given)
+            .sent_by(BackendKind::Bedrock);
+        let diagnosis = failure.diagnosis();
+        assert_eq!(diagnosis.category, Category::Refused);
+        assert_eq!(diagnosis.attempts, Some(3));
+        assert_eq!(diagnosis.backend, Some(BackendKind::Bedrock));
+        assert_eq!(
+            diagnosis.conceded.in_order().collect::<Vec<_>>(),
+            [Concession::Effort, Concession::Ceiling]
+        );
+
+        let uncounted = BackendError::from(ChatError::Egress(status()))
+            .conceding(given)
+            .sent_by(BackendKind::Bedrock)
+            .diagnosis();
+        assert_eq!(uncounted.backend, None);
+        assert!(uncounted.conceded.is_empty());
     }
 
     /// COMPACT-14: only 400 and 422 say the body was refused, on either backend and through the

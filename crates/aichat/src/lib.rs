@@ -543,6 +543,11 @@ impl<'a> AichatClient<'a> {
         self.spent.attempts
     }
 
+    /// The request fields the last call left out after the service refused them, in order.
+    pub fn conceded(&self) -> call::Conceded {
+        self.spent.conceded
+    }
+
     /// Whether a request of this client was routed to the premium host with the stored key, which
     /// is set when the key is produced and before the reply is known.
     pub fn presented_a_premium_key(&self) -> bool {

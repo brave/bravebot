@@ -64588,6 +64588,53 @@ fn a_refusal_counts_the_cache_probe_as_a_second_request() {
     );
 }
 
+/// BACKEND-37: a turn the service refuses on every request reports the request fields the client
+/// left out, in the order it gave them up, and the backend that sent them, beside the count of
+/// requests actually sent. Rejects a diagnosis that drops the list, one that reports a field the
+/// client never gave up, and one that leaves the backend out.
+#[test]
+fn a_refusal_on_every_request_reports_the_fields_given_up_and_the_backend() {
+    let scratch = Scratch::new("outcome-refused-fields");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // More than the client can have a use for, so it is the client and not the script that ends
+    // the exchange.
+    let (endpoint, received) = serve_script(vec![Served::Status(400); 12]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("answer something"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    let why = why_it_failed(&outcome.expect_err("the service refused the request"));
+    assert_eq!(why.category, bravebot_agent::Category::Refused, "{why:?}");
+    assert_eq!(
+        why.backend,
+        Some(bravebot_agent::BackendKind::Aichat),
+        "{why:?}"
+    );
+    let requests = received.try_iter().count();
+    assert_eq!(why.attempts, Some(requests as u32), "{why:?}");
+    // Every request after the first was sent because the client gave a field up.
+    assert_eq!(
+        why.conceded.in_order().count(),
+        requests - 1,
+        "a request was sent that no field was given up for: {why:?}"
+    );
+    assert_eq!(
+        why.conceded.in_order().next(),
+        Some(bravebot_aichat::call::Concession::Breakpoints),
+        "the cache probe is the first field the client gives up: {why:?}"
+    );
+}
+
 #[test]
 fn a_stop_between_attempts_is_a_stop_rather_than_a_failure() {
     let scratch = Scratch::new("outcome-stopped");

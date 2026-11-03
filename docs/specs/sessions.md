@@ -1065,7 +1065,11 @@ number; whether those words remain available to recall is SESSION-6, and the two
 each other. None of this is sent to the planner. What the planner is told of a failure is the note
 of [TURN-13](turns.md#TURN-13), which holds no more than the category and the request count.
 A recorded unauthorized failure ends with the commands [BACKEND-37](backends.md#BACKEND-37) names,
-since the reason is the line the interface showed.
+since the reason is the line the interface showed. A recorded refused failure holds the backend
+that sent the requests, the model the turn ran on, the request fields the retries left out and the
+next step [BACKEND-37](backends.md#BACKEND-37) names, for the same reason. The model is the name
+the person configured or chose, written with control characters made visible; the rest are words of
+this program's, chosen from closed sets. Nothing the service sent is among them.
 Accepted corrections remain within the cancelled turn through reload, export and later turns.
 
 **Why.** Turn boundaries cannot be recovered from the conversation afterwards, because a
@@ -1079,6 +1083,10 @@ closes.
 `verified-by: bravebot_tui::sessions::reopening_keeps_task_ownership_and_recorded_measurements`
 `verified-by: bravebot_tui::sessions::failure_after_work_keeps_its_prompt_and_safe_reason_without_changing_context`
 `verified-by: bravebot_tui::sessions::hidden_cancellation_then_corrections_keeps_plan_ownership`
+`verified-by: bravebot_session::sessions::a_refused_request_names_its_backend_and_the_fields_the_retries_left_out`
+`verified-by: bravebot_session::sessions::a_refused_request_names_the_model_the_turn_ran_on`
+`verified-by: bravebot_ui_bridge::history::a_rejected_turn_is_recorded_with_the_configured_model_and_none_of_the_services_words`
+`verified-by: bravebot_session::refused_in_french::a_refused_request_is_said_in_the_chosen_catalog_and_names_the_same_commands`
 `verified-by: bravebot_tui::sessions::accepted_corrections_survive_cancellation_storage_export_and_the_next_turn`
 `verified-by: bravebot_tui::sessions::processor_cancellation_preserves_its_plan_and_measurements_on_resume`
 `verified-by: bravebot_tui::sessions::reopening_does_not_restore_an_unsent_prompt`

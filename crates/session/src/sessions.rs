@@ -708,10 +708,13 @@ pub enum StoredOutcome {
 impl StoredOutcome {
     /// How turn `turn` ended in `error`, in the words the interface uses for it. A turn that ended
     /// on the read of a file the person named says which file and why (NAME-13), as the screen does.
-    pub fn ended_by(turn: usize, error: &bravebot_agent::TurnError) -> Self {
+    ///
+    /// `model` is the model name the person configured or chose for the turn (see
+    /// [`failure_reason_with_model`]).
+    pub fn ended_by(turn: usize, error: &bravebot_agent::TurnError, model: Option<&str>) -> Self {
         match (error.ending(), named_failure(error)) {
             (bravebot_agent::Ending::Failed(_), Some(reason)) => Self::Failed { reason },
-            (ending, _) => Self::ended(turn, ending, error.cut_off()),
+            (ending, _) => Self::ended(turn, ending, error.cut_off(), model),
         }
     }
 
@@ -720,11 +723,12 @@ impl StoredOutcome {
         turn: usize,
         ending: bravebot_agent::Ending,
         cut_off: Option<&bravebot_aichat::CutOff>,
+        model: Option<&str>,
     ) -> Self {
         match ending {
             bravebot_agent::Ending::Done => Self::Completed,
             bravebot_agent::Ending::Failed(diagnosis) => Self::Failed {
-                reason: failure_reason(diagnosis, cut_off),
+                reason: failure_reason_with_model(diagnosis, cut_off, model),
             },
             bravebot_agent::Ending::Stopped { .. } => Self::Cancelled {
                 reason: t!(turn_cancelled, turn = turn),
@@ -735,11 +739,16 @@ impl StoredOutcome {
 
 /// The failure line a turn that ended in `error` shows: the file and the reason where the read of
 /// a file the person named ended it (NAME-13), and the sentence for the category otherwise.
+///
+/// `model` is the model name the person configured or chose for the turn, which a refused request
+/// names ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
 pub fn failure_line(
     error: &bravebot_agent::TurnError,
     diagnosis: bravebot_agent::Diagnosis,
+    model: Option<&str>,
 ) -> String {
-    named_failure(error).unwrap_or_else(|| failure_reason(diagnosis, error.cut_off()))
+    named_failure(error)
+        .unwrap_or_else(|| failure_reason_with_model(diagnosis, error.cut_off(), model))
 }
 
 /// The failure line for a turn that ended on the read of a file the person named with `@`: the
@@ -758,6 +767,23 @@ pub fn named_failure(error: &bravebot_agent::TurnError) -> Option<String> {
 pub fn failure_reason(
     diagnosis: bravebot_agent::Diagnosis,
     cut_off: Option<&bravebot_aichat::CutOff>,
+) -> String {
+    failure_reason_with_model(diagnosis, cut_off, None)
+}
+
+/// As [`failure_reason`], for a turn that ran on `model`: the name the person configured or chose,
+/// which a refused request names beside the backend that sent it
+/// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+///
+/// A separate argument rather than a field of the diagnosis, because the diagnosis is a small `Copy`
+/// value built from a backend's structured error, and the name is the driver's own state that no
+/// error holds. It is the name as configured and never one a reply, a header or an address held, and
+/// it is spelled safe to draw here ([`model_words`]), since the person's settings file may hold
+/// anything and this line is stored, exported and drawn.
+pub fn failure_reason_with_model(
+    diagnosis: bravebot_agent::Diagnosis,
+    cut_off: Option<&bravebot_aichat::CutOff>,
+    model: Option<&str>,
 ) -> String {
     use bravebot_agent::Category;
     use bravebot_aichat::OpenCall;
@@ -823,10 +849,48 @@ pub fn failure_reason(
     if let Some(status) = diagnosis.status {
         said = t!(failure_with_status, what = said, status = status);
     }
+    // The backend a refused request went to, a closed word chosen by this program from the variant
+    // that sent it (BACKEND-37).
+    if diagnosis.category == Category::Refused
+        && let Some(backend) = diagnosis.backend
+    {
+        said = t!(
+            failure_with_backend,
+            what = said,
+            backend = backend_words(backend)
+        );
+    }
+    // The model the turn ran on, as the person configured or chose it. It is the driver's own state
+    // and is said whatever the backend, so nothing a service wrote can reach this word.
+    if diagnosis.category == Category::Refused
+        && let Some(model) = model.filter(|model| !model.is_empty())
+    {
+        said = t!(failure_with_model, what = said, model = model_words(model));
+    }
     // Said only where there was more than one, since "after 1 attempts" is a worse sentence than
     // the silence it replaces, and one attempt is what an unremarkable failure took.
     if let Some(attempts) = diagnosis.attempts.filter(|count| *count > 1) {
         said = t!(failure_with_attempts, what = said, attempts = attempts);
+    }
+    // The request fields the call left out after the service refused the request, in the order it
+    // gave them up, so the last is the one the service was refusing when the call ended. Each is a
+    // word of this program's, named by the closed set of fields it can leave out, and none of it
+    // came from a reply (BACKEND-37).
+    if diagnosis.category == Category::Refused && !diagnosis.conceded.is_empty() {
+        let fields = diagnosis
+            .conceded
+            .in_order()
+            .map(concession_words)
+            .collect::<Vec<_>>()
+            .join(", ");
+        said = t!(failure_with_conceded, what = said, fields = fields);
+    }
+    if diagnosis.category == Category::Refused {
+        said = t!(
+            failure_with_next,
+            what = said,
+            next = t!(failure_refused_next)
+        );
     }
     // After the status and the count, so a refused credential says what was refused first and
     // what to do about it last. The commands are this program's own words, chosen by the category
@@ -841,6 +905,53 @@ pub fn failure_reason(
         said = t!(failure_with_next, what = said, next = next);
     }
     t!(session_error, problem = said)
+}
+
+/// A model name as a failure line says it: every character that would draw as nothing or act on a
+/// terminal is written out as a visible one.
+///
+/// The name comes from the person's configuration or from `/model`, so it is not a service's
+/// words, but a settings file may hold any characters and the line is drawn in the status area,
+/// written to the session record and exported ([VIEW-4](../../../docs/specs/terminal-transcript.md#VIEW-4)).
+/// A control character becomes its Unicode picture (U+2400 and after), or U+FFFD where it has none;
+/// a character that draws as nothing is spelled by [`bravebot_core::invisible::spelled`].
+fn model_words(model: &str) -> String {
+    bravebot_core::invisible::spelled(model.to_string())
+        .text
+        .chars()
+        .map(|c| match c {
+            '\u{7f}' => '\u{2421}',
+            c if (c as u32) < 0x20 => char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'),
+            c if c.is_control() => '\u{fffd}',
+            c => c,
+        })
+        .collect()
+}
+
+/// The words for a backend, as a failure line names it.
+fn backend_words(backend: bravebot_agent::BackendKind) -> &'static str {
+    use bravebot_agent::BackendKind;
+    match backend {
+        BackendKind::Aichat => t!(failure_backend_aichat),
+        BackendKind::Bedrock => t!(failure_backend_bedrock),
+        BackendKind::Gateway => t!(failure_backend_gateway),
+        BackendKind::Chatgpt => t!(failure_backend_chatgpt),
+        BackendKind::Xai => t!(failure_backend_xai),
+    }
+}
+
+/// The words for a request field that was left out, with the setting a person changes where one
+/// exists.
+fn concession_words(concession: bravebot_aichat::call::Concession) -> &'static str {
+    use bravebot_aichat::call::Concession;
+    match concession {
+        Concession::CacheTtl => t!(failure_conceded_cache_ttl),
+        Concession::Breakpoints => t!(failure_conceded_breakpoints),
+        Concession::Effort => t!(failure_conceded_effort),
+        Concession::Ceiling => t!(failure_conceded_ceiling),
+        Concession::ArgumentsAsWritten => t!(failure_conceded_arguments),
+        Concession::ThinkingShown => t!(failure_conceded_thinking),
+    }
 }
 
 /// One point a rewind can go back to, as it is written down.
@@ -4230,6 +4341,8 @@ mod tests {
                 attempts,
                 usage: None,
                 context_tokens: None,
+                conceded: Default::default(),
+                backend: None,
                 cause: Box::new(BackendError::from(ChatError::Account(failure))),
             };
             failure_reason(error.diagnosis(), None)
@@ -4337,12 +4450,77 @@ mod tests {
         );
         assert_eq!(
             failure_reason(Diagnosis::of(Category::Refused), None),
-            "error: the service rejected the request"
+            "error: the service rejected the request. Choose another model with `/model`, or run \
+             `bravebot doctor` to see the endpoint and where the diagnostic log is kept"
         );
         assert_eq!(
             failure_reason(Diagnosis::of(Category::Transport).after(0), None),
             "error: the request did not get through"
         );
+    }
+
+    /// BACKEND-37: a refused request says which backend it went to and which request fields the
+    /// retries left out, in the order they were given up, after the status and the count, and ends
+    /// with the next step. The words are the driver's own.
+    ///
+    /// The regressions it rejects are the fields printed for a category other than refused, the
+    /// fields printed when none was given up, the order reversed, a field named twice, the backend
+    /// left out, and the next step placed before the count.
+    #[test]
+    fn a_refused_request_names_its_backend_and_the_fields_the_retries_left_out() {
+        use bravebot_agent::{BackendKind, Category, Diagnosis};
+        use bravebot_aichat::call::{Conceded, Concession};
+
+        let mut given = Conceded::default();
+        for concession in [
+            Concession::ThinkingShown,
+            Concession::Effort,
+            Concession::Ceiling,
+            Concession::Effort,
+        ] {
+            given.push(concession);
+        }
+        let refused = Diagnosis::of(Category::Refused)
+            .with_status(400)
+            .after(4)
+            .with_conceded(given)
+            .on_backend(BackendKind::Bedrock);
+        assert_eq!(
+            failure_reason(refused, None),
+            "error: the service rejected the request (HTTP 400), sent to AWS Bedrock, after 4 \
+             attempts, with the retries leaving out shown thinking, the effort level (/effort), \
+             the assumed reply limit (BRAVEBOT_OUTPUT_BUDGET). Choose another model with \
+             `/model`, or run `bravebot doctor` to see the endpoint and where the diagnostic log \
+             is kept"
+        );
+        // A refusal that gave up nothing says nothing about fields.
+        let plain = failure_reason(
+            Diagnosis::of(Category::Refused)
+                .with_status(400)
+                .after(1)
+                .on_backend(BackendKind::Aichat),
+            None,
+        );
+        assert!(!plain.contains("leaving out"), "{plain}");
+        assert!(plain.contains("sent to the Brave endpoint"), "{plain}");
+        assert!(!plain.contains("attempts"), "{plain}");
+        // Only the refused category says them.
+        for category in [
+            Category::Unavailable,
+            Category::Transport,
+            Category::Internal,
+        ] {
+            let line = failure_reason(
+                Diagnosis::of(category)
+                    .after(2)
+                    .with_conceded(given)
+                    .on_backend(BackendKind::Bedrock),
+                None,
+            );
+            assert!(!line.contains("leaving out"), "{category:?}: {line}");
+            assert!(!line.contains("sent to"), "{category:?}: {line}");
+            assert!(!line.contains("/model"), "{category:?}: {line}");
+        }
     }
 
     /// BACKEND-37: an unauthorized failure names the commands that show the credential and the
@@ -4382,7 +4560,6 @@ mod tests {
         for category in [
             Category::RateLimited,
             Category::Unavailable,
-            Category::Refused,
             Category::Transport,
             Category::Incomplete,
             Category::Undecodable,
@@ -4486,10 +4663,10 @@ mod tests {
         use bravebot_aichat::{CutOff, OpenCall};
 
         assert!(matches!(
-            StoredOutcome::ended(1, Ending::Done, None),
+            StoredOutcome::ended(1, Ending::Done, None, None),
             StoredOutcome::Completed
         ));
-        match StoredOutcome::ended(3, Ending::Stopped { attempts: None }, None) {
+        match StoredOutcome::ended(3, Ending::Stopped { attempts: None }, None, None) {
             StoredOutcome::Cancelled { reason } => assert_eq!(reason, t!(turn_cancelled, turn = 3)),
             other => panic!("a stop was recorded as {other:?}"),
         }
@@ -4502,13 +4679,68 @@ mod tests {
             }),
             thought: false,
         };
-        match StoredOutcome::ended(2, Ending::Failed(diagnosis), Some(&cut_off)) {
+        match StoredOutcome::ended(2, Ending::Failed(diagnosis), Some(&cut_off), None) {
             StoredOutcome::Failed { reason } => {
                 assert_eq!(reason, failure_reason(diagnosis, Some(&cut_off)));
                 assert!(reason.contains("write_file"), "{reason}");
             }
             other => panic!("a failure was recorded as {other:?}"),
         }
+    }
+
+    /// BACKEND-37: a refused request names the model the turn ran on, the name the person
+    /// configured or chose, after the backend and before the count. The name is stored in the
+    /// record with the rest of the reason, and a control character in it is written out.
+    ///
+    /// The regressions it rejects are the model left out of the line or of the stored reason, the
+    /// model said for a category other than refused, an empty name printed as a gap, and a name
+    /// holding an escape or a line break reaching the line unchanged.
+    #[test]
+    fn a_refused_request_names_the_model_the_turn_ran_on() {
+        use bravebot_agent::{BackendKind, Category, Diagnosis, Ending};
+
+        let refused = Diagnosis::of(Category::Refused)
+            .with_status(400)
+            .after(3)
+            .on_backend(BackendKind::Aichat);
+        assert_eq!(
+            failure_reason_with_model(refused, None, Some("claude-sonnet-x")),
+            "error: the service rejected the request (HTTP 400), sent to the Brave endpoint, \
+             using the model claude-sonnet-x, after 3 attempts. Choose another model with \
+             `/model`, or run `bravebot doctor` to see the endpoint and where the diagnostic log \
+             is kept"
+        );
+        // The stored reason is the same line, and a line that names no model is as it was.
+        match StoredOutcome::ended(1, Ending::Failed(refused), None, Some("claude-sonnet-x")) {
+            StoredOutcome::Failed { reason } => {
+                assert!(
+                    reason.contains("using the model claude-sonnet-x"),
+                    "{reason}"
+                )
+            }
+            other => panic!("a failure was recorded as {other:?}"),
+        }
+        assert_eq!(
+            failure_reason_with_model(refused, None, None),
+            failure_reason(refused, None)
+        );
+        assert!(!failure_reason(refused, None).contains("using the model"));
+        let empty = failure_reason_with_model(refused, None, Some(""));
+        assert!(!empty.contains("using the model"), "{empty}");
+        // Only the refused category says it.
+        let transport =
+            failure_reason_with_model(Diagnosis::of(Category::Transport), None, Some("m"));
+        assert!(!transport.contains("using the model"), "{transport}");
+        // A name from a settings file may hold any characters. None that acts on a terminal or
+        // draws as nothing reaches the line.
+        let hostile =
+            failure_reason_with_model(refused, None, Some("a\u{1b}[2Jb\nc\u{7f}d\u{85}e\u{200b}f"));
+        assert!(!hostile.chars().any(char::is_control), "{hostile:?}");
+        assert!(!hostile.contains('\u{200b}'), "{hostile:?}");
+        assert!(
+            hostile.contains("a\u{241b}[2Jb\u{240a}c\u{2421}d\u{fffd}e"),
+            "{hostile:?}"
+        );
     }
 
     /// The name is printed on the way out and pasted into a command, so it has to be the shape a

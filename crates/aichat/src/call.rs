@@ -22,6 +22,10 @@ pub struct Spent {
     /// The usage of the attempts before that one, which a new attempt sets aside so that
     /// `completed` holds only the attempt that just ended.
     pub retried: Option<Usage>,
+    /// The fields the call left out of its later requests because the service refused the
+    /// request, in the order they were given up
+    /// ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    pub conceded: Conceded,
 }
 
 impl Spent {
@@ -30,6 +34,7 @@ impl Spent {
         self.attempts = 0;
         self.completed = None;
         self.retried = None;
+        self.conceded = Conceded::default();
     }
 
     /// Set aside what the call has been billed so far, so that what the next attempt reports
@@ -133,6 +138,45 @@ pub enum Concession {
     ArgumentsAsWritten,
     /// The ask to show thinking as it happens.
     ThinkingShown,
+}
+
+/// The fields a call gave up, in the order it gave them up.
+///
+/// A closed set of at most one of each [`Concession`], written by [`drive`] from the status of a
+/// refusal and from what the request carried, and never from a reply. It is what a front end says
+/// beside the count of requests, so a person told that a request was refused is told which parts
+/// of it were tried without.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Conceded {
+    given: [Option<Concession>; 6],
+}
+
+impl Conceded {
+    /// Note that `concession` was given up. A field already noted is not noted twice.
+    pub fn push(&mut self, concession: Concession) {
+        if self.has(concession) {
+            return;
+        }
+        if let Some(slot) = self.given.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(concession);
+        }
+    }
+
+    /// Whether `concession` was given up.
+    pub fn has(&self, concession: Concession) -> bool {
+        self.given.contains(&Some(concession))
+    }
+
+    /// The fields given up, first to last. The last is the one the service was refusing when the
+    /// call ended.
+    pub fn in_order(&self) -> impl Iterator<Item = Concession> + '_ {
+        self.given.iter().flatten().copied()
+    }
+
+    /// Whether nothing was given up.
+    pub fn is_empty(&self) -> bool {
+        self.given[0].is_none()
+    }
 }
 
 impl Refusals {
@@ -285,6 +329,7 @@ where
         }
         if let Some(concession) = conceded {
             client.refusals_mut().give_up(concession);
+            client.spent_mut().conceded.push(concession);
             probed = true;
         } else if client.asks_again(attempt, &error) {
             let pause = client.pause(attempt, &error);
@@ -355,6 +400,7 @@ mod tests {
             attempts: 2,
             retried: Some(usage(10, 1)),
             completed: Some(usage(20, 2)),
+            ..Spent::default()
         };
         assert_eq!(spent.total(), Some(usage(30, 3)));
         // The prompt size is the last attempt's alone.
@@ -420,6 +466,7 @@ mod tests {
             attempts: 3,
             retried: Some(usage(1, 1)),
             completed: Some(usage(2, 2)),
+            ..Spent::default()
         };
         spent.begin_call();
         assert_eq!(spent.attempts, 0);
@@ -433,6 +480,7 @@ mod tests {
             attempts: 2,
             retried: Some(usage(10, 1)),
             completed: Some(usage(20, 2)),
+            ..Spent::default()
         };
         let mut completion = completion_with(usage(20, 2));
         spent.bill(&mut completion);
@@ -881,5 +929,34 @@ mod tests {
         let result = run_fake(&mut client, "driver-test\nfailed", &[], &mut seen);
         assert_eq!(result.unwrap_err(), Ended::Failed);
         assert_eq!(seen.sent_with.len(), 1);
+    }
+
+    /// BACKEND-37: the fields a call gave up are kept in the order it gave them up, and a later
+    /// call starts with none. Rejects a driver that keeps none, one that keeps them in the reverse
+    /// order, one that keeps a field a request was never refused for, and one that carries them
+    /// into the next call.
+    #[test]
+    fn the_fields_a_call_gave_up_are_kept_in_order_and_start_afresh() {
+        let mut client = Fake::ending(vec![
+            Ended::Refused,
+            Ended::Refused,
+            Ended::Failed,
+            Ended::Answered,
+        ]);
+        let mut seen = Seen::new();
+        let order = [
+            Concession::Effort,
+            Concession::Breakpoints,
+            Concession::Ceiling,
+        ];
+        let result = run_fake(&mut client, "driver-test\nconceded", &order, &mut seen);
+        assert_eq!(result.unwrap_err(), Ended::Failed);
+        assert_eq!(
+            client.spent.conceded.in_order().collect::<Vec<_>>(),
+            [Concession::Effort, Concession::Breakpoints],
+        );
+
+        client.spent.begin_call();
+        assert!(client.spent.conceded.is_empty());
     }
 }

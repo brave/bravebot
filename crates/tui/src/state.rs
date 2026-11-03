@@ -2496,7 +2496,8 @@ impl Session {
             .filter(|e| e.speaker == Speaker::User)
             .map(|e| e.text.clone());
         let outcome = self.finished.map(|finished| {
-            match StoredOutcome::ended(self.turns, finished.ending, None) {
+            // The transcript's failure entry, which names the model, replaces this reason below.
+            match StoredOutcome::ended(self.turns, finished.ending, None, None) {
                 StoredOutcome::Failed { reason } => StoredOutcome::Failed {
                     reason: entries
                         .iter()

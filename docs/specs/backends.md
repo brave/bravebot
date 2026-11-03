@@ -2237,6 +2237,30 @@ use the category, except that one that failed on the ChatGPT account says that f
 ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)). These paths do not copy raw backend errors into the
 conversation.
 
+A refused failure also carries the request fields the attempt driver left out after the service
+refused the request (effort, cache lifetime, cache marks, the assumed reply limit, tool arguments as
+written, shown thinking), in the order it gave them up, and the backend that sent the requests
+(the Brave endpoint, AWS Bedrock, a configured gateway, the ChatGPT account or the xAI account). The
+line says them after the status and before the count, names the setting that changes a field where
+one exists (`promptCacheTtl`, `/effort`, `BRAVEBOT_OUTPUT_BUDGET`), and ends with the next step:
+another model with `/model`, or `bravebot doctor` for the endpoint and the diagnostic log location.
+The pointer does not claim that either shows the service's error text, which neither holds
+([DIAG-1](diagnostic-log.md#DIAG-1)). The fields and the backend are chosen by this program from
+closed sets: the fields from the concession the driver gave up, the backend from the variant that
+sent the request. Neither is read from a reply, a header or an address, and the request count still
+includes every request sent, concessions among them.
+
+The line also names the model the turn ran on, after the backend: the name the person configured
+or chose (the turn's `model` setting, or the configured default), as the driver holds it. It is
+not the name sent on the wire, which a gateway may map to another, and it is never taken from a
+reply, a header or a URL. The name is the person's own text, so the session layer writes any
+character that draws as nothing or moves the cursor as a visible picture or code point before the
+line is stored or shown, and every front end gets the same safe text. A turn with no model name
+says no model. Only the refused category names the model and the backend.
+
+The note to the planner after a failed turn is unchanged and holds the category and the count only.
+The desktop and editor front ends are left as they were.
+
 Cancellation is distinct from failure. A processor carries cancellation and its attempt count
 separately from its tool-result text, so the parent can report the stop without parsing that text.
 
@@ -2297,6 +2321,14 @@ person only: the planner is told the category and the request count and no more.
 `verified-by: bravebot_session::sessions::an_unauthorized_failure_names_the_commands_that_show_the_credential_and_the_endpoint`
 `verified-by: bravebot_session::sessions::a_refused_premium_key_names_the_commands_that_replace_or_forget_it`
 `verified-by: bravebot_session::sessions::a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count`
+`verified-by: bravebot_session::sessions::a_refused_request_names_its_backend_and_the_fields_the_retries_left_out`
+`verified-by: bravebot_session::sessions::a_refused_request_names_the_model_the_turn_ran_on`
+`verified-by: bravebot_tui::sessions::a_rejected_turn_names_the_configured_model_and_none_of_the_services_words`
+`verified-by: bravebot_tui::app::a_rejected_request_is_said_with_the_configured_model_in_the_transcript`
+`verified-by: bravebot_ui_bridge::history::a_rejected_turn_is_recorded_with_the_configured_model_and_none_of_the_services_words`
+`verified-by: bravebot_bedrock::lib::the_client_reports_the_fields_the_last_call_gave_up`
+`verified-by: bravebot_aichat::call::the_fields_a_call_gave_up_are_kept_in_order_and_start_afresh`
+`verified-by: bravebot_agent::backend::the_fields_given_up_and_the_backend_reach_the_diagnosis_of_a_counted_failure`
 `verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_is_reported_as_unconfigured`
 `verified-by: bravebot_agent::backend::aws_refusing_the_credentials_it_was_signed_with_is_reported_as_unauthorized`
 `verified-by: bravebot_agent::backend::a_hop_refused_for_leaving_https_is_reported_as_a_gate_rather_than_a_failed_request`
@@ -2314,6 +2346,7 @@ person only: the planner is told the category and the request count and no more.
 `verified-by: bravebot_agent::turn::a_service_that_kept_refusing_is_reported_with_its_status_and_the_attempts_made`
 `verified-by: bravebot_agent::turn::a_reply_that_stopped_early_is_reported_as_unfinished_with_no_status`
 `verified-by: bravebot_agent::turn::a_refusal_counts_the_cache_probe_as_a_second_request`
+`verified-by: bravebot_agent::turn::a_refusal_on_every_request_reports_the_fields_given_up_and_the_backend`
 `verified-by: bravebot_bedrock::lib::request_counts_include_capability_probes`
 `verified-by: bravebot_bedrock::lib::cancellation_in_backoff_counts_only_sent_requests`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_between_attempts`

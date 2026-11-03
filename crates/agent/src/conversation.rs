@@ -2667,6 +2667,26 @@ mod tests {
             failed_turn(Diagnosis::of(Category::Refused).after(1)),
             "the account's failure reached the planner"
         );
+
+        // The backend and the request fields a refusal left out are for the person's screen too.
+        let mut given = bravebot_aichat::call::Conceded::default();
+        given.push(bravebot_aichat::call::Concession::Effort);
+        given.push(bravebot_aichat::call::Concession::Ceiling);
+        let on_a_backend = Diagnosis::of(Category::Refused)
+            .with_status(400)
+            .after(3)
+            .with_conceded(given)
+            .on_backend(crate::BackendKind::Bedrock);
+        let note = failed_turn(on_a_backend);
+        assert_eq!(
+            note,
+            failed_turn(Diagnosis::of(Category::Refused).after(3)),
+            "the backend or a conceded field reached the planner"
+        );
+        assert!(
+            !note.contains("Bedrock") && !note.contains("effort"),
+            "{note}"
+        );
     }
 
     /// Four exchanges, the shape most of the compaction tests need.

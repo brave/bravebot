@@ -3913,6 +3913,26 @@ failure-rate-limited-for =
     }
 failure-unavailable = the service could not answer
 failure-refused = the service rejected the request
+# Said after a refused request, in this order: the status, the backend that sent it, the model the
+# turn ran on, the count of tries
+# and the request fields the retries left out (BACKEND-37). Every word is this program's own, chosen
+# from a closed set, and none comes from the service's reply. The model is the name the person
+# configured or chose, written out where it holds a control character.
+failure-with-backend = { $what }, sent to { $backend }
+failure-with-model = { $what }, using the model { $model }
+failure-with-conceded = { $what }, with the retries leaving out { $fields }
+failure-refused-next = Choose another model with `/model`, or run `bravebot doctor` to see the endpoint and where the diagnostic log is kept
+failure-backend-aichat = the Brave endpoint
+failure-backend-bedrock = AWS Bedrock
+failure-backend-gateway = a configured gateway
+failure-backend-chatgpt = the ChatGPT account
+failure-backend-xai = the xAI account
+failure-conceded-cache-ttl = the cache lifetime (promptCacheTtl)
+failure-conceded-breakpoints = the cache marks
+failure-conceded-effort = the effort level (/effort)
+failure-conceded-ceiling = the assumed reply limit (BRAVEBOT_OUTPUT_BUDGET)
+failure-conceded-arguments = streamed tool arguments
+failure-conceded-thinking = shown thinking
 failure-transport = the request did not get through
 failure-incomplete = the reply stopped before it was finished
 failure-undecodable = the reply could not be read

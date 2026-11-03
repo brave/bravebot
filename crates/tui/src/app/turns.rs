@@ -922,6 +922,7 @@ pub(super) fn finish_turn(
             comparable: bravebot_agent::backend::Backend::reports_the_model_it_was_asked_for(
                 config, &chosen,
             ),
+            configured: chosen,
         };
         fold_outcome(
             session,
@@ -1485,6 +1486,10 @@ pub(super) struct Asked {
     pub(super) name: String,
     /// Whether that name and the one a reply reports are drawn from one roster.
     pub(super) comparable: bool,
+    /// The model the person configured or chose for the turn, the driver's own state. A failure
+    /// line names it (BACKEND-37). Not `name`, which for a gateway is the wire name, and never a
+    /// name a reply reported.
+    pub(super) configured: String,
 }
 
 /// Record what the turn asked for against what answered, and say so once where they differ.
@@ -1819,7 +1824,11 @@ pub(super) fn fold_outcome(
             match ending {
                 bravebot_agent::Ending::Failed(diagnosis) => {
                     session.fail(
-                        bravebot_session::sessions::failure_line(&error, diagnosis),
+                        bravebot_session::sessions::failure_line(
+                            &error,
+                            diagnosis,
+                            Some(&asked.configured),
+                        ),
                         ending,
                     );
                 }
