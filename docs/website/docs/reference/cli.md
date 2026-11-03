@@ -1229,7 +1229,7 @@ too large or not a number, a repeated option and any other word are refused with
 ## `schedule`
 
 ```sh
-bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>] [--scheduler crontab|launchd|systemd] [--accept-edits | --dangerously-skip-permissions]
+bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>] [--scheduler crontab|launchd|systemd] [--deliver-to <program>] [--accept-edits | --dangerously-skip-permissions]
 bravebot schedule list
 bravebot schedule remove <id>
 bravebot schedule run-now <id>
@@ -1272,6 +1272,14 @@ supported: there is no Windows scheduler yet.
 
 The expression is checked against the range of each field: minutes 0 to 59, hours 0 to 23, days of
 the month 1 to 31, months 1 to 12 and days of the week 0 to 7, with a step greater than zero.
+
+`--deliver-to <program>` takes the absolute path of a program that exists. After each run,
+`run-now` starts it with what the run printed on its standard input, with no argument, in your home
+directory, without bravebot's own credentials and for at most 60 seconds, after which it and what it
+started are stopped. `list` shows `delivers to <program>` or `delivers nowhere`. A program that
+fails, cannot be started or is stopped is named in one line on standard error, and the run, its
+recorded history and the exit status are what they would be without it. A paused entry and a
+skipped firing deliver nothing. The program only receives: nothing is sent back to a run.
 
 `pause <id>` stops an entry from running and keeps its line and its prompt. `resume <id>` lets it
 run again, and `list` shows `paused` or `active` for each entry. A run started for an entry stops at

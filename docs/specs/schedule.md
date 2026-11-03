@@ -14,8 +14,8 @@ documented-by:
 [CLI-42](cli.md#CLI-42) describes `bravebot schedule add|list|remove|run-now|history`: an entry, the
 crontab line that starts it and the one-shot run that line starts. This spec covers what a stored
 entry does when nobody is there: pausing it, what a firing does when the planner asks a question,
-what happens when the previous firing has not ended, and which expressions and flags an entry may
-hold.
+what happens when the previous firing has not ended, which expressions and flags an entry may
+hold, and where the result of a run goes.
 
 There is no `/schedule` command in a session. A session's own repeating prompt is `/loop`
 ([LOOP-12](loop.md#LOOP-12)), which lasts as long as the session, and a stored entry is made and
@@ -128,3 +128,99 @@ the entry is made at a firing.
 `verified-by: bravebot_schedule::schedule::a_stored_run_carries_one_of_three_modes_and_never_an_approval_flag`
 `verified-by: bravebot_schedule::schedule::a_typed_line_stores_no_approval_flag_whatever_mode_it_carries`
 `verified-by: bravebot_cli::schedule::the_mode_is_read_only_unless_a_flag_was_typed`
+
+<a id="SCHEDULE-7"></a>
+### SCHEDULE-7: a run's result is handed to the program chosen at `add`, and to nothing else
+
+`schedule add --deliver-to <path>` stores the absolute path of a program that exists and is a file,
+with no control character in it, in the entry (`deliver=<path>`). Anything else is refused with the
+status for an argument and nothing is written. `list` ends each row with `delivers to <path>` or
+`delivers nowhere`, before `paused` or `active`. Only `add`, typed by a person at a terminal, sets
+the destination: no run, result, pending question or later command changes it, and it is not one of
+the words the job the scheduler holds is started with.
+
+`run-now` records the run and drops the hold of SCHEDULE-4. Then, if the entry has a destination, it
+starts that program once with the run's standard output on its standard input. The bytes handed
+over are the `output.stdout` the run produced, moved on and not read again. The driver reads that
+output once, for the session name `session_of` accepts. Neither that read nor anything
+else in the driver decides whether, where or what to deliver from those bytes: whether to deliver
+depends on the entry alone. A run that failed, was refused, or stopped at its first question
+(SCHEDULE-2) hands over what it printed as any run does. A run stopped at a question prints its
+`--json` result line: `ok` false, status 4, a refusal at the `scheduled_question` gate, and the
+call to `ask_user` without its text. That line is the whole of what the destination receives. The
+lines kept for `pending` are not handed over, so the question and its choices do not reach the
+destination, and a later firing does not hand over an earlier firing's question.
+
+The destination is started with no argument, with the environment of the firing less this agent's
+own credentials ([HOOK-4](hooks.md#HOOK-4) says the same of a hook) and the search path reduced.
+It is a process group of its own, started in the person's home and not in the entry's directory,
+with its standard output and error discarded. It is given 60 seconds. A program still running then
+is stopped together with the programs it started, as a hook is ([HOOK-7](hooks.md#HOOK-7)). The
+hold is dropped before the destination starts, so a destination
+that is slow or never ends does not make the next firing look like one still running.
+
+A destination that cannot be started, ends with a failure status or is stopped at its limit is
+reported by one sentence on standard error that names the entry and the program path and carries
+nothing the run or the program printed. It changes neither the line `run-now` prints, nor the
+recorded run, nor the entry, nor the status `run-now` exits with. Delivery is not recorded in the
+history. A paused entry (SCHEDULE-1) and a firing skipped as still running (SCHEDULE-4) start no
+run and deliver nothing. A trigger firing ([triggers.md](triggers.md)) is not a scheduled run and
+delivers nothing.
+
+All three schedulers start `bravebot schedule run-now <id>`, so a cron, launchd or systemd firing
+reaches the same path.
+
+**Why.** Results were kept and listed and sent nowhere, so a person who wanted one had to go and
+read it. The destination is a program the person named at `add`, so what receives the result is
+decided by them and not by anything a run printed. The bytes are carried to it without being read,
+so the result decides nothing. A run that failed still prints what it printed, and a person with a
+notifier wants to know it failed.
+
+**Release.** A run's text may hold content that was private in the run, and a program receives the
+bytes outside the policy ([ROUTE-3](routing.md#ROUTE-3)). The release is the person's. They named
+the program for this entry in words they typed at a terminal, as they name a hook
+([HOOK-3](hooks.md#HOOK-3)) or a connector authority ([CONNECTOR-2](connectors.md#CONNECTOR-2)), and
+no run supplies or changes it. [LABEL-6](labels.md#LABEL-6) lists the standard input of a program a
+person endorsed among the places bytes may move to without being inspected. The destination is that
+program: it is chosen by the person at `add`, takes no argument, and receives the standard output of a separate run of bravebot,
+which the driver of `run-now` moves to its standard input without reading it.
+[ROUTE-3](routing.md#ROUTE-3) speaks of content carrying a label inside a session. The captured
+output carries none in the process that moves it, and the run that printed it already wrote it to
+its own standard output, which the scheduler puts on the person's log or mail.
+[ROUTE-5](routing.md#ROUTE-5) is about the endorsement of an effect the planner proposes, bound to
+one value and used once. `run-now` and a firing are not tool calls of a planner, so the endorsement
+here is the person's standing choice of program at `add`. Nothing the run printed reaches a routing
+field.
+
+**Not a hook, and not a question.** A hook is told the moment and nothing else
+([HOOK-5](hooks.md#HOOK-5)) and decides nothing ([HOOK-6](hooks.md#HOOK-6)), so it cannot carry the
+result. `prompt-shown` fires only for a question that reaches a person, and a scheduled run reaches
+nobody ([PROMPT-9](prompting.md#PROMPT-9), [HOOK-2](hooks.md#HOOK-2)), so it does not fire for the
+question a run stops at either.
+
+**Known costs.** The result goes only to the program named at `add`, and changing it means removing
+the entry and adding it again. Nothing carries a reply back to a run: no inbound path that answers
+a question the run stopped at is provided. Whether a destination received the result is known only
+from standard error, which the crontab line discards (`>/dev/null 2>&1`) and launchd and systemd
+keep in their own logs. A destination is not confined: it runs with the person's own authority, as
+a hook does. The program is checked when `add` stores it and started on every later delivery, so a
+scheduled run in accept-edits or bypass mode can overwrite it, and the replacement is started with
+the person's authority at the next delivery. This is accepted.
+
+`verified-by: bravebot_schedule::schedule::the_bytes_a_run_printed_reach_the_destination_unmodified`
+`verified-by: bravebot_schedule::schedule::hostile_text_changes_neither_what_is_run_nor_what_is_recorded`
+`verified-by: bravebot_schedule::schedule::a_destination_that_fails_changes_nothing_but_the_notice`
+`verified-by: bravebot_schedule::schedule::a_run_that_failed_hands_over_what_it_printed_as_any_run_does`
+`verified-by: bravebot_schedule::schedule::the_hold_is_let_go_of_while_the_destination_runs`
+`verified-by: bravebot_schedule::schedule::a_destination_that_never_ends_is_stopped_with_what_it_started`
+`verified-by: bravebot_schedule::schedule::the_destination_starts_outside_the_entry_directory`
+`verified-by: bravebot_schedule::schedule::nothing_a_run_printed_reaches_the_entry_or_its_destination`
+`verified-by: bravebot_schedule::schedule::a_destination_must_be_an_absolute_path_to_a_file_that_exists`
+`verified-by: bravebot_schedule::schedule::add_refuses_a_destination_that_is_not_usable_with_the_argument_status_before_storing`
+`verified-by: bravebot_schedule::schedule::list_shows_the_destination_before_the_paused_or_active_word`
+`verified-by: bravebot_cli::scheduled_runs::a_run_is_handed_to_the_destination_chosen_at_add_whichever_scheduler_started_it`
+`verified-by: bravebot_cli::scheduled_runs::a_skipped_firing_delivers_nothing_and_a_failing_destination_changes_nothing`
+`verified-by: bravebot_cli::scheduled_runs::an_earlier_question_is_not_delivered_again_by_the_next_firing`
+`verified-by: bravebot_cli::scheduled_runs::a_run_stopped_at_a_question_delivers_its_stdout_and_not_the_kept_question`
+`verified-by: bravebot_cli::scheduled_runs::the_destination_is_started_without_the_agents_own_credentials`
+`verified-by: bravebot_cli::scheduled_runs::a_trigger_firing_delivers_nothing_to_a_schedule_entrys_destination`

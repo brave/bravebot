@@ -6,8 +6,16 @@
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
 #![allow(clippy::unwrap_used, reason = "a test target")]
 
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+
+#[allow(
+    dead_code,
+    reason = "open_files.rs is shared by several test binaries, and this one uses only bind_mock_server"
+)]
+#[path = "../../agent/test-support/open_files.rs"]
+mod open_files;
 
 struct Scratch {
     path: PathBuf,
@@ -759,4 +767,471 @@ fn an_unknown_scheduler_writes_nothing() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(scratch.table(), "");
     assert!(!scratch.state().exists());
+}
+
+/// A destination program that writes its standard input to `caught` and ends with `status`.
+fn destination(scratch: &Scratch, name: &str, status: i32) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let program = scratch.path.join(name);
+    let caught = scratch.path.join(format!("{name}-caught"));
+    std::fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\n/bin/cat > '{}'\nexit {status}\n",
+            caught.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (program, caught)
+}
+
+/// SCHEDULE-7: every scheduler's job is the same `schedule run-now <id>` line, so a firing
+/// started by cron, launchd or systemd reaches the delivery the one path holds. The destination is
+/// chosen at add, listed, and handed the run's stdout and not the line `run-now` prints for the
+/// person who started it.
+#[test]
+fn a_run_is_handed_to_the_destination_chosen_at_add_whichever_scheduler_started_it() {
+    for scheduler in ["crontab", "launchd", "systemd"] {
+        let scratch = Scratch::new(&format!("schedule-deliver-{scheduler}"));
+        let (program, caught) = destination(&scratch, "notify", 0);
+        let program_text = program.to_str().unwrap();
+        let added = added(
+            &scratch,
+            &["--scheduler", scheduler, "--deliver-to", program_text],
+        );
+        assert!(
+            out(&added).contains("Added schedule 1."),
+            "{scheduler}: {}",
+            out(&added)
+        );
+        let listed = out(&scratch.run(&["schedule", "list"]));
+        assert!(
+            listed.contains(&format!("delivers to {program_text}")),
+            "{listed}"
+        );
+        // The job each scheduler installed starts this command, which is the path under test.
+        let installed = match scheduler {
+            "crontab" => scratch.table(),
+            "launchd" => std::fs::read_to_string(
+                scratch
+                    .path
+                    .join("home/Library/LaunchAgents/com.brave.bravebot.schedule.1.plist"),
+            )
+            .unwrap(),
+            _ => std::fs::read_to_string(
+                scratch
+                    .path
+                    .join("home/.config/systemd/user/bravebot-schedule-1.service"),
+            )
+            .unwrap(),
+        };
+        assert!(installed.contains("run-now"), "{scheduler}: {installed}");
+        assert!(
+            !installed.contains(program_text),
+            "the destination is not in the job: {installed}"
+        );
+
+        let ran = scratch.run(&["schedule", "run-now", "1"]);
+        assert!(out(&ran).contains("schedule 1 ran"), "{}", out(&ran));
+        let delivered = std::fs::read(&caught).expect("the destination was started");
+        assert!(
+            !String::from_utf8_lossy(&delivered).contains("schedule 1 ran"),
+            "{scheduler}"
+        );
+    }
+}
+
+/// SCHEDULE-7: a paused entry and a firing skipped as still running deliver nothing, and a
+/// destination that fails changes neither the line printed, the recorded run nor the exit status.
+#[test]
+fn a_skipped_firing_delivers_nothing_and_a_failing_destination_changes_nothing() {
+    let scratch = Scratch::new("schedule-deliver-skips");
+    let (failing, caught) = destination(&scratch, "fails", 7);
+    assert!(
+        added(&scratch, &["--deliver-to", failing.to_str().unwrap()])
+            .status
+            .success()
+    );
+    let (plain_entry_ran, _) = (scratch.run(&["schedule", "pause", "1"]), ());
+    assert!(plain_entry_ran.status.success());
+    let paused = scratch.run(&["schedule", "run-now", "1"]);
+    assert_eq!(paused.status.code(), Some(4));
+    assert!(!caught.exists(), "a paused entry delivered");
+    scratch.run(&["schedule", "resume", "1"]);
+
+    let holder = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(scratch.state().join("1.lock"))
+        .unwrap();
+    holder.try_lock().unwrap();
+    let skipped = scratch.run(&["schedule", "run-now", "1"]);
+    assert!(out(&skipped).contains("still running"));
+    assert!(!caught.exists(), "a skipped firing delivered");
+    drop(holder);
+
+    // The same entry without a destination, for what a run does on its own here.
+    let alone = Scratch::new("schedule-deliver-alone");
+    added(&alone, &[]);
+    let without = alone.run(&["schedule", "run-now", "1"]);
+
+    let with = scratch.run(&["schedule", "run-now", "1"]);
+    assert!(caught.exists(), "the destination was not started");
+    assert_eq!(with.status.code(), without.status.code());
+    assert_eq!(out(&with), out(&without));
+    let notice = String::from_utf8_lossy(&with.stderr).into_owned();
+    assert!(notice.contains("not delivered"), "{notice}");
+    assert!(notice.contains(failing.to_str().unwrap()), "{notice}");
+    let history = std::fs::read_to_string(scratch.state().join("1.history")).unwrap();
+    let alone_history = std::fs::read_to_string(alone.state().join("1.history")).unwrap();
+    assert_eq!(history.lines().count(), 1, "{history}");
+    assert_eq!(
+        history.split(' ').nth(1),
+        alone_history.split(' ').nth(1),
+        "the recorded status"
+    );
+}
+
+/// A chat gateway on loopback that lists one model and answers every chat request with a call to
+/// `ask_user`, so a run sent to it reaches a question. Returns its port.
+fn a_gateway_asking_which_cache() -> u16 {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            let mut length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            let (kind, text) = if request.starts_with("GET") {
+                (
+                    "application/json",
+                    r#"{"data": [{"id": "reasons-only", "context_length": 262144, "supported_parameters": ["tools"]}]}"#.to_string(),
+                )
+            } else {
+                let arguments = serde_json::json!({"questions": [{
+                    "header": "Cache",
+                    "question": "Which cache?",
+                    "options": [{"label": "HTTP"}, {"label": "Query"}]
+                }]})
+                .to_string();
+                let frame = serde_json::json!({"model": "reasons-only", "choices": [{
+                    "index": 0,
+                    "delta": {"role": "assistant", "tool_calls": [{
+                        "index": 0, "id": "call-1", "type": "function",
+                        "function": {"name": "ask_user", "arguments": arguments}}]},
+                    "finish_reason": "tool_calls"}]});
+                (
+                    "text/event-stream",
+                    format!("data: {frame}\n\ndata: [DONE]\n\n"),
+                )
+            };
+            let reply = format!(
+                "HTTP/1.1 200 \r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}",
+                text.len()
+            );
+            let _ = stream.write_all(reply.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    port
+}
+
+/// A scratch whose runs are sent to `a_gateway_asking_which_cache`, so a run of its entry stops at
+/// the question "Which cache?" (SCHEDULE-2).
+fn at_a_gateway_asking(name: &str) -> (Scratch, Vec<(&'static str, String)>) {
+    let scratch = Scratch::new(name);
+    let port = a_gateway_asking_which_cache();
+    let home = scratch.path.join("home/.bravebot");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("settings.json"),
+        format!(
+            r#"{{
+                "provider": {{"openrouter": {{
+                    "env": ["OPENROUTER_API_KEY"],
+                    "options": {{"baseURL": "http://127.0.0.1:{port}/api/v1"}}
+                }}}},
+                "model": "openrouter/reasons-only"
+            }}"#
+        ),
+    )
+    .unwrap();
+    let environment = vec![
+        (
+            "SERVICES_KEY_AICHAT",
+            "a-services-key-ZZSECRETZZ".to_string(),
+        ),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id-ZZSECRETZZ".to_string()),
+        (
+            "BACKTRACE_SUBMIT_URL",
+            "http://127.0.0.1:1/submit-ZZSECRETZZ".to_string(),
+        ),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1".to_string()),
+        ("OPENROUTER_API_KEY", "a-token".to_string()),
+    ];
+    (scratch, environment)
+}
+
+/// `run-now` of entry 1 in `scratch` with `environment` set on the child only.
+fn run_now_with(scratch: &Scratch, environment: &[(&'static str, String)]) -> Output {
+    let mut command = scratch.command(&["schedule", "run-now", "1"]);
+    for (name, value) in environment {
+        command.env(name, value);
+    }
+    command.output().unwrap()
+}
+
+/// SCHEDULE-7, SCHEDULE-2: a run that stopped at a question is delivered like any
+/// other. The destination receives the run's captured standard output, which is its one
+/// `--json` result line reporting the refusal at the scheduled-question gate (status 4). The
+/// question the run kept for `pending` is in the pending file and is not in what the destination
+/// received.
+#[test]
+fn a_run_stopped_at_a_question_delivers_its_stdout_and_not_the_kept_question() {
+    let (scratch, environment) = at_a_gateway_asking("schedule-deliver-stopped");
+    let (program, caught) = destination(&scratch, "notify", 0);
+    let program_text = program.to_str().unwrap();
+    assert!(
+        out(&added(&scratch, &["--deliver-to", program_text])).contains("Added schedule 1."),
+        "add"
+    );
+
+    let ran = run_now_with(&scratch, &environment);
+    let said = out(&ran);
+    assert!(said.contains("schedule 1 ran"), "{said}");
+
+    // The run stopped at its question and kept it.
+    let pending = out(&scratch.run(&["schedule", "pending", "1"]));
+    assert!(pending.contains("Which cache?"), "{pending}");
+    assert!(
+        std::fs::read_to_string(scratch.state().join("1.pending"))
+            .unwrap()
+            .contains("Which cache?")
+    );
+
+    let delivered = String::from_utf8(std::fs::read(&caught).expect("delivered")).unwrap();
+    // Exactly one line: the run's `--json` result, ending in a newline.
+    assert_eq!(delivered.lines().count(), 1, "{delivered:?}");
+    assert!(delivered.ends_with('\n'), "{delivered:?}");
+    let result: serde_json::Value = serde_json::from_str(delivered.trim_end()).unwrap();
+    // It is the result of the run that stopped: refused at the scheduled-question gate, and the
+    // status the history recorded for the firing.
+    assert_eq!(result["ok"], false, "{delivered}");
+    assert_eq!(result["status"], 4, "{delivered}");
+    assert_eq!(result["reason"], "refused", "{delivered}");
+    assert_eq!(result["calls"][0]["tool"], "ask_user", "{delivered}");
+    assert_eq!(
+        result["refusals"][0]["gate"], "scheduled_question",
+        "{delivered}"
+    );
+    let history = std::fs::read_to_string(scratch.state().join("1.history")).unwrap();
+    assert_eq!(history.lines().count(), 1, "{history}");
+    assert_eq!(history.split(' ').nth(1), Some("4"), "{history}");
+    // What the run kept is not part of what was delivered, and neither is the line printed for
+    // the person who started it.
+    for kept in ["Which cache?", "HTTP", "Query", "Pick:"] {
+        assert!(
+            !delivered.contains(kept),
+            "{kept} was delivered: {delivered}"
+        );
+    }
+    assert!(!delivered.contains("schedule 1 ran"), "{delivered}");
+}
+
+/// SCHEDULE-7: the credentials this agent holds are not in the environment of the
+/// destination, though the run it was handed the output of had them. They are set on the child
+/// command of the harness and not in this process.
+#[test]
+fn the_destination_is_started_without_the_agents_own_credentials() {
+    use std::os::unix::fs::PermissionsExt;
+    let (scratch, environment) = at_a_gateway_asking("schedule-deliver-environment");
+    let program = scratch.path.join("show-env");
+    let seen = scratch.path.join("env-seen");
+    std::fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\n/bin/cat > /dev/null\n/usr/bin/env > '{}'\n",
+            seen.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        out(&added(
+            &scratch,
+            &["--deliver-to", program.to_str().unwrap()]
+        ))
+        .contains("Added schedule 1.")
+    );
+
+    let mut command = scratch.command(&["schedule", "run-now", "1"]);
+    for (name, value) in &environment {
+        command.env(name, value);
+    }
+    // A variable that is not this agent's own is handed on, so an empty environment would not
+    // pass for a scrubbed one.
+    command.env("A_PERSONS_OWN_VARIABLE", "kept");
+    let ran = command.output().unwrap();
+    assert!(out(&ran).contains("schedule 1 ran"), "{}", out(&ran));
+
+    let seen = std::fs::read_to_string(&seen).expect("the destination was started");
+    for withheld in [
+        "SERVICES_KEY_AICHAT",
+        "BRAVE_SERVICES_KEY_ID",
+        "BACKTRACE_SUBMIT_URL",
+    ] {
+        assert!(
+            !seen
+                .lines()
+                .any(|line| line.starts_with(&format!("{withheld}="))),
+            "{withheld} reached the destination: {seen}"
+        );
+    }
+    assert!(!seen.contains("ZZSECRETZZ"), "{seen}");
+    assert!(seen.contains("A_PERSONS_OWN_VARIABLE=kept"), "{seen}");
+    // The settings name this variable as a gateway's token, which is withheld as well.
+    assert!(!seen.contains("OPENROUTER_API_KEY"), "{seen}");
+    assert!(seen.contains("BRAVE_AI_CHAT_ENDPOINT="), "{seen}");
+}
+
+/// SCHEDULE-7: a question a run stopped at on an earlier firing is not handed over again by the
+/// next. What is delivered is the stdout of the firing that ran, and `pending` is not read for it.
+#[test]
+fn an_earlier_question_is_not_delivered_again_by_the_next_firing() {
+    let scratch = Scratch::new("schedule-deliver-question");
+    let (program, caught) = destination(&scratch, "notify", 0);
+    added(&scratch, &["--deliver-to", program.to_str().unwrap()]);
+    std::fs::write(
+        scratch.state().join("1.pending"),
+        "Pick: Which branch ZZQUESTIONZZ?\n",
+    )
+    .unwrap();
+    scratch.run(&["schedule", "run-now", "1"]);
+    let delivered = String::from_utf8_lossy(&std::fs::read(&caught).unwrap()).into_owned();
+    assert!(!delivered.contains("ZZQUESTIONZZ"), "{delivered}");
+}
+
+/// A `trigger serve` process, ended when this is dropped.
+struct Listener {
+    child: std::process::Child,
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// SCHEDULE-7: a trigger firing is not a scheduled run and hands its output to no destination.
+/// A schedule entry with a destination is stored, a trigger with the same id is fired by a signed
+/// delivery to `trigger serve`, and the run it starts stops at its question and keeps it for `trigger
+/// pending`. The destination program is never started, and the schedule entry has no run
+/// recorded. A wrong implementation that delivered the output of a trigger's run to a
+/// destination, or ran the entry of the same id, would leave the destination's file behind.
+/// The check that the file is absent waits a few seconds after the run recorded its question,
+/// since a delivery would start after the run ended.
+#[test]
+fn a_trigger_firing_delivers_nothing_to_a_schedule_entrys_destination() {
+    let (scratch, environment) = at_a_gateway_asking("schedule-deliver-trigger");
+    let (program, caught) = destination(&scratch, "notify", 0);
+    assert!(
+        out(&added(
+            &scratch,
+            &["--deliver-to", program.to_str().unwrap()]
+        ))
+        .contains("Added schedule 1.")
+    );
+    let registered = scratch.run(&[
+        "trigger",
+        "add",
+        "1",
+        "--event",
+        "push",
+        "--",
+        "look at the delivery",
+    ]);
+    assert!(registered.status.success(), "{}", out(&registered));
+    let secret = out(&registered)
+        .lines()
+        .find_map(|line| line.strip_prefix("Secret: "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("add printed a secret")
+        .to_string();
+
+    let mut command = scratch.command(&["trigger", "serve", "--port", "0"]);
+    for (name, value) in &environment {
+        command.env(name, value);
+    }
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("serve starts");
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .expect("serve says where it listens");
+    let _listener = Listener { child };
+    let address = line
+        .split_whitespace()
+        .nth(2)
+        .unwrap_or_else(|| panic!("no address in {line:?}"))
+        .trim_end_matches('.')
+        .to_string();
+
+    // The firing: a delivery signed for the event the trigger was registered for.
+    let body = b"{}";
+    let signature = bravebot_signing::webhook::signature(&secret, "push", body);
+    let mut stream = std::net::TcpStream::connect(&address).expect("the listener accepts");
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .unwrap();
+    let head = format!(
+        "POST /1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nX-Bravebot-Signature: {signature}\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    stream.write_all(body).unwrap();
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).expect("an answer");
+    assert!(answer.starts_with("HTTP/1.1 202 "), "{answer}");
+
+    // The run it started was recorded: it stopped at its question and kept it.
+    let mut pending = String::new();
+    for _ in 0..120 {
+        pending = out(&scratch.run(&["trigger", "pending"]));
+        if pending.contains("Which cache?") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    assert!(pending.contains("1 stopped at a question"), "{pending}");
+    assert!(pending.contains("Which cache?"), "{pending}");
+
+    // A delivery would start once the run ended, which is just after it kept the question.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    assert!(
+        !caught.exists(),
+        "a trigger firing started the schedule entry's destination"
+    );
+    assert!(
+        !scratch.state().join("1.history").exists(),
+        "a trigger firing was recorded as a scheduled run"
+    );
 }

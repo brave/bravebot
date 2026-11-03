@@ -2,8 +2,9 @@
 //! one-shot runs started by the operating system's scheduler: `crontab`, a launchd job or a
 //! systemd timer (CLI-42, SCHEDULE-1 to SCHEDULE-6).
 //!
-//! An entry is written by a person at a terminal and holds a cron expression, a prompt, a directory
-//! and the permission mode the person typed. It is kept as two files under the state directory, the
+//! An entry is written by a person at a terminal and holds a cron expression, a prompt, a directory,
+//! the permission mode the person typed and, if the person named one, the program a run's result is
+//! to be delivered to. It is kept as two files under the state directory, the
 //! prompt alone in one so that no character in it needs escaping, and installed as one line of the
 //! person's crontab (or a launchd job or systemd timer) that runs `bravebot schedule run-now <id>`. That command starts this program's
 //! own one-shot `-p` path in the entry's directory. Nothing a run reads is ever written to an entry,
@@ -23,6 +24,7 @@ use firing::FIRING_VARIABLE;
 use std::fmt::Display;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// A result that is not read: the file or the stream was best-effort, and a failure to write it
 /// is not a reason to refuse what the person asked for. The terminal's printing uses it too.
@@ -57,6 +59,9 @@ pub struct Reply {
     /// The sentence for standard error where the subcommand did not succeed. A run that ended with
     /// a status other than zero has said what it had to in `out` and carries none.
     pub err: Option<String>,
+    /// A sentence for standard error that changes neither the outcome nor the lines: a delivery
+    /// that did not complete (SCHEDULE-7).
+    pub notice: Option<String>,
 }
 
 impl Reply {
@@ -65,6 +70,7 @@ impl Reply {
             outcome: Outcome::Done,
             out,
             err: None,
+            notice: None,
         }
     }
 
@@ -73,6 +79,7 @@ impl Reply {
             outcome,
             out: Vec::new(),
             err: Some(message.to_string()),
+            notice: None,
         }
     }
 }
@@ -211,6 +218,9 @@ struct Entry {
     directory: PathBuf,
     mode: Mode,
     scheduler: Scheduler,
+    /// The absolute path of the program the person typed at `add` to receive a run's result, or
+    /// `None` for an entry that delivers nothing. Only `add` writes it.
+    destination: Option<PathBuf>,
     prompt: String,
 }
 
@@ -221,6 +231,7 @@ struct Addition {
     prompt: String,
     directory: Option<PathBuf>,
     scheduler: Option<Scheduler>,
+    destination: Option<PathBuf>,
     mode: Mode,
 }
 
@@ -243,13 +254,19 @@ pub fn command(args: &[String], context: &Context) -> Reply {
     }
 }
 
-/// `--cron <expression> --prompt <text> [--dir <path>] [--scheduler <name>]`, in any order. A repeated flag, a missing
-/// value and any other word are refused rather than guessed at.
+/// The word of `add` that names the program a run's result is delivered to. Only `add` takes it,
+/// and it is never a flag a run is started with (SCHEDULE-6).
+pub const DELIVER_TO_WORD: &str = "--deliver-to";
+
+/// `--cron <expression> --prompt <text> [--dir <path>] [--scheduler <name>] [--deliver-to <path>]`,
+/// in any order. A repeated flag, a missing value and any other word are refused rather than
+/// guessed at.
 fn read_addition(words: &[String], mode: Mode) -> Option<Addition> {
     let mut cron = None;
     let mut prompt = None;
     let mut directory = None;
     let mut scheduler = None;
+    let mut destination = None;
     let mut rest = words.iter();
     while let Some(word) = rest.next() {
         match word.as_str() {
@@ -259,6 +276,9 @@ fn read_addition(words: &[String], mode: Mode) -> Option<Addition> {
             "--scheduler" if scheduler.is_none() => {
                 scheduler = Some(Scheduler::named(rest.next()?)?);
             }
+            DELIVER_TO_WORD if destination.is_none() => {
+                destination = Some(PathBuf::from(rest.next()?));
+            }
             _ => return None,
         }
     }
@@ -267,6 +287,7 @@ fn read_addition(words: &[String], mode: Mode) -> Option<Addition> {
         prompt: prompt?,
         directory,
         scheduler,
+        destination,
         mode,
     })
 }
@@ -365,17 +386,56 @@ fn is_an_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 9 && id.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// What an entry's file holds.
-fn entry_text(cron: &str, directory: &Path, mode: Mode, scheduler: Scheduler) -> Option<String> {
+/// Whether `path` can be stored as an entry's destination and read back as the same one: absolute,
+/// valid UTF-8 and with no control character, so that it is one line of the entry file.
+fn well_formed_destination(path: &Path) -> bool {
+    path.is_absolute()
+        && path
+            .to_str()
+            .is_some_and(|text| !text.chars().any(char::is_control))
+}
+
+/// Whether `path` is a destination `add` accepts: well formed, and a file that exists now. The
+/// program is the person's own, typed at a terminal; nothing is looked up on a search path
+/// because a scheduler's environment has almost none.
+fn checked_destination(path: &Path) -> bool {
+    well_formed_destination(path) && path.is_file()
+}
+
+/// The destination a stored value names, or `None` where the value is not a well formed one. The
+/// reading side of an entry: a value nobody could have typed at `add` makes the entry
+/// unreadable, and is never read as no destination. Existence is not asked again: a program that
+/// has since gone is a failed delivery, and the entry still lists.
+fn stored_destination(value: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(value);
+    well_formed_destination(&path).then_some(path)
+}
+
+/// What an entry's file holds. The destination line is written only where there is a destination,
+/// so an entry without one is the file it was before the key existed.
+fn entry_text(
+    cron: &str,
+    directory: &Path,
+    mode: Mode,
+    scheduler: Scheduler,
+    destination: Option<&Path>,
+) -> Option<String> {
     let directory = directory.to_str()?;
     if directory.contains('\n') {
         return None;
     }
-    Some(format!(
+    let mut text = format!(
         "cron={cron}\ndir={directory}\nmode={}\nscheduler={}\n",
         mode.word(),
         scheduler.word()
-    ))
+    );
+    if let Some(destination) = destination {
+        if !well_formed_destination(destination) {
+            return None;
+        }
+        text.push_str(&format!("deliver={}\n", destination.to_str()?));
+    }
+    Some(text)
 }
 
 /// An entry read back from `text` and the prompt file's contents.
@@ -383,6 +443,9 @@ fn read_entry(id: &str, text: &str, prompt: String) -> Option<Entry> {
     let (mut cron, mut directory, mut mode) = (None, None, None);
     // An entry written before there was a choice is a crontab line.
     let mut scheduler = Some(Scheduler::Crontab);
+    // An entry written before there was a destination has none. Once a stored value is malformed
+    // this stays `None`, so a later good line does not rescue the entry.
+    let mut destination = Some(None);
     for line in text.lines() {
         let (key, value) = line.split_once('=')?;
         match key {
@@ -390,6 +453,7 @@ fn read_entry(id: &str, text: &str, prompt: String) -> Option<Entry> {
             "dir" => directory = Some(PathBuf::from(value)),
             "mode" => mode = Mode::named(value),
             "scheduler" => scheduler = Scheduler::named(value),
+            "deliver" => destination = destination.and(stored_destination(value).map(Some)),
             _ => {}
         }
     }
@@ -399,6 +463,7 @@ fn read_entry(id: &str, text: &str, prompt: String) -> Option<Entry> {
         directory: directory?,
         mode: mode?,
         scheduler: scheduler?,
+        destination: destination?,
         prompt,
     })
 }
@@ -717,13 +782,28 @@ fn add(words: &[String], context: &Context) -> Reply {
     if !usable_prompt(&request.prompt) {
         return Reply::said(Outcome::Argument, t!(schedule_prompt_invalid));
     }
+    // The program is chosen here, by the person, and by no one after: it is refused with the
+    // argument status, and nothing is stored, unless it is an absolute path to a file.
+    if request
+        .destination
+        .as_deref()
+        .is_some_and(|path| !checked_destination(path))
+    {
+        return Reply::said(Outcome::Argument, t!(schedule_destination_invalid));
+    }
     let mode = request.mode;
     let directory = match project_directory(request.directory, context.project.as_deref()) {
         Ok(path) => path,
         Err(reply) => return reply,
     };
     let scheduler = request.scheduler.unwrap_or_else(Scheduler::usual);
-    let Some(text) = entry_text(&cron, &directory, request.mode, scheduler) else {
+    let Some(text) = entry_text(
+        &cron,
+        &directory,
+        request.mode,
+        scheduler,
+        request.destination.as_deref(),
+    ) else {
         return Reply::said(Outcome::Argument, t!(schedule_directory_invalid));
     };
     let Ok(me) = bravebot_sandbox::programs::Resolved::own_executable() else {
@@ -824,28 +904,44 @@ fn list() -> Reply {
         return Reply::done(vec![line(t!(schedule_none))]);
     }
     let kept = store_to_read().map(|store| kept_beside(&store));
-    let mut out = Vec::new();
-    for entry in &entries {
-        let paused = kept.as_ref().is_some_and(|kept| kept.is_paused(&entry.id));
-        out.push(format!(
-            "{}  {}",
-            t!(
-                schedule_row,
-                id = entry.id.as_str(),
-                cron = entry.cron.as_str(),
-                scheduler = entry.scheduler.word(),
-                directory = bravebot_approval::printable(&entry.directory.display().to_string()),
-                limit = entry.mode.limit(),
-                prompt = search::clean(&entry.prompt, LONGEST_PROMPT)
-            ),
-            if paused {
-                t!(schedule_state_paused)
-            } else {
-                t!(schedule_state_active)
-            }
-        ));
-    }
+    let out = entries
+        .iter()
+        .map(|entry| {
+            let paused = kept.as_ref().is_some_and(|kept| kept.is_paused(&entry.id));
+            row(entry, paused)
+        })
+        .collect();
     Reply::done(out)
+}
+
+/// One entry as `list` says it: what it runs, what it may do, where its result goes, and then
+/// whether it is paused.
+fn row(entry: &Entry, paused: bool) -> String {
+    let destination = match &entry.destination {
+        Some(path) => t!(
+            schedule_destination_to,
+            path = bravebot_approval::printable(&path.display().to_string())
+        ),
+        None => t!(schedule_destination_none).to_string(),
+    };
+    format!(
+        "{}  {}  {}",
+        t!(
+            schedule_row,
+            id = entry.id.as_str(),
+            cron = entry.cron.as_str(),
+            scheduler = entry.scheduler.word(),
+            directory = bravebot_approval::printable(&entry.directory.display().to_string()),
+            limit = entry.mode.limit(),
+            prompt = search::clean(&entry.prompt, LONGEST_PROMPT)
+        ),
+        destination,
+        if paused {
+            t!(schedule_state_paused)
+        } else {
+            t!(schedule_state_active)
+        }
+    )
 }
 
 /// The directory to write marks and questions in, and the entry `id`, for a command that changes
@@ -1034,9 +1130,10 @@ fn run_now(id: &str) -> Reply {
     if kept.is_paused(id) {
         return Reply::said(Outcome::Refused, t!(schedule_skipped_paused, id = id));
     }
-    // Held until this function returns, and released by the operating system if the process is
-    // killed. A firing that finds the previous one still running is skipped (SCHEDULE-4).
-    let _hold = match kept.hold(id) {
+    // Held until the run is recorded (`conclude` lets go of it before any delivery), and released by
+    // the operating system if the process is killed. A firing that finds the previous one still
+    // running is skipped (SCHEDULE-4).
+    let hold = match kept.hold(id) {
         Ok(Some(held)) => held,
         Ok(None) => return Reply::done(vec![line(t!(schedule_skipped_running, id = id))]),
         Err(_) => return Reply::said(Outcome::Failed, t!(schedule_failed)),
@@ -1064,11 +1161,47 @@ fn run_now(id: &str) -> Reply {
     let Ok(output) = command.output() else {
         return Reply::said(Outcome::Failed, t!(schedule_failed));
     };
+    conclude(
+        &store,
+        id,
+        entry.destination.as_deref(),
+        began,
+        output,
+        hold,
+        DELIVERY_LIMIT,
+    )
+}
+
+/// What happens once a firing's run has ended: it is recorded, the hold on the entry is let go of,
+/// and the bytes the run printed are handed to the entry's destination, where it has one.
+///
+/// The one read of the result is the session name `session_of` accepts. The bytes handed on are
+/// `output.stdout` itself, moved and not copied, so nothing between the run and the destination
+/// holds a second reading of them. Whether to deliver depends on the entry (a destination or none),
+/// and on nothing the run printed or the status it ended with: a run that failed, was refused or
+/// stopped at a question hands over what it printed as any other does (SCHEDULE-7).
+fn conclude(
+    store: &Path,
+    id: &str,
+    destination: Option<&Path>,
+    began: u64,
+    output: std::process::Output,
+    hold: std::fs::File,
+    limit: Duration,
+) -> Reply {
     let code = output.status.code().unwrap_or(-1);
     let session = std::str::from_utf8(&output.stdout)
         .ok()
         .and_then(|text| text.lines().last().and_then(session_of));
-    record(&store, id, began, code, session.as_deref());
+    record(store, id, began, code, session.as_deref());
+    // Let go before the destination starts, so a destination that never ends cannot make every
+    // later firing of the entry look like one still running (SCHEDULE-4, SCHEDULE-7).
+    drop(hold);
+    let notice = destination.and_then(|program| {
+        deliver(program, output.stdout, limit)
+            .err()
+            .map(|why| why.sentence(id, program, limit))
+    });
     let said = vec![line(t!(
         schedule_ran,
         id = id,
@@ -1083,6 +1216,90 @@ fn run_now(id: &str) -> Reply {
         },
         out: said,
         err: None,
+        notice,
+    }
+}
+
+/// How long a destination has to take what it was handed before it is stopped.
+const DELIVERY_LIMIT: Duration = Duration::from_secs(60);
+
+/// How often a running destination is looked at.
+const TICK: Duration = Duration::from_millis(50);
+
+/// Why a delivery did not complete. Each is a fact about the process and not about what it was
+/// handed.
+enum Undelivered {
+    /// The program could not be started.
+    NotStarted,
+    /// It ended with a status other than success.
+    Failed,
+    /// It was still running when the limit passed and was stopped.
+    TimedOut,
+}
+
+impl Undelivered {
+    /// The sentence for standard error. It names the entry and the program the person chose, and
+    /// carries nothing the program or the run printed.
+    fn sentence(&self, id: &str, program: &Path, limit: Duration) -> String {
+        let path = bravebot_approval::printable(&program.display().to_string());
+        match self {
+            Self::NotStarted => t!(schedule_delivery_not_started, id = id, path = path),
+            Self::Failed => t!(schedule_delivery_failed, id = id, path = path),
+            Self::TimedOut => t!(
+                schedule_delivery_timed_out,
+                id = id,
+                path = path,
+                seconds = limit.as_secs()
+            ),
+        }
+    }
+}
+
+/// Start `program`, write `bytes` to its standard input and wait for it for at most `limit`.
+///
+/// The bytes are written and never looked at. The program is started as a hook's is: without this
+/// agent's credentials, with the reduced search path, in a process group of its own so the limit
+/// ends whatever it started, in the person's home and not in the entry's directory, with no
+/// arguments, and with standard output and error discarded. The write is made on a thread of its
+/// own, so a program that never reads cannot stop the limit being kept.
+fn deliver(program: &Path, bytes: Vec<u8>, limit: Duration) -> Result<(), Undelivered> {
+    let withheld = bravebot_config::scrub::withheld();
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        bravebot_sandbox::programs::Inherits::Without(&withheld),
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    );
+    command
+        .current_dir(bravebot_agent::home::profile().unwrap_or_else(std::env::temp_dir))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = bravebot_sandbox::process::starting_a_program(|| command.spawn())
+        .map_err(|_| Undelivered::NotStarted)?;
+    // Not joined: a program that ended while something it started still holds the pipe would keep
+    // a join waiting. The thread ends when the pipe does, or with the process.
+    if let Some(mut stdin) = child.stdin.take() {
+        std::thread::spawn(move || ignored(stdin.write_all(&bytes)));
+    }
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) | Err(_) => return Err(Undelivered::Failed),
+            Ok(None) => {}
+        }
+        if started.elapsed() >= limit {
+            // The group first: the child has not been waited for, so its number still names its
+            // group and belongs to nothing else.
+            bravebot_session::jobs::end_group(child.id(), true);
+            ignored(child.kill());
+            // Reaped rather than left as a zombie.
+            ignored(child.wait());
+            return Err(Undelivered::TimedOut);
+        }
+        std::thread::sleep(TICK);
     }
 }
 
@@ -1231,6 +1448,238 @@ mod tests {
     }
 
     #[test]
+    fn the_destination_is_an_add_word_stored_under_its_own_key() {
+        // The person names the program at `add`, and the entry file holds it under a key
+        // of its own. A wrong implementation that kept it in the prompt file, or under `dir`,
+        // would not read back as the destination.
+        let base = ["--cron", "0 9 * * *", "--prompt", "hi"];
+        let with = |extra: &[&str]| -> Vec<String> {
+            base.iter().chain(extra).map(|s| s.to_string()).collect()
+        };
+        let named =
+            read_addition(&with(&[DELIVER_TO_WORD, "/bin/cat"]), Mode::Read).expect("reads");
+        assert_eq!(named.destination, Some(PathBuf::from("/bin/cat")));
+        assert_eq!(
+            read_addition(&with(&[]), Mode::Read).unwrap().destination,
+            None
+        );
+        // A repeat and a missing value are refused rather than guessed at.
+        assert!(
+            read_addition(
+                &with(&[DELIVER_TO_WORD, "/bin/cat", DELIVER_TO_WORD, "/bin/ls"]),
+                Mode::Read
+            )
+            .is_none()
+        );
+        assert!(read_addition(&with(&[DELIVER_TO_WORD]), Mode::Read).is_none());
+
+        let text = entry_text(
+            "0 9 * * *",
+            Path::new("/work"),
+            Mode::Read,
+            Scheduler::Crontab,
+            Some(Path::new("/bin/cat")),
+        )
+        .expect("an entry");
+        assert!(text.ends_with("deliver=/bin/cat\n"), "{text}");
+        let entry = read_entry("1", &text, "hi".into()).expect("reads");
+        assert_eq!(entry.destination, Some(PathBuf::from("/bin/cat")));
+        // An entry with no destination is the file it was before the key existed.
+        let plain = entry_text(
+            "0 9 * * *",
+            Path::new("/work"),
+            Mode::Read,
+            Scheduler::Crontab,
+            None,
+        )
+        .expect("an entry");
+        assert_eq!(
+            plain,
+            "cron=0 9 * * *\ndir=/work\nmode=read\nscheduler=crontab\n"
+        );
+    }
+
+    #[test]
+    fn an_entry_stored_before_the_destination_key_reads_as_no_destination() {
+        // An absent key is no destination, and the entry still loads.
+        let old = "cron=0 9 * * *\ndir=/work\nmode=read\nscheduler=launchd\n";
+        let entry = read_entry("1", old, "hi".into()).expect("still loads");
+        assert_eq!(entry.destination, None);
+        let older = "cron=0 9 * * *\ndir=/work\nmode=read\n";
+        assert_eq!(
+            read_entry("1", older, String::new())
+                .expect("loads")
+                .destination,
+            None
+        );
+    }
+
+    #[test]
+    fn a_malformed_stored_destination_makes_the_entry_unread_and_not_destinationless() {
+        // A value nobody could have typed at `add` is an entry that is not read, and is never
+        // read as one with no destination (which would silently stop delivering) or kept with the
+        // value ignored. The wrong implementation falls back to `None` for an unparsable value.
+        let text = |line: &str| format!("cron=0 9 * * *\ndir=/work\nmode=read\n{line}");
+        for bad in [
+            "deliver=\n",
+            "deliver=notify\n",
+            "deliver=./notify\n",
+            "deliver=/bin/a\rb\n",
+            "deliver=/bin/a\tb\n",
+            "deliver=/bin/a\u{7f}\n",
+            // A good line after a bad one does not rescue the entry.
+            "deliver=bad\ndeliver=/bin/cat\n",
+        ] {
+            assert!(
+                read_entry("1", &text(bad), String::new()).is_none(),
+                "{bad:?}"
+            );
+        }
+        // An entry text is refused at the writing side for the same values.
+        for bad in ["notify", "", "/bin/a\nb", "/bin/a\rb"] {
+            assert_eq!(
+                entry_text(
+                    "0 9 * * *",
+                    Path::new("/work"),
+                    Mode::Read,
+                    Scheduler::Crontab,
+                    Some(Path::new(bad))
+                ),
+                None,
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_destination_must_be_an_absolute_path_to_a_file_that_exists() {
+        // A destination must be absolute, exist and be a file.
+        let scratch = tempfile::tempdir().expect("a directory");
+        let program = scratch.path().join("notify");
+        std::fs::write(&program, "#!/bin/sh\n").expect("writes");
+        assert!(checked_destination(&program));
+        assert!(!checked_destination(&scratch.path().join("missing")));
+        assert!(!checked_destination(scratch.path()), "a directory");
+        assert!(!checked_destination(Path::new("notify")), "a bare name");
+        assert!(!checked_destination(Path::new("./notify")), "relative");
+        assert!(!checked_destination(Path::new("")));
+        let control = scratch.path().join("no\ttab");
+        std::fs::write(&control, "x").expect("writes");
+        assert!(!checked_destination(&control), "a control character");
+    }
+
+    #[test]
+    fn add_refuses_a_destination_that_is_not_usable_with_the_argument_status_before_storing() {
+        // The refusal has the argument status, and is reached before anything is stored. The
+        // refusal precedes `store()`, so the state directory is not read or made.
+        let scratch = tempfile::tempdir().expect("a directory");
+        let context = Context {
+            typed: Some(TypedLine::of_a_person()),
+            mode: Some(Mode::Read),
+            flags_typed: false,
+            project: Some(scratch.path().to_path_buf()),
+        };
+        for bad in [
+            "notify",
+            "/no/such/program",
+            scratch.path().to_str().unwrap(),
+        ] {
+            let words: Vec<String> = [
+                "--cron",
+                "0 9 * * *",
+                "--prompt",
+                "hi",
+                "--scheduler",
+                "crontab",
+                DELIVER_TO_WORD,
+                bad,
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+            let reply = add(&words, &context);
+            assert_eq!(reply.outcome, Outcome::Argument, "{bad}");
+            assert_eq!(
+                reply.err.as_deref(),
+                Some(t!(schedule_destination_invalid)),
+                "{bad}"
+            );
+            assert!(reply.out.is_empty(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn list_shows_the_destination_before_the_paused_or_active_word() {
+        // The row ends with the destination and then the state word.
+        let entry = |destination: Option<&str>| Entry {
+            id: "1".into(),
+            cron: "0 9 * * *".into(),
+            directory: PathBuf::from("/work"),
+            mode: Mode::Read,
+            scheduler: Scheduler::Crontab,
+            destination: destination.map(PathBuf::from),
+            prompt: "hi".into(),
+        };
+        let to = t!(schedule_destination_to, path = "/opt/notify").to_string();
+        let paused = row(&entry(Some("/opt/notify")), true);
+        assert!(
+            paused.ends_with(&format!("{to}  {}", t!(schedule_state_paused))),
+            "{paused}"
+        );
+        let active = row(&entry(Some("/opt/notify")), false);
+        assert!(
+            active.ends_with(&format!("{to}  {}", t!(schedule_state_active))),
+            "{active}"
+        );
+        let none = row(&entry(None), false);
+        assert!(
+            none.ends_with(&format!(
+                "{}  {}",
+                t!(schedule_destination_none),
+                t!(schedule_state_active)
+            )),
+            "{none}"
+        );
+    }
+
+    #[test]
+    fn nothing_a_run_printed_reaches_the_entry_or_its_destination() {
+        // What a run prints is carried only into the history line, and only as the session
+        // name `session_of` accepts. A run that prints a destination, a key line or a second
+        // session cannot change the entry file, and the history holds no path.
+        let store = tempfile::tempdir().expect("a directory");
+        let entry_text = entry_text(
+            "0 9 * * *",
+            Path::new("/work"),
+            Mode::Read,
+            Scheduler::Crontab,
+            Some(Path::new("/opt/notify")),
+        )
+        .expect("an entry");
+        std::fs::write(store.path().join("1.entry"), &entry_text).expect("writes");
+        std::fs::write(store.path().join("1.prompt"), "hi").expect("writes");
+        let before = entry_named(store.path(), "1").expect("reads");
+
+        let planted = [
+            "{\"reply\":\"x\\ndeliver=/evil\\n\",\"session\":\"/evil\"}",
+            "deliver=/evil\n{\"session\":\"20250101-120000-ab12 deliver=/evil\"}",
+            "{\"reply\":\"x\\\",\\\"session\\\":\\\"20250101-120000-ffff\"}",
+        ];
+        for result in planted {
+            let session = result.lines().last().and_then(session_of);
+            record(store.path(), "1", 100, 0, session.as_deref());
+        }
+        let history = std::fs::read_to_string(store.path().join("1.history")).expect("history");
+        assert!(!history.contains("evil"), "{history}");
+        assert_eq!(history.lines().count(), planted.len());
+        assert_eq!(
+            std::fs::read_to_string(store.path().join("1.entry")).expect("reads"),
+            entry_text
+        );
+        assert_eq!(entry_named(store.path(), "1"), Some(before));
+    }
+
+    #[test]
     fn a_stored_run_carries_one_of_three_modes_and_never_an_approval_flag() {
         // `add` reads the cron, the prompt and the directory and refuses any other word, so the
         // flag that lets a program approve a write is not stored (SCHEDULE-6).
@@ -1265,6 +1714,7 @@ mod tests {
                     directory: PathBuf::from("/work"),
                     mode,
                     scheduler: Scheduler::Crontab,
+                    destination: Some(PathBuf::from("/opt/notify")),
                     prompt: prompt.to_string(),
                 };
                 let arguments = run_arguments(&entry);
@@ -1273,6 +1723,13 @@ mod tests {
                 assert_eq!(arguments[at + 1], prompt, "{prompt:?}");
                 assert_eq!(arguments[0], "--json");
                 assert_eq!(arguments.len(), 3 + usize::from(mode.flag().is_some()));
+                // The destination is never a word a run is started with (SCHEDULE-6).
+                assert!(
+                    arguments
+                        .iter()
+                        .all(|word| word != "/opt/notify" && word != DELIVER_TO_WORD),
+                    "{arguments:?}"
+                );
             }
         }
     }
@@ -1334,6 +1791,7 @@ mod tests {
             Path::new("/work/here"),
             Mode::AcceptEdits,
             Scheduler::Systemd,
+            None,
         )
         .expect("a plain path");
         let entry = read_entry("3", &text, "do it".into()).expect("reads");
@@ -1345,6 +1803,7 @@ mod tests {
                 directory: PathBuf::from("/work/here"),
                 mode: Mode::AcceptEdits,
                 scheduler: Scheduler::Systemd,
+                destination: None,
                 prompt: "do it".into(),
             }
         );
@@ -1353,7 +1812,8 @@ mod tests {
                 "0 9 * * *",
                 Path::new("a\nb"),
                 Mode::Read,
-                Scheduler::Crontab
+                Scheduler::Crontab,
+                None
             ),
             None
         );
@@ -1373,13 +1833,13 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
         let directory = Path::new(std::ffi::OsStr::from_bytes(b"/work/\xff"));
         assert_eq!(
-            entry_text("0 9 * * *", directory, Mode::Read, Scheduler::Crontab),
+            entry_text("0 9 * * *", directory, Mode::Read, Scheduler::Crontab, None),
             None
         );
         // The lookalike a lossy conversion would write is itself a valid directory name.
         let lookalike = Path::new("/work/\u{FFFD}");
-        let text =
-            entry_text("0 9 * * *", lookalike, Mode::Read, Scheduler::Crontab).expect("an entry");
+        let text = entry_text("0 9 * * *", lookalike, Mode::Read, Scheduler::Crontab, None)
+            .expect("an entry");
         assert!(text.contains("dir=/work/\u{FFFD}\n"));
     }
 
@@ -1424,5 +1884,328 @@ mod tests {
         assert_eq!(read_run("100 0 -"), Some((100, 0, None)));
         assert_eq!(read_run("100 3 ../x"), Some((100, 3, None)));
         assert_eq!(read_run("soon 0 -"), None);
+    }
+
+    /// A stand-in destination: a script that runs `body`, in `directory`.
+    #[cfg(unix)]
+    fn stand_in(directory: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = directory.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("writes");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        path
+    }
+
+    /// What a run that ended with `code` and printed `stdout` leaves for `conclude`.
+    #[cfg(unix)]
+    fn ended(code: i32, stdout: &[u8]) -> std::process::Output {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: stdout.to_vec(),
+            stderr: Vec::new(),
+        }
+    }
+
+    /// `conclude` for entry `1` in `store`, as `run_now` calls it.
+    #[cfg(unix)]
+    fn concluded(
+        store: &Path,
+        destination: Option<&Path>,
+        output: std::process::Output,
+        limit: Duration,
+    ) -> Reply {
+        let hold = kept_beside(store).hold("1").expect("held").expect("free");
+        conclude(store, "1", destination, 100, output, hold, limit)
+    }
+
+    #[cfg(unix)]
+    const SECOND: Duration = Duration::from_secs(1);
+
+    /// SCHEDULE-7: the bytes a run printed reach the destination's standard input as they were,
+    /// whatever they hold. A wrong implementation that decoded the text, cut it, trimmed it or
+    /// stopped at a line, or one that wrote less than a pipe's buffer, would change one of these.
+    #[cfg(unix)]
+    #[test]
+    fn the_bytes_a_run_printed_reach_the_destination_unmodified() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let caught = directory.path().join("caught");
+        let program = stand_in(
+            directory.path(),
+            "notify",
+            &format!("exec /bin/cat > '{}'", caught.display()),
+        );
+        let mut large = b"{\"reply\":\"x\",\"session\":\"20250101-120000-ffff\"}\n".to_vec();
+        large.extend(std::iter::repeat_n(b'a', 1 << 20));
+        let payloads: Vec<Vec<u8>> = vec![
+            b"{\"reply\":\"r\",\"session\":\"20250101-120000-ab12\"}\n".to_vec(),
+            b"-rf $(id) `id`; rm -rf / %s \"session\":\"/evil\" --deliver-to /evil\n\n  \n"
+                .to_vec(),
+            b"\xff\xfe\x00 not text \r\n\x1b[2J".to_vec(),
+            Vec::new(),
+            large,
+        ];
+        for payload in payloads {
+            let store = tempfile::tempdir().expect("a directory");
+            let reply = concluded(
+                store.path(),
+                Some(&program),
+                ended(0, &payload),
+                Duration::from_secs(30),
+            );
+            assert_eq!(reply.notice, None);
+            assert_eq!(reply.outcome, Outcome::Done);
+            assert_eq!(std::fs::read(&caught).expect("caught"), payload);
+            std::fs::remove_file(&caught).expect("removed");
+        }
+    }
+
+    /// SCHEDULE-7: what is run, recorded and said is the same whether the run printed hostile text
+    /// or nothing, and the destination is started with no argument at all. A wrong implementation
+    /// that put the text, or a word from it, on the command line, or took the destination or the
+    /// session from it, would change these.
+    #[cfg(unix)]
+    #[test]
+    fn hostile_text_changes_neither_what_is_run_nor_what_is_recorded() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let arguments = directory.path().join("arguments");
+        let program = stand_in(
+            directory.path(),
+            "notify",
+            &format!(
+                "/bin/cat > /dev/null\nprintf '%s' \"$#\" > '{}'",
+                arguments.display()
+            ),
+        );
+        let evil = directory.path().join("evil-ran");
+        let evil_program = stand_in(
+            directory.path(),
+            "evil",
+            &format!(": > '{}'", evil.display()),
+        );
+        let hostile = format!(
+            "{{\"reply\":\"x\\\",\\\"session\\\":\\\"20250101-120000-ffff\",\"session\":null}}\n\
+             deliver={}\n- --deliver-to {} $(id) ; `id`\n",
+            evil_program.display(),
+            evil_program.display()
+        );
+        let store = tempfile::tempdir().expect("a directory");
+        let reply = concluded(
+            store.path(),
+            Some(&program),
+            ended(0, hostile.as_bytes()),
+            Duration::from_secs(30),
+        );
+        assert_eq!(reply.notice, None);
+        assert_eq!(std::fs::read_to_string(&arguments).expect("ran"), "0");
+        assert!(!evil.exists(), "the program the text named was started");
+        // Recorded as any run is: the status and no session, since the last line is not one.
+        assert_eq!(
+            std::fs::read_to_string(store.path().join("1.history")).expect("history"),
+            "100 0 -\n"
+        );
+        assert!(
+            reply.out[0].contains("session -") && !reply.out[0].contains("evil"),
+            "{:?}",
+            reply.out
+        );
+    }
+
+    /// SCHEDULE-7: a destination that fails, cannot be started or is not executable leaves the
+    /// lines, the status and the history as they are for an entry with no destination, and says so
+    /// in the notice only, with the sentence for that case. A wrong implementation that returned
+    /// the failure as the outcome, skipped the record, or gave one sentence for every case would
+    /// change one.
+    #[cfg(unix)]
+    #[test]
+    fn a_destination_that_fails_changes_nothing_but_the_notice() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("a directory");
+        let failing = stand_in(directory.path(), "fails", "/bin/cat > /dev/null\nexit 3");
+        let not_executable = directory.path().join("plain");
+        std::fs::write(&not_executable, "#!/bin/sh\n").expect("writes");
+        std::fs::set_permissions(&not_executable, std::fs::Permissions::from_mode(0o644))
+            .expect("mode");
+        let gone = directory.path().join("gone");
+        let path = |program: &Path| bravebot_approval::printable(&program.display().to_string());
+        let cases = [
+            (
+                &failing,
+                t!(schedule_delivery_failed, id = "1", path = path(&failing)).to_string(),
+            ),
+            (
+                &gone,
+                t!(schedule_delivery_not_started, id = "1", path = path(&gone)).to_string(),
+            ),
+            (
+                &not_executable,
+                t!(
+                    schedule_delivery_not_started,
+                    id = "1",
+                    path = path(&not_executable)
+                )
+                .to_string(),
+            ),
+        ];
+        for code in [0, 2] {
+            let alone_store = tempfile::tempdir().expect("a directory");
+            let alone = concluded(alone_store.path(), None, ended(code, b"out\n"), SECOND);
+            assert_eq!(alone.notice, None);
+            let alone_history =
+                std::fs::read_to_string(alone_store.path().join("1.history")).expect("history");
+            for (program, sentence) in &cases {
+                let store = tempfile::tempdir().expect("a directory");
+                let reply = concluded(store.path(), Some(program), ended(code, b"out\n"), SECOND);
+                assert_eq!(reply.outcome, alone.outcome, "{program:?}");
+                assert_eq!(reply.out, alone.out, "{program:?}");
+                assert_eq!(reply.err, None);
+                assert_eq!(
+                    std::fs::read_to_string(store.path().join("1.history")).expect("history"),
+                    alone_history
+                );
+                assert_eq!(reply.notice.as_ref(), Some(sentence), "{program:?}");
+            }
+        }
+    }
+
+    /// SCHEDULE-7: the result is handed over whatever status the run ended with. The decision to
+    /// deliver is made from the entry alone. A wrong implementation that delivered only after a
+    /// success would fail the status 2 case.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_that_failed_hands_over_what_it_printed_as_any_run_does() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let caught = directory.path().join("caught");
+        let program = stand_in(
+            directory.path(),
+            "notify",
+            &format!("exec /bin/cat > '{}'", caught.display()),
+        );
+        let store = tempfile::tempdir().expect("a directory");
+        let reply = concluded(
+            store.path(),
+            Some(&program),
+            ended(2, b"{\"error\":\"refused\"}\n"),
+            Duration::from_secs(30),
+        );
+        assert_eq!(reply.outcome, Outcome::Failed);
+        assert_eq!(
+            std::fs::read(&caught).expect("caught"),
+            b"{\"error\":\"refused\"}\n"
+        );
+    }
+
+    /// SCHEDULE-4, SCHEDULE-7: the hold on the entry is let go of before the destination starts,
+    /// so a destination that is slow does not make the next firing look like one still running. A
+    /// wrong implementation that kept the hold until `run_now` returned would not let this test
+    /// take it while the destination runs.
+    #[cfg(unix)]
+    #[test]
+    fn the_hold_is_let_go_of_while_the_destination_runs() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let started = directory.path().join("started");
+        let program = stand_in(
+            directory.path(),
+            "slow",
+            &format!(": > '{}'\n/bin/sleep 2", started.display()),
+        );
+        let store = tempfile::tempdir().expect("a directory");
+        let kept = kept_beside(store.path());
+        let hold = kept.hold("1").expect("held").expect("free");
+        std::thread::scope(|scope| {
+            let delivering = scope.spawn(|| {
+                conclude(
+                    store.path(),
+                    "1",
+                    Some(&program),
+                    100,
+                    ended(0, b"x"),
+                    hold,
+                    Duration::from_secs(30),
+                )
+            });
+            let waited = Instant::now();
+            while !started.exists() {
+                assert!(waited.elapsed() < Duration::from_secs(20), "never started");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(!delivering.is_finished(), "the destination had ended");
+            assert!(
+                kept.hold("1").expect("held").is_some(),
+                "the next firing would be skipped as still running"
+            );
+            assert_eq!(delivering.join().expect("joined").notice, None);
+        });
+    }
+
+    /// SCHEDULE-7: a destination that never ends is stopped at the limit with everything it
+    /// started, and the run is recorded and reported as it would be without one. A wrong
+    /// implementation that waited for it, or ended only the program the entry named, would hang
+    /// this test or let `late` appear.
+    #[cfg(unix)]
+    #[test]
+    fn a_destination_that_never_ends_is_stopped_with_what_it_started() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let late = directory.path().join("late");
+        let program = stand_in(
+            directory.path(),
+            "hangs",
+            &format!("( /bin/sleep 2; : > '{}' ) &\nwait", late.display()),
+        );
+        let store = tempfile::tempdir().expect("a directory");
+        let began = Instant::now();
+        let reply = concluded(
+            store.path(),
+            Some(&program),
+            ended(0, b"x"),
+            Duration::from_millis(300),
+        );
+        assert!(began.elapsed() < Duration::from_secs(20), "waited for it");
+        assert_eq!(reply.outcome, Outcome::Done);
+        let sentence = t!(
+            schedule_delivery_timed_out,
+            id = "1",
+            path = bravebot_approval::printable(&program.display().to_string()),
+            seconds = 0
+        )
+        .to_string();
+        assert_eq!(reply.notice, Some(sentence));
+        assert_eq!(
+            std::fs::read_to_string(store.path().join("1.history")).expect("history"),
+            "100 0 -\n"
+        );
+        std::thread::sleep(Duration::from_secs(3));
+        assert!(!late.exists(), "a program the destination started lived on");
+        // The next firing can take the hold.
+        assert!(kept_beside(store.path()).hold("1").expect("held").is_some());
+    }
+
+    /// SCHEDULE-7: the destination is started in the person's home and not in the directory the
+    /// entry runs in. A wrong implementation that started it in the entry's directory or the
+    /// directory of the calling process would change the directory it reports.
+    #[cfg(unix)]
+    #[test]
+    fn the_destination_starts_outside_the_entry_directory() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let at = directory.path().join("at");
+        let program = stand_in(
+            directory.path(),
+            "where",
+            &format!("/bin/cat > /dev/null\n/bin/pwd -P > '{}'", at.display()),
+        );
+        let store = tempfile::tempdir().expect("a directory");
+        let reply = concluded(
+            store.path(),
+            Some(&program),
+            ended(0, b"x"),
+            Duration::from_secs(30),
+        );
+        assert_eq!(reply.notice, None);
+        let home = std::fs::canonicalize(
+            bravebot_agent::home::profile().unwrap_or_else(std::env::temp_dir),
+        )
+        .expect("canonical");
+        let there = std::fs::read_to_string(&at).expect("ran");
+        assert_eq!(there.trim_end(), home.display().to_string());
     }
 }

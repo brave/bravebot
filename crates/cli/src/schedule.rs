@@ -65,6 +65,10 @@ fn finish(reply: Reply) -> ExitCode {
         ignored(writeln!(out, "{text}"));
     }
     drop(out);
+    // A delivery that did not complete is said here and changes nothing below (SCHEDULE-7).
+    if let Some(notice) = &reply.notice {
+        eprintln!("{notice}");
+    }
     let ending = match reply.outcome {
         Outcome::Done => return ExitCode::SUCCESS,
         Outcome::Argument => Ending::Argument,
@@ -117,6 +121,7 @@ mod tests {
                 outcome,
                 out: Vec::new(),
                 err: err.map(str::to_string),
+                notice: None,
             })
         };
         assert_eq!(said(Outcome::Done, None), ExitCode::SUCCESS);

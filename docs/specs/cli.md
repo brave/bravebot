@@ -2688,7 +2688,7 @@ of a skill change the tree it is graded in.
 <a id="CLI-42"></a>
 ### CLI-42: `schedule` installs a recurring one-shot run in the person's crontab, launchd or systemd
 
-`bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>] [--scheduler <name>]`
+`bravebot schedule add --cron "<five fields>" --prompt "<text>" [--dir <path>] [--scheduler <name>] [--deliver-to <path>]`
 writes an entry and has the scheduler it names run `bravebot schedule run-now <id>` at the times the
 expression gives: one line of the person's crontab for `crontab`, a plist in `~/Library/LaunchAgents`
 loaded with `launchctl load -w` for `launchd`, or a `.service` and a `.timer` in the systemd user
@@ -2733,6 +2733,10 @@ and a platform that is not Unix, refuse `add`, and refuse `remove` of a crontab 
 
 The driver reads a run's result for one value, the id of the session it recorded, and accepts it
 only where it is a session name. Nothing a run reads or says reaches an entry or the crontab.
+`--deliver-to <path>` names the program a run's standard output is handed to when `run-now` has
+recorded it, and `list` shows it as `delivers to <path>` or `delivers nowhere`. The bytes are carried
+to that program and not read, so the one read above is the only one, and a destination that fails
+is said on standard error and changes nothing else ([SCHEDULE-7](schedule.md#SCHEDULE-7)).
 
 A run is a one-shot run, so a background job its turn started ends with that turn
 ([RUN-15](tools/run.md#RUN-15)); nothing a job started is left running after the run exits.
@@ -2743,8 +2747,8 @@ Cron runs a job with almost none of the person's environment, so a run that need
 reads it from the state directory, as any run does.
 
 **Known costs.** There is no Windows scheduler. A job that finds no sign-in in the state directory
-ends with the status of the one-shot run and records no session. Results are kept and listed and
-are not sent anywhere.
+ends with the status of the one-shot run and records no session. A result goes only to the
+program named at `add`, and nothing is sent back to a run.
 
 `verified-by: bravebot_cli::scheduled_runs::an_entry_cannot_be_added_without_a_terminal`
 `verified-by: bravebot_cli::scheduled_runs::an_added_entry_is_one_crontab_line_and_listed_with_what_it_may_do`
