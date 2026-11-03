@@ -43475,20 +43475,30 @@ fn a_delegates_report_reaches_the_planner_that_asked_for_it() {
     let scratch = Scratch::new("delegate-report");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "DELEGATE-SOMETHING",
-            vec![
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
-                ),
-                reply_with("nothing to add while it works"),
-                reply_with("relayed"),
-            ],
-        ),
-        ("SAY-SOMETHING-SHORT", vec![reply_with("REPORTED BACK")]),
-    ]);
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-SOMETHING",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
+                    ),
+                    reply_with("nothing to add while it works"),
+                    reply_with("relayed"),
+                ],
+            ),
+            ("SAY-SOMETHING-SHORT", vec![reply_with("REPORTED BACK")]),
+        ],
+        // Held until the planner has asked a second time, so the delegate is still working when it
+        // answers that round and the turn waits for it. A report that came back sooner would be in
+        // that request, and the planner's second reply would be the answer.
+        Order::After {
+            held: "SAY-SOMETHING-SHORT",
+            after: "DELEGATE-SOMETHING",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -43503,8 +43513,10 @@ fn a_delegates_report_reaches_the_planner_that_asked_for_it() {
     )
     .expect("turn runs");
 
-    // Whichever round it arrived in: the turn is not blocked while a delegate works, so which
-    // request carries the report depends on how long the delegate took.
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate's reply was not held until the planner's second request"
+    );
     let asked = every_request(&received);
     let told = asked
         .iter()
