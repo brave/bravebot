@@ -39,3 +39,21 @@ test('a finish for no running call with its id is a row of its own, and leaves t
   entries = t.finish(entries, call(1, 'again'))
   assert.equal(notes(entries).length, 4, 'a call already finished is not finished twice')
 })
+
+test('a landing goes on the row of the call with its id, whichever call started last', () => {
+  let entries = [t.started(call(1)), t.started(call(2))]
+  entries = t.finish(entries, call(1, 'one'))
+  entries = t.land(entries, 'context', 1)
+  const landings = (rows) => rows.filter((entry) => entry.kind === 'tool').map((entry) => [entry.activity.call, entry.landing])
+  assert.deepEqual(landings(entries), [[1, 'context'], [2, null]])
+  entries = t.land(entries, 'quarantined', 2)
+  assert.deepEqual(landings(entries), [[1, 'context'], [2, 'quarantined']])
+})
+
+test('a landing with no id, or for no row, is dropped and a placed landing is not replaced', () => {
+  let entries = [t.started(call(1))]
+  assert.deepEqual(t.land(entries, 'context', null), entries)
+  assert.deepEqual(t.land(entries, 'context', 9), entries)
+  entries = t.land(entries, 'reserved', 1)
+  assert.deepEqual(t.land(entries, 'context', 1), entries)
+})

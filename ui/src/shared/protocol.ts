@@ -1073,7 +1073,8 @@ export interface EventMap {
    * printed, its note or its report is sent (VIEW-35).
    */
   agents: { agents: AgentEntry[]; started: number; working: number }
-  landed: { landing: Landing }
+  /** `call` is the id of the call whose result this places, the same as on its `tool.started`; `null` where no dispatch made the line. */
+  landed: { call: number | null; landing: Landing }
   quarantined: Shown
   todos: { rows: TodoRow[] }
   tokens: { written: number }

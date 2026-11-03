@@ -1079,7 +1079,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `hook.started` | `{ moment, program }` | `Reporter::hook_started` |
 | `hook.finished` | `{}` | `Reporter::hook_finished` |
 | `agents` | `{ agents: [ { id, kind, task, state } ], started, working }`, `id` as the driver spells the number (`d1`, and it may repeat), `state` one of `working`, `finished`, `failed` | `Reporter::delegate_started` and `delegate_finished`, and the end of a turn or run with an agent still working; **nothing the delegate printed, its note and report dropped** (VIEW-35) |
-| `landed` | `{ landing }` | `Reporter::landed` |
+| `landed` | `{ call, landing }`, `call` the id of the call whose result this places, the same as on its `tool.started`, or `null` where no dispatch made the line; a client with no row of that id drops it | `Reporter::landed` |
 | `quarantined` | `Shown` | `Reporter::quarantined` |
 | `todos` | `{ rows: [ { content, status } ] }` | `Reporter::todos` |
 | `tokens` | `{ written }` | `Reporter::output_tokens`, **only when the figure changes** |

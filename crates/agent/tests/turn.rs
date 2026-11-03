@@ -9098,6 +9098,11 @@ fn each_call_is_announced_and_summarised_under_an_id_of_its_own() {
         reporter.finished[1].failed,
         "the call whose arguments were not JSON was not refused"
     );
+    assert_eq!(
+        reporter.landed_calls,
+        vec![Some(started[0])],
+        "the landing names the call it is about, the one that read the file"
+    );
 }
 
 /// A round of calls made for different reasons used to be explained by one line that fitted

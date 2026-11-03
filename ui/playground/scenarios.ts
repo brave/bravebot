@@ -61,7 +61,7 @@ async function call(s: Script, verb: string, target: string, why: string, note: 
   s.emit('tool.started', tool(verb, target, why, null, id))
   await s.wait(700)
   s.emit('tool.finished', tool(verb, target, why, note, { ...extra, ...id }))
-  s.emit('landed', { landing })
+  s.emit('landed', { ...id, landing })
 }
 
 // ---------------------------------------------------------------- turns

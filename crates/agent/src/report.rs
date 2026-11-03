@@ -1097,7 +1097,7 @@ pub trait Reporter {
     ///
     /// Sent after the kernel has decided, which is why it is not part of the finished call: what
     /// happens to a result is settled by its label, after the tool that produced it has returned.
-    fn landed(&mut self, _landing: Landing) {}
+    fn landed(&mut self, _call: Option<CallId>, _landing: Landing) {}
 
     /// A tool call has begun.
     ///
@@ -1272,6 +1272,8 @@ pub struct RecordingReporter {
     pub returned: Vec<Returned>,
     /// Where each result went.
     pub landed: Vec<Landing>,
+    /// The call each entry of `landed` is about, in the same order.
+    pub landed_calls: Vec<Option<CallId>>,
     /// Everything the person said mid-turn, in the order it reached the planner.
     pub interjected: Vec<String>,
     /// Every message from another session, in the order it reached the planner.
@@ -1393,7 +1395,8 @@ impl Reporter for RecordingReporter {
         self.returned.push(returned);
     }
 
-    fn landed(&mut self, landing: Landing) {
+    fn landed(&mut self, call: Option<CallId>, landing: Landing) {
+        self.landed_calls.push(call);
         self.landed.push(landing);
     }
 

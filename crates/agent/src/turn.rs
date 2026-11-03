@@ -4104,7 +4104,7 @@ where
                             )
                         })
                         .collect();
-                reporter.landed(crate::report::Landing::Quarantined);
+                reporter.landed(output.reported_as, crate::report::Landing::Quarantined);
                 reporter.quarantined(crate::report::Shown {
                     origin: entries.origin.clone(),
                     reach: crate::report::Reach::NotThePlanner,
@@ -4206,7 +4206,7 @@ where
                     }
                     described.push(kept.for_context());
                 }
-                reporter.landed(crate::report::Landing::Quarantined);
+                reporter.landed(output.reported_as, crate::report::Landing::Quarantined);
                 result_from = Provenance::Reference(ids.join(", "));
                 let left_out = sentences::left_out_note(output.left_out);
                 format!(
@@ -4446,11 +4446,16 @@ where
                 // reporting that the model has read *that* is true, useless, and read by a
                 // person as a claim about their file.
                 if output.content && !printed_nothing {
-                    reporter.landed(match (&presented, &output.deferred) {
-                        (_, Some(_)) => crate::report::Landing::Reserved,
-                        (Presentation::Visible(_), _) => crate::report::Landing::Context,
-                        (Presentation::Quarantined(_), _) => crate::report::Landing::Quarantined,
-                    });
+                    reporter.landed(
+                        output.reported_as,
+                        match (&presented, &output.deferred) {
+                            (_, Some(_)) => crate::report::Landing::Reserved,
+                            (Presentation::Visible(_), _) => crate::report::Landing::Context,
+                            (Presentation::Quarantined(_), _) => {
+                                crate::report::Landing::Quarantined
+                            }
+                        },
+                    );
                 }
 
                 // What a command printed, kept whole enough for a person to open. Sent

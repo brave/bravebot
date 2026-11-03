@@ -464,11 +464,16 @@ export function finish(entries: Entry[], activity: Activity): Entry[] {
   return [...entries, { kind: 'tool', id: nextId(), activity, landing: null }]
 }
 
-/** Where the last finished call's result went. */
-export function land(entries: Entry[], landing: Landing): Entry[] {
+/**
+ * Where a finished call's result went, on the row of the call with that id. A delegate's call can
+ * start between the turn's call and its landing, so the latest row without one is not always the
+ * row the landing is about. A landing with no id, or for a call with no row, is dropped.
+ */
+export function land(entries: Entry[], landing: Landing, call: number | null): Entry[] {
+  if (call === null) return entries
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index]
-    if (entry?.kind === 'tool' && entry.landing === null) {
+    if (entry?.kind === 'tool' && entry.landing === null && entry.activity.call === call) {
       const updated = [...entries]
       updated[index] = { ...entry, landing }
       return updated

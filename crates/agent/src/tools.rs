@@ -133,6 +133,9 @@ pub struct Output {
     /// Structured cancellation from a processor, never reconstructed from tool-result text.
     pub cancelled: Option<crate::outcome::Cancellation>,
     pub call_id: Option<String>,
+    /// The id dispatch gave this call on its start and finish lines, so the line saying where the
+    /// result went can name the row it belongs to.
+    pub reported_as: Option<CallId>,
     pub tool: String,
     /// The rendered result, still labelled.
     ///
@@ -2546,7 +2549,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
                     .of_tool(&name)
                     .failed(produced.note.clone()),
             );
-            return output_of(produced, call.id.clone(), name);
+            return output_of(produced, call.id.clone(), call_id, name);
         }
     };
 
@@ -2821,14 +2824,20 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         finished.done(note)
     });
 
-    output_of(produced, call.id.clone(), name)
+    output_of(produced, call.id.clone(), call_id, name)
 }
 
 /// A finished call's [`Output`], from what the tool produced.
-fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Output {
+fn output_of(
+    produced: Produced,
+    call_id: Option<String>,
+    reported_as: CallId,
+    tool: String,
+) -> Output {
     Output {
         cancelled: produced.cancelled,
         call_id,
+        reported_as: Some(reported_as),
         tool,
         text: produced.text,
         origin: produced.origin,
@@ -2919,7 +2928,7 @@ pub fn refused_without_running<S: Sink, R: Reporter>(
             .saying_why(why)
             .failed(produced.note.clone()),
     );
-    output_of(produced, call.id.clone(), name)
+    output_of(produced, call.id.clone(), call_id, name)
 }
 
 /// What a write is refused with, and what the person watching is told about why.
@@ -15287,6 +15296,51 @@ mod tests {
             drawn("mcp__weather__get_forecast", None),
             r#"weather:get_forecast {"city":"Lyon"}"#
         );
+    }
+
+    /// A held call is announced and closed by two lines built apart, so each takes the id from one
+    /// value. A finish that lost it would leave its start row running and add a row of its own.
+    #[test]
+    fn a_held_call_finishes_under_the_id_it_started_with() {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let mut sink = RecordingSink::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "read a file");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::none(),
+            &mut sink,
+        )
+        .expect("policy");
+        let slots = SlotStore::new();
+        for id in ["c1", "c2"] {
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": id,
+                "type": "function",
+                "function": { "name": "read_file", "arguments": r#"{"path":"a.txt"}"# },
+            }))
+            .unwrap();
+            refused_without_running(
+                &mut policy,
+                &mut reporter,
+                None,
+                &slots,
+                &call,
+                "held".to_string(),
+            );
+        }
+
+        let started: Vec<_> = reporter.started.iter().map(|line| line.call).collect();
+        let finished: Vec<_> = reporter.finished.iter().map(|line| line.call).collect();
+        assert_eq!(started.len(), 2);
+        assert!(started.iter().all(Option::is_some), "{started:?}");
+        assert_eq!(finished, started);
+        assert_ne!(started[0], started[1]);
     }
 
     /// DELEGATE-33. The sentence is built from the capabilities a delegate was started without.
