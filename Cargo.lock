@@ -392,6 +392,7 @@ name = "bravebot-schedule"
 version = "0.20.0"
 dependencies = [
  "bravebot-agent",
+ "bravebot-approval",
  "bravebot-config",
  "bravebot-core",
  "bravebot-i18n",
