@@ -1,7 +1,5 @@
 # Bravebot mobile: executive summary
 
-Status: stages 1–2a, 3a, 3b and 3c are built: the Rust session view, the stdio TypeScript client in `packages/agent-client`, exact action targets, and the local host `bravebot-host` with controller loss and takeover after a client leaves. The React Native app in `mobile/` has its shell and session screens, tested against a fake client, with no target connected. Stages 2b, 4a, 4b, 5a, 5b and 6–8 remain proposed, and 3d has no device observations yet. See [current local scope](client-contract.md#implemented-typescript-client).
-
 ## Two modes in one app
 
 ![One React Native app and shared session client support an on-device agent and remote control of an agent on the host machine.](mobile-modes.png)

@@ -1,7 +1,5 @@
 # Mobile prototype implementation plan
 
-Status: stages 1–2a, 3a, 3b and 3c are built: the Rust session view, the stdio TypeScript client in `packages/agent-client`, exact action targets, and the local host `bravebot-host` with controller loss and takeover after a client leaves. The React Native app in `mobile/` has its shell and session screens, tested against a fake client, with no target connected. Stages 2b, 4a, 4b, 5a, 5b and 6–8 remain proposed, and 3d has no device observations yet. See [current local scope](client-contract.md#implemented-typescript-client).
-
 This is a high-level starting plan, not an exhaustive account of edge cases or behavior. Expect implementation discoveries to change or add to it. Update the affected design, specs, and tests as those decisions are made; resolve security gaps before enabling the affected feature. See the [executive summary](executive-summary.md) for the full proposal in one document.
 
 ## Scope and delivery rule
