@@ -36,6 +36,8 @@ fn openrouter() -> Target {
     Target::Gateway("openrouter".into())
 }
 
+/// Each refusal comes before the window asks for a key, so nobody types a key that would not be
+/// kept.
 #[test]
 fn a_key_is_refused_in_order_before_it_is_typed() {
     let directory = scratch("order");
@@ -73,6 +75,7 @@ fn a_key_is_refused_in_order_before_it_is_typed() {
     );
 }
 
+/// Rewriting a key file that can't be read would lose the keys in it.
 #[test]
 fn an_unreadable_file_is_refused_and_left_as_it_is() {
     let directory = scratch("unreadable");
@@ -95,6 +98,8 @@ fn an_unreadable_file_is_refused_and_left_as_it_is() {
     }
 }
 
+/// The key replaced still works at the service until revoked there, and is gone from here once the
+/// file is written, so it is replaced only on a yes.
 #[test]
 fn a_brave_key_is_stored_and_one_stored_is_replaced_only_when_asked() {
     let directory = scratch("brave");
@@ -129,6 +134,8 @@ fn a_brave_key_is_stored_and_one_stored_is_replaced_only_when_asked() {
     assert_eq!(held(&directory).as_deref(), Some("second"));
 }
 
+/// A key with no block naming its service would never be sent, and the key itself must not end up
+/// in the settings file.
 #[test]
 fn a_known_service_gets_its_block_recorded_with_its_key() {
     let directory = scratch("openrouter");
@@ -152,6 +159,7 @@ fn a_known_service_gets_its_block_recorded_with_its_key() {
     );
 }
 
+/// Refused before the key is typed, so nobody types one for a service no session would send it to.
 #[test]
 fn a_block_that_cannot_be_recorded_is_refused_before_the_key() {
     let directory = scratch("cannot-record");
@@ -164,6 +172,8 @@ fn a_block_that_cannot_be_recorded_is_refused_before_the_key() {
     assert!(!keys::file(&directory).exists());
 }
 
+/// The page is told where the key goes and which variable overrides it, and only the variable's
+/// name may leave the bridge, never its value.
 #[test]
 fn a_configured_gateway_says_its_host_and_the_variable_that_wins() {
     let directory = scratch("configured");
@@ -187,6 +197,7 @@ fn a_configured_gateway_says_its_host_and_the_variable_that_wins() {
     assert!(!user_settings_file(&directory).exists());
 }
 
+/// The page names what a key is for, and anything else is refused rather than guessed at.
 #[test]
 fn a_request_names_brave_or_a_gateway_with_its_id() {
     let request = |params: Value| {

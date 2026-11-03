@@ -267,6 +267,8 @@ mod tests {
         }
     }
 
+    /// The key is a bearer token (STATE-1), so it is kept private to this account, and a write that
+    /// stops part way must leave the key that was there.
     #[test]
     fn a_brave_key_is_stored_private_replacing_the_one_there() {
         let directory = scratch("brave");
@@ -293,6 +295,8 @@ mod tests {
         }
     }
 
+    /// One file holds every gateway's key, so adding one must keep the rest, and a file that can't
+    /// be read is not rewritten over keys that would be lost.
     #[test]
     fn a_gateway_key_is_added_beside_the_others_and_an_unreadable_file_is_left() {
         let directory = scratch("gateway");
@@ -314,6 +318,8 @@ mod tests {
         );
     }
 
+    /// The settings file is the person's own, so a block is added only where nothing names the
+    /// service, and a file that is not a document is left for them to fix.
     #[test]
     fn a_block_is_recorded_once_and_not_over_an_entry_the_person_wrote() {
         let directory = scratch("block");
@@ -336,6 +342,8 @@ mod tests {
         ));
     }
 
+    /// A session sends the variable rather than the stored key only where it holds a value, so a
+    /// blank one must not be said to win.
     #[test]
     fn only_a_variable_set_to_something_is_in_force() {
         let mut provider = Provider::known("openrouter").expect("known");
@@ -369,6 +377,7 @@ mod tests {
         }
     }
 
+    /// The window and `bravebot auth login` must refuse the same key with the same reason.
     #[test]
     fn a_gateway_key_is_refused_in_the_order_the_command_refuses_it() {
         let managed = Managed::default();
@@ -416,6 +425,8 @@ mod tests {
         assert!(found.offer.is_some_and(|offer| offer.unconfigured));
     }
 
+    /// Someone with only a gateway configured lacks the Brave credentials, and refusing them would
+    /// stop exactly the person the key is for.
     #[test]
     fn a_configuration_lacking_only_credentials_names_no_gateway_and_another_fault_is_refused() {
         for lacking in [
@@ -445,6 +456,8 @@ mod tests {
         assert_eq!(ids, ["work"]);
     }
 
+    /// A gateway the settings already name needs no block recorded, and the window is told a key is
+    /// stored for it so it asks before replacing it.
     #[test]
     fn a_configured_gateway_is_offered_with_the_key_stored_for_it() {
         let managed = Managed::default();
@@ -464,6 +477,8 @@ mod tests {
         assert!(found.offer.is_some_and(|offer| !offer.unconfigured));
     }
 
+    /// A Brave key needs no gateway, so a configuration fault must not refuse it, and the window
+    /// and the command must refuse it for the same reason.
     #[test]
     fn a_brave_key_is_refused_in_the_order_the_command_refuses_it() {
         let managed = Managed::default();
@@ -499,6 +514,8 @@ mod tests {
         );
     }
 
+    /// A machine policy that names no gateway leaves nowhere a key could be sent, while with no
+    /// policy the known services are still offered.
     #[test]
     fn nothing_is_offered_where_the_machine_names_no_gateway() {
         let directory = scratch("managed-none");
