@@ -576,7 +576,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
     let cancel = Cancel::new();
     let mut armed = 0usize;
     let mut jobs = tools::Jobs::default();
-    let mut run_directory = workspace.root().to_path_buf();
+    let mut run_directory = tools::RunDirectory::at(workspace.root());
     let mut confined_failures = tools::ConfinedFailures::default();
     let done = tools::apply_kept_checkout(
         &mut policy,
@@ -2374,7 +2374,7 @@ struct State<'s> {
     told_of_kept_jobs: bool,
     /// What earlier turns left open, until the first round tells the planner (OPEN-4).
     open_loops: Option<String>,
-    run_directory: std::path::PathBuf,
+    run_directory: tools::RunDirectory,
     confined_failures: tools::ConfinedFailures,
     spent: Elapsed,
     told_mode: crate::permission_mode::PermissionMode,
@@ -3388,7 +3388,7 @@ where
         // further means putting it in the session record and restoring it on `--resume`, the way the
         // vouched list is (RUN-9), and the entry points that would carry it are the caller's. Left for
         // the change that gives a session somewhere to keep one.
-        run_directory: workspace.root().to_path_buf(),
+        run_directory: tools::RunDirectory::at(workspace.root()),
         confined_failures: tools::ConfinedFailures::default(),
         // Seeded with the time the lists' questions kept the turn waiting on the person.
         spent,

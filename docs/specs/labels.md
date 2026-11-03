@@ -298,7 +298,10 @@ label is an enum, but the origin is a string that reaches the planner's context,
 transcript verbatim, so it is one the driver chose: a path, a slot, or an argument a person
 approved. It is never taken from the content it describes, nor from anything that answered the
 request for that content. An origin a server wrote is untrusted content in the planner's context
-wearing the driver's attribution, which is the thing this clause exists to stop.
+wearing the driver's attribution, which is the thing this clause exists to stop. The origin of what
+a `run` printed names the directory in the words the planner named it with, and not the directory a
+symbolic link in the tree led to, because whoever wrote a tree nobody vouched for chose that name
+([CMDLINE-12](tools/command-line.md#CMDLINE-12)).
 
 `verified-by: bravebot_core::policy::untrusted_content_is_presented_as_a_reference`
 `verified-by: bravebot_core::policy::trusted_content_is_presented_visibly`
@@ -309,6 +312,8 @@ wearing the driver's attribution, which is the thing this clause exists to stop.
 `verified-by: bravebot_core::reference::a_choice_reference_states_its_limit_and_no_count`
 `verified-by: bravebot_agent::turn::a_fetched_page_names_the_host_that_was_asked_for_and_not_where_a_redirect_went`
 `verified-by: bravebot_agent::tools::an_edit_by_reference_that_cannot_be_read_does_not_name_the_file`
+`verified-by: bravebot_agent::turn::a_run_result_names_the_directory_as_typed_and_not_where_a_link_led`
+`verified-by: bravebot_agent::turn::a_finished_jobs_account_names_the_directory_as_typed_and_not_where_a_link_led`
 
 <a id="LABEL-4"></a>
 ### LABEL-4: nothing untrusted in the driver's context

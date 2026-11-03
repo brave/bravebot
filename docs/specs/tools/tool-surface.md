@@ -126,6 +126,10 @@ made. A sentence somebody on the other side of the call composed is not part of 
 arrived as a server's error message, as a page, or as what a program printed, and however well it
 would explain the failure.
 
+A directory or a file named in a refusal is spelled as the planner wrote it. Where a symbolic link in
+a tree nobody vouched for led is a name whoever wrote the tree chose, so it is not among the values
+above, and a refusal never spells it.
+
 Where their own account of what went wrong is worth keeping, it reaches the person watching through
 the release that puts content on a screen, or it is quarantined and named by a reference. The
 planner is told the fact of the failure, the call it was about, and what to do differently.
@@ -148,6 +152,10 @@ and whoever reviews it is asked what footing its text is on.
 `verified-by: bravebot_agent::turn::a_fetch_refused_for_leaving_its_host_names_no_host_the_server_chose`
 `verified-by: bravebot_agent::turn::a_credential_created_as_a_whole_file_is_not_created_and_the_planner_is_told_so`
 `verified-by: bravebot_agent::tools::a_failed_listing_names_the_directory_as_typed_and_not_where_it_landed`
+`verified-by: bravebot_agent::turn::a_background_line_that_did_not_start_names_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::a_credential_refusal_names_the_redirection_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::a_refused_redirection_is_named_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::an_unopened_redirection_is_named_under_the_directory_as_typed`
 
 <a id="TOOL-5"></a>
 ### TOOL-5: every tool asks why it is called, and only a screen reads the answer

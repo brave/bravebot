@@ -293,8 +293,10 @@ pub enum ExecError {
     /// The directory the line was to run in no longer exists, so the pipeline was not started.
     ///
     /// Checked immediately before the first stage is spawned, since an approval can wait for
-    /// hours. The directory is the one the person was shown and approved.
-    DirectoryGone { directory: String },
+    /// hours. Names no path: the directory is the one the person was shown and approved, and the
+    /// line it belongs to is told with the directory the planner typed, where a path here would be
+    /// where a link led.
+    DirectoryGone,
     /// The platform could not confine the program, so it was not started.
     ///
     /// A program a person approved runs under its profile or not at all, so this is a refusal and
@@ -316,9 +318,7 @@ impl fmt::Display for ExecError {
             Self::NotStarted { program, detail } => {
                 write!(f, "'{program}' could not be started: {detail}")
             }
-            Self::DirectoryGone { directory } => {
-                write!(f, "the directory '{directory}' no longer exists")
-            }
+            Self::DirectoryGone => f.write_str("the directory it was to run in no longer exists"),
             Self::NotConfined { program, detail } => {
                 write!(
                     f,
@@ -1298,9 +1298,7 @@ fn the_directory_exists(directory: &std::path::Path) -> Result<(), ExecError> {
     if directory.is_dir() {
         return Ok(());
     }
-    Err(ExecError::DirectoryGone {
-        directory: directory.display().to_string(),
-    })
+    Err(ExecError::DirectoryGone)
 }
 
 /// Refuse the pipeline unless every step's start path still leads to the file that was approved.

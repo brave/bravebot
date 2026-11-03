@@ -338,6 +338,29 @@ pub struct Output {
     pub tool_loaded: Option<String>,
 }
 
+/// The directory `run` lines land in when they name none, carried from the last line that ran.
+///
+/// Two spellings of one place. `landing` is where the workspace resolved the directory, which the
+/// line runs in and every check is made against. `told` is the directory as the planner typed it,
+/// which is what a sentence addressed to the planner spells: where a link in a tree nobody vouched
+/// for led is a name whoever wrote the tree chose (LABEL-3, TOOL-4). `told` is never compared with
+/// `landing` or with anything else.
+#[derive(Debug, Clone)]
+pub struct RunDirectory {
+    pub landing: std::path::PathBuf,
+    pub told: String,
+}
+
+impl RunDirectory {
+    /// The workspace root, which a sentence about a line run there does not name.
+    pub fn at(root: &std::path::Path) -> Self {
+        Self {
+            landing: root.to_path_buf(),
+            told: String::new(),
+        }
+    }
+}
+
 /// Everything a tool works with that is not the policy.
 ///
 /// Three things, and the second two are new because of the processor: the quarantine, so a
@@ -491,7 +514,7 @@ pub struct Tools<'a> {
     /// The current working directory for `run` commands in this turn.
     ///
     /// Initialized to the workspace root and updated when `run` specifies a `directory`.
-    pub run_directory: &'a mut std::path::PathBuf,
+    pub run_directory: &'a mut RunDirectory,
     /// How many lines ran with a sandbox in this turn and did not exit zero, which a request for
     /// a line with no sandbox is accepted after and not before (SANDBOX-29).
     pub confined_failures: &'a mut ConfinedFailures,
@@ -8507,12 +8530,41 @@ struct Standing {
     key: String,
     /// The name a person and a finding see, which is the name relative to the workspace root.
     shown: String,
+    /// The name the planner is told: `shown` with the directory the line ran in spelled as the
+    /// planner typed it, where `shown` has the place a link in the tree led.
+    told: String,
     /// Where the file is, for reading what the line left and for putting back what it held.
     resolved: std::path::PathBuf,
     /// What the path held before the line opened it.
     held: crate::workspace::Before,
     /// What the trust map said about the path at that same moment.
     prior: bravebot_core::label::Integrity,
+}
+
+/// The name the planner is told for a destination a line opened.
+///
+/// A destination under the directory the line ran in is told as that directory spelled the way
+/// the planner typed it, followed by the rest of the path. The path itself was joined onto where
+/// the directory landed, and where a link led is a name whoever wrote the tree chose, which the
+/// planner is not told (LABEL-3, TOOL-4). `typed` is `None` for a line run at the root, and then,
+/// like a destination elsewhere, the name is the one relative to the root. Both halves are strings
+/// the planner wrote or paths the driver resolved: nothing is read from a file to build the name.
+fn told_destination(
+    workspace: &Workspace,
+    path: &std::path::Path,
+    landing: &std::path::Path,
+    typed: Option<&str>,
+) -> String {
+    match (typed, path.strip_prefix(landing)) {
+        (Some(typed), Ok(rest)) => {
+            let rest: Vec<std::borrow::Cow<'_, str>> = rest
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect();
+            format!("{}/{}", typed.trim_end_matches('/'), rest.join("/"))
+        }
+        _ => workspace.relative_display(path),
+    }
 }
 
 /// What a line left at the destinations it opened.
@@ -8632,7 +8684,7 @@ fn credential_refusal_after_a_line(said: &str, left: &Left<'_>, stuck: &[String]
     let paths: Vec<&str> = left
         .refused_at
         .iter()
-        .map(|destination| destination.shown.as_str())
+        .map(|destination| destination.told.as_str())
         .collect();
     let instead = do_this_instead(left.scanned.only_the_value);
     let text = match stuck.is_empty() {
@@ -9270,12 +9322,19 @@ fn requests_refusals(
 /// Hands back whether a redirection may leave the workspace on this line, which the run checks
 /// again at each open. A refusal comes back as the result of the call. Everything checked is the
 /// plan's own structure and the session's settings; no output of a program is read.
+///
+/// A refusal names a redirection's file under `told_directory`, the directory as the planner typed
+/// it, and never under where the workspace landed that directory (LABEL-3, TOOL-4).
 fn check_the_plan_before_asking<S: Sink>(
     policy: &mut Policy<'_, S>,
     tools: &Tools<'_>,
     plan: &bravebot_core::command::Plan,
     unconfined: bool,
+    told_directory: Option<&str>,
 ) -> Result<bool, Box<Produced>> {
+    let told = |path: &std::path::Path| {
+        told_destination(tools.workspace, path, &plan.directory, told_directory)
+    };
     // A read as well as a write. The rules below are matched against the spelling, and a name
     // Windows reads as another file would have them judge one file while the run opens the other.
     // Before the confinement, which cannot say where a stream or a device lands. `> NUL` is how
@@ -9285,7 +9344,7 @@ fn check_the_plan_before_asking<S: Sink>(
     for (paths, hint) in [(&plan.writes, discard), (&plan.reads, "")] {
         for path in paths {
             if let Err(misleading) = tools.workspace.refuse_misleading(path) {
-                let target = path.display().to_string();
+                let target = told(path);
                 return Err(Box::new(Produced::problem(format!(
                     "refused: {}{hint}",
                     workspace_failure(policy, "run", "command", &misleading, &target)
@@ -9301,7 +9360,7 @@ fn check_the_plan_before_asking<S: Sink>(
     for path in &plan.reads {
         let lands = crate::workspace::destination(path);
         if lands.is_some_and(|lands| tools.workspace.in_the_stores(&lands)) {
-            let target = path.display().to_string();
+            let target = told(path);
             let escape = crate::workspace::WorkspaceError::Escapes {
                 path: target.clone(),
                 remedy: crate::workspace::Remedy::Nothing,
@@ -9320,7 +9379,7 @@ fn check_the_plan_before_asking<S: Sink>(
     let reaches_anywhere = redirections_may_leave_the_workspace(unconfined, tools);
     for path in &plan.writes {
         if !reaches_anywhere && let Err(escape) = tools.workspace.confines_writing(path) {
-            let target = path.display().to_string();
+            let target = told(path);
             let way_out = match escape {
                 crate::workspace::WorkspaceError::Escapes { .. } => {
                     unconfined_way_out(policy, tools)
@@ -9363,7 +9422,12 @@ fn check_the_plan_before_asking<S: Sink>(
     ] {
         for path in paths {
             let named = tools.workspace.relative_display(path);
-            if let Err(refusal) = refuse_denied_path(policy, tools.workspace, purpose, &named) {
+            // The rules are asked under the landing-based name, and the refusal says the name
+            // under the directory as typed (LABEL-3, TOOL-4).
+            let shown = told(path);
+            if let Err(refusal) =
+                refuse_denied_path_as(policy, tools.workspace, purpose, &named, &shown)
+            {
                 return Err(Box::new(Produced::problem(refusal)));
             }
             // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env`
@@ -9372,7 +9436,7 @@ fn check_the_plan_before_asking<S: Sink>(
             for reached in tools.workspace.names_reached(path) {
                 if reached != named
                     && let Err(refusal) =
-                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &named)
+                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &shown)
                 {
                     return Err(Box::new(Produced::problem(refusal)));
                 }
@@ -9525,6 +9589,8 @@ struct JobStart<'a> {
     plan: &'a bravebot_core::command::Plan,
     displayed: &'a str,
     said: &'a str,
+    /// The directory the line ran in, spelled as the planner typed it.
+    told_directory: &'a str,
     label: Label,
     authority: &'a bravebot_core::file_authority::FileAuthority,
     started_revision: u64,
@@ -9547,7 +9613,10 @@ fn start_the_job<S: Sink, R: Reporter>(
 ) -> (String, bravebot_core::cancel::JobStop) {
     policy.record_ambient(job.spends);
     // The directory is carried over only once pre-flight checks and launch succeed.
-    *tools.run_directory = job.plan.directory.clone();
+    *tools.run_directory = RunDirectory {
+        landing: job.plan.directory.clone(),
+        told: job.told_directory.to_string(),
+    };
     let (name, stop) = tools.jobs.keep(
         running,
         JobLines::new(job.displayed, job.said),
@@ -9733,10 +9802,20 @@ fn run_call<S: Sink>(
 /// profile: the classifier is shown the words of the line and not the binary they resolve to, so
 /// the confinement is what holds the line to those words. The plan and the directory are the
 /// driver's own structure and no labelled value is built or released here.
+///
+/// `told_in` is the directory as the planner typed it, and is `None` when the line runs at the
+/// workspace root. The classifier is a model, so a name a link in the tree chose is not put in its
+/// request any more than in the planner's: it is shown the typed spelling, or the root, which is
+/// the person's own directory (AUTO-5).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the plan and its scopes are the driver's own structure and `policy` and `tools` are exclusive borrows, so none of them can share a bundle without the borrows aliasing"
+)]
 fn consult_about_a_run<S: Sink>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     plan: &bravebot_core::command::Plan,
+    told_in: Option<&str>,
     requested: &[bravebot_sandbox::scope::Requested],
     stdin: bool,
     unconfined: bool,
@@ -9753,7 +9832,10 @@ fn consult_about_a_run<S: Sink>(
     let Some(classifying) = tools.classifying.as_ref() else {
         return crate::confirm::Classified::NotAsked;
     };
-    let directory = plan.directory.display().to_string();
+    let directory = told_in.map_or_else(
+        || plan.directory.display().to_string(),
+        std::string::ToString::to_string,
+    );
     crate::classifier::consult(
         policy,
         &mut tools.chat,
@@ -9802,6 +9884,7 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     tools: &mut Tools<'_>,
     confirmer: &mut C,
     plan: &bravebot_core::command::Plan,
+    told_in: Option<&str>,
     record: Option<&crate::remembered::Store>,
     requested: &[bravebot_sandbox::scope::Requested],
     unconfined: bool,
@@ -9817,6 +9900,7 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
         policy,
         tools,
         plan,
+        told_in,
         requested,
         stdin.is_some(),
         unconfined,
@@ -10002,7 +10086,7 @@ fn failed_line_text(said: &str, error: &crate::exec::ExecError) -> String {
         ),
         // Nothing of this pipeline started, so only a command earlier in a line joined with `&&`,
         // `||` or `;` can have run.
-        crate::exec::ExecError::DirectoryGone { .. } => format!(
+        crate::exec::ExecError::DirectoryGone => format!(
             "error: `{said}` was not run: {error}. Name a directory that \
              exists with the 'directory' argument. A command earlier in the line may already \
              have run"
@@ -10128,7 +10212,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         }
     };
 
-    let directory = match named {
+    let (directory, told_directory) = match named {
         Some(proposed) => {
             // Read through the same gate the command line is, for the same reason: this is
             // resolved against the workspace and the driver branches on whether what it found is
@@ -10158,23 +10242,33 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             if !resolved.is_dir() {
                 return Produced::problem(format!("error: '{dir}' is not a directory"));
             }
-            resolved
+            // What the planner is told the directory was: its own released argument, or as the
+            // workspace spells a `..` that lands in an open directory, as the file tools do. The
+            // landing is where a link led, and a link in a tree nobody vouched for chooses that name.
+            let told = tools
+                .workspace
+                .climbed_to(&dir)
+                .unwrap_or_else(|| dir.clone());
+            (resolved, told)
         }
         None => {
             // The directory carried from the last call is checked as a named one is, before the
             // line is compiled and before anybody is asked: it may have been removed since.
             // Falling back to the workspace root means the next call is not refused the same way.
-            if !tools.run_directory.is_dir() {
-                let gone =
-                    std::mem::replace(tools.run_directory, tools.workspace.root().to_path_buf());
+            if !tools.run_directory.landing.is_dir() {
+                let gone = std::mem::replace(
+                    tools.run_directory,
+                    RunDirectory::at(tools.workspace.root()),
+                );
                 return Produced::problem(format!(
                     "error: the directory this line would run in, '{}', no longer exists. Name \
                      a directory with the 'directory' argument; without one the next call runs \
                      at the workspace root",
-                    gone.display()
+                    gone.told
                 ));
             }
-            tools.run_directory.clone()
+            let carried = tools.run_directory.clone();
+            (carried.landing, carried.told)
         }
     };
     // The rules are handed to the compiler rather than consulted on the plan it hands back,
@@ -10199,10 +10293,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     *may_change_files = crate::cmdline::plan_as_written(&plan, tools.profile)
         .is_none_or(|written| policy.plan_may_change_files(&written));
 
-    let reaches_anywhere = match check_the_plan_before_asking(policy, tools, &plan, unconfined) {
-        Ok(reaches_anywhere) => reaches_anywhere,
-        Err(produced) => return *produced,
-    };
+    let told_in =
+        (plan.directory.as_path() != tools.workspace.root()).then_some(told_directory.as_str());
+    let reaches_anywhere =
+        match check_the_plan_before_asking(policy, tools, &plan, unconfined, told_in) {
+            Ok(reaches_anywhere) => reaches_anywhere,
+            Err(produced) => return *produced,
+        };
 
     // What the planner named for standard input, turned into bytes and a label before anybody is
     // asked. Three gates, as a write's `contents_ref` has: the name is accepted as a reference
@@ -10301,6 +10398,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             tools,
             confirmer,
             &plan,
+            told_in,
             record.as_ref(),
             &requested,
             unconfined,
@@ -10344,19 +10442,24 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // The directory persists across calls, so a planner whose earlier call has been summarised away
     // by a compaction has nothing else left in its context saying where the next one lands, and a
     // person asked to release what this printed would otherwise not be told which tree it came out
-    // of. Structure either way: a path the driver resolved itself, never a byte of what ran.
-    let in_directory = |line: String| match plan.directory.as_path() == tools.workspace.root() {
+    // of. The planner is told the directory as it typed it: where a link in the tree led is a name
+    // whoever wrote the tree chose, and a sentence the driver writes is read as the driver's own
+    // (LABEL-3, TOOL-4). The person is shown the landing, which is what the line runs in. The
+    // test below is of the landing against the workspace root, two paths the driver resolved, and
+    // reads nothing of the directory's name.
+    let at_the_root = plan.directory.as_path() == tools.workspace.root();
+    let in_directory = |line: String, spelled: &str| match at_the_root {
         true => line,
-        false => format!(
-            "{line} (in {})",
-            tools.workspace.relative_display(&plan.directory)
-        ),
+        false => format!("{line} (in {spelled})"),
     };
-    let displayed = in_directory(plan.display());
+    let displayed = in_directory(
+        plan.display(),
+        &tools.workspace.relative_display(&plan.directory),
+    );
     // What the planner is told the line was: the plan with its operands as the line wrote them. A
     // glob in the line has been replaced by the names it matched, which came out of a directory
     // nobody may have vouched for, and the planner is not shown those (CMDLINE-4).
-    let said = in_directory(crate::cmdline::display_as_written(&plan));
+    let said = in_directory(crate::cmdline::display_as_written(&plan), &told_directory);
 
     // What this line reaches that nothing here holds, which the person approving it was shown at
     // the prompt. Worked out from the same plan the prompt drew, so the record and the grant
@@ -10368,6 +10471,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         plan: &plan,
         displayed: &displayed,
         said: &said,
+        told_directory: &told_directory,
         label,
         authority: &authority,
         started_revision,
@@ -10524,7 +10628,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 // destination can have replaced it with a link (CMDLINE-5). Not for a line whose
                 // programs have no profile, for the reason the check above is not.
                 if !reaches_anywhere && let Err(escape) = tools.workspace.confines_writing(path) {
-                    let target = path.display().to_string();
+                    let target = told_destination(
+                        tools.workspace,
+                        path,
+                        &plan.directory,
+                        (!at_the_root).then_some(told_directory.as_str()),
+                    );
                     let detail = workspace_failure(policy, "run", "command", &escape, &target);
                     return Err(crate::exec::ExecError::Redirection {
                         path: target,
@@ -10567,6 +10676,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     standing.push(Standing {
                         key: key.clone(),
                         shown: tools.workspace.relative_display(path),
+                        told: told_destination(
+                            tools.workspace,
+                            path,
+                            &plan.directory,
+                            (!at_the_root).then_some(told_directory.as_str()),
+                        ),
                         held,
                         resolved: path.to_path_buf(),
                         prior,
@@ -10582,7 +10697,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 let lands = crate::workspace::destination(path);
                 if lands.is_some_and(|lands| tools.workspace.in_the_stores(&lands)) {
                     return Err(crate::exec::ExecError::Redirection {
-                        path: path.display().to_string(),
+                        path: told_destination(
+                            tools.workspace,
+                            path,
+                            &plan.directory,
+                            (!at_the_root).then_some(told_directory.as_str()),
+                        ),
                         detail: "refused: kept facts, rules and session records are not read by \
                                  a command line"
                             .to_string(),
@@ -10634,7 +10754,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             .put_back(&destination.resolved, &destination.held)
             .is_err()
         {
-            stuck.push(destination.shown.clone());
+            stuck.push(destination.told.clone());
         }
     }
     // After a destination a scan refused has been put back. One the line created is removed again,
@@ -10700,7 +10820,10 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             // branch carries it too: a line whose stages never started moved nothing, and a turn
             // whose working directory had followed a run that did not happen would land the next
             // line somewhere nobody chose.
-            *tools.run_directory = plan.directory.clone();
+            *tools.run_directory = RunDirectory {
+                landing: plan.directory.clone(),
+                told: told_directory.clone(),
+            };
 
             // Both streams carry the revalidated plan label; their bytes decide nothing.
             let text = crate::exec::both_streams(&ran.stdout, &ran.stderr);
@@ -10799,6 +10922,28 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         // got to (GROUND-1).
         Err(error) => {
             let stopped = matches!(error, crate::exec::ExecError::Cancelled);
+            // A file exec could not open is named by the path it joined onto where the directory
+            // landed. Respelled under the directory as typed; a name the closures above already
+            // spelled that way, or an absolute one the planner wrote, is not under the landing and
+            // is left as it is. Both are paths the driver holds, and nothing is read from a file.
+            let error = match error {
+                crate::exec::ExecError::Redirection { path, detail }
+                    if std::path::Path::new(&path)
+                        .strip_prefix(&plan.directory)
+                        .is_ok() =>
+                {
+                    crate::exec::ExecError::Redirection {
+                        path: told_destination(
+                            tools.workspace,
+                            std::path::Path::new(&path),
+                            &plan.directory,
+                            (!at_the_root).then_some(told_directory.as_str()),
+                        ),
+                        detail,
+                    }
+                }
+                other => other,
+            };
             let text = failed_line_text(&said, &error);
             let mut produced = Produced::problem(text);
             produced.changed_a_file = changed_a_file;
@@ -14191,12 +14336,7 @@ mod tests {
             assert!(!text.contains("did not run"), "{error:?}: {text}");
         }
         assert!(failed_line_text("sleep 30", &errors[0]).contains("was started"));
-        let gone = failed_line_text(
-            "git status",
-            &ExecError::DirectoryGone {
-                directory: "sub".into(),
-            },
-        );
+        let gone = failed_line_text("git status", &ExecError::DirectoryGone);
         assert!(
             gone.contains("no longer exists") && !gone.contains("may have run in part"),
             "{gone}"
@@ -25371,7 +25511,7 @@ mod tests {
             let cancel = bravebot_core::cancel::Cancel::new();
             let mut armed = 0usize;
             let mut jobs = Jobs::default();
-            let mut run_directory = workspace.root().to_path_buf();
+            let mut run_directory = RunDirectory::at(workspace.root());
             let mut confined_failures = ConfinedFailures::default();
             body(&mut Tools {
                 workspace,

@@ -2036,9 +2036,10 @@ pub fn display_as_written(plan: &Plan) -> String {
         return plan.line.clone();
     };
     let mut written = Vec::new();
-    operands_as_written(&node, &mut written);
+    let mut targets = Vec::new();
+    operands_as_written(&node, &mut written, &mut targets);
     plan.steps
-        .display_with_operands(&written)
+        .display_with_operands(&written, &targets)
         .unwrap_or_else(|| plan.line.clone())
 }
 
@@ -2088,27 +2089,44 @@ fn unexpanded_operands(
     }
 }
 
-/// Each command's operands as the line spelled them, in the order the compiler builds its steps.
-fn operands_as_written(node: &Node, out: &mut Vec<Vec<String>>) {
-    let command = |command: &Command, out: &mut Vec<Vec<String>>| {
-        out.push(
-            command.words[1..]
-                .iter()
-                .map(|word| match word.pieces.iter().any(is_pattern) {
-                    true => render(&word.pieces),
-                    false => bravebot_core::command::quoted(&render(&word.pieces)),
-                })
-                .collect(),
-        );
-    };
+/// Each command's operands, and the files its redirections name, as the line spelled them, in the
+/// order the compiler builds its steps. A redirection that names no file adds nothing to the second
+/// list.
+fn operands_as_written(node: &Node, out: &mut Vec<Vec<String>>, targets: &mut Vec<Vec<String>>) {
+    let command =
+        |command: &Command, out: &mut Vec<Vec<String>>, targets: &mut Vec<Vec<String>>| {
+            out.push(
+                command.words[1..]
+                    .iter()
+                    .map(|word| match word.pieces.iter().any(is_pattern) {
+                        true => render(&word.pieces),
+                        false => bravebot_core::command::quoted(&render(&word.pieces)),
+                    })
+                    .collect(),
+            );
+            targets.push(
+                command
+                    .redirections
+                    .iter()
+                    .filter_map(|redirection| match redirection {
+                        Redirection::Stdout { target, .. }
+                        | Redirection::Stdin { target }
+                        | Redirection::Stderr { target, .. }
+                        | Redirection::Both { target } => Some(target),
+                        Redirection::StderrToStdout => None,
+                    })
+                    .map(|target| bravebot_core::command::quoted(&render(&target.pieces)))
+                    .collect(),
+            );
+        };
     match node {
-        Node::Command(one) => command(one, out),
-        Node::Pipeline(commands) => commands.iter().for_each(|one| command(one, out)),
+        Node::Command(one) => command(one, out, targets),
+        Node::Pipeline(commands) => commands.iter().for_each(|one| command(one, out, targets)),
         Node::Join { left, right, .. } => {
-            operands_as_written(left, out);
-            operands_as_written(right, out);
+            operands_as_written(left, out, targets);
+            operands_as_written(right, out, targets);
         }
-        Node::Group(inner) => operands_as_written(inner, out),
+        Node::Group(inner) => operands_as_written(inner, out, targets),
     }
 }
 
@@ -3626,6 +3644,32 @@ mod tests {
         );
         let bin = tree.root.join("bin/ls").display().to_string();
         let expected = format!("{bin} *.rs | {bin} -l 'a b' && ( {bin} a.* ; {bin} z?.txt )");
+        assert_eq!(told, expected);
+    }
+
+    /// What the planner is told of a line names the file of each redirection as the line wrote it.
+    /// The plan holds that file joined onto the directory the line landed in, which is where a
+    /// link led, and the person's plan still draws it.
+    ///
+    /// Rejects an implementation that tells the plan's joined path, drops the redirection, or
+    /// pairs a target with the wrong step.
+    #[test]
+    fn a_redirection_is_told_to_the_planner_with_its_file_as_it_was_written() {
+        let tree = Tree::new("told-redirection-as-written");
+        tree.executable("bin/ls").file("a.txt");
+        let line = "./bin/ls a.txt > out.txt 2>&1 && ./bin/ls < a.txt >> 'log file.txt'";
+        let plan = compile(line, &tree.root, None, &mut without_rules).expect("a plan");
+
+        let shown = plan.display();
+        let told = display_as_written(&plan);
+
+        let root = tree.root.display().to_string();
+        assert!(
+            shown.contains(&format!("{root}/out.txt")),
+            "the person's plan lost the landed file: {shown}"
+        );
+        let bin = tree.root.join("bin/ls").display().to_string();
+        let expected = format!("{bin} a.txt > out.txt 2>&1 && {bin} < a.txt >> 'log file.txt'");
         assert_eq!(told, expected);
     }
 
