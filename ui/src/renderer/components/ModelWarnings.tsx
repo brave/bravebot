@@ -17,7 +17,7 @@ export function ModelWarnings({ warnings, commands, session, onSignedIn }: {
 }): React.JSX.Element {
   return <>{warnings.map((warning, index) => {
     const way = signInWayOf(commands?.[index])
-    return <Alert type="warning" size="small" className="model-status" hasActions={Boolean(way)} key={warning} data-test="model-warning">
+    return <Alert type="warning" size="small" className="model-status" hasActions={Boolean(way)} isInlineActions key={warning} data-test="model-warning">
       <FailureSentence text={warning} command={commands?.[index]} />
       {way && <div slot="actions"><SignInButton way={way} session={session} onSignedIn={onSignedIn} /></div>}
     </Alert>

@@ -711,9 +711,9 @@ test('a picker warning draws the command it names as code and the rest as text',
   assert.match(drawn, /<leo-alert data-test="model-warning">Could not load models from Down Gateway\. Try again\.<\/leo-alert>/, drawn)
   // Each warning is a small warning alert, and only the one with a sign-in has actions.
   const alerts = ModelWarnings({ warnings: [named, unnamed], commands: [command, null] }).props.children
-  assert.deepEqual(alerts.map((each) => [each.props.type, each.props.size, each.props.className, each.props.hasActions]), [
-    ['warning', 'small', 'model-status', true],
-    ['warning', 'small', 'model-status', false],
+  assert.deepEqual(alerts.map((each) => [each.props.type, each.props.size, each.props.className, each.props.hasActions, each.props.isInlineActions]), [
+    ['warning', 'small', 'model-status', true, true],
+    ['warning', 'small', 'model-status', false, true],
   ])
   assert.equal((drawn.match(/<code>/g) ?? []).length, 1, drawn)
   assert.doesNotMatch(drawn, /`/, drawn)
