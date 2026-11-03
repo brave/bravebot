@@ -38,7 +38,8 @@ use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use std::fmt;
 use std::io::{ErrorKind, Read};
 use std::process::{Child, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 /// How long a command may run before it is given up on.
@@ -50,6 +51,17 @@ pub const LIMIT: Duration = Duration::from_secs(600);
 
 /// How often the wait loop looks up to see whether it should stop.
 const TICK: Duration = Duration::from_millis(50);
+
+/// How long to wait, once the shell itself has exited, for its pipes to reach their end.
+///
+/// A line that backgrounds a process with `&`, such as `sleep 12 &`, hands that process the same
+/// stdout and stderr the shell was given. The shell returns at once, but the pipe's write end
+/// stays open in the backgrounded process until it exits on its own, so waiting for the pipe to
+/// close waits for that process rather than for the command the user typed. This bounds that wait:
+/// once it elapses, what each pipe had delivered so far is kept, the same as for a pipe that
+/// failed outright. The backgrounded process is not reached by this or by cancellation, which
+/// matches a shell's own `&`: it is independent of the line once started.
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 /// What running a command produced.
 ///
@@ -217,11 +229,22 @@ fn run_sending(
         std::thread::sleep(TICK);
     };
 
-    // Collected after it exited, so every byte it wrote has been sent. A drain thread that vanished
-    // contributes nothing rather than failing the run: the exit code already says how it went.
+    // The shell has exited, so the command is over; a process it backgrounded with `&` is not
+    // waited for here (see DRAIN_GRACE). Each pipe is given that long to reach its own end, which
+    // is all the ordinary case needs: a shell that exited closed both when it did.
+    let drain_until = Instant::now() + DRAIN_GRACE;
+    while Instant::now() < drain_until
+        && !(out.as_ref().is_none_or(Drain::finished) && err.as_ref().is_none_or(Drain::finished))
+    {
+        std::thread::sleep(TICK);
+    }
+
+    // What each pipe had delivered by then, whether or not it had reached its end. A pipe still
+    // held open by a backgrounded process contributes only what arrived before the grace ran out,
+    // the same as a pipe that failed outright.
     Ok(Ran {
-        stdout: out.and_then(|rx| rx.recv().ok()).unwrap_or_default(),
-        stderr: err.and_then(|rx| rx.recv().ok()).unwrap_or_default(),
+        stdout: out.map(|drain| drain.text()).unwrap_or_default(),
+        stderr: err.map(|drain| drain.text()).unwrap_or_default(),
         code,
     })
 }
@@ -348,24 +371,32 @@ fn outcome(ran: &Ran) -> String {
 
 /// Read a pipe on a thread, lossily, so output that is not UTF-8 does not fail the run.
 ///
-/// Where `live` is given, what each read returned is also sent on as text as it is read. The text
-/// the thread hands back at the end is decoded from all the bytes at once, so the two agree on what
-/// an invalid byte becomes.
+/// Where `live` is given, what each read returned is also sent on as text as it is read.
+///
+/// What has been read so far is kept in a buffer the caller can look at, and ask whether the pipe
+/// has reached its end, at any time, rather than waiting for this thread to finish: the pipe may
+/// never close on its own, held open by a process the command backgrounded with `&` long after
+/// the command itself has returned. [`crate::exec::Background`] reads its own pipes the same way,
+/// for the same reason.
 fn drain<R: Read + Send + 'static>(
     pipe: Option<R>,
     mut live: Option<mpsc::Sender<String>>,
-) -> Option<mpsc::Receiver<String>> {
+) -> Option<Drain> {
     let mut pipe = pipe?;
-    let (tx, rx) = mpsc::channel();
+    let read = Arc::new(Mutex::new(Vec::new()));
+    let done = Arc::new(AtomicBool::new(false));
+    let into = Arc::clone(&read);
+    let ended = Arc::clone(&done);
     std::thread::spawn(move || {
-        let mut raw = Vec::new();
         let mut decoder = Utf8Pieces::default();
         let mut buffer = [0u8; READ];
         loop {
             match pipe.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(count) => {
-                    raw.extend_from_slice(&buffer[..count]);
+                    into.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .extend_from_slice(&buffer[..count]);
                     if live.is_some() {
                         send(&mut live, decoder.push(&buffer[..count]));
                     }
@@ -377,15 +408,35 @@ fn drain<R: Read + Send + 'static>(
         if live.is_some() {
             send(&mut live, decoder.finish());
         }
-        // What was read is kept when the pipe fails part way, since it is what was sent on, and a
-        // result that said nothing was printed would contradict what a person watched.
-        let text = String::from_utf8_lossy(&raw).into_owned();
-        let _ = tx.send(text);
+        ended.store(true, Ordering::Release);
     });
-    Some(rx)
+    Some(Drain { read, done })
 }
 
 const READ: usize = 8192;
+
+/// A pipe being read on a thread of its own, and what has been read so far.
+///
+/// What was read is kept rather than handed over only when the thread ends, because the thread may
+/// never end: the pipe can be held open by a process the command backgrounded with `&` long after
+/// the command itself has returned.
+struct Drain {
+    read: Arc<Mutex<Vec<u8>>>,
+    done: Arc<AtomicBool>,
+}
+
+impl Drain {
+    /// Whether the pipe has reached its end, so there is nothing further to wait for.
+    fn finished(&self) -> bool {
+        self.done.load(Ordering::Acquire)
+    }
+
+    /// What has been read so far, decoded lossily so bytes that are not UTF-8 do not fail the run.
+    fn text(&self) -> String {
+        let read = self.read.lock().unwrap_or_else(|e| e.into_inner());
+        String::from_utf8_lossy(&read).into_owned()
+    }
+}
 
 /// A receiver that has gone away means the screen has, and the command still has to run to its end
 /// with the result it would have had, so a failed send turns sending off and does nothing else.
@@ -487,12 +538,13 @@ mod tests {
     fn what_was_read_before_a_pipe_failed_is_kept() {
         let (live, pieces) = mpsc::channel();
 
-        let text = drain(Some(FailsAfter(Some(b"before the failure\n"))), Some(live))
-            .expect("a reader")
-            .recv()
-            .expect("the text");
+        let out =
+            drain(Some(FailsAfter(Some(b"before the failure\n"))), Some(live)).expect("a reader");
+        while !out.finished() {
+            std::thread::sleep(Duration::from_millis(5));
+        }
 
-        assert_eq!(text, "before the failure\n");
+        assert_eq!(out.text(), "before the failure\n");
         assert_eq!(
             pieces.try_iter().collect::<String>(),
             "before the failure\n"
