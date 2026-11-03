@@ -26,8 +26,6 @@ import { BotAvatar, BotFace, type Doing } from './BotAvatar'
 import type { Bot } from '../../shared/bots'
 import { projectLabel } from '../../shared/recents'
 import { conversationPreferences, setConversation } from '../experience'
-// The application's own icon, the file the app and installer icons are rendered from.
-import appIcon from '../../../build/icon.svg?url'
 import { ErrorCard } from './ErrorCard'
 import { RunRecord } from './RunRecord'
 import { failureSummary } from '../failure'
@@ -742,7 +740,7 @@ export function Transcript({
         <div className="toast-stack">{toast}<Toasts /></div>
         <div className="empty-body">
           <div className="welcome">
-            <img className="welcome-mark" src={appIcon} alt="" />
+            <img className="welcome-mark" src="./app-icon.svg" alt="" />
             <h1>What should we build?</h1>
             <p className="welcome-lede">Open a project to work with an agent in it. Changes and approvals stay in the conversation.</p>
             <div className="welcome-actions">
