@@ -3020,6 +3020,13 @@ where
         said.push_str("\n\n");
         said.push_str(text);
     }
+    // Nothing was typed, attached or pasted: a provider that requires content in every user
+    // message would refuse the request this would otherwise add an empty one to, and the turn
+    // already has something to say from the piped input or the context files above. A command
+    // line that gave none of those and no prompt either is refused before the turn starts
+    // (CLI-2), so this is never the only message the turn would hold.
+    let nothing_was_typed =
+        said.is_empty() && task.attachments.is_empty() && task.images.is_empty();
     let submitted = if task.attachments.is_empty() && task.images.is_empty() {
         Message::user(said)
     } else {
@@ -3105,6 +3112,7 @@ where
             submitted,
             Provenance::TypedWithSessions(task.prompt.clone()),
         ),
+        None if nothing_was_typed => {}
         None => conversation.push_from(submitted, Provenance::Typed),
     }
     // A delegate's task is the whole of what it was told, so a compaction sends it again

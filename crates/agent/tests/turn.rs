@@ -14298,6 +14298,75 @@ fn an_answer_is_read_back_even_after_a_quarantined_read() {
     );
 }
 
+/// Issue #2950: `cat notes.md | bravebot -p` is a complete invocation (CLI-2), the pipe is the
+/// input and the prompt is left off. The request this builds must not hold a second, empty user
+/// message beside the one naming the piped reference: a provider that requires non-empty
+/// content in every message would refuse the whole request over it.
+#[test]
+fn piped_input_with_no_prompt_sends_no_empty_message() {
+    let scratch = Scratch::new("session-piped-input-no-prompt");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![reply_with("no files piped yet")]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("").with_piped_input("notes from a pipe"),
+    )
+    .expect("the turn runs on piped input alone");
+
+    let sent = received.recv().expect("a request");
+    assert!(
+        sent.contains("Piped input could not be shown to you"),
+        "the piped reference never reached the request: {sent}"
+    );
+    assert!(
+        !sent.contains(r#""content":"""#) && !sent.contains(r#""content": """#),
+        "an empty user message rode beside the piped reference: {sent}"
+    );
+    assert_eq!(
+        sent.matches(r#""role":"user""#).count(),
+        1,
+        "more than one user message for a prompt nobody typed: {sent}"
+    );
+}
+
+/// The ordinary case beside it: piped input followed by an actual typed prompt still sends both
+/// the reference to the pipe and the prompt itself, unaffected by the empty-prompt skip above.
+#[test]
+fn piped_input_with_a_real_prompt_still_sends_both_messages() {
+    let scratch = Scratch::new("session-piped-input-with-prompt");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![reply_with("got both")]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        bravebot_core::trust::TrustStore::new("/work"),
+        Task::new("summarise this").with_piped_input("notes from a pipe"),
+    )
+    .expect("the turn runs on piped input and a prompt");
+
+    let sent = received.recv().expect("a request");
+    assert!(
+        sent.contains("Piped input could not be shown to you"),
+        "{sent}"
+    );
+    assert!(sent.contains("summarise this"), "{sent}");
+    assert_eq!(
+        sent.matches(r#""role":"user""#).count(),
+        2,
+        "the reference and the prompt did not arrive as two messages: {sent}"
+    );
+}
+
 /// The failure that started this. A turn that ends in an error has still been had, and the next
 /// turn is usually about it, so what it asked and what it learned stay in the conversation.
 #[test]
