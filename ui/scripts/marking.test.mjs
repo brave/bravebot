@@ -271,6 +271,13 @@ const CARDS = {
     // labels.md:355 gives a reply out of a transport the context's label, not the network's.
     why: 'the planner’s questions, which are its words rather than content it read',
   },
+  'ask-settled': {
+    entry: () => t.askSettled({ rows: [{ question: FORGED_CHROME, outcome: FORGED_CHROME }] }),
+    marks: null,
+    // docs/specs/tools/ask-user.md ASK-13: a row is a question the planner put and the answer a
+    // person gave to it, worded by the catalog, and is for the screen only.
+    why: 'the planner’s questions and what the person answered, picked from its options or typed, which are no content that was read',
+  },
   quarantined: { entry: () => confined([FORGED_CHROME, 'api_key = hunter2']), marks: '<pre class="preview">' },
   confirm: { entry: () => t.asked(UNTRUSTED_WRITE), marks: 'class="confirm untrusted"' },
   output: {

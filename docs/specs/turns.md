@@ -698,7 +698,8 @@ When a turn ends as a failure ([TURN-5](#TURN-5)) after it has added messages to
 the driver adds one more after them, so the next prompt follows it. The note says that the turn
 failed and ended before it finished, that it did not pause, and that nothing is continuing it. It
 gives the failure's category and, where it is known, the number of requests sent for the call that
-failed. A turn that answered, a turn that failed before it added anything to the conversation, and
+failed. The backend, the model and the request fields a refused call left out ([BACKEND-37](backends.md#BACKEND-37))
+are for the person alone and are not in the note. A turn that answered, a turn that failed before it added anything to the conversation, and
 a turn the person stopped add no note. A stop is the person's own pause, and the next prompt usually
 continues the turn ([TURN-3](#TURN-3)).
 
@@ -735,6 +736,7 @@ for a note to refer to.
 it, so a session that fails repeatedly holds one for each failure. A note is about fifty tokens.
 
 `verified-by: bravebot_agent::turn::a_turn_that_ends_on_a_failed_request_leaves_the_planner_a_note_of_it`
+`verified-by: bravebot_agent::backend::the_fields_given_up_and_the_backend_reach_the_diagnosis_of_a_counted_failure`
 `verified-by: bravebot_agent::turn::the_note_and_the_conversation_of_a_turn_that_failed_on_a_named_file_hold_no_name`
 `verified-by: bravebot_agent::turn::a_turn_that_failed_before_adding_anything_leaves_no_note_and_one_that_added_its_prompt_does`
 `verified-by: bravebot_agent::turn::a_turn_that_answered_or_was_stopped_leaves_no_note_of_a_failure`

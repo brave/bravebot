@@ -2648,6 +2648,13 @@ ask-key-change = modifier une réponse
 ask-review-title = vérifiez vos réponses
 ask-review-heading = Rien n'a encore été envoyé.
 ask-review-skipped = (passée)
+# Dit sous l'appel une fois les questions réglées, un bloc par question posée : la question, puis
+# ce qu'elle est devenue (ASK-13).
+ask-settled-heading = { $tag } : { $question }
+ask-settled-chose = choisi : { $labels }
+ask-settled-typed = répondu : { $words }
+ask-settled-skipped = passée
+ask-settled-closed = fermée faute de réponse dans le temps imparti
 
 
 ## Confier la ligne à un éditeur
@@ -3185,6 +3192,21 @@ failure-rate-limited-for =
     }
 failure-unavailable = le service n'a pas pu répondre
 failure-refused = le service a rejeté la requête
+failure-with-backend = { $what }, envoyée vers { $backend }
+failure-with-model = { $what }, avec le modèle { $model }
+failure-with-conceded = { $what }, les nouvelles tentatives ayant retiré { $fields }
+failure-refused-next = Choisissez un autre modèle avec `/model`, ou lancez `bravebot doctor` pour voir le point d'accès et l'endroit où le journal de diagnostic est conservé
+failure-backend-aichat = le point d'accès Brave
+failure-backend-bedrock = AWS Bedrock
+failure-backend-gateway = une passerelle configurée
+failure-backend-chatgpt = le compte ChatGPT
+failure-backend-xai = le compte xAI
+failure-conceded-cache-ttl = la durée du cache (promptCacheTtl)
+failure-conceded-breakpoints = les repères du cache
+failure-conceded-effort = le niveau d'effort (/effort)
+failure-conceded-ceiling = la limite de réponse supposée (BRAVEBOT_OUTPUT_BUDGET)
+failure-conceded-arguments = les arguments d'outil en flux
+failure-conceded-thinking = la réflexion affichée
 failure-transport = la requête n'est pas passée
 failure-incomplete = la réponse s'est arrêtée avant la fin
 failure-undecodable = la réponse n'a pas pu être lue

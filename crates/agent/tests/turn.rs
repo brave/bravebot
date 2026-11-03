@@ -10509,11 +10509,11 @@ fn the_model_can_ask_for_a_later_page_of_matches() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        second.contains("a.txt:300: needle 299"),
+        second.contains("a.txt:300:needle 299"),
         "the last match was out of reach at an offset past the cap: {second}"
     );
     assert!(
-        !second.contains("a.txt:1: needle 0"),
+        !second.contains("a.txt:1:needle 0"),
         "the offset was ignored and the first page came back again: {second}"
     );
 }
@@ -10551,7 +10551,7 @@ fn a_quarantined_capped_search_says_where_to_continue() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        !second.contains("a.txt:1: needle"),
+        !second.contains("a.txt:1:needle"),
         "the matches reached the model, so this is not the quarantined case: {second}"
     );
     assert!(
@@ -10599,7 +10599,7 @@ fn a_search_with_context_shows_the_lines_around_each_hit() {
     let second = received.recv().expect("second request");
     assert!(
         second.contains(
-            "a.txt-2- two\\na.txt:3: needle\\na.txt-4- four\\n--\\na.txt-7- seven\\na.txt:8: needle\\na.txt-9- nine"
+            "a.txt-2-two\\na.txt:3:needle\\na.txt-4-four\\n--\\na.txt-7-seven\\na.txt:8:needle\\na.txt-9-nine"
         ),
         "the context was not laid out as grep lays it out: {second}"
     );
@@ -10645,7 +10645,7 @@ fn a_quarantined_search_cut_short_of_its_context_still_says_it_is_incomplete() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        !second.contains("a.txt:1: needle"),
+        !second.contains("a.txt:1:needle"),
         "the matches reached the model, so this is not the quarantined case: {second}"
     );
     assert!(
@@ -10873,6 +10873,52 @@ fn a_search_whose_pattern_cannot_be_compiled_says_why() {
     );
 }
 
+/// The text after a search's separator is the file's line byte for byte, so indentation copied from
+/// a result is the indentation `read_file` shows. The file's entries start with one space; a search
+/// that adds a space of its own after the `:` or `-` shows two, for a match and for a context line.
+#[test]
+fn a_search_result_keeps_a_lines_indentation_as_read_file_shows_it() {
+    let scratch = Scratch::new("search-indentation");
+    std::fs::write(
+        scratch.path.join("list.md"),
+        "# list\n - alpha item\n - beta item\n - gamma item\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let requests = run_calls_under(
+        &workspace,
+        rules(&[], &[], &[]),
+        trusting_the_workspace(),
+        &[
+            (
+                "search",
+                r#"{"pattern":"beta","directory":".","context":1}"#,
+            ),
+            ("read_file", r#"{"path":"list.md"}"#),
+        ],
+    );
+    let found = newest_tool_result_text(&requests[1]);
+    let read = newest_tool_result_text(&requests[2]);
+
+    assert!(
+        found.contains("list.md-2- - alpha item\nlist.md:3: - beta item\nlist.md-4- - gamma item"),
+        "the text after the separator is not the file's line: {found}"
+    );
+    let beta_line = read
+        .lines()
+        .find(|line| line.ends_with(" - beta item"))
+        .unwrap_or_else(|| panic!("read_file does not show the beta line: {read}"));
+    assert_eq!(
+        beta_line, " - beta item",
+        "read_file does not show the file's line with its one space of indentation: {read}"
+    );
+    assert!(
+        !found.contains("list.md:3:  -") && !found.contains("list.md-2-  -"),
+        "the search added a space of its own after the separator: {found}"
+    );
+}
+
 /// The request that carries the result of one `search` call over `scratch`, with the workspace
 /// vouched for so the planner is shown the result's text.
 fn what_the_planner_is_told_of_a_search(scratch: &Scratch, arguments: &str) -> String {
@@ -10955,7 +11001,7 @@ fn an_empty_search_says_whether_the_glob_or_the_pattern_is_why() {
 fn the_search_tool_matches_case_exactly_unless_it_is_asked_not_to() {
     let scratch = Scratch::new("search-tool-case");
     std::fs::write(scratch.path.join("a.txt"), "EmailAliasesEnabled\n").unwrap();
-    let line = "a.txt:1: EmailAliasesEnabled";
+    let line = "a.txt:1:EmailAliasesEnabled";
 
     for (arguments, finds) in [
         (r#"{"pattern":"emailaliases","directory":"."}"#, false),
@@ -11009,7 +11055,7 @@ fn a_quarantined_search_still_tells_the_model_it_is_incomplete() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        !second.contains("a.txt:1: needle"),
+        !second.contains("a.txt:1:needle"),
         "the matches reached the model, so this is not the quarantined case: {second}"
     );
     assert!(
@@ -11147,7 +11193,7 @@ fn a_complete_search_makes_no_truncation_claim() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        second.contains("a.txt:1: needle"),
+        second.contains("a.txt:1:needle"),
         "the model was not shown the search body, so the assertion below proves nothing: {second}"
     );
     assert!(
@@ -12138,9 +12184,160 @@ fn editing_an_untrusted_file_is_refused() {
     let _first = received.recv().expect("first request");
     let second = received.recv().expect("second request");
     assert!(
-        second.contains("refusing to expose untrusted content"),
-        "the model was not told why: {second}"
+        second.contains(
+            "this file is closed to edit_file, label (U,priv): it is not vouched for, or \
+             untrusted content was written to it, and an edit has to compare its text."
+        ),
+        "the model was not told why the file is closed to edit_file: {second}"
     );
+    assert!(
+        second.contains(
+            "Write the whole file with write_file, edit it through run, or ask the person to \
+             vouch for the path"
+        ),
+        "the model was not told what is open: {second}"
+    );
+    assert!(
+        !second.contains("Use a reference"),
+        "the model was sent to a reference that edit_file cannot take: {second}"
+    );
+}
+
+/// EDIT-2. A file a person vouched for that a program then wrote into is untrusted too, and the
+/// refusal says so in the same words as for a file nobody vouched for. The file keeps the text the
+/// program wrote.
+#[test]
+fn editing_a_file_a_program_wrote_is_refused() {
+    let scratch = Scratch::new("edit-program-written");
+    std::fs::write(scratch.path.join("a.txt"), "keep\nold\n").unwrap();
+    std::fs::write(scratch.path.join("saved.txt"), "keep\nold\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"cat saved.txt > a.txt"}"#),
+        tool_request_2(
+            "edit_file",
+            r#"{"path":"a.txt","old_text":"old","new_text":"new"}"#,
+        ),
+        reply_with("understood"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+
+    let outcome = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("edit a.txt"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        !outcome.trust.is_trusted("a.txt"),
+        "a file a program wrote into reads back trusted, so the edit below says nothing"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+        "keep\nold\n",
+        "the file was edited"
+    );
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [_first, _second, third] = requests.as_slice() else {
+        panic!("three requests, for three rounds: {requests:?}");
+    };
+    assert!(
+        third.contains(
+            "this file is closed to edit_file, label (U,priv): it is not vouched for, or \
+             untrusted content was written to it, and an edit has to compare its text."
+        ),
+        "the model was not told why the file is closed to edit_file: {third}"
+    );
+    assert!(
+        !third.contains("Use a reference"),
+        "the model was sent to a reference that edit_file cannot take: {third}"
+    );
+}
+
+/// TOOL-6. The refusal of an untrusted file names `write_file` and `run` only where the turn is
+/// offered them, and says that only the person can open the file where it is offered neither.
+#[test]
+fn the_refusal_to_edit_an_untrusted_file_names_only_the_tools_the_turn_is_offered() {
+    let cases = [
+        (
+            "kind: worker\ntools: read_file, edit_file, write_file, run\n",
+            "Write the whole file with write_file, edit it through run, or ask the person to \
+             vouch for the path",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file, write_file\n",
+            "Write the whole file with write_file, or ask the person to vouch for the path",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file, run\n",
+            "Edit it through run, or ask the person to vouch for the path",
+        ),
+        (
+            "kind: worker\ntools: read_file, edit_file\n",
+            "Only the person can open it, by vouching for the path",
+        ),
+    ];
+    for (index, (fields, routes)) in cases.into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("edit-untrusted-offered-{index}"));
+        let home = Scratch::new(&format!("edit-untrusted-offered-{index}-home"));
+        std::fs::write(scratch.path.join("a.txt"), "keep\nold\n").unwrap();
+        define(&home, "editor", fields, "EDIT-IT");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_by_marker(vec![(
+            "ADDRESSED-EDIT",
+            vec![
+                tool_request_2(
+                    "edit_file",
+                    r#"{"path":"a.txt","old_text":"old","new_text":"new"}"#,
+                ),
+                reply_with("understood"),
+            ],
+        )]);
+        let config = config_for(&endpoint);
+
+        turns::run_cancellable(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &addressed("ADDRESSED-EDIT", &home, "editor"),
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("turn runs");
+
+        let requests: Vec<String> = received.try_iter().collect();
+        let [_first, second] = requests.as_slice() else {
+            panic!("two requests, for two rounds: {requests:?}");
+        };
+        assert!(
+            second.contains(&format!("and an edit has to compare its text. {routes}")),
+            "case {index} ({fields:?}) was not told {routes:?}: {second}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+            "keep\nold\n",
+            "case {index}: the file was edited"
+        );
+    }
 }
 
 /// A notebook the workspace vouched for reads as numbered cells with their source only, and its
@@ -16078,8 +16275,8 @@ fn a_search_that_found_nothing_glimpses_no_sentence_of_the_drivers() {
             &[][..],
             &[][..],
             &[
-                "notes.md:1: alpha one".to_string(),
-                "notes.md:3: alpha two".to_string()
+                "notes.md:1:alpha one".to_string(),
+                "notes.md:3:alpha two".to_string()
             ][..],
         ],
         "a sentence the driver wrote was glimpsed, or the matches were not: {:?}",
@@ -63175,6 +63372,85 @@ fn a_cd_stage_is_refused_before_asking_and_the_directory_argument_still_works() 
     );
 }
 
+/// CMDLINE-12: A `ulimit` stage is refused before any prompt, whether or not the host has a
+/// `ulimit` program, and nothing runs, so no `/usr/bin/ulimit` stage reaches a plan. The refusal
+/// the model reads names `ulimit` and `sh -c`, and the same limit written inside `sh -c` is then put
+/// to the person as one line.
+#[test]
+fn a_ulimit_stage_is_refused_before_asking_and_the_sh_c_form_is_put_to_the_person_as_one_line() {
+    let scratch = Scratch::new("cmdline-12-ulimit-stage");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let seen = confirmer.seen.clone();
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("run", r#"{"command":"ulimit -n 100 && sh -c 'ulimit -n'"}"#),
+        tool_request("run", r#"{"command":"sh -c 'ulimit -n 100 && ulimit -n'"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("run a line that starts with ulimit"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn completes");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("`ulimit` is a shell builtin")
+            && second.contains("change nothing for the steps after it")
+            && second.contains("`sh -c '... ulimit ...'`"),
+        "the refusal did not name ulimit and sh -c: {second}"
+    );
+    // The request also carries the run tool description, which names the `directory` argument in
+    // its `cd` sentence, so the advice is looked for in the refusal sentence alone.
+    let start = second
+        .find("`ulimit` is a shell builtin")
+        .expect("the refusal sentence");
+    let sentence = &second[start..];
+    let sentence = &sentence[..sentence.find("ulimit -a'`").expect("end of the sentence")];
+    assert!(
+        !sentence.contains("`directory` argument")
+            && !sentence.contains("NAME=value")
+            && !second.contains("$PATH"),
+        "the refusal gave the cd advice or blamed the search path: {sentence}"
+    );
+    let asked = seen.lock().unwrap();
+    assert_eq!(
+        asked.len(),
+        1,
+        "only the sh -c form was put to the person: {:?}",
+        asked
+            .iter()
+            .map(|ask| ask.plan.line.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        asked[0].plan.line, "sh -c 'ulimit -n 100 && ulimit -n'",
+        "the sh -c form is approved as one line"
+    );
+    assert_eq!(
+        asked[0].plan.steps().len(),
+        1,
+        "the sh -c form is one step, with no ulimit program of its own"
+    );
+}
+
 /// CMDLINE-12: A carried directory that has been removed is refused before any prompt, and the
 /// next call runs at the workspace root.
 #[test]
@@ -64309,6 +64585,53 @@ fn a_refusal_counts_the_cache_probe_as_a_second_request() {
         why.attempts,
         Some(requests as u32),
         "the cache probe was not counted: {why:?}"
+    );
+}
+
+/// BACKEND-37: a turn the service refuses on every request reports the request fields the client
+/// left out, in the order it gave them up, and the backend that sent them, beside the count of
+/// requests actually sent. Rejects a diagnosis that drops the list, one that reports a field the
+/// client never gave up, and one that leaves the backend out.
+#[test]
+fn a_refusal_on_every_request_reports_the_fields_given_up_and_the_backend() {
+    let scratch = Scratch::new("outcome-refused-fields");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    // More than the client can have a use for, so it is the client and not the script that ends
+    // the exchange.
+    let (endpoint, received) = serve_script(vec![Served::Status(400); 12]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("answer something"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    let why = why_it_failed(&outcome.expect_err("the service refused the request"));
+    assert_eq!(why.category, bravebot_agent::Category::Refused, "{why:?}");
+    assert_eq!(
+        why.backend,
+        Some(bravebot_agent::BackendKind::Aichat),
+        "{why:?}"
+    );
+    let requests = received.try_iter().count();
+    assert_eq!(why.attempts, Some(requests as u32), "{why:?}");
+    // Every request after the first was sent because the client gave a field up.
+    assert_eq!(
+        why.conceded.in_order().count(),
+        requests - 1,
+        "a request was sent that no field was given up for: {why:?}"
+    );
+    assert_eq!(
+        why.conceded.in_order().next(),
+        Some(bravebot_aichat::call::Concession::Breakpoints),
+        "the cache probe is the first field the client gives up: {why:?}"
     );
 }
 
@@ -73933,7 +74256,7 @@ fn read_git_searches_the_files_at_a_revision_and_pages_the_lines() {
     let _first = received.recv().expect("first request");
     let first = newest_tool_result(received.recv().expect("second request"));
     assert!(
-        first.contains("README:1: hello NEEDLE") && !first.contains("src/lib.rs"),
+        first.contains("README:1:hello NEEDLE") && !first.contains("src/lib.rs"),
         "the first page was not the first matching line alone: {first}"
     );
     assert!(
@@ -73944,7 +74267,7 @@ fn read_git_searches_the_files_at_a_revision_and_pages_the_lines() {
     );
     let second = newest_tool_result(received.recv().expect("third request"));
     assert!(
-        second.contains("src/lib.rs:2: let NEEDLE = 1;")
+        second.contains("src/lib.rs:2:let NEEDLE = 1;")
             && !second.contains("README")
             && !second.contains("ask again with skip"),
         "the skip did not move the search on to the next line: {second}"
@@ -74008,7 +74331,7 @@ fn a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not() {
     let _first = received.recv().expect("first request");
     let whole = newest_tool_result(received.recv().expect("second request"));
     assert!(
-        !whole.contains(&format!("README:1: {OURS}")),
+        !whole.contains(&format!("README:1:{OURS}")),
         "a search that read a distrusted file reached the planner: {whole}"
     );
     assert!(
@@ -74017,7 +74340,7 @@ fn a_search_that_read_a_distrusted_file_is_quarantined_matched_or_not() {
     );
     let narrowed = newest_tool_result(received.recv().expect("third request"));
     assert!(
-        narrowed.contains(&format!("README:1: {OURS}")),
+        narrowed.contains(&format!("README:1:{OURS}")),
         "the search narrowed to a trusted path was not shown: {narrowed}"
     );
 }
@@ -74067,7 +74390,7 @@ fn a_search_that_met_a_distrusted_file_past_the_size_cap_is_quarantined() {
         r#"{"query":"search","pattern":"ours"}"#,
     );
     assert!(
-        whole.contains("could not be shown to you") && !whole.contains("README:1: ours"),
+        whole.contains("could not be shown to you") && !whole.contains("README:1:ours"),
         "a search that met a distrusted file past the cap reached the planner: {whole}"
     );
     let narrowed = read_git_over_a_distrusted_file(
@@ -74076,7 +74399,7 @@ fn a_search_that_met_a_distrusted_file_past_the_size_cap_is_quarantined() {
         r#"{"query":"search","pattern":"ours","path":"README"}"#,
     );
     assert!(
-        narrowed.contains("README:1: ours"),
+        narrowed.contains("README:1:ours"),
         "the search narrowed to a trusted path was not shown: {narrowed}"
     );
 }
@@ -85853,6 +86176,60 @@ fn a_delegate_carries_the_nested_file_only_where_it_is_spelled_exactly() {
             loads || said.iter().all(|notice| !notice.contains("docs/")),
             "{file}: {said:?}"
         );
+    }
+}
+
+/// INSTR-14: a delegate started after a read in a package whose `AGENTS.md` repeats the project's
+/// carries the text once, and so does the turn that started it. A delegate composes its own
+/// standing instructions, so each request would otherwise carry every copy.
+#[test]
+fn a_delegate_carries_a_repeated_nested_agents_file_once() {
+    let scratch = Scratch::new("nested-duplicate-delegate");
+    for (path, contents) in [
+        ("AGENTS.md", "REPEATED-CONVENTION"),
+        ("pkg/AGENTS.md", "REPEATED-CONVENTION"),
+        ("pkg/a.txt", "the file body"),
+    ] {
+        let path = scratch.path.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "PARENT-START-MARK",
+            vec![
+                two_tool_requests(
+                    ("read_file", r#"{"path":"pkg/a.txt"}"#),
+                    (
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"CHILD-REPORTS-NOW"}"#,
+                    ),
+                ),
+                reply_with("waiting"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("CHILD-REPORTS-NOW", vec![reply_with("reported")]),
+    ]);
+
+    run_turn_saying_notices(
+        &config_for(&endpoint),
+        &workspace,
+        &mut bravebot_agent::Conversation::new(),
+        &Task::new("PARENT-START-MARK"),
+    );
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let (parent, delegate): (Vec<&String>, Vec<&String>) = requests
+        .iter()
+        .partition(|request| request.contains("PARENT-START-MARK"));
+    assert_eq!(delegate.len(), 1, "the delegate did not make its one round");
+    let system = system_prompt_of(delegate[0]);
+    assert_eq!(system.matches("REPEATED-CONVENTION").count(), 1, "{system}");
+    for request in parent {
+        let system = system_prompt_of(request);
+        assert_eq!(system.matches("REPEATED-CONVENTION").count(), 1, "{system}");
     }
 }
 

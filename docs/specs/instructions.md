@@ -68,7 +68,8 @@ definition is, and what makes one admissible at all, is
 
 The project's instructions are looked for under more than one name, in the order above, and the
 first that exists is the source. Not all of them: a repository holding two of these holds one set
-of instructions under two names, and reading both would state everything twice.
+of instructions under two names, and reading both would state everything twice. A nested file that
+repeats the source before it is left out for the same reason ([INSTR-14](#INSTR-14)).
 
 **Why more than one name.** More than one is in use, and a project that wrote its conventions down
 should not have them ignored over the spelling. This is still one source, resolved by name.
@@ -565,6 +566,18 @@ file, or which skills directory with a count, and never what it holds ([SKILL-4]
 ([INSTR-8](#INSTR-8)) and an `@path` import ([INSTR-11](#INSTR-11)) in it are ordinary text. Only
 `.bravebot/skills` is read below the root, as [INSTR-13](#INSTR-13) says. A safe session reads none.
 
+A nested `AGENTS.md` that passed the trust map and the `deny` rules is left out when its trimmed text
+equals that of the source admitted immediately before it in the order of [INSTR-4](#INSTR-4)
+(`~/.bravebot/AGENTS.md`, the person's `rules.md`, a rule file in force, the project's file as it
+reaches the prompt, or an earlier nested file), or when it is the same file on disk as that source.
+The person is told nothing, as for an absent source ([INSTR-6](#INSTR-6)), and
+[INSTR-15](#INSTR-15) does not measure it. A file that equals an earlier source but not the one
+immediately before it is kept, so leaving out a repeat never changes which text comes last and the
+deepest source keeps the last word. A file the gate refused is reported as it is whatever it says,
+because the comparison is made only on text that passed the gate. This keeps a source from being
+stated twice in a row ([INSTR-1](#INSTR-1)) where a monorepo repeats one file in several packages or
+a linked worktree holds a copy.
+
 Composed per turn like every other source ([INSTR-7](#INSTR-7)): a file read in a turn takes effect
 from the next turn, and the turn that read it keeps the instructions it started with. The record is
 the session's, so it is empty after `/cd`. The session's record keeps the directories as names, and a
@@ -591,6 +604,14 @@ which file is read.
 `verified-by: bravebot_agent::preamble::a_nested_file_spelled_in_another_case_is_an_ordinary_file`
 `verified-by: bravebot_agent::preamble::only_the_exactly_spelled_nested_file_loads_beside_a_differently_spelled_one`
 `verified-by: bravebot_agent::preamble::a_listed_name_matches_only_in_the_same_case`
+`verified-by: bravebot_agent::preamble::a_nested_agents_file_repeating_the_prompt_is_left_out`
+`verified-by: bravebot_agent::preamble::a_nested_file_repeating_an_earlier_source_but_not_the_last_is_kept`
+`verified-by: bravebot_agent::preamble::two_nested_agents_files_with_one_text_are_stated_once`
+`verified-by: bravebot_agent::preamble::a_distinct_nested_file_after_a_skipped_duplicate_still_loads`
+`verified-by: bravebot_agent::preamble::a_root_file_linked_to_a_nested_one_is_stated_once`
+`verified-by: bravebot_agent::preamble::a_linked_root_file_with_an_import_is_still_the_same_file_as_the_nested_one`
+`verified-by: bravebot_agent::preamble::a_distrusted_nested_file_repeating_the_prompt_is_still_reported`
+`verified-by: bravebot_agent::turn::a_delegate_carries_a_repeated_nested_agents_file_once`
 `verified-by: bravebot_agent::skills::a_nested_skill_is_offered_after_the_session_works_in_its_directory`
 `verified-by: bravebot_agent::skills::a_deeper_nested_skill_shadows_a_shallower_one_of_its_name`
 `verified-by: bravebot_agent::skills::a_foreign_skills_directory_under_a_touched_directory_is_not_a_source`
@@ -616,11 +637,12 @@ After a source has passed the trust gate, its byte length is compared against tw
 Over 16384 bytes a notice names the file and its size. The byte lengths of all the sources are
 added up, and over 32768 bytes in all one further notice says the total. The combined notice is
 said once for the turn, at the source that crosses the figure. Neither figure keeps a file out of
-the prompt: every source that passes the trust gate reaches it, whatever its size.
+the prompt: every source that passes the trust gate reaches it, whatever its size, except a nested
+`AGENTS.md` that [INSTR-14](#INSTR-14) skips as a repeat.
 
 The sources measured are the ones [INSTR-4](#INSTR-4) orders: `~/.bravebot/AGENTS.md`, the
-project's file, each nested `AGENTS.md` of [INSTR-14](#INSTR-14), and each rule file of
-[INSTR-16](#INSTR-16) that is in the prompt when the turn begins. Words from
+project's file, each nested `AGENTS.md` of [INSTR-14](#INSTR-14) that is not left out as a repeat,
+and each rule file of [INSTR-16](#INSTR-16) that is in the prompt when the turn begins. Words from
 `--append-system-prompt` are not measured, for the reason [INSTR-10](#INSTR-10) does not read them
 through the gate: a person who typed them for this run has said what this run carries. A source an
 untrusted directory holds is already out before this rule is reached, so nothing untrusted is
@@ -632,8 +654,10 @@ file ends them.
 
 This is a length and nothing else. The driver compares the byte count of text that has already
 passed the gate, which is the test [INSTR-8](#INSTR-8) already rests on, and a notice carries a
-path from [INSTR-1](#INSTR-1)'s fixed set and a number. Nothing a file says decides whether it is
-loaded or what is said about it. A path is named here where [SKILL-6](skills.md#SKILL-6) counts
+path from [INSTR-1](#INSTR-1)'s fixed set and a number. The size notices depend on a byte count
+only, and whether a file loads depends on the trust gate. The one comparison of text is the skip of
+[INSTR-14](#INSTR-14), which runs on text that has already passed the gate. A path is named here
+where [SKILL-6](skills.md#SKILL-6) counts
 rather than names, because that rule is about a path an untrusted project chose; these paths are
 fixed by [INSTR-1](#INSTR-1) and a nested one passed the trust map before it was measured.
 
@@ -654,6 +678,7 @@ compaction ([compaction.md](compaction.md)) is where that question belongs.
 `verified-by: bravebot_agent::preamble::a_long_instructions_file_loads_and_its_size_is_said`
 `verified-by: bravebot_agent::preamble::a_very_large_instructions_file_still_loads`
 `verified-by: bravebot_agent::preamble::sources_long_together_are_reported_once`
+`verified-by: bravebot_agent::preamble::skipped_duplicates_add_nothing_to_the_size_notices`
 `verified-by: bravebot_agent::preamble::a_long_rule_file_in_force_is_measured_like_an_instructions_file`
 
 <a id="INSTR-16"></a>

@@ -368,6 +368,11 @@ cap of its own bounds how many are returned, and one that stopped the lines arou
 being added makes the search incomplete exactly as [SEARCH-3](#SEARCH-3) says of the other caps,
 whether or not the planner may read the result.
 
+A match is printed as `path:line:text` and a context line as `path-line-text`, with the text
+following the separator byte for byte, as `grep -n` and `grep -C` print them. A line that starts
+with one space shows that one space, as `read_file` shows it. Groups of context that are not
+adjacent in the file are divided by a `--` line.
+
 **Why.** Understanding a hit otherwise costs a second call per hit, a round trip and a read of a
 file the search had open. The match cap cannot bound the lines around matches: two hundred matches
 with ten lines either side is four thousand lines, which the planner pays for in every later round,
@@ -379,6 +384,7 @@ though nothing lay near them.
 `verified-by: bravebot_agent::workspace::a_search_with_more_context_than_the_cap_allows_says_it_is_incomplete`
 `verified-by: bravebot_agent::workspace::a_context_past_the_maximum_is_held_to_it`
 `verified-by: bravebot_agent::turn::a_search_with_context_shows_the_lines_around_each_hit`
+`verified-by: bravebot_agent::turn::a_search_result_keeps_a_lines_indentation_as_read_file_shows_it`
 `verified-by: bravebot_agent::turn::a_quarantined_search_cut_short_of_its_context_still_says_it_is_incomplete`
 
 <a id="SEARCH-11"></a>

@@ -1057,6 +1057,17 @@ impl Confirmer for BridgeConfirmer {
         }) {
             Some(Reply::Ask(answers)) => {
                 let fresh = wire::fitted(answers, settled.outstanding());
+                // Said to the window as data, from the values it was asked for and gave back, once
+                // for the questions put (ASK-13). It is for the screen: the planner is told the
+                // answers by the call's result, and a front end that answered nothing is not drawn
+                // as having skipped.
+                if !fresh.is_empty() {
+                    self.emitter.send(Event::new(
+                        "ask.settled",
+                        &self.session,
+                        wire::ask_settled(settled.outstanding(), &fresh),
+                    ));
+                }
                 settled.finish(&mut self.memo(), fresh)
             }
             // Nobody could be asked. What the person answered before still stands, and the rest

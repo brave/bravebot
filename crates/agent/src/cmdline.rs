@@ -223,8 +223,14 @@ pub enum Reason {
     HereDocument,
     /// A word in command position that would reintroduce interpretation.
     Interpreter(&'static str),
-    /// A word in command position that sets state in a shell, which no step of a plan has.
+    /// A `cd`, `pushd`, `popd` or `export` in command position: it sets state in a shell, which no
+    /// step of a plan has, and the refusal points at the `directory` argument and at `NAME=value`.
     ShellState(&'static str),
+    /// A shell builtin in command position that acts on the shell running it (`ulimit`, `umask`,
+    /// `unset`, `alias`, `unalias`, `hash`, `wait`). A host may ship a program of the name that
+    /// exits zero and changes nothing for the steps after it. The refusal says so and points at
+    /// `sh -c`, which has the builtin and the steps that need it in one process.
+    ShellBuiltin(&'static str),
     /// A reserved word that opens a control structure.
     ControlFlow(&'static str),
     /// An unquoted `!`.
@@ -267,6 +273,30 @@ pub enum Reason {
     Syntax(&'static str),
 }
 
+/// The refusal of a shell builtin in command position: what it does stays in the shell that runs
+/// it, and the whole line goes inside `sh -c`. `ulimit` and `umask` get an example each, and
+/// `alias` and `unalias` are told to write the command out.
+fn write_shell_builtin(f: &mut fmt::Formatter<'_>, word: &str) -> fmt::Result {
+    write!(
+        f,
+        "`{word}` is a shell builtin, and what it does stays in the shell process that runs it. Each step of a line is a separate program started on its own, so a `{word}` step would change nothing for the steps after it, and a program of that name on the host runs it in a shell of its own. "
+    )?;
+    f.write_str(match word {
+        "ulimit" => {
+            "To run a program under a limit, write the whole line as `sh -c '... ulimit ...'`, for example `sh -c 'ulimit -n 10240 && cargo test'`, which is approved as one line. To read a limit, use `sh -c 'ulimit -a'`"
+        }
+        "umask" => {
+            "To run a program under a file creation mask, write the whole line as `sh -c '... umask ...'`, for example `sh -c 'umask 077 && touch f'`, which is approved as one line. To read the mask, use `sh -c 'umask'`"
+        }
+        "alias" | "unalias" => {
+            "An alias defined in one step is not seen by the other steps, and the host shell does not expand aliases in a non-interactive script, so write the command out instead"
+        }
+        _ => {
+            "It only means something between commands of one shell. Where a script needs it, write the whole script as `sh -c '...'`, which is approved as one line"
+        }
+    })
+}
+
 impl fmt::Display for Reason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -305,6 +335,7 @@ impl fmt::Display for Reason {
                 f,
                 "`{word}` sets state in a shell, and no shell holds state between the steps of a line or between calls, so it would change nothing for the steps after it. To run a line in another directory, name it in the `directory` argument of the call. To set a variable, write `NAME=value` in front of the program that needs it"
             ),
+            Self::ShellBuiltin(word) => write_shell_builtin(f, word),
             Self::ControlFlow(word) => {
                 write!(f, "`{word}` opens a control structure, and control flow is a program")
             }
@@ -398,9 +429,20 @@ pub const MAX_LINE: usize = 8192;
 /// Words that would put an interpreter back in the plan.
 const INTERPRETERS: [&str; 5] = ["eval", "source", ".", "exec", "trap"];
 
-/// Words that set state in a shell. Each step is started on its own, so a program of one of these
-/// names would either not exist or change nothing for the steps after it.
+/// Words that set the working directory or the environment of a shell. Each step is started on its
+/// own, so a program of one of these names would either not exist or change nothing for the steps
+/// after it. The call's `directory` argument and `NAME=value` in front of a program are the
+/// spellings a plan has for them.
 const SHELL_STATE: [&str; 4] = ["cd", "pushd", "popd", "export"];
+
+/// Shell builtins that act on the shell running them and have no argument or prefix of a plan to
+/// stand for them. A host may ship a program of one of these names (macOS has `/usr/bin/ulimit`)
+/// that runs the builtin in a shell of its own and exits zero, so the stage would succeed and
+/// change nothing for the steps after it. They are refused in every form, a read such as
+/// `ulimit -a` included, so the answer does not depend on whether the host has such a program.
+const SHELL_BUILTINS: [&str; 7] = [
+    "ulimit", "umask", "unset", "alias", "unalias", "hash", "wait",
+];
 
 /// Reserved words that open a control structure.
 const CONTROL_FLOW: [&str; 5] = ["if", "while", "for", "case", "function"];
@@ -1413,6 +1455,9 @@ impl<'a> Parser<'a> {
             }
             if let Some(found) = SHELL_STATE.iter().find(|word| **word == name) {
                 return Err(self.refuse(program.span, Reason::ShellState(found)));
+            }
+            if let Some(found) = SHELL_BUILTINS.iter().find(|word| **word == name) {
+                return Err(self.refuse(program.span, Reason::ShellBuiltin(found)));
             }
             if let Some(found) = CONTROL_FLOW.iter().find(|word| **word == name) {
                 return Err(self.refuse(program.span, Reason::ControlFlow(found)));
@@ -2872,6 +2917,128 @@ mod tests {
     #[test]
     fn a_word_that_only_looks_like_shell_state_is_not_refused() {
         for line in ["echo cd sub", "cdrecord x", "git -C sub status", "./cd sub"] {
+            parsed(line);
+        }
+    }
+
+    /// A shell builtin has no effect outside the shell that runs it, and a host may ship a program
+    /// of the name (macOS has `/usr/bin/ulimit`) that exits zero and changes nothing. Each word is
+    /// refused in every position a command can stand in, in every form including a read, whether or
+    /// not the host has such a program. An implementation that checks only the first stage of a
+    /// line, or only an unquoted word, or only the forms that set something, fails a row here.
+    #[test]
+    fn a_shell_builtin_is_refused_wherever_it_stands() {
+        for word in SHELL_BUILTINS {
+            for line in [
+                format!("{word} x"),
+                word.to_string(),
+                format!("{word} x && cat a.txt"),
+                format!("{word} x || cat a.txt"),
+                format!("{word} x ; cat a.txt"),
+                format!("cat a.txt && {word} x"),
+                format!("cat a.txt | {word} x"),
+                format!("({word} x && cat a.txt)"),
+                format!("FOO=1 {word} x"),
+                format!("'{word}' x"),
+                format!("\"{word}\" x"),
+            ] {
+                match refused(&line).reason {
+                    Reason::ShellBuiltin(found) => assert_eq!(found, word, "`{line}`"),
+                    other => panic!("`{line}` was refused as {other:?}, not as a shell builtin"),
+                }
+            }
+        }
+        // The read forms are refused as the set forms are.
+        for line in ["ulimit -a", "ulimit -n", "umask", "umask -S"] {
+            assert!(
+                matches!(refused(line).reason, Reason::ShellBuiltin(_)),
+                "`{line}` was not refused"
+            );
+        }
+    }
+
+    /// The reproduction of the report: a limit set in one step and read in the next. The refusal
+    /// names `ulimit`, says the step changes nothing for the steps after it, and says to write the
+    /// whole line as `sh -c`. It gives neither the `directory` argument nor the `NAME=value` advice,
+    /// which are true of `cd` and `export` and not of a limit, and does not blame `$PATH`.
+    #[test]
+    fn the_ulimit_refusal_says_to_put_the_whole_line_in_sh_c() {
+        let said = refused("ulimit -n 100 && sh -c 'ulimit -n'").to_string();
+        for part in [
+            "`ulimit`",
+            "change nothing for the steps after it",
+            "`sh -c '... ulimit ...'`",
+            "approved as one line",
+        ] {
+            assert!(said.contains(part), "the refusal lacks `{part}`: {said}");
+        }
+        for part in ["`directory` argument", "NAME=value", "$PATH"] {
+            assert!(!said.contains(part), "the refusal says `{part}`: {said}");
+        }
+        let again = refused("ulimit -n 10240 && cargo test").to_string();
+        assert!(again.contains("`sh -c '... ulimit ...'`"), "{again}");
+    }
+
+    /// The other builtins get wording that is true of them: a mask is read and set inside `sh -c`
+    /// as a limit is, an alias is not seen by other steps and is not expanded in a script, and the
+    /// rest only mean something inside one shell. None of them is told to set a limit, a directory
+    /// or a variable.
+    #[test]
+    fn the_other_builtin_refusals_say_what_is_true_of_them() {
+        let umask = refused("umask 077 && touch f").to_string();
+        assert!(
+            umask.contains("`umask`")
+                && umask.contains("`sh -c '... umask ...'`")
+                && !umask.contains("ulimit"),
+            "{umask}"
+        );
+        for word in ["alias", "unalias"] {
+            let said = refused(&format!("{word} x && cat a.txt")).to_string();
+            assert!(
+                said.contains(&format!("`{word}`"))
+                    && said.contains("change nothing for the steps after it")
+                    && said.contains("not seen by the other steps")
+                    && said.contains("does not expand aliases in a non-interactive script")
+                    && said.contains("write the command out")
+                    && !said.contains("`sh -c '...'`")
+                    && !said.contains("ulimit")
+                    && !said.contains("`directory` argument")
+                    && !said.contains("NAME=value"),
+                "{said}"
+            );
+        }
+        for word in ["unset", "hash", "wait"] {
+            let said = refused(&format!("{word} x && cat a.txt")).to_string();
+            assert!(
+                said.contains(&format!("`{word}`"))
+                    && said.contains("change nothing for the steps after it")
+                    && said.contains("`sh -c '...'`")
+                    && !said.contains("ulimit")
+                    && !said.contains("`directory` argument")
+                    && !said.contains("NAME=value"),
+                "{said}"
+            );
+        }
+    }
+
+    /// A program that only looks like a builtin, or holds its name as an operand, or is the
+    /// builtin inside `sh -c`, is an ordinary line. An implementation that refuses any word that
+    /// starts with `ulimit` fails on `ulimits`, one that refuses a line holding the word anywhere
+    /// fails on `echo ulimit -n 5` and `ls umask`, one that compares the last path component fails
+    /// on `./ulimit`, and one that refuses `sh -c` lines holding the word fails on the recommended
+    /// spelling.
+    #[test]
+    fn a_word_that_only_looks_like_a_shell_builtin_is_not_refused() {
+        for line in [
+            "echo ulimit -n 5",
+            "ulimits x",
+            "./ulimit -n 5",
+            "ls umask",
+            "git wait",
+            "hashsum x",
+            "sh -c 'ulimit -n 100 && ulimit -n'",
+            "sh -c 'umask 077 && touch f'",
+        ] {
             parsed(line);
         }
     }

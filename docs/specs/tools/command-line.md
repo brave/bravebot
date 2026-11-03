@@ -158,6 +158,7 @@ Refused, as a compile error with the offending span named:
 | `<<`, `<<<` | here-documents are content wearing the shape of syntax |
 | `eval`, `source`, `.`, `exec`, `trap` | reintroduce interpretation by name |
 | `cd`, `pushd`, `popd`, `export` | each stage is spawned fresh, so a stage of these names changes nothing for the stages after it; the refusal says the call's `directory` argument is how a line runs elsewhere and that `NAME=value` in front of a program sets a variable for it |
+| `ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash`, `wait` | each is a shell builtin whose effect stays in the shell that runs it, and a host may ship a program of the name that runs it in a shell of its own and exits zero; a stage of these names changes nothing for the stages after it, in any form including a read. The refusal says so and, for `ulimit` and `umask`, that the whole line is written as `sh -c '... ulimit ...'`, which is approved as one line; for `alias` and `unalias` that an alias defined in one stage is not seen by the other stages and the host shell does not expand aliases in a non-interactive script, so the command is written out; for the others it says the whole script goes inside `sh -c '...'` |
 | `if`, `while`, `for`, `case`, `function` | control flow is a program |
 | `!` | history expansion is text the user typed reaching a line the planner wrote |
 | `(` or `)` written onto the end of an argument | grouping is syntax, so an argument holding a parenthesis has to be quoted, and the refusal says so |
@@ -203,6 +204,10 @@ is the same thing as the planner having written them.
 `verified-by: bravebot_agent::cmdline::a_program_that_reintroduces_interpretation_is_refused`
 `verified-by: bravebot_agent::cmdline::a_word_that_sets_shell_state_is_refused_wherever_it_stands`
 `verified-by: bravebot_agent::cmdline::a_word_that_only_looks_like_shell_state_is_not_refused`
+`verified-by: bravebot_agent::cmdline::a_shell_builtin_is_refused_wherever_it_stands`
+`verified-by: bravebot_agent::cmdline::the_ulimit_refusal_says_to_put_the_whole_line_in_sh_c`
+`verified-by: bravebot_agent::cmdline::the_other_builtin_refusals_say_what_is_true_of_them`
+`verified-by: bravebot_agent::cmdline::a_word_that_only_looks_like_a_shell_builtin_is_not_refused`
 `verified-by: bravebot_agent::cmdline::a_word_that_opens_control_flow_is_refused`
 `verified-by: bravebot_agent::cmdline::an_unquoted_exclamation_mark_is_refused`
 `verified-by: bravebot_agent::cmdline::an_unquoted_parenthesis_written_onto_an_argument_says_to_quote_the_argument`
@@ -731,6 +736,24 @@ wherever it stands in the line and whether or not the host has a program of that
 would change nothing for the stages after it. The refusal says that the `directory` argument of the
 call is how a line runs elsewhere. Nothing runs and nobody is asked.
 
+A stage whose program is `ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash` or `wait` is refused
+the same way, in the same positions, whether or not the host has a program of that name. These are
+shell builtins whose effect stays in the shell that runs them. A host may ship a program of the name
+(macOS has `/usr/bin/ulimit`) that runs the builtin in a shell of its own and exits zero, so the
+stage would be planned, approved and run, and change nothing for the stages after it. The refusal
+says so. For `ulimit` and `umask` it says the whole line is written as `sh -c '... ulimit ...'`,
+which is approved as one line. For `alias` and `unalias` it says that an alias defined in one stage
+is not seen by the other stages and that the host shell does not expand aliases in a non-interactive
+script, so the command is written out. For the others it says the whole script goes inside
+`sh -c '...'`. It does not give the `directory` or `NAME=value` advice, which is about `cd` and `export`.
+
+The refusal covers every form of these words, a read such as `ulimit -a` or `umask` with no operand
+included. A host program of that name prints the limits of the shell it starts for itself, not those of
+any other stage, so a read is as misleading as a set, and the answer does not depend on whether the
+host has the program. A limit or a mask is read the way it is set, inside `sh -c`, which is not
+refused. A program that only has such a word as an operand, a longer name, or a path (`./ulimit`)
+is an ordinary program.
+
 **Why the asymmetry.** A directory is a routing field, shown at every prompt and endorsed with the
 plan, so carrying it is visible. An environment that accumulated invisibly across calls would change
 what a later plan does without appearing in that plan.
@@ -760,7 +783,12 @@ session somewhere to keep one ([RUN-9](run.md#RUN-9)).
 `verified-by: bravebot_agent::turn::a_refused_run_directory_does_not_persist`
 `verified-by: bravebot_agent::turn::a_carried_directory_that_was_removed_is_refused_before_asking`
 `verified-by: bravebot_agent::turn::a_cd_stage_is_refused_before_asking_and_the_directory_argument_still_works`
+`verified-by: bravebot_agent::turn::a_ulimit_stage_is_refused_before_asking_and_the_sh_c_form_is_put_to_the_person_as_one_line`
 `verified-by: bravebot_agent::cmdline::a_word_that_sets_shell_state_is_refused_wherever_it_stands`
+`verified-by: bravebot_agent::cmdline::a_shell_builtin_is_refused_wherever_it_stands`
+`verified-by: bravebot_agent::cmdline::the_ulimit_refusal_says_to_put_the_whole_line_in_sh_c`
+`verified-by: bravebot_agent::cmdline::the_other_builtin_refusals_say_what_is_true_of_them`
+`verified-by: bravebot_agent::cmdline::a_word_that_only_looks_like_a_shell_builtin_is_not_refused`
 `verified-by: bravebot_agent::turn::a_directory_removed_during_the_approval_is_reported_as_removed`
 `verified-by: bravebot_agent::turn::a_vouched_line_is_asked_about_again_when_a_directory_is_named`
 
@@ -864,7 +892,10 @@ What the description should say instead is the true thing: use whichever returns
 that filters usually returns less.
 
 The description must also say that a `cd` step is refused because it moves nothing for the steps
-after it, and that the `directory` argument is how a line runs elsewhere.
+after it, and that the `directory` argument is how a line runs elsewhere. It must say that a
+`ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash` or `wait` step is refused because it changes
+nothing for the steps after it, and that a program is run under a limit or a mask by writing the
+whole line as `sh -c '... ulimit ...'`, which is approved as one line.
 
 **Why a clause about wording.** A tool's description is the only instruction the planner reliably
 reads, and an instruction to reach for the structured tools instead measurably steers a session
@@ -874,6 +905,7 @@ into the expensive path. Wording that changes behaviour is behaviour.
 `verified-by: bravebot_agent::tools::the_run_description_does_not_send_the_planner_to_the_other_tools_instead`
 `verified-by: bravebot_agent::tools::only_run_takes_a_command_line`
 `verified-by: bravebot_agent::tools::the_run_description_says_cd_moves_nothing_and_directory_is_how_a_line_runs_elsewhere`
+`verified-by: bravebot_agent::tools::the_run_description_says_a_limit_or_mask_step_is_refused_and_goes_inside_sh_c`
 
 ## Amendments to existing specs
 

@@ -295,8 +295,8 @@ a page to be continued: narrow the pattern or point at a subdirectory instead.
 
 ### Lines around a match
 
-With `context`, each match comes with the lines either side of it, written `path-line- text` where a
-match is `path:line: text`, and a `--` line between groups that are not adjacent. Those lines are not
+With `context`, each match comes with the lines either side of it, written `path-line-text` where a
+match is `path:line:text`, and a `--` line between groups that are not adjacent. Those lines are not
 matches: they count toward neither the match cap nor the offset. A separate cap bounds how many are
 returned, and a search that reached it says it is incomplete.
 
@@ -497,8 +497,10 @@ looks for and in what it puts there, so the file keeps one terminator throughout
 `line endings: CRLF kept`. A file that mixes `\n` and `\r\n` is matched exactly as given.
 
 An edit requires a **trusted** file, because locating a passage to replace is a decision and a
-decision may be taken only from trusted content. To change a file the agent may not read, the route
-is `spawn_processor` plus `write_file`.
+decision may be taken only from trusted content. A file that is not vouched for, or that untrusted
+content was written to, is refused with a sentence saying the file is closed to `edit_file`. The
+sentence names the routes that are open: the whole file with `write_file`, an edit through `run`, or
+your vouching for the path. It names `write_file` and `run` only when the session offers them.
 
 ### Notebook cells
 
@@ -1068,6 +1070,12 @@ question at a time, with **Skip** to move to the next and an answer button that 
 something is picked or typed, and sends every answer once the last is settled. A series of one has no
 place. The line under the call in the transcript counts the questions asked (`3 questions asked`), not the
 answers, so a skipped question is still counted.
+
+Once the questions are settled, each question that was put is drawn under the call with its tag and
+sentence, and under it the option you picked, the words you typed, `skipped` or `closed on the clock`.
+A question answered from memory was not put and has none, and neither does a series nobody could be
+asked. These rows are only on your screen. The agent is not given them and the session does not keep
+them, so a session you resume shows the count line without them.
 
 In the terminal, a series of more than one ends in a review that lists each question beside your
 answer. Nothing has been sent until you press Enter there. Left goes back a question, a number

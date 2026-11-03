@@ -60,6 +60,8 @@ enum Chat {
     Answers,
     /// Refuses the credentials, in words of its own that no record may repeat.
     Refuses,
+    /// Rejects the request with a 400 whose body names a model and a host of its own.
+    Rejects,
     /// Answers "done", except to a conversation holding [`HELD`], which it never answers.
     Holds,
     /// Writes a task list in its first round, using 107 tokens, then refuses the credentials.
@@ -148,6 +150,13 @@ fn answer(mut stream: std::net::TcpStream, chat: Chat, held: &mpsc::Sender<()>) 
         let _ = held.send(());
         let _ = stream.read(&mut [0u8; 1]);
         return;
+    } else if matches!(chat, Chat::Rejects) {
+        (
+            "400 Bad Request",
+            "application/json",
+            json!({"error": BACKEND_WORDS, "model": "service-model-9", "host": "evil.example"})
+                .to_string(),
+        )
     } else if matches!(chat, Chat::Refuses | Chat::PlansThenRefuses) {
         (
             "401 Unauthorized",
@@ -551,6 +560,43 @@ fn a_failed_turn_is_recorded_with_the_reason_the_interface_composed() {
         !saved.to_string().contains("BACKEND-WORDS"),
         "the record repeats the backend's words: {saved}"
     );
+}
+
+/// BACKEND-37, SESSION-23: a turn the service rejected with a 400 is recorded with the model the
+/// front end was configured to use, and the record holds none of the service's words, model name or
+/// host.
+///
+/// The faults this rejects: a reason that leaves the configured model out, one that names the model
+/// the reply reported, and one that repeats anything the service wrote.
+#[test]
+fn a_rejected_turn_is_recorded_with_the_configured_model_and_none_of_the_services_words() {
+    let scratch = Scratch::new("bridge-history-rejected");
+    let (endpoint, _) = stub_service(Chat::Rejects);
+
+    let ended =
+        Window::open(&scratch.home(), &scratch.project(), &endpoint, None).turn("first question");
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+    assert_eq!(ended["data"]["category"], "refused", "{ended}");
+
+    let saved = record(&scratch.home());
+    let reason = saved["history"][0]["outcome"]["reason"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no reason: {saved}"));
+    assert!(reason.contains("(HTTP 400)"), "{reason}");
+    assert!(
+        reason.contains(&format!("using the model {STUB_MODEL}")),
+        "the reason does not name the configured model: {reason}"
+    );
+    for service in ["BACKEND-WORDS", "service-model-9", "evil.example"] {
+        assert!(
+            !saved.to_string().contains(service),
+            "{service} was recorded: {saved}"
+        );
+        assert!(
+            !ended.to_string().contains(service),
+            "{service} was sent: {ended}"
+        );
+    }
 }
 
 /// CHATGPT-8: a turn on the ChatGPT account where nobody signed in fails in the window naming the

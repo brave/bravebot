@@ -2104,7 +2104,7 @@ mod tests {
     }
 
     /// A search is `git grep` over the files at one revision, HEAD unless another is named: each
-    /// matching line as `path:line: text` in the order git lists the tree, a binary file that
+    /// matching line as `path:line:text` in the order git lists the tree, a binary file that
     /// matches named rather than printed, and a path narrowing it to the files beneath it.
     #[test]
     fn search_lists_the_lines_a_pattern_matches_at_a_revision_as_git_grep_does() {
@@ -2112,8 +2112,8 @@ mod tests {
         let answer = searched(&repo, None, None, "needle", &|_| false).expect("answered");
         assert_eq!(
             answer.text,
-            "a.txt:1: needle one\nBinary file img.bin matches\nsrc.txt:1: a needle in \
-             src.txt\nsrc/lib.rs:1: fn needle() {}\nsrc/lib.rs:3: let needle = 1;\n"
+            "a.txt:1:needle one\nBinary file img.bin matches\nsrc.txt:1:a needle in \
+             src.txt\nsrc/lib.rs:1:fn needle() {}\nsrc/lib.rs:3:let needle = 1;\n"
         );
         assert_eq!(
             (answer.next, answer.cut, answer.withheld),
@@ -2143,7 +2143,7 @@ mod tests {
             &|_| false,
         )
         .expect("answered");
-        assert_eq!(older.text, "src/lib.rs:1: fn needle() {}\n");
+        assert_eq!(older.text, "src/lib.rs:1:fn needle() {}\n");
         assert_eq!(older.shown, ["src/lib.rs", "src/sub/deep.rs"]);
         let inside =
             searched(&repo, None, Some("a.txt/inside"), "needle", &|_| false).expect("answered");
@@ -2153,7 +2153,25 @@ mod tests {
         let expression = searched(&repo, None, None, r"^fn \w+\(\)", &|_| false).expect("answered");
         assert_eq!(
             expression.text,
-            "src/lib.rs:1: fn needle() {}\nsrc/lib.rs:2: fn other() {}\n"
+            "src/lib.rs:1:fn needle() {}\nsrc/lib.rs:2:fn other() {}\n"
+        );
+    }
+
+    /// The line text follows the second colon byte for byte, as `git grep -n` prints it, so a line
+    /// that starts with a space shows that one space and indentation copied from the answer
+    /// matches the file. A separator of the tool's own would show two.
+    #[test]
+    fn a_search_prints_an_indented_line_with_exactly_the_indentation_the_file_has() {
+        let (repo, _) = searchable("search-indented", Some(("list.md", " - alpha item\n")));
+        let answer = searched(&repo, None, Some("list.md"), "item", &|_| false).expect("answered");
+        assert_eq!(answer.text, "list.md:1: - alpha item\n");
+        assert_eq!(
+            answer.printed,
+            [Printed {
+                path: "list.md".to_owned(),
+                first_line: 1,
+                text: " - alpha item\n".to_owned(),
+            }]
         );
     }
 
@@ -2190,7 +2208,7 @@ mod tests {
         assert!(!answer.shown.iter().any(|p| p == "src/lib.rs"));
         assert!(answer.withheld);
         let elsewhere = searched(&repo, None, Some("a.txt"), "needle", &lib).expect("answered");
-        assert_eq!(elsewhere.text, "a.txt:1: needle one\n");
+        assert_eq!(elsewhere.text, "a.txt:1:needle one\n");
         assert_eq!(elsewhere.shown, ["a.txt"]);
         assert!(
             !elsewhere.withheld,
@@ -2230,14 +2248,14 @@ mod tests {
         assert_eq!(
             page(0),
             (
-                "a.txt:1: needle one\nBinary file img.bin matches\n".to_owned(),
+                "a.txt:1:needle one\nBinary file img.bin matches\n".to_owned(),
                 Some(2)
             )
         );
         assert_eq!(
             page(2),
             (
-                "src.txt:1: a needle in src.txt\nsrc/lib.rs:1: fn needle() {}\n".to_owned(),
+                "src.txt:1:a needle in src.txt\nsrc/lib.rs:1:fn needle() {}\n".to_owned(),
                 Some(4)
             )
         );
@@ -2245,7 +2263,7 @@ mod tests {
             page(4),
             (
                 format!(
-                    "src/lib.rs:3: let needle = 1;\n(zz.log is {size} bytes, more than read_git \
+                    "src/lib.rs:3:let needle = 1;\n(zz.log is {size} bytes, more than read_git \
                      searches)\n"
                 ),
                 None

@@ -77,11 +77,14 @@ impl std::io::Write for Written {
 /// the sequences that move the cursor and set the colours between them.
 fn bytes_written(session: &mut Session) -> String {
     let written = Written::default();
-    // A fixed viewport, so that no terminal is asked for its size: there is none here.
+    // A fixed viewport, so that no terminal is asked for its size: there is none here. It is wide
+    // enough that the longest failure line (a refused request names its backend, the model and the
+    // next step) is drawn on one row, since the bytes of a wrapped line have cursor moves between
+    // its rows.
     let mut terminal = ratatui::Terminal::with_options(
         ratatui::backend::CrosstermBackend::new(written.clone()),
         ratatui::TerminalOptions {
-            viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 140, 50)),
+            viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 400, 50)),
         },
     )
     .expect("a terminal that writes to memory");
@@ -294,6 +297,7 @@ fn a_child_that_makes_the_run_and_folds_each_failure() {
             Asked {
                 name: MODEL.to_string(),
                 comparable: true,
+                configured: "test-model".to_string(),
             },
             Line {
                 text: "",
@@ -345,7 +349,7 @@ fn a_child_that_makes_the_run_and_folds_each_failure() {
         let bytes = bytes_written(&mut session);
         assert!(
             bytes.contains(failure.lines().next().unwrap_or_default()),
-            "the bytes written to the terminal do not hold the failure the screen shows"
+            "the bytes written to the terminal do not hold the failure the screen shows: {failure:?}"
         );
         for (name, text) in [
             ("the transcript", transcript),

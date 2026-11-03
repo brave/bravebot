@@ -34,6 +34,7 @@ governs:
   - ui/src/renderer/components/ThinkingTail.tsx
   - ui/src/renderer/thinking.ts
   - ui/src/renderer/apply.ts
+  - ui/src/renderer/transcript.ts
   - ui/src/renderer/live.ts
   - ui/src/renderer/components/Agents.tsx
   - ui/src/renderer/components/Sidebar.tsx
@@ -663,7 +664,11 @@ which is drawn before any file this program reads has been looked for.
 ### VIEW-22: failed and cancelled turns have distinct visible status
 
 A failed turn shows a reason below its status and in its transcript entry. The reason uses fixed
-text and the backend's known status and request count. It remains visible with the audit expanded
+text and the backend's known status and request count. A refused request also names the backend
+that sent it, the model the turn ran on and the request fields the retries left out, and ends
+with the next step ([BACKEND-37](backends.md#BACKEND-37)); those words are the program's own,
+except the model, which is the name the person configured and is written with control characters
+made visible. It remains visible with the audit expanded
 or collapsed, after resizing, and while reading older scrollback. Long reasons wrap within the
 available space. Terminal control characters are not drawn.
 
@@ -684,6 +689,7 @@ The live session's export includes its failure and cancellation entries.
 `verified-by: bravebot_tui::frame::an_export_of_a_failed_turn_says_why_it_failed`
 `verified-by: bravebot_tui::frame::an_export_attaches_each_reason_to_the_turn_that_had_it`
 `verified-by: bravebot_tui::frame::an_export_of_a_cancelled_turn_says_it_was_cancelled`
+`verified-by: bravebot_tui::app::a_rejected_request_is_said_with_the_configured_model_in_the_transcript`
 `verified-by: bravebot_tui::failure_history::turn_endings_keep_the_visible_history_anchor`
 `verified-by: bravebot_tui::outcome_colours::what_a_successful_turn_cost_is_not_drawn_in_the_failure_colour`
 `verified-by: bravebot_tui::outcome_colours::failure_label_uses_failure_colour`
@@ -1427,6 +1433,25 @@ top row of the list.
 `verified-by: bravebot_tui::model_prompt::paging_goes_over_a_folded_section`
 `verified-by: bravebot_tui::model_prompt::the_fold_and_page_keys_do_nothing_where_there_are_no_models`
 `verified-by: bravebot_tui::app::tests::pickers::page_down_moves_the_model_picker_by_the_list_the_session_drew`
+
+<a id="VIEW-42"></a>
+### VIEW-42: the questions of an `ask_user` call and what became of them are drawn under the call
+
+Once a series of questions is settled, the question the planner put, with its tag, is drawn under the
+call for each question that was put, and under each the option picked, the words typed, `skipped` or
+`closed on the clock` ([ASK-13](tools/ask-user.md#ASK-13)). The rows are the call's glimpse, handed to
+`Session::returned` as the rows of any other call are, so they are drawn behind the margin of one,
+through the replacement of [VIEW-3](#VIEW-3) and without the structure of [VIEW-4](#VIEW-4): a
+question or an answer that holds a line break or an escape is drawn on one line as text. They stay
+after the call finishes and carry over to the finished entry. A series that put no question draws no
+rows. They are of the screen alone, and a resumed session does not draw them ([VIEW-2](#VIEW-2)),
+since they are not in the session record.
+
+**Why.** Without them the scroll back holds `3 questions asked` and the planner's later reply, so a
+person reading what was decided has to read what the planner made of it.
+
+`verified-by: bravebot_tui::render::a_settled_ask_user_call_shows_each_question_and_its_answer_without_a_reply`
+`verified-by: bravebot_tui::render::a_series_nobody_could_be_asked_draws_no_rows`
 
 ## Known costs
 

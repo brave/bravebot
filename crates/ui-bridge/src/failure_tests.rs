@@ -129,6 +129,8 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
         attempts: 2,
         usage: None,
         context_tokens: None,
+        conceded: Default::default(),
+        backend: None,
         cause: Box::new(BackendError::from(ChatError::Account(
             AccountFailure::Ended,
         ))),

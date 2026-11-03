@@ -2008,6 +2008,21 @@ function Card({
     case 'narration':
       return <div className="narration"><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
 
+    case 'ask-settled':
+      // The kernel's words for each question and what became of it, in the register of the other
+      // lines that say what happened on the way to a reply. Drawn as text, so a question or an
+      // answer that looks like markup or a command is shown as typed.
+      return (
+        <div className="attached ask-settled">
+          <Icon name="file-text" />
+          <ul>
+            {entry.rows.map((row, at) => (
+              <li key={at}><span>{row.question}</span><span className="ask-settled-outcome">{row.outcome}</span></li>
+            ))}
+          </ul>
+        </div>
+      )
+
     case 'attached':
       // A line rather than a bubble, and the path rather than the contents. This is the same
       // register the tool lines are in — something that happened on the way to the reply — which

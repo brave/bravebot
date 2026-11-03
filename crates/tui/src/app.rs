@@ -25371,6 +25371,7 @@ mod tests {
             Asked {
                 name: "test-model".to_string(),
                 comparable: true,
+                configured: "test-model".to_string(),
             },
             Line {
                 text: "",
@@ -36968,6 +36969,8 @@ mod tests {
         let error = bravebot_agent::backend::BackendError::Attempted {
             usage: None,
             context_tokens: None,
+            conceded: Default::default(),
+            backend: None,
             attempts: 2,
             cause: Box::new(bravebot_agent::backend::BackendError::from(
                 ChatError::Account(AccountFailure::NotSignedIn),
@@ -36991,6 +36994,7 @@ mod tests {
             Asked {
                 name: "chatgpt/gpt-test".into(),
                 comparable: true,
+                configured: "test-model".to_string(),
             },
             Line {
                 text: "read a file",
@@ -41186,6 +41190,7 @@ mod tests {
         let asked = Asked {
             name: "test-model".to_string(),
             comparable: true,
+            configured: "test-model".to_string(),
         };
 
         fold_outcome(
@@ -41240,6 +41245,7 @@ mod tests {
             Asked {
                 name: "claude-3-opus".to_string(),
                 comparable: true,
+                configured: "test-model".to_string(),
             },
             "claude-3-sonnet",
             true,
@@ -41264,6 +41270,7 @@ mod tests {
                 Asked {
                     name: "claude-3-opus".to_string(),
                     comparable: true,
+                    configured: "test-model".to_string(),
                 },
                 "claude-3-sonnet",
                 true,
@@ -41291,6 +41298,7 @@ mod tests {
             Asked {
                 name: bravebot_config::DEFAULT_MODEL.to_string(),
                 comparable: true,
+                configured: "test-model".to_string(),
             },
             "claude-3-haiku",
             true,
@@ -41316,6 +41324,7 @@ mod tests {
             Asked {
                 name: "claude-3-opus".to_string(),
                 comparable: true,
+                configured: "test-model".to_string(),
             },
             "claude-3-haiku",
             true,
@@ -41339,6 +41348,7 @@ mod tests {
         let asked = || Asked {
             name: "claude-3-opus".to_string(),
             comparable: true,
+            configured: "test-model".to_string(),
         };
         record_what_the_turn_ran_on(&mut session, asked(), "claude-3-opus", true, true);
         assert_eq!(session.premium(), Some(true));
@@ -41868,6 +41878,7 @@ mod tests {
         let asked = Asked {
             name: "test-model".to_string(),
             comparable: true,
+            configured: "test-model".to_string(),
         };
 
         fold_outcome(
@@ -42122,6 +42133,7 @@ mod tests {
         let asked = Asked {
             name: "test-model".to_string(),
             comparable: true,
+            configured: "test-model".to_string(),
         };
 
         fold_outcome(
@@ -42160,6 +42172,8 @@ mod tests {
         let error = bravebot_agent::backend::BackendError::Attempted {
             usage: None,
             context_tokens: None,
+            conceded: Default::default(),
+            backend: None,
             attempts: 3,
             cause: Box::new(bravebot_agent::backend::BackendError::from(
                 bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {
@@ -42188,6 +42202,7 @@ mod tests {
             Asked {
                 name: "test-model".into(),
                 comparable: true,
+                configured: "test-model".to_string(),
             },
             Line {
                 text: "read a file",
@@ -42206,6 +42221,73 @@ mod tests {
         }
         assert_eq!(exported.matches("503").count(), 1);
         assert!(session.finished.unwrap().failed());
+    }
+
+    /// BACKEND-37: the transcript line of a rejected request names the model the person configured,
+    /// not the name the request carried to the service (which a gateway changes) and not any text
+    /// of the service's. The configured name holds a control character, which is written out in the
+    /// line, the status area and the export.
+    ///
+    /// The regressions it rejects are the wire name in place of the configured one, a line that
+    /// leaves the model out, and the control character reaching the screen.
+    #[test]
+    fn a_rejected_request_is_said_with_the_configured_model_in_the_transcript() {
+        let mut session = Session::new("none");
+        type_line(&mut session, "read a file");
+        session.submit().unwrap();
+        let error = bravebot_agent::backend::BackendError::Attempted {
+            usage: None,
+            context_tokens: None,
+            conceded: Default::default(),
+            backend: None,
+            attempts: 1,
+            cause: Box::new(bravebot_agent::backend::BackendError::from(
+                bravebot_aichat::ChatError::Egress(bravebot_net::EgressError::Status {
+                    url: "https://example.test/PRIVATE_PATH".into(),
+                    status: 400,
+                    retry_after: None,
+                    body: None,
+                }),
+            )),
+        };
+        fold_outcome(
+            &mut session,
+            Err(turn::TurnError::from(error)),
+            Trail::new(),
+            Carried {
+                asked: Default::default(),
+                exposed: Default::default(),
+                trust: TrustStore::new("/work"),
+                programs: TrustedPrograms::new(),
+            },
+            Occupied {
+                budget: 1000,
+                guessed: false,
+                last_request_tokens: 0,
+            },
+            Asked {
+                name: "gateway/wire-name".into(),
+                comparable: false,
+                configured: "my-model\u{1b}[2J".to_string(),
+            },
+            Line {
+                text: "read a file",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            &workspace_for_test(),
+        );
+        let reason = session.failure_said().expect("visible reason").to_string();
+        assert!(reason.contains("(HTTP 400)"), "{reason}");
+        assert!(
+            reason.contains("using the model my-model\u{241b}[2J"),
+            "{reason}"
+        );
+        assert!(!reason.contains("wire-name"), "{reason}");
+        assert!(!reason.chars().any(char::is_control), "{reason:?}");
+        let exported = render::as_markdown(&session, "test");
+        assert!(!exported.contains('\u{1b}'), "{exported:?}");
+        assert!(!exported.contains("PRIVATE_PATH"), "{exported}");
     }
 
     /// CHATGPT-8: a turn that failed in the account's own way is said in the transcript and the
@@ -42227,6 +42309,8 @@ mod tests {
             let error = bravebot_agent::backend::BackendError::Attempted {
                 usage: None,
                 context_tokens: None,
+                conceded: Default::default(),
+                backend: None,
                 attempts: 2,
                 cause: Box::new(bravebot_agent::backend::BackendError::from(
                     ChatError::Account(failure),
@@ -42250,6 +42334,7 @@ mod tests {
                 Asked {
                     name: "chatgpt/gpt-test".into(),
                     comparable: true,
+                    configured: "test-model".to_string(),
                 },
                 Line {
                     text: "read a file",
@@ -42819,6 +42904,7 @@ mod tests {
                     Asked {
                         name: "test-model".into(),
                         comparable: true,
+                        configured: "test-model".to_string(),
                     },
                     Line {
                         text: "second",
@@ -42878,6 +42964,7 @@ mod tests {
             Asked {
                 name: "test-model".into(),
                 comparable: true,
+                configured: "test-model".to_string(),
             },
             Line {
                 text: "work",

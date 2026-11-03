@@ -122,6 +122,8 @@ export function apply(
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
       case 'ask.request':
         return { ...old, entries: [...old.entries, t.askedQuestions(message.data)] }
+      case 'ask.settled':
+        return { ...old, entries: [...old.entries, t.askSettled(message.data)] }
       case 'turn.done': {
         refresh()
         // A rise means compaction summarised part of this conversation away, and what it takes it

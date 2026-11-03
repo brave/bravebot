@@ -3954,7 +3954,11 @@ mod preserved_history {
             }
             Err(error) => match error.ending() {
                 Ending::Failed(diagnosis) => session.fail(
-                    bravebot_session::sessions::failure_line(&error, diagnosis),
+                    bravebot_session::sessions::failure_line(
+                        &error,
+                        diagnosis,
+                        Some(task.model.as_deref().unwrap_or(&config.default_model)),
+                    ),
                     error.ending(),
                 ),
                 Ending::Stopped { attempts } => {
@@ -4845,6 +4849,81 @@ mod preserved_history {
             next.contains(r#""role":"tool""#),
             "the completed round was dropped: {next}"
         );
+    }
+
+    /// A rejected request names the model the person configured and the backend, and nothing the
+    /// service wrote (BACKEND-37, SESSION-23). The stand-in answers every request with a 400 whose
+    /// body and headers carry a model name, a host and a sentence of its own.
+    ///
+    /// It rejects a line that leaves the configured model out, one that names the model from the
+    /// reply instead, and one that carries any of the service's words into the screen line or the
+    /// stored reason.
+    #[test]
+    fn a_rejected_turn_names_the_configured_model_and_none_of_the_services_words() {
+        use std::io::{BufRead, Read, Write};
+        let scratch = Scratch::new("rejected-names-model");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = std::io::BufReader::new(&mut stream);
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let reply = r#"{"error":{"message":"SERVICE_SENTENCE unsupported field","model":"service-model-9","host":"evil.example"}}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nX-Model: service-model-9\r\nLocation: https://evil.example/\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        let mut session = Session::new("test");
+        let mut conversation = Conversation::new();
+        let task =
+            bravebot_agent::Task::new("hello").with_model(Some("my-configured-model".into()));
+        run_task(
+            &mut session,
+            &mut conversation,
+            &scratch.project,
+            &config_for(&endpoint),
+            &task,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        let line = session.failure_said().expect("a failure line").to_string();
+        assert!(line.contains("the service rejected the request"), "{line}");
+        assert!(line.contains("(HTTP 400)"), "{line}");
+        assert!(
+            line.contains("using the model my-configured-model"),
+            "the line does not name the configured model: {line}"
+        );
+        for service in [
+            "service-model-9",
+            "evil.example",
+            "SERVICE_SENTENCE",
+            "unsupported",
+        ] {
+            assert!(
+                !line.contains(service),
+                "the service's {service} was drawn: {line}"
+            );
+        }
+        match &session.turn_history()[0].outcome {
+            Some(bravebot_session::sessions::StoredOutcome::Failed { reason }) => {
+                assert_eq!(reason, &line)
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// A stop inside a processor must stay cancelled through reporting, saving and export.

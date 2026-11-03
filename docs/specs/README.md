@@ -45,7 +45,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [manifest.md](manifest.md) | `MANIFEST` | 15 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 50 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 30 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, what `/help` asks the planner to answer from the documentation, what `/changelog` shows, what `/todos` prints, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/lsp` says, what `/open` lists, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, how a prompt file is expanded, how a line that starts with the word of an MCP server's prompt runs it, and what `/mode` keeps applied |
-| [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 41 | what is drawn back: the transcript, a resumed session, a fenced block in a reply, and how content reaches the screen |
+| [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 42 | what is drawn back: the transcript, a resumed session, a fenced block in a reply, and how content reaches the screen |
 | [session-view.md](session-view.md) | `RPCVIEW` | 8 | the opt-in shared Rust view for fresh local bridge sessions, the stdio TypeScript client that applies it, and the anonymous channel they speak over |
 | [local-host.md](local-host.md) | `HOST` | 11 | the process that keeps a bridge's sessions while the programs that drive it come and go: who starts it, what a client may ask, where its records are, and when a session is closed |
 | [watching.md](watching.md) | `WATCH` | 24 | work done outside the transcript: a delegate's own lines, what a command printed, a question asked beside it, the mode Ctrl-L opens over the delegates and the questions, and `/outputs` and Alt-L, which open it over what commands printed |
@@ -118,7 +118,7 @@ the routing-versus-content split they share.
 | [tools/todo-write.md](tools/todo-write.md) | `TODO` | 3 | `todo_write` |
 | [tools/schedule-next.md](tools/schedule-next.md) | `SCHED` | 5 | `schedule_next` |
 | [tools/watch-file.md](tools/watch-file.md) | `ARM` | 6 | `watch_file` |
-| [tools/ask-user.md](tools/ask-user.md) | `ASK` | 12 | `ask_user` |
+| [tools/ask-user.md](tools/ask-user.md) | `ASK` | 13 | `ask_user` |
 | [tools/request-path.md](tools/request-path.md) | `PATHREQ` | 7 | `request_path` |
 | [tools/advisor.md](tools/advisor.md) | `ADVISOR` | 9 | `advisor` |
 | [tools/remember.md](tools/remember.md) | `REMEMBER` | 3 | `remember` |

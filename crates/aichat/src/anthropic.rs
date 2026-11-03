@@ -190,6 +190,11 @@ impl<'a> AnthropicClient<'a> {
         self.spent.attempts
     }
 
+    /// The request fields the last call left out after the service refused them, in order.
+    pub fn conceded(&self) -> crate::call::Conceded {
+        self.spent.conceded
+    }
+
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {

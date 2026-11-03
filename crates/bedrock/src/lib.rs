@@ -403,6 +403,11 @@ impl<'a> BedrockClient<'a> {
         self.spent.attempts
     }
 
+    /// The request fields the last call left out after the service refused them, in order.
+    pub fn conceded(&self) -> bravebot_aichat::call::Conceded {
+        self.spent.conceded
+    }
+
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
@@ -1771,6 +1776,66 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(sent.len(), 3, "a concession was offered twice");
         assert_eq!(refusals(model), Refusals::default());
+    }
+
+    /// The client reports the fields a call left out, which is what the interface says beside
+    /// the failure line of a refused request ([BACKEND-37](../../../docs/specs/backends.md#BACKEND-37)).
+    /// It is the client's own record of the call, so a call that was answered the first time
+    /// reports nothing and a call that gave the level up reports exactly the level.
+    #[test]
+    fn the_client_reports_the_fields_the_last_call_gave_up() {
+        use bravebot_core::{
+            capability::{Capability, CapabilitySet},
+            event::RecordingSink,
+            policy::{ReleasePlan, Routing},
+        };
+        let call = |model: &str, responses: Vec<Vec<u8>>| {
+            let request = ChatRequest::new(model, vec![Message::user("hello")])
+                .with_effort(Some(Effort::High));
+            let (http, _received) = scripted_responses(responses);
+            let config = config_for(Box::leak(model.to_string().into_boxed_str()));
+            let egress = Egress::new();
+            let mut client = BedrockClient::new(&config, &egress);
+            client.test_request = Some(http);
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "test");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .unwrap();
+            let result = client.complete(&mut policy, &request);
+            (result, client.conceded())
+        };
+
+        let (result, conceded) = call(
+            "a-model-whose-call-gave-up-the-level",
+            vec![refused_with(400), whole_reply()],
+        );
+        result.expect("the request without the level answers");
+        assert_eq!(
+            conceded.in_order().collect::<Vec<_>>(),
+            vec![Concession::Effort]
+        );
+
+        let (result, conceded) = call("a-model-answered-first-time", vec![whole_reply()]);
+        result.expect("the first request answers");
+        assert!(conceded.is_empty(), "nothing was refused");
+
+        // A second refusal of the same kind gives up the next field in the order, the assumed
+        // ceiling, and the client reports both in the order they were given up.
+        let (result, conceded) = call(
+            "a-model-whose-call-gave-up-the-level-and-the-ceiling",
+            vec![refused_with(400), refused_with(400), whole_reply()],
+        );
+        result.expect("the request without the level and the ceiling answers");
+        assert_eq!(
+            conceded.in_order().collect::<Vec<_>>(),
+            vec![Concession::Effort, Concession::Ceiling]
+        );
     }
 
     /// The record an interface reads to say a level is not in force: a model that refused the level

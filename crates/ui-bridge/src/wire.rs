@@ -1058,6 +1058,20 @@ pub fn answers(value: &Value) -> Vec<Answer> {
     list.iter().map(answer).collect()
 }
 
+/// What became of each question put, for the window to draw under the call (ASK-13).
+///
+/// `rows` has one `{ question, outcome }` pair per question in `asking`, worded by
+/// [`bravebot_agent::settled::pairs`] so the window says nothing of its own. For the screen only:
+/// the planner is told the answers by the call's result.
+pub fn ask_settled(asking: &Asking, answers: &[Answer]) -> Value {
+    json!({
+        "rows": bravebot_agent::settled::pairs(asking, answers)
+            .into_iter()
+            .map(|(question, outcome)| json!({ "question": question, "outcome": outcome }))
+            .collect::<Vec<_>>(),
+    })
+}
+
 fn answer(value: &Value) -> Answer {
     let Some(object) = value.as_object() else {
         return Answer::Declined;

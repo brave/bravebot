@@ -4327,6 +4327,30 @@ fn record_confinement_refusal<S: Sink>(
     }
 }
 
+/// What `edit_file` says of a file it will not edit because the file is not trusted: it is not
+/// vouched for, or untrusted content was written to it (EDIT-2). Fixed text about the path's
+/// state. It holds no byte of the file and no name, and the label is the one the driver assigned.
+/// It names `write_file` and `run` only where the turn is offered them (TOOL-6), and always the
+/// vouch, which is the person's to give. The vouch is named on every turn, a delegate's included,
+/// because nothing on the turn says it cannot ask a person.
+fn closed_to_editing<S: Sink>(policy: &Policy<'_, S>, label: Label) -> String {
+    let routes = match (policy.writing_is_offered(), policy.running_is_offered()) {
+        (true, true) => {
+            "Write the whole file with write_file, edit it through run, or ask the person to \
+             vouch for the path"
+        }
+        (true, false) => {
+            "Write the whole file with write_file, or ask the person to vouch for the path"
+        }
+        (false, true) => "Edit it through run, or ask the person to vouch for the path",
+        (false, false) => "Only the person can open it, by vouching for the path",
+    };
+    format!(
+        "refused: this file is closed to edit_file, label {label}: it is not vouched for, or \
+         untrusted content was written to it, and an edit has to compare its text. {routes}"
+    )
+}
+
 /// [`workspace_failure`] as the `error:` result a file tool returns, so each tool's refusal of a
 /// path the workspace turned away is worded and recorded in one place.
 fn file_tool_problem<S: Sink>(
@@ -6480,9 +6504,8 @@ fn edit_file<S: Sink, C: Confirmer>(
     // Confidentiality is not the question here. Workspace content is private, and staying
     // inside the process to locate a passage releases nothing; only integrity decides whether
     // this comparison is safe to make.
-    let current = match policy.read_trusted_content("edit_file", &source) {
-        Ok(text) => text,
-        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    let Ok(current) = policy.read_trusted_content("edit_file", &source) else {
+        return Produced::problem(closed_to_editing(policy, source.label()));
     };
 
     // In order, each on the text the one before it left (EDIT-6). Nothing is kept until every pair
@@ -12993,9 +13016,10 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
     }
 }
 
-/// The lines a search matched, one `path:line: text` each and nothing of the driver's.
+/// The lines a search matched, one `path:line:text` each and nothing of the driver's. The text
+/// follows the separator byte for byte, as `grep -n` prints it.
 ///
-/// With context, the lines around them follow grep's shape: `path-line- text` for a line that did
+/// With context, the lines around them follow grep's shape: `path-line-text` for a line that did
 /// not match, and a `--` line between groups that are not adjacent in the file, so a gap is not
 /// read as the lines having been next to each other.
 fn match_lines(found: &crate::workspace::Matches) -> String {
@@ -13030,7 +13054,7 @@ fn match_lines(found: &crate::workspace::Matches) -> String {
         return found
             .matches
             .iter()
-            .map(|m| format!("{}:{}: {}", m.path, m.line, m.text))
+            .map(|m| format!("{}:{}:{}", m.path, m.line, m.text))
             .collect::<Vec<_>>()
             .join("\n");
     }
@@ -13042,14 +13066,14 @@ fn match_lines(found: &crate::workspace::Matches) -> String {
             (
                 m.path.as_str(),
                 m.line,
-                format!("{}:{}: {}", m.path, m.line, m.text),
+                format!("{}:{}:{}", m.path, m.line, m.text),
             )
         })
         .chain(found.context.iter().map(|c| {
             (
                 c.path.as_str(),
                 c.line,
-                format!("{}-{}- {}", c.path, c.line, c.text),
+                format!("{}-{}-{}", c.path, c.line, c.text),
             )
         }))
         .collect();
@@ -17818,6 +17842,27 @@ mod tests {
                 && described.contains("`directory` argument is how a line runs elsewhere"),
             "the description does not say cd is refused and directory is the route: {described}"
         );
+    }
+
+    /// A planner that writes `ulimit -n 10240 && cargo test` is refused when the line is compiled,
+    /// and on a host with `/usr/bin/ulimit` the line used to run with a stage that changed
+    /// nothing. The description is the only place the planner can learn before writing the line
+    /// that the whole line goes inside `sh -c`. A description that names `ulimit` without the
+    /// `sh -c` spelling, or names `cd` alone, fails this test.
+    #[test]
+    fn the_run_description_says_a_limit_or_mask_step_is_refused_and_goes_inside_sh_c() {
+        let described = run_description();
+        for part in [
+            "`ulimit`, `umask`, `unset`, `alias`, `unalias`, `hash` or `wait` step is refused",
+            "changes nothing for the steps after it",
+            "`sh -c '... ulimit ...'`",
+            "approved as one line",
+        ] {
+            assert!(
+                described.contains(part),
+                "the description lacks `{part}`: {described}"
+            );
+        }
     }
 
     /// A session with a browser already running and its debugging port open asked the person

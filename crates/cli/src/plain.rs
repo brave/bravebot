@@ -1817,6 +1817,17 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             });
         }
 
+        // What was put and what came back, once, so the transcript of a session in lines says what
+        // was decided without the planner's reply (ASK-13). Each line goes through `shown` like
+        // the questions themselves.
+        // Nothing is said when no question was put, since there is then nothing to say became of
+        // anything. The test is on how many questions were put and never on what came back.
+        if !fresh.is_empty() {
+            for line in bravebot_agent::settled::lines(settled.outstanding(), &fresh) {
+                self.say(&shown(&line));
+            }
+        }
+
         settled.finish(&mut self.answers, fresh)
     }
 
@@ -3581,6 +3592,52 @@ mod tests {
         assert!(later.contains("(1 of 2)"), "{later}");
         assert!(later.contains("(2 of 2)"), "{later}");
         assert!(!later.contains("of 3"), "{later}");
+    }
+
+    /// ASK-13: a session in lines says what each question put was and how it ended, directly
+    /// under the questions, and says nothing for one a remembered answer settled. The regressions
+    /// it rejects: no rows, rows for the remembered question, and a newline in a typed line
+    /// starting a row of its own.
+    #[test]
+    fn each_question_put_is_followed_by_what_became_of_it() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"east\nblue\n".to_vec())),
+            Vec::new(),
+        );
+        asking.ask_user(&series_of(&[("Region", "Which region?")]));
+        let before = asking.output.len();
+        asking.ask_user(&series_of(&[
+            ("Colour", "Which colour?"),
+            ("Region", "Which region?"),
+        ]));
+
+        let later = String::from_utf8(asking.output[before..].to_vec()).expect("text");
+        assert!(
+            later.contains("Colour: Which colour?\n  answered: blue\n"),
+            "{later}"
+        );
+        assert!(!later.contains("Region: Which region?"), "{later}");
+    }
+
+    /// ASK-13: a series every question of which a remembered answer settled puts no question, so
+    /// it says nothing became of anything. The regressions it rejects: rows built from the whole
+    /// series instead of the questions put, and a "skipped" row for each remembered question.
+    #[test]
+    fn a_series_wholly_remembered_draws_no_rows() {
+        let mut asking = Prompting::new(
+            std::io::BufReader::new(std::io::Cursor::new(b"east\n".to_vec())),
+            Vec::new(),
+        );
+        asking.ask_user(&series_of(&[("Region", "Which region?")]));
+        let before = asking.output.len();
+        let again = asking.ask_user(&series_of(&[("Region", "Which region?")]));
+
+        assert_eq!(again, vec![Answer::Typed("east".to_string())]);
+        let later = String::from_utf8(asking.output[before..].to_vec()).expect("text");
+        assert!(!later.contains("skipped"), "{later}");
+        assert!(!later.contains("answered:"), "{later}");
+        assert!(later.contains("answered already"), "{later}");
+        assert!(!later.contains("Region: Which region?"), "{later}");
     }
 
     /// A lone question has nowhere else in anything to be, so it carries no position.

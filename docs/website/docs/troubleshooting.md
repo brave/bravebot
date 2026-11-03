@@ -65,7 +65,7 @@ and an editor say the sentence alone.
 | the service would not accept the credentials | the credential is wrong for this deployment, or has lapsed. The line ends with the commands to run: `bravebot auth status` shows the sign-in or key in use and `bravebot doctor` shows the endpoint. When the request carried your premium key, it names `bravebot auth login brave` to replace the key and `bravebot auth logout brave` to send requests to the free endpoint instead |
 | the service asked for fewer requests | rate limited, so wait and ask again |
 | the service could not answer | the service is unavailable at the moment |
-| the service rejected the request | the request was refused as invalid |
+| the service rejected the request | the request was refused as invalid. The line names the backend it was sent to, the model you configured or chose (not a name the service sent back), and the request fields the retries left out (the cache lifetime, set by `promptCacheTtl`; the effort level, set by `/effort`; the assumed reply limit, set by `BRAVEBOT_OUTPUT_BUDGET`; the cache marks; streamed tool arguments; shown thinking). It ends with the next step: choose another model with `/model`, or run `bravebot doctor` to see the endpoint and where the diagnostic log is kept. Neither shows the service's own error text |
 | the request did not get through | nothing reached the service, or no reply began: network, proxy or TLS roots |
 | the reply stopped before it was finished | the reply began and was cut off, went quiet part way, or was still being written when its time ran out |
 | the reply could not be read | a reply arrived that could not be decoded, or the model sent back nothing twice in a row |
@@ -134,7 +134,10 @@ directory. See [Trusted directories](security/trust.md).
 
 **An edit was refused on a file the agent could clearly see.** `edit_file` requires a *trusted* file,
 because locating a passage to replace is a comparison and a comparison is a decision. For a
-quarantined file the route is a processor plus a write, which you approve from the diff.
+file that is not vouched for, or that untrusted content was written to, the refusal says the file
+is closed to `edit_file` and names what is open: a whole-file `write_file`, which you approve from
+the diff, an edit through `run`, or your vouching for the path. It names `write_file` and `run` only
+when the session offers them.
 
 **`AGENTS.md was not loaded: this directory is not trusted`**. Exactly what it says. A project's own
 instructions are read through the trust map, so they load when you vouched for the directory. Your own

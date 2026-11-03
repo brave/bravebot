@@ -2838,6 +2838,9 @@ where
     if !offered_names(&offered, "write_file") {
         policy.without_writing();
     }
+    if !offered_names(&offered, "run") {
+        policy.without_running();
+    }
     if !offers_read_output {
         policy.without_reading();
     }
