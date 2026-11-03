@@ -23,6 +23,13 @@ export const ASSISTANT_BUBBLE = '.bubble.assistant'
 export const BOT_OPEN_BUTTON = '.bot-open-button'
 /** The yes on a trust question. */
 export const TRUST_APPROVE = '[data-test="trust-approve"]'
+/**
+ * An answering button of a question in a `.confirm-actions` row. Each is a `leo-button` host
+ * whose label is slotted light-DOM text; `.confirm-actions button` instead pierces the host's
+ * open shadow root and matches its inner native `<button>`, whose own text is never set, so
+ * reading a label through it reads empty text (#3659).
+ */
+export const CONFIRM_BUTTON = '.confirm-actions leo-button'
 
 /** The trust question, which is a dialog named "Project trust". */
 export const trustQuestion = (page) => page.getByRole('dialog', { name: 'Project trust', exact: true })

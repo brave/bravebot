@@ -12,7 +12,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync }
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT, COMPOSER_SEND } from './drive-support.mjs'
+import { COMPOSER_INPUT, COMPOSER_SEND, CONFIRM_BUTTON } from './drive-support.mjs'
 
 /** A language server that answers what a session asks of one, and says when it came up. */
 const SERVER = `#!/bin/sh
@@ -93,7 +93,7 @@ try {
   const scope = await card.locator('.permission-scope code').allInnerTexts()
   assert.deepEqual(scope.map((text) => text.trim()), [program, project], 'what would run, and the tree it would read')
   assert.match(await card.locator('.warn').innerText(), /code from your dependencies runs with your own access/, 'that it builds is said out loud')
-  assert.deepEqual(await card.locator('.confirm-actions button').allInnerTexts(), ['Don’t start', 'Start for this conversation'])
+  assert.deepEqual(await card.locator(CONFIRM_BUTTON).allInnerTexts(), ['Don’t start', 'Start for this conversation'])
   assert.match(await page.locator('.pending-jump').innerText(), /Approval needed/)
   assert.equal(await page.locator('.pending-jump').getAttribute('data-tooltip'), 'Answer the language server')
   assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).count(), 0, 'nothing can be sent while the question stands: the round button is Stop')
