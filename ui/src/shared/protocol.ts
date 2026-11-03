@@ -36,6 +36,8 @@ export type Change =
   | { kind: 'elided'; lines: number }
 
 export interface Activity {
+  /** The id dispatch gave the call, the same on its start and its finish. `null` for a line no dispatch made. */
+  call: number | null
   verb: string
   target: string
   /** `target` spelled so a file's name that is blank or ends in whitespace is visible (PROMPT-1). Draw this and not `target`; match a call to its confirmation on `target`. */

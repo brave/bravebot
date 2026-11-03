@@ -217,7 +217,7 @@ bound to the arguments as held.
 `verified-by: bravebot_agent::tools::a_file_calls_line_spells_a_name_a_person_could_not_otherwise_tell_apart`
 `verified-by: bravebot_agent::tools::a_stored_call_spells_the_name_of_its_file`
 `verified-by: bravebot_ui_bridge::reporting::a_calls_file_crosses_as_held_and_as_spelled`
-`verified-by: bravebot_ui_bridge::acp::a_call_is_titled_with_the_file_as_spelled_and_closed_on_the_name_as_held`
+`verified-by: bravebot_ui_bridge::acp::a_call_is_titled_with_the_file_as_spelled`
 `verified-by: bravebot_tui::render::a_call_about_a_file_draws_a_name_that_ends_in_a_space_spelled`
 `verified-by: bravebot_tui::app::the_notes_about_a_checkouts_allow_rule_spell_the_rule_and_the_files`
 `verified-by: bravebot_ui_bridge::acp::the_trust_question_spells_a_directory_that_would_draw_as_another`

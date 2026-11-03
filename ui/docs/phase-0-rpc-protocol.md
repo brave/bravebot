@@ -1110,7 +1110,7 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 `Activity` serialises as:
 
 ```json
-{ "verb": "read", "target": "src/main.rs", "shownTarget": "src/main.rs", "shownFile": "src/main.rs",
+{ "call": 7, "verb": "read", "target": "src/main.rs", "shownTarget": "src/main.rs", "shownFile": "src/main.rs",
   "why": "see the entry point", "note": "412 lines",
   "failed": false, "untrusted": false, "waitedSeconds": null,
   "changes": [ { "kind": "added", "text": "…" } ] }
@@ -1128,6 +1128,8 @@ it is. It equals `shownTarget` where the call names no file.
 `why` is the planner's own line on what the call is for, the same on `tool.started` and
 `tool.finished`, and empty where it gave none. It is released for the screen and read by
 nothing else, so a client draws it beside the call or not at all.
+
+`call` is the id the engine gives a dispatch, taken from a counter and never from the call or the reply. It is the same on a call's `tool.started` and `tool.finished` and unique within the process, so a client pairs a finish with its start by `call` alone, never by `verb` or `target`, which can be content from outside. It is `null` on a line no dispatch made, which no finish ends.
 
 `note: null` means the call is still running — that is what distinguishes an unfinished
 line from one that finished with nothing to say, and the client must render the two

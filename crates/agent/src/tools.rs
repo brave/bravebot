@@ -27,7 +27,7 @@
 use crate::confirm::{Confirmer, Decision, Intent, Remark, WriteDecision, WriteRequest};
 use crate::diff::Diff;
 use crate::processor::{self, Chat};
-use crate::report::{Activity, Reporter};
+use crate::report::{Activity, CallId, Reporter};
 use bravebot_aichat::protocol::{Tool, ToolCall, Usage};
 use bravebot_core::ask::{self, Choice, Question, Series};
 use bravebot_core::credentials::Scanned;
@@ -2538,9 +2538,11 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
             let produced =
                 Produced::problem(format!("error: the arguments were not valid JSON: {e}"));
             // Announced and closed in one breath, because there was never a call to watch.
-            reporter.tool_started(Activity::running(verb, "").of_tool(&name));
+            let call_id = CallId::next();
+            reporter.tool_started(Activity::running(verb, "").for_call(call_id).of_tool(&name));
             reporter.tool_finished(
                 Activity::running(verb, "")
+                    .for_call(call_id)
                     .of_tool(&name)
                     .failed(produced.note.clone()),
             );
@@ -2570,8 +2572,10 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
     // selects no server, and with either holding the server's tools back the offer is not deferred.
     let loads_a_tool = name == "load_tool" && tools.mcp.is_some_and(|offer| offer.is_deferred());
     let why = why_of(policy, &name, &arguments);
+    let call_id = CallId::next();
     reporter.tool_started(
         Activity::running(verb, target.clone())
+            .for_call(call_id)
             .of_tool(&name)
             .naming_a_file(names_a_file(&name))
             .saying_why(why.clone()),
@@ -2797,6 +2801,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
     // have it too, as part of what the turn spent at the model, but a total cannot answer which
     // call was the slow one or whether a model or this machine was what took the time.
     let finished = Activity::running(verb, target)
+        .for_call(call_id)
         .of_tool(&name)
         .naming_a_file(names_a_file(&name))
         .saying_why(why)
@@ -2900,13 +2905,16 @@ pub fn refused_without_running<S: Sink, R: Reporter>(
         .map(|(_, alias, tool)| format!("{alias}:{tool}"))
         .or_else(|| name.strip_prefix("mcp__").map(server_named));
     let target = target_of(policy, &name, server.as_deref(), slots, &arguments);
+    let call_id = CallId::next();
     reporter.tool_started(
         Activity::running(verb, target.clone())
+            .for_call(call_id)
             .of_tool(&name)
             .saying_why(why.clone()),
     );
     reporter.tool_finished(
         Activity::running(verb, target)
+            .for_call(call_id)
             .of_tool(&name)
             .saying_why(why)
             .failed(produced.note.clone()),
@@ -28460,8 +28468,29 @@ mod tests {
 
             assert_eq!(beforehand, sequential);
             assert_eq!(trail_beforehand, trail);
-            assert_eq!(screen_beforehand.started, screen.started);
-            assert_eq!(screen_beforehand.finished, screen.finished);
+            // Each dispatch takes a new id, so the two runs agree on the lines and on which
+            // finish ends which start, not on the ids' values.
+            let ids = |lines: &[Activity]| lines.iter().map(|line| line.call).collect::<Vec<_>>();
+            let without_ids = |lines: &[Activity]| {
+                lines
+                    .iter()
+                    .cloned()
+                    .map(|line| Activity { call: None, ..line })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(ids(&screen.finished), ids(&screen.started));
+            assert_eq!(
+                ids(&screen_beforehand.finished),
+                ids(&screen_beforehand.started)
+            );
+            assert_eq!(
+                without_ids(&screen_beforehand.started),
+                without_ids(&screen.started)
+            );
+            assert_eq!(
+                without_ids(&screen_beforehand.finished),
+                without_ids(&screen.finished)
+            );
             assert_eq!(sequential.len(), calls.len());
             assert!(
                 sequential.iter().any(|answer| answer.6.is_some()),

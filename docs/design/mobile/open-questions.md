@@ -1,6 +1,6 @@
 # Mobile prototype open questions
 
-Status: proposal. Q2 is resolved, and U1 is decided for host-launched clients. This is the single record of unresolved decisions and choices awaiting validation. The [decision record](decisions-and-tradeoffs.md) holds settled choices and their reasons; the linked architecture and contract sections hold implementation requirements.
+Status: proposal. Q2 and Q6 are resolved, and U1 is decided for host-launched clients. This is the single record of unresolved decisions and choices awaiting validation. The [decision record](decisions-and-tradeoffs.md) holds settled choices and their reasons; the linked architecture and contract sections hold implementation requirements.
 
 **Unresolved** means an answer is still needed. **Awaiting validation** means the plan has a proposed answer that needs evidence. Neither status establishes implemented behavior. Each entry names the capability that needs its answer; unrelated work can proceed.
 
@@ -110,11 +110,10 @@ These are not accepted risks or implementation details that can be skipped. The 
 
 ### Q6. How does a tool finish name the call it ends?
 
-- **Status:** unresolved. Arrival order is used meanwhile.
-- **Question and reason:** the engine gives a call no identity. The session view pairs a tool finish with the latest call still running, because no content of a call may decide the row: a call's target can be content from outside. When two calls are in flight and finish out of order, each row shows the other call's verb, target and note until the turn ends, and the Calls made list and the transcript are wrong for that time. Pairing by verb and target was tried and removed, because it branches on content.
-- **Current assumption:** a review of the engine's call sites found calls running one at a time, so the swap needs overlapping calls. This is not yet confirmed by a test of the engine.
-- **Evidence needed:** an id the engine assigns to a call and carries on both events, the change to the session view's wire shape and its spec, and a test with overlapping calls that finish in either order.
-- **Before:** any engine work that runs calls in parallel, and before the Calls made list is relied on as a record of what touched content from outside.
+- **Status:** resolved.
+- **Decision:** the engine gives each dispatch an id from a process-wide counter, never from the call or the provider's reply, and carries it as `call` on both `tool.started` and `tool.finished`. The session view, the ACP bridge and the desktop transcript pair a finish with its start by that id alone. A finish whose id names no running call, or that has none, is a row of its own. Calls already overlap without parallel dispatch: a delegate runs on a thread of its own and reports through the same reporter as the turn that started it.
+- **Evidence:** `bravebot_agent::turn::each_call_is_announced_and_summarised_under_an_id_of_its_own` checks that two calls in one reply get different ids and that each finish carries its start's id. `bravebot_ui_bridge::view::a_finished_call_replaces_the_row_of_the_call_it_ends` and `bravebot_ui_bridge::acp::a_finished_call_closes_the_editor_entry_with_its_call_id` finish two calls with the same verb and target in either order. `ui/scripts/tool-pairing.test.mjs` does the same for the desktop transcript.
+- **Remaining:** the TUI pairs a finish with the call still running for the same delegate, the desktop transcript gives a landed write to the latest call row that has none, and the CLI only prints. None of them reads the id yet.
 - **Issue:** [#2769](https://github.com/brave/bravebot/issues/2769), "Give tool calls an id in the session view, so a finish lands on its own call's row when calls overlap".
 
 ### Q7. When does the mobile app close a session it opened?

@@ -170,7 +170,7 @@ export const BOT_SAID: Said[] = [
 // ---------------------------------------------------------------- event payloads
 
 export const tool = (verb: string, target: string, why: string, note: string | null, extra: Partial<Activity> = {}): Activity => ({
-  verb, target, shownTarget: target, shownFile: target, why, note, failed: false, untrusted: false, changes: [], waitedSeconds: null, ...extra,
+  call: null, verb, target, shownTarget: target, shownFile: target, why, note, failed: false, untrusted: false, changes: [], waitedSeconds: null, ...extra,
 })
 
 export const axes = (integrity: LabelAxes['integrity'], confidentiality: LabelAxes['confidentiality']): LabelAxes => ({ integrity, confidentiality })
