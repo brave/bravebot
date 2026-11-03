@@ -1776,7 +1776,6 @@ mod tests {
 
     #[test]
     fn an_entry_stored_before_the_destination_key_reads_as_no_destination() {
-        // An absent key is no destination, and the entry still loads.
         let old = "cron=0 9 * * *\ndir=/work\nmode=read\nscheduler=launchd\n";
         let entry = read_entry("1", old, "hi".into()).expect("still loads");
         assert_eq!(entry.destination, None);
@@ -1828,7 +1827,8 @@ mod tests {
 
     #[test]
     fn a_destination_must_be_an_absolute_path_to_a_file_that_exists() {
-        // A destination must be absolute, exist and be a file.
+        // Existence is checked only at `add`: `stored_destination` does not check again, so a
+        // program removed later is a failed delivery and not an unreadable entry.
         let scratch = tempfile::tempdir().expect("a directory");
         let program = scratch.path().join("notify");
         std::fs::write(&program, "#!/bin/sh\n").expect("writes");
@@ -1885,7 +1885,6 @@ mod tests {
 
     #[test]
     fn list_shows_the_destination_before_the_paused_or_active_word() {
-        // The row ends with the destination and then the state word.
         let entry = |destination: Option<&str>| Entry {
             id: "1".into(),
             cron: "0 9 * * *".into(),
