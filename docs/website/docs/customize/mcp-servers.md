@@ -354,8 +354,12 @@ the server's allow or deny list", or "N tools were withheld by the server's allo
 Each tool is `alias:tool`, then its arguments, then every row of what the server says about it
 behind the `┃` margin, none of it cut: a yes puts exactly this text in front of the model, and
 the margin marks the words that are the server's. A [check](../security/vetting.md) reads the list
-first, as it reads anything else about to be believed, and its verdict is drawn above it. `↑↓`
-scrolls a list longer than the screen.
+first, as it reads anything else about to be believed, and its verdict is drawn above it. With
+several servers the checks of their lists are made at the same time, no more than eight at once,
+so the wait before the first question is about one check's. The questions come one at a time in the
+order the servers are declared, and the time you take over them is counted as time spent waiting on
+you, which the checks are not. When the session spends a Premium subscription, the checks are made
+one after another instead. `↑↓` scrolls a list longer than the screen.
 
 | Answer | What happens |
 |---|---|

@@ -7277,3 +7277,368 @@ fn a_tool_list_and_a_move_the_person_does_not_approve_are_recorded_as_refusals()
     );
     assert!(!clean, "a turn whose move was declined read as clean");
 }
+
+/// How long the slow chat server holds each check before it answers.
+const A_CHECK_TAKES: std::time::Duration = std::time::Duration::from_millis(800);
+
+/// A mock chat server that answers each connection on a thread of its own, holding a check for
+/// [`A_CHECK_TAKES`] before it says it found nothing, and answering the turn's own round at once.
+/// Every body is reported.
+fn serve_slow_checks() -> (String, mpsc::Receiver<String>) {
+    let (endpoint, bodies, _most) = serve_counted_checks();
+    (endpoint, bodies)
+}
+
+/// As [`serve_slow_checks`], and also counts the most checks it held open at one moment.
+fn serve_counted_checks() -> (
+    String,
+    mpsc::Receiver<String>,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let most = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let holding = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = most.clone();
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let sender = sender.clone();
+            let (most, holding) = (most.clone(), holding.clone());
+            thread::spawn(move || {
+                let body = body_of(&stream);
+                let _ = sender.send(body.clone());
+                let reply = match body.contains(A_CHECK_ASKING) {
+                    true => {
+                        let now = holding.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        most.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+                        thread::sleep(A_CHECK_TAKES);
+                        holding.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        reply_with(
+                            r#"{\"verdict\": \"safe\", \"reason\": \"nothing addressed to a reader\"}"#,
+                        )
+                    }
+                    false => reply_with("done"),
+                };
+                let frames = as_sse(&reply);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                    frames.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            });
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), receiver, counted)
+}
+
+/// `count` servers, each answering as the weather server does, under the aliases `s0`, `s1` and on.
+fn servers_named(scratch: &Scratch, count: usize) -> Session {
+    let reached: Vec<Reached> = (0..count)
+        .map(|n| {
+            let (url, _requests) = serve_weather();
+            reach_as(&format!("s{n}"), &url)
+        })
+        .collect();
+    Session::new(
+        reached,
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    )
+}
+
+/// Three servers, each answering as the weather server does, under the aliases `a`, `b` and `c`.
+fn three_servers(scratch: &Scratch) -> Session {
+    let reached: Vec<Reached> = ["a", "b", "c"]
+        .into_iter()
+        .map(|alias| {
+            let (url, _requests) = serve_weather();
+            reach_as(alias, &url)
+        })
+        .collect();
+    Session::new(
+        reached,
+        scratch.project(),
+        Some(scratch.state()),
+        true,
+        Managed::default(),
+    )
+}
+
+/// The checks of every list a turn puts to the person are made at the same time, so the wait
+/// before the planner is asked is one check's and not the sum of them, and the questions are still
+/// drawn in server order, one per list, each over its own check (SERVERS-8). The regressions it
+/// rejects are a loop that finishes one server's check and question before it starts the next
+/// server's, which makes the wait three checks long, and a settle that drops, repeats or reorders
+/// a question or a check while overlapping them.
+#[test]
+fn the_checks_of_every_unasked_list_are_made_together_and_the_questions_drawn_in_server_order() {
+    let scratch = Scratch::new("checks-together");
+    let session = three_servers(&scratch);
+    let (endpoint, chat) = serve_slow_checks();
+    let workspace = Workspace::new(scratch.project()).expect("workspace");
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut trail = RecordingSink::new();
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+
+    let started = std::time::Instant::now();
+    let outcome = turns::run_cancellable(
+        &config_for(&endpoint),
+        &Egress::new(),
+        &workspace,
+        &Task::new("what is the forecast").with_mcp(Some(session.clone())),
+        &mut confirmer,
+        &mut reporter,
+        &mut trail,
+        bravebot_agent::workspace::trust_store(workspace.root()),
+        &Cancel::new(),
+    );
+    let took = started.elapsed();
+    outcome.expect("the turn runs");
+
+    let put: Vec<&str> = confirmer
+        .lists
+        .iter()
+        .map(|list| list.alias.as_str())
+        .collect();
+    assert_eq!(
+        put,
+        ["a", "b", "c"],
+        "the questions were not drawn in server order"
+    );
+    let checks = chat
+        .try_iter()
+        .filter(|body| body.contains(A_CHECK_ASKING))
+        .count();
+    assert_eq!(
+        checks, 3,
+        "a list was checked more or fewer times than once"
+    );
+    assert_eq!(reporter.checks.len(), 3, "a check was not announced");
+    assert_eq!(
+        reporter.checks_finished, 3,
+        "a check was not announced as over"
+    );
+    let said = trail
+        .events()
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::GatePassed { gate: "vetting", detail }
+                    if detail.contains("the check said")
+            )
+        })
+        .count();
+    assert_eq!(said, 3, "the trail does not hold one verdict per check");
+    assert_eq!(
+        session.offering(),
+        vec![
+            ("a".to_string(), Offering::Tools(1)),
+            ("b".to_string(), Offering::Tools(1)),
+            ("c".to_string(), Offering::Tools(1)),
+        ]
+    );
+    assert!(
+        took < A_CHECK_TAKES * 2,
+        "three checks of {A_CHECK_TAKES:?} took {took:?}, so they were made one after another"
+    );
+}
+
+/// A turn stopped at the first question leaves every list it did not get an answer to for the
+/// next turn to ask, though the checks of all of them were already running (SERVERS-8). The
+/// regression it rejects is a settle that marks the lists it took out as asked once their checks
+/// are running, so a stop loses them.
+#[test]
+fn a_turn_stopped_at_the_first_of_several_lists_leaves_the_others_to_be_asked_again() {
+    let scratch = Scratch::new("checks-together-stopped");
+    let session = three_servers(&scratch);
+    let (endpoint, _chat) = serve_slow_checks();
+    let cancel = Cancel::new();
+    let mut stopping = Answering::new(Decision::Reject, CallDecision::reject());
+    stopping.stop = Some(cancel.clone());
+
+    let (result, _reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session.clone())),
+        &mut stopping,
+        &cancel,
+    );
+    let _ = result;
+
+    let put: Vec<&str> = stopping
+        .lists
+        .iter()
+        .map(|list| list.alias.as_str())
+        .collect();
+    assert_eq!(put, ["a"], "only the first list should have been put");
+    assert_eq!(
+        session.offering(),
+        vec![
+            ("a".to_string(), Offering::Unasked),
+            ("b".to_string(), Offering::Unasked),
+            ("c".to_string(), Offering::Unasked),
+        ],
+        "a list the stopped turn did not get an answer to was not left to be asked again"
+    );
+}
+
+/// A subscription that is held and never drawn on, which is what makes a turn one that spends one.
+struct IdleWallet;
+
+impl bravebot_aichat::Subscription for IdleWallet {
+    fn next_credential(&mut self) -> Result<bravebot_aichat::SubscriptionCredential, String> {
+        Ok(bravebot_aichat::SubscriptionCredential {
+            key: bravebot_config::Secret::new("credential-1".to_string()),
+        })
+    }
+}
+
+/// A turn that spends a subscription makes the checks of the lists one after another, because the
+/// credential is lent to one request at a time (SERVERS-8). The regression it rejects is a settle
+/// that overlaps the checks whatever the turn holds, which lends the one credential to several
+/// requests at once. The checks and the questions are otherwise as when they are made together.
+#[test]
+fn a_turn_spending_a_subscription_makes_the_checks_of_the_lists_one_after_another() {
+    let scratch = Scratch::new("checks-serial-subscription");
+    let session = three_servers(&scratch);
+    let (endpoint, chat_requests) = serve_slow_checks();
+    let mut config = config_for(&endpoint);
+    // The compiled-in premium host is Brave's, which a subscription's request would reach, so the
+    // mock server is made the premium host as well.
+    config.premium_endpoint = Some(endpoint.clone());
+    let egress = Egress::new();
+    let account = bravebot_agent::chatgpt::AccountSession::begin();
+    let mut wallet = IdleWallet;
+    let mut chat = bravebot_agent::processor::Chat::new(&config, &egress, &account)
+        .on(Some(&config.default_model))
+        .spending(Some(&mut wallet));
+    let holding = CapabilitySet::from_iter(
+        std::iter::once(Capability::WebFetch)
+            .chain(["a", "b", "c"].map(|alias| Capability::McpCall(ServerAlias::new(alias)))),
+    );
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "settle the lists");
+    let mut sink = RecordingSink::new();
+    let mut policy =
+        Policy::begin(routing, ReleasePlan::new(), holding.clone(), &mut sink).expect("policy");
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+
+    let started = std::time::Instant::now();
+    session.settle(
+        &mut policy,
+        &mut chat,
+        &mut confirmer,
+        &mut bravebot_agent::IgnoreReports,
+        PermissionMode::Ask,
+        &holding,
+    );
+    let took = started.elapsed();
+
+    let put: Vec<&str> = confirmer
+        .lists
+        .iter()
+        .map(|list| list.alias.as_str())
+        .collect();
+    assert_eq!(put, ["a", "b", "c"]);
+    let checks = chat_requests
+        .try_iter()
+        .filter(|body| body.contains(A_CHECK_ASKING))
+        .count();
+    assert_eq!(
+        checks, 3,
+        "a list was checked more or fewer times than once"
+    );
+    assert!(
+        took >= A_CHECK_TAKES * 3,
+        "three checks of {A_CHECK_TAKES:?} took {took:?} in a turn spending a subscription, so they overlapped"
+    );
+}
+
+/// The time a person takes over each of several lists is charged to them in full and nothing else
+/// is: the checks, made together, are not part of it (SESSION-12, SERVERS-8). The regressions it
+/// rejects are a settle that charges only the first question's wait or drops the waits of the
+/// questions drawn after a check returned, and one that charges the checks' own wait to the person.
+#[test]
+fn the_time_taken_over_several_lists_made_together_is_charged_to_the_person_once() {
+    let scratch = Scratch::new("checks-together-wait");
+    let session = three_servers(&scratch);
+    let (endpoint, _chat) = serve_slow_checks();
+    let mut reading = Answering::new(Decision::Approve, CallDecision::reject());
+    reading.list_delay = std::time::Duration::from_millis(400);
+    let (result, reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut reading,
+        &Cancel::new(),
+    );
+    let timing = result.expect("the turn runs").timing;
+    let waited = 3 * 400;
+    assert_eq!(reading.lists.len(), 3, "a list was not put to the person");
+    assert!(
+        timing.stalled_ms >= waited,
+        "the waits on the lists were not all charged to the person: {timing:?}"
+    );
+    assert!(
+        timing.stalled_ms < waited + 400,
+        "the wait on the checks was charged to the person: {timing:?}"
+    );
+    assert!(
+        timing.inference_ms + timing.tools_ms + timing.stalled_ms <= timing.wall_ms,
+        "the parts exceed the whole: {timing:?}"
+    );
+    let last = reporter
+        .spent
+        .last()
+        .expect("the turn reported what it spent");
+    assert_eq!(last.timing.stalled_ms, timing.stalled_ms);
+}
+
+/// A session with more servers than a round may read at once checks no more of their lists at one
+/// moment than that, begins the next as one is joined, and still draws the questions in server
+/// order (SERVERS-8, TURN-10). The regression it rejects is a thread for every list, which holds
+/// as many requests open as there are servers.
+#[test]
+fn no_more_checks_are_made_at_once_than_the_reads_of_one_round() {
+    let scratch = Scratch::new("checks-together-capped");
+    let session = servers_named(&scratch, 10);
+    let (endpoint, chat, most) = serve_counted_checks();
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+    let (result, _reporter) = timed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("what is the forecast").with_mcp(Some(session)),
+        &mut confirmer,
+        &Cancel::new(),
+    );
+    result.expect("the turn runs");
+
+    let put: Vec<String> = confirmer
+        .lists
+        .iter()
+        .map(|list| list.alias.as_str().to_string())
+        .collect();
+    let declared: Vec<String> = (0..10).map(|n| format!("s{n}")).collect();
+    assert_eq!(
+        put, declared,
+        "the questions were not drawn in server order"
+    );
+    let checks = chat
+        .try_iter()
+        .filter(|body| body.contains(A_CHECK_ASKING))
+        .count();
+    assert_eq!(
+        checks, 10,
+        "a list was checked more or fewer times than once"
+    );
+    assert_eq!(
+        most.load(std::sync::atomic::Ordering::SeqCst),
+        8,
+        "the checks held open at one moment were not the eight a round may read"
+    );
+}

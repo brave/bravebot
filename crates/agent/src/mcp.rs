@@ -15,7 +15,7 @@ use crate::confirm::{
     CallDecision, Confirmer, Decision, ListedTool, McpCallRequest, MoveRequest, ToolListRequest,
 };
 use crate::processor::Chat;
-use crate::report::Reporter;
+use crate::report::{IgnoreReports, Reporter};
 use crate::scratch::SessionScratch;
 use crate::servers::EffectivePolicy;
 use bravebot_aichat::protocol::{Tool, Usage};
@@ -25,11 +25,11 @@ use bravebot_config::mcp::{
 };
 use bravebot_config::{Managed, Refusal, Rule};
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
-use bravebot_core::event::Sink;
+use bravebot_core::event::{RecordingSink, Sink};
 use bravebot_core::policy::{McpStanding, Policy};
 use bravebot_core::slot::{SlotId, SlotStore};
 use bravebot_core::value::Labelled;
-use bravebot_core::vetting::{Endorsed, Verdict};
+use bravebot_core::vetting::{Endorsed, Verdict, VettingSpec};
 use bravebot_i18n::t;
 use bravebot_mcp::protocol::{WIRE_PREFIX, WIRE_SEPARATOR, choice_key, with_choice};
 use bravebot_mcp::{
@@ -350,6 +350,11 @@ impl<R: Reporter> Said<'_, R> {
     }
 }
 
+/// The most checks of tool lists made at the same time, the figure the reads of one round are
+/// held to (TURN-10). A session with more servers than this starts the next check as each one
+/// before it is joined, in server order.
+const CHECKS_AT_ONCE: usize = crate::tools::READS_AT_ONCE;
+
 fn stopped(chat: &Chat<'_>) -> bool {
     chat.cancel.is_some_and(|cancel| cancel.is_cancelled())
 }
@@ -572,6 +577,17 @@ impl Session {
     /// of the session, and a turn stopped at the question leaves it unasked. Settled at the start
     /// of a turn a person asked for, and of a plan run, since that is where there is somebody to put
     /// the question to.
+    ///
+    /// The checks of every list to be put are made at the same time, each on a thread of its own
+    /// under a branch of the policy, at most [`CHECKS_AT_ONCE`] of them, and the questions are
+    /// drawn in server order as each check returns (SERVERS-8). A turn that has a subscription to
+    /// spend makes them one after another, because the credential is lent to one request at a
+    /// time. Which lists are checked and which thread runs which check depend on the servers and
+    /// the mode only, never on what a list or a reply says.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the checks are specified, run and drawn in server order, each step depending on the one before"
+    )]
     pub fn settle<S: Sink, C: Confirmer, R: Reporter>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -582,6 +598,8 @@ impl Session {
         holding: &CapabilitySet,
     ) -> Settled {
         let mut settled = Settled::default();
+        // Every list to be put, in server order, taken out before any is checked.
+        let mut pending: Vec<(&Server, Listing)> = Vec::new();
         for server in &self.0.servers {
             if stopped(chat) {
                 break;
@@ -610,15 +628,112 @@ impl Session {
                     }
                 }
             };
-            let mut said = Said {
-                reporter: &mut *reporter,
-                notices: &mut settled.notices,
-            };
-            let (now, usage) =
-                self.settle_one(policy, chat, confirmer, &mut said, mode, server, listing);
-            settled.usage.add(usage);
-            *held(&server.state) = now;
+            pending.push((server.as_ref(), listing));
         }
+
+        // Not made where every check is being bypassed, for the reason a vouch makes none there:
+        // the mode answers this question yes, so nobody would read the word.
+        let checking = mode != crate::PermissionMode::Bypass;
+        let specs: Vec<Option<VettingSpec>> = pending
+            .iter()
+            .map(|(server, listing)| {
+                checking.then(|| {
+                    policy.before_vetting_a_tool_list(&server.alias, listing.list().clone())
+                })
+            })
+            .collect();
+        let together = checking && pending.len() > 1 && chat.subscription.is_none();
+
+        // What a thread needs to make a check of its own. The turn's chat is not lent to a thread,
+        // since it may hold a credential that only one request can use at a time.
+        let (config, egress, model, cancel) = (chat.config, chat.egress, chat.model, chat.cancel);
+        let account = chat.session.clone();
+        let mut base = RecordingSink::new();
+        let branchable = policy.branch(&mut base);
+
+        std::thread::scope(|scope| {
+            // The check of the list at `index` on a thread of its own, where checks are made at
+            // the same time. Which index is begun when depends on the number of servers alone.
+            let start = |index: usize| {
+                let spec = specs[index].as_ref().filter(|_| together)?;
+                let branchable = &branchable;
+                let account = &account;
+                Some(scope.spawn(move || {
+                    let mut record = RecordingSink::new();
+                    let mut branch = branchable.branch(&mut record);
+                    let mut chat = Chat::new(config, egress, account).on(model);
+                    if let Some(cancel) = cancel {
+                        chat = chat.stoppable_by(cancel);
+                    }
+                    let checked = crate::vet::run(&mut branch, &mut chat, &mut IgnoreReports, spec);
+                    drop(branch);
+                    (checked, record)
+                }))
+            };
+            let mut started = specs.len().min(CHECKS_AT_ONCE);
+            let mut running: Vec<Option<_>> = (0..specs.len())
+                .map(|index| if index < started { start(index) } else { None })
+                .collect();
+
+            for (index, ((server, listing), spec)) in pending.into_iter().zip(&specs).enumerate() {
+                if stopped(chat) {
+                    // Not asked, so the next turn asks. A check that was already made is still
+                    // recorded and still charged.
+                    if let Some(handle) = running[index].take() {
+                        let (checked, record) = handle
+                            .join()
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+                        policy.rejoin(record);
+                        settled.usage.add(checked.usage);
+                    }
+                    *held(&server.state) = State::Unasked(listing);
+                    continue;
+                }
+                let checked = match (spec, running[index].take()) {
+                    (None, _) => (
+                        Verdict::Inconclusive("the check was not made"),
+                        None,
+                        Usage::default(),
+                    ),
+                    (Some(spec), handle) => {
+                        let checked = match handle {
+                            // Said around the wait, so the screen names the check the question
+                            // below is waiting on and has stopped saying so before it is drawn.
+                            Some(handle) => {
+                                reporter.check_started(spec.checking());
+                                let finished = handle.join();
+                                reporter.check_finished();
+                                let (checked, record) = finished
+                                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+                                policy.rejoin(record);
+                                // A place is free, so the next list in server order is checked.
+                                if started < specs.len() && !stopped(chat) {
+                                    running[started] = start(started);
+                                    started += 1;
+                                }
+                                checked
+                            }
+                            None => crate::vet::run(policy, chat, &mut *reporter, spec),
+                        };
+                        let reason = checked.reason.map(|reason| {
+                            let proof =
+                                policy.authorise_display_release("what a check said about content");
+                            reason.declassify(&proof)
+                        });
+                        (checked.verdict, reason, checked.usage)
+                    }
+                };
+                let mut said = Said {
+                    reporter: &mut *reporter,
+                    notices: &mut settled.notices,
+                };
+                let (now, usage) = self.settle_one(
+                    policy, chat, confirmer, &mut said, mode, server, listing, checked,
+                );
+                settled.usage.add(usage);
+                *held(&server.state) = now;
+            }
+        });
         settled
     }
 
@@ -676,30 +791,12 @@ impl Session {
         mode: crate::PermissionMode,
         server: &Server,
         listing: Listing,
+        (verdict, reason, usage): (Verdict, Option<String>, Usage),
     ) -> (State, Usage) {
         let alias = server.alias.as_str();
         let refused = listing.refused();
         let withheld = listing.withheld();
         let list = listing.list().clone();
-
-        // Not made where every check is being bypassed, for the reason a vouch makes none there:
-        // the mode answers this question yes, so nobody would read the word.
-        let (verdict, reason, usage) = match mode != crate::PermissionMode::Bypass {
-            true => {
-                let spec = policy.before_vetting_a_tool_list(alias, list.clone());
-                let checked = crate::vet::run(policy, chat, &mut *said.reporter, &spec);
-                let reason = checked.reason.map(|reason| {
-                    let proof = policy.authorise_display_release("what a check said about content");
-                    reason.declassify(&proof)
-                });
-                (checked.verdict, reason, checked.usage)
-            }
-            false => (
-                Verdict::Inconclusive("the check was not made"),
-                None,
-                Usage::default(),
-            ),
-        };
 
         let shaped = policy.render_in_place("mcp_tools", &list, |text| listed(alias, &text));
         let tools = {

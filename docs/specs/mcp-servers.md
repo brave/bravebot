@@ -907,7 +907,16 @@ That list is put to the person at the start of the first turn they ask for, or o
 tool's name as `alias:tool`, its arguments, and every row of its description behind the margin with
 none of it cut, since a yes puts exactly this text in front of the planner. A check reads it first,
 as it reads anything else about to be promoted ([CHECK-10](vetting.md#CHECK-10)), and its verdict is
-drawn above the list.
+drawn above the list. The checks of every list to be put are made at the same time, no more than
+eight at one moment (the number of reads one round makes, [TURN-10](turns.md#TURN-10)) and the next
+begun, in the order the servers are declared, as one is joined. The wait before the planner is asked
+is therefore about one check's and not the sum of them, and the questions are drawn in the order the
+servers are declared, each when the one before it is answered. Which lists are checked depends on
+the servers and the mode, never on what a list or a check says. A turn that spends a subscription
+makes the checks one after another, since the credential is lent to one request at a time. The
+time a person takes over the questions is charged to them as it was when the checks were made one
+after another, and the time spent waiting on a check is not. A turn stopped at a question leaves
+every list it has not put unasked, and the checks already made are still charged.
 
 A yes is the person vouching for the list, and it is the one road by which the list is promoted
 ([LABEL-8](labels.md#LABEL-8)). A no offers none of its tools for the rest of the session and is not
@@ -963,6 +972,11 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_agent::mcp::two_servers_composing_one_name_offer_neither_under_it`
 `verified-by: bravebot_agent::mcp::a_declined_list_offers_nothing_and_is_not_asked_again`
 `verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_list_leaves_it_to_be_asked_again`
+`verified-by: bravebot_agent::mcp::the_checks_of_every_unasked_list_are_made_together_and_the_questions_drawn_in_server_order`
+`verified-by: bravebot_agent::mcp::a_turn_stopped_at_the_first_of_several_lists_leaves_the_others_to_be_asked_again`
+`verified-by: bravebot_agent::mcp::a_turn_spending_a_subscription_makes_the_checks_of_the_lists_one_after_another`
+`verified-by: bravebot_agent::mcp::the_time_taken_over_several_lists_made_together_is_charged_to_the_person_once`
+`verified-by: bravebot_agent::mcp::no_more_checks_are_made_at_once_than_the_reads_of_one_round`
 `verified-by: bravebot_agent::mcp::a_list_is_asked_about_every_session_and_a_yes_records_nothing`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_started_in_a_fresh_session_puts_the_lists_to_the_person_before_it_plans`
 `verified-by: bravebot_tui::app::clearing_keeps_the_answer_to_an_mcp_servers_list_for_the_process`

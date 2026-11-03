@@ -596,6 +596,11 @@ the screen that is not what the session is waiting on, and it is what the surfac
 saying once the check is over. A surface that is handed the pair and draws neither half leaves the
 finished-looking row that made the pair necessary.
 
+Where several checks are made at the same time, as the checks of a session's MCP tool lists are
+([SERVERS-8](mcp-servers.md#SERVERS-8)), the pair is still announced one check at a time: a check
+is announced as the turn begins to wait on it, in the order the questions are drawn, and announced
+as over when that wait ends.
+
 **Why.** A whole model call runs inside a tool call, and the verb already on the screen names the
 thing that has not happened yet: somebody watching `Read output` cannot tell a check that is working
 from a backend that is hanging. Where auto-vetting is on and the verdict is safe, no prompt is drawn
