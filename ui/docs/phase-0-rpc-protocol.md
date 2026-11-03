@@ -610,7 +610,8 @@ confirmation is **refused** (§8.4). Returns `{}` once the worker has joined.
 Puts the session back to where it stood `steps` turns ago, on disk and in the conversation
 together, as the terminal's `/undo` and `/rewind` do (SESSION-19). Each file a rewound turn
 wrote goes back to what it held before the earliest of them, and the conversation, turn count,
-spend, task lists and audit trail go back with it. Refused with `turn_in_flight` while a turn
+spend, task lists and audit trail go back with it. The answers given to the planner's questions
+are forgotten, so a question the planner puts again is sent as an `ask.request`. Refused with `turn_in_flight` while a turn
 runs, and with `bad_request` where the session holds fewer than `steps` points.
 
 ```json

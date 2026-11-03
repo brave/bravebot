@@ -1902,6 +1902,14 @@ impl Bridge {
         }
         let gaps = point.coverage.gaps();
         let snapshot = point.snapshot;
+        // As in the terminal: every answer to the planner's questions goes, because the memo does
+        // not say which turn an answer came in (ASK-8). Read as it stands if a turn panicked
+        // holding the lock, since the memo only gains or replaces a whole entry.
+        state
+            .question_answers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .forget();
         let (trust, programs, servers) = state.answers.what_a_rewind_takes_back();
         let refused = bravebot_agent::rewind::restore(
             &workspace,

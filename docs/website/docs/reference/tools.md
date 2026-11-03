@@ -1080,7 +1080,8 @@ Puts up to four questions to you and waits. More than four is refused whole rath
 Questions are put one at a time. You may choose an option, answer in your own words, or skip. A
 skipped question is an answer to work with rather than a reason to ask again. An answer is remembered
 for the session, question by question, in the terminal and in the desktop application, and a session
-opened, resumed or forked in the desktop application begins with none. The turn's notices name each
+opened, resumed or forked in the desktop application begins with none. An undo (`/undo`, `/rewind`)
+forgets every answer, so each question is asked again. The turn's notices name each
 question it did not put. Only an answer you gave is remembered, so a question that nobody could be asked,
 or that came back with no answer, is put again.
 
