@@ -715,7 +715,7 @@ fn names_the_chatgpt_sign_in(text: &str) -> bool {
 /// the sign-in file, as the agent's does to tell a first run what is configured, names neither.
 #[test]
 fn the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else() {
-    let callers: Vec<String> = shipped::sources()
+    let callers: BTreeSet<String> = shipped::sources()
         .iter()
         .filter(|source| names_the_chatgpt_sign_in(&source.without_test_modules))
         .map(|source| source.name.clone())
@@ -723,9 +723,11 @@ fn the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else() {
     assert_eq!(
         callers,
         [
-            "crates/ui-bridge/src/accounts.rs",
-            "crates/cli/src/chatgpt.rs"
+            "crates/cli/src/chatgpt.rs",
+            "crates/ui-bridge/src/accounts.rs"
         ]
+        .map(String::from)
+        .into()
     );
 }
 
@@ -781,14 +783,16 @@ fn names_the_xai_sign_in(text: &str) -> bool {
 /// `sign_in`.
 #[test]
 fn the_xai_sign_in_is_started_by_the_command_and_nothing_else() {
-    let callers: Vec<String> = shipped::sources()
+    let callers: BTreeSet<String> = shipped::sources()
         .iter()
         .filter(|source| names_the_xai_sign_in(&source.without_test_modules))
         .map(|source| source.name.clone())
         .collect();
     assert_eq!(
         callers,
-        ["crates/ui-bridge/src/accounts.rs", "crates/cli/src/xai.rs"]
+        ["crates/cli/src/xai.rs", "crates/ui-bridge/src/accounts.rs"]
+            .map(String::from)
+            .into()
     );
 }
 
@@ -829,21 +833,23 @@ fn the_scan_for_the_xai_sign_in_finds_each_way_to_name_it_and_not_a_read_of_the_
 /// one.
 #[test]
 fn the_cancellable_aws_sign_in_is_started_by_the_window_and_nothing_else() {
-    let callers: Vec<String> = shipped::sources()
+    let callers = shipped::sources()
         .iter()
         .filter(|source| {
             let text = &source.without_test_modules;
             text.contains("sign_in_to_until") || text.contains("sign_in_if_needed_until")
         })
         .map(|source| source.name.clone())
-        .collect();
+        .collect::<BTreeSet<String>>();
     assert_eq!(
         callers,
         [
-            "crates/ui-bridge/src/accounts_bedrock.rs",
             "crates/agent/src/backend.rs",
-            "crates/bedrock/src/credentials.rs"
+            "crates/bedrock/src/credentials.rs",
+            "crates/ui-bridge/src/accounts_bedrock.rs"
         ]
+        .map(String::from)
+        .into()
     );
 }
 
