@@ -25,7 +25,7 @@ const LOCK: &str = ".lock";
 /// The environment variable that names the stored schedule a run belongs to. `run-now` sets it for
 /// the one-shot run it starts, and a run that finds it names a stored entry stops at the first
 /// question and keeps it (SCHEDULE-2).
-pub(crate) const FIRING_VARIABLE: &str = "BRAVEBOT_SCHEDULE_ENTRY";
+pub const FIRING_VARIABLE: &str = "BRAVEBOT_SCHEDULE_ENTRY";
 
 /// The longest question line a pending file holds, in characters.
 const LONGEST_QUESTION: usize = 500;
@@ -34,12 +34,12 @@ const LONGEST_QUESTION: usize = 500;
 const LONGEST_CHOICE: usize = 160;
 
 /// The files kept beside the entries of one directory.
-pub(crate) struct Store {
+pub struct Store {
     directory: PathBuf,
 }
 
 impl Store {
-    pub(crate) fn at(directory: &Path) -> Self {
+    pub fn at(directory: &Path) -> Self {
         Self {
             directory: directory.to_path_buf(),
         }
@@ -50,16 +50,16 @@ impl Store {
         self.directory.join(format!("{name}{end}"))
     }
 
-    pub(crate) fn is_paused(&self, name: &str) -> bool {
+    pub fn is_paused(&self, name: &str) -> bool {
         self.sidecar(name, PAUSED).is_file()
     }
 
-    pub(crate) fn mark_paused(&self, name: &str) -> std::io::Result<()> {
+    pub fn mark_paused(&self, name: &str) -> std::io::Result<()> {
         home::write_file(&self.sidecar(name, PAUSED), b"")
     }
 
     /// Take the mark off. An entry with no mark is not an error.
-    pub(crate) fn unmark_paused(&self, name: &str) -> std::io::Result<()> {
+    pub fn unmark_paused(&self, name: &str) -> std::io::Result<()> {
         match std::fs::remove_file(self.sidecar(name, PAUSED)) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
             _ => Ok(()),
@@ -75,7 +75,7 @@ impl Store {
 
     /// The lines of the question `name` is waiting on, cleaned again as they are read because the
     /// file is one a person could have edited. `None` where there is no such file.
-    pub(crate) fn pending(&self, name: &str) -> Option<Vec<String>> {
+    pub fn pending(&self, name: &str) -> Option<Vec<String>> {
         let text = std::fs::read_to_string(self.sidecar(name, PENDING)).ok()?;
         Some(
             text.lines()
@@ -86,7 +86,7 @@ impl Store {
 
     /// Delete the pending question of `name`, and say whether there was one. Whether there was one
     /// is the file's existence and not its content.
-    pub(crate) fn clear_pending(&self, name: &str) -> bool {
+    pub fn clear_pending(&self, name: &str) -> bool {
         std::fs::remove_file(self.sidecar(name, PENDING)).is_ok()
     }
 
@@ -94,7 +94,7 @@ impl Store {
     /// where another run of the same entry holds it. The hold is a lock on a file the operating
     /// system releases when the process ends however it ends, so a run that was killed leaves no
     /// hold behind.
-    pub(crate) fn hold(&self, name: &str) -> std::io::Result<Option<std::fs::File>> {
+    pub fn hold(&self, name: &str) -> std::io::Result<Option<std::fs::File>> {
         home::create_directory(&self.directory)?;
         let file = home::append_to_file(&self.sidecar(name, LOCK))?;
         match file.try_lock() {
@@ -106,7 +106,7 @@ impl Store {
 
     /// Delete everything kept beside the entry `name`, so a later entry of the same name does not
     /// inherit a pause, a question or a lock.
-    pub(crate) fn forget(&self, name: &str) {
+    pub fn forget(&self, name: &str) {
         for end in [PAUSED, PENDING, LOCK] {
             std::fs::remove_file(self.sidecar(name, end)).ok();
         }
@@ -116,17 +116,14 @@ impl Store {
 /// The entry a run says it belongs to: `value` (the variable `run-now` sets, read by the caller)
 /// when `is_stored` says it names a stored entry, and `None` otherwise, so one that names nothing
 /// changes nothing.
-pub(crate) fn named_by(
-    value: Option<String>,
-    is_stored: impl FnOnce(&str) -> bool,
-) -> Option<String> {
+pub fn named_by(value: Option<String>, is_stored: impl FnOnce(&str) -> bool) -> Option<String> {
     let value = value?;
     is_stored(&value).then_some(value)
 }
 
 /// Keep the question a run of `name` stopped at, where it stopped at one. Best effort: a run that
 /// cannot write here has still run.
-pub(crate) fn record_firing(store: &Store, name: &str, asked: Option<&Asking>) {
+pub fn record_firing(store: &Store, name: &str, asked: Option<&Asking>) {
     if let Some(asking) = asked {
         store.write_pending(name, &question_lines(asking)).ok();
     }

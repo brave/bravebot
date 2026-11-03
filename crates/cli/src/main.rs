@@ -14,7 +14,6 @@ mod deep_link;
 mod doctor;
 mod exit;
 mod finish;
-mod firing;
 mod flags;
 mod goal_run;
 mod host;

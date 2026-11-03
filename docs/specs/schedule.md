@@ -3,7 +3,7 @@ id: SCHEDULE
 title: Scheduled runs: pause, stop at a question, overlap
 status: normative
 governs:
-  - crates/cli/src/firing.rs
+  - crates/schedule/src/firing.rs
 documented-by:
   - docs/website/docs/reference/cli.md
   - docs/website/docs/using/headless.md
@@ -41,8 +41,8 @@ to bring it back, and editing the crontab is the one thing `schedule` otherwise 
 doing by hand.
 
 `verified-by: bravebot_cli::scheduled_runs::a_paused_entry_keeps_its_line_and_its_firing_is_skipped_until_it_is_resumed`
-`verified-by: bravebot_cli::firing::a_pause_mark_is_put_on_and_taken_off`
-`verified-by: bravebot_cli::firing::forgetting_an_entry_deletes_what_was_kept_beside_it`
+`verified-by: bravebot_schedule::firing::a_pause_mark_is_put_on_and_taken_off`
+`verified-by: bravebot_schedule::firing::forgetting_an_entry_deletes_what_was_kept_beside_it`
 
 <a id="SCHEDULE-2"></a>
 ### SCHEDULE-2: a run started for an entry stops at the first question it is asked
@@ -61,8 +61,8 @@ A person reading the question later is told what the run needed.
 
 `verified-by: bravebot_cli::main::a_scheduled_run_stops_at_the_first_question_and_keeps_it`
 `verified-by: bravebot_cli::main::a_run_stopped_at_a_scheduled_question_ends_refused`
-`verified-by: bravebot_cli::firing::a_question_is_kept_replaced_read_cleaned_and_cleared`
-`verified-by: bravebot_cli::firing::an_entry_named_in_the_variable_must_be_stored`
+`verified-by: bravebot_schedule::firing::a_question_is_kept_replaced_read_cleaned_and_cleared`
+`verified-by: bravebot_schedule::firing::an_entry_named_in_the_variable_must_be_stored`
 
 <a id="SCHEDULE-3"></a>
 ### SCHEDULE-3: `pending` shows the kept question and `clear` deletes it without reading it
@@ -89,7 +89,7 @@ that was killed leaves none behind. Another entry is not held.
 same directory.
 
 `verified-by: bravebot_cli::scheduled_runs::a_firing_is_skipped_while_the_previous_one_of_the_entry_still_runs`
-`verified-by: bravebot_cli::firing::a_second_hold_on_one_entry_is_refused_until_the_first_is_dropped`
+`verified-by: bravebot_schedule::firing::a_second_hold_on_one_entry_is_refused_until_the_first_is_dropped`
 
 <a id="SCHEDULE-5"></a>
 ### SCHEDULE-5: an expression is refused unless every number is inside its field's range
@@ -103,7 +103,7 @@ nothing is written.
 **Why.** A value outside a range is one the scheduler rejects or reads its own way after the entry
 was stored, and by then the person is not at the terminal.
 
-`verified-by: bravebot_cli::schedule::a_cron_field_outside_its_range_or_with_a_zero_step_is_refused`
+`verified-by: bravebot_schedule::schedule::a_cron_field_outside_its_range_or_with_a_zero_step_is_refused`
 `verified-by: bravebot_cli::scheduled_runs::a_cron_field_outside_its_range_writes_nothing`
 
 <a id="SCHEDULE-6"></a>
@@ -125,6 +125,6 @@ refused the same way with the status for an argument, which `history` shows. No 
 the entry is made at a firing.
 
 `verified-by: bravebot_cli::scheduled_runs::a_layer_that_made_the_bypass_unreachable_refuses_it_at_add_and_at_a_firing`
-`verified-by: bravebot_cli::schedule::a_stored_run_carries_one_of_three_modes_and_never_an_approval_flag`
-`verified-by: bravebot_cli::schedule::a_typed_line_stores_no_approval_flag_whatever_mode_it_carries`
+`verified-by: bravebot_schedule::schedule::a_stored_run_carries_one_of_three_modes_and_never_an_approval_flag`
+`verified-by: bravebot_schedule::schedule::a_typed_line_stores_no_approval_flag_whatever_mode_it_carries`
 `verified-by: bravebot_cli::schedule::the_mode_is_read_only_unless_a_flag_was_typed`

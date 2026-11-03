@@ -1,7 +1,10 @@
-//! Scheduled runs: the entries a person registers, the system scheduler's files for them, and the
-//! record of each firing.
-//!
-//! Nothing here draws or prints. A subcommand returns the lines it would say and how it ended, so
-//! the terminal, the line-by-line interface and the desktop bridge show the same words.
+//! The `bravebot schedule` subcommands as functions that return their lines and how they ended,
+//! so a front end other than the terminal can run them. See [`command`].
 
 #![forbid(unsafe_code)]
+
+mod calendar;
+pub mod firing;
+mod schedule;
+
+pub use schedule::*;

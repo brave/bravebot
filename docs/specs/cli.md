@@ -28,6 +28,8 @@ governs:
   - crates/cli/src/session_delete.rs
   - crates/cli/src/stats.rs
   - crates/cli/src/schedule.rs
+  - crates/schedule/src/schedule.rs
+  - crates/schedule/src/calendar.rs
   - crates/cli/src/skill_eval.rs
   - crates/cli/src/trigger.rs
   - crates/session/src/stats.rs
@@ -2755,18 +2757,18 @@ are not sent anywhere.
 `verified-by: bravebot_cli::scheduled_runs::an_entry_is_not_kept_where_the_crontab_would_not_take_the_line`
 `verified-by: bravebot_cli::scheduled_runs::a_host_with_no_crontab_refuses_add_and_remove`
 `verified-by: bravebot_cli::schedule::the_mode_is_read_only_unless_a_flag_was_typed`
-`verified-by: bravebot_cli::schedule::a_directory_that_is_not_utf8_is_refused_and_not_written_as_its_lookalike`
-`verified-by: bravebot_cli::schedule::a_cron_expression_is_five_fields_of_digits_and_the_four_operators`
-`verified-by: bravebot_cli::schedule::a_table_keeps_every_other_line_and_replaces_only_its_own`
-`verified-by: bravebot_cli::schedule::the_session_is_found_outside_the_reply_and_never_inside_it`
+`verified-by: bravebot_schedule::schedule::a_directory_that_is_not_utf8_is_refused_and_not_written_as_its_lookalike`
+`verified-by: bravebot_schedule::schedule::a_cron_expression_is_five_fields_of_digits_and_the_four_operators`
+`verified-by: bravebot_schedule::schedule::a_table_keeps_every_other_line_and_replaces_only_its_own`
+`verified-by: bravebot_schedule::schedule::the_session_is_found_outside_the_reply_and_never_inside_it`
 `verified-by: bravebot_cli::scheduled_runs::a_systemd_entry_is_a_timer_and_a_service_and_not_a_crontab_line`
 `verified-by: bravebot_cli::scheduled_runs::a_launchd_entry_is_a_plist_loaded_and_unloaded_by_its_path`
 `verified-by: bravebot_cli::scheduled_runs::removing_a_job_the_scheduler_fails_to_stop_still_deletes_its_files_and_entry`
 `verified-by: bravebot_cli::scheduled_runs::an_entry_is_not_kept_where_launchctl_or_systemctl_refuses_the_job`
 `verified-by: bravebot_cli::scheduled_runs::an_unknown_scheduler_writes_nothing`
-`verified-by: bravebot_cli::schedule::calendar::a_day_and_a_weekday_that_are_both_restricted_run_on_either`
-`verified-by: bravebot_cli::schedule::calendar::a_plist_for_more_times_than_the_limit_is_refused`
-`verified-by: bravebot_cli::schedule::calendar::a_service_quotes_the_program_and_doubles_what_systemd_would_expand`
+`verified-by: bravebot_schedule::calendar::a_day_and_a_weekday_that_are_both_restricted_run_on_either`
+`verified-by: bravebot_schedule::calendar::a_plist_for_more_times_than_the_limit_is_refused`
+`verified-by: bravebot_schedule::calendar::a_service_quotes_the_program_and_doubles_what_systemd_would_expand`
 `verified-by: bravebot_cli::flags::exactly_the_eighteen_commands_that_start_no_session_are_named`
 
 <a id="CLI-43"></a>

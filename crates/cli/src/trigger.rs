@@ -4,9 +4,9 @@
 //! written by a person at the command line, and `serve` listens on the loopback address and starts
 //! the one-shot run it stands for when a delivery is signed with the trigger's secret. Its entries
 //! are kept under `<state>/triggers`, and the question a run stopped at is kept and cleared by the
-//! code the schedules use (`firing.rs`). A run is unattended in the same way, because the variable
-//! [`FIRING_VARIABLE`] makes the one-shot run record its question instead of declining it
-//! (SCHEDULE-2).
+//! code the schedules use (`crates/schedule/src/firing.rs`). A run is unattended in the same way,
+//! because the variable [`FIRING_VARIABLE`] makes the one-shot run record its question instead of
+//! declining it (SCHEDULE-2).
 //!
 //! # Why nothing here branches on what a sender wrote
 //!
@@ -23,10 +23,10 @@
 //! Everything the listener answers is one of a few fixed pages that repeat nothing from the request.
 
 use crate::exit::{Ending, fail};
-use crate::firing;
 use crate::flags::SKIP_PERMISSIONS;
 use bravebot_agent::home;
 use bravebot_i18n::t;
+use bravebot_schedule::firing;
 use bravebot_session::search;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -247,7 +247,7 @@ fn is_a_name(name: &str) -> bool {
 }
 
 /// The trigger entries of one directory under the state directory, one file each, with the secret
-/// and the files `firing.rs` keeps beside them.
+/// and the files `crates/schedule/src/firing.rs` keeps beside them.
 struct Store {
     directory: PathBuf,
 }
@@ -299,7 +299,7 @@ impl Store {
         self.path(name).is_file()
     }
 
-    /// The question `name` is waiting on, as `firing.rs` kept it.
+    /// The question `name` is waiting on, as `crates/schedule/src/firing.rs` kept it.
     fn pending(&self, name: &str) -> Option<Vec<String>> {
         self.kept().pending(name)
     }

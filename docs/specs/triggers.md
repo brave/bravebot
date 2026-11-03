@@ -4,7 +4,7 @@ title: Event-triggered runs
 status: normative
 governs:
   - crates/cli/src/trigger.rs
-  - crates/cli/src/firing.rs
+  - crates/schedule/src/firing.rs
   - crates/signing/src/webhook.rs
 documented-by:
   - docs/website/docs/reference/cli.md
@@ -23,7 +23,7 @@ bravebot's terminal, and everything that file says about a one-shot run holds fo
 the same limits as a stored schedule's run ([schedule.md](schedule.md)): nobody is present, so it
 stops at its first question and keeps it ([SCHEDULE-2](schedule.md#SCHEDULE-2)). The entry file
 format is the trigger's own; the question a run stopped at is kept, shown and cleared by the code
-`schedule` uses (`crates/cli/src/firing.rs`), under `triggers/` instead of `schedules/`.
+`schedule` uses (`crates/schedule/src/firing.rs`), under `triggers/` instead of `schedules/`.
 
 What this spec settles that the first proposal left open:
 
