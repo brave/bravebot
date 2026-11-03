@@ -480,6 +480,30 @@ mod tests {
         ));
     }
 
+    /// A value that is not text is judged as the bytes it is. A loop that skipped a value it cannot
+    /// convert would keep a planted one, and one that rendered it lossily would judge the genuine
+    /// file whose name holds `U+FFFD` instead ([PATH-003](../../../docs/best-practices/paths.md#PATH-003)).
+    #[test]
+    fn a_value_that_is_not_text_is_withheld_and_not_judged_by_its_lossy_rendering() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let (session, safe, _planted, _genuine) = planted_and_genuine("gcloud-not-text");
+        let lookalike = safe.join("python-\u{FFFD}");
+        std::fs::write(&lookalike, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&lookalike, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let bytes = OsStr::from_bytes(b"python-\xff");
+
+        assert!(withheld("CLOUDSDK_PYTHON", &session.join(bytes), &session));
+        assert!(withheld(
+            "CLOUDSDK_PYTHON",
+            &session.join("python-\u{FFFD}"),
+            &session
+        ));
+        assert!(withheld("CLOUDSDK_PYTHON", &safe.join(bytes), &session));
+        assert!(!withheld("CLOUDSDK_PYTHON", &lookalike, &session));
+        assert!(withheld("CLOUDSDK_CONFIG", &session.join(bytes), &session));
+    }
+
     /// The regression it rejects: starting `gcloud` with `CLOUDSDK_CONFIG` as the person set it, so
     /// the launcher sources `virtenv/bin/activate` from a directory a stage wrote.
     #[test]
