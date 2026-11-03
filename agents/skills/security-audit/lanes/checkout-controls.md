@@ -19,8 +19,11 @@ block sets and the six read from the person's layers alone:
 {layer_clauses}
 
 `PINNABLE` in `crates/config/src/managed.rs` lists the names a machine's managed layer may pin, which
-its comment describes as the ones that decide where a request goes. A name on it is one a checkout
-could otherwise decide.
+its comment describes as the ones that decide where a request goes. Six of its eight names are the
+Bedrock names, which come from the person's layers alone. The two endpoints are the names on it that
+a project or local file can still decide on a source build (`BACKEND-35`), and the test
+`every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it` in
+`crates/config/src/settings.rs` fails when that set changes.
 
 ### Where to start
 

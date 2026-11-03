@@ -2048,7 +2048,10 @@ conversation content is sent and who may read it, and a Google key or project, o
 region, profile or tier model, they chose would decide which account receives it. So one of these
 fifteen names in either file is reported by `doctor` with the file that wrote it and decides nothing,
 and it does not displace what a layer
-entitled to state it said. An exported variable still wins, as for every name here, and each of the
+entitled to state it said. The set a machine-level file may pin ([BACKEND-38](#BACKEND-38)) is the six
+Bedrock names and the two endpoints. The endpoints are the only pinnable names a project or local
+file can still state, on a source build
+([BACKEND-35](#BACKEND-35)). An exported variable still wins, as for every name here, and each of the
 two answers comes whole from one place: [NET-7](network-egress.md#NET-7) and
 [NET-8](network-egress.md#NET-8) say how. The names are spelled as the environment spells them in
 upper case, and a lower-case spelling is not read from a file.

@@ -67,6 +67,13 @@ const MANAGED_DIR: &str = "/etc/bravebot";
 /// id: a layer that names a destination grants nothing, and a credential is the one value here that
 /// would.
 ///
+/// The six Bedrock names are read from the person's layers alone (BACKEND-33). The two endpoints are
+/// the exception: a project or local file can still name them on a source build (BACKEND-35). The
+/// test `every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it` in `settings.rs`
+/// fails when a name is added here without being placed on one side of that line, and
+/// `the_persons_own_files_decide_every_pinnable_name` checks that the person's own files decide
+/// every name here.
+///
 /// The names this layer answers for that are not variables are the server lists and the two
 /// `permissions` keys that only refuse, each read in its own field: what they have in common with
 /// the list here is that none of them can widen anything.
