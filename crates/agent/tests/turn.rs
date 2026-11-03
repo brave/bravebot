@@ -39958,6 +39958,85 @@ fn a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped() {
     }
 }
 
+/// A read of a respelled name whose vouch check is stopped still tells the planner that another
+/// spelling was read (READ-11), on the result the stopped turn leaves in the conversation. The
+/// planner sees it on the next turn's request.
+#[test]
+fn a_stop_during_the_vouch_check_of_a_respelled_read_keeps_the_respelling_note() {
+    let scratch = Scratch::new("vouch-stopped-respelled");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(
+        scratch.path.join(format!("{NARROW}.md")),
+        "SENTINEL-XYZZY\n",
+    )
+    .unwrap();
+    let typed = format!("{}.md", NARROW.replace('\u{202f}', " "));
+    let arguments = serde_json::json!({ "path": typed }).to_string();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![tool_request("read_file", &arguments), reply_with("done")],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopsWhenACheckBegins::new(&cancel);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let error = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the screenshot notes"),
+        &mut conversation,
+        &mut confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .unwrap_err();
+    assert!(
+        matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+        "the turn did not end as stopped: {:?}",
+        error.ending()
+    );
+    assert_eq!(reporter.begun, 1, "no check was made");
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("and now"),
+        &mut conversation,
+        &mut ShownAfterAVet::new(true),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the next turn runs");
+    let request = received
+        .try_iter()
+        .last()
+        .expect("the planner was sent a request");
+    assert!(
+        request.contains("stopped: the turn was stopped before the check"),
+        "the stop is not in the conversation: {request}"
+    );
+    assert!(
+        request.contains("differs only in the kind of space"),
+        "the stopped read lost the note that another spelling was read: {request}"
+    );
+}
+
 /// A turn stopped while the check before a vouch prompt is running asks nobody to vouch. The file
 /// stays quarantined and is asked about again by the next turn's read (CHECK-16).
 ///
@@ -91609,4 +91688,313 @@ fn a_mode_change_to_off_names_request_path_only_where_the_turn_was_offered_it() 
              {notice}"
         );
     }
+}
+
+/// The spaces a macOS screenshot name holds: U+202F before `PM`.
+const NARROW: &str = "Screenshot 2026-10-27 at 12.10.54\u{202f}PM";
+
+/// One `read_file` of `path` against `scratch`, returning the text the planner was sent for it
+/// and the trail. `trust` is the trust map the turn starts from, `None` for the default (nothing
+/// vouched for).
+fn read_respelled<C: bravebot_agent::Confirmer + Send>(
+    scratch: &Scratch,
+    path: &str,
+    task: Task,
+    trust: Option<bravebot_core::trust::TrustStore>,
+    confirmer: &mut C,
+) -> (String, RecordingSink) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    read_respelled_in(&workspace, path, task, trust, confirmer)
+}
+
+/// [`read_respelled`] against a workspace the caller has prepared.
+fn read_respelled_in<C: bravebot_agent::Confirmer + Send>(
+    workspace: &Workspace,
+    path: &str,
+    task: Task,
+    trust: Option<bravebot_core::trust::TrustStore>,
+    confirmer: &mut C,
+) -> (String, RecordingSink) {
+    let arguments = serde_json::json!({ "path": path }).to_string();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", &arguments),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    match trust {
+        Some(trust) => {
+            turns::run_with_trust(
+                &config, &egress, workspace, &task, confirmer, &mut sink, trust,
+            )
+            .expect("turn runs");
+        }
+        None => {
+            turns::run(&config, &egress, workspace, &task, confirmer, &mut sink)
+                .expect("turn runs");
+        }
+    }
+    // The last request is the one that carries the result; a vouch offer sends a check before it.
+    let last = received
+        .try_iter()
+        .last()
+        .expect("the planner was sent a result");
+    (newest_tool_result_text(&last), sink)
+}
+
+/// READ-11. A name typed with an ordinary space reads the file whose name holds U+202F there, in
+/// the text the planner may see, and the result says another spelling was read without naming it.
+#[test]
+fn a_text_read_finds_the_file_whose_space_is_another_kind() {
+    let scratch = Scratch::new("respell-text");
+    std::fs::write(scratch.path.join(format!("{NARROW}.txt")), "the body of it").unwrap();
+    let typed = format!("{}.txt", NARROW.replace('\u{202f}', " "));
+
+    let (told, sink) = read_respelled(
+        &scratch,
+        &typed,
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(told.contains("the body of it"), "not read: {told}");
+    assert!(
+        told.contains("differs only in the kind of space"),
+        "the planner was not told another spelling was read: {told}"
+    );
+    assert!(
+        !told.contains('\u{202f}') && !told.contains("Screenshot"),
+        "the result names the file: {told}"
+    );
+    let promotions = sink
+        .events()
+        .iter()
+        .filter(|event| matches!(event, Event::GatePassed { gate: "promote", detail } if detail.contains("read_file.path")))
+        .count();
+    assert_eq!(
+        promotions,
+        1,
+        "the trail repeats a line: {:#?}",
+        sink.events()
+    );
+}
+
+/// READ-11. Typed with U+202F where the file has an ordinary space is the same case reversed, and
+/// a U+00A0 file is found too.
+#[test]
+fn a_respelling_goes_both_ways_and_covers_the_no_break_space() {
+    let scratch = Scratch::new("respell-reverse");
+    std::fs::write(scratch.path.join("a b.txt"), "plain space body").unwrap();
+    let (told, _) = read_respelled(
+        &scratch,
+        "a\u{202f}b.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(told.contains("plain space body"), "not read: {told}");
+    assert!(told.contains("differs only in the kind of space"), "{told}");
+
+    let scratch = Scratch::new("respell-nbsp");
+    std::fs::write(scratch.path.join("c\u{a0}d.txt"), "no break body").unwrap();
+    let (told, _) = read_respelled(
+        &scratch,
+        "c d.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(told.contains("no break body"), "not read: {told}");
+}
+
+/// READ-11. A name that is there is read as it is, and a name with no such file under any
+/// spelling still says so, without a note about another spelling.
+#[test]
+fn a_name_that_is_there_or_matches_nothing_is_not_respelled() {
+    let scratch = Scratch::new("respell-none");
+    std::fs::write(scratch.path.join("a b.txt"), "exact body").unwrap();
+    std::fs::write(scratch.path.join("a\u{202f}b.txt"), "other body").unwrap();
+    let (told, _) = read_respelled(
+        &scratch,
+        "a b.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(
+        told.contains("exact body") && !told.contains("other body"),
+        "{told}"
+    );
+    assert!(
+        !told.contains("differs only in the kind of space"),
+        "{told}"
+    );
+
+    let (told, _) = read_respelled(
+        &scratch,
+        "no such name.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(told.contains("No such file or directory"), "{told}");
+    assert!(
+        !told.contains("differs only in the kind of space"),
+        "{told}"
+    );
+    assert!(
+        told.contains("another kind of space than the one given"),
+        "a name with a space that matches nothing does not say the space may differ: {told}"
+    );
+}
+
+/// READ-11. A picture read through another spelling is quarantined as any picture is, and an
+/// absolute path into an opened directory is respelled in its last component too.
+#[test]
+fn a_picture_and_an_absolute_path_are_respelled() {
+    let scratch = Scratch::new("respell-picture");
+    let outside = Scratch::new("respell-picture-opened");
+    std::fs::write(scratch.path.join(format!("{NARROW}.png")), a_png()).unwrap();
+    std::fs::write(outside.path.join(format!("{NARROW}.png")), a_png()).unwrap();
+    let typed = format!("{}.png", NARROW.replace('\u{202f}', " "));
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(outside.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+    let absolute = added.join(&typed).to_string_lossy().into_owned();
+
+    for path in [typed.clone(), absolute] {
+        let (told, _) = read_respelled_in(
+            &workspace,
+            &path,
+            Task::new("look at the screenshot"),
+            Some(trust.clone()),
+            &mut bravebot_agent::confirm::ApproveWrites,
+        );
+        assert!(told.contains("ref:"), "{path}: no reference: {told}");
+        assert!(
+            told.contains("differs only in the kind of space"),
+            "{path}: {told}"
+        );
+        assert!(!told.contains('\u{202f}'), "{path}: names the file: {told}");
+    }
+}
+
+/// READ-11. The spelling opened is gated as itself: a deny rule on it refuses the read, the file
+/// is not shown, and the refusal does not name the file's own spelling.
+#[test]
+fn a_deny_rule_on_the_spelling_opened_refuses_the_read() {
+    let scratch = Scratch::new("respell-denied");
+    std::fs::write(
+        scratch.path.join("secret\u{202f}file.txt"),
+        "SECRET_TOKEN=hunter2",
+    )
+    .unwrap();
+    let (told, _) = read_respelled(
+        &scratch,
+        "secret file.txt",
+        Task::new("read it").with_permissions(rules(&["Read(./secret\u{202f}file.txt)"], &[], &[])),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(!told.contains("hunter2"), "a denied file was read: {told}");
+    assert!(told.contains("deny rule"), "no refusal: {told}");
+    assert!(
+        !told.contains('\u{202f}'),
+        "the refusal names the file: {told}"
+    );
+}
+
+/// READ-11. A respelling that leads out of the workspace through a link is not chosen: the name
+/// stays missing, as it would with no respelling, and the same link under its own name is refused
+/// for leaving the workspace. A respelling that read the target would hand back `OUTSIDE_BODY`.
+#[cfg(unix)]
+#[test]
+fn a_respelled_name_cannot_leave_the_workspace() {
+    let outside = Scratch::new("respell-outside");
+    std::fs::write(outside.path.join("out.txt"), "OUTSIDE_BODY").unwrap();
+    let scratch = Scratch::new("respell-confined");
+    std::os::unix::fs::symlink(
+        outside.path.join("out.txt"),
+        scratch.path.join("link\u{202f}name.txt"),
+    )
+    .unwrap();
+    let (told, _) = read_respelled(
+        &scratch,
+        "link name.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(!told.contains("OUTSIDE_BODY"), "left the workspace: {told}");
+    assert!(
+        !told.contains("differs only in the kind of space"),
+        "a link out of the workspace was read as a respelling: {told}"
+    );
+    assert!(
+        told.contains("No such file or directory"),
+        "the name was not left missing: {told}"
+    );
+
+    let (told, _) = read_respelled(
+        &scratch,
+        "link\u{202f}name.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(!told.contains("OUTSIDE_BODY"), "left the workspace: {told}");
+    assert!(
+        told.contains("outside the workspace"),
+        "the link under its own name was not refused for leaving: {told}"
+    );
+}
+
+/// READ-11, INSTR-16. The touched-file list holds the spelling that was opened, which names the
+/// file, and not the spelling typed, which names none.
+#[test]
+fn a_respelled_read_records_the_spelling_opened_as_touched() {
+    let scratch = Scratch::new("respell-touched");
+    let on_disk = format!("{NARROW}.txt");
+    std::fs::write(scratch.path.join(&on_disk), "the body of it").unwrap();
+    let typed = format!("{}.txt", NARROW.replace('\u{202f}', " "));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (told, _) = read_respelled_in(
+        &workspace,
+        &typed,
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(told.contains("the body of it"), "not read: {told}");
+    assert_eq!(workspace.touched_files(), [on_disk]);
+}
+
+/// READ-11. The file opened is keyed and labelled as itself: with nothing vouched for it is a
+/// reference, and the person is offered a vouch for it.
+#[test]
+fn a_respelled_file_nobody_vouched_for_is_a_reference_and_is_offered_for_a_vouch() {
+    let scratch = Scratch::new("respell-vouch");
+    std::fs::write(scratch.path.join("n\u{202f}o.md"), "UNVOUCHED_BODY").unwrap();
+    let mut confirmer = VouchesForFiles::new(false);
+    let (told, _) = read_respelled(
+        &scratch,
+        "n o.md",
+        Task::new("read it"),
+        None,
+        &mut confirmer,
+    );
+    assert!(!told.contains("UNVOUCHED_BODY"), "{told}");
+    assert!(told.contains("ref:"), "no reference: {told}");
+    assert!(told.contains("differs only in the kind of space"), "{told}");
+    assert_eq!(
+        confirmer.offered.lock().unwrap().len(),
+        1,
+        "the vouch was not offered for the file opened"
+    );
 }

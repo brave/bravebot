@@ -462,3 +462,51 @@ on every picture in the file. A picture's base64 is a cap spent on nothing a rea
 `verified-by: bravebot_agent::notebook::an_output_view_is_cut_at_the_cap`
 `verified-by: bravebot_agent::notebook::an_output_view_of_unreadable_input_is_empty`
 `verified-by: bravebot_agent::notebook::outputs_are_asked_of_a_code_cell_that_holds_some`
+
+<a id="READ-11"></a>
+### READ-11: a name that matches no file is read as the file that differs from it in the kind of space
+
+Where `path` names no file, the last component is tried with its spaces replaced by U+202F, by
+U+00A0 and by U+0020: all of them together, then each one alone (a name with more than 16 spaces
+is tried only with all of them replaced). The first candidate that is a file is read. U+202F is
+what macOS puts before `AM` and `PM` in a screenshot's name, and it looks like the space a person
+types. Other Unicode spaces are not tried. The directory part is kept as written, and a name that
+is there is read as it is. It applies to an absolute path as well as a relative one, and not to
+`path_ref`, which names the file exactly.
+
+The candidates are made from the name the planner typed and each is probed by path with `stat`.
+No directory is listed and no filename or content decides anything. The spelling that is read goes
+through every gate as if the planner had typed it: deny rules, confinement, the trust key and
+label, the reference a planner may not see, the vouch offer, the credential scan and the change
+token. The result says that no file is named exactly as given and that the file read differs only
+in the kind of space. That sentence is fixed words: it does not name either spelling.
+
+Where no candidate is a file either, and the last component of the name holds a space, the
+not-found error adds that a space can be U+0020, U+00A0 or U+202F and the file may be named with
+another kind than the one given. It names neither spelling, and it is added for an absolute path
+as well as a relative one. `read_file` adds it, and only for a `path` the planner typed: a read by
+`path_ref` does not get it, because that name is not the planner's to respell. A name with no
+space in its last component gets the error it got before. The touched-file list records the
+spelling that was opened.
+
+Only `read_file` respells. `edit_file` and `write_file` name a file to change and a name that
+matches no file there may be a new file, so a respelling would write somewhere other than the
+planner asked. `list_files`, `search` and `repo_map` take directories, which are not respelled.
+
+**Why.** A model types the space it sees, and the file holds another. The failure was a bare "No
+such file or directory" for two names that look identical, followed by a search and a clarifying
+turn. The filename on disk is content ([LIST-1](list-files.md#LIST-1)), so the planner is told
+only that a respelling was read, never what the file is called.
+
+`verified-by: bravebot_agent::turn::a_text_read_finds_the_file_whose_space_is_another_kind`
+`verified-by: bravebot_agent::turn::a_respelling_goes_both_ways_and_covers_the_no_break_space`
+`verified-by: bravebot_agent::turn::a_name_that_is_there_or_matches_nothing_is_not_respelled`
+`verified-by: bravebot_agent::turn::a_picture_and_an_absolute_path_are_respelled`
+`verified-by: bravebot_agent::turn::a_deny_rule_on_the_spelling_opened_refuses_the_read`
+`verified-by: bravebot_agent::turn::a_respelled_name_cannot_leave_the_workspace`
+`verified-by: bravebot_agent::turn::a_respelled_file_nobody_vouched_for_is_a_reference_and_is_offered_for_a_vouch`
+`verified-by: bravebot_agent::workspace::space_variants_change_only_the_kind_of_space_in_the_last_component`
+`verified-by: bravebot_agent::workspace::a_missing_name_is_respelled_to_the_file_that_differs_in_its_spaces`
+`verified-by: bravebot_agent::workspace::a_missing_typed_name_with_a_space_says_the_kind_of_space_may_differ`
+`verified-by: bravebot_agent::turn::a_respelled_read_records_the_spelling_opened_as_touched`
+`verified-by: bravebot_agent::tools::a_read_by_reference_to_a_removed_file_with_a_space_carries_no_space_hint`

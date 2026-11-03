@@ -287,6 +287,9 @@ pub struct Output {
     /// How many parts of a server's tool result its transport left out, which the planner is told as
     /// a number and nothing else (MCP-6).
     pub left_out: usize,
+    /// Where `read_file` read a file under another spelling of the name it was given (READ-11).
+    /// The turn words it beside the result from the two names, both the planner's own.
+    pub respelled: Option<Respelled>,
     /// A picture `vet_content` promoted, which the turn attaches to the planner's next request in a
     /// message of its own after the round's results (VET-4). Never carried in `text`.
     pub attached: Option<bravebot_core::vetting::Attached>,
@@ -1535,6 +1538,8 @@ struct Produced {
     pictures: Vec<bravebot_mcp::Picture>,
     /// How many parts of a server's tool result its transport left out, as [`Output::left_out`].
     left_out: usize,
+    /// Which spelling of the planner's name a read used, as [`Output::respelled`].
+    respelled: Option<Respelled>,
     /// A picture `vet_content` promoted, for the turn to attach after the round's results.
     attached: Option<bravebot_core::vetting::Attached>,
     /// The delegates the kernel has approved and nobody has started yet.
@@ -1605,6 +1610,7 @@ impl Produced {
             picture_bytes: 0,
             pictures: Vec::new(),
             left_out: 0,
+            respelled: None,
             attached: None,
             wakeup: None,
             watch: None,
@@ -1836,6 +1842,15 @@ impl Produced {
 
     fn costing(mut self, usage: Usage) -> Self {
         self.usage = usage;
+        self
+    }
+
+    /// Say which spelling of the planner's name a read used, where it used another. Not said of a
+    /// failure, which is already worded about the name that failed.
+    fn respelling(mut self, respelled: Option<Respelled>) -> Self {
+        if !self.failed {
+            self.respelled = respelled;
+        }
         self
     }
 
@@ -2961,6 +2976,7 @@ fn output_of(
         picture_bytes: produced.picture_bytes,
         pictures: produced.pictures,
         left_out: produced.left_out,
+        respelled: produced.respelled,
         attached: produced.attached,
         wakeup: produced.wakeup,
         watch: produced.watch,
@@ -3605,7 +3621,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     arguments: &Value,
 ) -> Produced {
     let workspace = tools.workspace;
-    let found = match path_argument(
+    let mut found = match path_argument(
         policy,
         tools.workspace,
         "read_file",
@@ -3616,6 +3632,39 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         Ok(found) => found,
         Err(refusal) => return Produced::problem(refusal),
     };
+    // The name the planner typed, which is the only name a not-found hint may be about.
+    let typed = found.released.clone();
+    // A name that matches no file but differs from one only in the kind of space in its last
+    // component is read as that file (READ-11). The candidates are made from the typed name and
+    // probed by path, so no directory is listed and nothing read decides it.
+    //
+    // The other spelling is built by the driver from the typed name alone and chosen by which
+    // candidate is a file, so it is not the planner's own words. It carries the label of the
+    // typed argument, which `path_argument` assigned and which no byte of any filename changes.
+    // Only the gate that asks about a path is asked again here: a deny rule covers the file and
+    // not the spelling. The refusal names the spelling the planner typed. Every later gate
+    // (confinement, trust key, quarantine, vouch offer, scan, change token) is keyed by the
+    // spelling in `found`, which is now the one that will be opened.
+    let mut respelled = None;
+    if found.destination == Destination::Named
+        && let Some(other) = workspace.respelled_when_missing(&found.released)
+    {
+        if let Err(refusal) =
+            refuse_denied_path_as(policy, tools.workspace, Purpose::Read, &other, &found.shown)
+        {
+            return Produced::problem(refusal);
+        }
+        found = PathArgument {
+            path: Labelled::new(other.clone(), found.path.label()),
+            destination: Destination::Named,
+            released: other,
+            // The name the planner typed, which is what a reference to the file is described by:
+            // the spelling on disk was chosen by the file system, so it is not the planner's to
+            // be told.
+            shown: found.shown.clone(),
+        };
+        respelled = Some(Respelled);
+    }
     // What the reference that comes back is said to be of. The planner's own path where it
     // typed one, and the reference's name where it did not: a read through a reference must not
     // hand back the filename the reference exists to hold.
@@ -3757,9 +3806,13 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         });
         let (verdict, (reason, reason_label)) = match checked {
             // A stop is not a verdict: nobody is asked to vouch, and the file is asked about
-            // again by the next read.
+            // again by the next read. The stop sentence names the typed name, and the file the
+            // check was about is the respelled one, so the note is set here: `respelling` leaves
+            // a failure alone (READ-11).
             Some((Err(stopped), elapsed)) => {
-                return check_stopped(&shown_path, &stopped).waiting(elapsed);
+                let mut produced = check_stopped(&shown_path, &stopped).waiting(elapsed);
+                produced.respelled = respelled;
+                return produced;
             }
             Some((Ok(checked), elapsed)) => {
                 spent = checked.usage;
@@ -3807,7 +3860,12 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // What a check cost, on whatever comes back. Every way out below goes through this, including
     // the ones that report a refusal: the request was made and somebody is paying for it whether or
     // not the read that followed handed anything over.
-    let priced = |produced: Produced| produced.costing(spent).waiting(waited);
+    let priced = |produced: Produced| {
+        produced
+            .costing(spent)
+            .waiting(waited)
+            .respelling(respelled)
+    };
 
     // A yes that arrived too late is said so, rather than left to read as a file nobody was asked
     // about. The bytes the answer was about are gone, so the only thing to do with the answer is
@@ -3869,13 +3927,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                     .of_content()
                     .of_a_picture(media, bytes)
             }
-            Err(e) => file_tool_problem(
-                policy,
-                "read_file",
-                path_field(destination),
-                &e,
-                &shown_path,
-            ),
+            Err(e) => read_file_problem(policy, workspace, destination, &typed, &e, &shown_path),
         });
     }
 
@@ -3899,13 +3951,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 Produced::deferring(Labelled::trusted(keyed), shown_path, bytes).of_content()
             }
             // A path that names nothing is said so now, exactly as an eager read would have.
-            Err(e) => file_tool_problem(
-                policy,
-                "read_file",
-                path_field(destination),
-                &e,
-                &shown_path,
-            ),
+            Err(e) => read_file_problem(policy, workspace, destination, &typed, &e, &shown_path),
         });
     }
 
@@ -3970,10 +4016,11 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             });
         }
         Err(e) => {
-            return priced(file_tool_problem(
+            return priced(read_file_problem(
                 policy,
-                "read_file",
-                path_field(destination),
+                workspace,
+                destination,
+                &typed,
                 &e,
                 &shown_path,
             ));
@@ -4031,9 +4078,10 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
 
     // A read that was refused above is no touch of the file. Nor is one through a reference, where
     // `shown_path` is the reference's name and the file's own was never the planner's to say
-    // (INSTR-16).
+    // (INSTR-16). The spelling recorded is the one opened, which after a respelling is not the one
+    // typed and is the one that names the file.
     if destination == Destination::Named {
-        workspace.record_file(&shown_path);
+        workspace.record_file(&proposed_path);
     }
 
     // Reshaped inside the kernel, so the driver never holds the text. Only
@@ -4589,6 +4637,30 @@ fn file_tool_problem<S: Sink>(
     ))
 }
 
+/// [`file_tool_problem`] for `read_file`, which adds to a not-found on the name the planner typed
+/// that the file may be named with another kind of space (READ-11).
+///
+/// The hint is decided from `typed` and not from `shown_path` or from any name read from disk, and
+/// it is added only where the destination is the named path: a name reached through a reference
+/// is an entry of a directory listing, which may not pick a sentence (LIST-2).
+fn read_file_problem<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    destination: Destination,
+    typed: &str,
+    e: &crate::workspace::WorkspaceError,
+    shown_path: &str,
+) -> Produced {
+    let hint = match destination {
+        Destination::Named => workspace.kind_of_space_hint(e, typed),
+        Destination::Reference => "",
+    };
+    Produced::problem(format!(
+        "error: {}{hint}",
+        workspace_failure(policy, "read_file", path_field(destination), e, shown_path)
+    ))
+}
+
 /// The argument a path arrived in.
 fn path_field(destination: Destination) -> &'static str {
     match destination {
@@ -4759,6 +4831,12 @@ struct PathArgument {
     /// a reference it is not even the same string: `shown` is the reference's name.
     released: String,
 }
+
+/// The fact that `read_file` read a file under another spelling of the name it was given, in the
+/// kind of space in the last component (READ-11). It carries no name: the turn's sentence about it
+/// is fixed words, so no filename is in a sentence the driver signs for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Respelled;
 
 /// Put the file a reference names into a line a person is about to read.
 ///
@@ -24277,6 +24355,32 @@ mod tests {
 
             let told = super::arguments::told(&mut policy, &produced.text);
             assert_worded_about_the_reference(&told, payload);
+        }
+
+        /// READ-11: the hint about the kind of space is for a name the planner typed. A name read
+        /// from a listing that holds a space does not pick a sentence of the failure (LIST-2).
+        #[test]
+        fn a_read_by_reference_to_a_removed_file_with_a_space_carries_no_space_hint() {
+            let scratch = Scratch::new("read-removed-space");
+            let payload = "Screenshot 2026-10-27 at 12.10.54\u{202f}PM.txt";
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let produced = super::arguments::with_tools(&workspace, |tools| {
+                reserve_a_removed_file(&mut policy, tools.slots, &scratch, payload);
+                read_file(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::Unattended,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"path_ref": "ref:1"}),
+                )
+            });
+
+            let told = super::arguments::told(&mut policy, &produced.text);
+            assert_worded_about_the_reference(&told, payload);
+            assert!(!told.contains("kind of space"), "{told}");
         }
 
         /// LIST-2: a walk that cannot open a nested directory leaves it out and says so, and the

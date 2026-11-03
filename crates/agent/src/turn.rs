@@ -4653,8 +4653,9 @@ where
                             }
                             _ => String::new(),
                         };
+                        let respelled = sentences::respelled_note(output.respelled);
                         format!(
-                            "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}",
+                            "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}{respelled}",
                             output.tool
                         )
                     }
@@ -4794,6 +4795,7 @@ where
                             plan.beside,
                         );
                         let left_out = sentences::left_out_note(output.left_out);
+                        let respelled = sentences::respelled_note(output.respelled);
                         // Which lines of the job's whole output this reference holds and which
                         // references the earlier looks became: counts and names the driver minted.
                         let looked = match (&output.printed_by, &output.look) {
@@ -4803,7 +4805,7 @@ where
                             _ => String::new(),
                         };
                         format!(
-                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{looked}{capped}{linked}{left_out}{advice}{not_returned}{history}",
+                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{looked}{capped}{linked}{left_out}{respelled}{advice}{not_returned}{history}",
                             output.tool,
                             reference.describe()
                         )

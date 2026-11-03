@@ -40,6 +40,63 @@ fn locked<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
     lock.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The kinds of space a file name is tried with: U+202F (macOS writes it before `AM` and `PM` in a
+/// screenshot's name), U+00A0 and the ordinary space. Other Unicode spaces are not tried.
+const SPACE_KINDS: [char; 3] = ['\u{202f}', '\u{a0}', ' '];
+
+/// How many spaces a name may hold and still be tried with each one replaced alone. A name with
+/// more is tried only with all of them replaced together, which bounds the candidates at a few
+/// dozen `stat` calls however long the name is.
+const MAX_SPACES_VARIED_ALONE: usize = 16;
+
+/// The names that differ from `named` only in the kind of space its last component holds, each
+/// made from `named` alone and none equal to it (READ-11).
+///
+/// Every space of the last component replaced by one kind together, then each space replaced by
+/// one kind alone, so a name with ordinary spaces and a single U+202F before `PM` is a candidate.
+/// The directory part is kept as it was written. Nothing is read from the disk: the caller probes
+/// each candidate by path.
+fn space_variants(named: &str) -> Vec<String> {
+    let split = named
+        .rfind(|c| c == '/' || (BACKSLASH_SEPARATES && c == '\\'))
+        .map_or(0, |at| at + 1);
+    let (directory, last) = named.split_at(split);
+    let spaces: Vec<usize> = last
+        .char_indices()
+        .filter(|(_, c)| SPACE_KINDS.contains(c))
+        .map(|(at, _)| at)
+        .collect();
+    if spaces.is_empty() {
+        return Vec::new();
+    }
+
+    let mut found: Vec<String> = Vec::new();
+    let mut offer = |last: String| {
+        let candidate = format!("{directory}{last}");
+        if candidate != named && !found.contains(&candidate) {
+            found.push(candidate);
+        }
+    };
+    for kind in SPACE_KINDS {
+        offer(
+            last.chars()
+                .map(|c| if SPACE_KINDS.contains(&c) { kind } else { c })
+                .collect(),
+        );
+    }
+    if spaces.len() <= MAX_SPACES_VARIED_ALONE {
+        for kind in SPACE_KINDS {
+            for &at in &spaces {
+                let (before, from_space) = last.split_at(at);
+                let mut after = from_space.chars();
+                after.next();
+                offer(format!("{before}{kind}{}", after.as_str()));
+            }
+        }
+    }
+    found
+}
+
 mod bypass;
 mod carry;
 mod checkouts;
@@ -1238,6 +1295,54 @@ impl Workspace {
             .ok()
             .and_then(|resolved| std::fs::metadata(resolved).ok())
             .is_some_and(|meta| meta.is_file())
+    }
+
+    /// The name of the file that `named` stands for, where nothing is at `named` and a file is at
+    /// the same name spelled with another kind of space in its last component (U+0020, U+00A0 or
+    /// U+202F).
+    ///
+    /// macOS writes U+202F before `AM` and `PM` in a screenshot's name, and it looks like the
+    /// ordinary space a person or a model types. The candidates are made from `named` alone and
+    /// each is probed by path with [`Workspace::names_a_file`]: no directory is listed, so no
+    /// filename read from the disk decides anything, and each candidate passes the same
+    /// containment as any other name. `None` where `named` is there already, or no candidate is a
+    /// file, or the caller has to keep the name it was given.
+    pub(crate) fn respelled_when_missing(&self, named: &str) -> Option<String> {
+        // A name that resolves and is there is read as it is, whatever it is.
+        let resolved = self.resolve(named).ok()?;
+        if std::fs::symlink_metadata(resolved).is_ok() {
+            return None;
+        }
+        space_variants(named)
+            .into_iter()
+            .find(|candidate| self.names_a_file(candidate))
+    }
+
+    /// What `read_file` adds to a failure to read `typed`, a name the planner wrote (READ-11): the
+    /// file may be named with another kind of space than the one given. Empty unless `error` is a
+    /// path that is not there, nothing is at `typed`, and the last component of `typed` holds a
+    /// space.
+    ///
+    /// Decided from the name the planner typed and from `stat` of it, never from a filename read
+    /// from the disk. A caller that reads through a reference does not ask: the name it read is
+    /// an entry of a directory listing, which may not pick a sentence (LIST-2).
+    pub(crate) fn kind_of_space_hint(&self, error: &WorkspaceError, typed: &str) -> &'static str {
+        let last = typed
+            .rsplit(|c| c == '/' || (BACKSLASH_SEPARATES && c == '\\'))
+            .next()
+            .unwrap_or(typed);
+        let holds_a_space = last.chars().any(|c| SPACE_KINDS.contains(&c));
+        let nothing_there = || {
+            self.resolve(typed).map_or(true, |resolved| {
+                std::fs::symlink_metadata(resolved).is_err()
+            })
+        };
+        if matches!(error, WorkspaceError::Io { .. }) && holds_a_space && nothing_there() {
+            "; a space in a name can be U+0020, U+00A0 or U+202F, which look the same, so the \
+             file may be named with another kind of space than the one given"
+        } else {
+            ""
+        }
     }
 
     /// The file `named` names, as the absolute path the file tools reach it at, where it is a regular
@@ -5023,6 +5128,54 @@ mod tests {
         );
     }
 
+    /// A name is respelled by kind of space in its last component alone (READ-11): the directory
+    /// part is kept, the name is never among its own candidates, and the direction does not matter.
+    #[test]
+    fn space_variants_change_only_the_kind_of_space_in_the_last_component() {
+        assert!(space_variants("nospace.png").is_empty());
+        let variants = space_variants("dir with space/Shot 10.30.12 PM.png");
+        assert!(variants.contains(&"dir with space/Shot\u{a0}10.30.12\u{a0}PM.png".to_string()));
+        assert!(variants.contains(&"dir with space/Shot 10.30.12\u{202f}PM.png".to_string()));
+        assert!(variants.iter().all(|v| v.starts_with("dir with space/")));
+        assert!(
+            variants
+                .iter()
+                .all(|v| v != "dir with space/Shot 10.30.12 PM.png")
+        );
+        let reverse = space_variants("Shot 10.30.12\u{202f}PM.png");
+        assert!(reverse.contains(&"Shot 10.30.12 PM.png".to_string()));
+    }
+
+    /// A name that is not there is respelled to the file that is, and a name that is there is not.
+    #[test]
+    fn a_missing_name_is_respelled_to_the_file_that_differs_in_its_spaces() {
+        let root = crate::testutil::scratch_dir("respelled-when-missing");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        std::fs::write(root.join("Shot 10.30.12\u{202f}PM.png"), b"x").unwrap();
+        std::fs::write(root.join("Here today.txt"), b"x").unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+
+        assert_eq!(
+            workspace
+                .respelled_when_missing("Shot 10.30.12 PM.png")
+                .as_deref(),
+            Some("Shot 10.30.12\u{202f}PM.png")
+        );
+        assert_eq!(
+            workspace
+                .respelled_when_missing("Here\u{a0}today.txt")
+                .as_deref(),
+            Some("Here today.txt")
+        );
+        assert_eq!(
+            workspace.respelled_when_missing("Here today.txt"),
+            None,
+            "a name that exists is never respelled"
+        );
+        assert_eq!(workspace.respelled_when_missing("absent file.txt"), None);
+    }
+
     /// The name the workspace hands back and the key it asks the map about are both spelled from
     /// `/` on a host that separates with a backslash, and both keep the name as it arrived on one
     /// that does not: there a backslash is a legal filename byte, so the file is one at the top of
@@ -6480,6 +6633,58 @@ mod tests {
         assert!(!detail.contains("todo.txt"), "{detail}");
         let absolute = io_detail(&missing, "/home/me/todo.txt", Path::new("/work/project"));
         assert!(!absolute.contains("/work/project"), "{absolute}");
+    }
+
+    /// A typed name whose last component holds a space, with nothing at it, is told it may differ
+    /// in the kind of space, for an absolute path as well as a relative one, and the hint never
+    /// names the file (READ-11). A name without a space, a directory part that holds one, a name
+    /// that is there, and an error other than not-found get no hint. The detail of a failure
+    /// (`io_detail`) never holds it, whatever the name, because a name reached through a reference
+    /// is not the planner's.
+    #[test]
+    fn a_missing_typed_name_with_a_space_says_the_kind_of_space_may_differ() {
+        let scratch = crate::testutil::scratch_dir("kind-of-space-hint");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(scratch.join("with space")).expect("directory");
+        std::fs::write(scratch.join("here today.txt"), "x").expect("file");
+        let workspace = Workspace::new(&scratch).expect("workspace");
+        let root = workspace.root().to_path_buf();
+        let missing = io::Error::from(io::ErrorKind::NotFound);
+        let io_error = |named: &str| WorkspaceError::Io {
+            path: named.to_string(),
+            detail: io_detail(&missing, named, &root),
+        };
+        let absolute = root.join("Shot 10.30.12 PM.png");
+        let absolute = absolute.to_str().expect("text path");
+        for named in [
+            "Shot 10.30.12 PM.png",
+            absolute,
+            "dir/Shot\u{a0}PM.png",
+            "Shot\u{202f}PM.png",
+        ] {
+            let error = io_error(named);
+            let hint = workspace.kind_of_space_hint(&error, named);
+            assert!(hint.contains("another kind of space"), "{named}: {hint}");
+            assert!(!hint.contains("Shot"), "{named}: {hint}");
+            assert!(
+                !error.describe(named).contains("kind of space"),
+                "io_detail added the hint for {named}"
+            );
+        }
+        for named in ["todo.txt", "with space/todo.txt", "here today.txt"] {
+            let error = io_error(named);
+            let hint = workspace.kind_of_space_hint(&error, named);
+            assert!(hint.is_empty(), "{named}: {hint}");
+        }
+        let denied = WorkspaceError::Unreadable {
+            path: "Shot PM.png".to_string(),
+            detail: "denied".to_string(),
+        };
+        assert!(
+            workspace
+                .kind_of_space_hint(&denied, "Shot PM.png")
+                .is_empty()
+        );
     }
 
     /// A `~` reference whose home directory is not text is refused. The directory its lossy
