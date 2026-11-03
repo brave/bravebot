@@ -1,5 +1,6 @@
 use super::*;
-use bravebot_config::{Settings, env_var, keys};
+use bravebot_config::keys::{self, Keys};
+use bravebot_config::{Settings, brave_key, env_var};
 
 fn scratch(name: &str) -> PathBuf {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))

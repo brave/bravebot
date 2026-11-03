@@ -8,11 +8,9 @@
 //! carries the key or any part of it.
 
 use crate::protocol::{Failure, Request};
-use bravebot_agent::accounts::{Offer, offered};
 use bravebot_agent::home;
-use bravebot_agent::key_entry::{self, StoreError};
-use bravebot_config::keys::Keys;
-use bravebot_config::{Config, ConfigError, Managed, Secret, brave_key, user_settings_file};
+use bravebot_agent::key_entry::{self, Inputs, Ready, Refusal, StoreError};
+use bravebot_config::{Config, ConfigError, Managed, Secret, user_settings_file};
 use bravebot_i18n::t;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -68,78 +66,39 @@ impl Before {
     }
 }
 
-/// What the checks that need no key found.
-pub(crate) struct Ready<'b> {
-    pub(crate) directory: &'b Path,
-    /// Whether a key is stored already, which a new one replaces only where the person said so.
-    pub(crate) stored: bool,
-    /// For a gateway, the one it is for.
-    pub(crate) offer: Option<Offer<'b>>,
+fn host(ready: &Ready<'_>) -> Option<String> {
+    ready
+        .offer
+        .as_ref()
+        .map(|offer| offer.provider.host().to_string())
 }
 
-impl Ready<'_> {
-    fn host(&self) -> Option<String> {
-        self.offer
-            .as_ref()
-            .map(|offer| offer.provider.host().to_string())
-    }
-
-    fn records(&self) -> bool {
-        self.offer.as_ref().is_some_and(|offer| offer.unconfigured)
-    }
+fn records(ready: &Ready<'_>) -> bool {
+    ready.offer.as_ref().is_some_and(|offer| offer.unconfigured)
 }
 
-/// The checks that need no key, in the order `bravebot auth login` makes them, each refusing with
-/// a sentence of the window's own that names no path and repeats nothing a file holds.
+/// The checks that need no key, which are [`key_entry::ready`]'s, each refusing with a sentence of
+/// the window's own that names no path and repeats nothing a file holds.
 pub(crate) fn ready<'b>(target: &Target, before: &'b Before) -> Result<Ready<'b>, &'static str> {
-    // INCOG-7: a session that leaves nothing behind stores no key either.
-    if before.incognito {
-        return Err(t!(desktop_accounts_key_incognito));
-    }
-    match target {
-        Target::Brave => {
-            let directory = before
-                .directory
-                .as_deref()
-                .ok_or(t!(desktop_accounts_key_nowhere))?;
-            match brave_key::read(directory) {
-                Err(brave_key::Unreadable) => Err(t!(desktop_accounts_key_brave_unreadable)),
-                Ok(held) => Ok(Ready {
-                    directory,
-                    stored: held.is_some(),
-                    offer: None,
-                }),
-            }
-        }
-        Target::Gateway(id) => {
-            // A configuration that lacks only the Brave credentials names no gateway, as the
-            // command reads it.
-            let providers = match &before.config {
-                Ok(config) => config.providers.as_slice(),
-                Err(ConfigError::Missing(_) | ConfigError::Empty(_)) => &[],
-                Err(_) => return Err(t!(desktop_accounts_key_misconfigured)),
-            };
-            let offer = offered(providers, &before.managed)
-                .into_iter()
-                .find(|offer| offer.id() == id)
-                .ok_or(t!(desktop_accounts_key_not_offered))?;
-            let directory = before
-                .directory
-                .as_deref()
-                .ok_or(t!(desktop_accounts_key_nowhere))?;
-            let stored = Keys::read(directory).map_err(|_| t!(desktop_accounts_keys_unreadable))?;
-            // Before the key is typed, so nobody types one for a service no session would send it to.
-            if offer.unconfigured {
-                key_entry::with_block(&offer, &user_settings_file(directory))
-                    .map_err(|_| t!(desktop_accounts_key_cannot_record))?;
-            }
-            Ok(Ready {
-                directory,
-                stored: stored.get(id).is_some(),
-                offer: Some(offer),
-            })
-        }
-    }
+    let target = match target {
+        Target::Brave => key_entry::Target::Brave,
+        Target::Gateway(id) => key_entry::Target::Gateway(id),
+    };
+    let inputs = Inputs {
+        incognito: before.incognito,
+        directory: before.directory.as_deref(),
+        config: &before.config,
+        managed: &before.managed,
+    };
+    key_entry::ready(&target, &inputs).map_err(|refused| match refused {
+        Refusal::Incognito => t!(desktop_accounts_key_incognito),
+        Refusal::Nowhere => t!(desktop_accounts_key_nowhere),
+        Refusal::BraveUnreadable => t!(desktop_accounts_key_brave_unreadable),
+        Refusal::Misconfigured => t!(desktop_accounts_key_misconfigured),
+        Refusal::NoneOffered | Refusal::NotOffered(_) => t!(desktop_accounts_key_not_offered),
+        Refusal::KeysUnreadable => t!(desktop_accounts_keys_unreadable),
+        Refusal::CannotRecord(_) => t!(desktop_accounts_key_cannot_record),
+    })
 }
 
 /// Store `key`, typed for `target`, where every check still holds. `Ok` carries a sentence for a
@@ -203,9 +162,9 @@ pub(crate) fn answer_before(target: &Target, before: &Before) -> Value {
             json!({
                 "ready": true,
                 "stored": ready.stored,
-                "host": ready.host(),
+                "host": host(&ready),
                 "variable": variable,
-                "records": ready.records(),
+                "records": records(&ready),
             })
         }
     }

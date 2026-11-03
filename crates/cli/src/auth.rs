@@ -11,7 +11,7 @@ use bravebot_agent::accounts::BedrockSwitch as Switch;
 #[cfg(test)]
 use bravebot_agent::accounts::write_keys;
 use bravebot_agent::accounts::{
-    self, BedrockCheck, ListError, Offer, aws_accounts, bedrock_config, offered,
+    self, BedrockCheck, ListError, Offer, aws_accounts, bedrock_config,
 };
 use bravebot_agent::backend::Backend;
 #[cfg(test)]
@@ -518,9 +518,10 @@ fn gateway(named: Option<&str>) -> ExitCode {
     if bravebot_core::incognito::engaged() {
         return fail(Ending::Failed, t!(auth_gateway_not_while_incognito));
     }
-    let providers = match gateways_configured(Config::from_env()) {
-        Ok(providers) => providers,
-        Err(problem) => return fail(Ending::Configuration, drawn_problem(&problem)),
+    let config = Config::from_env();
+    let providers = match key_entry::configured_gateways(&config) {
+        Ok(providers) => providers.to_vec(),
+        Err(problem) => return fail(Ending::Configuration, drawn_problem(problem)),
     };
     let managed = Managed::load();
     let directory = home::writable();
@@ -547,19 +548,6 @@ fn gateway(named: Option<&str>) -> ExitCode {
 /// variable or a settings file chose, so its control characters are drawn as pictures (LAYER-3).
 fn drawn_problem(problem: &ConfigError) -> String {
     crate::progress::printable_lines(&t!(cli_configuration_problem, problem = problem))
-}
-
-/// The gateways a configuration names, where it can be read.
-///
-/// A configuration that lacks only the Brave credentials is one that names no gateway and no AWS
-/// account, since either makes them optional, so it names none here. Refusing it would stop the person
-/// this sign-in is for, who holds a key and has configured nothing else.
-fn gateways_configured(config: Result<Config, ConfigError>) -> Result<Vec<Provider>, ConfigError> {
-    match config {
-        Ok(config) => Ok(config.providers),
-        Err(ConfigError::Missing(_) | ConfigError::Empty(_)) => Ok(Vec::new()),
-        Err(other) => Err(other),
-    }
 }
 
 /// One line to a stream. A failed write is ignored, since stdout and stderr are the only places one
@@ -591,33 +579,13 @@ struct Ready<'a> {
     stored: Keys,
 }
 
-/// The checks that need no answer, each of which refuses before anything is asked.
+/// The checks that need no answer, each of which refuses before anything is asked. They are
+/// [`key_entry`]'s, with the terminal's own check between the offer and the place it is stored.
 fn ready<'a>(task: &Task<'a>, err: &mut impl Write) -> Result<Ready<'a>, Ending> {
-    let offers = offered(task.providers, task.managed);
-    if offers.is_empty() {
-        return Err(refused(
-            err,
-            Ending::Configuration,
-            t!(auth_gateway_none_configured, path = managed_path()),
-        ));
-    }
-    let named = match task.named {
-        None => None,
-        Some(id) => match offers.iter().position(|offer| offer.id() == id) {
-            Some(at) => Some(at),
-            // Not repeated back either: a word naming no gateway may be the key, typed where the id
-            // goes by somebody who took it for the argument.
-            None => {
-                return Err(refused(
-                    err,
-                    Ending::Argument,
-                    not_offered(
-                        offers.iter().map(Offer::id),
-                        task.managed.gateways().is_some(),
-                    ),
-                ));
-            }
-        },
+    let (offers, named) = match key_entry::gateway_offers(task.providers, task.managed, task.named)
+    {
+        Ok(found) => found,
+        Err(refusal) => return Err(gateway_refused(err, task, refusal)),
     };
     if !task.terminal {
         return Err(refused(
@@ -626,18 +594,9 @@ fn ready<'a>(task: &Task<'a>, err: &mut impl Write) -> Result<Ready<'a>, Ending>
             t!(auth_gateway_needs_a_terminal),
         ));
     }
-    let Some(directory) = task.directory else {
-        return Err(refused(err, Ending::Failed, t!(auth_gateway_no_home)));
-    };
-    let Ok(stored) = Keys::read(directory) else {
-        return Err(refused(
-            err,
-            Ending::Failed,
-            t!(
-                auth_gateway_keys_unreadable,
-                path = keys::file(directory).display()
-            ),
-        ));
+    let (directory, stored) = match key_entry::gateway_place(task.directory) {
+        Ok(place) => place,
+        Err(refusal) => return Err(gateway_refused(err, task, refusal)),
     };
     Ok(Ready {
         managed: task.managed,
@@ -646,6 +605,43 @@ fn ready<'a>(task: &Task<'a>, err: &mut impl Write) -> Result<Ready<'a>, Ending>
         directory,
         stored,
     })
+}
+
+/// A refusal of [`key_entry`]'s, as the terminal words it.
+fn gateway_refused(err: &mut impl Write, task: &Task<'_>, refusal: key_entry::Refusal) -> Ending {
+    use key_entry::Refusal;
+    match refusal {
+        Refusal::NoneOffered => refused(
+            err,
+            Ending::Configuration,
+            t!(auth_gateway_none_configured, path = managed_path()),
+        ),
+        // Not repeated back either: a word naming no gateway may be the key, typed where the id goes
+        // by somebody who took it for the argument.
+        Refusal::NotOffered(ids) => refused(
+            err,
+            Ending::Argument,
+            not_offered(
+                ids.iter().map(String::as_str),
+                task.managed.gateways().is_some(),
+            ),
+        ),
+        Refusal::Nowhere => refused(err, Ending::Failed, t!(auth_gateway_no_home)),
+        Refusal::KeysUnreadable => refused(
+            err,
+            Ending::Failed,
+            t!(
+                auth_gateway_keys_unreadable,
+                path = task.directory.map(keys::file).unwrap_or_default().display()
+            ),
+        ),
+        Refusal::Incognito
+        | Refusal::Misconfigured
+        | Refusal::BraveUnreadable
+        | Refusal::CannotRecord(_) => {
+            unreachable!("not a refusal of the offers or of the place a gateway key is stored")
+        }
+    }
 }
 
 /// Ask which service the key is for and, where one is stored for it, whether to replace it.
@@ -1637,6 +1633,7 @@ mod golden {
 mod tests {
     use super::*;
     use bravebot_agent::accounts::bedrock_switch as switch;
+    use bravebot_agent::accounts::offered;
     use bravebot_config::provider::{Credential, Source};
     use std::borrow::Cow;
     use std::path::PathBuf;
@@ -2063,7 +2060,7 @@ mod tests {
             ConfigError::Empty("SERVICES_KEY_AICHAT"),
         ] {
             assert_eq!(
-                gateways_configured(Err(lacking)).map(|found| found.len()),
+                key_entry::configured_gateways(&Err(lacking)).map(<[Provider]>::len),
                 Ok(0)
             );
         }
@@ -2071,11 +2068,12 @@ mod tests {
             value: "ftp://elsewhere".to_string(),
         };
         assert_eq!(
-            gateways_configured(Err(invalid())).map(|found| found.len()),
-            Err(invalid())
+            key_entry::configured_gateways(&Err(invalid())).map(<[Provider]>::len),
+            Err(&invalid())
         );
         let config = configured(TWO_GATEWAYS_WITH_A_KNOWN_ID, &Managed::default());
-        let found = gateways_configured(Ok(config)).expect("readable");
+        let config = Ok(config);
+        let found = key_entry::configured_gateways(&config).expect("readable");
         let ids: Vec<&str> = found.iter().map(|provider| provider.id.as_str()).collect();
         assert_eq!(ids, ["openrouter", "work"]);
     }

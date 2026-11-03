@@ -12,7 +12,7 @@ use crate::plain::Prompting;
 use bravebot_agent::accounts;
 use bravebot_agent::confirm::Decision;
 use bravebot_agent::home;
-use bravebot_agent::key_entry;
+use bravebot_agent::key_entry::{self, Refusal};
 use bravebot_config::{Secret, brave_key};
 use bravebot_i18n::t;
 use std::io::{BufRead, IsTerminal, Write};
@@ -65,30 +65,30 @@ fn sign_in<R: BufRead, W: Write>(
     if !task.terminal {
         return refused(err, Ending::Argument, t!(brave_needs_a_terminal));
     }
-    let Some(directory) = task.directory else {
-        return refused(err, Ending::Failed, t!(brave_no_home));
-    };
-    let path = brave_key::file(directory);
-    match brave_key::read(directory) {
-        Err(brave_key::Unreadable) => {
+    let (directory, stored) = match key_entry::brave_place(task.directory) {
+        Ok(place) => place,
+        Err(Refusal::Nowhere) => return refused(err, Ending::Failed, t!(brave_no_home)),
+        Err(Refusal::BraveUnreadable) => {
+            let path = task.directory.map(brave_key::file).unwrap_or_default();
             return refused(
                 err,
                 Ending::Failed,
                 t!(brave_key_unreadable, path = path.display()),
             );
         }
-        // Replaced only on a yes, because the one replaced is gone once the file is written.
-        Ok(Some(_)) => {
-            let replace = {
-                let mut asking = open_questions();
-                asking.say(t!(brave_key_held));
-                asking.ask(&[], t!(brave_replace)) == Decision::Approve
-            };
-            if !replace {
-                return Ending::Done;
-            }
+        Err(other) => unreachable!("not a refusal of the place a Brave key is stored: {other:?}"),
+    };
+    let path = brave_key::file(directory);
+    // Replaced only on a yes, because the one replaced is gone once the file is written.
+    if stored {
+        let replace = {
+            let mut asking = open_questions();
+            asking.say(t!(brave_key_held));
+            asking.ask(&[], t!(brave_replace)) == Decision::Approve
+        };
+        if !replace {
+            return Ending::Done;
         }
-        Ok(None) => {}
     }
 
     let key = match read_key(t!(brave_key_question)) {
