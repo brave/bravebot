@@ -174,9 +174,16 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
    * a row of the transcript and is never sent to the model. A form that changes the schedule is
    * refused by the bridge while a turn runs (`turn_in_flight`, the bridge's decision and not a
    * reading of the line here), and the line then waits in the queue to be asked again when the
-   * turn ends (CMD-8). Nothing here reads the argument.
+   * turn ends (CMD-8). Nothing here reads the argument. A line typed while a `/schedule` line already
+   * waits waits behind it, whatever it is, since the bridge cannot see this queue and would answer a
+   * read before the write typed first (CMD-8).
    */
   const schedule = useCallback(async (handle: string, argument: string, line: string, queuedAlready = false) => {
+    const waiting = !queuedAlready && openedLives.current.get(handle)?.queued?.some((item) => item.schedule !== undefined)
+    if (waiting) {
+      updateSession(handle, (old) => old ? { ...old, queued: [...(old.queued ?? []), { prompt: line, attachments: [], staged: [], schedule: argument }] } : old)
+      return
+    }
     try {
       const answer = await call<ScheduleAnswer>('schedule.command', { session: handle, argument })
       updateSession(handle, (old) => old ? { ...old, entries: [...old.entries, t.scheduleAnswered(answer)] } : old)

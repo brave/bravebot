@@ -954,6 +954,9 @@ fn add(words: &[String], context: &Context) -> Reply {
 /// has to exist and be a directory; a path that is not one is an argument error.
 fn project_directory(named: Option<PathBuf>, here: Option<&Path>) -> Result<PathBuf, Reply> {
     let directory = match (named, here) {
+        // Relative to the session's own directory, which is not the process's: the window serves
+        // every open session from one process, and `/cd` moves the terminal's without moving it.
+        (Some(path), Some(here)) if path.is_relative() => here.join(path),
         (Some(path), _) => path,
         (None, Some(here)) => here.to_path_buf(),
         (None, None) => return Err(Reply::said(Outcome::Failed, t!(cli_directory_unknown))),
@@ -2115,6 +2118,66 @@ mod tests {
         assert!(text.contains("dir=/work/\u{FFFD}\n"));
     }
 
+    /// A relative `--dir` is the session's own directory's, whatever directory the process is in:
+    /// the window serves every open session from one process, and the terminal's `/cd` moves its
+    /// directory without moving the process. Rejects a `--dir` resolved against the process's
+    /// directory, which would name `<process directory>/sub` or refuse the path.
+    #[test]
+    fn a_relative_directory_is_resolved_against_the_sessions_directory() {
+        let here = tempfile::tempdir().expect("a directory");
+        std::fs::create_dir(here.path().join("sub")).expect("sub");
+        let process = std::env::current_dir().expect("a directory");
+        assert_ne!(here.path().canonicalize().expect("canonical"), process);
+        assert!(!process.join("sub").is_dir(), "the process has a `sub`");
+        let resolved = project_directory(Some(PathBuf::from("sub")), Some(here.path()))
+            .unwrap_or_else(|_| panic!("a relative directory was refused"));
+        assert_eq!(
+            resolved,
+            here.path().join("sub").canonicalize().expect("canonical")
+        );
+        // An absolute one is taken as it is, and a missing one is still refused.
+        let elsewhere = tempfile::tempdir().expect("a directory");
+        let absolute = project_directory(Some(elsewhere.path().to_path_buf()), Some(here.path()))
+            .unwrap_or_else(|_| panic!("an absolute directory was refused"));
+        assert_eq!(
+            absolute,
+            elsewhere.path().canonicalize().expect("canonical")
+        );
+        assert!(project_directory(Some(PathBuf::from("missing")), Some(here.path())).is_err());
+    }
+
+    /// PATH-003: a destination that is not UTF-8 is refused and is not stored as its lossy lookalike,
+    /// which is a different program. Rejects `to_str` replaced by `to_string_lossy`: the lookalike
+    /// is itself a well-formed destination and is written as it is.
+    #[cfg(unix)]
+    #[test]
+    fn a_destination_that_is_not_utf8_is_refused_and_not_written_as_its_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let destination = Path::new(std::ffi::OsStr::from_bytes(b"/opt/notify-\xff"));
+        assert!(!well_formed_destination(destination));
+        assert_eq!(
+            entry_text(
+                "0 9 * * *",
+                Path::new("/work"),
+                Mode::Read,
+                Scheduler::Crontab,
+                Some(destination)
+            ),
+            None
+        );
+        let lookalike = Path::new("/opt/notify-\u{FFFD}");
+        assert!(well_formed_destination(lookalike));
+        let text = entry_text(
+            "0 9 * * *",
+            Path::new("/work"),
+            Mode::Read,
+            Scheduler::Crontab,
+            Some(lookalike),
+        )
+        .expect("an entry");
+        assert!(text.contains("deliver=/opt/notify-\u{FFFD}\n"));
+    }
+
     #[test]
     fn a_crontab_line_quotes_the_program_and_escapes_the_percent() {
         let line = crontab_line("0 9 * * *", "/opt/it's 100%/bravebot", "2").expect("a line");
@@ -2592,5 +2655,98 @@ mod tests {
         .expect("canonical");
         let there = std::fs::read_to_string(&at).expect("ran");
         assert_eq!(there.trim_end(), home.display().to_string());
+    }
+
+    /// SANDBOX-30, PATH-005: a destination is started with the reduced search path, so a program it
+    /// starts by name is never a file a confined stage wrote into a directory the session keeps out,
+    /// even when that directory is first on the `PATH` bravebot inherited. The test binary runs again
+    /// with `PATH` holding the kept-out directory, an installed one and the system's, in that order.
+    /// The destination is `#!/usr/bin/env interp`; each `interp` records that it ran. A destination
+    /// started with bravebot's whole `PATH` runs the planted one.
+    #[cfg(unix)]
+    #[test]
+    fn a_destination_never_runs_a_program_it_starts_by_name_that_a_stage_may_have_written() {
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str = "schedule::tests::a_destination_never_runs_a_program_it_starts_by_name_that_a_stage_may_have_written";
+        const WORK: &str = "BRAVEBOT_TEST_SCHEDULE_DESTINATION_WORK";
+        const INSTALLED: &str = "BRAVEBOT_TEST_SCHEDULE_DESTINATION_INSTALLED";
+        const PLANTED: &str = "BRAVEBOT_TEST_SCHEDULE_DESTINATION_PLANTED";
+
+        if let Some(work) = std::env::var_os(WORK) {
+            let work = PathBuf::from(work);
+            let installed = PathBuf::from(std::env::var_os(INSTALLED).expect("installed"));
+            bravebot_sandbox::programs::keep_out(Path::new(
+                &std::env::var_os(PLANTED).expect("planted"),
+            ));
+            std::fs::write(work.join("ran"), "").expect("marker");
+            let store = tempfile::tempdir().expect("a directory");
+            let reply = concluded(
+                store.path(),
+                Some(&installed.join("env-destination")),
+                ended(0, b"x"),
+                Duration::from_secs(30),
+            );
+            assert_eq!(reply.notice, None, "the destination did not complete");
+            assert!(
+                !work.join("planted-ran").exists(),
+                "the destination looked its interpreter up in a directory a stage may write"
+            );
+            assert!(
+                work.join("installed-ran").exists(),
+                "the destination did not run the installed interpreter"
+            );
+            return;
+        }
+
+        // Under `target`, not the system's temporary directory: that one is itself kept out of the
+        // search path, so an installed interpreter there would not be found either.
+        let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+        std::fs::create_dir_all(&target).expect("target");
+        let work = tempfile::tempdir_in(&target).expect("a directory");
+        let installed = tempfile::tempdir_in(&target).expect("a directory");
+        let planted = work.path().join(".venv/bin");
+        std::fs::create_dir_all(&planted).expect("planted");
+        let write = |directory: &Path, name: &str, body: String| {
+            let file = directory.join(name);
+            std::fs::write(&file, body).expect("writes");
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        };
+        let records =
+            |marker: &str| format!("#!/bin/sh\n: > '{}'\n", work.path().join(marker).display());
+        write(&planted, "interp", records("planted-ran"));
+        write(installed.path(), "interp", records("installed-ran"));
+        write(
+            installed.path(),
+            "env-destination",
+            "#!/usr/bin/env interp\n".to_string(),
+        );
+        let path = std::env::join_paths([
+            planted.clone(),
+            installed.path().to_path_buf(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .expect("a path");
+
+        let mut again = bravebot_sandbox::programs::start(
+            &bravebot_sandbox::programs::Resolved::own_executable().expect("the test binary"),
+            bravebot_sandbox::programs::Inherits::All,
+            bravebot_sandbox::programs::SearchPath::Inherited,
+        );
+        let child = again
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(WORK, work.path())
+            .env(INSTALLED, installed.path())
+            .env(PLANTED, &planted)
+            .env("PATH", &path)
+            .output()
+            .expect("runs");
+
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        assert!(
+            work.path().join("ran").exists(),
+            "the child did not run the test: {report}"
+        );
+        assert!(child.status.success(), "{report}");
     }
 }

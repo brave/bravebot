@@ -87,7 +87,18 @@ test('the composer asks for the command only from the text a person typed, throu
   assert.doesNotMatch(turn.slice(turn.indexOf('const schedule = ')), /reads_only|readsOnly|startsWith\('(add|remove)/)
   // Nothing outside the box's handlers makes a queued schedule line.
   const queuing = [...turn.matchAll(/schedule: argument/g)]
-  assert.equal(queuing.length, 1)
+  assert.equal(queuing.length, 2, 'the bridge refusal and a line behind a waiting schedule line')
+})
+
+test('a /schedule line typed behind a waiting /schedule line waits, and is not sent to the bridge first (CMD-8)', () => {
+  const turn = readFileSync('src/renderer/use-turn.ts', 'utf8')
+  const body = turn.slice(turn.indexOf('const schedule = '))
+  // The queue is read before the bridge is called, and a waiting schedule item holds the line back.
+  const read = body.indexOf('item.schedule !== undefined')
+  const called = body.indexOf("call<ScheduleAnswer>('schedule.command'")
+  assert.ok(read > 0 && called > read, 'the queue is read before schedule.command is called')
+  assert.match(body.slice(0, called), /!queuedAlready && openedLives\.current\.get\(handle\)\?\.queued\?\.some\(\(item\) => item\.schedule !== undefined\)/)
+  assert.match(body.slice(0, called), /if \(waiting\) \{.*?queued: \[\.\.\.\(old\.queued \?\? \[\]\), \{ prompt: line, attachments: \[\], staged: \[\], schedule: argument \}\].*?return\s*\}/s)
 })
 
 test('the bridge method is one the window may send, and is a method the main process does not gate by directory', () => {
