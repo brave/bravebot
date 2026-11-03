@@ -35,6 +35,7 @@
  - Changed the lines of a `search` result, a manifest search step and a `read_git` search to `path:line:text` for a match and `path-line-text` for a line around one, with the text unchanged, so a line's indentation is shown as `read_file` shows it. ([#3687](https://github.com/brave/bravebot/issues/3687))
  - Changed the refusal of `edit_file` on a file that is not vouched for, or that untrusted content was written to, to say the file is closed to `edit_file` and to name what is open: `write_file`, `run` and vouching for the path, each only where the session offers it. It no longer tells the agent to use a reference, which `edit_file` cannot take. ([#3688](https://github.com/brave/bravebot/issues/3688))
  - Changed the line that ends a turn the service refused as invalid (HTTP 400) to name the backend the request went to, the model you configured or chose, and the request fields the retries left out, such as the cache lifetime, the effort level or shown thinking, and to end with the next step: `/model`, or `bravebot doctor`. It shows no text from the service, and the desktop window's failure message is unchanged. ([#3713](https://github.com/brave/bravebot/issues/3713))
+ - Changed a saved `model` of `xai/<name>` that a gateway lists as a bare name to select the xAI account, where before xAI sign-in it reached that gateway. `<gateway-id>/xai/<name>` still reaches the gateway. ([#3142](https://github.com/brave/bravebot/issues/3142))
 
 ## [0.20.0](https://github.com/brave/bravebot/releases/tag/v0.20.0)
 
