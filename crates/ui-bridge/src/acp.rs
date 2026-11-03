@@ -32,8 +32,7 @@ const ALLOW_ONCE: &str = "allow-once";
 const ALLOW_ALWAYS: &str = "allow-always";
 const REJECT_ONCE: &str = "reject-once";
 
-/// A tool call the editor was told about and has not been told the end of.
-/// A call the editor was told has started, by the id dispatch gave it.
+/// A tool call the editor was told about and has not been told the end of, by the id dispatch gave it.
 struct Tool {
     call: u64,
     id: String,
