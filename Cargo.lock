@@ -460,6 +460,7 @@ dependencies = [
  "bravebot-mentions",
  "bravebot-net",
  "bravebot-sandbox",
+ "bravebot-schedule",
  "bravebot-session",
  "bravebot-skus",
  "bravebot-stamp",
