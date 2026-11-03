@@ -20,7 +20,7 @@ import {
   type Attempt, type SignInAnswer, type SignInCurrent, type SignInNotice, type SignInOutcome, type SignInWay, type SignInWindowState,
 } from '../shared/accounts'
 
-/** How long an ask is dropped for after a no, so a page cannot raise the dialog until a key lands on it. */
+/** How long an ask is dropped for after a no or a cancelled key window, so a page cannot raise either again until a key lands on it. */
 export const COOLDOWN_MS = 3000
 
 /** Past its own deadline by this much, an attempt whose ending never arrived no longer holds the gate. */
@@ -141,6 +141,16 @@ export function sessionOf(value: unknown): string | undefined | null {
   return typeof value === 'string' && value ? value : null
 }
 
+/** `window`, if `sender` is its page and it is still open. */
+export function fromWindow<W extends Asker>(window: W | null, sender: unknown): W | null {
+  return window && !window.isDestroyed() && sender === window.webContents ? window : null
+}
+
+/** `params` for the bridge, naming `session` when the page named one. */
+export function withSession(session: string | undefined, params: Record<string, unknown>): Record<string, unknown> {
+  return session === undefined ? params : { ...params, session }
+}
+
 interface Running {
   attempt: Attempt
   way: SignInWay
@@ -161,8 +171,7 @@ export class SignIn<W extends Asker = Asker> {
   constructor(private readonly deps: SignInDeps<W>) {}
 
   private fromWindow(sender: unknown): W | null {
-    const window = this.deps.window()
-    return window && !window.isDestroyed() && sender === window.webContents ? window : null
+    return fromWindow(this.deps.window(), sender)
   }
 
   private stillRunning(): Running | null {
@@ -187,10 +196,9 @@ export class SignIn<W extends Asker = Asker> {
     if (this.deps.now() < this.coolUntil) return null
     this.asking = way
     this.askingId = way === 'bedrock' ? id as string | null : null
-    const withSession = (params: Record<string, unknown>) => (named === undefined ? params : { ...params, session: named })
     try {
       // Only an AWS row is read by asking the AWS command-line tool, and only an AWS ask needs it.
-      const rows = parseAccounts(await this.deps.ask('accounts.list', withSession(way === 'bedrock' ? {} : { bedrock: false })))
+      const rows = parseAccounts(await this.deps.ask('accounts.list', withSession(named, way === 'bedrock' ? {} : { bedrock: false })))
       if (!rows) return { error: 'The agent did not say which sign-ins are stored. Rebuild or reinstall the app, then retry.' }
       if (way === 'bedrock' && !rows.some((row) => row.way === way && row.id === id && row.command !== null)) return null
       const replace = way !== 'bedrock' && rows.some((row) => row.way === way && row.canSignOut)
@@ -201,7 +209,7 @@ export class SignIn<W extends Asker = Asker> {
       }
       if (this.fromWindow(sender) !== window) return null
       this.endedEarly = null
-      const answer = await this.deps.ask('accounts.signIn', withSession(way === 'bedrock' ? { way, id: this.askingId } : { way, replace }))
+      const answer = await this.deps.ask('accounts.signIn', withSession(named, way === 'bedrock' ? { way, id: this.askingId } : { way, replace }))
       const attempt = (answer as { attempt?: unknown } | null)?.attempt
       if (!isAttempt(attempt)) return { error: 'The agent did not start the sign-in. Rebuild or reinstall the app, then retry.' }
       if (this.endedEarly !== attempt && !this.running) this.running = { attempt, way, id: this.askingId, state: null, deadline: null }

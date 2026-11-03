@@ -19,7 +19,8 @@ function load(entry) {
   return module.exports
 }
 
-const { KeyEntry, KEY_COOLDOWN_MS } = load('./src/main/key-entry')
+const { KeyEntry } = load('./src/main/key-entry')
+const { COOLDOWN_MS } = load('./src/main/sign-in')
 const { accountLogo } = load('./src/shared/accounts')
 
 const KEY = 'sk-PLACEHOLDER-TYPED-KEY-k9k9'
@@ -153,7 +154,7 @@ test('one key window at a time, and closing it cancels and holds the next ask of
   assert.deepEqual(g.told.at(-1), { kind: 'ended', way: 'brave', id: null, outcome: 'cancelled', sentence: null })
   assert.ok(!methods(g.sent).includes('accounts.storeKey'), 'nothing is stored')
   assert.equal(await g.entry.request(g.webContents, 'brave', null), null, 'held off just after')
-  g.stub.clock += KEY_COOLDOWN_MS
+  g.stub.clock += COOLDOWN_MS
   assert.deepEqual(await g.entry.request(g.webContents, 'brave', null), { opened: true })
 })
 
@@ -191,10 +192,13 @@ test('the main window closing or quitting takes the key window with it', async (
 
 test('the key window is a page of its own that reaches only its own channels', () => {
   const main = readFileSync('src/main/key-window.ts', 'utf8')
-  for (const pattern of [/useContentSize: true/, /sandbox: true/, /contextIsolation: true/, /nodeIntegration: false/, /preload\/key-window\.js/,
+  assert.match(main, /smallWindow\('key-window', \{ spellcheck: false \}\)/)
+  const small = readFileSync('src/main/small-window.ts', 'utf8')
+  for (const pattern of [/useContentSize: true/, /sandbox: true/, /contextIsolation: true/, /nodeIntegration: false/, /preload\/\$\{page\}\.js/,
     /setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/, /on\('will-navigate', \(event\) => event\.preventDefault\(\)\)/, /if \(!closing\) cancel\(\)/]) {
-    assert.match(main, pattern)
+    assert.match(small, pattern)
   }
+  assert.match(small, /\.\.\.preferences,\s*preload:/, 'a window\'s own preferences cannot undo the hardening that follows them')
   const handlers = main.split('ipcMain.handle(').slice(1).map((each) => each.slice(0, 160))
   assert.equal(handlers.length, 4)
   assert.match(main, /Math\.min\(KEY_WINDOW_HEIGHTS\.most, Math\.max\(KEY_WINDOW_HEIGHTS\.least/, 'the page cannot size its window past the bounds')

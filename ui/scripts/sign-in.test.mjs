@@ -364,7 +364,8 @@ test('closing the window or quitting cancels an AWS sign-in too', async () => {
   assert.equal(g.signIn.current(g.webContents), null)
   const window = readFileSync('src/main/sign-in-window.ts', 'utf8')
   assert.match(window, /bedrock: 'Sign in to AWS'/)
-  assert.match(window, /on\('closed', \(\) => \{[\s\S]{0,80}if \(!closing\) cancel\(\)/)
+  assert.match(window, /smallWindow\('sign-in'\)/)
+  assert.match(readFileSync('src/main/small-window.ts', 'utf8'), /on\('closed', \(\) => \{[\s\S]{0,80}if \(!closing\) cancel\(\)/)
 })
 
 test('the session the page names reaches every ask of the bridge, and one that is not an id drops the ask', async () => {
@@ -399,9 +400,10 @@ test('no sign-in is asked for while the key window is open or asked for', async 
 
 test('a sign-in or key window that is open already is told what to show when it is brought back', () => {
   const signInWindow = readFileSync('src/main/sign-in-window.ts', 'utf8')
-  assert.match(signInWindow, /if \(shown && !shown\.isDestroyed\(\)\) \{\s*shown\.webContents\.send\('bravebot:sign-in-window:changed', state\)/)
+  assert.match(readFileSync('src/main/small-window.ts', 'utf8'), /if \(open\) \{\s*reuse\(open\)/)
+  assert.match(signInWindow, /reuse: \(window\) => window\.webContents\.send\('bravebot:sign-in-window:changed', state\)/)
   const keyWindow = readFileSync('src/main/key-window.ts', 'utf8')
-  assert.match(keyWindow, /if \(shown && !shown\.isDestroyed\(\)\) \{[\s\S]{0,120}shown\.webContents\.send\('bravebot:key-window:changed', state\)/)
+  assert.match(keyWindow, /reuse: \(window\) => \{[\s\S]{0,80}window\.webContents\.send\('bravebot:key-window:changed', state\)/)
   assert.match(readFileSync('src/preload/key-window.ts', 'utf8'), /ipcRenderer\.on\('bravebot:key-window:changed'/)
   assert.match(readFileSync('src/renderer/key-window.tsx', 'utf8'), /onChanged\(setState\)/)
 })

@@ -12,10 +12,7 @@
  */
 
 import { isKeyWay, parseAccounts, type KeyAnswer, type KeyNotice, type KeySaveAnswer, type KeyWay, type KeyWindowState } from '../shared/accounts'
-import { sessionOf, type Asker } from './sign-in'
-
-/** How long an ask is dropped for after the key window is cancelled. */
-export const KEY_COOLDOWN_MS = 3000
+import { COOLDOWN_MS, fromWindow, sessionOf, withSession, type Asker } from './sign-in'
 
 export interface KeyEntryDeps<W extends Asker = Asker> {
   /** The bridge. */
@@ -49,8 +46,7 @@ export class KeyEntry<W extends Asker = Asker> {
   constructor(private readonly deps: KeyEntryDeps<W>) {}
 
   private fromWindow(sender: unknown): W | null {
-    const window = this.deps.window()
-    return window && !window.isDestroyed() && sender === window.webContents ? window : null
+    return fromWindow(this.deps.window(), sender)
   }
 
   /** `bravebot:enterKey`. Dropped, saying nothing, unless every condition of the gate holds. */
@@ -65,14 +61,13 @@ export class KeyEntry<W extends Asker = Asker> {
     if (this.busy() || this.deps.otherBusy()) return null
     if (this.deps.now() < this.coolUntil) return null
     this.asking = true
-    const withSession = (params: Record<string, unknown>) => (inSession === undefined ? params : { ...params, session: inSession })
     try {
       // No key row is read by asking the AWS command-line tool, so the AWS rows are not checked.
-      const rows = parseAccounts(await this.deps.ask('accounts.list', withSession({ bedrock: false })))
+      const rows = parseAccounts(await this.deps.ask('accounts.list', withSession(inSession, { bedrock: false })))
       if (!rows) return { error: 'The agent did not say which keys are stored. Rebuild or reinstall the app, then retry.' }
       const row = rows.find((r) => r.way === way && (way === 'brave' || r.id === named))
       if (!row?.canEnterKey) return null
-      const params = withSession(way === 'gateway' ? { way, id: named } : { way })
+      const params = withSession(inSession, way === 'gateway' ? { way, id: named } : { way })
       const before = (await this.deps.ask('accounts.keyBefore', params)) as Record<string, unknown> | null
       if (before?.ready !== true) {
         return { error: text(before?.sentence) ?? 'The agent did not say whether a key can be stored. Rebuild or reinstall the app, then retry.' }
@@ -132,8 +127,7 @@ export class KeyEntry<W extends Asker = Asker> {
     try {
       const params: Record<string, unknown> = { way: open.way, key, replace: open.replace }
       if (open.id !== null) params.id = open.id
-      if (this.session !== undefined) params.session = this.session
-      const answer = (await this.deps.ask('accounts.storeKey', params)) as Record<string, unknown> | null
+      const answer = (await this.deps.ask('accounts.storeKey', withSession(this.session, params))) as Record<string, unknown> | null
       if (this.open !== open) return { refused: 'The key window is not waiting for a key.' }
       if (answer?.outcome === 'stored') {
         this.finish('stored', text(answer.sentence))
@@ -159,7 +153,7 @@ export class KeyEntry<W extends Asker = Asker> {
   cancel(): void {
     if (!this.open) return
     if (this.saving && !this.cancelledWhileSaving) { this.cancelledWhileSaving = true; return }
-    this.coolUntil = this.deps.now() + KEY_COOLDOWN_MS
+    this.coolUntil = this.deps.now() + COOLDOWN_MS
     this.finish('cancelled', null)
   }
 
