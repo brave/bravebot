@@ -480,6 +480,32 @@ mod tests {
         ));
     }
 
+    /// A configuration directory is never a bare name: a relative one is read from the directory the
+    /// session writes in, and one that does not exist is made by whoever writes it first.
+    #[test]
+    fn a_relative_or_missing_config_directory_is_not_the_one_gcloud_is_told_to_read() {
+        let (session, safe, _planted, genuine) = planted_and_genuine("gcloud-config-spellings");
+
+        assert!(withheld("CLOUDSDK_CONFIG", Path::new("gcloud"), &session));
+        assert!(withheld("CLOUDSDK_CONFIG", Path::new("./gcloud"), &session));
+        assert!(withheld(
+            "CLOUDSDK_CONFIG",
+            Path::new("../gcloud"),
+            &session
+        ));
+        assert!(withheld(
+            "CLOUDSDK_CONFIG",
+            &safe.join("not-made-yet"),
+            &session
+        ));
+        assert!(withheld(
+            "CLOUDSDK_CONFIG",
+            &session.join("not-made-yet"),
+            &session
+        ));
+        assert!(!withheld("CLOUDSDK_CONFIG", &genuine, &session));
+    }
+
     /// A value that is not text is judged as the bytes it is. A loop that skipped a value it cannot
     /// convert would keep a planted one, and one that rendered it lossily would judge the genuine
     /// file whose name holds `U+FFFD` instead ([PATH-003](../../../docs/best-practices/paths.md#PATH-003)).
