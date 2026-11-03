@@ -348,6 +348,18 @@ test('a pressed face holds its squash until let go, springs back, and giggles at
   stop()
 })
 
+test('choosing a face\'s row giggles at the first press and takes no count towards the next', () => {
+  globalThis.requestAnimationFrame = () => 1
+  const { svg, played } = stage()
+  const stop = show(svg, SEED, 'open', true)
+  const figures = () => played.filter(each => each.name === 'figure')
+  press(svg, true); letGo(svg)
+  assert.ok(same(figures().at(-1).frames, moves('giggle').figure), 'a chosen row giggles')
+  press(svg); letGo(svg)
+  assert.ok(same(figures().at(-1).frames, moves('release').figure), 'the giggle starts the count again')
+  stop()
+})
+
 test('a face changed in the editor pops in, and its neighbours notice a cheer', () => {
   globalThis.requestAnimationFrame = () => 1
   const one = stage({ x: 0, y: 0 })

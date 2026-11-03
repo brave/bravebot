@@ -141,7 +141,7 @@ function BotRow({
 }): React.JSX.Element {
   return (
     <div className={`bot${open ? ' bot-open' : ''}`}>
-      <button type="button" className="bot-open-button" aria-current={open ? 'true' : undefined} onClick={() => onOpen(bot)}>
+      <button type="button" className="bot-open-button" aria-current={open ? 'true' : undefined} data-presses-face onClick={() => onOpen(bot)}>
         <BotAvatar seed={bot.avatar} doing={doing} size={40} />
         <span className="bot-said">
           <span className="bot-name">{bot.name}</span>
