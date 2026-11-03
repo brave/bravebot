@@ -115,8 +115,8 @@ A failed request carries an `outcome`: `rejected` when the request was refused a
 `unknown` when it may have reached the bridge (a lost connection, a failed write, a deadline, or the
 bridge reporting an `internal` error), so the
 caller must look at the current state before trying again. At most 256 requests wait for an answer at
-once and one request is at most 8 MiB; beyond that a request is refused before it is written. Cancel
-and close are exempt from the first limit, so a caller can always stop work. Parameters that cannot be
+once and one request line is at most 8 Mi characters; beyond that a request is refused before it is written. Cancel
+and close are exempt from the count of waiting requests, so a caller can always stop work. They are still subject to the size limit and the deadline. Parameters that cannot be
 written fail the request instead of throwing. A request
 unanswered past its deadline (30 seconds by default) ends the connection and stops the
 child, since its outcome cannot be known. Nothing is retried. The cleanup request sent after a
@@ -130,8 +130,10 @@ listeners, other sessions, the rest of the data being read, the request it belon
 shutdown. A diagnostic hook that throws does not lose the message being read.
 
 A startup that breaks the protocol (a malformed or out-of-order initial view, a repeated row id)
-refuses the session for good, even if a valid initial view follows. Startup trust questions are
-held only while a session is being created, and at most 64 sessions' worth are held, earliest first.
+refuses the session for good, even if a valid initial view follows. A startup trust question that
+arrives before the response naming its session is held only while a session is being created. Other
+events for an unknown session are dropped. At most 64 sessions' worth are held, earliest first, and
+at most 256 events for each.
 
 **Local program.** `scripts/local-client.ts` drives one fresh session from a terminal: it requires an
 explicit `--trust yes|no`, answers an approval only as `--decide approve|reject|prompt` says (a

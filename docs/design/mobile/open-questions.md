@@ -129,7 +129,7 @@ These are not accepted risks or implementation details that can be skipped. The 
 ### Q8. How does the app know a target can list its sessions?
 
 - **Status:** unresolved.
-- **Question and reason:** the app asks for the session list on every change and does not read `TargetInfo.sessionList`. A client that reports `false`, such as the stdio client, rejects every request, the rejection is dropped, and the drawer says "No sessions yet." while a session is open. A failed request on a target that does list keeps the last list without saying so.
+- **Question and reason:** the app asks for the session list when the drawer opens, after a session is picked, and when what a row shows for the session on screen changes (its status, its waiting question, whether it has ended or has a prompt). It does not read `TargetInfo.sessionList`. A client that reports `false`, such as the stdio client, rejects every request, the rejection is dropped, and the drawer says "No sessions yet." while a session is open. A failed request on a target that does list keeps the last list without saying so.
 - **Current assumption:** the first target implements listing, so no gate is needed yet.
 - **Evidence needed:** read `sessionList` once from `describe()`, which can itself reject; hide the list or explain its absence when it is `false`; show a failed load differently from an empty list. Tests with a client that reports `false` and one whose list fails.
 - **Before:** a target built on the stdio client, or any target without listing.
