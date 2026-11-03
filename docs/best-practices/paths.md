@@ -8,7 +8,9 @@ text sits on a display or on a decision. Most of the `to_string_lossy` calls in 
 display, which is correct, so a lint cannot tell the two apart. The same reviewer checks that a fix
 to a name that got past a rule accounts for the other names the file has. It also checks that a
 program bravebot starts itself is tested for the names it starts, and that a fix to one such program
-accounts for the others [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30) lists.
+accounts for the others [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30) lists. For a program
+bravebot starts for itself with the person's environment, it checks that each variable the program
+reads to choose code to run is removed unless its value is a safe file, directory or program name.
 
 ---
 
@@ -179,3 +181,80 @@ host does not hold.
 **Why:** a table of the names one file has cannot show a step that merges two files, because every
 row in it is a pair the volume already opens as one. Each such step was found by a report after it
 shipped, and an extra rule about the wrong file decides what the person never agreed to.
+
+---
+
+<a id="PATH-008"></a>
+
+## A program's code-selecting variables are removed unless they name a safe file
+
+**A diff that adds or changes the start of a program bravebot starts for itself, with the
+person's environment, has each variable the program's launcher reads to choose code to run removed,
+unless the value passes a check.** The value passes when it is an absolute path that exists outside
+every stage-writable directory, links followed, or, for a variable that names a program, a bare
+program name, which the program finds on the reduced `PATH`. A variable that only carries a
+credential, such as `GOOGLE_APPLICATION_CREDENTIALS`, stays. A variable that names a directory the
+program reads configuration from counts as code when the program runs files from that directory,
+even though the directory also holds credentials ([BACKEND-65](../specs/backends.md#BACKEND-65)).
+
+A program bravebot starts for itself is one the person and the project did not ask to run. A `run`
+stage, a `run` command in the background, a hook, a language server and a line typed at the `!`
+prompt run commands the person or the project chose, so the rule does not apply to them. A start of
+bravebot's own executable is not a start of another program, so the rule does not apply to it
+either. A reviewer decides the rest from what the start is for, and the diff says which it is when
+that is not plain. This entry does not say that a start the diff does not touch complies. The only
+list whose values are kept or removed by `may_be_run` is `CODE_SELECTORS` in
+`crates/agent/src/gcloud.rs`, so a diff that changes the AWS CLI, browser opener, scheduler or
+push-identity start adds a list for it, or records the gap as [GAP-001](gaps.md#GAP-001) asks.
+
+In a diff that adds or changes the start of a program bravebot starts for itself, a reviewer reads
+the program's launcher and documentation for every variable that names an interpreter, a plugin or
+module directory, a configuration directory it runs files from, or a wrapper to run first. Each one
+is either listed in the program's selector list with tests, or the diff says why the program never
+reads it. Such a start with no list, or with a variable the launcher reads missing from the list,
+breaks the rule. A second list reuses the check by moving it to code the lists share
+([PATH-006](#PATH-006)), not by copying it.
+
+`make check-code-selectors` confirms only that every name in `CODE_SELECTORS` has one assertion that
+removes a value and one that keeps a value. A reviewer confirms the rest of these, and that the list
+is complete:
+
+- A value inside a stage-writable directory is removed.
+- A link from outside to inside such a directory is removed.
+- A relative path and a path that does not exist are removed, except that a variable that names a
+  program keeps a bare program name.
+- An absolute path that exists outside every stage-writable directory is kept.
+- A value that is not UTF-8 is judged as the bytes it is ([PATH-003](#PATH-003)).
+- A variable the launcher does not read to choose code is left as set.
+
+```rust
+// Wrong: the variables are inherited as the person set them, so a value naming a file a stage
+// wrote is run outside confinement.
+bravebot_sandbox::programs::start(
+    &Resolved::found_earlier(program),
+    Inherits::Without(&own_credentials()),
+    SearchPath::Reduced,
+)
+
+// Right: the same start, with each listed variable removed unless its value passes the check.
+// This is the loop `gcloud.rs` has; a second program moves the check to shared code first.
+let mut command = bravebot_sandbox::programs::start(
+    &Resolved::found_earlier(program),
+    Inherits::Without(&own_credentials()),
+    SearchPath::Reduced,
+);
+for (name, names) in CODE_SELECTORS {
+    if let Some(value) = held(name)
+        && !may_be_run(names, Path::new(&value), &outside_stage_writable)
+    {
+        command.env_remove(name);
+    }
+}
+command
+```
+
+**Why:** the sandbox confines what a stage runs. A program started outside it runs, with the
+person's authority, whatever file a variable names as its interpreter or as a directory it sources
+scripts from. The list of variables is read from the program, so a reviewer who does not read the
+launcher cannot tell that one is missing.
+

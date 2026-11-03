@@ -108,6 +108,27 @@ something skipped: the parser is hand written against the subset of Fluent in
 report every catalog complete forever. `--selftest` checks the parse and the verdict against inputs
 whose answer is known, and reads no catalog; `make check-locales` runs it first, for the same reason.
 
+## check-code-selectors.py
+
+Fails while a variable in `CODE_SELECTORS` in `crates/agent/src/gcloud.rs` lacks a test.
+
+`gcloud` is started with the person's environment, and its launcher reads `CLOUDSDK_PYTHON` and
+`CLOUDSDK_CONFIG` to choose code to run. `command_for` takes such a variable off when its value
+names a path a stage may write. For each name in the list, this requires an
+`assert!(withheld("NAME", ...))` and an `assert!(!withheld("NAME", ...))` in the test module of the
+same file. A loop that keeps every value fails the first, and one that removes every value fails the
+second.
+
+```sh
+make check-code-selectors   # or contrib/check-code-selectors.py
+```
+
+`make check` runs it and CI has a job for it. It compiles nothing and needs no toolchain. It cannot
+tell that the list is complete: a variable the launcher reads that is not listed is found by
+reading the launcher, which [PATH-008](../docs/best-practices/paths.md#PATH-008) asks a reviewer to
+do. `--selftest` checks the parse and the verdict against inputs whose answer is known and reads no
+source file; `make check-code-selectors` runs it first.
+
 ## check-lint-increase.py
 
 Fails a change that adds sites of a clippy lint the tree has hundreds of.
