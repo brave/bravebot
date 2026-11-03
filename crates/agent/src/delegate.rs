@@ -626,7 +626,7 @@ pub fn seed<S: Sink>(
     remembering: Option<&str>,
 ) -> Seeded {
     Seeded {
-        file_authority: policy.file_authority(),
+        file_authority: policy.file_authority().with_own_waits(),
         spec,
         vouched: policy.vouched(),
         permissions: policy.permissions().clone(),

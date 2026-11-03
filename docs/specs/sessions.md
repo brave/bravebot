@@ -417,26 +417,32 @@ than the one in force at the time.
 <a id="SESSION-12"></a>
 ### SESSION-12: the record says where each turn's time went, not only how long it took
 
-Every turn's wall clock is written down split four ways: what was spent waiting on the model, what
-was spent running tools, what was spent waiting for the person to answer a prompt, and what is left
-over. The four are a partition rather than four independent measures, so the parts account for the
-whole and the remainder is meaningful. An approval prompt is drawn from inside a tool call, so what
-was spent waiting for a person is taken off the tool figure rather than counted in both. The
-question about a server's tool list ([SERVERS-8](mcp-servers.md#SERVERS-8)) is put before any tool
-runs, and the time it waits is charged to the same figure and reported as soon as the question is
-settled, so a turn stopped at it keeps that time.
+Every turn's wall clock is written down split five ways: what was spent waiting on the model, what
+was spent running tools, what was spent waiting for the person to answer a prompt, what was spent
+blocked entering the file-authority boundary, and what is left over. The five are a partition rather
+than five independent measures, so the parts account for the whole and the remainder is meaningful.
+An approval prompt is drawn from inside a tool call, so what was spent waiting for a person is taken
+off the tool figure rather than counted in both. The same holds for the time a call spent blocked
+behind another holder of the boundary: it is taken off the tool figure and reported as
+`file_wait_ms`. Only a capture that had to wait is timed, as two instants, so the figure holds
+durations and no path, label or byte. Blocked spans inside one call's window are counted once and
+capped at the time the call took. The question about a server's tool list
+([SERVERS-8](mcp-servers.md#SERVERS-8)) is put before any tool runs, and the time it waits is
+charged to the same figure and reported as soon as the question is settled, so a turn stopped at it
+keeps that time.
 
-Delegate inference contributes only where requests overlap the parent's actual collection waits,
-with overlapping requests counted once (see [delegation.md](delegation.md)). The resulting
-breakdown reaches the same outcome, cumulative progress and session record as the parent's own
-measurements; collection does not add a second session charge.
+Delegate inference and delegate file waits contribute only where they overlap the parent's actual
+collection waits, with overlapping spans counted once (see [delegation.md](delegation.md)). The
+resulting breakdown reaches the same outcome, cumulative progress and session record as the parent's
+own measurements; collection does not add a second session charge.
 
 A turn that failed or stopped records its elapsed wall time and the timing breakdown retained from
 its progress on the same footing as one that succeeded. A `/compact` asked for mid-turn is charged
 to the turn it interrupted, as its tokens are; one asked for before the first turn is charged to
 the leading entry its tokens go to. `/status` reports the session total and each part that actually
 happened; a part that did not happen is left out rather than shown as zero. A record written before
-this was kept reads as an empty breakdown, which is not the same as a session that took no time.
+this was kept reads as an empty breakdown, which is not the same as a session that took no time, and
+one written before the file-wait figure existed reads that figure as zero.
 
 **Why.** A duration alone is unactionable, and the three things it conflates want three different
 fixes. A turn that took four minutes on the model, one that took four minutes running a test suite,
@@ -455,6 +461,13 @@ harness's own overhead.
 `verified-by: bravebot_session::sessions::a_record_written_before_timing_was_kept_still_loads`
 `verified-by: bravebot_tui::status::the_panel_says_where_the_session_spent_its_time`
 `verified-by: bravebot_tui::status::a_part_that_never_happened_is_not_reported_as_zero`
+`verified-by: bravebot_tui::status::the_panel_says_how_long_the_session_waited_for_file_access`
+`verified-by: bravebot_core::file_authority::a_blocked_capture_records_its_wait_and_a_free_one_does_not`
+`verified-by: bravebot_core::file_authority::a_handle_with_its_own_log_keeps_its_waits_apart`
+`verified-by: bravebot_agent::turn::time_blocked_at_the_file_boundary_is_charged_to_file_wait_and_not_to_the_tool`
+`verified-by: bravebot_agent::timing::a_record_without_a_file_wait_figure_reads_it_as_zero`
+`verified-by: bravebot_agent::timing::the_file_wait_is_taken_out_of_the_remainder`
+`verified-by: bravebot_agent::timing::blocked_since_counts_overlapping_waits_once`
 `verified-by: bravebot_tui::status::a_session_with_no_turn_yet_reports_no_time`
 `verified-by: bravebot_agent::confirm::the_time_a_person_takes_to_answer_is_counted`
 `verified-by: bravebot_agent::confirm::every_kind_of_question_is_timed`

@@ -15416,6 +15416,7 @@ mod tests {
                 inference_ms: 300,
                 tools_ms: 100,
                 stalled_ms: 5_000,
+                file_wait_ms: 0,
             });
 
             let first = s
@@ -15535,6 +15536,7 @@ mod tests {
                     inference_ms: 300,
                     tools_ms: 100,
                     stalled_ms: 600_000,
+                    file_wait_ms: 0,
                 }),
             );
 
@@ -15610,6 +15612,7 @@ mod tests {
                     inference_ms: 3_000,
                     tools_ms: 1_000,
                     stalled_ms: 4_000,
+                    file_wait_ms: 0,
                 },
             )]));
 
@@ -19415,6 +19418,7 @@ mod tests {
                     inference_ms: 31,
                     tools_ms: 13,
                     stalled_ms: 7,
+                    file_wait_ms: 0,
                 },
                 ..Default::default()
             });

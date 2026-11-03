@@ -281,6 +281,59 @@ impl fmt::Display for RunRequestCause {
 
 type Gated<T> = Result<T, Denial>;
 
+/// The label of an observation of one path, taken by [`Policy::measure_path`] and not yet
+/// recorded.
+///
+/// Carries the label and the key the map was asked about, which the trail names. The key is the
+/// path as the driver resolved it, and no file content.
+#[derive(Debug, Clone)]
+pub struct PathObserved {
+    label: Label,
+    path: String,
+}
+
+impl PathObserved {
+    /// The label the map gave the path.
+    pub fn label(&self) -> Label {
+        self.label
+    }
+}
+
+/// The label a `run` line's output gets, worked out by [`Policy::measure_plan`] and not yet
+/// recorded.
+///
+/// Carries the label and the fixed sentence that says why, which is a literal chosen by the
+/// policy and not a byte of anything the line printed.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanLabelled {
+    label: Label,
+    why: &'static str,
+}
+
+/// The label and the size of an observation of several paths, taken by
+/// [`Policy::measure_paths`] and not yet recorded.
+///
+/// Carries no path and no content: the integrity met over the paths and how many there were.
+#[derive(Debug, Clone, Copy)]
+pub struct PathsObserved {
+    label: Label,
+    visited: usize,
+}
+
+impl PathsObserved {
+    /// This observation and `later`, as one over the paths of both: integrity is the meet of the
+    /// two, and the counts add.
+    ///
+    /// For a result built from files captured one at a time, whose label must be no more trusted
+    /// than the map's answer for any one of them at the moment its bytes were taken.
+    pub fn with(self, later: Self) -> Self {
+        Self {
+            label: crate::label::taint_all([self.label, later.label]),
+            visited: self.visited + later.visited,
+        }
+    }
+}
+
 /// The routing block for one turn: trusted key/value pairs that decide where effects
 /// land.
 ///
@@ -1609,7 +1662,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         std::mem::replace(&mut self.trust, authority)
     }
 
-    /// Capture bytes and decide their labels within one file-authority boundary.
+    /// Capture within one file-authority boundary, held exclusive, whatever enters or completes an
+    /// effect.
+    ///
+    /// What runs inside is only what must be atomic with the entry or completion: the revision
+    /// check, a label lookup, `begin` or `publish`. Reading a large file or walking a tree belongs
+    /// outside it, or in [`Policy::capture_files_shared`] where the read has to agree with the label.
     /// The closure must not prompt, call a model, or wait for a process or delegate.
     pub fn capture_files<R>(
         &mut self,
@@ -1626,7 +1684,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The closure is given no handle to enter an effect, so it cannot change a file decision.
     /// It is still held against every effect, so the bytes it reads and the label it assigns them
     /// belong to one state of the map. The closure must not prompt, call a model, or wait for a
-    /// process or delegate.
+    /// process or delegate. It must not emit an event or write the trail: measure inside, and
+    /// record after the guard is released, as `Policy::measure_paths` and `record_paths` do.
     pub fn capture_files_shared<R>(&mut self, capture: impl FnOnce(&mut Self) -> R) -> R {
         let authority = self.file_authority();
         let _guard = authority.capture_shared();
@@ -2457,6 +2516,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::observe`] cannot know that, because a capability has no idea where its bytes
     /// came from; the trust store does.
     pub fn observe_path(&mut self, capability: Capability, path: &str) -> Gated<Label> {
+        let measured = self.measure_path(&capability, path)?;
+        Ok(self.record_path(capability, measured))
+    }
+
+    /// The label [`Policy::observe_path`] would give `path`, without recording it.
+    ///
+    /// For a capture that holds the file-authority boundary only while it reads: the lookup is
+    /// taken inside the capture and [`Policy::record_path`] writes the event after the boundary
+    /// is released, so no sink is called while a writer waits. Nothing is emitted here.
+    pub fn measure_path(&self, capability: &Capability, path: &str) -> Gated<PathObserved> {
         let base = capability.output_label().ok_or_else(|| Denial {
             principle: Principle::Capability,
             message: format!("'{capability}' produces no observation to label"),
@@ -2469,19 +2538,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             _ => Integrity::Untrusted,
         };
 
-        let label = Label::new(integrity, base.confidentiality);
+        Ok(PathObserved {
+            label: Label::new(integrity, base.confidentiality),
+            path: path.to_string(),
+        })
+    }
+
+    /// Emit the observation [`Policy::measure_path`] took, and return its label.
+    ///
+    /// Emits the same two lines [`Policy::observe_path`] does.
+    pub fn record_path(&mut self, capability: Capability, observed: PathObserved) -> Label {
+        let PathObserved { label, path } = observed;
         self.sink.emit(Event::Observed { capability, label });
         self.allow(
             "trust",
             format!(
                 "{path} read as {}",
-                match integrity {
+                match label.integrity {
                     Integrity::Trusted => "trusted, from a trusted path",
                     Integrity::Untrusted => "untrusted",
                 }
             ),
         );
-        Ok(label)
+        label
     }
 
     /// Record an observation spanning several paths, taking the meet of their integrity.
@@ -2494,6 +2573,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         capability: Capability,
         paths: impl IntoIterator<Item = &'p str>,
     ) -> Gated<Label> {
+        let measured = self.measure_paths(&capability, paths)?;
+        Ok(self.record_paths(capability, measured))
+    }
+
+    /// The label [`Policy::observe_paths`] would give `paths`, without recording it.
+    ///
+    /// For a capture that holds the file-authority boundary only while it reads: the lookup is
+    /// taken inside the capture and [`Policy::record_paths`] writes the event after the boundary
+    /// is released, so no sink is called while a writer waits. Nothing is emitted here.
+    pub fn measure_paths<'p>(
+        &self,
+        capability: &Capability,
+        paths: impl IntoIterator<Item = &'p str>,
+    ) -> Gated<PathsObserved> {
         let base = capability.output_label().ok_or_else(|| Denial {
             principle: Principle::Capability,
             message: format!("'{capability}' produces no observation to label"),
@@ -2515,19 +2608,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             integrity = Integrity::Trusted;
         }
 
-        let label = Label::new(integrity, base.confidentiality);
+        Ok(PathsObserved {
+            label: Label::new(integrity, base.confidentiality),
+            visited,
+        })
+    }
+
+    /// Emit the observation [`Policy::measure_paths`] took, and return its label.
+    ///
+    /// Emits the same two lines [`Policy::observe_paths`] does.
+    pub fn record_paths(&mut self, capability: Capability, observed: PathsObserved) -> Label {
+        let PathsObserved { label, visited } = observed;
         self.sink.emit(Event::Observed { capability, label });
         self.allow(
             "trust",
             format!(
                 "{visited} path(s) observed together, {}",
-                match integrity {
+                match label.integrity {
                     Integrity::Trusted => "all trusted",
                     Integrity::Untrusted => "at least one untrusted",
                 }
             ),
         );
-        Ok(label)
+        label
     }
 
     /// Whether the map trusts `path` and every path beneath it.
@@ -8216,6 +8319,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     fn label_a_run(&mut self, plan: &crate::command::Plan, requesting: bool) -> Gated<Label> {
+        self.gate_a_run(plan)?;
+        let measured = self.measure_a_run(plan, requesting)?;
+        Ok(self.record_a_run(measured))
+    }
+
+    /// The gates a `run` line passes before its output is labelled: the capability, a plan with
+    /// something in it, and the single-use grant for exactly this plan. None of them reads the
+    /// file map, so none belongs inside the file-authority boundary.
+    pub fn gate_a_run(&mut self, plan: &crate::command::Plan) -> Gated<()> {
         self.before_capability(Capability::ShellExec)?;
 
         if plan.steps().is_empty() {
@@ -8226,8 +8338,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         }
 
-        self.consume_grant("run", "plan", &plan.canonical())?;
+        self.consume_grant("run", "plan", &plan.canonical())
+    }
 
+    /// The label [`Policy::before_plan`] gives a line's output, without recording it.
+    ///
+    /// For a capture that holds the file-authority boundary shared: the audited road reads the
+    /// map, so the lookup is taken inside it, and [`Policy::record_a_run`] writes the trail line
+    /// after the boundary is released. Run [`Policy::gate_a_run`] first. Nothing is emitted here.
+    pub fn measure_a_run(
+        &self,
+        plan: &crate::command::Plan,
+        requesting: bool,
+    ) -> Gated<PlanLabelled> {
         let opaque = Capability::ShellExec.output_label().ok_or_else(|| Denial {
             principle: Principle::Capability,
             message: "command output must have a label".to_string(),
@@ -8287,8 +8410,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                  written, where it runs",
             )
         };
+        Ok(PlanLabelled { label, why })
+    }
+
+    /// Write the trail line for the label [`Policy::measure_a_run`] took, and return the label.
+    pub fn record_a_run(&mut self, measured: PlanLabelled) -> Label {
+        let PlanLabelled { label, why } = measured;
         self.allow("provenance", format!("run: output labelled {label}, {why}"));
-        Ok(label)
+        label
     }
 
     /// Issue a single-use endorsement for a routing field at an exact value.

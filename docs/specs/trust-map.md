@@ -350,12 +350,26 @@ No reader can capture replacement bytes under an earlier grant. This covers cont
 attachments, deferred references and searches as well as direct reads. A capture that only reads
 holds the boundary shared with other such captures, and every capture that enters or completes an
 effect holds it exclusive, so listings and searches overlap ([TURN-10](turns.md#TURN-10)) and an
-effect still waits for every reader and is waited for by every reader. Collection never merges
-a delegate's stale file snapshot. No coordination lock spans a prompt, model call or child join. Session callers retain this
-same authority after turn-owned children finish, including on failure or cancellation, and save
-its current file decisions rather than substituting the map from before the turn. Manifest runs
-also retain current file decisions on every returned error or cancellation, as
-[manifest.md](manifest.md) requires.
+effect still waits for every reader and is waited for by every reader. The work inside the boundary
+is what must be atomic with the decision it protects, and a long read or walk is kept out of it
+where it can be. A listing measures the labels of the paths it will name inside the shared
+boundary, and walks the tree and records the observation outside it. A search walks with no hold,
+then reads each file and measures that file's label inside one shared boundary. A write's entry
+holds it exclusive for the revision check, the trust lookup and reserving the path, and reads the
+file for its backup after that, while the path is reserved and reads as untrusted.
+
+The preview a `write_file` shows, and a vouch's, hold it shared. The label check at the start of a
+`run` line holds it shared for the revision read and the map lookup only: the line's gates read no
+file and run before the boundary, and the line's trail entry is written after it. A `read_file`
+runs its gates before the boundary and writes its trail lines after it, and a listing and a search
+record their observation after it. No sink is called while any of these holds the boundary, so an
+effect waiting to enter never waits on a sink.
+
+Collection never merges a delegate's stale file snapshot. No coordination lock spans a prompt,
+model call or child join. Session callers retain this same authority after turn-owned children
+finish, including on failure or cancellation, and save its current file decisions rather than
+substituting the map from before the turn. Manifest runs also retain current file decisions on
+every returned error or cancellation, as [manifest.md](manifest.md) requires.
 
 Approvals based on a preview are checked before effect entry against the path's revision taken
 when the preview was drawn, so a changed path cannot spend the old approval. A vouch is checked
@@ -369,13 +383,13 @@ the rest of the turn. A change to another
 path invalidates neither an approval nor a vouch, but any `run` line that started voids a vouch.
 The count is compared only for a vouch and for the write-back exception in
 [WRITE-4](tools/write-file.md#WRITE-4), which compares it separately. A backup records the trust
-of its bytes at capture under the same boundary. On a volume that folds case (TRUST-2), every
-spelling of a path is that path, both for the writer an active path refuses and for the revision an
-approval is checked against, so a run line redirecting to one file under two such spellings is
-refused as a second writer to it. Canonically equivalent spellings are one path here on every
-volume, because refusing a writer and invalidating an approval only narrow. On a volume that holds
-two such names apart, a second writer to the other name may be refused, and on one that does not,
-no second writer to the one file is let in.
+of its bytes at capture, taken under the boundary with the entry of the write that replaces them.
+On a volume that folds case (TRUST-2), every spelling of a path is that path, both for the writer
+an active path refuses and for the revision an approval is checked against, so a run line
+redirecting to one file under two such spellings is refused as a second writer to it. Canonically
+equivalent spellings are one path here on every volume, because refusing a writer and invalidating
+an approval only narrow. On a volume that holds two such names apart, a second writer to the other
+name may be refused, and on one that does not, no second writer to the one file is let in.
 
 `verified-by: bravebot_tui::sessions::failed_manifest_retains_file_decisions_live_and_resumed`
 `verified-by: bravebot_tui::sessions::cancelled_manifest_retains_file_decisions_live_and_resumed`
@@ -391,6 +405,13 @@ no second writer to the one file is let in.
 `verified-by: bravebot_core::file_authority::readers_hold_the_boundary_at_the_same_time`
 `verified-by: bravebot_core::file_authority::an_effect_cannot_enter_while_a_reader_holds_the_boundary`
 `verified-by: bravebot_core::file_authority::a_reader_cannot_capture_while_an_effect_holds_the_boundary`
+`verified-by: bravebot_agent::tools::a_listing_walk_does_not_hold_an_effect_out_and_is_labelled_after_it`
+`verified-by: bravebot_agent::tools::a_listing_waits_for_an_effect_holding_the_boundary_to_label_its_paths`
+`verified-by: bravebot_agent::tools::a_search_walk_does_not_hold_an_effect_out_and_is_labelled_after_it`
+`verified-by: bravebot_agent::tools::a_search_waits_for_an_effect_holding_the_boundary_to_read_a_file`
+`verified-by: bravebot_agent::tools::a_write_file_peek_does_not_wait_for_a_reader_holding_the_boundary`
+`verified-by: bravebot_agent::tools::a_run_label_check_does_not_wait_for_a_reader_holding_the_boundary`
+`verified-by: bravebot_agent::workspace::the_backup_read_does_not_hold_the_exclusive_boundary`
 `verified-by: bravebot_agent::workspace::an_untrusted_write_in_another_case_is_read_back_untrusted_under_either_spelling`
 `verified-by: bravebot_agent::turn::a_line_naming_one_file_under_two_case_spellings_is_refused_as_a_second_writer`
 `verified-by: bravebot_agent::workspace::each_alias_in_the_table_reads_back_an_untrusted_write_as_untrusted_unless_it_is_a_listed_gap`

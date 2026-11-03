@@ -758,7 +758,11 @@ Each holds its own conversation, quarantine, capabilities, routing grants and pr
 compaction of a delegate's conversation sends its task again after the summary
 ([COMPACT-19](compaction.md#COMPACT-19)).
 They share live file authority because their effects touch the same filesystem. A capture boundary
-spans one operation, so a large listing or search can delay other captures until it finishes.
+spans the decision it protects and not a whole operation: a listing or search walks the tree outside
+it and takes it per label or per file read ([TRUST-4](trust-map.md#TRUST-4)), so a large one does
+not hold up another run's capture until it finishes. Each delegate is seeded with the parent's one
+file authority and its own record of waits, so waiting for a file is charged to the run that
+waited ([DELEGATE-18](#DELEGATE-18)).
 Reservations are per path, so writes to other paths proceed.
 
 [checkouts.md](checkouts.md) gives a delegate a checkout of its own where its spawn or its
@@ -863,12 +867,27 @@ elapsed time does not change their additive accounting.
 A nested delegate's request intervals reach every run above it, so each parent's waits are
 measured against the requests of everything beneath it and not only its own delegates'.
 
+Time a delegate spent blocked entering the file-authority boundary is counted the same way, as the
+parent's `file_wait_ms` ([SESSION-12](sessions.md#SESSION-12)). Each delegate hands back the spans
+it was blocked for when it ends, as pairs of instants and nothing else. The parent charges the union
+of those spans clipped to its join windows, so thirty delegates blocked at once on one holder count
+the elapsed time once. Where a blocked span overlaps a request interval, the request is charged and
+the span is not: a delegate whose planner call ran while another of its calls waited was waiting on
+the model. A request handed back at a later join can cover a span an earlier join already charged to
+`file_wait_ms`; that span stays charged there and is not charged to inference as well, so the two
+figures never come to more than the time the delegates were waiting. A parent's own calls are not
+charged this way: their blocked spans are taken off the call that waited. The joins happen between a
+parent's rounds and not inside a call, so a span handed back by a delegate never falls inside the
+window of a parent's call and is not counted there as well.
+
 **Why.** Adding concurrent request durations would report time the parent did not spend waiting.
 A delegate's final duration alone cannot say which part fell inside a wait. Retaining intervals
 also lets a later collection account for its requests during earlier joins without charging them
 again.
 
 `verified-by: bravebot_agent::timing::delegate_requests_cover_only_their_union_inside_a_wait`
+`verified-by: bravebot_agent::timing::delegates_blocked_together_charge_the_union_once_and_a_request_wins`
+`verified-by: bravebot_agent::timing::a_late_request_over_an_earlier_blocked_span_is_not_charged_twice`
 `verified-by: bravebot_agent::shared::a_nested_delegates_requests_reach_every_delegate_above_it`
 `verified-by: bravebot_agent::timing::successive_collections_charge_each_covered_instant_once`
 `verified-by: bravebot_agent::turn::overlapping_delegate_requests_charge_one_elapsed_wait`

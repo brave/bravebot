@@ -20,7 +20,7 @@ use bravebot_core::capability::Capability;
 use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::{Role, Sink};
 use bravebot_core::label::Label;
-use bravebot_core::policy::Policy;
+use bravebot_core::policy::{PathObserved, Policy};
 use bravebot_core::spelling::to_key;
 use bravebot_core::value::Labelled;
 use bravebot_filetype::{Decoded, Decoding, SNIFF_BYTES, decode_text, looks_binary};
@@ -228,6 +228,10 @@ enum Reach {
     Dropped,
 }
 
+/// The observation of a path beside the read taken under it. The read can fail after the label
+/// was taken, and the observation is recorded either way.
+type TextMeasured = (PathObserved, Result<Labelled<String>, WorkspaceError>);
+
 /// The directories file operations are confined to.
 ///
 /// One primary root, which every relative path is resolved against, plus any the user added by
@@ -239,6 +243,8 @@ pub struct Workspace {
     after_write: Arc<Mutex<Option<WriteInterruption>>>,
     #[cfg(test)]
     while_reading: Arc<Mutex<Option<ReadingHook>>>,
+    #[cfg(test)]
+    while_backing_up: Arc<Mutex<Option<ReadingHook>>>,
     root: PathBuf,
     /// Absolute directories the user named, each canonical.
     ///
@@ -487,6 +493,8 @@ impl Workspace {
             after_write: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             while_reading: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            while_backing_up: Arc::new(Mutex::new(None)),
             root: canonical,
             added: Arc::default(),
             scratch: None,
@@ -774,7 +782,14 @@ impl Workspace {
         path: &Labelled<String>,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
-        policy.capture_files(|policy, _capture| self.read_text_captured(policy, path, reach))
+        // The gates read no file and decide nothing about one, so they run before the boundary is
+        // taken. Inside it go the path lookup, the label lookup and the read, which have to agree.
+        let relative = Self::gate_text_read(policy, path)?;
+        let (measured, read) = policy
+            .capture_files_shared(|policy| self.read_text_measured(policy, &relative, reach))?;
+        // After the boundary: the event reaches the sink while no writer waits for it.
+        policy.record_path(Capability::FileRead, measured);
+        read
     }
 
     fn read_text_captured<S: Sink>(
@@ -783,32 +798,50 @@ impl Workspace {
         path: &Labelled<String>,
         reach: Reach,
     ) -> Result<Labelled<String>, WorkspaceError> {
+        let relative = Self::gate_text_read(policy, path)?;
+        let (measured, read) = self.read_text_measured(policy, &relative, reach)?;
+        policy.record_path(Capability::FileRead, measured);
+        read
+    }
+
+    /// The capability and routing gates of a text read, and the trusted path they admitted.
+    fn gate_text_read<S: Sink>(
+        policy: &mut Policy<'_, S>,
+        path: &Labelled<String>,
+    ) -> Result<String, WorkspaceError> {
         policy.before_capability(Capability::FileRead)?;
         policy.before_action("file_read", "path", Role::Routing, path)?;
 
         // Safe to read: before_action just proved this is (T,pub).
-        let relative = path
-            .clone()
+        path.clone()
             .into_trusted()
             .map_err(|_| WorkspaceError::Invalid {
                 path: "<untrusted>".into(),
                 reason: "the path was not trusted",
-            })?;
+            })
+    }
 
+    /// Resolve, label and read `relative`, recording nothing. The observation is returned beside
+    /// the read, which may have failed after the label was taken.
+    fn read_text_measured<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        relative: &str,
+        reach: Reach,
+    ) -> Result<TextMeasured, WorkspaceError> {
         // Not a decision taken from the bytes: the caller says which of the two reads this is,
         // and it says so from the shape of the gesture that produced the path.
         let resolved = match reach {
-            Reach::Confined => self
-                .resolve(&relative)
-                .map_err(WorkspaceError::for_a_read)?,
-            Reach::Dropped => self.resolve_attachment(&relative, reach)?,
+            Reach::Confined => self.resolve(relative).map_err(WorkspaceError::for_a_read)?,
+            Reach::Dropped => self.resolve_attachment(relative, reach)?,
         };
-        let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
+        let measured = policy.measure_path(&Capability::FileRead, &self.trust_key(relative))?;
+        let label = measured.label();
 
-        let raw = std::fs::read(&resolved)
-            .map_err(|e| read_failure(&e, &resolved, &relative, &self.root))?;
-
-        Ok(Labelled::new(exact_text(raw, &relative)?, label))
+        let read = std::fs::read(&resolved)
+            .map_err(|e| read_failure(&e, &resolved, relative, &self.root))
+            .and_then(|raw| Ok(Labelled::new(exact_text(raw, relative)?, label)));
+        Ok((measured, read))
     }
 
     /// Read a file as a `data:` URI, confined to the workspace like every other read.
@@ -892,6 +925,8 @@ impl Workspace {
         media: &str,
         reach: Reach,
     ) -> Result<(Labelled<String>, usize), WorkspaceError> {
+        // Exclusive: `before_capability` and `observe_path` emit trail lines inside this closure,
+        // and a shared capture must emit nothing while it is held.
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("file_read", "path", Role::Routing, path)?;
@@ -1072,21 +1107,32 @@ impl Workspace {
         path: &Labelled<String>,
         read: impl FnOnce(&str, Label, &[PathBuf]) -> Result<R, WorkspaceError>,
     ) -> Result<R, WorkspaceError> {
-        policy.capture_files(|policy, _capture| {
-            policy.before_capability(Capability::FileRead)?;
-            policy.before_action("file_read", "path", Role::Routing, path)?;
+        // The capability and routing gates read no file, so they run before the boundary is taken
+        // and their trail lines are written while no writer waits. Inside it go the label lookup
+        // and the read, which have to agree. The observation is recorded after it is released.
+        policy.before_capability(Capability::FileRead)?;
+        policy.before_action("file_read", "path", Role::Routing, path)?;
 
-            let relative = path
-                .clone()
-                .into_trusted()
-                .map_err(|_| WorkspaceError::Invalid {
-                    path: "<untrusted>".into(),
-                    reason: "the path was not trusted",
-                })?;
+        let relative = path
+            .clone()
+            .into_trusted()
+            .map_err(|_| WorkspaceError::Invalid {
+                path: "<untrusted>".into(),
+                reason: "the path was not trusted",
+            })?;
 
-            let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
-            read(&relative, label, policy.loaded_skill_directories())
-        })
+        let (measured, read) = policy.capture_files_shared(|policy| {
+            let measured =
+                policy.measure_path(&Capability::FileRead, &self.trust_key(&relative))?;
+            let read = read(
+                &relative,
+                measured.label(),
+                policy.loaded_skill_directories(),
+            );
+            Ok::<_, WorkspaceError>((measured, read))
+        })?;
+        policy.record_path(Capability::FileRead, measured);
+        read
     }
 
     /// [`Workspace::read_page`], answering `Unchanged` where the file is the one a window was
@@ -1742,7 +1788,11 @@ impl Workspace {
                 }
             })?;
         }
-        let effect = policy.capture_files(|policy, capture| {
+        // Inside the boundary: the revision check, the trust the path has now, and entry, which
+        // must be atomic with one another. The backup reads the file after it. `begin` has reserved
+        // the path by then, so no other effect can enter it and a reader sees it untrusted, and a
+        // long read of a large file keeps no other capture waiting.
+        let (effect, captured_trust) = policy.capture_files(|policy, capture| {
             let key = self.trust_key(&relative);
             if expected_revision.is_some_and(|revision| revision != capture.revision_of(&key)) {
                 return Err(WorkspaceError::Stale {
@@ -1759,9 +1809,9 @@ impl Workspace {
                 .ok_or_else(|| WorkspaceError::Contended {
                     path: relative.clone(),
                 })?;
-            self.record_backup(&resolved, captured_trust);
-            Ok::<_, WorkspaceError>(effect)
+            Ok::<_, WorkspaceError>((effect, captured_trust))
         })?;
+        self.record_backup(&resolved, captured_trust);
 
         // Both gates have passed, so the bytes may be released to the write.
         let proof = policy.authorise_content_release("file_write", "contents");
@@ -1785,10 +1835,26 @@ impl Workspace {
         Ok(resolved)
     }
 
-    /// Run `hook` with the directory, inside the capture of every listing and search from here on.
+    /// Run `hook` with the directory, during the walk of every listing and search from here on.
+    /// The walk holds no file-authority boundary, so the hook sees a reader that has not captured.
     #[cfg(test)]
     pub(crate) fn hold_reads(&self, hook: impl Fn(&str) + Send + Sync + 'static) {
         *locked(&self.while_reading) = Some(ReadingHook(Arc::new(hook)));
+    }
+
+    /// Run `hook` with the file's path, just before a write reads the file it replaces for the
+    /// session's undo. The path is reserved by then and the exclusive boundary is released.
+    #[cfg(test)]
+    pub(crate) fn hold_backup_reads(&self, hook: impl Fn(&str) + Send + Sync + 'static) {
+        *locked(&self.while_backing_up) = Some(ReadingHook(Arc::new(hook)));
+    }
+
+    #[cfg(test)]
+    fn hold_while_backing_up(&self, path: &Path) {
+        let hook = locked(&self.while_backing_up).clone();
+        if let Some(ReadingHook(hook)) = hook {
+            hook(&path.to_string_lossy());
+        }
     }
 
     #[cfg(test)]
@@ -1879,6 +1945,8 @@ impl Workspace {
             .sum();
         let room = MAX_REWIND_BYTES.saturating_sub(held);
 
+        #[cfg(test)]
+        self.hold_while_backing_up(resolved);
         backups.push(Backup {
             captured_trust,
             path: resolved.to_path_buf(),
@@ -2572,7 +2640,7 @@ impl Workspace {
         pattern: Option<&Labelled<String>>,
         depth: Option<usize>,
     ) -> Result<Labelled<Listing>, WorkspaceError> {
-        policy.capture_files_shared(|policy| {
+        {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("file_list", "directory", Role::Routing, directory)?;
 
@@ -2642,8 +2710,16 @@ impl Workspace {
                 .chain(stopped_at.iter())
                 .map(|reported| self.key_below(&relative, &root, reported))
                 .collect();
-            let label =
-                policy.observe_paths(Capability::FileRead, keys.iter().map(String::as_str))?;
+            // The walk above reads directory entries and no file's bytes, and runs outside the
+            // boundary so a long walk does not hold an effect out (TRUST-4). What is listed is
+            // names, and the label of a name is the map's answer for its path, taken inside the
+            // boundary and so under one state of the map. An effect that entered after the walk
+            // has already distrusted its path, so the label can only be as trusted as the map says
+            // of the path now. The event is emitted after the boundary is released.
+            let measured = policy.capture_files_shared(|policy| {
+                policy.measure_paths(&Capability::FileRead, keys.iter().map(String::as_str))
+            })?;
+            let label = policy.record_paths(Capability::FileRead, measured);
 
             // `walk` collects one entry past the cap so reaching it is detectable. Which entries
             // survive is down to traversal order, so a truncated listing is a sample of the tree
@@ -2665,7 +2741,7 @@ impl Workspace {
                 },
                 label,
             ))
-        })
+        }
     }
 
     /// A ranked map of the declarations in the source files beneath `directory`.
@@ -2682,6 +2758,8 @@ impl Workspace {
         directory: &Labelled<String>,
         budget: usize,
     ) -> Result<Labelled<RepoMap>, WorkspaceError> {
+        // Exclusive: `before_capability` and `before_action` emit trail lines inside this
+        // closure, and a shared capture must emit nothing while it is held.
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("repo_map", "directory", Role::Routing, directory)?;
@@ -2915,7 +2993,7 @@ impl Workspace {
             context.min(MAX_SEARCH_CONTEXT)
         };
         let offset = if output.summarises() { 1 } else { offset };
-        policy.capture_files_shared(|policy| {
+        {
             policy.before_capability(Capability::FileRead)?;
             for pattern in patterns {
                 policy.before_action("file_grep", "pattern", Role::Routing, pattern)?;
@@ -3039,8 +3117,14 @@ impl Workspace {
                 .iter()
                 .map(|reported| self.key_below(&relative, &root, reported))
                 .collect();
-            let label =
-                policy.observe_paths(Capability::FileRead, keys.iter().map(String::as_str))?;
+            // The walk above names files and reads none, so it runs outside the boundary and a
+            // long one does not hold an effect out (TRUST-4). The boundary is taken once per file
+            // below, around that file's bytes and the map's answer for its path together. The
+            // result's label is the meet of those answers, so it is no more trusted than any file
+            // was when its bytes were taken. Files the loop never reached were not read and are
+            // asked about after it, as the whole set was before.
+            let mut observed = policy.measure_paths(&Capability::FileRead, [])?;
+            let mut reached = keys.len();
 
             // Collected one past the cap for the same reason as `walk`: reaching the limit has
             // to be distinguishable from happening to have exactly that many matches.
@@ -3056,20 +3140,29 @@ impl Workspace {
             let skip = offset.saturating_sub(1);
             let mut matched = 0usize;
             let started = Instant::now();
-            for path in paths {
+            for (index, path) in paths.iter().enumerate() {
                 if matches.len() > MAX_MATCHES {
+                    reached = index;
                     break;
                 }
                 // Checked per file rather than per line: the clock is here to bound a walk over a
                 // large tree, and a single file cannot be large enough to matter beside that.
                 if started.elapsed() >= self.search_time {
                     timed_out = true;
+                    reached = index;
                     break;
                 }
-                let absolute = self.root.join(&path);
+                let absolute = self.root.join(path);
+                let (looked, read) = policy.capture_files_shared(|policy| {
+                    (
+                        policy.measure_paths(&Capability::FileRead, [keys[index].as_str()]),
+                        std::fs::read_to_string(&absolute),
+                    )
+                });
+                observed = observed.with(looked?);
                 // Unreadable or non-UTF8 files are skipped rather than failing the search:
                 // a binary in the tree should not make grep unusable.
-                let Ok(contents) = std::fs::read_to_string(&absolute) else {
+                let Ok(contents) = read else {
                     continue;
                 };
                 searched += 1;
@@ -3155,6 +3248,13 @@ impl Workspace {
                 matched -= 1;
             }
 
+            // No bytes of these were taken, so there is no pairing of bytes and label for a
+            // boundary to keep (TRUST-4), and none is held while the event is emitted.
+            let unread = policy.measure_paths(
+                &Capability::FileRead,
+                keys[reached..].iter().map(String::as_str),
+            )?;
+            let label = policy.record_paths(Capability::FileRead, observed.with(unread));
             Ok(Labelled::new(
                 Matches {
                     matches,
@@ -3175,7 +3275,7 @@ impl Workspace {
                 },
                 label,
             ))
-        })
+        }
     }
 
     /// The name the trust map holds `.git` under, for the repository the planner called `named`.
@@ -3213,6 +3313,8 @@ impl Workspace {
             until,
             beside,
         } = *question;
+        // Exclusive: `before_capability` and `before_action` emit trail lines inside this
+        // closure, and a shared capture must emit nothing while it is held.
         policy.capture_files(|policy, _capture| {
             policy.before_capability(Capability::FileRead)?;
             policy.before_action("read_git", "repository", Role::Routing, repository)?;
@@ -3615,6 +3717,8 @@ impl Workspace {
         let made = self.session_checkout(id).ok_or(Declined::NoRepository)?;
         let root = made.path.to_string_lossy().into_owned();
         let tree_key = self.trust_key(&root);
+        // Exclusive: `observe_repository` emits the observation and a trail line inside this
+        // closure, and a shared capture must emit nothing while it is held.
         policy.capture_files(|policy, _capture| {
             let git_key = self.trusted_git_dir(policy, ".")?;
             if !policy.trusts_beneath(&tree_key) {
@@ -4816,6 +4920,64 @@ mod tests {
         assert!(!old.is_complete());
         assert!(!recent.is_complete());
         assert!(workspace.take_backups().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A write reads the file it replaces for the session's undo after it has reserved the path,
+    /// and not while it holds the exclusive file-authority boundary (TRUST-4). A large file
+    /// would otherwise keep every other capture waiting for the read. The hook runs where the
+    /// backup is read, and a second thread enters an effect there: with the read inside the
+    /// exclusive capture, the entry waits past the timeout.
+    #[test]
+    fn the_backup_read_does_not_hold_the_exclusive_boundary() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        use std::sync::mpsc;
+        let root = crate::testutil::scratch_dir("bravebot-backup-outside-boundary");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create scratch");
+        std::fs::write(root.join("shared.txt"), "original trusted text").unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let authority = FileAuthority::new(trust);
+        let entered = Arc::new(Mutex::new(Vec::new()));
+        {
+            let authority = authority.clone();
+            let entered = entered.clone();
+            workspace.hold_backup_reads(move |_| {
+                let authority = authority.clone();
+                let (done, finished) = mpsc::channel();
+                std::thread::spawn(move || {
+                    drop(authority.capture());
+                    let _ = done.send(());
+                });
+                let got_in = finished.recv_timeout(Duration::from_secs(5)).is_ok();
+                entered.lock().unwrap().push(got_in);
+            });
+        }
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "write");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+            &mut sink,
+        )
+        .unwrap()
+        .with_file_authority(authority);
+        let written = workspace.write(
+            &mut policy,
+            &Labelled::trusted("shared.txt".to_string()),
+            &Labelled::new("replacement".to_string(), Label::trusted_public()),
+        );
+        assert!(written.is_ok(), "{written:?}");
+        assert_eq!(
+            *entered.lock().unwrap(),
+            [true],
+            "the backup was read while the exclusive boundary was held, or not read at all"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

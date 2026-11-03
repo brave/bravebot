@@ -3843,6 +3843,66 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
     );
 }
 
+/// A tool call that has to wait for someone else to leave the file-authority boundary is charged
+/// to the file-wait figure and not to the tool, and the parts still come to no more than the whole.
+/// The boundary is held from outside the turn for a known time while a read waits to enter it.
+#[test]
+fn time_blocked_at_the_file_boundary_is_charged_to_file_wait_and_not_to_the_tool() {
+    let scratch = Scratch::new("timing-file-wait");
+    std::fs::write(scratch.path.join("present.md"), "THERE").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"present.md"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let holder = {
+        let authority = authority.clone();
+        std::thread::spawn(move || {
+            let guard = authority.capture();
+            held_tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            drop(guard);
+        })
+    };
+    held_rx.recv().unwrap();
+
+    let task = Task::new("read present.md").with_file_authority(authority);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+    holder.join().unwrap();
+
+    let timing = outcome.timing;
+    assert!(
+        timing.file_wait_ms >= 100,
+        "the wait at the boundary was not counted: {timing:?}"
+    );
+    assert!(
+        timing.tools_ms < timing.file_wait_ms,
+        "the wait was charged to the tool as well: {timing:?}"
+    );
+    assert!(
+        timing.inference_ms + timing.tools_ms + timing.stalled_ms + timing.file_wait_ms
+            <= timing.wall_ms,
+        "the parts came to more than the whole: {timing:?}"
+    );
+}
+
 /// The property that matters: a refused write does not touch the disk.
 #[test]
 fn a_refused_write_does_not_happen() {

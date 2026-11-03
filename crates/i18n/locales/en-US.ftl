@@ -2809,6 +2809,10 @@ status-time = Time
 status-time-inference = on the model
 status-time-tools = running tools
 status-time-stalled = waiting on you
+# Held outside the file-authority boundary while another call, or a delegate, had it. Durations
+# only. Counted apart from the tool figure so a slow tool and a queue for the boundary are not the
+# same number.
+status-time-file-wait = waiting on file access
 status-time-overhead = unaccounted for
 # How much of the last turn's prompt the service did not have to read. Two figures because they are
 # priced differently: a read is a fraction of what a fresh token costs and a write is above it, so a

@@ -2457,6 +2457,7 @@ status-time = Temps
 status-time-inference = sur le modèle
 status-time-tools = exécution des outils
 status-time-stalled = en attente de vous
+status-time-file-wait = en attente d'accès aux fichiers
 status-time-overhead = non attribué
 status-cache = Cache du prompt, dernier tour
 status-cache-read = servi depuis le cache

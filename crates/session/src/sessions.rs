@@ -4092,6 +4092,7 @@ mod tests {
                 inference_ms: 11,
                 tools_ms: 22,
                 stalled_ms: 33,
+                file_wait_ms: 0,
             },
             ..Default::default()
         };
@@ -4136,6 +4137,7 @@ mod tests {
                 inference_ms: 11,
                 tools_ms: 22,
                 stalled_ms: 33,
+                file_wait_ms: 0,
             })
         );
     }
@@ -7284,6 +7286,7 @@ mod tests {
                     inference_ms: 37,
                     tools_ms: 19,
                     stalled_ms: 11,
+                    file_wait_ms: 0,
                 },
                 ..Default::default()
             }),

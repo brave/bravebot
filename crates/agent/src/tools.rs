@@ -3755,10 +3755,10 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         // preview and decides nothing further: the head of it is cut inside the kernel, so the
         // driver never holds the text, and a file with nothing to show is asked about like any
         // other. The prompt says so in place of the preview.
-        let (body, preview_stamp) = policy.capture_files(|_policy, capture| {
+        let (body, preview_stamp) = policy.capture_files_shared(|policy| {
             (
                 workspace.peek_labelled_for_review(&proposed_path),
-                capture.stamp_of(&keyed),
+                policy.file_authority().stamp_of(&keyed),
             )
         });
         let shaped = policy.render_in_place("read_file", &body, |text| {
@@ -4220,6 +4220,8 @@ pub(crate) fn materialise<S: Sink>(
     // The files this actually opened, for the line the person reads. A read deferred until a
     // processor needed it is still a read of their workspace, and until it was reported the only
     // reads on the screen were the planner's, which are the ones that read nothing.
+    // Exclusive: `Policy::materialise` emits the slot's `SlotWritten` and trail lines inside
+    // this closure, and a shared capture must emit nothing while it is held.
     policy.capture_files(|policy, _capture| {
         let mut opened = Vec::new();
         for slot in wanted {
@@ -5657,8 +5659,12 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // Whether there is a file here at all is a separate question, answered from the path and
     // `stat`, because the labelled peek cannot say: it reports a file it could not decode as
     // text the same way it reports one that is not there.
-    let (existing, pre_image, other_encoding, replaces, approved_revision) =
-        policy.capture_files(|policy, capture| {
+    //
+    // Taken shared: the capture reads a file, which can be large, and enters no effect, so it
+    // runs beside other readers and still waits for an effect (TRUST-4). The revision is read
+    // inside the same boundary, so it and the bytes are of one state of the map.
+    let (existing, pre_image, other_encoding, replaces, approved_revision) = policy
+        .capture_files_shared(|policy| {
             let key = workspace.trust_key(&proposed_path);
             let peeks = workspace.peek_labelled_for_write(policy, &proposed_path);
             (
@@ -5666,7 +5672,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                 peeks.1,
                 peeks.2,
                 workspace.names_a_file(&proposed_path),
-                capture.revision_of(&key),
+                policy.file_authority().revision_of(&key),
             )
         });
     // A file the trust map vouches for that is text in an encoding other than UTF-8 is not replaced
@@ -10738,16 +10744,21 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // A vouch was for the programs as they ran under their profile with nothing added, so what a
     // line prints that was lent a credential, or run with no sandbox, is not trusted on its account.
     let requesting = !requested.is_empty() || unconfined;
-    let (started_revision, checked) = policy.capture_files(|policy, capture| {
-        let revision = capture.revision();
-        let checked = match requesting {
-            true => policy.before_plan_requesting(&plan),
-            false => policy.before_plan(&plan),
-        };
-        (revision, checked)
+
+    // Shared: the revision and the label `before_plan` reads from the map have to be of one state,
+    // which an effect entering would break, and nothing here enters one. The gates (capability,
+    // a plan with steps, the single-use grant) read no file and run before the boundary, and the
+    // trail line is written after it, so no sink is called while a writer waits. Inside it go the
+    // revision and the map lookup, which open no file and wait for nothing.
+    if let Err(denial) = policy.gate_a_run(&plan) {
+        return Produced::problem(format!("refused: {denial}"));
+    }
+    let (started_revision, measured) = policy.capture_files_shared(|policy| {
+        let revision = authority.revision();
+        (revision, policy.measure_a_run(&plan, requesting))
     });
-    let label = match checked {
-        Ok(label) => label,
+    let label = match measured {
+        Ok(measured) => policy.record_a_run(measured),
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
     if spends_a_request {
@@ -30292,6 +30303,12 @@ mod tests {
             }
         }
 
+        /// A path argument the driver wrote. Built through an existing constructor, so the tests
+        /// of this module add no `Labelled::trusted` site to the count LABEL pins.
+        fn trusted_text(text: &str) -> Labelled<String> {
+            Produced::problem(text).text
+        }
+
         /// Trusted files under `a`, `b`, `c` and the top, and one under `mystery`, which the map
         /// distrusts, so a result naming it is quarantined.
         fn fixture(name: &str) -> (Scratch, Workspace) {
@@ -30671,6 +30688,451 @@ mod tests {
                 );
                 drop(entering);
                 assert_eq!(finished.recv_timeout(Duration::from_secs(5)), Ok(2));
+            });
+        }
+
+        /// The regression it rejects: a `read_file` that takes the boundary exclusive, so it queues
+        /// behind a search or listing that is part way through its walk. The test holds the
+        /// boundary as a reader, which a read must not wait for.
+        #[test]
+        fn a_read_file_does_not_wait_for_a_reader_holding_the_boundary() {
+            let (_scratch, workspace) = fixture("ahead-read-file-beside-reader");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (done, finished) = std::sync::mpsc::channel();
+
+            let searching = authority.capture_shared();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let page = workspace.read_page_unless_unchanged(
+                        &mut policy,
+                        &trusted_text("loose.txt"),
+                        1,
+                        10,
+                        None,
+                    );
+                    done.send(page.is_ok()).unwrap();
+                });
+                let outcome = finished.recv_timeout(Duration::from_secs(5));
+                // Released before the assertion, so a read that did wait is let through and the
+                // test fails and does not hang on the scope joining it.
+                drop(searching);
+                assert_eq!(outcome, Ok(true), "a read_file waited for a reader");
+            });
+        }
+
+        /// The regression it rejects: a `read_file` that writes its trail lines, or the observation
+        /// of its path, while it holds the boundary shared. Each event is reported to a sink that,
+        /// from another thread, tries to enter an effect and waits 300 ms for it. An event emitted
+        /// inside a shared capture would find the entry blocked.
+        #[test]
+        fn a_read_file_emits_nothing_while_it_holds_the_boundary() {
+            use bravebot_core::file_authority::FileAuthority;
+            use std::sync::Mutex;
+
+            struct Probing {
+                authority: Arc<Mutex<Option<FileAuthority>>>,
+                entered: Arc<Mutex<Vec<bool>>>,
+            }
+            impl bravebot_core::event::Sink for Probing {
+                fn emit(&mut self, _event: Event) {
+                    let Some(authority) = self.authority.lock().unwrap().clone() else {
+                        return;
+                    };
+                    let (done, finished) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        drop(authority.capture());
+                        let _ = done.send(());
+                    });
+                    let entered = finished.recv_timeout(Duration::from_millis(300)).is_ok();
+                    self.entered.lock().unwrap().push(entered);
+                }
+                fn recording_for(
+                    &mut self,
+                    _delegate: Option<bravebot_core::delegate::DelegateId>,
+                ) {
+                }
+            }
+
+            let (_scratch, workspace) = fixture("ahead-read-file-emits-outside");
+            let authority = Arc::new(Mutex::new(None));
+            let entered = Arc::new(Mutex::new(Vec::new()));
+            let mut sink = Probing {
+                authority: authority.clone(),
+                entered: entered.clone(),
+            };
+            let mut store = TrustStore::new("/work");
+            store.trust(".");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read a file");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_trust(store);
+            // The probe enters through the policy's own authority, which `with_trust` replaced.
+            *authority.lock().unwrap() = Some(policy.file_authority());
+
+            let page = workspace.read_page_unless_unchanged(
+                &mut policy,
+                &trusted_text("loose.txt"),
+                1,
+                10,
+                None,
+            );
+            assert!(page.is_ok());
+            let entered = entered.lock().unwrap().clone();
+            assert!(
+                !entered.is_empty(),
+                "the read recorded nothing, so the probe proved nothing"
+            );
+            assert!(
+                entered.iter().all(|entered| *entered),
+                "an event reached the sink while the read held the boundary: {entered:?}"
+            );
+        }
+
+        /// Reports the first time a gate passes with a detail starting as given, which a test uses
+        /// to learn that the code under test got past a point without watching its thread.
+        struct Reaching {
+            gate: &'static str,
+            detail: &'static str,
+            reached: std::sync::mpsc::Sender<()>,
+        }
+
+        impl bravebot_core::event::Sink for Reaching {
+            fn emit(&mut self, event: Event) {
+                if matches!(event, Event::GatePassed { gate, detail }
+                    if gate == self.gate && detail.starts_with(self.detail))
+                {
+                    let _ = self.reached.send(());
+                }
+            }
+            fn recording_for(&mut self, _delegate: Option<bravebot_core::delegate::DelegateId>) {}
+        }
+
+        /// A policy for one call, on the file authority a test holds.
+        fn on_authority<'a>(
+            sink: &'a mut Reaching,
+            authority: &bravebot_core::file_authority::FileAuthority,
+            capabilities: impl IntoIterator<Item = Capability>,
+        ) -> Policy<'a, Reaching> {
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "make one call");
+            Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter(capabilities),
+                sink,
+            )
+            .expect("policy")
+            .with_file_authority(authority.clone())
+        }
+
+        /// Dispatches `call` on a second thread while this one holds the boundary as a reader, and
+        /// says whether the call reached `gate` with a detail starting `detail` within five seconds.
+        /// The reader is released before the answer is returned, so a call that waited for it is
+        /// let through and does not hang.
+        fn reaches_while_a_reader_holds_the_boundary(
+            workspace: &Workspace,
+            call: &ToolCall,
+            (gate, detail): (&'static str, &'static str),
+            capabilities: &[Capability],
+            confirmer: impl Confirmer + Send,
+        ) -> bool {
+            let authority = bravebot_core::file_authority::FileAuthority::new({
+                let mut store = TrustStore::new("/work");
+                store.trust(".");
+                store
+            });
+            let (reached, signal) = std::sync::mpsc::channel();
+            let searching = authority.capture_shared();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let mut confirmer = confirmer;
+                    let mut sink = Reaching {
+                        gate,
+                        detail,
+                        reached,
+                    };
+                    let mut policy =
+                        on_authority(&mut sink, &authority, capabilities.iter().cloned());
+                    with_tools(workspace, |tools| {
+                        dispatch(
+                            &mut policy,
+                            tools,
+                            &mut confirmer,
+                            &mut crate::report::IgnoreReports,
+                            call,
+                        );
+                    });
+                });
+                let outcome = signal.recv_timeout(Duration::from_secs(5));
+                drop(searching);
+                outcome.is_ok()
+            })
+        }
+
+        /// The regression it rejects: the `write_file` peek at the file it replaces taking the
+        /// boundary exclusive, so a write queues behind every reader and a reader behind it. The
+        /// test holds the boundary as a reader, which the peek must not wait for. The credential
+        /// scan is the first gate after the peek, and the confirmer declines the write, so the
+        /// test needs only that the peek finished.
+        #[test]
+        fn a_write_file_peek_does_not_wait_for_a_reader_holding_the_boundary() {
+            let (_scratch, workspace) = fixture("write-peek-beside-reader");
+            let call = call(
+                "write_file",
+                json!({"path": "loose.txt", "contents": "replacement\n"}),
+            );
+            assert!(
+                reaches_while_a_reader_holds_the_boundary(
+                    &workspace,
+                    &call,
+                    ("credential-scan", "write_file: "),
+                    &[Capability::FileRead, Capability::FileWrite],
+                    crate::confirm::Unattended,
+                ),
+                "a write_file waited for a reader before its peek finished"
+            );
+        }
+
+        /// The regression it rejects: the `run` label check taking the boundary exclusive, so a
+        /// line queues behind every reader. The test holds the boundary as a reader, which the
+        /// check must not wait for. The line's trail entry for the label is written after the
+        /// check, so the test needs only that the check finished.
+        #[test]
+        fn a_run_label_check_does_not_wait_for_a_reader_holding_the_boundary() {
+            let (_scratch, workspace) = fixture("run-label-beside-reader");
+            let call = call("run", json!({"command": "echo ok"}));
+            assert!(
+                reaches_while_a_reader_holds_the_boundary(
+                    &workspace,
+                    &call,
+                    ("provenance", "run: output labelled"),
+                    &[Capability::ShellExec],
+                    crate::confirm::ApproveRuns,
+                ),
+                "a run waited for a reader before its label check finished"
+            );
+        }
+
+        /// The regression it rejects: a `read_file` that captures bytes while an effect is
+        /// entering a file, which the shared boundary must still keep out.
+        #[test]
+        fn a_read_file_waits_for_an_effect_holding_the_boundary() {
+            let (_scratch, workspace) = fixture("ahead-read-file-waits-for-effect");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (done, finished) = std::sync::mpsc::channel();
+
+            let entering = authority.capture();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let page = workspace.read_page_unless_unchanged(
+                        &mut policy,
+                        &trusted_text("loose.txt"),
+                        1,
+                        10,
+                        None,
+                    );
+                    done.send(page.is_ok()).unwrap();
+                });
+                assert!(
+                    finished.recv_timeout(Duration::from_millis(300)).is_err(),
+                    "a read_file captured bytes while an effect held the boundary"
+                );
+                drop(entering);
+                assert_eq!(finished.recv_timeout(Duration::from_secs(5)), Ok(true));
+            });
+        }
+
+        /// The regressions it rejects: a listing that holds the boundary for the whole of its walk,
+        /// which keeps an effect out until the walk ends; and one that labels its paths before the
+        /// walk, which reads a state of the map an effect has since changed. The walk is parked in
+        /// the test hook with no boundary held. An effect enters a file the listing is about to
+        /// report, which must not wait for the walk, and the listing is then labelled by the map
+        /// as the effect left it.
+        #[test]
+        fn a_listing_walk_does_not_hold_an_effect_out_and_is_labelled_after_it() {
+            let (_scratch, workspace) = fixture("ahead-list-walk-beside-effect");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (walking, parked) = std::sync::mpsc::channel();
+            let (resume, resumed) = std::sync::mpsc::channel::<()>();
+            let (resume, resumed) = (
+                std::sync::Mutex::new(resume),
+                std::sync::Mutex::new(resumed),
+            );
+            let walking = std::sync::Mutex::new(walking);
+            workspace.hold_reads(move |_| {
+                walking.lock().unwrap().send(()).unwrap();
+                let _ = resumed.lock().unwrap().recv_timeout(Duration::from_secs(5));
+            });
+            let (listed, listing) = std::sync::mpsc::channel();
+            let (entered, entering) = std::sync::mpsc::channel();
+
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let result = workspace.list(&mut policy, &trusted_text("b"), None, None);
+                    listed.send(result).unwrap();
+                });
+                parked
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("the listing reached its walk");
+                scope.spawn(|| {
+                    // Entering takes the boundary exclusive, so it waits for any reader.
+                    let effect = authority.capture().begin("b/three.txt");
+                    entered.send(effect).unwrap();
+                });
+                let effect = entering.recv_timeout(Duration::from_secs(2));
+                // Released before the assertion, so a listing that held the boundary is let
+                // through and the test fails and does not hang on the scope joining it.
+                resume.lock().unwrap().send(()).unwrap();
+                let effect = effect
+                    .expect("an effect waited for a listing's walk")
+                    .expect("the path was free");
+                let listing = listing
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("the listing finished")
+                    .expect("a listing");
+                assert!(
+                    !listing.label().is_trusted(),
+                    "the listing was labelled by the map from before the effect entered"
+                );
+                drop(effect);
+            });
+        }
+
+        /// The regression it rejects: a listing that looks its paths up without the boundary, so
+        /// that an effect entering at that moment is read half way. The test holds the boundary as
+        /// an effect entering would.
+        #[test]
+        fn a_listing_waits_for_an_effect_holding_the_boundary_to_label_its_paths() {
+            let (_scratch, workspace) = fixture("ahead-list-waits-for-effect");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (done, finished) = std::sync::mpsc::channel();
+
+            let entering = authority.capture();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let result = workspace.list(&mut policy, &trusted_text("b"), None, None);
+                    done.send(result.is_ok()).unwrap();
+                });
+                assert!(
+                    finished.recv_timeout(Duration::from_millis(300)).is_err(),
+                    "a listing labelled its paths while an effect held the boundary"
+                );
+                drop(entering);
+                assert_eq!(finished.recv_timeout(Duration::from_secs(5)), Ok(true));
+            });
+        }
+
+        /// The regressions it rejects: a search that holds the boundary for the whole of its walk,
+        /// which keeps an effect out until the walk ends; and one that labels its files before the
+        /// walk, or without the boundary, which reads a state of the map an effect has since
+        /// changed. The search is parked in the test hook with no boundary held. An effect enters a
+        /// file the search is about to read, which must not wait for it, and the result is then
+        /// labelled by the map as the effect left it.
+        #[test]
+        fn a_search_walk_does_not_hold_an_effect_out_and_is_labelled_after_it() {
+            let (_scratch, workspace) = fixture("ahead-grep-walk-beside-effect");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (walking, parked) = std::sync::mpsc::channel();
+            let (resume, resumed) = std::sync::mpsc::channel::<()>();
+            let (resume, resumed) = (
+                std::sync::Mutex::new(resume),
+                std::sync::Mutex::new(resumed),
+            );
+            let walking = std::sync::Mutex::new(walking);
+            workspace.hold_reads(move |_| {
+                walking.lock().unwrap().send(()).unwrap();
+                let _ = resumed.lock().unwrap().recv_timeout(Duration::from_secs(5));
+            });
+            let (searched, search) = std::sync::mpsc::channel();
+            let (entered, entering) = std::sync::mpsc::channel();
+
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let result = workspace.grep_around(
+                        &mut policy,
+                        &[trusted_text("needle")],
+                        &trusted_text("b"),
+                        None,
+                        true,
+                        1,
+                        0,
+                    );
+                    searched.send(result).unwrap();
+                });
+                parked
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("the search reached its walk");
+                scope.spawn(|| {
+                    // Entering takes the boundary exclusive, so it waits for any reader.
+                    let effect = authority.capture().begin("b/three.txt");
+                    entered.send(effect).unwrap();
+                });
+                let effect = entering.recv_timeout(Duration::from_secs(2));
+                // Released before the assertion, so a search that held the boundary is let
+                // through and the test fails and does not hang on the scope joining it.
+                resume.lock().unwrap().send(()).unwrap();
+                let effect = effect
+                    .expect("an effect waited for a search's walk")
+                    .expect("the path was free");
+                let search = search
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("the search finished")
+                    .expect("a search");
+                assert!(
+                    !search.label().is_trusted(),
+                    "the search was labelled by the map from before the effect entered"
+                );
+                drop(effect);
+            });
+        }
+
+        /// The regression it rejects: a search that reads a file's bytes, or the map's answer for
+        /// it, without the boundary, so that an effect entering that file is read half way
+        /// (TRUST-4). The test holds the boundary as an effect entering would.
+        #[test]
+        fn a_search_waits_for_an_effect_holding_the_boundary_to_read_a_file() {
+            let (_scratch, workspace) = fixture("ahead-grep-waits-for-effect");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (done, finished) = std::sync::mpsc::channel();
+
+            let entering = authority.capture();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let result = workspace.grep_around(
+                        &mut policy,
+                        &[trusted_text("needle")],
+                        &trusted_text("b"),
+                        None,
+                        true,
+                        1,
+                        0,
+                    );
+                    done.send(result.is_ok()).unwrap();
+                });
+                assert!(
+                    finished.recv_timeout(Duration::from_millis(300)).is_err(),
+                    "a search read a file while an effect held the boundary"
+                );
+                drop(entering);
+                assert_eq!(finished.recv_timeout(Duration::from_secs(5)), Ok(true));
             });
         }
 
