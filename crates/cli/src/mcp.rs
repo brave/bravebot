@@ -3156,6 +3156,34 @@ mod tests {
         assert!(shown.lines().any(|line| line.trim() == said), "{shown}");
     }
 
+    /// An image `mcp add` cannot pin is refused before anything is written: the add ends on the
+    /// argument with the reason, no question is asked, and no declaration file is made. A path is
+    /// one such image, and is refused without asking any registry.
+    #[test]
+    fn an_image_add_cannot_pin_is_refused_before_anything_is_written() {
+        let directory = scratch("cli-mcp-openshell-unpinnable");
+        let (outcome, screen) = typing(
+            &directory,
+            &[
+                "add",
+                "boxed",
+                "--openshell",
+                "./server-image",
+                "--",
+                "python3",
+            ],
+            "y\n",
+        );
+        let (ending, said) = outcome.expect_err("an image that cannot be pinned was taken");
+        assert_eq!(ending, Ending::Argument, "{said}");
+        assert!(said.contains(t!(mcp_image_not_a_reference)), "{said}");
+        assert!(!screen.contains("Use this MCP server"), "{screen}");
+        assert!(
+            !mcp::declarations_file(&directory).exists(),
+            "a declaration was written for an image that was not pinned"
+        );
+    }
+
     /// `doctor` asks OpenShell about itself only for the servers declared to run in it.
     #[test]
     fn doctor_is_told_the_servers_declared_for_openshell_and_no_others() {
