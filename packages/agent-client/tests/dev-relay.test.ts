@@ -137,6 +137,10 @@ test('an app that gives the code drives the host through the relay: the workspac
   const relayed = await connect(launch, made.open)
   assert.deepEqual(made.urls, [`ws://127.0.0.1:${launch.port}`], 'the code is not part of the address')
   assert.deepEqual(relayed.client.workspaces(), [{ id: host.project, name: 'project' }])
+  // The relay writes this line to its stderr, which reaches the test through the host's pipe, so it can land after the connection is up.
+  for (let waited = 0; !host.stderr().includes('the app gave the code and is connected') && waited < 5_000; waited += 20) {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
   assert.equal(host.stderr().includes('the app gave the code and is connected'), true)
 
   const session = await relayed.client.createSession({ workspace: host.project })
