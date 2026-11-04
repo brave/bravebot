@@ -1221,6 +1221,113 @@ mod tests {
         assert_eq!(phase("nothing here"), None);
     }
 
+    /// An `openshell` that logs every command line it is given and fails at `failing`: the
+    /// subcommand, as `sandbox create`, that exits 1, or `get` to report the `Error` phase.
+    struct FakeCli {
+        dir: std::path::PathBuf,
+    }
+
+    impl FakeCli {
+        fn failing(failing: &str) -> Self {
+            static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "bravebot-fake-openshell-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&dir).expect("a directory");
+            let log = dir.join("log");
+            let phase = if failing == "get" { "Error" } else { "Ready" };
+            let script = format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\ncase \"$1 $2\" in\n  \"{failing}\") exit 1 ;;\n  \"sandbox get\") echo '  Phase: {phase}' ;;\n  \"sandbox exec\") echo /usr/local/bin/python3.13 ;;\nesac\nexit 0\n",
+                log = log.display(),
+            );
+            let program = dir.join("openshell");
+            std::fs::write(&program, script).expect("the script");
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                .expect("executable");
+            Self { dir }
+        }
+
+        fn shell(&self, hosts: &[String]) -> OpenShell {
+            OpenShell::with_program(
+                Resolved::found_earlier(self.dir.join("openshell")),
+                "bb-testsandbox1",
+                "python:3.13-slim",
+                hosts,
+            )
+            .expect("valid")
+        }
+
+        fn lines(&self) -> Vec<String> {
+            std::fs::read_to_string(self.dir.join("log"))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+    }
+
+    impl Drop for FakeCli {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.dir).ok();
+        }
+    }
+
+    fn start(shell: &OpenShell) -> Result<ConfinedChild, SandboxError> {
+        shell.spawn(
+            OsStr::new("python3"),
+            &[],
+            &SandboxPolicy::strict(),
+            crate::testutil::nothing_attached(),
+            Environment::Inherited,
+        )
+    }
+
+    /// SANDBOX-33: a create that fails, a sandbox that reports `Error`, and a policy that cannot be
+    /// confirmed each refuse the start before the program is started; the sandbox, which the
+    /// gateway may have made, is deleted when the backend is dropped; and a later start on the same
+    /// backend is refused without creating another.
+    #[test]
+    fn a_start_whose_sandbox_or_policy_cannot_be_confirmed_is_refused_and_the_sandbox_deleted() {
+        let hosts = vec!["example.com".to_string()];
+        for failing in ["sandbox create", "get", "policy set"] {
+            let cli = FakeCli::failing(failing);
+            let shell = cli.shell(&hosts);
+            let refused = start(&shell);
+            assert!(
+                matches!(refused, Err(SandboxError::SetupFailed { .. })),
+                "{failing}: {refused:?}"
+            );
+            let again = start(&shell);
+            assert!(
+                matches!(again, Err(SandboxError::SetupFailed { .. })),
+                "{failing}: a second start was not refused: {again:?}"
+            );
+            drop(shell);
+            let lines = cli.lines();
+            let started = lines
+                .iter()
+                .any(|line| line.starts_with("sandbox exec") && !line.contains("readlink"));
+            assert!(!started, "{failing}: the program was started: {lines:?}");
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|line| line.starts_with("sandbox create"))
+                    .count(),
+                1,
+                "{failing}: {lines:?}"
+            );
+            assert!(
+                lines
+                    .last()
+                    .is_some_and(|line| line.starts_with("sandbox delete bb-testsandbox1")),
+                "{failing}: the sandbox was not deleted on drop: {lines:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_variable_other_than_path_or_home_is_refused_before_anything_is_created() {
         let shell =
