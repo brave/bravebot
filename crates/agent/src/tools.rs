@@ -11047,15 +11047,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             // spelled that way, or an absolute one the planner wrote, is not under the landing and
             // is left as it is. Both are paths the driver holds, and nothing is read from a file.
             let error = match error {
-                crate::exec::ExecError::Redirection { path, detail }
-                    if std::path::Path::new(&path)
-                        .strip_prefix(&plan.directory)
-                        .is_ok() =>
+                crate::exec::ExecError::Unopened { path, detail }
+                    if path.strip_prefix(&plan.directory).is_ok() =>
                 {
                     crate::exec::ExecError::Redirection {
                         path: told_destination(
                             tools.workspace,
-                            std::path::Path::new(&path),
+                            &path,
                             &plan.directory,
                             (!at_the_root).then_some(told_directory.as_str()),
                         ),

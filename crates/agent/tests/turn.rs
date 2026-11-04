@@ -86047,6 +86047,39 @@ fn an_unopened_redirection_is_named_under_the_directory_as_typed() {
     );
 }
 
+/// The same when the link leads to a directory whose name is not UTF-8: the decision is made on
+/// the path, so the landing name still does not reach the planner (PATH-001).
+#[cfg(unix)]
+#[test]
+fn an_unopened_redirection_under_a_non_utf8_link_target_is_named_as_typed() {
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new("linked-directory-open-bytes");
+    let target = std::ffi::OsStr::from_bytes(b"mail-id_rsa-\xff-target");
+    std::fs::create_dir(scratch.path.join(target)).unwrap();
+    std::fs::write(scratch.path.join(target).join("note.txt"), "one\ntwo\n").unwrap();
+    std::os::unix::fs::symlink(target, scratch.path.join("docs")).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            r#"{"command":"sed -n p note.txt > missing/out.txt","directory":"docs"}"#,
+        ),
+        reply_with("done"),
+    ]);
+
+    let bodies = bodies_of_a_turn_approving_runs_once(&workspace, &endpoint, &received);
+
+    let last = bodies.last().expect("the round after the failure");
+    assert!(
+        last.contains("'docs/missing/out.txt' could not be opened"),
+        "the failure did not name the file under the directory as typed: {last}"
+    );
+    assert!(
+        !bodies.iter().any(|body| body.contains("mail-id_rsa")),
+        "where a link led reached the planner through a failed open: {bodies:?}"
+    );
+}
+
 /// A directory the planner typed with a `..` that lands in an open directory is told as the
 /// workspace spells it for the file tools: the absolute path it lands on.
 #[cfg(unix)]

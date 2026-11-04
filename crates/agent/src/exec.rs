@@ -310,6 +310,14 @@ pub enum ExecError {
     Io(String),
     /// A redirection's file could not be opened.
     Redirection { path: String, detail: String },
+    /// A redirection's file could not be opened, with the path exec tried, kept as a path until it
+    /// is shown so that a caller can decide on it ([PATH-001]).
+    ///
+    /// [PATH-001]: ../../../docs/best-practices/paths.md
+    Unopened {
+        path: std::path::PathBuf,
+        detail: String,
+    },
 }
 
 impl fmt::Display for ExecError {
@@ -329,6 +337,9 @@ impl fmt::Display for ExecError {
             Self::Io(detail) => write!(f, "the pipeline could not be run: {detail}"),
             Self::Redirection { path, detail } => {
                 write!(f, "'{path}' could not be opened: {detail}")
+            }
+            Self::Unopened { path, detail } => {
+                write!(f, "'{}' could not be opened: {detail}", path.display())
             }
         }
     }
@@ -1061,8 +1072,8 @@ fn for_writing(path: &std::path::Path, append: bool) -> Result<std::fs::File, Ex
         .append(append)
         .truncate(!append)
         .open(path)
-        .map_err(|e| ExecError::Redirection {
-            path: path.display().to_string(),
+        .map_err(|e| ExecError::Unopened {
+            path: path.to_path_buf(),
             detail: e.to_string(),
         })
 }
@@ -1093,8 +1104,8 @@ fn feed(bytes: &str) -> Result<Handle, ExecError> {
 
 /// A redirection's source, opened to be read.
 fn for_reading(path: &std::path::Path) -> Result<std::fs::File, ExecError> {
-    std::fs::File::open(path).map_err(|e| ExecError::Redirection {
-        path: path.display().to_string(),
+    std::fs::File::open(path).map_err(|e| ExecError::Unopened {
+        path: path.to_path_buf(),
         detail: e.to_string(),
     })
 }
