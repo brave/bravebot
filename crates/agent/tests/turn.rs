@@ -43475,20 +43475,30 @@ fn a_delegates_report_reaches_the_planner_that_asked_for_it() {
     let scratch = Scratch::new("delegate-report");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
 
-    let (endpoint, received) = serve_by_marker(vec![
-        (
-            "DELEGATE-SOMETHING",
-            vec![
-                tool_request(
-                    "spawn_agent",
-                    r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
-                ),
-                reply_with("nothing to add while it works"),
-                reply_with("relayed"),
-            ],
-        ),
-        ("SAY-SOMETHING-SHORT", vec![reply_with("REPORTED BACK")]),
-    ]);
+    let (endpoint, received, held) = serve_by_marker_in(
+        vec![
+            (
+                "DELEGATE-SOMETHING",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"reader","task":"SAY-SOMETHING-SHORT"}"#,
+                    ),
+                    reply_with("nothing to add while it works"),
+                    reply_with("relayed"),
+                ],
+            ),
+            ("SAY-SOMETHING-SHORT", vec![reply_with("REPORTED BACK")]),
+        ],
+        // Held until the planner has asked a second time, so the delegate is still working when it
+        // answers that round and the turn waits for it. A report that came back sooner would be in
+        // that request, and the planner's second reply would be the answer.
+        Order::After {
+            held: "SAY-SOMETHING-SHORT",
+            after: "DELEGATE-SOMETHING",
+            asked: 2,
+        },
+    );
     let config = config_for(&endpoint);
     let egress = bravebot_net::Egress::new();
     let mut sink = RecordingSink::new();
@@ -43503,8 +43513,10 @@ fn a_delegates_report_reaches_the_planner_that_asked_for_it() {
     )
     .expect("turn runs");
 
-    // Whichever round it arrived in: the turn is not blocked while a delegate works, so which
-    // request carries the report depends on how long the delegate took.
+    assert!(
+        held.load(Ordering::SeqCst),
+        "the delegate's reply was not held until the planner's second request"
+    );
     let asked = every_request(&received);
     let told = asked
         .iter()
@@ -85490,9 +85502,11 @@ fn a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_withou
     let home = Scratch::new("reach-fan-out-home");
     define(&home, "checker-lead", "kind: checker\n", "LEAD-BODY");
     let workspace = Workspace::new(&scratch.path).expect("workspace");
-    // The delegates answer only once the planner has asked a second time, so the planner is
-    // never told what came back in a round the script does not hold a reply for.
-    let (endpoint, received, _) = serve_by_marker_in(
+    // The first delegate answers once the planner has asked a second time and the second once it
+    // has asked a third time. The turn asks the planner again as soon as one delegate ends, so
+    // delegates released together can end apart and cause a request the script holds no reply for.
+    // Staggered, the planner is told about one delegate and then the other every time.
+    let (endpoint, received, staggered) = serve_by_marker_in(
         vec![
             (
                 "FAN-TASK",
@@ -85502,13 +85516,14 @@ fn a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_withou
                         r#"{"kind":"worker","task":"SHARED-HALF","each":["ENTRY-ONE","ENTRY-TWO"]}"#,
                     ),
                     reply_with("waiting"),
+                    reply_with("one is back"),
                     reply_with("delegates finished"),
                 ],
             ),
             ("ENTRY-ONE", vec![reply_with("one")]),
             ("ENTRY-TWO", vec![reply_with("two")]),
         ],
-        Order::Staged(&[("ENTRY-ONE", "FAN-TASK", 2), ("ENTRY-TWO", "FAN-TASK", 2)]),
+        Order::Staged(&[("ENTRY-ONE", "FAN-TASK", 2), ("ENTRY-TWO", "FAN-TASK", 3)]),
     );
     let mut reporter = bravebot_agent::report::RecordingReporter::default();
 
@@ -85525,6 +85540,10 @@ fn a_fan_out_from_a_run_that_cannot_write_says_once_that_each_was_started_withou
     )
     .expect("turn runs");
 
+    assert!(
+        staggered.load(Ordering::SeqCst),
+        "the delegates were not held until the planner's second and third requests"
+    );
     assert_eq!(reporter.delegated.len(), 2, "both delegates should start");
     let requests: Vec<String> = received.try_iter().collect();
     let told = requests
