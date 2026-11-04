@@ -3790,7 +3790,8 @@ up in this order, and the program is started only at the end:
 3. Where the program may reach hosts, its real path inside the image is read with `readlink -f`, and
    one enforced network rule per allowed host, port 443 only, for that path, is applied with
    `policy set --wait`. The rule cannot be written earlier, since the path exists only inside a
-   sandbox that does. With no host the program reaches nothing.
+   sandbox that does. A path that is not UTF-8 cannot be named in the rule, which is text, and is
+   refused rather than converted. With no host the program reaches nothing.
 4. The program is started once OpenShell reports the rule loaded. Any step that fails
 refuses the start, and a sandbox already created is deleted. A variable the caller would pass other
 than `PATH` and `HOME` is refused before anything is created, since nothing of this machine's
@@ -3816,6 +3817,7 @@ such as `/usr/local/bin/python3` matches nothing, since OpenShell matches the bi
 `verified-by: bravebot_sandbox::openshell::a_variable_other_than_path_or_home_is_refused_before_anything_is_created`
 `verified-by: bravebot_sandbox::openshell::a_start_whose_sandbox_or_policy_cannot_be_confirmed_is_refused_and_the_sandbox_deleted`
 `verified-by: bravebot_sandbox::openshell::a_program_name_that_is_not_utf8_reaches_sandbox_exec_as_its_bytes`
+`verified-by: bravebot_sandbox::openshell::a_real_path_that_is_not_utf8_is_refused_before_any_rule_is_set`
 `verified-by: bravebot_mcp::openshell::a_server_in_an_openshell_sandbox_answers_over_stdio_and_reaches_only_its_host`
 `verified-by: bravebot_mcp::openshell::a_program_missing_from_the_image_is_refused_and_the_sandbox_removed`
 `verified-by: bravebot_mcp::openshell::a_long_lived_connection_carries_many_calls_a_pause_and_a_long_reply`

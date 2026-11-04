@@ -234,16 +234,28 @@ impl OpenShell {
         )
     }
 
-    /// Run `openshell` with `args`, and refuse unless it succeeded, naming `what` it was doing.
+    /// Run `openshell` with `args`, and refuse unless it succeeded, naming `what` it was doing. What
+    /// it printed, as text to read and show, where nothing it says becomes a grant.
     fn run_ok(
         &self,
         what: &str,
         args: &[&OsStr],
         within: Duration,
     ) -> Result<String, SandboxError> {
+        self.run_ok_bytes(what, args, within)
+            .map(|printed| String::from_utf8_lossy(&printed).into_owned())
+    }
+
+    /// [`Self::run_ok`], with what it printed as the bytes it is, for a value that becomes a grant.
+    fn run_ok_bytes(
+        &self,
+        what: &str,
+        args: &[&OsStr],
+        within: Duration,
+    ) -> Result<Vec<u8>, SandboxError> {
         let output = self.run(args, within)?;
         if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+            Ok(output.stdout)
         } else {
             Err(setup(format!(
                 "{what} failed: {}",
@@ -358,8 +370,11 @@ impl OpenShell {
 
     /// The real path of `program` inside the image, since a network rule names the executable the
     /// kernel reports and not a link to it.
+    ///
+    /// The rule is YAML text, so a path that is not UTF-8 cannot be named in it. It is refused rather
+    /// than converted, which would grant the hosts to a name that is not the file that runs.
     fn real_path(&self, program: &OsStr) -> Result<String, SandboxError> {
-        let resolved = self.run_ok(
+        let resolved = self.run_ok_bytes(
             "finding the program inside the sandbox",
             &[
                 OsStr::new("sandbox"),
@@ -376,6 +391,13 @@ impl OpenShell {
             ],
             ANSWERED_WITHIN,
         )?;
+        let Ok(resolved) = std::str::from_utf8(&resolved) else {
+            return Err(setup(format!(
+                "the path of `{}` in the image `{}` is not UTF-8, so no network rule can name it",
+                program.to_string_lossy(),
+                self.image
+            )));
+        };
         let path = resolved.trim();
         if is_real_path(path) {
             Ok(path.to_string())
@@ -1229,6 +1251,11 @@ mod tests {
 
     impl FakeCli {
         fn failing(failing: &str) -> Self {
+            Self::resolving(failing, "/usr/local/bin/python3.13")
+        }
+
+        /// One whose `sandbox exec` prints `resolved`, a `printf` format, as a program's real path.
+        fn resolving(failing: &str, resolved: &str) -> Self {
             static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             let dir = std::env::temp_dir().join(format!(
                 "bravebot-fake-openshell-{}-{}",
@@ -1239,7 +1266,7 @@ mod tests {
             let log = dir.join("log");
             let phase = if failing == "get" { "Error" } else { "Ready" };
             let script = format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\ncase \"$1 $2\" in\n  \"{failing}\") exit 1 ;;\n  \"sandbox get\") echo '  Phase: {phase}' ;;\n  \"sandbox exec\") echo /usr/local/bin/python3.13 ;;\nesac\nexit 0\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\ncase \"$1 $2\" in\n  \"{failing}\") exit 1 ;;\n  \"sandbox get\") echo '  Phase: {phase}' ;;\n  \"sandbox exec\") printf '{resolved}\\n' ;;\nesac\nexit 0\n",
                 log = log.display(),
             );
             let program = dir.join("openshell");
@@ -1326,6 +1353,26 @@ mod tests {
                 "{failing}: the sandbox was not deleted on drop: {lines:?}"
             );
         }
+    }
+
+    /// SANDBOX-33: a program whose real path in the image is not UTF-8 cannot be named in the
+    /// network rule, which is text, so the start is refused before any rule is set, rather than
+    /// granting the hosts to a lossy lookalike of the path.
+    #[test]
+    fn a_real_path_that_is_not_utf8_is_refused_before_any_rule_is_set() {
+        let cli = FakeCli::resolving("none", "/usr/bin/tool-\\377");
+        let shell = cli.shell(&["example.com".to_string()]);
+        let refused = start(&shell);
+        assert!(
+            matches!(&refused, Err(SandboxError::SetupFailed { detail, .. }) if detail.contains("not UTF-8")),
+            "{refused:?}"
+        );
+        drop(shell);
+        let lines = cli.lines();
+        assert!(
+            !lines.iter().any(|line| line.starts_with("policy set")),
+            "{lines:?}"
+        );
     }
 
     /// The program is handed to `sandbox exec` as the bytes it is. A name that is not UTF-8 and its
