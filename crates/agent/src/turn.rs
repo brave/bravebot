@@ -4427,6 +4427,7 @@ where
                                 &mut chat,
                                 reporter,
                                 &reference.slot,
+                                plan.beside,
                             )
                         };
                         // A check made here is a model call like the one read_output makes, so

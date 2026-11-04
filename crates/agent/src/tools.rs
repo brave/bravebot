@@ -8000,6 +8000,7 @@ fn release_vetted_text<S: Sink, C: Confirmer>(
     said: Option<Labelled<String>>,
     spec: Option<&bravebot_core::vetting::VettingSpec>,
     expects: Option<&Labelled<String>>,
+    beside: Beside,
 ) -> Result<(Labelled<String>, usize, Endorsed), Box<Produced>> {
     // Who the trail is credited to, which the mode decides along with the verdict. The one branch
     // on a verdict that decides more than which sentence a person reads first is inside it, and it
@@ -8103,8 +8104,8 @@ fn release_vetted_text<S: Sink, C: Confirmer>(
             policy.refuse_unapproved_release("vet_content", &slot.to_string());
             return Err(Box::new(Produced::problem(format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
-                 you have, pass {slot} to spawn_processor, or say in your reply what you needed \
-                 from it."
+                 you have, {}or say in your reply what you needed from it.",
+                pass_to_a_processor(beside, slot)
             ))));
         }
     }
@@ -8167,6 +8168,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     chat: &mut Chat<'_>,
     reporter: &mut R,
     slot: &SlotId,
+    beside: Beside,
 ) -> ReadInTheResult {
     let nothing = |text| ReadInTheResult {
         text,
@@ -8188,6 +8190,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
             None,
             spec,
             None,
+            beside,
         )
         .ok()
         .map(|(text, _, _)| text)
@@ -8348,6 +8351,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             said,
             spec.as_ref(),
             Some(&expects),
+            tools.beside,
         ) {
             Ok((text, counted, endorsed)) => vetted_text(&slot, text, counted, endorsed)
                 .costing(spent)
