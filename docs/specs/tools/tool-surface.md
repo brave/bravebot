@@ -234,9 +234,9 @@ notebook cell, and `edit_file` for a notebook, `write_file` names `spawn_process
 `contents_ref` argument, `edit_file` names `write_file`, `repo_map` and `lsp` name `read_file`, and
 `vet_content` names `spawn_processor`, each only where the list holds it.
 
-Two refusals that took their sentence from the policy's general denial are written from the list as
-well. That denial ends "Use a reference to it instead", which neither tool can follow: neither
-returns a reference at the point of refusal, and a turn offered no processor cannot use one. The
+Two refusals are written from the list rather than from the policy's general denial. That denial
+ends "Use a reference to it instead", which neither tool can follow: neither returns a reference at
+the point of refusal, and a turn offered no processor cannot use one. The
 refusal of `read_file` with `output_of` for a notebook the driver may not examine says the outputs
 are closed to `read_file`, prints the label the driver assigned, and names the routes the turn is
 offered: a plain read of the file for a reference to give to `spawn_processor`, said only where the
@@ -252,9 +252,9 @@ before `output_of` is looked at ([READ-1](read-file.md#READ-1)), and `read_git` 
 answer labelled trusted. The refusals are built by functions of their own so that a test can give
 them a label the call site would not.
 
-The general denial itself, which about thirty callers inside the driver receive as an error and do
-not show, is unchanged. Any other tool that shows a planner that denial in a result still says "Use a
-reference to it instead" without reading the list.
+The general denial, which about thirty callers inside the driver receive as an error and do not
+show, is not written from the list: any other tool that shows it to a planner says "Use a reference
+to it instead" whatever the list holds.
 
 The turn settles its list once and writes these from it ([VET-2](vet-content.md#VET-2)), so a
 delegate, a definition's tools line and the command line's `--tools` all give the same result. A
