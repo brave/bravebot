@@ -173,7 +173,10 @@ not asking.
 A planner that loops back over the same decision does not make the user restate it, and a set
 where some are already settled shows only the rest. Questions differing anywhere, including in
 their tag, are different questions. `/clear` and `/branch` begin another session, and the answers
-given before do not carry into it. The desktop application keeps them the same way: for the
+given before do not carry into it. An undo (`/undo` and `/rewind` in the terminal, `session.rewind`
+in the desktop application) forgets every answer, those given before the turns it undid as well as
+in them, because an answer is not kept with the turn it was given in; an undo that finds no turn to
+go back to forgets none. The desktop application keeps them the same way: for the
 session, across its turns, and a session opened, resumed or forked there begins with none. The
 turn's notices name each question it did not put. The terminal and the desktop application
 remember only an answer the person gave, so a question that nobody could be asked, or that the
@@ -205,6 +208,7 @@ was answered already.
 `verified-by: bravebot_core::ask::a_question_closed_on_the_clock_is_not_remembered_and_the_one_beside_it_is`
 `verified-by: bravebot_tui::ask::a_question_closed_on_the_clock_is_asked_again_and_the_one_beside_it_is_remembered`
 `verified-by: bravebot_tui::state::clearing_the_conversation_forgets_the_answers_to_the_planners_questions`
+`verified-by: bravebot_tui::app::undoing_a_turn_forgets_the_answers_to_the_planners_questions`
 `verified-by: bravebot_cli::plain::a_question_asked_again_in_a_session_in_lines_is_answered_from_memory`
 `verified-by: bravebot_cli::plain::a_series_with_some_questions_settled_puts_only_the_rest`
 `verified-by: bravebot_ui_bridge::answering_tests::a_question_the_person_answered_is_not_put_to_the_window_again`
@@ -217,6 +221,8 @@ was answered already.
 `verified-by: bravebot_ui_bridge::remembered_answers::a_question_answered_in_one_turn_is_not_put_again_in_the_next`
 `verified-by: bravebot_ui_bridge::remembered_answers::a_question_that_differs_only_in_its_tag_is_put_again`
 `verified-by: bravebot_ui_bridge::remembered_answers::another_session_is_not_answered_from_the_first_ones_memory`
+`verified-by: bravebot_ui_bridge::remembered_answers::a_question_answered_in_an_undone_turn_is_put_again`
+`verified-by: bravebot_ui_bridge::remembered_answers::an_undo_that_goes_back_nowhere_keeps_the_answers`
 `verified-by: bravebot_ui_bridge::remembered_answers::a_turn_that_fails_after_a_remembered_answer_still_names_the_question_it_did_not_put`
 
 <a id="ASK-9"></a>

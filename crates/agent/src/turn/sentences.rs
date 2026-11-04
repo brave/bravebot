@@ -4,7 +4,8 @@
 //! short, how a command was run, and the size of what it printed. None reads the content that was
 //! quarantined, which is why they can live apart from the presentation of it in `one_turn`.
 
-use super::ReadOutputIs;
+use super::{ReadOutputIs, STOP_BEING_ASKED};
+use crate::tools::{Beside, Named};
 use crate::workspace::Paging;
 
 /// What a result says about a cap, written beside the reference because the reference describes
@@ -119,19 +120,54 @@ pub(super) fn left_out_note(left_out: usize) -> String {
 /// four-minute make check again through grep, when the whole log was
 /// in the slot and a filter fed it through stdin_ref reads it there.
 ///
+/// A turn whose list lacks `read_output` has nothing to be pointed at, and none of the sentences
+/// that name it, or that lean on a release it makes, is said to it (TOOL-6). What is left is the
+/// statement that the quarantine is about the command, the vouching sentence where it applies,
+/// which names no tool, `spawn_processor` as the way to work with the output where the list holds
+/// it, and `read_file` where the list holds it. The same holds for `read_file`:
+/// its sentence is said only to a list that holds it.
+///
 /// `printed_by` is whether a command produced the result, `bytes` is the size of what it printed
-/// where that is known, and `cap` is the largest result a run may hold.
+/// where that is known, `cap` is the largest result a run may hold, and `beside` is which of the
+/// tools named here the turn's list holds.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the facts of the result, the mode's answer and the list's tools are separate inputs"
+)]
 pub(super) fn run_advice(
     printed_by: bool,
     covered_by_record: bool,
     read_output_is: ReadOutputIs,
+    beside: Beside,
     tool: &str,
     read_asked: bool,
     bytes: Option<usize>,
     cap: usize,
 ) -> String {
+    let read_file = if beside.holds(Named::ReadFile) {
+        " To read a file, use read_file."
+    } else {
+        ""
+    };
     match (printed_by, covered_by_record, read_output_is) {
         (false, _, _) => String::new(),
+        // Whatever the mode says, a list without `read_output` has no release for a `read` to make
+        // early and nothing to call for a look at the output.
+        (true, _, _) if !beside.holds(Named::ReadOutput) => {
+            let vouching = if covered_by_record {
+                String::new()
+            } else {
+                format!(" {STOP_BEING_ASKED}")
+            };
+            let processor = if beside.holds(Named::SpawnProcessor) {
+                " To work with what it printed, give the reference to spawn_processor."
+            } else {
+                ""
+            };
+            format!(
+                "\n\nThis is about the command rather than about what it printed.{vouching}{processor}{read_file}"
+            )
+        }
         (true, _, ReadOutputIs::Unasked) => {
             let in_the_result = match (tool == "run", read_asked) {
                 (false, _) => "",
@@ -155,8 +191,7 @@ pub(super) fn run_advice(
                 "\n\nThis is about the command rather than about what \
                  it printed, and it is not the end of the road. To see \
                  this one, call read_output with the \
-                 reference.{in_the_result} To read a file, use \
-                 read_file."
+                 reference.{in_the_result}{read_file}"
             )
         }
         (true, _, ReadOutputIs::ByACheck) => {
@@ -180,22 +215,21 @@ pub(super) fn run_advice(
                 "\n\nThis is about the command rather than about \
                  what it printed, and it is not the end of the road. \
                  To see this one, call read_output with the \
-                 reference.{not_returned} To read a file, use \
-                 read_file."
+                 reference.{not_returned}{read_file}"
             )
         }
-        (true, true, ReadOutputIs::Asked) => "\n\nThis is about the command rather \
+        (true, true, ReadOutputIs::Asked) => format!(
+            "\n\nThis is about the command rather \
              than about what it printed, and it is not the end of the \
              road. To see this one, call read_output with the \
-             reference. To read a file, use read_file."
-            .to_string(),
-        (true, false, ReadOutputIs::Asked) => "\n\nThis is about the command rather \
+             reference.{read_file}"
+        ),
+        (true, false, ReadOutputIs::Asked) => format!(
+            "\n\nThis is about the command rather \
              than about what it printed, and it is not the end of the \
              road. To see this one, call read_output with the \
-             reference. To stop being asked, a person vouching for \
-             every stage of the exact command makes what it prints \
-             visible from then on. To read a file, use read_file."
-            .to_string(),
+             reference. {STOP_BEING_ASKED}{read_file}"
+        ),
     }
 }
 
@@ -231,8 +265,11 @@ pub(super) fn read_not_returned(
 /// is what `read_git` answers with nobody asked, and for any other program, or a repository it
 /// declines, the sentence is noise. `ran_git` is decided by the caller and not when the line ran,
 /// so a line whose output is shown pays nothing.
-pub(super) fn history_note(ran_git: bool) -> &'static str {
-    if ran_git {
+///
+/// Said only to a turn whose list holds `read_git`: a list without it has nothing to be pointed at
+/// and the git output it was given is what there is (TOOL-6).
+pub(super) fn history_note(ran_git: bool, beside: Beside) -> &'static str {
+    if ran_git && beside.holds(Named::ReadGit) {
         " To read a repository's history, use read_git: it reads \
          .git without starting git, and in a trusted repository \
          nobody is asked."
@@ -245,6 +282,28 @@ pub(super) fn history_note(ran_git: bool) -> &'static str {
 mod tests {
     use super::*;
 
+    /// `run_advice` for a list that holds every tool it names, which is what the text was written
+    /// for and what the pins below read.
+    fn advice(
+        printed_by: bool,
+        covered_by_record: bool,
+        read_output_is: ReadOutputIs,
+        tool: &str,
+        read_asked: bool,
+        bytes: Option<usize>,
+        cap: usize,
+    ) -> String {
+        run_advice(
+            printed_by,
+            covered_by_record,
+            read_output_is,
+            Beside::every(),
+            tool,
+            read_asked,
+            bytes,
+            cap,
+        )
+    }
     const ABOUT: &str = "\n\nThis is about the command rather than about what it printed, and it is not the end of the road. To see this one, call read_output with the reference.";
 
     #[test]
@@ -308,17 +367,14 @@ mod tests {
             ReadOutputIs::ByACheck,
             ReadOutputIs::Asked,
         ] {
-            assert_eq!(run_advice(false, false, is, "run", true, Some(1), 10), "");
-            assert_eq!(
-                run_advice(false, true, is, "read_file", false, None, 10),
-                ""
-            );
+            assert_eq!(advice(false, false, is, "run", true, Some(1), 10), "");
+            assert_eq!(advice(false, true, is, "read_file", false, None, 10), "");
         }
     }
 
     #[test]
     fn an_unasked_run_is_offered_the_read_flag_until_it_was_used() {
-        let advice = run_advice(
+        let told = advice(
             true,
             false,
             ReadOutputIs::Unasked,
@@ -328,14 +384,14 @@ mod tests {
             10,
         );
         assert_eq!(
-            advice,
+            told,
             format!(
                 "{ABOUT} To have what a command prints come back in the result that ran it, call run with read: true. To read a file, use read_file."
             )
         );
         // Not a run: nothing about `read`.
         assert_eq!(
-            run_advice(
+            advice(
                 true,
                 false,
                 ReadOutputIs::Unasked,
@@ -354,7 +410,7 @@ mod tests {
             "{ABOUT} It is longer than a run's result may hold, so it was left out of this one. read_output is not held to that size and hands back all of it. To see part of it without running the command again, call run with a filter such as tail -n 100 or grep, stdin_ref set to the reference, and read: true. To read a file, use read_file."
         );
         assert_eq!(
-            run_advice(
+            advice(
                 true,
                 false,
                 ReadOutputIs::Unasked,
@@ -367,12 +423,12 @@ mod tests {
         );
         // An unknown size counts as too long.
         assert_eq!(
-            run_advice(true, false, ReadOutputIs::Unasked, "run", true, None, 10),
+            advice(true, false, ReadOutputIs::Unasked, "run", true, None, 10),
             long
         );
         // At the cap it fit, so there is nothing to add.
         assert_eq!(
-            run_advice(
+            advice(
                 true,
                 false,
                 ReadOutputIs::Unasked,
@@ -388,7 +444,7 @@ mod tests {
     #[test]
     fn a_check_answering_says_the_output_was_not_returned_only_for_a_run_that_asked() {
         assert_eq!(
-            run_advice(
+            advice(
                 true,
                 false,
                 ReadOutputIs::ByACheck,
@@ -403,7 +459,7 @@ mod tests {
         );
         for (tool, asked) in [("run", false), ("job_output", true)] {
             assert_eq!(
-                run_advice(
+                advice(
                     true,
                     false,
                     ReadOutputIs::ByACheck,
@@ -424,7 +480,7 @@ mod tests {
         );
         for bytes in [Some(11), None] {
             assert_eq!(
-                run_advice(true, false, ReadOutputIs::ByACheck, "run", true, bytes, 10),
+                advice(true, false, ReadOutputIs::ByACheck, "run", true, bytes, 10),
                 long
             );
         }
@@ -433,11 +489,11 @@ mod tests {
     #[test]
     fn a_person_asked_hears_about_vouching_only_where_no_record_stops_the_asking() {
         assert_eq!(
-            run_advice(true, true, ReadOutputIs::Asked, "run", false, None, 10),
+            advice(true, true, ReadOutputIs::Asked, "run", false, None, 10),
             format!("{ABOUT} To read a file, use read_file.")
         );
         assert_eq!(
-            run_advice(true, false, ReadOutputIs::Asked, "run", false, None, 10),
+            advice(true, false, ReadOutputIs::Asked, "run", false, None, 10),
             format!(
                 "{ABOUT} To stop being asked, a person vouching for every stage of the exact command makes what it prints visible from then on. To read a file, use read_file."
             )
@@ -497,10 +553,220 @@ mod tests {
 
     #[test]
     fn the_history_sentence_appears_only_where_git_ran() {
-        assert_eq!(history_note(false), "");
+        assert_eq!(history_note(false, Beside::every()), "");
         assert_eq!(
-            history_note(true),
+            history_note(true, Beside::every()),
             " To read a repository's history, use read_git: it reads .git without starting git, and in a trusted repository nobody is asked."
+        );
+    }
+
+    /// A list that holds every tool except the named ones.
+    fn without(names: &[&str]) -> Beside {
+        [
+            ("run", Named::Run),
+            ("read_output", Named::ReadOutput),
+            ("read_file", Named::ReadFile),
+            ("read_git", Named::ReadGit),
+            ("spawn_processor", Named::SpawnProcessor),
+        ]
+        .into_iter()
+        .filter(|(name, _)| names.contains(name))
+        .fold(Beside::every(), |beside, (_, named)| beside.without(named))
+    }
+
+    /// R31: a list that holds every tool reads what it always read, for every mode, record state,
+    /// tool and read-ask. The pins above are for the full list too, so this ties the two entry
+    /// points together: the full list is the helper's own.
+    #[test]
+    fn a_list_holding_every_tool_reads_the_text_it_always_did() {
+        for is in [
+            ReadOutputIs::Unasked,
+            ReadOutputIs::ByACheck,
+            ReadOutputIs::Asked,
+        ] {
+            for (record, tool, asked, bytes) in [
+                (false, "run", false, Some(1)),
+                (true, "run", true, Some(11)),
+                (false, "job_output", false, None),
+            ] {
+                let text = run_advice(true, record, is, Beside::every(), tool, asked, bytes, 10);
+                assert!(text.starts_with(ABOUT), "{is:?}: {text}");
+                assert!(text.ends_with(" To read a file, use read_file."), "{text}");
+            }
+        }
+    }
+
+    /// The fault: the advice names `read_output` whatever the list holds, so a turn left without it
+    /// is sent to a tool it was not offered. Every mode, record state, tool and read-ask is
+    /// checked, and the text still says whose answer the quarantine is about.
+    #[test]
+    fn a_list_without_read_output_is_not_pointed_at_it_in_any_arm() {
+        for is in [
+            ReadOutputIs::Unasked,
+            ReadOutputIs::ByACheck,
+            ReadOutputIs::Asked,
+        ] {
+            for (record, tool, asked, bytes) in [
+                (false, "run", false, Some(1)),
+                (false, "run", true, Some(1)),
+                (false, "run", true, Some(11)),
+                (true, "run", true, None),
+                (false, "job_output", false, None),
+            ] {
+                let text = run_advice(
+                    true,
+                    record,
+                    is,
+                    without(&["read_output"]),
+                    tool,
+                    asked,
+                    bytes,
+                    10,
+                );
+                assert!(!text.contains("read_output"), "{is:?}: {text}");
+                assert!(!text.contains("filter"), "{is:?}: {text}");
+                assert!(!text.contains("read: true"), "{is:?}: {text}");
+                assert!(
+                    text.starts_with(
+                        "\n\nThis is about the command rather than about what it printed."
+                    ),
+                    "{is:?}: {text}"
+                );
+            }
+        }
+    }
+
+    /// Without `read_output` the advice keeps `read_file` and the vouching sentence, which names no
+    /// tool, and drops the vouching sentence where a record already stops the asking.
+    #[test]
+    fn a_list_without_read_output_keeps_what_names_no_missing_tool() {
+        let beside = without(&["read_output", "spawn_processor"]);
+        assert_eq!(
+            run_advice(
+                true,
+                false,
+                ReadOutputIs::Asked,
+                beside,
+                "run",
+                false,
+                None,
+                10
+            ),
+            "\n\nThis is about the command rather than about what it printed. To stop being asked, a person vouching for every stage of the exact command makes what it prints visible from then on. To read a file, use read_file."
+        );
+        assert_eq!(
+            run_advice(
+                true,
+                true,
+                ReadOutputIs::Asked,
+                beside,
+                "run",
+                false,
+                None,
+                10
+            ),
+            "\n\nThis is about the command rather than about what it printed. To read a file, use read_file."
+        );
+    }
+
+    /// The fault: a list without `read_output` is left with no way forward even where it holds
+    /// `spawn_processor`, or is pointed at `spawn_processor` where it lacks it.
+    #[test]
+    fn a_list_without_read_output_is_pointed_at_spawn_processor_only_where_it_holds_it() {
+        let with = run_advice(
+            true,
+            true,
+            ReadOutputIs::Asked,
+            without(&["read_output", "read_file"]),
+            "run",
+            false,
+            None,
+            10,
+        );
+        assert_eq!(
+            with,
+            "\n\nThis is about the command rather than about what it printed. To work with what it printed, give the reference to spawn_processor."
+        );
+        let without_it = run_advice(
+            true,
+            true,
+            ReadOutputIs::Asked,
+            without(&["read_output", "read_file", "spawn_processor"]),
+            "run",
+            false,
+            None,
+            10,
+        );
+        assert!(!without_it.contains("spawn_processor"), "{without_it}");
+    }
+
+    /// The fault: `read_file` is named whatever the list holds.
+    #[test]
+    fn a_list_without_read_file_is_not_pointed_at_it() {
+        let beside = without(&["read_file"]);
+        for is in [
+            ReadOutputIs::Unasked,
+            ReadOutputIs::ByACheck,
+            ReadOutputIs::Asked,
+        ] {
+            let text = run_advice(true, true, is, beside, "run", false, Some(1), 10);
+            assert!(!text.contains("read_file"), "{is:?}: {text}");
+            assert!(
+                text.contains("call read_output with the reference"),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            run_advice(
+                true,
+                true,
+                ReadOutputIs::Asked,
+                beside,
+                "run",
+                false,
+                None,
+                10
+            ),
+            ABOUT
+        );
+        let neither = without(&["read_output", "read_file", "spawn_processor"]);
+        assert_eq!(
+            run_advice(
+                true,
+                true,
+                ReadOutputIs::Asked,
+                neither,
+                "run",
+                false,
+                None,
+                10
+            ),
+            "\n\nThis is about the command rather than about what it printed."
+        );
+    }
+
+    /// The fault: the history sentence is said to a list that lacks `read_git`.
+    #[test]
+    fn the_history_sentence_is_left_out_where_the_list_lacks_read_git() {
+        assert_eq!(history_note(true, without(&["read_git"])), "");
+        assert_eq!(history_note(false, without(&["read_git"])), "");
+    }
+
+    /// A result no command printed has no advice whatever the list holds.
+    #[test]
+    fn a_result_no_command_printed_has_no_advice_on_a_short_list() {
+        assert_eq!(
+            run_advice(
+                false,
+                false,
+                ReadOutputIs::Asked,
+                without(&["read_output", "read_file"]),
+                "read_file",
+                false,
+                None,
+                10
+            ),
+            ""
         );
     }
 }

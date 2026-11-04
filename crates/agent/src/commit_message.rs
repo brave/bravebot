@@ -138,6 +138,7 @@ pub fn draft<S: Sink>(
         messages: false,
         since: None,
         until: None,
+        beside: crate::tools::Beside::every(),
     };
     let answer = workspace
         .read_git(policy, &question)

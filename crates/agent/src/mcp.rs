@@ -67,6 +67,9 @@ pub struct Reached {
     ask_every_call: bool,
     /// The arguments of its tools the declaration says take a choice (SERVERS-22).
     choice_arguments: ChoiceArguments,
+    /// The headers and bearer token the declaration names, as the environment gave them when the
+    /// server was started, which a server moved during a turn is reached with (SERVERS-18).
+    headers: Vec<(String, String)>,
 }
 
 impl Reached {
@@ -86,7 +89,16 @@ impl Reached {
             exclude_tools: Vec::new(),
             ask_every_call: false,
             choice_arguments: ChoiceArguments::new(),
+            headers: Vec::new(),
         }
+    }
+
+    /// The same server, with the headers its connection sends, which the connection it is moved to
+    /// sends as well (SERVERS-11, SERVERS-18). The values are secrets: they are held and sent, and
+    /// nothing reads or shows them.
+    pub fn sending(mut self, headers: Vec<(String, String)>) -> Self {
+        self.headers = headers;
+        self
     }
 
     /// The same server, with whether its declaration says every call to it is asked about, which
@@ -115,6 +127,12 @@ impl Reached {
     #[cfg(test)]
     pub(crate) fn filters(&self) -> (&[String], &[String]) {
         (&self.tools, &self.exclude_tools)
+    }
+
+    /// The headers [`Reached::sending`] holds.
+    #[cfg(test)]
+    pub(crate) fn sent_headers(&self) -> &[(String, String)] {
+        &self.headers
     }
 
     /// The same server, with the policy its process was started under (SERVERS-20). A server with
@@ -274,6 +292,9 @@ struct Server {
     ask_every_call: bool,
     /// The arguments of its tools the declaration says take a choice (SERVERS-22).
     choice_arguments: ChoiceArguments,
+    /// The headers and bearer token its first connection sent, which a move sends to the new
+    /// destination as well (SERVERS-18).
+    headers: Vec<(String, String)>,
     /// After `connection`, since fields drop in order: the process is stopped before its home goes.
     _home: Option<SessionScratch>,
 }
@@ -387,6 +408,7 @@ impl Session {
                     exclude_tools: reached.exclude_tools,
                     ask_every_call: reached.ask_every_call,
                     choice_arguments: reached.choice_arguments,
+                    headers: reached.headers,
                     _home: reached.home,
                 })
             })
@@ -1042,7 +1064,9 @@ impl Session {
             return false;
         }
 
-        let mut moved = HttpServer::new(alias, url.as_str()).starting_within(startup);
+        let mut moved = HttpServer::new(alias, url.as_str())
+            .with_headers(server.headers.clone())
+            .starting_within(startup);
         if let Err(error) = moved.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))
         {
             match policy.take_server_hop() {

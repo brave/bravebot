@@ -269,6 +269,11 @@ sentence the driver writes to the planner. The names are drawn with a control ch
 that draws as nothing and the other characters [PROMPT-1](../prompting.md#PROMPT-1) lists written
 as `\u{..}`, so a name holding one does not draw as another name.
 
+The directory the line ran in and the file each redirection names are told in the words the planner
+wrote, with a `..` that lands in an added directory told as the workspace spells it for the file
+tools. Where a link in that tree led is a name whoever wrote the tree chose, so it is drawn for the
+person and never spelled into a sentence for the planner.
+
 Ignored directories are ignored the way the tree walk ignores them, so `**` does not descend into
 `.git` or `node_modules`.
 
@@ -306,6 +311,14 @@ everything and asks nothing.
 `verified-by: bravebot_agent::turn::a_run_result_does_not_spell_the_names_a_glob_matched_to_the_planner`
 `verified-by: bravebot_agent::turn::a_finished_jobs_account_does_not_spell_the_names_a_glob_matched_to_the_planner`
 `verified-by: bravebot_agent::turn::a_deny_rule_refusal_does_not_spell_the_names_a_glob_matched_to_the_planner`
+`verified-by: bravebot_agent::cmdline::a_redirection_is_told_to_the_planner_with_its_file_as_it_was_written`
+`verified-by: bravebot_core::command::what_the_planner_is_told_names_a_program_by_its_link_alone`
+`verified-by: bravebot_agent::turn::a_run_result_names_the_directory_as_typed_and_not_where_a_link_led`
+`verified-by: bravebot_agent::turn::a_finished_jobs_account_names_the_directory_as_typed_and_not_where_a_link_led`
+`verified-by: bravebot_agent::turn::a_background_line_that_did_not_start_names_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::a_credential_refusal_names_the_redirection_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::a_refused_redirection_is_named_under_the_directory_as_typed`
+`verified-by: bravebot_agent::turn::an_unopened_redirection_is_named_under_the_directory_as_typed`
 `verified-by: bravebot_agent::cmdline::a_range_counts_and_keeps_the_padding_it_was_written_with`
 `verified-by: bravebot_agent::cmdline::a_leading_tilde_becomes_the_home_directory`
 `verified-by: bravebot_agent::cmdline::a_tilde_with_no_home_to_stand_for_is_refused`
@@ -770,6 +783,15 @@ root. The directory is checked again immediately before the first stage is spawn
 approval can wait for hours, and a directory removed in that time is reported as removed rather than
 as a program that could not be started.
 
+The person is shown the directory the line runs in, where a symbolic link in the tree led. The
+planner is told the directory in the words it named it with, or in the words of the call that named
+the one it carried, and a `..` that lands in an added directory as the workspace spells it for the
+file tools. That spelling is used in the account of the line, in the origin of what it printed and
+of what a job printed, and in every refusal and failure about the line, including the sentence about
+a carried directory that no longer exists. A link in a tree nobody vouched for chooses the name it
+leads to ([LABEL-3](../labels.md#LABEL-3), [CMDLINE-4](#CMDLINE-4)). The auto mode's classifier is a
+model, and is shown the same spelling ([AUTO-5](../auto-mode.md#AUTO-5)).
+
 The carrying lasts a turn. It is not written into the session record, so the next turn starts at the
 root again. That is short of what this clause describes, and is left to the change that gives a
 session somewhere to keep one ([RUN-9](run.md#RUN-9)).
@@ -782,6 +804,10 @@ session somewhere to keep one ([RUN-9](run.md#RUN-9)).
 `verified-by: bravebot_agent::turn::what_is_reported_about_a_line_says_which_directory_it_ran_in`
 `verified-by: bravebot_agent::turn::a_refused_run_directory_does_not_persist`
 `verified-by: bravebot_agent::turn::a_carried_directory_that_was_removed_is_refused_before_asking`
+`verified-by: bravebot_agent::turn::a_carried_directory_is_told_as_typed_and_not_where_a_link_led`
+`verified-by: bravebot_agent::turn::a_carried_directory_that_is_gone_is_told_as_typed_and_not_where_a_link_led`
+`verified-by: bravebot_agent::turn::a_run_refusal_for_a_removed_directory_names_it_as_typed_and_not_where_a_link_led`
+`verified-by: bravebot_agent::turn::a_run_in_a_directory_typed_with_a_climb_is_told_as_the_workspace_spells_it`
 `verified-by: bravebot_agent::turn::a_cd_stage_is_refused_before_asking_and_the_directory_argument_still_works`
 `verified-by: bravebot_agent::turn::a_ulimit_stage_is_refused_before_asking_and_the_sh_c_form_is_put_to_the_person_as_one_line`
 `verified-by: bravebot_agent::cmdline::a_word_that_sets_shell_state_is_refused_wherever_it_stands`
@@ -859,7 +885,8 @@ call, visible in the prompt, and impossible to hide inside an argument.
 Standard input is empty, as it is today, so a program that reads it gets nothing rather than the
 terminal. Beyond that, invocations known to require interaction are refused at compile time with a
 message naming the alternative: `git rebase -i`, `git add -i`, an editor, a pager without
-`--no-pager`, anything that would open `/dev/tty`.
+`--no-pager`, anything that would open `/dev/tty`. The refusal of an editor names `edit_file` as the
+alternative only where the turn's list holds it ([TOOL-6](tool-surface.md#TOOL-6)).
 
 `git commit` is refused when it supplies no message, because git then opens an editor. A message
 source lets it through: `-m`, `-F`, `-C`, `--message`, `--file`, `--reuse-message` or `--no-edit`. A
@@ -874,6 +901,7 @@ deadline and returns what it printed, which is the same outcome by a slower road
 `verified-by: bravebot_agent::cmdline::a_program_that_wants_a_terminal_is_refused_before_it_starts`
 `verified-by: bravebot_agent::cmdline::a_line_that_names_the_terminal_device_is_refused`
 `verified-by: bravebot_agent::cmdline::the_same_program_without_the_interactive_part_is_not_refused`
+`verified-by: bravebot_agent::cmdline::the_refusal_of_an_editor_names_edit_file_only_where_the_list_holds_it`
 `verified-by: bravebot_agent::exec::a_stage_that_reads_stdin_is_given_nothing_rather_than_the_terminal`
 
 <a id="CMDLINE-16"></a>

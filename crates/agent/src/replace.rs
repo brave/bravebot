@@ -38,6 +38,19 @@ pub enum ReplaceError {
     EmptyPattern,
 }
 
+impl ReplaceError {
+    /// The words for the planner, naming `write_file` only where `writing_offered` says the turn's
+    /// list holds it. The text of a list that holds it is what `Display` writes.
+    pub fn said(&self, writing_offered: bool) -> String {
+        match self {
+            Self::EmptyPattern if !writing_offered => {
+                "the text to replace must not be empty".to_string()
+            }
+            other => other.to_string(),
+        }
+    }
+}
+
 impl fmt::Display for ReplaceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -853,6 +866,26 @@ mod tests {
         assert_eq!(
             replace("a\n", "", "y", false).expect_err("empty"),
             ReplaceError::EmptyPattern
+        );
+    }
+
+    /// TOOL-6. The empty-pattern refusal names `write_file` only where the turn's list holds it.
+    /// A list holding it reads the words `Display` always wrote. The regression it rejects is the
+    /// refusal naming the tool to a turn that was never offered it.
+    #[test]
+    fn the_empty_pattern_refusal_names_write_file_only_where_the_list_holds_it() {
+        let refusal = ReplaceError::EmptyPattern;
+        assert_eq!(refusal.said(true), refusal.to_string());
+        assert_eq!(
+            refusal.said(true),
+            "the text to replace must not be empty; use write_file to create or replace a whole \
+             file"
+        );
+        assert_eq!(refusal.said(false), "the text to replace must not be empty");
+        // The other refusals name no tool and read the same either way.
+        assert_eq!(
+            ReplaceError::NotFound.said(false),
+            ReplaceError::NotFound.to_string()
         );
     }
 

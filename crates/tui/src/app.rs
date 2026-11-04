@@ -40012,6 +40012,77 @@ mod tests {
         );
     }
 
+    /// ASK-8: an undo forgets the answers to the planner's questions, so a question the planner
+    /// puts again after it is drawn. Rejects: a rewind that leaves the session's memo as it was.
+    #[test]
+    fn undoing_a_turn_forgets_the_answers_to_the_planners_questions() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_core::ask::Answer;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-rewind-answers");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut trust = TrustStore::new(&root);
+        let mut programs = TrustedPrograms::new();
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut session = Session::new("none");
+        let mut conversation = Conversation::new();
+
+        let start = conversation.recounted().len();
+        type_line(&mut session, "pick a cache");
+        session.submit().expect("the prompt is sent");
+        let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
+        session.rewind.open(point, "pick a cache".to_string());
+        session.prompt_recorded(conversation.recounted().len());
+        conversation.push(Message::user("pick a cache"));
+        conversation.push(Message::assistant("done"));
+        session
+            .answers
+            .remember("pick one: Cache: Which?".into(), Answer::Chosen(vec![1]));
+        session.complete("done", vec![], 10);
+        session.record_turn(start, &conversation);
+
+        // A rewind that reaches no point is refused and changes nothing.
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            5,
+        );
+        assert_eq!(
+            session.answers.recall("pick one: Cache: Which?"),
+            Some(Answer::Chosen(vec![1])),
+            "an undo that went back nowhere forgot the answers"
+        );
+
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            1,
+        );
+
+        assert_eq!(session.turns, 0, "the turn was not undone");
+        assert_eq!(
+            session.answers.recall("pick one: Cache: Which?"),
+            None,
+            "an answer given in the undone turn outlived the undo"
+        );
+    }
+
     /// FILES-10: `/rewind` removes the edits of the turns it undoes, and the state ends once none is
     /// left, since the list is read from the transcript the rewind cut.
     #[test]

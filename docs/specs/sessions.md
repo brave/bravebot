@@ -636,7 +636,8 @@ goes back another. Every path in the project that a rewound turn wrote through a
 back to what it held first, and one such a turn created is removed; where two of the rewound
 turns wrote the same path, it goes back to what it held before the first of them. The
 conversation returns to the snapshot taken before the earliest rewound turn, and with it the turn
-count, the spend, the timing, the trusted programs, and the transcript. File trust is reconciled per path as described below. Those turns' audit lines are dropped, since they decided about turns that are no longer in the
+count, the spend, the timing, the trusted programs, and the transcript. The answers to the planner's
+questions are forgotten, all of them, so a question put again is asked ([ASK-8](tools/ask-user.md#ASK-8)). File trust is reconciled per path as described below. Those turns' audit lines are dropped, since they decided about turns that are no longer in the
 conversation. Their display prompts, outcomes, and task lists are removed with them. Saving and
 reopening after rewind must not restore them, and a new turn that reuses a removed turn number
 inherits none of its metadata.

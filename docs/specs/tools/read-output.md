@@ -171,6 +171,10 @@ sample says where its middle begins, so the first page can start there. A turn t
 `read_output` is told only that the length kept the rest out of the result, and the moves it does
 have ([TOOL-6](tool-surface.md#TOOL-6)).
 
+The refusals of `read_output` for a reference no program printed and for a `pattern`, and the refusal
+of `job_output` for a name no run handed back, still name `run` without reading the list. They are
+not yet written from it ([TOOL-6](tool-surface.md#TOOL-6)).
+
 **Why nobody is asked.** The cap is a budget and not an authority ([RUN-21](run.md#RUN-21)). The
 label on these bytes already let the planner read them, and the only thing that kept them out of the
 result was the room they would take. A person asked here would be answering for bytes the label had

@@ -233,6 +233,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
             sandbox,
             tools::workspace_is_trusted(policy, workspace),
         ),
+        plan.beside.holds(tools::Named::RequestPath),
     ) {
         conversation.push_composed_from(
             Message::user(&notice),
@@ -315,6 +316,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         state.jobs,
         task.output_cap.unwrap_or(tools::OUTPUT_CAP),
         read_output_is(),
+        plan.beside,
         policy,
         conversation,
         reporter,
@@ -326,7 +328,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
     // the session kept from an earlier turn is something the planner has no other way
     // to know is there (RUN-15).
     if !std::mem::replace(&mut state.told_of_kept_jobs, true) {
-        tell_of_kept_jobs(state.jobs, conversation);
+        tell_of_kept_jobs(state.jobs, plan.beside, conversation);
     }
 
     // Once, beside the jobs and for the same reason: what earlier turns left open is gone from
@@ -1633,6 +1635,7 @@ pub(super) fn tools_for_a_call<'a>(
         scheduling: plan.scheduling,
         arming: plan.arming,
         running: plan.running,
+        beside: plan.beside,
         armed: &mut state.armed,
         home: task.home.as_deref(),
         profile: task.profile.as_deref(),

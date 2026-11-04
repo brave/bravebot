@@ -20001,6 +20001,78 @@ five
             );
         }
 
+        /// TOOL-6. The refusal names `run`, `read_output` and `vet_content` as what still works
+        /// only where the turn's list holds them: the filter route needs `run` and `read_output`,
+        /// the whole read needs `vet_content`, and a turn with neither is told only that no
+        /// processor can be started. The control is a policy told of nothing, whose text is the one
+        /// written before the list was consulted. The regression it rejects is a refusal that
+        /// names the three tools whatever the turn was offered.
+        #[test]
+        fn the_refusal_of_a_processor_in_a_private_context_names_only_the_tools_the_turn_holds() {
+            let refusal = |tell: &dyn Fn(&mut Policy<'_, RecordingSink>)| {
+                let (store, public, _) = quarantine();
+                let mut sink = RecordingSink::new();
+                let mut policy = Policy::begin(
+                    routing_with("task", "pull out the failing tests"),
+                    ReleasePlan::new(),
+                    all_capabilities(),
+                    &mut sink,
+                )
+                .unwrap()
+                .holding(crate::label::Confidentiality::Private);
+                tell(&mut policy);
+                let written =
+                    policy.label_model_output("spawn_processor", "list the failures".to_string());
+                policy
+                    .before_processor("p", &[public], &written, None, &store)
+                    .expect_err("a private context cannot instruct a processor")
+                    .message
+            };
+            let start = "what you write has been private since you were shown private content, so \
+                         no rewording changes that and no processor can be started in this \
+                         conversation";
+            let filter = "to narrow a reference that holds text, run a filter such as grep or tail \
+                          with stdin_ref set to it and call read_output on what that prints";
+            let whole = "vet_content is the question to ask to read a reference whole";
+
+            let full = refusal(&|_| {});
+            assert!(
+                full.contains(&format!("{start}; {filter}, and {whole}")),
+                "{full}"
+            );
+
+            let no_vetting = refusal(&|policy| policy.without_vetting());
+            assert!(
+                no_vetting.contains(&format!("{start}; {filter}")),
+                "{no_vetting}"
+            );
+            assert!(!no_vetting.contains("vet_content"), "{no_vetting}");
+
+            for (what, told) in [
+                ("run", refusal(&|policy| policy.without_running())),
+                ("read_output", refusal(&|policy| policy.without_reading())),
+            ] {
+                assert!(
+                    told.contains(&format!("{start}; {whole}")),
+                    "without {what}: {told}"
+                );
+                assert!(
+                    !told.contains("stdin_ref") && !told.contains("read_output"),
+                    "without {what}: {told}"
+                );
+            }
+
+            let neither = refusal(&|policy| {
+                policy.without_vetting();
+                policy.without_running();
+            });
+            assert!(neither.contains(start), "{neither}");
+            for name in ["vet_content", "read_output", "stdin_ref", "grep"] {
+                assert!(!neither.contains(name), "{name} in {neither}");
+            }
+            assert!(!neither.contains("conversation;"), "{neither}");
+        }
+
         /// The audit trail must be able to show what a processor was allowed to see, without
         /// showing any of it.
         #[test]

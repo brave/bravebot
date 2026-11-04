@@ -55,7 +55,7 @@ use offered::checkouts_share_refs;
 #[cfg(test)]
 use offered::state_withheld;
 pub use offered::{
-    Running, Scheduling, available, for_delegate, for_planner, offer_advisor,
+    Beside, Named, Running, Scheduling, available, for_delegate, for_planner, offer_advisor,
     offer_message_session, offer_propose_plan, offer_propose_rule, offer_recall, offer_remember,
     offer_set_link, offer_tool_loader, state_confinement, state_read_output_answer,
     state_vet_content_answer, state_what_is_beside, state_withheld_variables,
@@ -338,6 +338,29 @@ pub struct Output {
     pub tool_loaded: Option<String>,
 }
 
+/// The directory `run` lines land in when they name none, carried from the last line that ran.
+///
+/// Two spellings of one place. `landing` is where the workspace resolved the directory, which the
+/// line runs in and every check is made against. `told` is the directory as the planner typed it,
+/// which is what a sentence addressed to the planner spells: where a link in a tree nobody vouched
+/// for led is a name whoever wrote the tree chose (LABEL-3, TOOL-4). `told` is never compared with
+/// `landing` or with anything else.
+#[derive(Debug, Clone)]
+pub struct RunDirectory {
+    pub landing: std::path::PathBuf,
+    pub told: String,
+}
+
+impl RunDirectory {
+    /// The workspace root, which a sentence about a line run there does not name.
+    pub fn at(root: &std::path::Path) -> Self {
+        Self {
+            landing: root.to_path_buf(),
+            told: String::new(),
+        }
+    }
+}
+
 /// Everything a tool works with that is not the policy.
 ///
 /// Three things, and the second two are new because of the processor: the quarantine, so a
@@ -404,6 +427,10 @@ pub struct Tools<'a> {
     /// refused with says the same thing again. A turn told in the description that nothing else
     /// reads the history and then told by the refusal to use `run` has been given both answers.
     pub running: Running,
+    /// Which of the tools that result text names this turn's list holds, built once where the turn
+    /// settles its list. A sentence a tool writes names `read_output`, `read_file`, `job_output`
+    /// and the like only where this says the list holds them (TOOL-6). Agrees with `running`.
+    pub beside: Beside,
     /// How many watches this turn has already armed, which is what the count bound is read
     /// against.
     ///
@@ -491,7 +518,7 @@ pub struct Tools<'a> {
     /// The current working directory for `run` commands in this turn.
     ///
     /// Initialized to the workspace root and updated when `run` specifies a `directory`.
-    pub run_directory: &'a mut std::path::PathBuf,
+    pub run_directory: &'a mut RunDirectory,
     /// How many lines ran with a sandbox in this turn and did not exit zero, which a request for
     /// a line with no sandbox is accepted after and not before (SANDBOX-29).
     pub confined_failures: &'a mut ConfinedFailures,
@@ -1301,6 +1328,44 @@ fn what_becomes_of_a_job(kept: bool) -> &'static str {
     }
 }
 
+/// What follows "without having to ask" in the note that starts a job: how to look at it before it
+/// ends, where `job_output` is on the list, and the end of the sentence where it is not.
+///
+/// The driver's own words, chosen by the list the turn was offered and by nothing the job printed.
+fn how_to_look_at_a_job(job: &str, beside: Beside) -> String {
+    if beside.holds(Named::JobOutput) {
+        format!(
+            "; call job_output with \"{job}\" before then to see what it has printed. Each look \
+             returns what arrived since the previous look, and the output before it stays in the \
+             references of the earlier looks."
+        )
+    } else {
+        ".".to_string()
+    }
+}
+
+/// What a refusal of `vet_content` offers in place of the bytes, naming `spawn_processor` only
+/// where the list holds it: "pass ref:N to spawn_processor, " or nothing.
+///
+/// The driver's own words, chosen by the list the turn was offered.
+fn pass_to_a_processor(beside: Beside, slot: &impl std::fmt::Display) -> String {
+    if beside.holds(Named::SpawnProcessor) {
+        format!("pass {slot} to spawn_processor, ")
+    } else {
+        String::new()
+    }
+}
+
+/// What `spawn_processor` says to a planner that gave it nothing to read: where a new file comes
+/// from, naming `write_file` only where the list holds it, and nothing where it does not.
+fn write_it_yourself(beside: Beside) -> &'static str {
+    if beside.holds(Named::WriteFile) {
+        " To make a file from nothing, write it yourself with write_file."
+    } else {
+        ""
+    }
+}
+
 /// How a job that has ended finished, read off the exit code of each of its steps.
 ///
 /// Structure and nothing else: no byte of what the pipeline printed reaches this. Failed rather
@@ -1674,13 +1739,12 @@ impl Produced {
     ///
     /// It says the finish arrives by itself, because it does (CMDLINE-14), and a planner that does
     /// not know that spends a round per look asking whether a build has finished.
-    fn started_in_the_background(mut self, job: String, kept: bool) -> Self {
+    fn started_in_the_background(mut self, job: String, kept: bool, beside: Beside) -> Self {
         self.text = Labelled::trusted(format!(
             "started in the background as {job}. Nothing has been read from it yet. If it ends \
              while this turn is still going you are told so, with how it ended and what it \
-             printed, without having to ask; call job_output with \"{job}\" before then to see \
-             what it has printed. Each look returns what arrived since the previous look, and \
-             the output before it stays in the references of the earlier looks. {}",
+             printed, without having to ask{} {}",
+            how_to_look_at_a_job(&job, beside),
             what_becomes_of_a_job(kept)
         ));
         self
@@ -1696,16 +1760,16 @@ impl Produced {
         job: String,
         after: std::time::Duration,
         kept: bool,
+        beside: Beside,
     ) -> Self {
         self.text = Labelled::trusted(format!(
             "the user moved this command to the background after {:.1}s, and it is still running \
              as {job}. Do not run it again. Nothing has been read from it yet, including what it \
              printed before the move. If it ends while this turn is still going you are told so, \
-             with how it ended and what it printed, without having to ask; call job_output with \
-             \"{job}\" before then to see what it has printed. Each look returns what arrived \
-             since the previous look, and the output before it stays in the references of the \
-             earlier looks. It no longer has a deadline. {}",
+             with how it ended and what it printed, without having to ask{} It no longer has a \
+             deadline. {}",
             after.as_secs_f64(),
+            how_to_look_at_a_job(&job, beside),
             what_becomes_of_a_job(kept)
         ));
         self
@@ -2689,7 +2753,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         // bottom of the tree that calls it anyway is refused by the kernel, which is the check
         // that holds whatever the list said, and the trail then says why.
         "spawn_agent" => spawn_agent(policy, tools, reporter, &arguments),
-        "load_skill" => load_skill(policy, tools.skills, &arguments),
+        "load_skill" => load_skill(policy, tools.skills, tools.beside, &arguments),
         "search_skills" => search_skills(policy, tools.skills, &arguments),
         // A delegate's task came from a planner, so the question would ask the person to
         // arbitrate something they never set up. Refused here as well as absent from the list.
@@ -3509,9 +3573,8 @@ fn notebook_outputs<S: Sink>(
         Ok(contents) => contents,
         Err(e) => return file_tool_problem(policy, "read_file", field, &e, shown_path),
     };
-    let current = match policy.read_trusted_content("read_file", &source) {
-        Ok(text) => text,
-        Err(denial) => return Produced::problem(format!("refused: {denial}")),
+    let Ok(current) = policy.read_trusted_content("read_file", &source) else {
+        return Produced::problem(closed_to_reading_outputs(policy, source.label()));
     };
     if let Err(reason) = crate::notebook::check_outputs_of(&current, cell) {
         return Produced::problem(format!("error: {reason}"));
@@ -4416,6 +4479,71 @@ fn closed_to_editing<S: Sink>(policy: &Policy<'_, S>, label: Label) -> String {
         "refused: this file is closed to edit_file, label {label}: it is not vouched for, or \
          untrusted content was written to it, and an edit has to compare its text. {routes}"
     )
+}
+
+/// The refusal of `output_of` for a notebook whose contents the driver may not examine, worded
+/// from the tools the turn is offered (TOOL-6).
+///
+/// A read of a file the trust map does not vouch for answers with a reference before `output_of`
+/// is looked at, so this is reached only if the map changed during the call. The text holds no
+/// byte of the file and no name, and the label is the one the driver assigned. It names
+/// `spawn_processor` and `run` only where the turn is offered them, and always the vouch, which
+/// is the person's to give and which nothing on the turn says a delegate cannot ask for. A plain
+/// read of the file is named only beside `spawn_processor`, because the reference it returns is
+/// of use to the planner only through a processor.
+fn closed_to_reading_outputs<S: Sink>(policy: &Policy<'_, S>, label: Label) -> String {
+    let routes = match (policy.processors_offered(), policy.running_is_offered()) {
+        (true, true) => {
+            "Read the file with read_file and no output_of for a reference to give to \
+             spawn_processor, read it through run, or ask the person to vouch for the path"
+        }
+        (true, false) => {
+            "Read the file with read_file and no output_of for a reference to give to \
+             spawn_processor, or ask the person to vouch for the path"
+        }
+        (false, true) => "Read it through run, or ask the person to vouch for the path",
+        (false, false) => "Only the person can open it, by vouching for the path",
+    };
+    format!(
+        "refused: the outputs of this notebook are closed to read_file, label {label}: it is not \
+         vouched for, or untrusted content was written to it. {routes}"
+    )
+}
+
+/// The refusal of a `read_git` answer the driver may not examine, worded from whether the turn is
+/// offered `run` (TOOL-6).
+///
+/// An answer is labelled from the trust map before it is examined and an untrusted one is not
+/// examined at all, so this is reached only if the map changed during the call. A reference to the
+/// answer is not offered as a way out, because this tool does not return one. `run` is named only
+/// where the turn holds it.
+fn closed_to_read_git(running: Running, label: Label) -> String {
+    let routes = if running.offered() {
+        "Ask git through run, or ask the person to vouch for the repository"
+    } else {
+        "Only the person can open it, by vouching for the repository"
+    };
+    format!(
+        "refused: this answer is closed to read_git, label {label}: the repository is not \
+         vouched for, or untrusted content was written to it. {routes}"
+    )
+}
+
+/// The examination of a `read_git` answer for the credential scan, or the refusal the planner is
+/// given where the driver may not examine it (TOOL-6).
+///
+/// `read_git` calls it only for an answer labelled trusted, so the refusal is not reached from a
+/// turn: the label the guard tests and the label this checks are the one the driver assigned.
+/// The refusal is built here, apart from the guard, so a test can give it an answer the guard
+/// would not let through.
+fn examine_git_answer<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    answer: &Labelled<crate::git::Answer>,
+    running: Running,
+) -> Result<crate::git::Answer, String> {
+    policy
+        .read_trusted_content("read_git", answer)
+        .map_err(|_| closed_to_read_git(running, answer.label()))
 }
 
 /// [`workspace_failure`] as the `error:` result a file tool returns, so each tool's refusal of a
@@ -6595,11 +6723,17 @@ fn edit_file<S: Sink, C: Confirmer>(
                 running = r.contents;
                 occurrences += r.occurrences;
             }
-            Err(e) if total == 1 => return Produced::problem(format!("error: {e}")),
+            Err(e) if total == 1 => {
+                return Produced::problem(format!(
+                    "error: {}",
+                    e.said(policy.writing_is_offered())
+                ));
+            }
             Err(e) => {
                 return Produced::problem(format!(
-                    "error: edit {} of {total}: {e}. No edit in this call was applied",
-                    at + 1
+                    "error: edit {} of {total}: {}. No edit in this call was applied",
+                    at + 1,
+                    e.said(policy.writing_is_offered())
                 ));
             }
         }
@@ -7240,17 +7374,21 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
     // it rather than being told a gate said no. The name is a slot by now, so what is left is a
     // slot that holds something other than what a program printed.
     if !tools.slots.is_from_command(&slot) {
-        // `vet_content` is offered only where the turn is not a delegate's (the dispatch arm),
-        // so a delegate is not pointed at a tool it does not have.
+        // `vet_content` is offered only where the turn's list holds it, which a delegate's never
+        // does (the dispatch arm) and a definition's tools line or the command line can also
+        // decide. A caller is pointed at it only where it is there, and told nothing where it is
+        // not, since no other tool shows a quarantined reference.
         let route = if tools.delegated {
-            "A delegate has no way to ask for it to be shown; say in your report what you needed \
-             from it."
+            " A delegate has no way to ask for it to be shown; say in your report what you \
+             needed from it."
+        } else if tools.beside.holds(Named::VetContent) {
+            " Where you have to read it yourself, vet_content is how to ask for it."
         } else {
-            "Where you have to read it yourself, vet_content is how to ask for it."
+            ""
         };
         return Produced::problem(format!(
             "refused: {slot} is not something a program printed, so there is nothing to show. \
-             Only a reference that came back from run can be read this way. {route}"
+             Only a reference that came back from run can be read this way.{route}"
         ));
     }
 
@@ -7862,6 +8000,7 @@ fn release_vetted_text<S: Sink, C: Confirmer>(
     said: Option<Labelled<String>>,
     spec: Option<&bravebot_core::vetting::VettingSpec>,
     expects: Option<&Labelled<String>>,
+    beside: Beside,
 ) -> Result<(Labelled<String>, usize, Endorsed), Box<Produced>> {
     // Who the trail is credited to, which the mode decides along with the verdict. The one branch
     // on a verdict that decides more than which sentence a person reads first is inside it, and it
@@ -7965,8 +8104,8 @@ fn release_vetted_text<S: Sink, C: Confirmer>(
             policy.refuse_unapproved_release("vet_content", &slot.to_string());
             return Err(Box::new(Produced::problem(format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
-                 you have, pass {slot} to spawn_processor, or say in your reply what you needed \
-                 from it."
+                 you have, {}or say in your reply what you needed from it.",
+                pass_to_a_processor(beside, slot)
             ))));
         }
     }
@@ -8029,6 +8168,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     chat: &mut Chat<'_>,
     reporter: &mut R,
     slot: &SlotId,
+    beside: Beside,
 ) -> ReadInTheResult {
     let nothing = |text| ReadInTheResult {
         text,
@@ -8050,6 +8190,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
             None,
             spec,
             None,
+            beside,
         )
         .ok()
         .map(|(text, _, _)| text)
@@ -8210,6 +8351,7 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             said,
             spec.as_ref(),
             Some(&expects),
+            tools.beside,
         ) {
             Ok((text, counted, endorsed)) => vetted_text(&slot, text, counted, endorsed)
                 .costing(spent)
@@ -8270,8 +8412,9 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
                     return Produced::refused_with_a_note(
                         format!(
                             "refused: {slot} was kept back from you. Do not ask for it again. \
-                             Work with what you have, pass {slot} to spawn_processor, or say in \
-                             your reply what you needed from it."
+                             Work with what you have, {}or say in your reply what you needed \
+                             from it.",
+                            pass_to_a_processor(tools.beside, &slot)
                         ),
                         detail,
                     )
@@ -8329,8 +8472,8 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
             policy.refuse_unapproved_release("vet_content", &slot.to_string());
             return Produced::problem(format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
-                 you have, pass {slot} to spawn_processor, or say in your reply what you needed \
-                 from it."
+                 you have, {}or say in your reply what you needed from it.",
+                pass_to_a_processor(tools.beside, &slot)
             ))
             .costing(spent)
             .waiting(waited);
@@ -8507,12 +8650,41 @@ struct Standing {
     key: String,
     /// The name a person and a finding see, which is the name relative to the workspace root.
     shown: String,
+    /// The name the planner is told: `shown` with the directory the line ran in spelled as the
+    /// planner typed it, where `shown` has the place a link in the tree led.
+    told: String,
     /// Where the file is, for reading what the line left and for putting back what it held.
     resolved: std::path::PathBuf,
     /// What the path held before the line opened it.
     held: crate::workspace::Before,
     /// What the trust map said about the path at that same moment.
     prior: bravebot_core::label::Integrity,
+}
+
+/// The name the planner is told for a destination a line opened.
+///
+/// A destination under the directory the line ran in is told as that directory spelled the way
+/// the planner typed it, followed by the rest of the path. The path itself was joined onto where
+/// the directory landed, and where a link led is a name whoever wrote the tree chose, which the
+/// planner is not told (LABEL-3, TOOL-4). `typed` is `None` for a line run at the root, and then,
+/// like a destination elsewhere, the name is the one relative to the root. Both halves are strings
+/// the planner wrote or paths the driver resolved: nothing is read from a file to build the name.
+fn told_destination(
+    workspace: &Workspace,
+    path: &std::path::Path,
+    landing: &std::path::Path,
+    typed: Option<&str>,
+) -> String {
+    match (typed, path.strip_prefix(landing)) {
+        (Some(typed), Ok(rest)) => {
+            let rest: Vec<std::borrow::Cow<'_, str>> = rest
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect();
+            format!("{}/{}", typed.trim_end_matches('/'), rest.join("/"))
+        }
+        _ => workspace.relative_display(path),
+    }
 }
 
 /// What a line left at the destinations it opened.
@@ -8632,7 +8804,7 @@ fn credential_refusal_after_a_line(said: &str, left: &Left<'_>, stuck: &[String]
     let paths: Vec<&str> = left
         .refused_at
         .iter()
-        .map(|destination| destination.shown.as_str())
+        .map(|destination| destination.told.as_str())
         .collect();
     let instead = do_this_instead(left.scanned.only_the_value);
     let text = match stuck.is_empty() {
@@ -9270,12 +9442,19 @@ fn requests_refusals(
 /// Hands back whether a redirection may leave the workspace on this line, which the run checks
 /// again at each open. A refusal comes back as the result of the call. Everything checked is the
 /// plan's own structure and the session's settings; no output of a program is read.
+///
+/// A refusal names a redirection's file under `told_directory`, the directory as the planner typed
+/// it, and never under where the workspace landed that directory (LABEL-3, TOOL-4).
 fn check_the_plan_before_asking<S: Sink>(
     policy: &mut Policy<'_, S>,
     tools: &Tools<'_>,
     plan: &bravebot_core::command::Plan,
     unconfined: bool,
+    told_directory: Option<&str>,
 ) -> Result<bool, Box<Produced>> {
+    let told = |path: &std::path::Path| {
+        told_destination(tools.workspace, path, &plan.directory, told_directory)
+    };
     // A read as well as a write. The rules below are matched against the spelling, and a name
     // Windows reads as another file would have them judge one file while the run opens the other.
     // Before the confinement, which cannot say where a stream or a device lands. `> NUL` is how
@@ -9285,7 +9464,7 @@ fn check_the_plan_before_asking<S: Sink>(
     for (paths, hint) in [(&plan.writes, discard), (&plan.reads, "")] {
         for path in paths {
             if let Err(misleading) = tools.workspace.refuse_misleading(path) {
-                let target = path.display().to_string();
+                let target = told(path);
                 return Err(Box::new(Produced::problem(format!(
                     "refused: {}{hint}",
                     workspace_failure(policy, "run", "command", &misleading, &target)
@@ -9301,7 +9480,7 @@ fn check_the_plan_before_asking<S: Sink>(
     for path in &plan.reads {
         let lands = crate::workspace::destination(path);
         if lands.is_some_and(|lands| tools.workspace.in_the_stores(&lands)) {
-            let target = path.display().to_string();
+            let target = told(path);
             let escape = crate::workspace::WorkspaceError::Escapes {
                 path: target.clone(),
                 remedy: crate::workspace::Remedy::Nothing,
@@ -9320,7 +9499,7 @@ fn check_the_plan_before_asking<S: Sink>(
     let reaches_anywhere = redirections_may_leave_the_workspace(unconfined, tools);
     for path in &plan.writes {
         if !reaches_anywhere && let Err(escape) = tools.workspace.confines_writing(path) {
-            let target = path.display().to_string();
+            let target = told(path);
             let way_out = match escape {
                 crate::workspace::WorkspaceError::Escapes { .. } => {
                     unconfined_way_out(policy, tools)
@@ -9363,7 +9542,12 @@ fn check_the_plan_before_asking<S: Sink>(
     ] {
         for path in paths {
             let named = tools.workspace.relative_display(path);
-            if let Err(refusal) = refuse_denied_path(policy, tools.workspace, purpose, &named) {
+            // The rules are asked under the landing-based name, and the refusal says the name
+            // under the directory as typed (LABEL-3, TOOL-4).
+            let shown = told(path);
+            if let Err(refusal) =
+                refuse_denied_path_as(policy, tools.workspace, purpose, &named, &shown)
+            {
                 return Err(Box::new(Produced::problem(refusal)));
             }
             // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env`
@@ -9372,7 +9556,7 @@ fn check_the_plan_before_asking<S: Sink>(
             for reached in tools.workspace.names_reached(path) {
                 if reached != named
                     && let Err(refusal) =
-                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &named)
+                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &shown)
                 {
                     return Err(Box::new(Produced::problem(refusal)));
                 }
@@ -9425,6 +9609,7 @@ fn settle_the_confinement<S: Sink>(
             confinement
                 .with_requested(requested)
                 .with_requests_offered(requests_accepted(policy, tools).is_ok())
+                .with_request_path_listed(tools.beside.holds(Named::RequestPath))
         });
     if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
         let cause = match confinement {
@@ -9525,6 +9710,8 @@ struct JobStart<'a> {
     plan: &'a bravebot_core::command::Plan,
     displayed: &'a str,
     said: &'a str,
+    /// The directory the line ran in, spelled as the planner typed it.
+    told_directory: &'a str,
     label: Label,
     authority: &'a bravebot_core::file_authority::FileAuthority,
     started_revision: u64,
@@ -9547,7 +9734,10 @@ fn start_the_job<S: Sink, R: Reporter>(
 ) -> (String, bravebot_core::cancel::JobStop) {
     policy.record_ambient(job.spends);
     // The directory is carried over only once pre-flight checks and launch succeed.
-    *tools.run_directory = job.plan.directory.clone();
+    *tools.run_directory = RunDirectory {
+        landing: job.plan.directory.clone(),
+        told: job.told_directory.to_string(),
+    };
     let (name, stop) = tools.jobs.keep(
         running,
         JobLines::new(job.displayed, job.said),
@@ -9733,10 +9923,20 @@ fn run_call<S: Sink>(
 /// profile: the classifier is shown the words of the line and not the binary they resolve to, so
 /// the confinement is what holds the line to those words. The plan and the directory are the
 /// driver's own structure and no labelled value is built or released here.
+///
+/// `told_in` is the directory as the planner typed it, and is `None` when the line runs at the
+/// workspace root. The classifier is a model, so a name a link in the tree chose is not put in its
+/// request any more than in the planner's: it is shown the typed spelling, or the root, which is
+/// the person's own directory (AUTO-5).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the plan and its scopes are the driver's own structure and `policy` and `tools` are exclusive borrows, so none of them can share a bundle without the borrows aliasing"
+)]
 fn consult_about_a_run<S: Sink>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     plan: &bravebot_core::command::Plan,
+    told_in: Option<&str>,
     requested: &[bravebot_sandbox::scope::Requested],
     stdin: bool,
     unconfined: bool,
@@ -9753,7 +9953,10 @@ fn consult_about_a_run<S: Sink>(
     let Some(classifying) = tools.classifying.as_ref() else {
         return crate::confirm::Classified::NotAsked;
     };
-    let directory = plan.directory.display().to_string();
+    let directory = told_in.map_or_else(
+        || plan.directory.display().to_string(),
+        std::string::ToString::to_string,
+    );
     crate::classifier::consult(
         policy,
         &mut tools.chat,
@@ -9802,6 +10005,7 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
     tools: &mut Tools<'_>,
     confirmer: &mut C,
     plan: &bravebot_core::command::Plan,
+    told_in: Option<&str>,
     record: Option<&crate::remembered::Store>,
     requested: &[bravebot_sandbox::scope::Requested],
     unconfined: bool,
@@ -9817,6 +10021,7 @@ fn ask_about_the_run<S: Sink, C: Confirmer>(
         policy,
         tools,
         plan,
+        told_in,
         requested,
         stdin.is_some(),
         unconfined,
@@ -10002,7 +10207,7 @@ fn failed_line_text(said: &str, error: &crate::exec::ExecError) -> String {
         ),
         // Nothing of this pipeline started, so only a command earlier in a line joined with `&&`,
         // `||` or `;` can have run.
-        crate::exec::ExecError::DirectoryGone { .. } => format!(
+        crate::exec::ExecError::DirectoryGone => format!(
             "error: `{said}` was not run: {error}. Name a directory that \
              exists with the 'directory' argument. A command earlier in the line may already \
              have run"
@@ -10128,7 +10333,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         }
     };
 
-    let directory = match named {
+    let (directory, told_directory) = match named {
         Some(proposed) => {
             // Read through the same gate the command line is, for the same reason: this is
             // resolved against the workspace and the driver branches on whether what it found is
@@ -10158,23 +10363,33 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             if !resolved.is_dir() {
                 return Produced::problem(format!("error: '{dir}' is not a directory"));
             }
-            resolved
+            // What the planner is told the directory was: its own released argument, or as the
+            // workspace spells a `..` that lands in an open directory, as the file tools do. The
+            // landing is where a link led, and a link in a tree nobody vouched for chooses that name.
+            let told = tools
+                .workspace
+                .climbed_to(&dir)
+                .unwrap_or_else(|| dir.clone());
+            (resolved, told)
         }
         None => {
             // The directory carried from the last call is checked as a named one is, before the
             // line is compiled and before anybody is asked: it may have been removed since.
             // Falling back to the workspace root means the next call is not refused the same way.
-            if !tools.run_directory.is_dir() {
-                let gone =
-                    std::mem::replace(tools.run_directory, tools.workspace.root().to_path_buf());
+            if !tools.run_directory.landing.is_dir() {
+                let gone = std::mem::replace(
+                    tools.run_directory,
+                    RunDirectory::at(tools.workspace.root()),
+                );
                 return Produced::problem(format!(
                     "error: the directory this line would run in, '{}', no longer exists. Name \
                      a directory with the 'directory' argument; without one the next call runs \
                      at the workspace root",
-                    gone.display()
+                    gone.told
                 ));
             }
-            tools.run_directory.clone()
+            let carried = tools.run_directory.clone();
+            (carried.landing, carried.told)
         }
     };
     // The rules are handed to the compiler rather than consulted on the plan it hands back,
@@ -10188,7 +10403,10 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         // The refusal names the span that caused it, so the planner can rewrite that part rather
         // than guessing at the whole line. There is no degraded mode to fall back to.
         Err(crate::cmdline::Stopped::Compile(refused)) => {
-            return Produced::problem(format!("error: {refused}"));
+            return Produced::problem(format!(
+                "error: {}",
+                refused.said(tools.beside.holds(Named::EditFile))
+            ));
         }
         Err(crate::cmdline::Stopped::Rule(denial)) => return refused_by_a_rule(&denial),
     };
@@ -10199,10 +10417,13 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     *may_change_files = crate::cmdline::plan_as_written(&plan, tools.profile)
         .is_none_or(|written| policy.plan_may_change_files(&written));
 
-    let reaches_anywhere = match check_the_plan_before_asking(policy, tools, &plan, unconfined) {
-        Ok(reaches_anywhere) => reaches_anywhere,
-        Err(produced) => return *produced,
-    };
+    let told_in =
+        (plan.directory.as_path() != tools.workspace.root()).then_some(told_directory.as_str());
+    let reaches_anywhere =
+        match check_the_plan_before_asking(policy, tools, &plan, unconfined, told_in) {
+            Ok(reaches_anywhere) => reaches_anywhere,
+            Err(produced) => return *produced,
+        };
 
     // What the planner named for standard input, turned into bytes and a label before anybody is
     // asked. Three gates, as a write's `contents_ref` has: the name is accepted as a reference
@@ -10301,6 +10522,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             tools,
             confirmer,
             &plan,
+            told_in,
             record.as_ref(),
             &requested,
             unconfined,
@@ -10344,19 +10566,24 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // The directory persists across calls, so a planner whose earlier call has been summarised away
     // by a compaction has nothing else left in its context saying where the next one lands, and a
     // person asked to release what this printed would otherwise not be told which tree it came out
-    // of. Structure either way: a path the driver resolved itself, never a byte of what ran.
-    let in_directory = |line: String| match plan.directory.as_path() == tools.workspace.root() {
+    // of. The planner is told the directory as it typed it: where a link in the tree led is a name
+    // whoever wrote the tree chose, and a sentence the driver writes is read as the driver's own
+    // (LABEL-3, TOOL-4). The person is shown the landing, which is what the line runs in. The
+    // test below is of the landing against the workspace root, two paths the driver resolved, and
+    // reads nothing of the directory's name.
+    let at_the_root = plan.directory.as_path() == tools.workspace.root();
+    let in_directory = |line: String, spelled: &str| match at_the_root {
         true => line,
-        false => format!(
-            "{line} (in {})",
-            tools.workspace.relative_display(&plan.directory)
-        ),
+        false => format!("{line} (in {spelled})"),
     };
-    let displayed = in_directory(plan.display());
+    let displayed = in_directory(
+        plan.display(),
+        &tools.workspace.relative_display(&plan.directory),
+    );
     // What the planner is told the line was: the plan with its operands as the line wrote them. A
     // glob in the line has been replaced by the names it matched, which came out of a directory
     // nobody may have vouched for, and the planner is not shown those (CMDLINE-4).
-    let said = in_directory(crate::cmdline::display_as_written(&plan));
+    let said = in_directory(crate::cmdline::display_as_written(&plan), &told_directory);
 
     // What this line reaches that nothing here holds, which the person approving it was shown at
     // the prompt. Worked out from the same plan the prompt drew, so the record and the grant
@@ -10368,6 +10595,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         plan: &plan,
         displayed: &displayed,
         said: &said,
+        told_directory: &told_directory,
         label,
         authority: &authority,
         started_revision,
@@ -10427,7 +10655,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     format!("`{said}` started in the background"),
                     format!("started as {name}"),
                 )
-                .started_in_the_background(name, tools.jobs.is_kept())
+                .started_in_the_background(name, tools.jobs.is_kept(), tools.beside)
                 .having_run_a_program()
             }
             Err(error) => Produced::problem(format!("error: `{said}` did not start: {error}"))
@@ -10503,7 +10731,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                         moved.after.as_secs_f64()
                     ),
                 )
-                .moved_to_the_background(name, moved.after, tools.jobs.is_kept())
+                .moved_to_the_background(name, moved.after, tools.jobs.is_kept(), tools.beside)
                 .having_run_a_program();
             }
             Ok(crate::exec::Waited::Ran(ran)) => Ok(ran),
@@ -10524,7 +10752,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 // destination can have replaced it with a link (CMDLINE-5). Not for a line whose
                 // programs have no profile, for the reason the check above is not.
                 if !reaches_anywhere && let Err(escape) = tools.workspace.confines_writing(path) {
-                    let target = path.display().to_string();
+                    let target = told_destination(
+                        tools.workspace,
+                        path,
+                        &plan.directory,
+                        (!at_the_root).then_some(told_directory.as_str()),
+                    );
                     let detail = workspace_failure(policy, "run", "command", &escape, &target);
                     return Err(crate::exec::ExecError::Redirection {
                         path: target,
@@ -10567,6 +10800,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                     standing.push(Standing {
                         key: key.clone(),
                         shown: tools.workspace.relative_display(path),
+                        told: told_destination(
+                            tools.workspace,
+                            path,
+                            &plan.directory,
+                            (!at_the_root).then_some(told_directory.as_str()),
+                        ),
                         held,
                         resolved: path.to_path_buf(),
                         prior,
@@ -10582,7 +10821,12 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
                 let lands = crate::workspace::destination(path);
                 if lands.is_some_and(|lands| tools.workspace.in_the_stores(&lands)) {
                     return Err(crate::exec::ExecError::Redirection {
-                        path: path.display().to_string(),
+                        path: told_destination(
+                            tools.workspace,
+                            path,
+                            &plan.directory,
+                            (!at_the_root).then_some(told_directory.as_str()),
+                        ),
                         detail: "refused: kept facts, rules and session records are not read by \
                                  a command line"
                             .to_string(),
@@ -10634,7 +10878,7 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             .put_back(&destination.resolved, &destination.held)
             .is_err()
         {
-            stuck.push(destination.shown.clone());
+            stuck.push(destination.told.clone());
         }
     }
     // After a destination a scan refused has been put back. One the line created is removed again,
@@ -10700,7 +10944,10 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
             // branch carries it too: a line whose stages never started moved nothing, and a turn
             // whose working directory had followed a run that did not happen would land the next
             // line somewhere nobody chose.
-            *tools.run_directory = plan.directory.clone();
+            *tools.run_directory = RunDirectory {
+                landing: plan.directory.clone(),
+                told: told_directory.clone(),
+            };
 
             // Both streams carry the revalidated plan label; their bytes decide nothing.
             let text = crate::exec::both_streams(&ran.stdout, &ran.stderr);
@@ -10799,6 +11046,26 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
         // got to (GROUND-1).
         Err(error) => {
             let stopped = matches!(error, crate::exec::ExecError::Cancelled);
+            // A file exec could not open is named by the path it joined onto where the directory
+            // landed. Respelled under the directory as typed; a name the closures above already
+            // spelled that way, or an absolute one the planner wrote, is not under the landing and
+            // is left as it is. Both are paths the driver holds, and nothing is read from a file.
+            let error = match error {
+                crate::exec::ExecError::Unopened { path, detail }
+                    if path.strip_prefix(&plan.directory).is_ok() =>
+                {
+                    crate::exec::ExecError::Redirection {
+                        path: told_destination(
+                            tools.workspace,
+                            &path,
+                            &plan.directory,
+                            (!at_the_root).then_some(told_directory.as_str()),
+                        ),
+                        detail,
+                    }
+                }
+                other => other,
+            };
             let text = failed_line_text(&said, &error);
             let mut produced = Produced::problem(text);
             produced.changed_a_file = changed_a_file;
@@ -11820,8 +12087,9 @@ fn spawn_processor<S: Sink>(
     if entries.is_empty() {
         return Produced::problem(
             "error: 'reads' names no references. A processor only works on quarantined content \
-             you were not shown, so it needs at least one reference to some. To make a file from \
-             nothing, write it yourself with write_file.",
+             you were not shown, so it needs at least one reference to some."
+                .to_string()
+                + write_it_yourself(tools.beside),
         );
     }
 
@@ -12616,6 +12884,7 @@ fn budget_figure(arguments: &Value) -> Result<Option<u64>, String> {
 fn load_skill<S: Sink>(
     policy: &mut Policy<'_, S>,
     skills: &crate::skills::Catalogue,
+    beside: Beside,
     arguments: &Value,
 ) -> Produced {
     let Some(proposed) = argument(arguments, "name") else {
@@ -12662,7 +12931,7 @@ fn load_skill<S: Sink>(
     let note = note_for(policy, "load_skill", skill.body(), |text: String| {
         tally(text.lines().count(), "line", "lines")
     });
-    let body = opened_skill(policy, skill);
+    let body = opened_skill(policy, skill, beside);
     let mut produced = Produced::new(body, skill.origin.clone(), note);
     produced.skill = Some(skill.name.clone());
     // Carried out rather than acted on here. The rounds after this one are the turn's to ask, and a
@@ -12741,10 +13010,12 @@ fn search_skills<S: Sink>(
 pub(crate) fn opened_skill<S: Sink>(
     policy: &mut Policy<'_, S>,
     skill: &crate::skills::Skill,
+    beside: Beside,
 ) -> Labelled<String> {
     let body = match (&skill.directory, skill.files.is_empty()) {
         (Some(directory), false) => {
-            let listing = beside_the_skill(directory, skill.landed.as_deref(), &skill.files);
+            let listing =
+                beside_the_skill(directory, skill.landed.as_deref(), &skill.files, beside);
             policy.render_in_place("load_skill", skill.body(), |text| {
                 format!("{text}{listing}")
             })
@@ -12766,17 +13037,27 @@ pub(crate) fn opened_skill<S: Sink>(
 /// Where the directory is a link to another directory in the workspace, the sentence says where it
 /// lands, because a listing of the link's parent shows nothing and a listing of the landed
 /// directory shows the files (LOAD-4).
-fn beside_the_skill(directory: &str, landed: Option<&str>, files: &[String]) -> String {
+fn beside_the_skill(
+    directory: &str,
+    landed: Option<&str>,
+    files: &[String],
+    beside: Beside,
+) -> String {
+    // How a file is named, with read_file named only where the list holds it. A list without it
+    // is given the path to use for another tool and no instruction about which.
+    let how = if beside.holds(Named::ReadFile) {
+        "Read one with read_file, naming the directory and the file, for example"
+    } else {
+        "For example"
+    };
     let mut listing = format!(
-        "\n\n---\nFiles kept beside this skill in {directory}. Read one with read_file, \
-         naming the directory and the file, for example {directory}/{}:\n",
+        "\n\n---\nFiles kept beside this skill in {directory}. {how} {directory}/{}:\n",
         files[0]
     );
     if let Some(landed) = landed {
         listing = format!(
             "\n\n---\nFiles kept beside this skill in {directory}, a link to {landed}, which is where \
-             list_files shows them. Read one with read_file, naming the directory and the file, \
-             for example {landed}/{}:\n",
+             list_files shows them. {how} {landed}/{}:\n",
             files[0]
         );
     }
@@ -13182,7 +13463,7 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         }
     };
 
-    let relative = if operation.needs_position() {
+    let (relative, landed) = if operation.needs_position() {
         let Some(proposed) = argument(arguments, "path") else {
             return Produced::problem(format!(
                 "error: 'path' is required for {}",
@@ -13202,9 +13483,17 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         if let Err(refusal) = refuse_denied_path(policy, tools.workspace, Purpose::Read, &named) {
             return Produced::problem(refusal);
         }
-        named
+        // The path is asked about as a read is: a path that lands outside the workspace is refused
+        // here, before a server is started or the person is asked about one, and the refusal is
+        // recorded in the trail (LSP-4, TRACE-1). The promotion above says only that the planner
+        // chose it. Worded about the name typed, since the landing can come from a link.
+        let landed = match tools.workspace.resolve(&named) {
+            Ok(landed) => landed,
+            Err(e) => return file_tool_problem(policy, "lsp", "path", &e, &named),
+        };
+        (named, Some(landed))
     } else {
-        String::new()
+        (String::new(), None)
     };
 
     let Some(servers) = tools.servers.as_deref_mut() else {
@@ -13212,14 +13501,20 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
         // one, and saying so is better than an answer nobody could trust.
         return Produced::problem(
             "refused: no language server can be started here, because this platform offers no \
-             way to confine one. Use search and read_file instead.",
+             way to confine one."
+                .to_string()
+                + if tools.beside.holds(Named::ReadFile) && tools.beside.holds(Named::Search) {
+                    " Use search and read_file instead."
+                } else {
+                    ""
+                },
         );
     };
 
-    // The server is given the path it can open, which is the resolved one. What the planner is
-    // shown is rendered back against the root by the lsp module.
+    // The server is given the path it can open, which is the one the workspace resolved. What the
+    // planner is shown is rendered back against the root by the lsp module.
     let root = servers.root().to_path_buf();
-    let file = root.join(&relative);
+    let file = landed.unwrap_or_else(|| root.join(&relative));
     let absolute = if relative.is_empty() {
         String::new()
     } else {
@@ -13889,6 +14184,7 @@ fn read_git<S: Sink, C: Confirmer>(
         messages,
         since,
         until,
+        beside: tools.beside,
     };
     let answer = match workspace.read_git(policy, &question) {
         Ok(answer) => answer,
@@ -13904,9 +14200,9 @@ fn read_git<S: Sink, C: Confirmer>(
     // answer holds is scanned as a read of `.git`.
     let mut keyed_findings: Vec<(String, bravebot_core::credentials::Finding)> = Vec::new();
     if answer.label().is_trusted() {
-        let read = match policy.read_trusted_content("read_git", &answer) {
+        let read = match examine_git_answer(policy, &answer, running) {
             Ok(read) => read,
-            Err(denial) => return Produced::problem(format!("refused: {denial}")),
+            Err(refusal) => return Produced::problem(refusal),
         };
         let pieces = read
             .printed
@@ -14191,12 +14487,7 @@ mod tests {
             assert!(!text.contains("did not run"), "{error:?}: {text}");
         }
         assert!(failed_line_text("sleep 30", &errors[0]).contains("was started"));
-        let gone = failed_line_text(
-            "git status",
-            &ExecError::DirectoryGone {
-                directory: "sub".into(),
-            },
-        );
+        let gone = failed_line_text("git status", &ExecError::DirectoryGone);
         assert!(
             gone.contains("no longer exists") && !gone.contains("may have run in part"),
             "{gone}"
@@ -14650,7 +14941,7 @@ mod tests {
         for (which, produced) in [
             (
                 "started",
-                blank().started_in_the_background("job:3".to_string(), false),
+                blank().started_in_the_background("job:3".to_string(), false, Beside::every()),
             ),
             (
                 "moved",
@@ -14658,6 +14949,7 @@ mod tests {
                     "job:3".to_string(),
                     std::time::Duration::from_secs(2),
                     false,
+                    Beside::every(),
                 ),
             ),
         ] {
@@ -14671,6 +14963,73 @@ mod tests {
                 "{which}: the note still promises the whole of the output: {told}"
             );
         }
+    }
+
+    /// TOOL-6. The notes that start a job name `job_output` only where the turn's list holds it.
+    /// Without it the note says what happens to the job and nothing about looking at it, and the
+    /// full list reads the text written before the fact existed. The regression it rejects is a
+    /// note that names `job_output` to a turn that was not offered it.
+    #[test]
+    fn the_notes_that_start_a_job_name_job_output_only_where_it_is_offered() {
+        let blank = || Produced::problem(String::new());
+        let without = Beside::every().without(Named::JobOutput);
+        let kept = what_becomes_of_a_job(false);
+        let started = |beside| {
+            blank()
+                .started_in_the_background("job:3".to_string(), false, beside)
+                .text
+                .into_trusted()
+                .expect("trusted text")
+        };
+        let moved = |beside| {
+            blank()
+                .moved_to_the_background(
+                    "job:3".to_string(),
+                    std::time::Duration::from_secs(2),
+                    false,
+                    beside,
+                )
+                .text
+                .into_trusted()
+                .expect("trusted text")
+        };
+        assert_eq!(
+            started(Beside::every()),
+            format!(
+                "started in the background as job:3. Nothing has been read from it yet. If it ends \
+                 while this turn is still going you are told so, with how it ended and what it \
+                 printed, without having to ask; call job_output with \"job:3\" before then to see \
+                 what it has printed. Each look returns what arrived since the previous look, and \
+                 the output before it stays in the references of the earlier looks. {kept}"
+            )
+        );
+        assert_eq!(
+            started(without),
+            format!(
+                "started in the background as job:3. Nothing has been read from it yet. If it ends \
+                 while this turn is still going you are told so, with how it ended and what it \
+                 printed, without having to ask. {kept}"
+            )
+        );
+        assert_eq!(
+            moved(Beside::every()),
+            format!(
+                "the user moved this command to the background after 2.0s, and it is still running \
+                 as job:3. Do not run it again. Nothing has been read from it yet, including what it \
+                 printed before the move. If it ends while this turn is still going you are told \
+                 so, with how it ended and what it printed, without having to ask; call job_output \
+                 with \"job:3\" before then to see what it has printed. Each look returns what \
+                 arrived since the previous look, and the output before it stays in the references \
+                 of the earlier looks. It no longer has a deadline. {kept}"
+            )
+        );
+        let told = moved(without);
+        assert!(told.contains("Do not run it again."), "{told}");
+        assert!(!told.contains("job_output"), "{told}");
+        assert!(
+            told.contains("without having to ask. It no longer has a deadline."),
+            "{told}"
+        );
     }
 
     /// The reference to an earlier look is recorded only while its job is held: a name the job no
@@ -15750,6 +16109,62 @@ mod tests {
         offered
     }
 
+    /// TOOL-6. `Beside::on` reads each fact off the list it is given: the table holds every tool
+    /// it names, and taking one off clears that fact and no other.
+    #[test]
+    fn beside_is_read_off_the_list_the_turn_holds() {
+        assert_eq!(Beside::on(&the_table_without(&[])), Beside::every());
+        let without_read_output = Beside::on(&the_table_without(&["read_output"]));
+        assert!(!without_read_output.holds(Named::ReadOutput));
+        assert_eq!(
+            Beside::every().without(Named::ReadOutput),
+            without_read_output
+        );
+        let without_run = Beside::on(&the_table_without(&["run"]));
+        assert!(!without_run.holds(Named::Run));
+        assert!(without_run.holds(Named::ReadFile) && without_run.holds(Named::ReadOutput));
+        assert!(!Beside::on(&the_table_without(&["read_git"])).holds(Named::ReadGit));
+        assert!(!Beside::on(&the_table_without(&["spawn_processor"])).holds(Named::SpawnProcessor));
+    }
+
+    /// TOOL-6. The listing of the files kept beside a skill names `read_file` only where the turn's
+    /// list holds it, and gives the path to use either way. A turn offered every tool reads the
+    /// sentence it always did. The faults it rejects are a sentence that names the tool in every
+    /// list, and one that drops the example path where the tool is absent.
+    #[test]
+    fn the_files_beside_a_skill_name_read_file_only_where_the_list_holds_it() {
+        let files = vec!["checklist.md".to_string(), "notes.md".to_string()];
+        let without = Beside::every().without(Named::ReadFile);
+        for (landed, link) in [
+            (None, ""),
+            (
+                Some("real/ship-it"),
+                ", a link to real/ship-it, which is where list_files shows them",
+            ),
+        ] {
+            let at = landed.unwrap_or("skills/ship-it");
+            let full = beside_the_skill("skills/ship-it", landed, &files, Beside::every());
+            assert_eq!(
+                full,
+                format!(
+                    "\n\n---\nFiles kept beside this skill in skills/ship-it{link}. Read one with \
+                     read_file, naming the directory and the file, for example \
+                     {at}/checklist.md:\n- checklist.md\n- notes.md\n"
+                ),
+                "a turn offered every tool read different text"
+            );
+            let short = beside_the_skill("skills/ship-it", landed, &files, without);
+            assert_eq!(
+                short,
+                format!(
+                    "\n\n---\nFiles kept beside this skill in skills/ship-it{link}. For example \
+                     {at}/checklist.md:\n- checklist.md\n- notes.md\n"
+                ),
+            );
+            assert!(!short.contains("read_file"), "{short}");
+        }
+    }
+
     fn description_of(offered: &[bravebot_aichat::protocol::Tool], name: &str) -> String {
         offered
             .iter()
@@ -16484,6 +16899,303 @@ mod tests {
             ),
             "taking job_output off changed more than the sentence about it"
         );
+    }
+
+    /// The description of one argument of a tool.
+    fn argument_of(
+        offered: &[bravebot_aichat::protocol::Tool],
+        tool: &str,
+        argument: &str,
+    ) -> String {
+        offered
+            .iter()
+            .find(|candidate| candidate.function.name == tool)
+            .unwrap_or_else(|| panic!("{tool} is not on the list"))
+            .function
+            .parameters["properties"][argument]["description"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{tool} has no description for {argument}"))
+            .to_string()
+    }
+
+    /// TOOL-6. `run`'s paragraph on watching names `read_file` and `job_output`, and each only
+    /// where the list holds it. The sentence about a looks needing a later look and the rest of
+    /// the description are the same for every list, and a list holding both reads the words the
+    /// table always wrote.
+    #[test]
+    fn the_run_description_on_watching_names_only_the_tools_the_list_holds() {
+        let old = "A file takes no command at all: read_file hands back a change token, and \
+                   comparing the token from one look with the token from the next is the whole \
+                   of the technique. A program's own output is watched here: start it with \
+                   background: true and call job_output with wait_seconds, which is one call \
+                   covering a window rather than a look per turn. Neither reaches past this turn \
+                   by itself: a background job is killed when the turn ends unless the account \
+                   of its start says the session keeps it, and comparing a token needs a later \
+                   look.";
+        let full = description_of(&the_table_without(&[]), "run");
+        assert!(
+            full.contains(old),
+            "a list holding both lost the words it had: {full}"
+        );
+        let as_built = description_of(
+            &available(
+                Scheduling::ArrangingALook,
+                crate::watch::Arming::Unavailable,
+                Deadlines::BUILT_IN,
+                Running::Offered,
+            ),
+            "run",
+        );
+        assert_eq!(
+            as_built, full,
+            "the table and a pass over a full list disagree"
+        );
+
+        let file_gone = "A file is watched by comparing what one look at it returned with what \
+                         the next look returns.";
+        let program_gone = "A program's own output is watched here: start it with background: \
+                            true, and you are told when it ends.";
+        let neither = "Neither reaches past this turn by itself: a background job is killed when \
+                       the turn ends unless the account of its start says the session keeps it, \
+                       and";
+        for (gone, expected) in [
+            (
+                "read_file",
+                format!(
+                    "{file_gone} A program's own output is watched here: start it with \
+                     background: true and call job_output with wait_seconds, which is one call \
+                     covering a window rather than a look per turn. {neither} comparing two \
+                     looks needs a later look."
+                ),
+            ),
+            (
+                "job_output",
+                format!(
+                    "A file takes no command at all: read_file hands back a change token, and \
+                     comparing the token from one look with the token from the next is the \
+                     whole of the technique. {program_gone} {neither} comparing a token needs a \
+                     later look."
+                ),
+            ),
+        ] {
+            let offered = the_table_without(&[gone]);
+            let without = description_of(&offered, "run");
+            assert!(
+                !names_the_tool(&without, gone),
+                "a list without {gone} was sent to it: {without}"
+            );
+            assert_eq!(
+                without,
+                full.replace(old, &expected),
+                "taking {gone} off changed more than the paragraph on watching"
+            );
+        }
+        let bare = description_of(&the_table_without(&["read_file", "job_output"]), "run");
+        for gone in ["read_file", "job_output"] {
+            assert!(!names_the_tool(&bare, gone), "{gone} remains: {bare}");
+        }
+        assert_eq!(
+            bare,
+            full.replace(
+                old,
+                &format!(
+                    "{file_gone} {program_gone} {neither} comparing two looks needs a later look."
+                )
+            )
+        );
+    }
+
+    /// TOOL-6. The `read` argument of `run` names `read_output` only where the list holds it. A
+    /// list without it releases nothing to `read`, so the argument says it changes nothing there.
+    #[test]
+    fn the_run_read_argument_names_read_output_only_where_the_list_holds_it() {
+        let full = argument_of(&the_table_without(&[]), "run", "read");
+        assert_eq!(
+            full,
+            "Ask to read what the command prints in this result. Where read_output would hand it \
+             to you without asking the user, or would hand it back at once, it comes back here \
+             as text you can read, and there is no read_output call to make. Where it would be \
+             kept back, it still comes back as a reference. Output too long for one result still \
+             comes back as a reference, with its size, and read_output is not held to that size. \
+             Everywhere else this changes nothing, and output you may not read still comes back \
+             as a reference. Defaults to false. Not with background: true, which has printed \
+             nothing yet."
+        );
+        let without = argument_of(&the_table_without(&["read_output"]), "run", "read");
+        assert!(!names_the_tool(&without, "read_output"), "{without}");
+        assert_eq!(
+            without,
+            "Ask to read what the command prints in this result. This changes nothing in this \
+             turn: output you may not read comes back as a reference. Defaults to false. Not \
+             with background: true, which has printed nothing yet."
+        );
+        // Taking another tool off leaves the words alone.
+        for other in ["spawn_processor", "job_output", "write_file", "read_file"] {
+            assert_eq!(
+                argument_of(&the_table_without(&[other]), "run", "read"),
+                full,
+                "taking {other} off changed the read argument"
+            );
+        }
+    }
+
+    /// TOOL-6. `read_file` sends a picture, a PDF and the saved outputs of a notebook cell to
+    /// `spawn_processor`, and a notebook's cells to `edit_file`, each only where the list holds it.
+    /// A list holding both reads the words the table always wrote.
+    #[test]
+    fn the_read_file_description_names_only_the_tools_the_list_holds() {
+        let full = description_of(&the_table_without(&[]), "read_file");
+        let to_the_processor = " Give that reference to spawn_processor with a question about it \
+                                and the answer comes back the way any processor's does. That is \
+                                how to check a screenshot or read a scanned page.";
+        let to_edit = ": edit_file changes a cell by that number.";
+        assert!(
+            full.contains(&format!("whoever vouched for the directory it is in.{to_the_processor} A .ipynb notebook comes back as its cells, numbered from 1, with their source only{to_edit} Saved outputs")),
+            "a list holding both lost the words it had: {full}"
+        );
+        let output_of = |offered: &[bravebot_aichat::protocol::Tool]| {
+            argument_of(offered, "read_file", "output_of")
+        };
+        let full_output_of = output_of(&the_table_without(&[]));
+        assert!(
+            full_output_of
+                .contains("They come back as a reference for spawn_processor, never as text"),
+            "{full_output_of}"
+        );
+
+        let without_processor = the_table_without(&["spawn_processor"]);
+        let described = description_of(&without_processor, "read_file");
+        assert!(
+            !names_the_tool(&described, "spawn_processor"),
+            "{described}"
+        );
+        assert_eq!(described, full.replace(to_the_processor, ""));
+        let argument = output_of(&without_processor);
+        assert!(!names_the_tool(&argument, "spawn_processor"), "{argument}");
+        assert_eq!(
+            argument,
+            full_output_of.replace("a reference for spawn_processor", "a reference")
+        );
+
+        let without_edit = the_table_without(&["edit_file"]);
+        let described = description_of(&without_edit, "read_file");
+        assert!(!names_the_tool(&described, "edit_file"), "{described}");
+        assert_eq!(described, full.replace(to_edit, "."));
+        assert_eq!(output_of(&without_edit), full_output_of);
+
+        let neither = the_table_without(&["spawn_processor", "edit_file"]);
+        let bare = description_of(&neither, "read_file");
+        assert_eq!(
+            bare,
+            full.replace(to_the_processor, "").replace(to_edit, ".")
+        );
+    }
+
+    /// TOOL-6. The `contents_ref` argument of `write_file` says where a processor's answer may be
+    /// written only where the list holds `spawn_processor`. A list without it has no answer of one
+    /// to write, and the driver refuses such a write whatever the words say (PROC-6).
+    #[test]
+    fn the_write_file_reference_argument_names_spawn_processor_only_where_the_list_holds_it() {
+        let full = argument_of(&the_table_without(&[]), "write_file", "contents_ref");
+        let lands = " What spawn_processor produced may be written only over the file that call \
+                     was about. When the call read only references that are no file, such as a \
+                     fetched page or a run's output, it may be written only to a new file in \
+                     the scratch directory.";
+        assert_eq!(
+            full,
+            format!(
+                "A reference whose quarantined content becomes the whole file, e.g. \"ref:2\". \
+                 This is how to write out something you were never shown, such as a fetched \
+                 page.{lands} A picture or PDF reference is written as the file it encodes, to a \
+                 path you name ending in its extension, such as .png."
+            )
+        );
+        let without = argument_of(
+            &the_table_without(&["spawn_processor"]),
+            "write_file",
+            "contents_ref",
+        );
+        assert!(!names_the_tool(&without, "spawn_processor"), "{without}");
+        assert_eq!(without, full.replace(lands, ""));
+        for other in ["run", "read_output", "edit_file", "fetch_url"] {
+            assert_eq!(
+                argument_of(&the_table_without(&[other]), "write_file", "contents_ref"),
+                full,
+                "taking {other} off changed contents_ref"
+            );
+        }
+    }
+
+    /// TOOL-6. `edit_file` recommends `write_file` for a change to most of a file only where the
+    /// list holds it. A list holding it reads the words the table always wrote.
+    #[test]
+    fn the_edit_file_description_names_write_file_only_where_the_list_holds_it() {
+        let full = description_of(&the_table_without(&[]), "edit_file");
+        let prefer = " Prefer this to write_file when changing part of a file: the user approves a \
+                      diff, which is easier to review than a whole body.";
+        assert_eq!(
+            full,
+            format!(
+                "Replace an exact passage of text in an existing workspace file.{prefer} The \
+                 user must approve each edit before it happens, so explain what you are \
+                 changing. To change several places in one file, give them together in edits: \
+                 the user approves one diff. In a .ipynb notebook, name a cell by the number a \
+                 read showed instead of a passage: give cell and new_text to replace that \
+                 cell's source (its saved outputs are dropped), or cell_action insert_after or \
+                 delete."
+            )
+        );
+        let without = description_of(&the_table_without(&["write_file"]), "edit_file");
+        assert!(!names_the_tool(&without, "write_file"), "{without}");
+        assert_eq!(without, full.replace(prefer, ""));
+        for other in ["read_file", "spawn_processor", "run"] {
+            assert_eq!(
+                description_of(&the_table_without(&[other]), "edit_file"),
+                full,
+                "taking {other} off changed the edit_file description"
+            );
+        }
+    }
+
+    /// TOOL-6. `repo_map`, `lsp` and `vet_content` name `read_file`, `read_file` and
+    /// `spawn_processor` only where the list holds them. A list holding them reads the words the
+    /// table always wrote.
+    #[test]
+    fn the_repo_map_lsp_and_vet_content_descriptions_name_only_the_tools_the_list_holds() {
+        let every = the_table_without(&[]);
+        for (tool, missing, sentence, kept) in [
+            (
+                "repo_map",
+                "read_file",
+                "never bodies: read_file reads the lines it points at.",
+                "never bodies.",
+            ),
+            (
+                "lsp",
+                "read_file",
+                "the line says so, and read_file will not open it.",
+                "the line says so.",
+            ),
+            (
+                "vet_content",
+                "spawn_processor",
+                "Say plainly in your reply why you need to read it rather than pass it to \
+                 spawn_processor.",
+                "Say plainly in your reply why you need to read it.",
+            ),
+        ] {
+            let full = description_of(&every, tool);
+            assert!(full.contains(sentence), "{tool}: {full}");
+            let without = description_of(&the_table_without(&[missing]), tool);
+            assert!(!names_the_tool(&without, missing), "{tool}: {without}");
+            assert_eq!(without, full.replace(sentence, kept), "{tool}");
+            // A list without a tool this text does not name reads the full text.
+            assert_eq!(
+                description_of(&the_table_without(&["edit_file"]), tool),
+                full,
+                "{tool}: taking edit_file off changed it"
+            );
+        }
     }
 
     /// A conversation shown private content refuses every later processor call for the rest of it,
@@ -23061,6 +23773,52 @@ mod tests {
             produced.text.declassify(&proof)
         }
 
+        /// TOOL-6. An edit whose `old_text` is empty is told to use `write_file` where the turn's
+        /// list holds it, and told only that the text must not be empty where it does not. The
+        /// regression it rejects is the caller printing the error's `Display`, which names the tool
+        /// to a turn that was never offered it. The file is left alone either way.
+        #[test]
+        fn an_empty_old_text_names_write_file_only_where_the_list_holds_it() {
+            let scratch = Scratch::new("edit-empty");
+            std::fs::write(scratch.path.join("a.txt"), "keep\nold\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut told_with = String::new();
+            let mut told_without = String::new();
+            for (offered, told) in [(true, &mut told_with), (false, &mut told_without)] {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy_vouching(&mut sink);
+                if !offered {
+                    policy.without_writing();
+                }
+                let produced = edit_file(
+                    &mut policy,
+                    &workspace,
+                    &SlotStore::new(),
+                    crate::findings::Recording::default(),
+                    crate::PermissionMode::Ask,
+                    false,
+                    None,
+                    &mut crate::confirm::ApproveWrites,
+                    &json!({"path": "a.txt", "old_text": "", "new_text": "new"}),
+                );
+                assert!(produced.failed);
+                let proof = policy.authorise_display_release("test inspects the tool result");
+                *told = produced.text.declassify(&proof);
+            }
+
+            assert_eq!(
+                told_with,
+                "error: the text to replace must not be empty; use write_file to create or \
+                 replace a whole file"
+            );
+            assert_eq!(told_without, "error: the text to replace must not be empty");
+            assert_eq!(
+                std::fs::read_to_string(scratch.path.join("a.txt")).unwrap(),
+                "keep\nold\n"
+            );
+        }
+
         /// The baseline: with the file vouched for and a context that has met nothing
         /// untrusted, the edit lands. Without this the refusal below would prove nothing.
         #[test]
@@ -23781,6 +24539,215 @@ mod tests {
                 refused[0]
             );
             assert!(!clean, "a turn whose read was refused would end as clean");
+        }
+    }
+
+    /// TOOL-6 for the refusals of `read_file` (the saved outputs of a notebook) and `read_git`
+    /// when the driver may not examine what was read. A run does not reach either refusal today,
+    /// because a file or an answer nobody vouched for is held back before it is examined, so the
+    /// helpers are called directly. The wording is the driver's own and names a way out only where
+    /// the turn holds it.
+    mod untrusted_refusals {
+        use super::arguments::Scratch;
+        use super::*;
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::label::{Confidentiality, Label};
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        const NOTEBOOK: &str = "refused: the outputs of this notebook are closed to read_file, \
+                                label (U,pub): it is not vouched for, or untrusted content was \
+                                written to it. ";
+        const GIT: &str = "refused: this answer is closed to read_git, label (U,pub): the \
+                           repository is not vouched for, or untrusted content was written to it. ";
+
+        fn policy(sink: &mut RecordingSink) -> Policy<'_, RecordingSink> {
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read a file");
+            Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                sink,
+            )
+            .expect("policy")
+        }
+
+        /// The regression it rejects: naming `spawn_processor` or `run` whatever the turn holds,
+        /// which sends a delegate or a restricted turn to a tool it was never offered, or leaving
+        /// one out of a turn that has it.
+        #[test]
+        fn the_notebook_refusal_names_only_the_routes_the_turn_holds() {
+            let cases: [(&str, bool, bool, bool, &str); 5] = [
+                (
+                    "everything offered",
+                    true,
+                    true,
+                    false,
+                    "Read the file with read_file and no output_of for a reference to give to \
+                     spawn_processor, read it through run, or ask the person to vouch for the path",
+                ),
+                (
+                    "no run",
+                    true,
+                    false,
+                    false,
+                    "Read the file with read_file and no output_of for a reference to give to \
+                     spawn_processor, or ask the person to vouch for the path",
+                ),
+                (
+                    "no spawn_processor",
+                    false,
+                    true,
+                    false,
+                    "Read it through run, or ask the person to vouch for the path",
+                ),
+                (
+                    "neither",
+                    false,
+                    false,
+                    false,
+                    "Only the person can open it, by vouching for the path",
+                ),
+                (
+                    "spawn_processor offered, context private",
+                    true,
+                    true,
+                    true,
+                    "Read it through run, or ask the person to vouch for the path",
+                ),
+            ];
+            for (what, spawning, running, private, routes) in cases {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                if !spawning {
+                    policy.without_spawning();
+                }
+                if !running {
+                    policy.without_running();
+                }
+                if private {
+                    policy = policy.holding(Confidentiality::Private);
+                }
+                assert_eq!(
+                    closed_to_reading_outputs(&policy, Label::untrusted_public()),
+                    format!("{NOTEBOOK}{routes}"),
+                    "{what}"
+                );
+            }
+        }
+
+        /// The regression it rejects: naming `run` to a turn whose list does not hold it.
+        #[test]
+        fn the_git_refusal_names_run_only_where_the_turn_holds_it() {
+            assert_eq!(
+                closed_to_read_git(Running::Offered, Label::untrusted_public()),
+                format!("{GIT}Ask git through run, or ask the person to vouch for the repository")
+            );
+            assert_eq!(
+                closed_to_read_git(Running::Withheld, Label::untrusted_public()),
+                format!("{GIT}Only the person can open it, by vouching for the repository")
+            );
+        }
+
+        /// The wiring of `read_git`'s refusal. `read_git` asks only for an answer labelled trusted,
+        /// so a turn never gives `examine_git_answer` an untrusted one; the function that holds
+        /// the call to `read_trusted_content` is called with one here.
+        ///
+        /// The regression it rejects: printing the denial, which ends in "Use a reference to it
+        /// instead" although this tool returns no reference, or carrying any byte of the answer.
+        #[test]
+        fn an_untrusted_git_answer_is_refused_in_the_helpers_words() {
+            for (running, routes) in [
+                (
+                    Running::Offered,
+                    "Ask git through run, or ask the person to vouch for the repository",
+                ),
+                (
+                    Running::Withheld,
+                    "Only the person can open it, by vouching for the repository",
+                ),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let answer = Labelled::new(
+                    crate::git::Answer {
+                        text: "KEEP-OUT-OF-THE-REFUSAL".to_string(),
+                        ..crate::git::Answer::default()
+                    },
+                    Label::untrusted_public(),
+                );
+                let refused = examine_git_answer(&mut policy, &answer, running)
+                    .expect_err("an untrusted answer was examined");
+                assert_eq!(refused, format!("{GIT}{routes}"));
+                assert!(
+                    !refused.contains("Use a reference to it instead"),
+                    "{refused}"
+                );
+                assert!(!refused.contains("KEEP-OUT-OF-THE-REFUSAL"), "{refused}");
+            }
+
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let trusted = Labelled::new(
+                crate::git::Answer {
+                    text: "a trusted answer".to_string(),
+                    ..crate::git::Answer::default()
+                },
+                Label::trusted_public(),
+            );
+            let read = examine_git_answer(&mut policy, &trusted, Running::Offered)
+                .expect("a trusted answer is examined");
+            assert_eq!(read.text, "a trusted answer");
+        }
+
+        /// The wiring of `notebook_outputs`: a notebook the map does not vouch for gets the
+        /// helper's wording and not the shared sentence of the kernel, and nothing of the file.
+        ///
+        /// The regression it rejects: printing the denial, which ends in "Use a reference to it
+        /// instead" for a turn that may hold no way to use one.
+        #[test]
+        fn a_notebook_nobody_vouched_for_is_refused_in_the_helpers_words() {
+            let scratch = Scratch::new("notebook-outputs-refusal");
+            std::fs::write(scratch.path.join("n.ipynb"), "KEEP-OUT-OF-THE-REFUSAL").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            for (spawning, running, routes) in [
+                (
+                    true,
+                    true,
+                    "Read the file with read_file and no output_of for a reference to give to \
+                     spawn_processor, read it through run, or ask the person to vouch for the path",
+                ),
+                (
+                    false,
+                    false,
+                    "Only the person can open it, by vouching for the path",
+                ),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                if !spawning {
+                    policy.without_spawning();
+                }
+                if !running {
+                    policy.without_running();
+                }
+                let produced = notebook_outputs(
+                    &mut policy,
+                    &workspace,
+                    &Labelled::trusted("n.ipynb".to_string()),
+                    ("path", "n.ipynb"),
+                    1,
+                );
+                let told = arguments::told(&mut policy, &produced.text);
+                // A file read is private, so the label the driver assigned reads (U,priv).
+                assert_eq!(
+                    told,
+                    format!("{}{routes}", NOTEBOOK.replace("(U,pub)", "(U,priv)"))
+                );
+                assert!(!told.contains("Use a reference to it instead"), "{told}");
+                assert!(!told.contains("KEEP-OUT-OF-THE-REFUSAL"), "{told}");
+            }
         }
     }
 
@@ -25371,7 +26338,7 @@ mod tests {
             let cancel = bravebot_core::cancel::Cancel::new();
             let mut armed = 0usize;
             let mut jobs = Jobs::default();
-            let mut run_directory = workspace.root().to_path_buf();
+            let mut run_directory = RunDirectory::at(workspace.root());
             let mut confined_failures = ConfinedFailures::default();
             body(&mut Tools {
                 workspace,
@@ -25387,6 +26354,7 @@ mod tests {
                 scheduling: Scheduling::ArrangingALook,
                 arming: Arming::Allowed { free: 1 },
                 running: Running::Offered,
+                beside: Beside::every(),
                 armed: &mut armed,
                 home: None,
                 profile: None,
@@ -25681,7 +26649,21 @@ mod tests {
                 true,
             );
 
-            assert_eq!(described(&not_confining), plain);
+            let not_confining = described(&not_confining);
+            assert_eq!(not_confining.len(), plain.len());
+            for ((name, before), (_, after)) in plain.iter().zip(&not_confining) {
+                if name == "run" {
+                    assert_eq!(
+                        after,
+                        &format!(
+                            "{before} The `request_path` tool is refused in this session and \
+                             nobody is asked, so do not call it."
+                        )
+                    );
+                } else {
+                    assert_eq!(after, before, "{name} was changed");
+                }
+            }
             let confining = described(&confining);
             assert_eq!(confining.len(), plain.len());
             for ((name, before), (_, after)) in plain.iter().zip(&confining) {
@@ -25695,6 +26677,82 @@ mod tests {
                 }
             }
             assert!(plain.iter().any(|(name, _)| name == "run"));
+        }
+
+        /// TOOL-6: a turn whose list lacks `request_path` (a `--tools run` turn, a definition that
+        /// leaves it out) is told of no refusal of a tool it cannot call, whether the programs are
+        /// unconfined or confined and whether the session accepts requests or not. Where it holds the
+        /// tool the text is the one it was. The faults it rejects are a statement that reads the
+        /// session and not the list, and a sentence that names the tool in every list.
+        #[test]
+        fn the_confinement_statement_names_request_path_only_where_the_list_holds_it() {
+            use bravebot_sandbox::SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+            let table = |with: bool| {
+                let mut table = for_planner(
+                    Scheduling::ArrangingALook,
+                    Arming::Allowed { free: 1 },
+                    &bravebot_core::delegate::Definitions::default(),
+                    Deadlines::BUILT_IN,
+                    Running::Offered,
+                );
+                table.retain(|tool| with || tool.function.name != "request_path");
+                table
+            };
+            let run_description = |tools: &[Tool]| {
+                tools
+                    .iter()
+                    .find(|tool| tool.function.name == "run")
+                    .expect("run is offered")
+                    .function
+                    .description
+                    .clone()
+            };
+            assert!(
+                table(true)
+                    .iter()
+                    .any(|tool| tool.function.name == "request_path"),
+                "the full list holds request_path"
+            );
+            assert!(
+                !table(false)
+                    .iter()
+                    .any(|tool| tool.function.name == "request_path")
+            );
+            let without = run_description(&table(false));
+            assert!(
+                !without.contains("request_path"),
+                "the unmodified description names it: {without}"
+            );
+            for (confine, mode, accepted) in [
+                (false, WorkspaceWrite, true),
+                (true, Off, true),
+                (true, Off, false),
+                (true, Strict, true),
+                (true, Strict, false),
+                (true, ReadOnly, true),
+                (true, ReadOnly, false),
+                (true, WorkspaceWrite, true),
+                (true, WorkspaceWrite, false),
+            ] {
+                let at = format!("confine={confine} {mode:?} accepted={accepted}");
+                let mut short = table(false);
+                state_confinement(&mut short, confine, mode, accepted);
+                let short = run_description(&short);
+                assert!(!short.contains("request_path"), "{at}: {short}");
+                let mut full = table(true);
+                state_confinement(&mut full, confine, mode, accepted);
+                let full = run_description(&full);
+                let unconfined = !confine || mode == Off;
+                assert_eq!(
+                    full.contains("The `request_path` tool is refused in this session"),
+                    unconfined,
+                    "{at}: {full}"
+                );
+                assert!(
+                    full.contains("`request_path`"),
+                    "{at}: the full list lost its text: {full}"
+                );
+            }
         }
 
         /// SANDBOX-22: a turn whose programs are not confined at all says nothing of a boundary, and
@@ -25728,7 +26786,11 @@ mod tests {
             };
             assert_eq!(
                 said(bravebot_sandbox::SandboxMode::Off),
-                Some(String::new())
+                Some(
+                    "The `request_path` tool is refused in this session and nobody is asked, so do \
+                     not call it."
+                        .to_string()
+                )
             );
             let strict = said(bravebot_sandbox::SandboxMode::Strict).expect("appended");
             let workspace_write =
@@ -26150,12 +27212,17 @@ mod tests {
 
         /// What `read_output` answers for a reference that holds a file's bytes, not output.
         fn refusal_for_a_file_reference(delegated: bool) -> String {
+            refusal_for_a_file_reference_beside(delegated, Beside::every())
+        }
+
+        fn refusal_for_a_file_reference_beside(delegated: bool, beside: Beside) -> String {
             let scratch = Scratch::new("read-output-not-a-program");
             let workspace = Workspace::new(&scratch.path).expect("workspace");
             let mut sink = RecordingSink::new();
             let mut policy = policy(&mut sink);
             let output = with_tools(&workspace, |tools| {
                 tools.delegated = delegated;
+                tools.beside = beside;
                 tools
                     .slots
                     .writer_for(
@@ -26198,6 +27265,30 @@ mod tests {
             );
             assert!(!told.contains("vet_content"), "{told}");
             assert!(told.contains("say in your report"), "{told}");
+        }
+
+        /// TOOL-6. A turn whose list lacks `vet_content` without being a delegate's (a definition's
+        /// tools line or `--tools`) is not pointed at it, and the refusal still says what was
+        /// refused. The control is the full list, whose text is the one written before the fact
+        /// existed. The regression it rejects is a refusal that reads `tools.delegated` alone and
+        /// sends a limited planner to a tool it does not have.
+        #[test]
+        fn a_refused_read_of_a_non_output_reference_does_not_name_vet_content_off_the_list() {
+            let without = Beside::every().without(Named::VetContent);
+            let told = refusal_for_a_file_reference_beside(false, without);
+            assert_eq!(
+                told,
+                "refused: ref:1 is not something a program printed, so there is nothing to show. \
+                 Only a reference that came back from run can be read this way.",
+            );
+
+            let control = refusal_for_a_file_reference_beside(false, Beside::every());
+            assert_eq!(
+                control,
+                "refused: ref:1 is not something a program printed, so there is nothing to show. \
+                 Only a reference that came back from run can be read this way. Where you have to \
+                 read it yourself, vet_content is how to ask for it.",
+            );
         }
 
         /// Whether the trail says this argument was read as the planner's own words. The gate
@@ -26580,6 +27671,7 @@ mod tests {
             let produced = load_skill(
                 &mut policy,
                 &crate::skills::Catalogue::default(),
+                Beside::every(),
                 &json!({"name": "commit-style"}),
             );
             let said = told(&mut policy, &produced.text);
@@ -26789,6 +27881,117 @@ mod tests {
                 assert!(
                     told.contains("The references given so far are ref:0."),
                     "{arguments}: {told}"
+                );
+            }
+        }
+
+        /// TOOL-6. The pointers in `spawn_processor`'s empty-`reads` error and in `vet_content`'s
+        /// refusal name `write_file` and `spawn_processor` only where the list holds them. The
+        /// regression they reject is the driver's sentence naming the tool to a turn whose list
+        /// lacks it. A full list reads the words the code always wrote.
+        #[test]
+        fn the_processor_and_vet_pointers_name_only_the_tools_the_list_holds() {
+            let scratch = Scratch::new("pointers-by-list");
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let nothing = |beside: Beside| {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let produced = with_tools(&workspace, |tools| {
+                    tools.beside = beside;
+                    spawn_processor(
+                        &mut policy,
+                        tools,
+                        &json!({"instruction": "draw a betta fish", "reads": []}),
+                    )
+                });
+                told(&mut policy, &produced.text)
+            };
+            let full = nothing(Beside::every());
+            assert!(
+                full.ends_with("write it yourself with write_file."),
+                "{full}"
+            );
+            let without = nothing(Beside::every().without(Named::WriteFile));
+            assert_eq!(
+                without,
+                "error: 'reads' names no references. A processor only works on quarantined \
+                 content you were not shown, so it needs at least one reference to some."
+            );
+
+            let kept_back = |beside: Beside| {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let produced = with_tools(&workspace, |tools| {
+                    tools.beside = beside;
+                    tools
+                        .slots
+                        .writer_for(
+                            SlotId::new("ref:0"),
+                            bravebot_core::label::Label::untrusted_private(),
+                        )
+                        .expect("a reference to hold")
+                        .write("fetched text")
+                        .expect("written");
+                    vet_content(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::ApproveWrites,
+                        &mut crate::report::IgnoreReports,
+                        &json!({"ref": "ref:0", "expects": "some text"}),
+                    )
+                });
+                told(&mut policy, &produced.text)
+            };
+            let full = kept_back(Beside::every());
+            assert_eq!(
+                full,
+                "refused: ref:0 was kept back from you. Do not ask for it again. Work with what \
+                 you have, pass ref:0 to spawn_processor, or say in your reply what you needed \
+                 from it."
+            );
+            let without = kept_back(Beside::every().without(Named::SpawnProcessor));
+            assert_eq!(
+                without,
+                "refused: ref:0 was kept back from you. Do not ask for it again. Work with what \
+                 you have, or say in your reply what you needed from it."
+            );
+        }
+
+        /// TOOL-6. The refusal of `lsp` on a host that cannot confine a server names `search` and
+        /// `read_file` as the alternative only where the list holds both.
+        #[test]
+        fn the_lsp_refusal_names_search_and_read_file_only_where_the_list_holds_them() {
+            let scratch = Scratch::new("lsp-by-list");
+            std::fs::write(scratch.path.join("a.rs"), "fn main() {}\n").unwrap();
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+            let said = |beside: Beside| {
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let produced = with_tools(&workspace, |tools| {
+                    tools.beside = beside;
+                    lsp(
+                        &mut policy,
+                        tools,
+                        &mut crate::confirm::ApproveWrites,
+                        &json!({"operation": "documentSymbol", "path": "a.rs"}),
+                    )
+                });
+                told(&mut policy, &produced.text)
+            };
+            let full = said(Beside::every());
+            assert!(
+                full.ends_with("offers no way to confine one. Use search and read_file instead."),
+                "{full}"
+            );
+            for lacking in [
+                Beside::every().without(Named::Search),
+                Beside::every().without(Named::ReadFile),
+            ] {
+                let without = said(lacking);
+                assert!(
+                    without.ends_with("offers no way to confine one."),
+                    "{without}"
                 );
             }
         }
@@ -27965,7 +29168,7 @@ mod tests {
         catalogue: &crate::skills::Catalogue,
         name: &str,
     ) -> String {
-        let produced = load_skill(policy, catalogue, &json!({ "name": name }));
+        let produced = load_skill(policy, catalogue, Beside::every(), &json!({ "name": name }));
         assert!(!produced.failed, "the skill did not load");
         told(policy, &produced.text)
     }
@@ -27996,6 +29199,7 @@ mod tests {
         let produced = load_skill(
             &mut policy,
             &catalogue,
+            Beside::every(),
             &json!({ "name": "bravebot-help/using/watche" }),
         );
         assert!(produced.failed, "a name one character out loaded a page");
@@ -28026,6 +29230,7 @@ mod tests {
         let produced = load_skill(
             &mut policy,
             &catalogue,
+            Beside::every(),
             &json!({ "name": "bravebot-help/specs/command" }),
         );
         assert!(produced.failed, "a name one character out loaded a spec");
@@ -28056,6 +29261,7 @@ mod tests {
         let produced = load_skill(
             &mut policy,
             &catalogue,
+            Beside::every(),
             &json!({ "name": "bravebot-help/using/watches" }),
         );
         assert!(
@@ -28065,6 +29271,7 @@ mod tests {
         let produced = load_skill(
             &mut policy,
             &catalogue,
+            Beside::every(),
             &json!({ "name": "bravebot-help/specs/commands" }),
         );
         assert!(

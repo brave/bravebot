@@ -5241,9 +5241,31 @@ fn moving_declared(
     scratch: &Scratch,
     writable: bool,
     managed: Managed,
+    second: (String, mpsc::Receiver<String>),
+    reached: impl FnOnce(HttpServer) -> HttpServer,
+    declare: impl FnOnce(Declaration) -> Declaration,
+) -> Moving {
+    moving_declared_sending(
+        scratch,
+        writable,
+        managed,
+        second,
+        reached,
+        declare,
+        Vec::new(),
+    )
+}
+
+/// As [`moving_declared`], the first server being reached with `headers` and the session holding
+/// them as a server started from a declaration naming them does.
+fn moving_declared_sending(
+    scratch: &Scratch,
+    writable: bool,
+    managed: Managed,
     (second_url, second): (String, mpsc::Receiver<String>),
     reached: impl FnOnce(HttpServer) -> HttpServer,
     declare: impl FnOnce(Declaration) -> Declaration,
+    headers: Vec<(String, String)>,
 ) -> Moving {
     let moved_to = format!("{second_url}/mcp");
     let (first_url, first) = serve_moving(moved_to.clone());
@@ -5255,10 +5277,16 @@ fn moving_declared(
     approvals.approve("weather", declared.digest());
     std::fs::write(approvals_file(&scratch.state()), approvals.to_text()).expect("mcp-approved");
     let session = Session::new(
-        vec![reach_server(
-            reached(HttpServer::new("weather", first_url.as_str())),
-            declared.digest(),
-        )],
+        vec![
+            reach_server(
+                reached(
+                    HttpServer::new("weather", first_url.as_str()).with_headers(headers.clone()),
+                ),
+                declared.digest(),
+            )
+            .asking_every_call(declared.asks_every_call())
+            .sending(headers),
+        ],
         scratch.project(),
         Some(scratch.state()),
         writable,
@@ -5825,6 +5853,492 @@ fn a_server_that_moves_a_second_time_is_recorded_over_what_the_first_move_wrote(
     assert!(
         methods(&third).contains(&"tools/call".to_string()),
         "the call did not reach where the server moved the second time"
+    );
+}
+
+/// The headers a request carried, names in lower case.
+type RequestHeaders = Vec<(String, String)>;
+
+/// A weather server answering as [`serve_weather`] does, and answering every call with a redirect to
+/// `to` where it is given one. Every body is reported on the first receiver, and the headers of the
+/// same request on the second, in the same order.
+fn serve_recording(
+    to: Option<String>,
+) -> (
+    String,
+    mpsc::Receiver<String>,
+    mpsc::Receiver<RequestHeaders>,
+) {
+    let listener = open_files::bind_mock_server();
+    let port = listener.local_addr().expect("addr").port();
+    let (bodies, received) = mpsc::channel();
+    let (heads, headers) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            let mut sent = RequestHeaders::new();
+            let mut content_length = 0usize;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0
+                    || header == "\r\n"
+                    || header == "\n"
+                {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':') {
+                    if name.trim().eq_ignore_ascii_case("content-length") {
+                        content_length = value.trim().parse().unwrap_or(0);
+                    }
+                    sent.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            let _ = reader.read_exact(&mut body);
+            let body = String::from_utf8_lossy(&body).to_string();
+            let _ = heads.send(sent);
+            let _ = bodies.send(body.clone());
+            let response = match (&to, body.contains(r#""tools/call""#)) {
+                (Some(to), true) => format!(
+                    "HTTP/1.1 307 Temporary Redirect\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
+                _ => answered(&body, "get_forecast"),
+            };
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), received, headers)
+}
+
+/// The credentials a declaration naming a bearer variable and a header variable resolves to.
+fn declared_credentials() -> Vec<(String, String)> {
+    vec![
+        (
+            "Authorization".to_string(),
+            "Bearer secret-token".to_string(),
+        ),
+        ("X-Team".to_string(), "team-value".to_string()),
+    ]
+}
+
+/// `declared`, naming the variables [`declared_credentials`] are the values of.
+fn naming_credentials(declared: Declaration) -> Declaration {
+    declared
+        .heading(
+            [("X-Team".to_string(), "TEAM_HEADER".to_string())].into(),
+            Some("WEATHER_TOKEN".to_string()),
+        )
+        .expect("headers")
+}
+
+/// Whether a request carried `name` as `value`.
+fn carried(headers: &RequestHeaders, name: &str, value: &str) -> bool {
+    headers
+        .iter()
+        .any(|(sent, held)| sent == &name.to_ascii_lowercase() && held == value)
+}
+
+/// SERVERS-11, SERVERS-18: a server moved during a turn is reached with the headers and the bearer
+/// token its declaration names, in the handshake to where it moved, in the call retried there and
+/// in the call of a later turn. The regression it rejects is a connection made for the move that
+/// sends none of them, which a server needing them answers with an error.
+#[test]
+fn a_server_moved_during_a_turn_is_reached_with_the_headers_and_token_it_was_declared_with() {
+    let scratch = Scratch::new("move-credentials");
+    let (second_url, second_bodies, second_headers) = serve_recording(None);
+    let moving = moving_declared_sending(
+        &scratch,
+        true,
+        Managed::default(),
+        (second_url, second_bodies),
+        |server| server,
+        naming_credentials,
+        declared_credentials(),
+    );
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        reply_with("done again"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    for city in ["Paris", "Lyon"] {
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new(format!("the forecast for {city}")).with_mcp(Some(moving.session.clone())),
+            &mut confirmer,
+        );
+    }
+
+    assert_eq!(confirmer.moves.len(), 1, "{:?}", confirmer.moves);
+    for file in [
+        declarations_file(&scratch.state()),
+        approvals_file(&scratch.state()),
+    ] {
+        let written = std::fs::read_to_string(&file).expect("the record");
+        assert!(
+            !written.contains("secret-token") && !written.contains("team-value"),
+            "a credential was written to {}: {written}",
+            file.display()
+        );
+    }
+    let reached = methods(&moving.second);
+    let heads: Vec<RequestHeaders> = second_headers.try_iter().collect();
+    assert_eq!(
+        reached.iter().filter(|m| *m == "tools/call").count(),
+        2,
+        "the retried call and the call of the next turn: {reached:?}"
+    );
+    assert_eq!(reached.first().map(String::as_str), Some("initialize"));
+    assert_eq!(
+        heads.len(),
+        reached.len(),
+        "a request was recorded without its headers"
+    );
+    for (method, head) in reached.iter().zip(&heads) {
+        assert!(
+            carried(head, "authorization", "Bearer secret-token"),
+            "{method} went without the bearer token: {head:?}"
+        );
+        assert!(
+            carried(head, "x-team", "team-value"),
+            "{method} went without the declared header: {head:?}"
+        );
+    }
+}
+
+/// SERVERS-11, SERVERS-18: a server that moves a second time in one session is reached with the
+/// headers and token at its second destination as well, so the move keeps what the first move
+/// kept. The regression it rejects is a move that holds the credentials only for the connection
+/// the session started with.
+#[test]
+fn a_server_moved_twice_is_reached_with_the_headers_and_token_at_each_destination() {
+    let scratch = Scratch::new("move-credentials-twice");
+    let (third_url, third_bodies, third_headers) = serve_recording(None);
+    let third_to = format!("{third_url}/mcp");
+    let (second_url, second_bodies, second_headers) = serve_recording(Some(third_to.clone()));
+    let moving = moving_declared_sending(
+        &scratch,
+        true,
+        Managed::default(),
+        (second_url, second_bodies),
+        |server| server,
+        naming_credentials,
+        declared_credentials(),
+    );
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        reply_with("done again"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    for city in ["Paris", "Lyon"] {
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new(format!("the forecast for {city}")).with_mcp(Some(moving.session.clone())),
+            &mut confirmer,
+        );
+    }
+
+    assert_eq!(confirmer.moves.len(), 2, "{:?}", confirmer.moves);
+    assert!(
+        methods(&third_bodies).contains(&"tools/call".to_string()),
+        "the call did not reach the second destination"
+    );
+    // The second move is recorded over what the first wrote, so the file names the variables at
+    // the second destination and that declaration is the one approved (SERVERS-18).
+    let at_third = naming_credentials(Declaration::http(third_to).expect("a url"));
+    assert_eq!(declared_now(&scratch), at_third);
+    let approvals = Approvals::read(&scratch.state());
+    assert!(approvals.approves(&at_third.digest()));
+    assert!(!approvals.approves(
+        &naming_credentials(Declaration::http(moving.moved_to).expect("a url")).digest()
+    ));
+    for (place, headers) in [("first", second_headers), ("second", third_headers)] {
+        let heads: Vec<RequestHeaders> = headers.try_iter().collect();
+        assert!(!heads.is_empty(), "nothing reached the {place} destination");
+        for head in &heads {
+            assert!(
+                carried(head, "authorization", "Bearer secret-token")
+                    && carried(head, "x-team", "team-value"),
+                "a request to the {place} destination went without them: {head:?}"
+            );
+        }
+    }
+}
+
+/// SERVERS-18: a server declared with no headers and no bearer variable is moved with none sent,
+/// so a move invents no `Authorization`. The regression it rejects is a move that sends a
+/// credential of its own, to a destination the person approved only as an address. It also passes
+/// without the headers being carried across a move, since a server with none has none to lose; it
+/// guards the other direction only.
+#[test]
+fn a_server_declared_without_credentials_is_moved_without_any() {
+    let scratch = Scratch::new("move-no-credentials");
+    let (second_url, second_bodies, second_headers) = serve_recording(None);
+    let moving = moving_declared_sending(
+        &scratch,
+        true,
+        Managed::default(),
+        (second_url, second_bodies),
+        |server| server,
+        |declared| declared,
+        Vec::new(),
+    );
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    assert!(methods(&moving.second).contains(&"tools/call".to_string()));
+    let heads: Vec<RequestHeaders> = second_headers.try_iter().collect();
+    assert!(!heads.is_empty(), "nothing reached where the server moved");
+    for head in &heads {
+        assert!(
+            head.iter()
+                .all(|(name, _)| name != "authorization" && name != "x-team"),
+            "a credential was sent that the declaration does not name: {head:?}"
+        );
+    }
+}
+
+/// SERVERS-18, SERVERS-11: the headers and bearer token of a server that moved go to the socket
+/// the person approved and to no other host. The destination answers every call with a redirect to
+/// a third server, which the person is not asked about in the first turn (the hop is held, not
+/// followed) and declines in the second. The regressions it rejects are a reply followed from the
+/// destination to a host nobody approved, which then receives the headers, and a connection that
+/// sends the credentials as headers of every hop. It also holds that no notice and no request to
+/// the planner carries a value.
+#[test]
+fn a_moved_servers_headers_go_to_the_approved_destination_and_to_no_other_host() {
+    let scratch = Scratch::new("move-credentials-scope");
+    let (third_url, third_bodies, third_headers) = serve_recording(None);
+    let (second_url, second_bodies, second_headers) =
+        serve_recording(Some(format!("{third_url}/mcp")));
+    let moving = moving_declared_sending(
+        &scratch,
+        true,
+        Managed::default(),
+        (second_url, second_bodies),
+        |server| server,
+        naming_credentials,
+        declared_credentials(),
+    );
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        reply_with("done again"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    let mut notices = noticed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+    confirmer.moved = Decision::Reject;
+    notices.extend(noticed_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Lyon").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    ));
+
+    let at_third: Vec<String> = third_bodies.try_iter().collect();
+    let third_heads: Vec<RequestHeaders> = third_headers.try_iter().collect();
+    assert!(
+        at_third.is_empty() && third_heads.is_empty(),
+        "a host nobody approved was reached: {at_third:?} {third_heads:?}"
+    );
+    assert_eq!(confirmer.moves.len(), 2, "{:?}", confirmer.moves);
+    let heads: Vec<RequestHeaders> = second_headers.try_iter().collect();
+    assert!(
+        heads.len() >= 3,
+        "the handshake and the calls reached the destination: {heads:?}"
+    );
+    for head in &heads {
+        assert!(
+            carried(head, "authorization", "Bearer secret-token")
+                && carried(head, "x-team", "team-value"),
+            "a request to the approved destination went without them: {head:?}"
+        );
+    }
+    assert_eq!(
+        declared_now(&scratch),
+        naming_credentials(Declaration::http(moving.moved_to.clone()).expect("a url")),
+        "the declined move was recorded"
+    );
+    let everything_said = format!("{notices:?} {:?}", rounds(&chat));
+    assert!(
+        !everything_said.contains("secret-token") && !everything_said.contains("team-value"),
+        "a credential reached a notice or the planner"
+    );
+}
+
+/// SERVERS-18: a server whose declaration names a bearer variable the environment did not set, so
+/// the headers it started with hold only the other one, is moved without an `Authorization`
+/// header, the move is made, the call is retried there and the file keeps the variable's name.
+/// The regressions it rejects are a move that sends a token of its own for the unset variable and
+/// a move that gives up because a header is missing.
+#[test]
+fn a_server_moved_with_an_unset_bearer_variable_is_moved_without_a_token() {
+    let scratch = Scratch::new("move-unset-credential");
+    let (second_url, second_bodies, second_headers) = serve_recording(None);
+    let moving = moving_declared_sending(
+        &scratch,
+        true,
+        Managed::default(),
+        (second_url, second_bodies),
+        |server| server,
+        naming_credentials,
+        vec![("X-Team".to_string(), "team-value".to_string())],
+    );
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    assert_eq!(confirmer.moves.len(), 1, "{:?}", confirmer.moves);
+    assert!(methods(&moving.second).contains(&"tools/call".to_string()));
+    let heads: Vec<RequestHeaders> = second_headers.try_iter().collect();
+    assert!(!heads.is_empty(), "nothing reached where the server moved");
+    for head in &heads {
+        assert!(
+            carried(head, "x-team", "team-value"),
+            "the header that was set went missing: {head:?}"
+        );
+        assert!(
+            head.iter().all(|(name, _)| name != "authorization"),
+            "a token was sent for a variable that is not set: {head:?}"
+        );
+    }
+    assert_eq!(
+        declared_now(&scratch),
+        naming_credentials(Declaration::http(moving.moved_to).expect("a url"))
+    );
+}
+
+/// SERVERS-21, SERVERS-11: a server declared to ask every call is still asked about at every call
+/// after it moves during a turn, and the declaration written for the move still says so. The
+/// regression it rejects is a rewrite that builds the declaration from the address alone, which
+/// drops the property from the file. The answer given is one that would stand, so a call made
+/// unasked would show as fewer questions than calls.
+#[test]
+fn a_server_asked_every_call_is_still_asked_after_it_moves_during_a_turn() {
+    let scratch = Scratch::new("move-keeps-asking-live");
+    let moving = moving_declared(
+        &scratch,
+        true,
+        Managed::default(),
+        serve_weather(),
+        |server| server,
+        |declared| declared.asking_every_call(true),
+    );
+    assert!(moving.session.offer().asks_every_call("weather"));
+
+    let (endpoint, _chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+        tool_request(FORECAST, r#"{"city":"Lyon"}"#),
+        reply_with("done again"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve_and_stand());
+    confirmer.moved = Decision::Approve;
+    for city in ["Paris", "Lyon"] {
+        run_turn(
+            &endpoint,
+            &scratch.project(),
+            Task::new(format!("the forecast for {city}")).with_mcp(Some(moving.session.clone())),
+            &mut confirmer,
+        );
+    }
+
+    assert_eq!(confirmer.moves.len(), 1, "{:?}", confirmer.moves);
+    assert!(declared_now(&scratch).asks_every_call());
+    assert_eq!(
+        confirmer.calls.len(),
+        2,
+        "a call to the moved server was made unasked: {:?}",
+        confirmer.calls
+    );
+    assert!(confirmer.calls.iter().all(|call| call.asked_every_call));
+}
+
+/// SERVERS-11, MCP-12: a move leaves the list the session holds for the server as it was. The
+/// destination is not asked for its tools, and a tool only it lists is not offered, so the list a
+/// declaration's tool filters were applied to is not replaced by one they were not applied to.
+/// The regression it rejects is a move that reads the list again from where the server moved.
+#[test]
+fn a_move_leaves_the_tools_the_session_holds_for_the_server_as_they_were() {
+    let scratch = Scratch::new("move-keeps-list");
+    let moving = moving_with(
+        &scratch,
+        true,
+        Managed::default(),
+        serve_tool("delete_city"),
+        |server| server,
+    );
+
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris"}"#),
+        reply_with("done"),
+    ]);
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::approve());
+    confirmer.moved = Decision::Approve;
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("the forecast for Paris").with_mcp(Some(moving.session.clone())),
+        &mut confirmer,
+    );
+
+    assert_eq!(confirmer.moves.len(), 1, "{:?}", confirmer.moves);
+    let reached = methods(&moving.second);
+    assert!(reached.contains(&"tools/call".to_string()), "{reached:?}");
+    assert!(
+        !reached.contains(&"tools/list".to_string()),
+        "the destination was asked for its tools: {reached:?}"
+    );
+    let sent = rounds(&chat);
+    let [_, after, ..] = sent.as_slice() else {
+        panic!("the turn made {} rounds", sent.len());
+    };
+    let offered = offered_names(after);
+    assert!(offered.contains(&FORECAST.to_string()), "{offered:?}");
+    assert!(
+        !offered.contains(&"mcp__weather__delete_city".to_string()),
+        "a tool only the destination lists was offered: {offered:?}"
     );
 }
 

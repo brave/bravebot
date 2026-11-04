@@ -2264,7 +2264,7 @@ fn handshake_at(
     exclude_tools: &[String],
 ) -> McpResult<crate::mcp::Reached> {
     let mut server = HttpServer::new(alias, url)
-        .with_headers(headers)
+        .with_headers(headers.clone())
         .starting_within(timeouts.startup());
     server.initialize(policy, egress, "bravebot", env!("CARGO_PKG_VERSION"))?;
     let listing = bravebot_mcp::listed_or_none(alias, server.list_tools(policy, egress))?
@@ -2274,6 +2274,7 @@ fn handshake_at(
     Ok(
         crate::mcp::Reached::new(Connection::Http(server), listing, declared)
             .filtered_by(tools, exclude_tools)
+            .sending(headers)
             .with_prompts(prompts)
             .noting(notes),
     )
@@ -5396,13 +5397,26 @@ while {answering}"#
         name: &str,
         declare: impl FnOnce(Declaration) -> Declaration,
     ) -> Redirected {
+        let (moved_to, second) = serving(weather, String::new());
+        let (declared_url, first) = serving(redirecting, moved_to.clone());
+        redirected_at(name, declare, declared_url, moved_to, first, second)
+    }
+
+    /// [`redirected_declaring`] over the servers at `declared_url` and `moved_to`, whose bodies
+    /// `first` and `second` report.
+    fn redirected_at(
+        name: &str,
+        declare: impl FnOnce(Declaration) -> Declaration,
+        declared_url: String,
+        moved_to: String,
+        first: mpsc::Receiver<String>,
+        second: mpsc::Receiver<String>,
+    ) -> Redirected {
         let root = scratch(name);
         let home = root.join("home");
         let project = root.join("project");
         std::fs::create_dir_all(&home).expect("home");
         std::fs::create_dir_all(project.join(".bravebot")).expect("project");
-        let (moved_to, second) = serving(weather, String::new());
-        let (declared_url, first) = serving(redirecting, moved_to.clone());
         let declared = declare(Declaration::http(declared_url.clone()).expect("declaration"));
         let mut declarations = Declarations::default();
         declarations.insert("weather", &declared);
@@ -5573,6 +5587,102 @@ while {answering}"#
         let approvals = Approvals::read(&redirected.home);
         assert!(approvals.approves(&now.digest()));
         assert!(!approvals.approves(&redirected.declared.digest()));
+    }
+
+    /// The headers each request to a server reported.
+    type Reported = mpsc::Receiver<Vec<(String, String)>>;
+
+    /// A weather server declared and approved at a url that redirects its handshake to a second
+    /// one, the declaration naming a header variable of `PATH` and a bearer variable of
+    /// `bearer_variable`, and the headers each of the two is sent. `PATH` is a variable every test
+    /// run has, so the values the environment gives are the ones `reach` reads.
+    fn redirected_naming_credentials(
+        name: &str,
+        bearer_variable: &str,
+    ) -> (Redirected, Reported, Reported) {
+        let (moved_to, second) = serving_reporting_headers_answering(weather, String::new());
+        let (declared_url, first) =
+            serving_reporting_headers_answering(redirecting, moved_to.clone());
+        let bearer_variable = bearer_variable.to_string();
+        let redirected = redirected_at(
+            name,
+            |declared| {
+                declared
+                    .heading(
+                        [("X-Team".to_string(), "PATH".to_string())].into(),
+                        Some(bearer_variable),
+                    )
+                    .expect("headers")
+            },
+            declared_url,
+            moved_to,
+            mpsc::channel().1,
+            mpsc::channel().1,
+        );
+        (redirected, first, second)
+    }
+
+    /// SERVERS-11, SERVERS-18: a server moved at its handshake is started under the declaration
+    /// written, so it is reached at the address the person approved with the headers and the
+    /// bearer token the declaration names, and the declared address is sent them in the handshake
+    /// that was redirected and nothing else is. The regression it rejects is a server started at
+    /// the new address from the address alone, which sends none of them.
+    #[test]
+    fn a_server_moved_at_its_handshake_is_reached_with_the_headers_and_token_it_was_declared_with()
+    {
+        let (redirected, first, second) =
+            redirected_naming_credentials("cli-servers-move-credentials", "PATH");
+        let path = std::env::var("PATH").expect("PATH is set");
+
+        let (reached, _) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        let bearer = format!("Bearer {path}");
+        for (place, requests) in [("declared", first), ("moved", second)] {
+            let requests: Vec<_> = requests.try_iter().collect();
+            assert!(!requests.is_empty(), "nothing reached the {place} address");
+            for request in &requests {
+                assert!(
+                    request.contains(&("authorization".to_string(), bearer.clone()))
+                        && request.contains(&("x-team".to_string(), path.clone())),
+                    "a request to the {place} address went without them: {request:?}"
+                );
+            }
+        }
+        let written = std::fs::read_to_string(mcp::declarations_file(&redirected.home))
+            .expect("declarations");
+        assert!(!written.contains(&path), "a value was written: {written}");
+    }
+
+    /// SERVERS-18: a server moved at its handshake whose declaration names a bearer variable the
+    /// environment does not set is moved without an `Authorization` header and still sends the
+    /// header it does have. The regression it rejects is a move that sends a bearer header of its
+    /// own for the variable that is unset, or does not make the move.
+    #[test]
+    fn a_server_moved_at_its_handshake_with_an_unset_bearer_variable_is_moved_without_a_token() {
+        let (redirected, first, second) = redirected_naming_credentials(
+            "cli-servers-move-unset-credential",
+            "BRAVEBOT_TEST_3615_UNSET_TOKEN",
+        );
+        let path = std::env::var("PATH").expect("PATH is set");
+
+        let (reached, _) = reached_redirected(&redirected, Asking::Person, true, true, "y\n");
+
+        assert_eq!(reached.aliases(), vec!["weather"], "{:?}", reached.notes);
+        for (place, requests) in [("declared", first), ("moved", second)] {
+            let requests: Vec<_> = requests.try_iter().collect();
+            assert!(!requests.is_empty(), "nothing reached the {place} address");
+            for request in &requests {
+                assert!(
+                    request.contains(&("x-team".to_string(), path.clone())),
+                    "a request to the {place} address went without the header: {request:?}"
+                );
+                assert!(
+                    request.iter().all(|(name, _)| name != "authorization"),
+                    "a request to the {place} address sent a token that is not set: {request:?}"
+                );
+            }
+        }
     }
 
     /// SERVERS-11: a no starts nothing, sends nothing where the reply pointed and rewrites
@@ -6481,6 +6591,108 @@ done
             &mut Vec::new(),
         );
         (started, notes)
+    }
+
+    /// As [`serving`] with the weather server, reporting the headers of each request instead of its
+    /// body, names in lower case.
+    fn serving_reporting_headers() -> (String, mpsc::Receiver<Vec<(String, String)>>) {
+        serving_reporting_headers_answering(weather, String::new())
+    }
+
+    /// As [`serving_reporting_headers`], answering each request with `answer` as [`serving`] does.
+    fn serving_reporting_headers_answering(
+        answer: fn(&str, &str) -> String,
+        to: String,
+    ) -> (String, mpsc::Receiver<Vec<(String, String)>>) {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut reader = std::io::BufReader::new(stream.try_clone().expect("clone"));
+                let mut length = 0;
+                let mut sent = Vec::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
+                        sent.push((name.to_ascii_lowercase(), value.trim().to_string()));
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let body = String::from_utf8_lossy(&body).into_owned();
+                let _ = sender.send(sent);
+                let _ = stream.write_all(answer(&body, &to).as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}/mcp"), receiver)
+    }
+
+    /// SERVERS-11, SERVERS-18: a remote server started from a declaration naming a bearer variable
+    /// and a header variable sends the values the environment gave in its handshake and holds them
+    /// for a move later in the session. The regressions it rejects are a handshake that is made
+    /// without them, and one that does not hand them to the session, which leaves a server moved
+    /// during a turn to be reached with none.
+    #[test]
+    fn a_remote_server_is_started_sending_the_headers_its_declaration_names_and_holds_them_for_a_move()
+     {
+        let (url, requests) = serving_reporting_headers();
+        let declaration = Declaration::http(url)
+            .expect("declaration")
+            .heading(
+                [("X-Team".to_string(), "TEAM_HEADER".to_string())].into(),
+                Some("WEATHER_TOKEN".to_string()),
+            )
+            .expect("headers");
+        let environment = |var: &str| match var {
+            "WEATHER_TOKEN" => Some(OsString::from("secret-token")),
+            "TEAM_HEADER" => Some(OsString::from("team-value")),
+            _ => None,
+        };
+        let plan = planned(&declaration, &environment).expect("a plan");
+        let home = Home {
+            directory: None,
+            writable: false,
+        };
+        let mut notes = Vec::new();
+        let started = start(
+            vec![("weather".to_string(), plan)],
+            &home,
+            Stream::Null,
+            &mut notes,
+            &mut Vec::new(),
+        );
+
+        let [reached] = started.as_slice() else {
+            panic!("started {} servers: {notes:?}", started.len());
+        };
+        let expected = vec![
+            (
+                "Authorization".to_string(),
+                "Bearer secret-token".to_string(),
+            ),
+            ("X-Team".to_string(), "team-value".to_string()),
+        ];
+        assert_eq!(reached.sent_headers(), expected.as_slice());
+        let requests: Vec<_> = requests.try_iter().collect();
+        assert!(!requests.is_empty(), "the server was not reached");
+        for request in &requests {
+            assert!(
+                request.contains(&(
+                    "authorization".to_string(),
+                    "Bearer secret-token".to_string()
+                )) && request.contains(&("x-team".to_string(), "team-value".to_string())),
+                "a request went without them: {request:?}"
+            );
+        }
     }
 
     /// MCP-10: a remote server that declared prompts is started with the ones that can be offered, and

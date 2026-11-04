@@ -127,7 +127,9 @@ The lines are the ones recorded as typed when they arrived, never chosen by read
 ([LAYER-6](layering.md#LAYER-6)). A line sent with files, a message nobody recorded the origin of, a
 file the person named, the planner's words and a result are not among them. The newest twelve are
 sent, each cut to 4000 bytes. The action is the line the planner typed and its directory, or the URL
-and its host. Both are plain text the driver already holds, so nothing is released from a label to
+and its host. The directory is the one the planner typed, or the workspace's own spelling of a climb
+into an added directory, and not where a link in the tree led: a name a clone chose is not put in a
+model's request. Both are plain text the driver already holds, so nothing is released from a label to
 build the request and the request carries no tool, no tool result, no body, no output, no listing
 name, no resolved binary, no remark of a processor, no description a server wrote and no instruction
 file from the checkout. A row for the reply is in [LABEL-8](labels.md#LABEL-8).
@@ -141,6 +143,7 @@ was given. The planner may hold vouched files, and a vouched file is the tree's 
 `verified-by: bravebot_agent::classifier::the_request_holds_the_persons_lines_and_the_action_and_offers_no_tools`
 `verified-by: bravebot_agent::classifier::a_long_history_is_bounded_and_a_line_is_cut_at_a_character_boundary`
 `verified-by: bravebot_agent::classifier::a_fetch_names_the_url_and_the_host`
+`verified-by: bravebot_agent::turn::the_classifier_is_shown_the_directory_as_typed_and_not_where_a_link_led`
 
 <a id="AUTO-6"></a>
 ### AUTO-6: the classifier returns one word, and anything but the allow word puts the question to the person

@@ -293,8 +293,10 @@ pub enum ExecError {
     /// The directory the line was to run in no longer exists, so the pipeline was not started.
     ///
     /// Checked immediately before the first stage is spawned, since an approval can wait for
-    /// hours. The directory is the one the person was shown and approved.
-    DirectoryGone { directory: String },
+    /// hours. Names no path: the directory is the one the person was shown and approved, and the
+    /// line it belongs to is told with the directory the planner typed, where a path here would be
+    /// where a link led.
+    DirectoryGone,
     /// The platform could not confine the program, so it was not started.
     ///
     /// A program a person approved runs under its profile or not at all, so this is a refusal and
@@ -308,6 +310,14 @@ pub enum ExecError {
     Io(String),
     /// A redirection's file could not be opened.
     Redirection { path: String, detail: String },
+    /// A redirection's file could not be opened, with the path exec tried, kept as a path until it
+    /// is shown so that a caller can decide on it ([PATH-001]).
+    ///
+    /// [PATH-001]: ../../../docs/best-practices/paths.md
+    Unopened {
+        path: std::path::PathBuf,
+        detail: String,
+    },
 }
 
 impl fmt::Display for ExecError {
@@ -316,9 +326,7 @@ impl fmt::Display for ExecError {
             Self::NotStarted { program, detail } => {
                 write!(f, "'{program}' could not be started: {detail}")
             }
-            Self::DirectoryGone { directory } => {
-                write!(f, "the directory '{directory}' no longer exists")
-            }
+            Self::DirectoryGone => f.write_str("the directory it was to run in no longer exists"),
             Self::NotConfined { program, detail } => {
                 write!(
                     f,
@@ -329,6 +337,9 @@ impl fmt::Display for ExecError {
             Self::Io(detail) => write!(f, "the pipeline could not be run: {detail}"),
             Self::Redirection { path, detail } => {
                 write!(f, "'{path}' could not be opened: {detail}")
+            }
+            Self::Unopened { path, detail } => {
+                write!(f, "'{}' could not be opened: {detail}", path.display())
             }
         }
     }
@@ -1061,8 +1072,8 @@ fn for_writing(path: &std::path::Path, append: bool) -> Result<std::fs::File, Ex
         .append(append)
         .truncate(!append)
         .open(path)
-        .map_err(|e| ExecError::Redirection {
-            path: path.display().to_string(),
+        .map_err(|e| ExecError::Unopened {
+            path: path.to_path_buf(),
             detail: e.to_string(),
         })
 }
@@ -1093,8 +1104,8 @@ fn feed(bytes: &str) -> Result<Handle, ExecError> {
 
 /// A redirection's source, opened to be read.
 fn for_reading(path: &std::path::Path) -> Result<std::fs::File, ExecError> {
-    std::fs::File::open(path).map_err(|e| ExecError::Redirection {
-        path: path.display().to_string(),
+    std::fs::File::open(path).map_err(|e| ExecError::Unopened {
+        path: path.to_path_buf(),
         detail: e.to_string(),
     })
 }
@@ -1298,9 +1309,7 @@ fn the_directory_exists(directory: &std::path::Path) -> Result<(), ExecError> {
     if directory.is_dir() {
         return Ok(());
     }
-    Err(ExecError::DirectoryGone {
-        directory: directory.display().to_string(),
-    })
+    Err(ExecError::DirectoryGone)
 }
 
 /// Refuse the pipeline unless every step's start path still leads to the file that was approved.
