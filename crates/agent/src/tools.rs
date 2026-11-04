@@ -27,7 +27,7 @@
 use crate::confirm::{Confirmer, Decision, Intent, Remark, WriteDecision, WriteRequest};
 use crate::diff::Diff;
 use crate::processor::{self, Chat};
-use crate::report::{Activity, Reporter};
+use crate::report::{Activity, CallId, Reporter};
 use bravebot_aichat::protocol::{Tool, ToolCall, Usage};
 use bravebot_core::ask::{self, Choice, Question, Series};
 use bravebot_core::credentials::Scanned;
@@ -133,6 +133,9 @@ pub struct Output {
     /// Structured cancellation from a processor, never reconstructed from tool-result text.
     pub cancelled: Option<crate::outcome::Cancellation>,
     pub call_id: Option<String>,
+    /// The id dispatch gave this call on its start and finish lines, so the line saying where the
+    /// result went can name the row it belongs to.
+    pub reported_as: Option<CallId>,
     pub tool: String,
     /// The rendered result, still labelled.
     ///
@@ -2538,13 +2541,15 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
             let produced =
                 Produced::problem(format!("error: the arguments were not valid JSON: {e}"));
             // Announced and closed in one breath, because there was never a call to watch.
-            reporter.tool_started(Activity::running(verb, "").of_tool(&name));
+            let call_id = CallId::next();
+            reporter.tool_started(Activity::running(verb, "").for_call(call_id).of_tool(&name));
             reporter.tool_finished(
                 Activity::running(verb, "")
+                    .for_call(call_id)
                     .of_tool(&name)
                     .failed(produced.note.clone()),
             );
-            return output_of(produced, call.id.clone(), name);
+            return output_of(produced, call.id.clone(), call_id, name);
         }
     };
 
@@ -2570,8 +2575,10 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
     // selects no server, and with either holding the server's tools back the offer is not deferred.
     let loads_a_tool = name == "load_tool" && tools.mcp.is_some_and(|offer| offer.is_deferred());
     let why = why_of(policy, &name, &arguments);
+    let call_id = CallId::next();
     reporter.tool_started(
         Activity::running(verb, target.clone())
+            .for_call(call_id)
             .of_tool(&name)
             .naming_a_file(names_a_file(&name))
             .saying_why(why.clone()),
@@ -2797,6 +2804,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
     // have it too, as part of what the turn spent at the model, but a total cannot answer which
     // call was the slow one or whether a model or this machine was what took the time.
     let finished = Activity::running(verb, target)
+        .for_call(call_id)
         .of_tool(&name)
         .naming_a_file(names_a_file(&name))
         .saying_why(why)
@@ -2816,14 +2824,20 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
         finished.done(note)
     });
 
-    output_of(produced, call.id.clone(), name)
+    output_of(produced, call.id.clone(), call_id, name)
 }
 
 /// A finished call's [`Output`], from what the tool produced.
-fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Output {
+fn output_of(
+    produced: Produced,
+    call_id: Option<String>,
+    reported_as: CallId,
+    tool: String,
+) -> Output {
     Output {
         cancelled: produced.cancelled,
         call_id,
+        reported_as: Some(reported_as),
         tool,
         text: produced.text,
         origin: produced.origin,
@@ -2900,18 +2914,21 @@ pub fn refused_without_running<S: Sink, R: Reporter>(
         .map(|(_, alias, tool)| format!("{alias}:{tool}"))
         .or_else(|| name.strip_prefix("mcp__").map(server_named));
     let target = target_of(policy, &name, server.as_deref(), slots, &arguments);
+    let call_id = CallId::next();
     reporter.tool_started(
         Activity::running(verb, target.clone())
+            .for_call(call_id)
             .of_tool(&name)
             .saying_why(why.clone()),
     );
     reporter.tool_finished(
         Activity::running(verb, target)
+            .for_call(call_id)
             .of_tool(&name)
             .saying_why(why)
             .failed(produced.note.clone()),
     );
-    output_of(produced, call.id.clone(), name)
+    output_of(produced, call.id.clone(), call_id, name)
 }
 
 /// What a write is refused with, and what the person watching is told about why.
@@ -15279,6 +15296,51 @@ mod tests {
             drawn("mcp__weather__get_forecast", None),
             r#"weather:get_forecast {"city":"Lyon"}"#
         );
+    }
+
+    /// A held call is announced and closed by two lines built apart, so each takes the id from one
+    /// value. A finish that lost it would leave its start row running and add a row of its own.
+    #[test]
+    fn a_held_call_finishes_under_the_id_it_started_with() {
+        use bravebot_core::capability::CapabilitySet;
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        let mut sink = RecordingSink::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "read a file");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::none(),
+            &mut sink,
+        )
+        .expect("policy");
+        let slots = SlotStore::new();
+        for id in ["c1", "c2"] {
+            let call: ToolCall = serde_json::from_value(json!({
+                "id": id,
+                "type": "function",
+                "function": { "name": "read_file", "arguments": r#"{"path":"a.txt"}"# },
+            }))
+            .unwrap();
+            refused_without_running(
+                &mut policy,
+                &mut reporter,
+                None,
+                &slots,
+                &call,
+                "held".to_string(),
+            );
+        }
+
+        let started: Vec<_> = reporter.started.iter().map(|line| line.call).collect();
+        let finished: Vec<_> = reporter.finished.iter().map(|line| line.call).collect();
+        assert_eq!(started.len(), 2);
+        assert!(started.iter().all(Option::is_some), "{started:?}");
+        assert_eq!(finished, started);
+        assert_ne!(started[0], started[1]);
     }
 
     /// DELEGATE-33. The sentence is built from the capabilities a delegate was started without.
@@ -28460,8 +28522,29 @@ mod tests {
 
             assert_eq!(beforehand, sequential);
             assert_eq!(trail_beforehand, trail);
-            assert_eq!(screen_beforehand.started, screen.started);
-            assert_eq!(screen_beforehand.finished, screen.finished);
+            // Each dispatch takes a new id, so the two runs agree on the lines and on which
+            // finish ends which start, not on the ids' values.
+            let ids = |lines: &[Activity]| lines.iter().map(|line| line.call).collect::<Vec<_>>();
+            let without_ids = |lines: &[Activity]| {
+                lines
+                    .iter()
+                    .cloned()
+                    .map(|line| Activity { call: None, ..line })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(ids(&screen.finished), ids(&screen.started));
+            assert_eq!(
+                ids(&screen_beforehand.finished),
+                ids(&screen_beforehand.started)
+            );
+            assert_eq!(
+                without_ids(&screen_beforehand.started),
+                without_ids(&screen.started)
+            );
+            assert_eq!(
+                without_ids(&screen_beforehand.finished),
+                without_ids(&screen.finished)
+            );
             assert_eq!(sequential.len(), calls.len());
             assert!(
                 sequential.iter().any(|answer| answer.6.is_some()),

@@ -9049,6 +9049,62 @@ fn each_tool_call_is_announced_before_it_runs_and_summarised_after() {
     assert!(!finished.failed);
 }
 
+/// A call's start and its finish carry the id dispatch gave it, and two calls have different
+/// ids, including one whose arguments were not JSON. A screen pairs the two lines by it, because
+/// a delegate's calls are reported between the turn's and the latest start is not always the one
+/// a finish ends.
+#[test]
+fn each_call_is_announced_and_summarised_under_an_id_of_its_own() {
+    let scratch = Scratch::new("announced-call-id");
+    std::fs::write(scratch.path.join("target.txt"), "one\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        two_tool_requests(
+            ("read_file", r#"{"path":"target.txt"}"#),
+            ("read_file", r#"{"path":"#),
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read it"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let calls = |lines: &[bravebot_agent::report::Activity]| {
+        lines
+            .iter()
+            .map(|activity| activity.call.expect("dispatch gave the call an id"))
+            .collect::<Vec<_>>()
+    };
+    let started = calls(&reporter.started);
+    assert_eq!(started.len(), 2);
+    assert_ne!(started[0], started[1]);
+    assert_eq!(calls(&reporter.finished), started);
+    assert!(
+        reporter.finished[1].failed,
+        "the call whose arguments were not JSON was not refused"
+    );
+    assert_eq!(
+        reporter.landed_calls,
+        vec![Some(started[0])],
+        "the landing names the call it is about, the one that read the file"
+    );
+}
+
 /// A round of calls made for different reasons used to be explained by one line that fitted
 /// only one of them. Each call carries its own reason to its own line, from the moment it starts
 /// to the moment it is summarised, refused or not: the finished line replaces the running one,

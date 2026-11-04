@@ -203,6 +203,31 @@ use bravebot_core::todo::Row;
 use bravebot_core::vetting::Checking;
 use bravebot_i18n::t;
 
+/// Which call a line is about, so a finish is drawn on its own call's line when calls overlap.
+///
+/// Delegates run alongside each other and alongside the turn, and their calls are reported through
+/// the same reporter, so the order lines arrive in does not say which start a finish ends.
+///
+/// Taken from a counter in this process when dispatch begins a call, and never from the call: the
+/// id a model service gives a call comes back in its reply and can be missing, and a call's target
+/// can be content from outside, so pairing on either would let a reply decide which line a result
+/// is drawn on. Unique within the process, which holds every session a host runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CallId(u64);
+
+impl CallId {
+    /// An id no other call in this process has.
+    pub fn next() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// The id as a number, for a wire.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// One thing the turn did, shaped for the person watching.
 ///
 /// Every string in here has already been through the display gate, exactly as
@@ -211,6 +236,11 @@ use bravebot_i18n::t;
 /// content is allowed to reach.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Activity {
+    /// The call this line is about, the same on its start and its finish.
+    ///
+    /// `None` only for a line no dispatch made, such as one a test or a resumed session draws.
+    /// Every call dispatch begins has one.
+    pub call: Option<CallId>,
     /// What is being done, in the driver's own word.
     ///
     /// A literal chosen by the dispatch table rather than anything the model wrote, so a call
@@ -281,6 +311,7 @@ impl Activity {
     /// A call that has begun and has not finished.
     pub fn running(verb: &'static str, target: impl Into<String>) -> Self {
         Self {
+            call: None,
             verb,
             target: target.into(),
             names_a_file: false,
@@ -294,6 +325,12 @@ impl Activity {
             untrusted: false,
             waited: None,
         }
+    }
+
+    /// Say which call this line is about.
+    pub fn for_call(mut self, call: CallId) -> Self {
+        self.call = Some(call);
+        self
     }
 
     /// Say which tool this is, by the name dispatch matched rather than the word shown.
@@ -1060,7 +1097,7 @@ pub trait Reporter {
     ///
     /// Sent after the kernel has decided, which is why it is not part of the finished call: what
     /// happens to a result is settled by its label, after the tool that produced it has returned.
-    fn landed(&mut self, _landing: Landing) {}
+    fn landed(&mut self, _call: Option<CallId>, _landing: Landing) {}
 
     /// A tool call has begun.
     ///
@@ -1069,10 +1106,11 @@ pub trait Reporter {
     /// nothing at all until it finished.
     fn tool_started(&mut self, _activity: Activity) {}
 
-    /// The call [`Reporter::tool_started`] last announced has finished.
+    /// A call [`Reporter::tool_started`] announced has finished.
     ///
-    /// Paired by position rather than by an identifier because dispatch runs one call at a
-    /// time: there is never a second call in flight for this to be ambiguous between.
+    /// Paired with its start by [`Activity::call`], which both carry. Delegates' calls are reported
+    /// through the same reporter as the turn's, so the latest start is not necessarily the one a
+    /// finish ends.
     fn tool_finished(&mut self, _activity: Activity) {}
 
     /// The command the call [`Reporter::tool_started`] last announced can be moved to the
@@ -1234,6 +1272,8 @@ pub struct RecordingReporter {
     pub returned: Vec<Returned>,
     /// Where each result went.
     pub landed: Vec<Landing>,
+    /// The call each entry of `landed` is about, in the same order.
+    pub landed_calls: Vec<Option<CallId>>,
     /// Everything the person said mid-turn, in the order it reached the planner.
     pub interjected: Vec<String>,
     /// Every message from another session, in the order it reached the planner.
@@ -1355,7 +1395,8 @@ impl Reporter for RecordingReporter {
         self.returned.push(returned);
     }
 
-    fn landed(&mut self, landing: Landing) {
+    fn landed(&mut self, call: Option<CallId>, landing: Landing) {
+        self.landed_calls.push(call);
         self.landed.push(landing);
     }
 

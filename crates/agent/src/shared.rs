@@ -325,7 +325,7 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn quarantined(&mut self, shown: Shown);
         fn printed(&mut self, output: Printed);
         fn returned(&mut self, returned: Returned);
-        fn landed(&mut self, landing: Landing);
+        fn landed(&mut self, call: Option<crate::report::CallId>, landing: Landing);
         fn tool_started(&mut self, activity: Activity);
         fn tool_finished(&mut self, activity: Activity);
         fn movable(&mut self, handoff: bravebot_core::cancel::Handoff);
