@@ -22,7 +22,8 @@ documented-by: none (internal: the local RPC view is documented in ui/docs/phase
 ## Scope
 
 The opt-in Rust display view for fresh local bridge sessions, and the standalone TypeScript client
-that applies it over stdio. The view has no listener, native binding, recovery, or controller
+that applies it over stdio, or in development over the loopback relay that
+[local-host.md](local-host.md) describes. The view has no listener, native binding, recovery, or controller
 model. The view does not grant authority. Exact action targets (RPCVIEW-6) apply to every client of
 the bridge, and RPCVIEW-8 states what the local channel they arrive on is. A client that names no
 turn in a cancel stops whatever is running.
@@ -173,7 +174,7 @@ repeated trust answer, and a client talking to one must not claim the stronger p
 <a id="RPCVIEW-5"></a>
 ### RPCVIEW-5: the TypeScript client applies the view and decides nothing
 
-`packages/agent-client` is the stdio client. Its wire types are checked against the Rust types
+`packages/agent-client` is the stdio client. Its `./dev-relay` export carries the same client over the development relay that [local-host.md](local-host.md) describes, and these rules hold there too. Its wire types are checked against the Rust types
 through a contract file that a Rust test writes and compares. The client requires the advertised
 capability and refuses a runtime that lacks version 1, before it creates a session. It starts the
 view itself and never builds one from legacy events.
