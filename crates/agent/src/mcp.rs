@@ -2421,6 +2421,67 @@ pub(crate) fn call<S: Sink, C: Confirmer, R: Reporter>(
 mod tests {
     use super::*;
 
+    /// A server only a manifest run calls is never asked for a prompt by a turn: the request is
+    /// refused before anything is sent. The server's address answers nothing, so a request that
+    /// went out would fail on the connection, with other words.
+    #[test]
+    fn a_prompt_of_a_server_only_a_manifest_run_calls_is_refused_before_it_is_sent() {
+        let listing = bravebot_mcp::protocol::listed_or_none(
+            "boxed",
+            Err(McpError::Server {
+                code: -32601,
+                method: "tools/list".to_string(),
+            }),
+        )
+        .expect("an empty listing");
+        let reached = Reached::new(
+            Connection::Http(bravebot_mcp::HttpServer::new(
+                "boxed",
+                "http://127.0.0.1:9/mcp",
+            )),
+            listing,
+            Digest::parse(&"d".repeat(64)).expect("a digest"),
+        )
+        .in_a_sandbox_for_manifest_runs(
+            Box::new(()),
+            Sandboxed {
+                name: "bb-aaaaaaaaaaaa".into(),
+                image: "python:3.13-slim".into(),
+                hosts: Vec::new(),
+            },
+        );
+        let session = Session::new(
+            vec![reached],
+            std::path::PathBuf::new(),
+            None,
+            false,
+            Managed::default(),
+        );
+        let mut sink = RecordingSink::new();
+        let mut routing = bravebot_core::policy::Routing::new();
+        routing.insert_trusted("task", "use a prompt");
+        let mut policy = Policy::begin(
+            routing,
+            bravebot_core::policy::ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("boxed"))]),
+            &mut sink,
+        )
+        .expect("policy");
+        let refused = session.prompt(
+            &mut policy,
+            &bravebot_net::Egress::new(),
+            "boxed",
+            "summarise",
+            &[],
+        );
+        match refused {
+            Err(McpError::Transport(said)) => {
+                assert!(said.contains("manifest runs alone"), "{said}");
+            }
+            other => panic!("a turn's prompt reached a manifest-only server: {other:?}"),
+        }
+    }
+
     /// MCP-15: a reply the server did not report as failed says so, in the driver's own words, and
     /// a reply it reported as failed does not. The origin is built from the name alone, so it holds
     /// nothing the server wrote.
