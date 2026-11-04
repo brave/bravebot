@@ -2222,7 +2222,11 @@ fn asking_about_reaching(
     let _home = HomeRestored(std::env::var_os("HOME"));
     if reach.home_is_outside {
         // SAFETY: PATH_LOCK is held for the whole of this body, and `_home` puts the value back.
-        unsafe { std::env::set_var("HOME", &outside) };
+        // `BRAVEBOT_HOME` answers before `HOME`, so it is cleared for the same reason.
+        unsafe {
+            std::env::set_var("HOME", &outside);
+            std::env::remove_var("BRAVEBOT_HOME");
+        };
     }
     let (mut workspace, recorded) = a_workspace_with_a_server(&scratch);
     if reach.admit_outside {
