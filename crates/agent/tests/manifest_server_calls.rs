@@ -672,6 +672,13 @@ fn the_planner_is_shown_a_vouched_lists_names_and_none_of_its_words() {
         assert!(!request.contains(DESCRIPTION), "{request}");
     }
     assert!(vouched.chat[1].contains("SERVER_CALL"));
+    // The planner is told what a call shows, so it plans a task that asks only to see a tool's
+    // answer as the call, and never refuses it as having no way to show the answer.
+    assert!(
+        vouched.chat[1].contains("What it returns is shown to the person as the call answers"),
+        "{}",
+        vouched.chat[1]
+    );
 
     // The person declines the list a run puts to them, which is what a run with nobody to ask does
     // too. The first request is the check over that list; the planner's two come after it.

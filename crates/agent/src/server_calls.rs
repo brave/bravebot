@@ -174,8 +174,10 @@ impl Servers {
             false => String::new(),
             true => format!(
                 "\nTools a SERVER_CALL step may call, as alias:tool with its arguments (* is \
-                 required). A call is an action, so it comes after every read and transform. It \
-                 fills no slot and no step can name what it returned.\n{}",
+                 required). A call is an action, so it comes after every read and transform. What \
+                 it returns is shown to the person as the call answers, so a task that asks only \
+                 to see a tool's answer is done by the call. It fills no slot, so no later step \
+                 can read, transform or answer with what it returned.\n{}",
                 self.listing()
             ),
         }
