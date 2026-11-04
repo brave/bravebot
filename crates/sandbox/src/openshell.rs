@@ -1328,6 +1328,37 @@ mod tests {
         }
     }
 
+    /// The program is handed to `sandbox exec` as the bytes it is. A name that is not UTF-8 and its
+    /// lossy lookalike reach the CLI as two different command lines, so a conversion through a
+    /// string on the way would be caught.
+    #[test]
+    fn a_program_name_that_is_not_utf8_reaches_sandbox_exec_as_its_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let executed = |program: &OsStr| {
+            let cli = FakeCli::failing("none");
+            let shell = cli.shell(&[]);
+            let mut child = shell
+                .spawn(
+                    program,
+                    &[],
+                    &SandboxPolicy::strict(),
+                    crate::testutil::nothing_attached(),
+                    Environment::Inherited,
+                )
+                .expect("started");
+            child.wait().expect("the fake CLI exits");
+            let log = std::fs::read(cli.dir.join("log")).expect("the log");
+            log.split(|byte| *byte == b'\n')
+                .find(|line| line.starts_with(b"sandbox exec"))
+                .map(<[u8]>::to_vec)
+                .expect("a sandbox exec line")
+        };
+        let raw = executed(OsStr::from_bytes(b"tool-\xff"));
+        let lookalike = executed(OsStr::new("tool-\u{FFFD}"));
+        assert!(raw.ends_with(b"-- tool-\xff"), "{raw:?}");
+        assert_ne!(raw, lookalike);
+    }
+
     #[test]
     fn a_variable_other_than_path_or_home_is_refused_before_anything_is_created() {
         let shell =
