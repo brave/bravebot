@@ -875,8 +875,40 @@ pub fn named(file: &Path, project: &Path) -> String {
 /// What a declaration that runs in an OpenShell sandbox starts.
 ///
 /// Its program is named as it is inside the image, so nothing on this machine is looked up for it.
+/// Why a declaration for OpenShell would be refused for what it shares of this machine, in the
+/// words a session refuses it with, or nothing where it shares nothing. One check, so `mcp add`
+/// refuses what a session would and no copy of it can drift.
+///
 /// Nothing that reaches a native server's environment or files is passed into the sandbox yet: a
 /// variable would travel on a command line, and a path on this machine means nothing in the image.
+pub fn shared_with_openshell(declaration: &Declaration) -> Result<(), String> {
+    match declaration {
+        Declaration::Stdio {
+            variables,
+            env,
+            reads,
+            directory,
+            ..
+        } => shares_nothing(variables, env, reads, directory.as_deref()),
+        _ => Ok(()),
+    }
+}
+
+fn shares_nothing(
+    variables: &[String],
+    env: &std::collections::BTreeMap<String, String>,
+    reads: &[String],
+    directory: Option<&str>,
+) -> Result<(), String> {
+    if !variables.is_empty() || !env.is_empty() {
+        return Err(t!(servers_openshell_no_variables).to_string());
+    }
+    if !reads.is_empty() || directory.is_some() {
+        return Err(t!(servers_openshell_no_files).to_string());
+    }
+    Ok(())
+}
+
 fn planned_in_openshell(declaration: &Declaration, image: &str) -> Result<Plan, String> {
     let Declaration::Stdio {
         argv,
@@ -891,12 +923,7 @@ fn planned_in_openshell(declaration: &Declaration, image: &str) -> Result<Plan, 
     else {
         return Err(problem(&mcp::Problem::Remote("backend")));
     };
-    if !variables.is_empty() || !env.is_empty() {
-        return Err(t!(servers_openshell_no_variables).to_string());
-    }
-    if !reads.is_empty() || directory.is_some() {
-        return Err(t!(servers_openshell_no_files).to_string());
-    }
+    shares_nothing(variables, env, reads, directory.as_deref())?;
     // An approval covers the reference as written, so one that names no digest, a tag or a path
     // whose contents can change, would cover whatever it names later. Only `mcp add` pins one.
     if !crate::images::Reference::parse(image).is_some_and(|reference| reference.digest.is_some()) {
@@ -6701,8 +6728,18 @@ done
             let why = planned(&refused, &|_| None).expect_err("refused");
             assert!(why.contains("no variables"), "{why}");
         }
-        let why = planned(&reading, &|_| None).expect_err("refused");
-        assert!(why.contains("reads only its image"), "{why}");
+        let directory = Declaration::stdio(vec!["python3".into()], Vec::new(), Some("/srv".into()))
+            .expect("declaration")
+            .running_in(bravebot_config::mcp::Backend::OpenShell {
+                image: PINNED_IMAGE.into(),
+            })
+            .expect("an OpenShell declaration");
+        for refused in [reading, directory] {
+            let why = planned(&refused, &|_| None).expect_err("refused");
+            assert!(why.contains("reads only its image"), "{why}");
+            assert_eq!(shared_with_openshell(&refused), Err(why));
+        }
+        assert_eq!(shared_with_openshell(&in_openshell(&["python3"])), Ok(()));
     }
 
     /// A server in a sandbox reaches the hosts its declaration lists, less what the session's

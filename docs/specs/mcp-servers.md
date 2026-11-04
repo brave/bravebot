@@ -2377,7 +2377,8 @@ declaration that names neither digests as it did before, and changing either ask
 
 `bravebot mcp add <alias> --openshell <image> -- <program> [args...]` writes the pair. The program is
 looked for in the image, so no `PATH` is asked for. A variable, a stored value, `--dir` or `--http`
-beside it is refused in the sentence a session would use to refuse it, and nothing is written. An
+beside it, or an argument naming a file on this machine that the declaration would be granted, is
+refused by the check a session refuses it with, in its sentence, and nothing is written. An
 image named by a tag is pinned before anything is written: its registry is asked, through the egress
 gate and with no credential but the anonymous pull token Docker Hub and GHCR issue, for the manifest
 the tag names, as an index first, and the reference is written as `<image>@sha256:<digest>`, the
@@ -2396,6 +2397,7 @@ the person never saw once the tag moved.
 `verified-by: bravebot_config::mcp::a_backend_names_the_field_that_changed_and_survives_the_file`
 `verified-by: bravebot_config::mcp::a_backend_is_openshell_with_one_image_and_belongs_to_a_local_server`
 `verified-by: bravebot_cli::mcp::the_openshell_flag_names_the_image_of_a_local_server_and_asks_for_no_path`
+`verified-by: bravebot_cli::mcp::an_openshell_server_whose_arguments_name_a_file_here_is_refused_before_anything_is_written`
 `verified-by: bravebot_cli::mcp::list_and_get_say_which_server_runs_in_openshell_and_from_what_image`
 `verified-by: bravebot_agent::images::a_reference_is_read_as_a_registry_reads_it`
 `verified-by: bravebot_agent::images::what_is_not_a_reference_is_refused`

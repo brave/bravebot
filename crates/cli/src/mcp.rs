@@ -212,6 +212,9 @@ fn add<R: BufRead, W: Write>(
     let declaration =
         bravebot_agent::servers::with_reads(declaration, directory, &|name| std::env::var_os(name))
             .map_err(not_added)?;
+    // The files its arguments name are granted only now, so a server in a sandbox, which is given
+    // none, is checked again.
+    shares_nothing(&declaration).map_err(argument)?;
     let mut declarations = read(directory)?;
     // Read before anything is written, so a settings file the request cannot go in stops the
     // declaration too rather than leaving half of what was typed done.
@@ -596,14 +599,6 @@ fn declared(
             if !env_http_headers.is_empty() || bearer_env.is_some() {
                 return Err(Refusal::Problem(Problem::Remote("env_http_headers")));
             }
-            // Nothing of this machine is passed into a sandbox yet, so a declaration a session
-            // would refuse to start is refused here, in the words the session would use.
-            if openshell.is_some() && (!variables.is_empty() || !env.is_empty()) {
-                return Err(argument(t!(servers_openshell_no_variables)).into());
-            }
-            if openshell.is_some() && directory.is_some() {
-                return Err(argument(t!(servers_openshell_no_files)).into());
-            }
             // A bare name is looked for only in the PATH a declaration gives it (SERVERS-10), so
             // one typed with neither would be a server that can never start. A program in a
             // sandbox is looked for in its image instead.
@@ -617,7 +612,7 @@ fn declared(
                 Some(image) => mcp::Backend::OpenShell { image },
                 None => mcp::Backend::Native,
             };
-            Declaration::stdio(argv, variables, directory)
+            let declaration = Declaration::stdio(argv, variables, directory)
                 .and_then(|declaration| declaration.running_in(backend))
                 .and_then(|declaration| declaration.storing(env))
                 .and_then(|declaration| declaration.hosting(allowed_hosts))
@@ -625,7 +620,9 @@ fn declared(
                 .map(|declaration| declaration.asking_every_call(ask_every_call))
                 .and_then(|declaration| declaration.choosing(choices))
                 .map(|declaration| declaration.timing(timeouts))
-                .map_err(Refusal::Problem)
+                .map_err(Refusal::Problem)?;
+            shares_nothing(&declaration).map_err(argument)?;
+            Ok(declaration)
         }
         Some(Transport::Http(_)) if !variables.is_empty() => {
             Err(Refusal::Problem(Problem::Remote("variables")))
@@ -727,6 +724,17 @@ enum Transport {
 
 fn argument(message: impl std::fmt::Display) -> Stopped {
     (Ending::Argument, message.to_string())
+}
+
+/// Why a server declared for OpenShell would be refused by a session for what it shares of this
+/// machine, by the session's own check and in its words. Nothing for any other server.
+fn shares_nothing(declaration: &Declaration) -> Result<(), String> {
+    match declaration.backend() {
+        mcp::Backend::OpenShell { .. } => {
+            bravebot_agent::servers::shared_with_openshell(declaration)
+        }
+        mcp::Backend::Native => Ok(()),
+    }
 }
 
 /// A flag no form takes, shown up to its `=`, since `--env=NAME=value` and
@@ -3181,6 +3189,42 @@ mod tests {
         assert!(
             !mcp::declarations_file(&directory).exists(),
             "a declaration was written for an image that was not pinned"
+        );
+    }
+
+    /// A server in a sandbox whose arguments name a file on this machine is refused by `add`, in the
+    /// words a session would refuse it with, and nothing is written. The file is granted only once
+    /// the declaration is read against the files its arguments name, so the check before that
+    /// cannot see it: `add` checks again after.
+    #[test]
+    fn an_openshell_server_whose_arguments_name_a_file_here_is_refused_before_anything_is_written()
+    {
+        const PINNED: &str = "python:3.13-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1";
+        let directory = scratch("cli-mcp-openshell-names-a-file");
+        let elsewhere = scratch("cli-mcp-openshell-names-a-file-elsewhere");
+        let script = elsewhere.join("server.py");
+        std::fs::write(&script, "print()").expect("a file");
+        let script = std::fs::canonicalize(&script).expect("resolved");
+        let (outcome, screen) = typing(
+            &directory,
+            &[
+                "add",
+                "boxed",
+                "--openshell",
+                PINNED,
+                "--",
+                "python3",
+                script.to_str().expect("a UTF-8 path"),
+            ],
+            "y\n",
+        );
+        let (ending, said) = outcome.expect_err("a server in a sandbox was given a file");
+        assert_eq!(ending, Ending::Argument, "{said}");
+        assert_eq!(said, t!(servers_openshell_no_files).to_string());
+        assert!(!screen.contains("Use this MCP server"), "{screen}");
+        assert!(
+            !mcp::declarations_file(&directory).exists(),
+            "a declaration was written that a session would refuse"
         );
     }
 
