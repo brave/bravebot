@@ -215,6 +215,14 @@ pub(super) fn manifest_animated(
                     let answer = crate::confirm::ask_exposure(terminal, &request);
                     replying.plainly(session, answer, crate::remote_confirm::Reply::Exposure);
                 }
+                // A server's list is put before the plan, and each call as its step reaches it
+                // (MANIFEST-15), drawn as a turn draws them.
+                crate::remote_confirm::ToMain::ToolList(request) => {
+                    answer_tool_list_in_a_turn(terminal, session, &replying, &request);
+                }
+                crate::remote_confirm::ToMain::McpCall(request) => {
+                    answer_mcp_call_in_a_turn(terminal, session, &replying, &request);
+                }
                 // The questions a turn asks that this mode cannot. There is no shell and no `run` in
                 // the schema (MANIFEST-5), so no pipeline is proposed and no output is read back;
                 // there is no step that asks to be shown a slot; and there is no planner left to pose

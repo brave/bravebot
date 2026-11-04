@@ -1479,7 +1479,12 @@ fn manifest_step_asks(message: &crate::remote_confirm::ToMain) -> bool {
     use crate::remote_confirm::ToMain;
     matches!(
         message,
-        ToMain::Write(_) | ToMain::Fetch(_) | ToMain::Vouch(_) | ToMain::Exposure(_)
+        ToMain::Write(_)
+            | ToMain::Fetch(_)
+            | ToMain::Vouch(_)
+            | ToMain::Exposure(_)
+            | ToMain::ToolList(_)
+            | ToMain::McpCall(_)
     )
 }
 
@@ -18951,8 +18956,8 @@ mod tests {
         );
     }
 
-    /// A manifest run's steps put writes, fetches, vouches and credential exposures to the person,
-    /// and each of those has to turn the title to waiting. Questions the mode refuses undrawn and
+    /// A manifest run's steps put writes, fetches, vouches, credential exposures, a server's list and
+    /// a server's calls to the person, and each of those has to turn the title to waiting. Questions the mode refuses undrawn and
     /// messages that ask nothing must not.
     #[test]
     fn every_approval_a_manifest_step_draws_turns_the_title_to_waiting() {
@@ -18975,6 +18980,28 @@ mod tests {
             bravebot_agent::confirm::ExposureRequest {
                 path: "notes.md".into(),
                 credentials: Vec::new(),
+            }
+        )));
+        assert!(manifest_step_asks(&ToMain::ToolList(
+            bravebot_agent::confirm::ToolListRequest {
+                alias: "weather".into(),
+                tools: Vec::new(),
+                refused: 0,
+                withheld: 0,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+            }
+        )));
+        assert!(manifest_step_asks(&ToMain::McpCall(
+            bravebot_agent::confirm::McpCallRequest {
+                alias: "weather".into(),
+                tool: "get_forecast".into(),
+                arguments: Vec::new(),
+                also: Vec::new(),
+                description: None,
+                may_stand: false,
+                asked_every_call: false,
+                asked_for_private_arguments: false,
             }
         )));
         assert!(!manifest_step_asks(&ToMain::Streaming("text".into())));
