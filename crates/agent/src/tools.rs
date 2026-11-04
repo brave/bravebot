@@ -287,6 +287,9 @@ pub struct Output {
     /// How many parts of a server's tool result its transport left out, which the planner is told as
     /// a number and nothing else (MCP-6).
     pub left_out: usize,
+    /// Where `read_file` read a file under another spelling of the name it was given (READ-11).
+    /// The turn words it beside the result from the two names, both the planner's own.
+    pub respelled: Option<Respelled>,
     /// A picture `vet_content` promoted, which the turn attaches to the planner's next request in a
     /// message of its own after the round's results (VET-4). Never carried in `text`.
     pub attached: Option<bravebot_core::vetting::Attached>,
@@ -1535,6 +1538,8 @@ struct Produced {
     pictures: Vec<bravebot_mcp::Picture>,
     /// How many parts of a server's tool result its transport left out, as [`Output::left_out`].
     left_out: usize,
+    /// Which spelling of the planner's name a read used, as [`Output::respelled`].
+    respelled: Option<Respelled>,
     /// A picture `vet_content` promoted, for the turn to attach after the round's results.
     attached: Option<bravebot_core::vetting::Attached>,
     /// The delegates the kernel has approved and nobody has started yet.
@@ -1605,6 +1610,7 @@ impl Produced {
             picture_bytes: 0,
             pictures: Vec::new(),
             left_out: 0,
+            respelled: None,
             attached: None,
             wakeup: None,
             watch: None,
@@ -1836,6 +1842,15 @@ impl Produced {
 
     fn costing(mut self, usage: Usage) -> Self {
         self.usage = usage;
+        self
+    }
+
+    /// Say which spelling of the planner's name a read used, where it used another. Not said of a
+    /// failure, which is already worded about the name that failed.
+    fn respelling(mut self, respelled: Option<Respelled>) -> Self {
+        if !self.failed {
+            self.respelled = respelled;
+        }
         self
     }
 
@@ -2961,6 +2976,7 @@ fn output_of(
         picture_bytes: produced.picture_bytes,
         pictures: produced.pictures,
         left_out: produced.left_out,
+        respelled: produced.respelled,
         attached: produced.attached,
         wakeup: produced.wakeup,
         watch: produced.watch,
@@ -3605,7 +3621,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     arguments: &Value,
 ) -> Produced {
     let workspace = tools.workspace;
-    let found = match path_argument(
+    let mut found = match path_argument(
         policy,
         tools.workspace,
         "read_file",
@@ -3616,6 +3632,39 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         Ok(found) => found,
         Err(refusal) => return Produced::problem(refusal),
     };
+    // The name the planner typed, which is the only name a not-found hint may be about.
+    let typed = found.released.clone();
+    // A name that matches no file but differs from one only in the kind of space in its last
+    // component is read as that file (READ-11). The candidates are made from the typed name and
+    // probed by path, so no directory is listed and nothing read decides it.
+    //
+    // The other spelling is built by the driver from the typed name alone and chosen by which
+    // candidate is a file, so it is not the planner's own words. It carries the label of the
+    // typed argument, which `path_argument` assigned and which no byte of any filename changes.
+    // Only the gate that asks about a path is asked again here: a deny rule covers the file and
+    // not the spelling. The refusal names the spelling the planner typed. Every later gate
+    // (confinement, trust key, quarantine, vouch offer, scan, change token) is keyed by the
+    // spelling in `found`, which is now the one that will be opened.
+    let mut respelled = None;
+    if found.destination == Destination::Named
+        && let Some(other) = workspace.respelled_when_missing(&found.released)
+    {
+        if let Err(refusal) =
+            refuse_denied_path_as(policy, tools.workspace, Purpose::Read, &other, &found.shown)
+        {
+            return Produced::problem(refusal);
+        }
+        found = PathArgument {
+            path: Labelled::new(other.clone(), found.path.label()),
+            destination: Destination::Named,
+            released: other,
+            // The name the planner typed, which is what a reference to the file is described by:
+            // the spelling on disk was chosen by the file system, so it is not the planner's to
+            // be told.
+            shown: found.shown.clone(),
+        };
+        respelled = Some(Respelled);
+    }
     // What the reference that comes back is said to be of. The planner's own path where it
     // typed one, and the reference's name where it did not: a read through a reference must not
     // hand back the filename the reference exists to hold.
@@ -3658,7 +3707,9 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // file, which is the defect this covers.
     //
     // Asked once per path per turn, and only for a path that is quarantined, so a planner retrying
-    // a read does not put the same question up twice.
+    // a read does not put the same question up twice. An answer thrown away because the file
+    // changed while the person was answering frees the path (`vouch_if_unchanged`), so the read
+    // the result below invites asks again.
     //
     // Never asked about a picture. What a yes grants is that a file's *text* may be read, and the
     // branch below hands a picture back as a reference whatever the trust map says, so the
@@ -3672,10 +3723,10 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // reach of anything read.
     //
     // `should_offer_vouch` is last because it is the only one of these that does anything: it marks
-    // the path asked about and writes the trail line saying so. Every test that could still call
-    // the prompt off has to come before it, or the path spends its one question of the turn on a
-    // prompt nobody sees and the trail records an offer that was never made. That is the defect
-    // this block was rewritten to fix, and the order is what holds it fixed.
+    // the path asked about. Every test that could still call the prompt off has to come before
+    // it, or the path spends its one question of the turn on a prompt nobody sees and the trail
+    // records an offer that was never made. That is the defect this block was rewritten to fix,
+    // and the order is what holds it fixed.
 
     // The name the map holds a rule about this file under, which is the relative one where the
     // planner spelled a file in the project by its absolute path. Every question below is about the
@@ -3704,10 +3755,10 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         // preview and decides nothing further: the head of it is cut inside the kernel, so the
         // driver never holds the text, and a file with nothing to show is asked about like any
         // other. The prompt says so in place of the preview.
-        let (body, preview_stamp) = policy.capture_files(|_policy, capture| {
+        let (body, preview_stamp) = policy.capture_files_shared(|policy| {
             (
                 workspace.peek_labelled_for_review(&proposed_path),
-                capture.stamp_of(&keyed),
+                policy.file_authority().stamp_of(&keyed),
             )
         });
         let shaped = policy.render_in_place("read_file", &body, |text| {
@@ -3715,7 +3766,20 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             (head.join("\n"), text.lines().nth(VOUCH_PREVIEW).is_some())
         });
         let label = shaped.label().to_string();
-        let (preview, truncated) = {
+
+        // Read here once, and used for the preview and the check below alike, so those two agree
+        // with each other (MODE-8). The confirmer reads the mode again when it answers, so the mode
+        // can change between the two reads.
+        //
+        // Bypassing answers the question without showing anybody anything, so no preview is
+        // released and the trail does not record one as shown to the user (TRACE-7). If the mode
+        // changes to one that asks before the answer, the prompt says the file has nothing to show
+        // in place of the preview. If it changes to bypass, the preview was released and the check
+        // ran, and the answer is recorded as the mode's.
+        let bypassing = tools.permission_mode.get() == crate::PermissionMode::Bypass;
+        let (preview, truncated) = if bypassing {
+            (String::new(), false)
+        } else {
             let proof = policy.authorise_display_release("the head of a quarantined file");
             shaped.declassify(&proof)
         };
@@ -3732,7 +3796,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
         // The plain mode test and not the one the two promotion gates ask, because screening does not
         // answer a vouch: it is a standing rule about a path rather than one slot's bytes, so under
         // bypass nobody reads this word however the run was started.
-        let checked = (tools.permission_mode.get() != crate::PermissionMode::Bypass).then(|| {
+        let checked = (!bypassing).then(|| {
             let spec = policy.before_vetting_a_path(&proposed_path, body);
             let asked_at = std::time::Instant::now();
             (
@@ -3741,7 +3805,16 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             )
         });
         let (verdict, (reason, reason_label)) = match checked {
-            Some((checked, elapsed)) => {
+            // A stop is not a verdict: nobody is asked to vouch, and the file is asked about
+            // again by the next read. The stop sentence names the typed name, and the file the
+            // check was about is the respelled one, so the note is set here: `respelling` leaves
+            // a failure alone (READ-11).
+            Some((Err(stopped), elapsed)) => {
+                let mut produced = check_stopped(&shown_path, &stopped).waiting(elapsed);
+                produced.respelled = respelled;
+                return produced;
+            }
+            Some((Ok(checked), elapsed)) => {
                 spent = checked.usage;
                 waited = elapsed;
                 let said = released_reason(policy, checked.reason);
@@ -3763,8 +3836,16 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             reason,
             reason_label,
         };
-        if confirmer.confirm_vouch(&request) == Decision::Approve {
-            approval_outlived = !policy.vouch_if_unchanged(&keyed, preview_stamp);
+        // The trail line for the offer is written once the answer says who gave it: a person was
+        // offered the chance, and a mode that approved offered nobody anything (TRACE-7). The name
+        // is the mode's own fixed word, so nothing read reaches the trail through it.
+        let (decision, answered_by) = confirmer.confirm_vouch_noting_the_mode(&request);
+        match answered_by {
+            None => policy.note_vouch_offered(&keyed),
+            Some(mode) => policy.record_vouch_answered_by_mode(&keyed, mode),
+        }
+        if decision == Decision::Approve {
+            approval_outlived = !policy.vouch_if_unchanged(&keyed, preview_stamp, answered_by);
             // A record that outlived the yes would take it back on the next turn (MEMORY-5).
             if !approval_outlived {
                 crate::memory::trusted_again(
@@ -3779,7 +3860,12 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
     // What a check cost, on whatever comes back. Every way out below goes through this, including
     // the ones that report a refusal: the request was made and somebody is paying for it whether or
     // not the read that followed handed anything over.
-    let priced = |produced: Produced| produced.costing(spent).waiting(waited);
+    let priced = |produced: Produced| {
+        produced
+            .costing(spent)
+            .waiting(waited)
+            .respelling(respelled)
+    };
 
     // A yes that arrived too late is said so, rather than left to read as a file nobody was asked
     // about. The bytes the answer was about are gone, so the only thing to do with the answer is
@@ -3841,13 +3927,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                     .of_content()
                     .of_a_picture(media, bytes)
             }
-            Err(e) => file_tool_problem(
-                policy,
-                "read_file",
-                path_field(destination),
-                &e,
-                &shown_path,
-            ),
+            Err(e) => read_file_problem(policy, workspace, destination, &typed, &e, &shown_path),
         });
     }
 
@@ -3871,13 +3951,7 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
                 Produced::deferring(Labelled::trusted(keyed), shown_path, bytes).of_content()
             }
             // A path that names nothing is said so now, exactly as an eager read would have.
-            Err(e) => file_tool_problem(
-                policy,
-                "read_file",
-                path_field(destination),
-                &e,
-                &shown_path,
-            ),
+            Err(e) => read_file_problem(policy, workspace, destination, &typed, &e, &shown_path),
         });
     }
 
@@ -3942,10 +4016,11 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
             });
         }
         Err(e) => {
-            return priced(file_tool_problem(
+            return priced(read_file_problem(
                 policy,
-                "read_file",
-                path_field(destination),
+                workspace,
+                destination,
+                &typed,
                 &e,
                 &shown_path,
             ));
@@ -4003,9 +4078,10 @@ fn read_file<S: Sink, C: Confirmer, R: Reporter>(
 
     // A read that was refused above is no touch of the file. Nor is one through a reference, where
     // `shown_path` is the reference's name and the file's own was never the planner's to say
-    // (INSTR-16).
+    // (INSTR-16). The spelling recorded is the one opened, which after a respelling is not the one
+    // typed and is the one that names the file.
     if destination == Destination::Named {
-        workspace.record_file(&shown_path);
+        workspace.record_file(&proposed_path);
     }
 
     // Reshaped inside the kernel, so the driver never holds the text. Only
@@ -4144,6 +4220,8 @@ pub(crate) fn materialise<S: Sink>(
     // The files this actually opened, for the line the person reads. A read deferred until a
     // processor needed it is still a read of their workspace, and until it was reported the only
     // reads on the screen were the planner's, which are the ones that read nothing.
+    // Exclusive: `Policy::materialise` emits the slot's `SlotWritten` and trail lines inside
+    // this closure, and a shared capture must emit nothing while it is held.
     policy.capture_files(|policy, _capture| {
         let mut opened = Vec::new();
         for slot in wanted {
@@ -4561,6 +4639,30 @@ fn file_tool_problem<S: Sink>(
     ))
 }
 
+/// [`file_tool_problem`] for `read_file`, which adds to a not-found on the name the planner typed
+/// that the file may be named with another kind of space (READ-11).
+///
+/// The hint is decided from `typed` and not from `shown_path` or from any name read from disk, and
+/// it is added only where the destination is the named path: a name reached through a reference
+/// is an entry of a directory listing, which may not pick a sentence (LIST-2).
+fn read_file_problem<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    destination: Destination,
+    typed: &str,
+    e: &crate::workspace::WorkspaceError,
+    shown_path: &str,
+) -> Produced {
+    let hint = match destination {
+        Destination::Named => workspace.kind_of_space_hint(e, typed),
+        Destination::Reference => "",
+    };
+    Produced::problem(format!(
+        "error: {}{hint}",
+        workspace_failure(policy, "read_file", path_field(destination), e, shown_path)
+    ))
+}
+
 /// The argument a path arrived in.
 fn path_field(destination: Destination) -> &'static str {
     match destination {
@@ -4731,6 +4833,12 @@ struct PathArgument {
     /// a reference it is not even the same string: `shown` is the reference's name.
     released: String,
 }
+
+/// The fact that `read_file` read a file under another spelling of the name it was given, in the
+/// kind of space in the last component (READ-11). It carries no name: the turn's sentence about it
+/// is fixed words, so no filename is in a sentence the driver signs for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Respelled;
 
 /// Put the file a reference names into a line a person is about to read.
 ///
@@ -5551,8 +5659,12 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
     // Whether there is a file here at all is a separate question, answered from the path and
     // `stat`, because the labelled peek cannot say: it reports a file it could not decode as
     // text the same way it reports one that is not there.
-    let (existing, pre_image, other_encoding, replaces, approved_revision) =
-        policy.capture_files(|policy, capture| {
+    //
+    // Taken shared: the capture reads a file, which can be large, and enters no effect, so it
+    // runs beside other readers and still waits for an effect (TRUST-4). The revision is read
+    // inside the same boundary, so it and the bytes are of one state of the map.
+    let (existing, pre_image, other_encoding, replaces, approved_revision) = policy
+        .capture_files_shared(|policy| {
             let key = workspace.trust_key(&proposed_path);
             let peeks = workspace.peek_labelled_for_write(policy, &proposed_path);
             (
@@ -5560,7 +5672,7 @@ fn put_in_the_workspace<S: Sink, C: Confirmer>(
                 peeks.1,
                 peeks.2,
                 workspace.names_a_file(&proposed_path),
-                capture.revision_of(&key),
+                policy.file_authority().revision_of(&key),
             )
         });
     // A file the trust map vouches for that is text in an encoding other than UTF-8 is not replaced
@@ -7495,8 +7607,14 @@ fn read_output<S: Sink, C: Confirmer, R: Reporter>(
         Some(spec) => {
             let asked_at = std::time::Instant::now();
             let checked = crate::vet::run(policy, &mut tools.chat, reporter, spec);
-            spent = checked.usage;
             waited = Some(crate::timing::Interval::since(asked_at));
+            // A stop is not a verdict: no prompt, no refusal on the record, and the slot stays
+            // as it was so the next turn can ask for it again.
+            let checked = match checked {
+                Ok(checked) => checked,
+                Err(stopped) => return check_stopped(&slot, &stopped).waiting(waited),
+            };
+            spent = checked.usage;
             let said = released_reason(policy, checked.reason);
             (checked.verdict, said)
         }
@@ -7763,6 +7881,46 @@ pub(crate) struct ReadInTheResult {
     pub usage: Usage,
     /// How long the turn waited on the check. `None` where none was made.
     pub waited: Option<crate::timing::Interval>,
+    /// Set where the person stopped the turn while the check ran. `text` is `None` then too, and
+    /// the turn ends as stopped once the run's own result is recorded.
+    pub stopped: Option<crate::outcome::Cancellation>,
+}
+
+/// What a read is told when the person stopped the turn while its check ran, with the cost of the
+/// attempts that completed.
+///
+/// The words are the driver's, and say nothing about the content or the check: only the person can
+/// cause a stop. The reference can be asked for again, since nothing was refused. The stop is
+/// carried beside the words so the turn ends as stopped rather than failed (TOOL-4).
+fn check_stopped(subject: impl std::fmt::Display, stopped: &crate::vet::Stopped) -> Produced {
+    let mut produced = Produced::problem(format!(
+        "stopped: the turn was stopped before the check on {subject} finished, so nothing was \
+         decided about it. {subject} was not refused and can be asked for again."
+    ))
+    .costing(stopped.usage);
+    produced.cancelled = Some(crate::outcome::Cancellation {
+        attempts: stopped.attempts,
+    });
+    produced
+}
+
+/// A refusal of a read the planner is told was kept back, with the line the person reads beside
+/// it.
+///
+/// The planner's `text` is the same in every mode and says nothing about what decided. Where the
+/// mode is bypass and auto-vetting is on, nobody was asked and a check's word answered, so the
+/// person is also told that, and which setting lifts it. The condition is the two facts the
+/// session was started with and never the verdict, the reason or a byte of the content, so an
+/// unsafe word and a check that could not be made read alike. Elsewhere a person was asked and
+/// said no, so there is nothing to add.
+fn kept_back(mode: crate::PermissionMode, auto_vetting: bool, text: String) -> Produced {
+    match mode == crate::PermissionMode::Bypass && auto_vetting {
+        true => {
+            let note = format!("{text} {}", crate::report::vetting_kept_back());
+            Produced::refused_with_a_note(text, note)
+        }
+        false => Produced::problem(text),
+    }
 }
 
 /// What a run that asked to read what it printed is handed in the same result, where the answer
@@ -7801,6 +7959,7 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         text,
         usage: Usage::default(),
         waited: None,
+        stopped: None,
     };
     if !mode.checks_before_promoting(auto_vetting) {
         return nothing(
@@ -7826,6 +7985,20 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     let asked_at = std::time::Instant::now();
     let checked = crate::vet::run(policy, chat, reporter, &spec);
     let waited = Some(crate::timing::Interval::since(asked_at));
+    // A stop leaves the slot quarantined and unrefused, and the turn ends stopped.
+    let checked = match checked {
+        Ok(checked) => checked,
+        Err(stopped) => {
+            return ReadInTheResult {
+                text: None,
+                usage: stopped.usage,
+                waited,
+                stopped: Some(crate::outcome::Cancellation {
+                    attempts: stopped.attempts,
+                }),
+            };
+        }
+    };
     let usage = checked.usage;
     // Before `release_output`, which would put anything but `safe` to the person: nobody is
     // shown this output here.
@@ -7844,12 +8017,19 @@ pub(crate) fn read_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         .ok()
         .map(|(text, _, _)| text)
     } else {
+        // Nothing is returned and the planner is told only that `read: true` did not return the
+        // output, so the person is told here what decided, as `read_output` tells them beside its
+        // refusal. The condition is the mode and the setting, never the word the check gave.
+        if mode == crate::PermissionMode::Bypass && auto_vetting {
+            reporter.notice(crate::report::vetting_kept_back());
+        }
         None
     };
     ReadInTheResult {
         text,
         usage,
         waited,
+        stopped: None,
     }
 }
 
@@ -7959,10 +8139,11 @@ fn release_output<S: Sink, C: Confirmer>(
         // false claim and naming the check would hand the planner the word it must not read.
         if confirmer.confirm_read_output(&request) == Decision::Reject {
             policy.refuse_unapproved_release("read_output", &slot.to_string());
-            return Err(Box::new(Produced::problem(format!(
+            let text = format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, or say in your reply what you needed from it."
-            ))));
+            );
+            return Err(Box::new(kept_back(mode, auto_vetting, text)));
         }
     }
 
@@ -8102,11 +8283,12 @@ fn release_vetted_text<S: Sink, C: Confirmer>(
         // from a person, and neither fact is the planner's to be told.
         if confirmer.confirm_vetted_read(&request) == Decision::Reject {
             policy.refuse_unapproved_release("vet_content", &slot.to_string());
-            return Err(Box::new(Produced::problem(format!(
+            let text = format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, {}or say in your reply what you needed from it.",
                 pass_to_a_processor(beside, slot)
-            ))));
+            );
+            return Err(Box::new(kept_back(mode, auto_vetting, text)));
         }
     }
 
@@ -8174,6 +8356,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         text,
         usage: Usage::default(),
         waited: None,
+        stopped: None,
     };
     let release = |policy: &mut Policy<'_, S>,
                    confirmer: &mut C,
@@ -8210,6 +8393,20 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
     let asked_at = std::time::Instant::now();
     let checked = crate::vet::run(policy, chat, reporter, &spec);
     let waited = Some(crate::timing::Interval::since(asked_at));
+    // A stop leaves the slot quarantined and unrefused, and the turn ends stopped.
+    let checked = match checked {
+        Ok(checked) => checked,
+        Err(stopped) => {
+            return ReadInTheResult {
+                text: None,
+                usage: stopped.usage,
+                waited,
+                stopped: Some(crate::outcome::Cancellation {
+                    attempts: stopped.attempts,
+                }),
+            };
+        }
+    };
     let usage = checked.usage;
     // Before `release_vetted_text`, which would put anything but `safe` to the person: nobody is
     // shown this result here.
@@ -8222,6 +8419,7 @@ pub(crate) fn vet_in_the_result<S: Sink, C: Confirmer, R: Reporter>(
         text,
         usage,
         waited,
+        stopped: None,
     }
 }
 
@@ -8329,8 +8527,13 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         Some(spec) => {
             let asked_at = std::time::Instant::now();
             let checked = crate::vet::run(policy, &mut tools.chat, reporter, spec);
-            spent = checked.usage;
             waited = Some(crate::timing::Interval::since(asked_at));
+            // A stop is not a verdict, so nobody is asked and nothing is refused (`read_output`).
+            let checked = match checked {
+                Ok(checked) => checked,
+                Err(stopped) => return check_stopped(&slot, &stopped).waiting(waited),
+            };
+            spent = checked.usage;
             said = checked.reason;
             checked.verdict
         }
@@ -8470,13 +8673,14 @@ fn vet_content<S: Sink, C: Confirmer, R: Reporter>(
         // from a person, and neither fact is the planner's to be told.
         if confirmer.confirm_vetted_read(&request) == Decision::Reject {
             policy.refuse_unapproved_release("vet_content", &slot.to_string());
-            return Produced::problem(format!(
+            let text = format!(
                 "refused: {slot} was kept back from you. Do not ask for it again. Work with what \
                  you have, {}or say in your reply what you needed from it.",
                 pass_to_a_processor(tools.beside, &slot)
-            ))
-            .costing(spent)
-            .waiting(waited);
+            );
+            return kept_back(mode, tools.auto_vetting, text)
+                .costing(spent)
+                .waiting(waited);
         }
     }
 
@@ -10540,16 +10744,21 @@ fn run_line<S: Sink, C: Confirmer, R: Reporter>(
     // A vouch was for the programs as they ran under their profile with nothing added, so what a
     // line prints that was lent a credential, or run with no sandbox, is not trusted on its account.
     let requesting = !requested.is_empty() || unconfined;
-    let (started_revision, checked) = policy.capture_files(|policy, capture| {
-        let revision = capture.revision();
-        let checked = match requesting {
-            true => policy.before_plan_requesting(&plan),
-            false => policy.before_plan(&plan),
-        };
-        (revision, checked)
+
+    // Shared: the revision and the label `before_plan` reads from the map have to be of one state,
+    // which an effect entering would break, and nothing here enters one. The gates (capability,
+    // a plan with steps, the single-use grant) read no file and run before the boundary, and the
+    // trail line is written after it, so no sink is called while a writer waits. Inside it go the
+    // revision and the map lookup, which open no file and wait for nothing.
+    if let Err(denial) = policy.gate_a_run(&plan) {
+        return Produced::problem(format!("refused: {denial}"));
+    }
+    let (started_revision, measured) = policy.capture_files_shared(|policy| {
+        let revision = authority.revision();
+        (revision, policy.measure_a_run(&plan, requesting))
     });
-    let label = match checked {
-        Ok(label) => label,
+    let label = match measured {
+        Ok(measured) => policy.record_a_run(measured),
         Err(denial) => return Produced::problem(format!("refused: {denial}")),
     };
     if spends_a_request {
@@ -24159,6 +24368,32 @@ mod tests {
             assert_worded_about_the_reference(&told, payload);
         }
 
+        /// READ-11: the hint about the kind of space is for a name the planner typed. A name read
+        /// from a listing that holds a space does not pick a sentence of the failure (LIST-2).
+        #[test]
+        fn a_read_by_reference_to_a_removed_file_with_a_space_carries_no_space_hint() {
+            let scratch = Scratch::new("read-removed-space");
+            let payload = "Screenshot 2026-10-27 at 12.10.54\u{202f}PM.txt";
+            let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+            let mut sink = RecordingSink::new();
+            let mut policy = policy_vouching(&mut sink);
+            let produced = super::arguments::with_tools(&workspace, |tools| {
+                reserve_a_removed_file(&mut policy, tools.slots, &scratch, payload);
+                read_file(
+                    &mut policy,
+                    tools,
+                    &mut crate::confirm::Unattended,
+                    &mut crate::report::IgnoreReports,
+                    &json!({"path_ref": "ref:1"}),
+                )
+            });
+
+            let told = super::arguments::told(&mut policy, &produced.text);
+            assert_worded_about_the_reference(&told, payload);
+            assert!(!told.contains("kind of space"), "{told}");
+        }
+
         /// LIST-2: a walk that cannot open a nested directory leaves it out and says so, and the
         /// sentence it says it in is not about that directory. The error opening it produced
         /// spells the name, and a failure a tool words reaches the planner as the driver's own.
@@ -30068,6 +30303,12 @@ mod tests {
             }
         }
 
+        /// A path argument the driver wrote. Built through an existing constructor, so the tests
+        /// of this module add no `Labelled::trusted` site to the count LABEL pins.
+        fn trusted_text(text: &str) -> Labelled<String> {
+            Produced::problem(text).text
+        }
+
         /// Trusted files under `a`, `b`, `c` and the top, and one under `mystery`, which the map
         /// distrusts, so a result naming it is quarantined.
         fn fixture(name: &str) -> (Scratch, Workspace) {
@@ -30447,6 +30688,451 @@ mod tests {
                 );
                 drop(entering);
                 assert_eq!(finished.recv_timeout(Duration::from_secs(5)), Ok(2));
+            });
+        }
+
+        /// The regression it rejects: a `read_file` that takes the boundary exclusive, so it queues
+        /// behind a search or listing that is part way through its walk. The test holds the
+        /// boundary as a reader, which a read must not wait for.
+        #[test]
+        fn a_read_file_does_not_wait_for_a_reader_holding_the_boundary() {
+            let (_scratch, workspace) = fixture("ahead-read-file-beside-reader");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (done, finished) = std::sync::mpsc::channel();
+
+            let searching = authority.capture_shared();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let page = workspace.read_page_unless_unchanged(
+                        &mut policy,
+                        &trusted_text("loose.txt"),
+                        1,
+                        10,
+                        None,
+                    );
+                    done.send(page.is_ok()).unwrap();
+                });
+                let outcome = finished.recv_timeout(Duration::from_secs(5));
+                // Released before the assertion, so a read that did wait is let through and the
+                // test fails and does not hang on the scope joining it.
+                drop(searching);
+                assert_eq!(outcome, Ok(true), "a read_file waited for a reader");
+            });
+        }
+
+        /// The regression it rejects: a `read_file` that writes its trail lines, or the observation
+        /// of its path, while it holds the boundary shared. Each event is reported to a sink that,
+        /// from another thread, tries to enter an effect and waits 300 ms for it. An event emitted
+        /// inside a shared capture would find the entry blocked.
+        #[test]
+        fn a_read_file_emits_nothing_while_it_holds_the_boundary() {
+            use bravebot_core::file_authority::FileAuthority;
+            use std::sync::Mutex;
+
+            struct Probing {
+                authority: Arc<Mutex<Option<FileAuthority>>>,
+                entered: Arc<Mutex<Vec<bool>>>,
+            }
+            impl bravebot_core::event::Sink for Probing {
+                fn emit(&mut self, _event: Event) {
+                    let Some(authority) = self.authority.lock().unwrap().clone() else {
+                        return;
+                    };
+                    let (done, finished) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        drop(authority.capture());
+                        let _ = done.send(());
+                    });
+                    let entered = finished.recv_timeout(Duration::from_millis(300)).is_ok();
+                    self.entered.lock().unwrap().push(entered);
+                }
+                fn recording_for(
+                    &mut self,
+                    _delegate: Option<bravebot_core::delegate::DelegateId>,
+                ) {
+                }
+            }
+
+            let (_scratch, workspace) = fixture("ahead-read-file-emits-outside");
+            let authority = Arc::new(Mutex::new(None));
+            let entered = Arc::new(Mutex::new(Vec::new()));
+            let mut sink = Probing {
+                authority: authority.clone(),
+                entered: entered.clone(),
+            };
+            let mut store = TrustStore::new("/work");
+            store.trust(".");
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "read a file");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy")
+            .with_trust(store);
+            // The probe enters through the policy's own authority, which `with_trust` replaced.
+            *authority.lock().unwrap() = Some(policy.file_authority());
+
+            let page = workspace.read_page_unless_unchanged(
+                &mut policy,
+                &trusted_text("loose.txt"),
+                1,
+                10,
+                None,
+            );
+            assert!(page.is_ok());
+            let entered = entered.lock().unwrap().clone();
+            assert!(
+                !entered.is_empty(),
+                "the read recorded nothing, so the probe proved nothing"
+            );
+            assert!(
+                entered.iter().all(|entered| *entered),
+                "an event reached the sink while the read held the boundary: {entered:?}"
+            );
+        }
+
+        /// Reports the first time a gate passes with a detail starting as given, which a test uses
+        /// to learn that the code under test got past a point without watching its thread.
+        struct Reaching {
+            gate: &'static str,
+            detail: &'static str,
+            reached: std::sync::mpsc::Sender<()>,
+        }
+
+        impl bravebot_core::event::Sink for Reaching {
+            fn emit(&mut self, event: Event) {
+                if matches!(event, Event::GatePassed { gate, detail }
+                    if gate == self.gate && detail.starts_with(self.detail))
+                {
+                    let _ = self.reached.send(());
+                }
+            }
+            fn recording_for(&mut self, _delegate: Option<bravebot_core::delegate::DelegateId>) {}
+        }
+
+        /// A policy for one call, on the file authority a test holds.
+        fn on_authority<'a>(
+            sink: &'a mut Reaching,
+            authority: &bravebot_core::file_authority::FileAuthority,
+            capabilities: impl IntoIterator<Item = Capability>,
+        ) -> Policy<'a, Reaching> {
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "make one call");
+            Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter(capabilities),
+                sink,
+            )
+            .expect("policy")
+            .with_file_authority(authority.clone())
+        }
+
+        /// Dispatches `call` on a second thread while this one holds the boundary as a reader, and
+        /// says whether the call reached `gate` with a detail starting `detail` within five seconds.
+        /// The reader is released before the answer is returned, so a call that waited for it is
+        /// let through and does not hang.
+        fn reaches_while_a_reader_holds_the_boundary(
+            workspace: &Workspace,
+            call: &ToolCall,
+            (gate, detail): (&'static str, &'static str),
+            capabilities: &[Capability],
+            confirmer: impl Confirmer + Send,
+        ) -> bool {
+            let authority = bravebot_core::file_authority::FileAuthority::new({
+                let mut store = TrustStore::new("/work");
+                store.trust(".");
+                store
+            });
+            let (reached, signal) = std::sync::mpsc::channel();
+            let searching = authority.capture_shared();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let mut confirmer = confirmer;
+                    let mut sink = Reaching {
+                        gate,
+                        detail,
+                        reached,
+                    };
+                    let mut policy =
+                        on_authority(&mut sink, &authority, capabilities.iter().cloned());
+                    with_tools(workspace, |tools| {
+                        dispatch(
+                            &mut policy,
+                            tools,
+                            &mut confirmer,
+                            &mut crate::report::IgnoreReports,
+                            call,
+                        );
+                    });
+                });
+                let outcome = signal.recv_timeout(Duration::from_secs(5));
+                drop(searching);
+                outcome.is_ok()
+            })
+        }
+
+        /// The regression it rejects: the `write_file` peek at the file it replaces taking the
+        /// boundary exclusive, so a write queues behind every reader and a reader behind it. The
+        /// test holds the boundary as a reader, which the peek must not wait for. The credential
+        /// scan is the first gate after the peek, and the confirmer declines the write, so the
+        /// test needs only that the peek finished.
+        #[test]
+        fn a_write_file_peek_does_not_wait_for_a_reader_holding_the_boundary() {
+            let (_scratch, workspace) = fixture("write-peek-beside-reader");
+            let call = call(
+                "write_file",
+                json!({"path": "loose.txt", "contents": "replacement\n"}),
+            );
+            assert!(
+                reaches_while_a_reader_holds_the_boundary(
+                    &workspace,
+                    &call,
+                    ("credential-scan", "write_file: "),
+                    &[Capability::FileRead, Capability::FileWrite],
+                    crate::confirm::Unattended,
+                ),
+                "a write_file waited for a reader before its peek finished"
+            );
+        }
+
+        /// The regression it rejects: the `run` label check taking the boundary exclusive, so a
+        /// line queues behind every reader. The test holds the boundary as a reader, which the
+        /// check must not wait for. The line's trail entry for the label is written after the
+        /// check, so the test needs only that the check finished.
+        #[test]
+        fn a_run_label_check_does_not_wait_for_a_reader_holding_the_boundary() {
+            let (_scratch, workspace) = fixture("run-label-beside-reader");
+            let call = call("run", json!({"command": "echo ok"}));
+            assert!(
+                reaches_while_a_reader_holds_the_boundary(
+                    &workspace,
+                    &call,
+                    ("provenance", "run: output labelled"),
+                    &[Capability::ShellExec],
+                    crate::confirm::ApproveRuns,
+                ),
+                "a run waited for a reader before its label check finished"
+            );
+        }
+
+        /// The regression it rejects: a `read_file` that captures bytes while an effect is
+        /// entering a file, which the shared boundary must still keep out.
+        #[test]
+        fn a_read_file_waits_for_an_effect_holding_the_boundary() {
+            let (_scratch, workspace) = fixture("ahead-read-file-waits-for-effect");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (done, finished) = std::sync::mpsc::channel();
+
+            let entering = authority.capture();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let page = workspace.read_page_unless_unchanged(
+                        &mut policy,
+                        &trusted_text("loose.txt"),
+                        1,
+                        10,
+                        None,
+                    );
+                    done.send(page.is_ok()).unwrap();
+                });
+                assert!(
+                    finished.recv_timeout(Duration::from_millis(300)).is_err(),
+                    "a read_file captured bytes while an effect held the boundary"
+                );
+                drop(entering);
+                assert_eq!(finished.recv_timeout(Duration::from_secs(5)), Ok(true));
+            });
+        }
+
+        /// The regressions it rejects: a listing that holds the boundary for the whole of its walk,
+        /// which keeps an effect out until the walk ends; and one that labels its paths before the
+        /// walk, which reads a state of the map an effect has since changed. The walk is parked in
+        /// the test hook with no boundary held. An effect enters a file the listing is about to
+        /// report, which must not wait for the walk, and the listing is then labelled by the map
+        /// as the effect left it.
+        #[test]
+        fn a_listing_walk_does_not_hold_an_effect_out_and_is_labelled_after_it() {
+            let (_scratch, workspace) = fixture("ahead-list-walk-beside-effect");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (walking, parked) = std::sync::mpsc::channel();
+            let (resume, resumed) = std::sync::mpsc::channel::<()>();
+            let (resume, resumed) = (
+                std::sync::Mutex::new(resume),
+                std::sync::Mutex::new(resumed),
+            );
+            let walking = std::sync::Mutex::new(walking);
+            workspace.hold_reads(move |_| {
+                walking.lock().unwrap().send(()).unwrap();
+                let _ = resumed.lock().unwrap().recv_timeout(Duration::from_secs(5));
+            });
+            let (listed, listing) = std::sync::mpsc::channel();
+            let (entered, entering) = std::sync::mpsc::channel();
+
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let result = workspace.list(&mut policy, &trusted_text("b"), None, None);
+                    listed.send(result).unwrap();
+                });
+                parked
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("the listing reached its walk");
+                scope.spawn(|| {
+                    // Entering takes the boundary exclusive, so it waits for any reader.
+                    let effect = authority.capture().begin("b/three.txt");
+                    entered.send(effect).unwrap();
+                });
+                let effect = entering.recv_timeout(Duration::from_secs(2));
+                // Released before the assertion, so a listing that held the boundary is let
+                // through and the test fails and does not hang on the scope joining it.
+                resume.lock().unwrap().send(()).unwrap();
+                let effect = effect
+                    .expect("an effect waited for a listing's walk")
+                    .expect("the path was free");
+                let listing = listing
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("the listing finished")
+                    .expect("a listing");
+                assert!(
+                    !listing.label().is_trusted(),
+                    "the listing was labelled by the map from before the effect entered"
+                );
+                drop(effect);
+            });
+        }
+
+        /// The regression it rejects: a listing that looks its paths up without the boundary, so
+        /// that an effect entering at that moment is read half way. The test holds the boundary as
+        /// an effect entering would.
+        #[test]
+        fn a_listing_waits_for_an_effect_holding_the_boundary_to_label_its_paths() {
+            let (_scratch, workspace) = fixture("ahead-list-waits-for-effect");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (done, finished) = std::sync::mpsc::channel();
+
+            let entering = authority.capture();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let result = workspace.list(&mut policy, &trusted_text("b"), None, None);
+                    done.send(result.is_ok()).unwrap();
+                });
+                assert!(
+                    finished.recv_timeout(Duration::from_millis(300)).is_err(),
+                    "a listing labelled its paths while an effect held the boundary"
+                );
+                drop(entering);
+                assert_eq!(finished.recv_timeout(Duration::from_secs(5)), Ok(true));
+            });
+        }
+
+        /// The regressions it rejects: a search that holds the boundary for the whole of its walk,
+        /// which keeps an effect out until the walk ends; and one that labels its files before the
+        /// walk, or without the boundary, which reads a state of the map an effect has since
+        /// changed. The search is parked in the test hook with no boundary held. An effect enters a
+        /// file the search is about to read, which must not wait for it, and the result is then
+        /// labelled by the map as the effect left it.
+        #[test]
+        fn a_search_walk_does_not_hold_an_effect_out_and_is_labelled_after_it() {
+            let (_scratch, workspace) = fixture("ahead-grep-walk-beside-effect");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (walking, parked) = std::sync::mpsc::channel();
+            let (resume, resumed) = std::sync::mpsc::channel::<()>();
+            let (resume, resumed) = (
+                std::sync::Mutex::new(resume),
+                std::sync::Mutex::new(resumed),
+            );
+            let walking = std::sync::Mutex::new(walking);
+            workspace.hold_reads(move |_| {
+                walking.lock().unwrap().send(()).unwrap();
+                let _ = resumed.lock().unwrap().recv_timeout(Duration::from_secs(5));
+            });
+            let (searched, search) = std::sync::mpsc::channel();
+            let (entered, entering) = std::sync::mpsc::channel();
+
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let result = workspace.grep_around(
+                        &mut policy,
+                        &[trusted_text("needle")],
+                        &trusted_text("b"),
+                        None,
+                        true,
+                        1,
+                        0,
+                    );
+                    searched.send(result).unwrap();
+                });
+                parked
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("the search reached its walk");
+                scope.spawn(|| {
+                    // Entering takes the boundary exclusive, so it waits for any reader.
+                    let effect = authority.capture().begin("b/three.txt");
+                    entered.send(effect).unwrap();
+                });
+                let effect = entering.recv_timeout(Duration::from_secs(2));
+                // Released before the assertion, so a search that held the boundary is let
+                // through and the test fails and does not hang on the scope joining it.
+                resume.lock().unwrap().send(()).unwrap();
+                let effect = effect
+                    .expect("an effect waited for a search's walk")
+                    .expect("the path was free");
+                let search = search
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("the search finished")
+                    .expect("a search");
+                assert!(
+                    !search.label().is_trusted(),
+                    "the search was labelled by the map from before the effect entered"
+                );
+                drop(effect);
+            });
+        }
+
+        /// The regression it rejects: a search that reads a file's bytes, or the map's answer for
+        /// it, without the boundary, so that an effect entering that file is read half way
+        /// (TRUST-4). The test holds the boundary as an effect entering would.
+        #[test]
+        fn a_search_waits_for_an_effect_holding_the_boundary_to_read_a_file() {
+            let (_scratch, workspace) = fixture("ahead-grep-waits-for-effect");
+            let mut sink = RecordingSink::new();
+            let mut policy = policy(&mut sink);
+            let authority = policy.file_authority();
+            let (done, finished) = std::sync::mpsc::channel();
+
+            let entering = authority.capture();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let result = workspace.grep_around(
+                        &mut policy,
+                        &[trusted_text("needle")],
+                        &trusted_text("b"),
+                        None,
+                        true,
+                        1,
+                        0,
+                    );
+                    done.send(result.is_ok()).unwrap();
+                });
+                assert!(
+                    finished.recv_timeout(Duration::from_millis(300)).is_err(),
+                    "a search read a file while an effect held the boundary"
+                );
+                drop(entering);
+                assert_eq!(finished.recv_timeout(Duration::from_secs(5)), Ok(true));
             });
         }
 
@@ -31109,8 +31795,9 @@ mod tests {
         use bravebot_core::file_authority::FileAuthority;
         use bravebot_core::policy::{ReleasePlan, Routing};
 
-        /// Answers a vouch question yes, after starting a `run` line when it holds an authority to
-        /// start one on. Counts the questions it was asked. Every other question is Unattended's.
+        /// Answers a vouch question yes, after starting a `run` line on the first question when it
+        /// holds an authority to start one on. Counts the questions it was asked. Every other
+        /// question is Unattended's.
         struct SaysYes {
             starts_a_program_on: Option<FileAuthority>,
             asked: usize,
@@ -31119,7 +31806,7 @@ mod tests {
         impl Confirmer for SaysYes {
             fn confirm_vouch(&mut self, _request: &VouchRequest) -> Decision {
                 self.asked += 1;
-                if let Some(authority) = &self.starts_a_program_on {
+                if let Some(authority) = self.starts_a_program_on.take() {
                     authority.note_program_started();
                 }
                 Decision::Approve
@@ -31186,10 +31873,11 @@ mod tests {
             }
         }
 
-        /// Reads `note.txt`, which nobody vouched for, with a person who answers yes, in bypass so
-        /// that no confined check is made. Returns what the planner was told, whether the file is
-        /// still quarantined afterwards, and how many times the person was asked.
-        fn read_while(starts_a_program: bool) -> (String, bool, usize) {
+        /// Reads `note.txt`, which nobody vouched for, `reads` times in one turn with a person who
+        /// answers yes, in bypass so that no confined check is made. Returns what the planner was
+        /// told by each read, whether the file is still quarantined afterwards, and how many times
+        /// the person was asked, and the trail.
+        fn read_note(starts_a_program: bool, reads: usize) -> (Vec<String>, bool, usize, String) {
             let scratch = Scratch::new("vouch-after-program");
             std::fs::write(scratch.path.join("note.txt"), "a line\n").unwrap();
             let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -31216,18 +31904,39 @@ mod tests {
             }))
             .expect("a call");
 
-            let output = with_tools(&workspace, |tools| {
+            let outputs = with_tools(&workspace, |tools| {
                 tools.permission_mode.set(crate::PermissionMode::Bypass);
-                dispatch(
-                    &mut policy,
-                    tools,
-                    &mut person,
-                    &mut crate::report::IgnoreReports,
-                    &call,
-                )
+                (0..reads)
+                    .map(|_| {
+                        dispatch(
+                            &mut policy,
+                            tools,
+                            &mut person,
+                            &mut crate::report::IgnoreReports,
+                            &call,
+                        )
+                    })
+                    .collect::<Vec<_>>()
             });
-            let said = told(&mut policy, &output.text);
-            (said, policy.read_is_quarantined("note.txt"), person.asked)
+            let said = outputs
+                .iter()
+                .map(|output| told(&mut policy, &output.text))
+                .collect();
+            let still_quarantined = policy.read_is_quarantined("note.txt");
+            drop(policy);
+            (
+                said,
+                still_quarantined,
+                person.asked,
+                format!("{:?}", sink.events()),
+            )
+        }
+
+        /// One read of `note.txt`: what the planner was told, whether the file is still
+        /// quarantined, and how many times the person was asked.
+        fn read_while(starts_a_program: bool) -> (String, bool, usize) {
+            let (mut said, still_quarantined, asked, _) = read_note(starts_a_program, 1);
+            (said.remove(0), still_quarantined, asked)
         }
 
         /// The regression it rejects: `read_file` passing the vouch only the path's revision, or
@@ -31253,6 +31962,45 @@ mod tests {
             assert!(
                 said.contains("changed while the user was being asked about it"),
                 "the planner was not told the answer was thrown away: {said}"
+            );
+        }
+
+        /// The regression it rejects: a read after a thrown-away answer asking nobody. The result of
+        /// the first read tells the planner to read again and says the person will be asked, so the
+        /// second read has to put the question, and a yes with no program started in between has to
+        /// trust the file. An implementation that keeps the path marked as asked about leaves the
+        /// second read quarantined with `asked` still 1.
+        #[test]
+        fn a_read_after_a_thrown_away_answer_asks_the_person_again() {
+            let (said, still_quarantined, asked, trail) = read_note(true, 2);
+            assert!(
+                said[0].contains("changed while the user was being asked about it"),
+                "the first answer was not thrown away: {}",
+                said[0]
+            );
+            assert_eq!(
+                asked, 2,
+                "the second read did not put the question again: {}",
+                said[1]
+            );
+            assert!(
+                !still_quarantined,
+                "a yes given to the second question was not spent: {}",
+                said[1]
+            );
+            assert!(
+                !said[1].contains("changed while the user was being asked about it"),
+                "the second answer was thrown away too: {}",
+                said[1]
+            );
+            assert_eq!(
+                trail
+                    .matches(
+                        "note.txt: quarantined, so the user is offered the chance to vouch for it"
+                    )
+                    .count(),
+                2,
+                "the trail does not show the second offer: {trail}"
             );
         }
     }

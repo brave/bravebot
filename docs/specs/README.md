@@ -18,7 +18,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [trust-map.md](trust-map.md) | `TRUST` | 25 | which paths the user vouched for, what a write does to that record, and how long an answer lasts |
 | [permissions.md](permissions.md) | `PERM` | 20 | rules written in advance about what to ask about and what to refuse |
 | [processors.md](processors.md) | `PROC` | 16 | the one component that reads untrusted content, and what it may do with it |
-| [vetting.md](vetting.md) | `CHECK` | 15 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
+| [vetting.md](vetting.md) | `CHECK` | 16 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [grounding.md](grounding.md) | `GROUND` | 6 | counting what a delegate or a goal's turns actually ran and wrote, and telling the planner and the goal judge (proposed: not built) |
 | [delegation.md](delegation.md) | `DELEGATE` | 33 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
@@ -97,7 +97,7 @@ the routing-versus-content split they share.
 | Spec | Id | Clauses | Tool |
 |---|---|---|---|
 | [tools/tool-surface.md](tools/tool-surface.md) | `TOOL` | 6 | the surface every tool shares |
-| [tools/read-file.md](tools/read-file.md) | `READ` | 10 | `read_file` |
+| [tools/read-file.md](tools/read-file.md) | `READ` | 11 | `read_file` |
 | [tools/list-files.md](tools/list-files.md) | `LIST` | 6 | `list_files` |
 | [tools/search.md](tools/search.md) | `SEARCH` | 13 | `search` |
 | [tools/repo-map.md](tools/repo-map.md) | `MAP` | 5 | `repo_map` |

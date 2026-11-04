@@ -822,6 +822,13 @@ since making the check is what sends them, and each promotion costs a model call
 critical path. Both are the price of the screening rather than side effects of it, and a run that
 wants neither leaves the flag off.
 
+A person is told what the screening does. Where the run also bypasses permissions and the flag
+turns auto-vetting on, the plain client and the other command-line path print one line after the
+notice that permissions are skipped, saying that a read a check does not pass is refused and not
+asked about ([CHECK-11](vetting.md#CHECK-11)). Without the bypass flag, or with auto-vetting off,
+that line is not printed. A refusal that screening makes is also told to the person as it happens
+([CHECK-9](vetting.md#CHECK-9)).
+
 The flag is taken out of the arguments before anything dispatches on them, so it composes with
 every way of starting and with the other flags taken out there, `--plain` included. Given
 twice it is given once, which is asking for something that is already on rather than an error to
@@ -847,6 +854,9 @@ a time, and only where a check completed and found nothing.
 `verified-by: bravebot_cli::main::an_invocation_that_only_mentions_vetting_does_not_ask_for_it`
 `verified-by: bravebot_cli::main::vetting_composes_with_the_other_flags_that_lead`
 `verified-by: bravebot_core::vetting::asking_on_the_command_line_is_one_way_and_idempotent`
+`verified-by: bravebot_cli::progress::bypass_with_auto_vetting_says_what_bypass_refuses_after_the_flags_line`
+`verified-by: bravebot_cli::progress::bypass_without_auto_vetting_or_without_the_flag_says_nothing_extra`
+`verified-by: bravebot_cli::running::a_one_shot_run_in_bypass_says_what_bypass_refuses_only_with_auto_vetting_on`
 
 <a id="CLI-16"></a>
 ### CLI-16: a one-shot run names its own effort level, or asks for the one a session would

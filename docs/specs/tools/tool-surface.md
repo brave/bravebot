@@ -8,13 +8,13 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 255
+      - crates/agent/src/tools.rs: 258
       - crates/agent/src/tools/message.rs: 14
       - crates/agent/src/tools/link.rs: 6
       - crates/agent/src/tools/recall.rs: 25
   - symbol: Produced::refused_with_a_note
     sites:
-      - crates/agent/src/tools.rs: 12
+      - crates/agent/src/tools.rs: 13
 documented-by: docs/website/docs/reference/tools.md
 ---
 

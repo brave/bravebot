@@ -281,6 +281,59 @@ impl fmt::Display for RunRequestCause {
 
 type Gated<T> = Result<T, Denial>;
 
+/// The label of an observation of one path, taken by [`Policy::measure_path`] and not yet
+/// recorded.
+///
+/// Carries the label and the key the map was asked about, which the trail names. The key is the
+/// path as the driver resolved it, and no file content.
+#[derive(Debug, Clone)]
+pub struct PathObserved {
+    label: Label,
+    path: String,
+}
+
+impl PathObserved {
+    /// The label the map gave the path.
+    pub fn label(&self) -> Label {
+        self.label
+    }
+}
+
+/// The label a `run` line's output gets, worked out by [`Policy::measure_plan`] and not yet
+/// recorded.
+///
+/// Carries the label and the fixed sentence that says why, which is a literal chosen by the
+/// policy and not a byte of anything the line printed.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanLabelled {
+    label: Label,
+    why: &'static str,
+}
+
+/// The label and the size of an observation of several paths, taken by
+/// [`Policy::measure_paths`] and not yet recorded.
+///
+/// Carries no path and no content: the integrity met over the paths and how many there were.
+#[derive(Debug, Clone, Copy)]
+pub struct PathsObserved {
+    label: Label,
+    visited: usize,
+}
+
+impl PathsObserved {
+    /// This observation and `later`, as one over the paths of both: integrity is the meet of the
+    /// two, and the counts add.
+    ///
+    /// For a result built from files captured one at a time, whose label must be no more trusted
+    /// than the map's answer for any one of them at the moment its bytes were taken.
+    pub fn with(self, later: Self) -> Self {
+        Self {
+            label: crate::label::taint_all([self.label, later.label]),
+            visited: self.visited + later.visited,
+        }
+    }
+}
+
 /// The routing block for one turn: trusted key/value pairs that decide where effects
 /// land.
 ///
@@ -614,6 +667,10 @@ pub struct Policy<'sink, S: Sink> {
     /// map and needs no remembering; a no is worth honouring for the rest of the turn so a planner
     /// retrying a read does not put the same question up twice, but it is not a standing refusal
     /// and the next turn may ask again.
+    ///
+    /// A path leaves the set when [`Policy::vouch_if_unchanged`] throws an answer away, because
+    /// the question was about text that is gone and the person has not answered about what the
+    /// file holds now. The next read of it asks again.
     vouch_asked: std::collections::BTreeSet<String>,
     /// The files a person agreed to have read despite what the scan found in them.
     ///
@@ -1605,7 +1662,12 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         std::mem::replace(&mut self.trust, authority)
     }
 
-    /// Capture bytes and decide their labels within one file-authority boundary.
+    /// Capture within one file-authority boundary, held exclusive, whatever enters or completes an
+    /// effect.
+    ///
+    /// What runs inside is only what must be atomic with the entry or completion: the revision
+    /// check, a label lookup, `begin` or `publish`. Reading a large file or walking a tree belongs
+    /// outside it, or in [`Policy::capture_files_shared`] where the read has to agree with the label.
     /// The closure must not prompt, call a model, or wait for a process or delegate.
     pub fn capture_files<R>(
         &mut self,
@@ -1622,7 +1684,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// The closure is given no handle to enter an effect, so it cannot change a file decision.
     /// It is still held against every effect, so the bytes it reads and the label it assigns them
     /// belong to one state of the map. The closure must not prompt, call a model, or wait for a
-    /// process or delegate.
+    /// process or delegate. It must not emit an event or write the trail: measure inside, and
+    /// record after the guard is released, as `Policy::measure_paths` and `record_paths` do.
     pub fn capture_files_shared<R>(&mut self, capture: impl FnOnce(&mut Self) -> R) -> R {
         let authority = self.file_authority();
         let _guard = authority.capture_shared();
@@ -2200,21 +2263,46 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// True once per path per turn, and only where the path is quarantined and so the offer would
     /// change something. Records the asking, so a planner retrying a read does not put the same
-    /// question up twice.
+    /// question up twice. A yes thrown away by [`Policy::vouch_if_unchanged`] does not count as the
+    /// asking, so the path is offered again.
     ///
     /// This offers the trust map's own decision at the moment it bites. It is not a second route
     /// to trusting content: what a yes writes is a rule in the map, the same rule `@` and the
     /// startup question write, so the answer stays consistent for every later read of that path.
+    ///
+    /// Writes nothing to the trail itself. The caller writes the line for a person with
+    /// [`Policy::note_vouch_offered`], and for a mode that answered with
+    /// [`Policy::record_vouch_answered_by_mode`] (TRACE-7).
     pub fn should_offer_vouch(&mut self, path: &str) -> bool {
         if !self.read_is_quarantined(path) || self.vouch_asked.contains(path) {
             return false;
         }
         self.vouch_asked.insert(path.to_string());
+        true
+    }
+
+    /// Record that the question whether to vouch for `path` is being put to a person.
+    ///
+    /// Written only for the path of a question that goes to the confirmer, after
+    /// [`Policy::should_offer_vouch`] said to ask. A mode that approves draws no prompt, so
+    /// writing it there would record a person offered something they were never shown (TRACE-7).
+    pub fn note_vouch_offered(&mut self, path: &str) {
         self.allow(
             "approval",
             format!("{path}: quarantined, so the user is offered the chance to vouch for it"),
         );
-        true
+    }
+
+    /// Record that a mode answered the offer to vouch for `path` and nobody was asked.
+    ///
+    /// `mode` is the mode's own fixed name, so the entry holds no text but the path. It is the
+    /// wording [`Policy::allow_exposing_read`] and a language server's start use for the same
+    /// thing (TRACE-7).
+    pub fn record_vouch_answered_by_mode(&mut self, path: &str, mode: &'static str) {
+        self.allow(
+            "approval",
+            format!("{path}: answered by {mode} mode, nobody was asked"),
+        );
     }
 
     /// Record that the user vouched for this exact command, in this exact tree, its side effects
@@ -2428,6 +2516,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// [`Policy::observe`] cannot know that, because a capability has no idea where its bytes
     /// came from; the trust store does.
     pub fn observe_path(&mut self, capability: Capability, path: &str) -> Gated<Label> {
+        let measured = self.measure_path(&capability, path)?;
+        Ok(self.record_path(capability, measured))
+    }
+
+    /// The label [`Policy::observe_path`] would give `path`, without recording it.
+    ///
+    /// For a capture that holds the file-authority boundary only while it reads: the lookup is
+    /// taken inside the capture and [`Policy::record_path`] writes the event after the boundary
+    /// is released, so no sink is called while a writer waits. Nothing is emitted here.
+    pub fn measure_path(&self, capability: &Capability, path: &str) -> Gated<PathObserved> {
         let base = capability.output_label().ok_or_else(|| Denial {
             principle: Principle::Capability,
             message: format!("'{capability}' produces no observation to label"),
@@ -2440,19 +2538,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             _ => Integrity::Untrusted,
         };
 
-        let label = Label::new(integrity, base.confidentiality);
+        Ok(PathObserved {
+            label: Label::new(integrity, base.confidentiality),
+            path: path.to_string(),
+        })
+    }
+
+    /// Emit the observation [`Policy::measure_path`] took, and return its label.
+    ///
+    /// Emits the same two lines [`Policy::observe_path`] does.
+    pub fn record_path(&mut self, capability: Capability, observed: PathObserved) -> Label {
+        let PathObserved { label, path } = observed;
         self.sink.emit(Event::Observed { capability, label });
         self.allow(
             "trust",
             format!(
                 "{path} read as {}",
-                match integrity {
+                match label.integrity {
                     Integrity::Trusted => "trusted, from a trusted path",
                     Integrity::Untrusted => "untrusted",
                 }
             ),
         );
-        Ok(label)
+        label
     }
 
     /// Record an observation spanning several paths, taking the meet of their integrity.
@@ -2465,6 +2573,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         capability: Capability,
         paths: impl IntoIterator<Item = &'p str>,
     ) -> Gated<Label> {
+        let measured = self.measure_paths(&capability, paths)?;
+        Ok(self.record_paths(capability, measured))
+    }
+
+    /// The label [`Policy::observe_paths`] would give `paths`, without recording it.
+    ///
+    /// For a capture that holds the file-authority boundary only while it reads: the lookup is
+    /// taken inside the capture and [`Policy::record_paths`] writes the event after the boundary
+    /// is released, so no sink is called while a writer waits. Nothing is emitted here.
+    pub fn measure_paths<'p>(
+        &self,
+        capability: &Capability,
+        paths: impl IntoIterator<Item = &'p str>,
+    ) -> Gated<PathsObserved> {
         let base = capability.output_label().ok_or_else(|| Denial {
             principle: Principle::Capability,
             message: format!("'{capability}' produces no observation to label"),
@@ -2486,19 +2608,29 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             integrity = Integrity::Trusted;
         }
 
-        let label = Label::new(integrity, base.confidentiality);
+        Ok(PathsObserved {
+            label: Label::new(integrity, base.confidentiality),
+            visited,
+        })
+    }
+
+    /// Emit the observation [`Policy::measure_paths`] took, and return its label.
+    ///
+    /// Emits the same two lines [`Policy::observe_paths`] does.
+    pub fn record_paths(&mut self, capability: Capability, observed: PathsObserved) -> Label {
+        let PathsObserved { label, visited } = observed;
         self.sink.emit(Event::Observed { capability, label });
         self.allow(
             "trust",
             format!(
                 "{visited} path(s) observed together, {}",
-                match integrity {
+                match label.integrity {
                     Integrity::Trusted => "all trusted",
                     Integrity::Untrusted => "at least one untrusted",
                 }
             ),
         );
-        Ok(label)
+        label
     }
 
     /// Whether the map trusts `path` and every path beneath it.
@@ -6157,6 +6289,22 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         verdict
     }
 
+    /// Record that a check was stopped before it finished.
+    ///
+    /// Not a verdict, so nothing is returned and the trail line holds no word from
+    /// [`crate::vetting::Verdict`]: the person ended the turn, nothing was learned about the
+    /// content, and a reader of the trail must not take the line for a check that objected or one
+    /// that could not be made. The slot is not marked refused, so it can be asked for again.
+    pub fn vetting_stopped(&mut self, spec: &crate::vetting::VettingSpec) {
+        self.allow(
+            "vetting",
+            format!(
+                "{}: the check was stopped before it finished and gave no verdict",
+                Self::describe_check(spec)
+            ),
+        );
+    }
+
     /// Take the word of whoever endorsed one slot's content and give the planner those bytes.
     ///
     /// **Not a relabel, and not a claim about a file.** The slot keeps the label it was
@@ -7071,6 +7219,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// and a rule on the file is more specific than any rule on the tree around it, so a
     /// referenced file is trusted inside a directory nobody vouched for.
     pub fn vouch_for_named_path(&mut self, path: &str) {
+        self.vouch_recording(path, "the user named it in their own line");
+    }
+
+    /// Publish a rule trusting `path` and record `how` as the reason in the trail.
+    fn vouch_recording(&mut self, path: &str, how: &str) {
         if !self.trust.publish(path, Integrity::Trusted) {
             self.allow(
                 "trust",
@@ -7078,10 +7231,7 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             );
             return;
         }
-        self.allow(
-            "trust",
-            format!("{path} trusted: the user named it in their own line"),
-        );
+        self.allow("trust", format!("{path} trusted: {how}"));
     }
 
     /// Record that `path` is untrusted because a write in an earlier session left it so.
@@ -7111,19 +7261,38 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Refusing is recorded and reported. A yes that quietly does nothing leaves a person watching
     /// a file they just trusted come back quarantined with nothing saying why, and the caller needs
     /// the answer to say so.
+    ///
+    /// A refused answer also frees `path` for [`Policy::should_offer_vouch`], so the read the
+    /// caller tells the planner to make puts the question again, about what the file holds then.
+    /// Nothing is freed when the answer is spent. A no never reaches this method, so it keeps the
+    /// path asked about for the rest of the turn.
+    ///
+    /// `answered_by` is the name of the mode that answered, or `None` for a person. The rule
+    /// written is the same either way. The trail credits the user with naming the file only for
+    /// the second (TRACE-7).
     pub fn vouch_if_unchanged(
         &mut self,
         path: &str,
         shown_at: crate::file_authority::Stamp,
+        answered_by: Option<&'static str>,
     ) -> bool {
         let vouched = self.capture_files(|policy, capture| {
             if capture.stamp_of(path) != shown_at {
                 return false;
             }
-            policy.vouch_for_named_path(path);
+            match answered_by {
+                Some(mode) => policy.vouch_recording(
+                    path,
+                    &format!(
+                        "{mode} mode answered the offer to vouch for it, the user did not name it"
+                    ),
+                ),
+                None => policy.vouch_for_named_path(path),
+            }
             true
         });
         if !vouched {
+            self.vouch_asked.remove(path);
             self.allow(
                 "trust",
                 format!("{path} not trusted: it changed while the question was being answered"),
@@ -8150,6 +8319,15 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     }
 
     fn label_a_run(&mut self, plan: &crate::command::Plan, requesting: bool) -> Gated<Label> {
+        self.gate_a_run(plan)?;
+        let measured = self.measure_a_run(plan, requesting)?;
+        Ok(self.record_a_run(measured))
+    }
+
+    /// The gates a `run` line passes before its output is labelled: the capability, a plan with
+    /// something in it, and the single-use grant for exactly this plan. None of them reads the
+    /// file map, so none belongs inside the file-authority boundary.
+    pub fn gate_a_run(&mut self, plan: &crate::command::Plan) -> Gated<()> {
         self.before_capability(Capability::ShellExec)?;
 
         if plan.steps().is_empty() {
@@ -8160,8 +8338,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             ));
         }
 
-        self.consume_grant("run", "plan", &plan.canonical())?;
+        self.consume_grant("run", "plan", &plan.canonical())
+    }
 
+    /// The label [`Policy::before_plan`] gives a line's output, without recording it.
+    ///
+    /// For a capture that holds the file-authority boundary shared: the audited road reads the
+    /// map, so the lookup is taken inside it, and [`Policy::record_a_run`] writes the trail line
+    /// after the boundary is released. Run [`Policy::gate_a_run`] first. Nothing is emitted here.
+    pub fn measure_a_run(
+        &self,
+        plan: &crate::command::Plan,
+        requesting: bool,
+    ) -> Gated<PlanLabelled> {
         let opaque = Capability::ShellExec.output_label().ok_or_else(|| Denial {
             principle: Principle::Capability,
             message: "command output must have a label".to_string(),
@@ -8221,8 +8410,14 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                  written, where it runs",
             )
         };
+        Ok(PlanLabelled { label, why })
+    }
+
+    /// Write the trail line for the label [`Policy::measure_a_run`] took, and return the label.
+    pub fn record_a_run(&mut self, measured: PlanLabelled) -> Label {
+        let PlanLabelled { label, why } = measured;
         self.allow("provenance", format!("run: output labelled {label}, {why}"));
-        Ok(label)
+        label
     }
 
     /// Issue a single-use endorsement for a routing field at an exact value.
@@ -22529,7 +22724,7 @@ five
                 effect.complete(Integrity::Untrusted);
 
                 (
-                    policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                    policy.vouch_if_unchanged("vendor/lib.js", shown_at, None),
                     policy.trust().is_trusted("vendor/lib.js"),
                 )
             };
@@ -22560,10 +22755,183 @@ five
             let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
 
             assert!(
-                policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                policy.vouch_if_unchanged("vendor/lib.js", shown_at, None),
                 "an answer about the version in front of the person was not spent on it"
             );
             assert!(policy.trust().is_trusted("vendor/lib.js"));
+        }
+
+        /// A path is offered once per turn, except after an answer that was thrown away.
+        ///
+        /// A thrown-away answer was about text that is gone, so the person has not answered about
+        /// the file as it is, and the read the planner is told to make has to put the question
+        /// again. A no, and a yes that was spent, keep the path asked about, so a planner retrying
+        /// a read does not put the same question up twice. The three cases are one policy each so
+        /// that none of them can borrow another's state.
+        #[test]
+        fn a_path_is_offered_again_only_after_an_answer_was_thrown_away() {
+            // Thrown away: a program started while the question was open.
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
+            policy.file_authority().note_program_started();
+            assert!(!policy.vouch_if_unchanged("vendor/lib.js", shown_at, None));
+            assert!(
+                policy.should_offer_vouch("vendor/lib.js"),
+                "a thrown-away answer left the path unasked about"
+            );
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js"),
+                "the offer made after a thrown-away answer was made twice"
+            );
+
+            // A no: the confirmer is never asked to vouch, so nothing frees the path.
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js"),
+                "a path the person said no to was offered again"
+            );
+
+            // A yes that was spent: the path is trusted, so there is nothing left to offer.
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
+            assert!(policy.vouch_if_unchanged("vendor/lib.js", shown_at, None));
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js"),
+                "a path the person vouched for was offered again"
+            );
+        }
+
+        /// TRACE-7: the offer to vouch for a file is recorded as a person's only where a person was
+        /// asked. A mode that answered it is named, nobody is said to have been offered anything and
+        /// nobody is said to have named the file. Both write the same rule. Each entry is asserted
+        /// present for its own case and absent for the other, since a record that reads the same
+        /// for a mode and a person is the defect. Deciding whether to ask writes nothing: the
+        /// entry for a person waits for the caller, so a mode's answer cannot be preceded by a
+        /// line saying somebody was offered the chance.
+        #[test]
+        fn the_trail_says_who_answered_the_offer_to_vouch() {
+            let by_a_person = (
+                "vendor/lib.js: quarantined, so the user is offered the chance to vouch for it",
+                "vendor/lib.js trusted: the user named it in their own line",
+            );
+            let by_bypass = (
+                "vendor/lib.js: answered by bypass mode, nobody was asked",
+                "vendor/lib.js trusted: bypass mode answered the offer to vouch for it, the user did not name it",
+            );
+            for (answered_by, (approval, trust), (other_approval, other_trust)) in [
+                (Some("bypass"), by_bypass, by_a_person),
+                (None, by_a_person, by_bypass),
+            ] {
+                let mut sink = RecordingSink::new();
+                let mut policy = open_policy(&mut sink);
+                let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
+                assert!(policy.should_offer_vouch("vendor/lib.js"));
+                match answered_by {
+                    None => policy.note_vouch_offered("vendor/lib.js"),
+                    Some(mode) => policy.record_vouch_answered_by_mode("vendor/lib.js", mode),
+                }
+                assert!(policy.vouch_if_unchanged("vendor/lib.js", shown_at, answered_by));
+                assert!(
+                    policy.trust().is_trusted("vendor/lib.js"),
+                    "{answered_by:?} wrote no rule"
+                );
+                drop(policy);
+
+                let entries = |wanted: &str| -> Vec<String> {
+                    sink.events()
+                        .iter()
+                        .filter_map(|event| match event {
+                            crate::event::Event::GatePassed { gate, detail } if *gate == wanted => {
+                                Some(detail.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                };
+                assert_eq!(
+                    entries("approval"),
+                    [approval],
+                    "{answered_by:?}: the approval entry"
+                );
+                assert_eq!(
+                    entries("trust"),
+                    [trust],
+                    "{answered_by:?}: the trust entry"
+                );
+                let trail = format!("{:?}", sink.events());
+                assert!(
+                    !trail.contains(other_approval) && !trail.contains(other_trust),
+                    "{answered_by:?} left the other case's entry: {trail}"
+                );
+            }
+        }
+
+        /// Deciding to put the question writes no entry, and asks about a path once. A trail line
+        /// written here would be there for a mode that never put the question to anybody.
+        #[test]
+        fn deciding_to_offer_a_vouch_writes_nothing_and_asks_once() {
+            let mut sink = RecordingSink::new();
+            let mut policy = open_policy(&mut sink);
+            assert!(policy.should_offer_vouch("vendor/lib.js"));
+            assert!(
+                !policy.should_offer_vouch("vendor/lib.js"),
+                "a path was offered twice in one turn"
+            );
+            drop(policy);
+            // Beginning a policy writes its precommit entry; nothing else is written.
+            assert!(
+                sink.events().iter().all(|event| matches!(
+                    event,
+                    crate::event::Event::GatePassed {
+                        gate: "precommit",
+                        ..
+                    }
+                )),
+                "deciding to ask wrote to the trail: {:?}",
+                sink.events()
+            );
+        }
+
+        /// A mode's answer that arrives after the file changed is refused like a person's, and the
+        /// trail does not credit the mode with a rule that was never written.
+        #[test]
+        fn a_vouch_a_mode_answered_is_not_spent_on_a_version_nobody_was_shown() {
+            let mut sink = RecordingSink::new();
+            let mut writer_sink = RecordingSink::new();
+            let (spent, trusted) = {
+                let mut policy = open_policy(&mut sink);
+                let shown_at = policy.capture_files(|_, capture| capture.stamp_of("vendor/lib.js"));
+                let mut writer =
+                    open_policy(&mut writer_sink).with_file_authority(policy.file_authority());
+                let effect = writer
+                    .capture_files(|_, capture| capture.begin("vendor/lib.js"))
+                    .expect("the path is free");
+                effect.complete(Integrity::Untrusted);
+                (
+                    policy.vouch_if_unchanged("vendor/lib.js", shown_at, Some("bypass")),
+                    policy.trust().is_trusted("vendor/lib.js"),
+                )
+            };
+            assert!(
+                !spent,
+                "a mode's answer was spent on a version it was not given for"
+            );
+            assert!(!trusted, "a changed file came back trusted");
+            let trail = format!("{:?}", sink.events());
+            assert!(
+                trail.contains("changed while the question was being answered"),
+                "nothing says why the file stayed quarantined: {trail}"
+            );
+            assert!(
+                !trail.contains("bypass mode answered the offer to vouch"),
+                "the mode was credited with a rule that was refused: {trail}"
+            );
         }
 
         /// A `run` line that starts while the question is open voids the answer, whatever the line
@@ -22592,7 +22960,7 @@ five
                     "a program starting moved the path's revision"
                 );
                 (
-                    policy.vouch_if_unchanged("vendor/lib.js", shown_at),
+                    policy.vouch_if_unchanged("vendor/lib.js", shown_at, None),
                     policy.trust().is_trusted("vendor/lib.js"),
                 )
             };

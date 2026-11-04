@@ -57,10 +57,7 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
                         out.push_str(&format!("**Usage:** {tokens} tokens\n\n"));
                     }
                     if let Some(timing) = session.timing_by_turn().get(turn) {
-                        out.push_str(&format!(
-                            "**Timing:** wall {} ms; inference {} ms; tools {} ms; stalled {} ms\n\n",
-                            timing.wall_ms, timing.inference_ms, timing.tools_ms, timing.stalled_ms
-                        ));
+                        out.push_str(&timing_line(timing));
                     }
                     if let Some(tasks) = plans.get(turn) {
                         out.push_str(&task_list(tasks));
@@ -127,6 +124,18 @@ pub fn as_markdown(session: &Session, title: &str) -> String {
     }
 
     out
+}
+
+/// A turn's timing line, with the closing blank line.
+fn timing_line(timing: &bravebot_agent::timing::Timing) -> String {
+    format!(
+        "**Timing:** wall {} ms; inference {} ms; tools {} ms; stalled {} ms; file wait {} ms\n\n",
+        timing.wall_ms,
+        timing.inference_ms,
+        timing.tools_ms,
+        timing.stalled_ms,
+        timing.file_wait_ms
+    )
 }
 
 /// The word an exported prompt carries for how its turn ended.

@@ -543,6 +543,13 @@ the calls before it left. No label, routing or approval decision changes.
 **Reads wait for effects and not for each other.** A read holds the file authority's access lock
 shared, and an effect entering or completing holds it exclusive ([TRUST-4](trust-map.md#TRUST-4)).
 Two reads therefore overlap, and neither captures bytes while an effect on a file is entering.
+What a read holds the lock for is its label measurement and, for a search, the read of one file at
+a time. A listing's or a search's walk of the tree runs outside it, so an effect can enter while a
+large one is under way, and the labels of the paths it names are measured after the walk, inside the
+lock ([TRUST-4](trust-map.md#TRUST-4)).
+`read_file` takes the lock shared in the same way. It still runs alone and in order, but it does not
+wait for a search or listing that is part way through, and a search or listing does not wait for it
+(delegates share the one file authority).
 
 **Cancelling.** The cancel is checked before the run starts, before a thread starts each read, and
 before each call is taken. A read already running finishes, as a search does when it runs alone. A
@@ -565,6 +572,9 @@ and each call in it is shown as finishing at once.
 `verified-by: bravebot_agent::tools::no_more_reads_run_at_once_than_the_limit`
 `verified-by: bravebot_agent::tools::a_cancel_stops_the_reads_not_yet_started`
 `verified-by: bravebot_agent::tools::reads_taken_beforehand_wait_for_an_effect_entering_a_file`
+`verified-by: bravebot_agent::tools::a_read_file_does_not_wait_for_a_reader_holding_the_boundary`
+`verified-by: bravebot_agent::tools::a_read_file_waits_for_an_effect_holding_the_boundary`
+`verified-by: bravebot_agent::tools::a_read_file_emits_nothing_while_it_holds_the_boundary`
 `verified-by: bravebot_agent::tools::a_read_is_used_only_while_the_context_is_what_it_ran_under`
 `verified-by: bravebot_agent::tools::only_a_read_the_run_offers_is_taken_beforehand`
 `verified-by: bravebot_core::policy::a_branch_decides_what_the_policy_it_came_from_would`

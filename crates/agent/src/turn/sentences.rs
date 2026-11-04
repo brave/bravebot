@@ -59,6 +59,19 @@ pub(super) fn links_note(tool: &str, links: usize) -> String {
     }
 }
 
+/// What a result says about a read that used another spelling of the name it was given. Fixed
+/// words and no name: the file's own name is not the planner's to be told (LABEL-3), and the
+/// planner typed the other.
+pub(super) fn respelled_note(respelled: Option<crate::tools::Respelled>) -> String {
+    if respelled.is_none() {
+        return String::new();
+    }
+    "\n\nNo file is named exactly as given. This is the file whose name differs only in the kind \
+     of space it holds (U+0020, U+00A0 or U+202F; macOS puts U+202F before AM and PM in a \
+     screenshot's name)."
+        .to_string()
+}
+
 /// What a result says about the parts of a server's answer its transport left out, beside the
 /// reference for the reason `capped_note` is. A number and never a word of what was left out.
 pub(super) fn left_out_note(left_out: usize) -> String {

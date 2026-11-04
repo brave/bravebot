@@ -18,9 +18,9 @@ guards:
       - crates/agent/src/manifest.rs: 3
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/skills.rs: 1
-      - crates/agent/src/tools.rs: 32
+      - crates/agent/src/tools.rs: 33
       - crates/agent/src/turn.rs: 1
-      - crates/agent/src/workspace.rs: 16
+      - crates/agent/src/workspace.rs: 17
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/src/anthropic.rs: 8
@@ -77,7 +77,7 @@ guards:
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 26
       - crates/agent/src/turn.rs: 8
-      - crates/agent/src/workspace.rs: 16
+      - crates/agent/src/workspace.rs: 17
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
@@ -756,8 +756,9 @@ arrives at all.
   - **Force the word `unsafe`, or reply with nothing a verdict can be read out of.** That lands on
     the prompt with the warning, which is the direction this is built to fail in. Where nobody
     can be asked, which is a run that bypasses permissions with auto-vetting on, there is no
-    prompt: the verdict alone answers, anything but `safe` is a refusal, and the planner is told
-    the slot was kept back and not to ask again ([CHECK-12](vetting.md#CHECK-12), "nobody to fall
+    prompt: the verdict alone answers, anything but `safe` is a refusal, the planner is told
+    the slot was kept back and not to ask again, and the person is told that auto-vetting kept it
+    back ([CHECK-9](vetting.md#CHECK-9), [CHECK-12](vetting.md#CHECK-12), "nobody to fall
     back to", and the Known cost "A screened run with nobody to ask" in [vetting.md](vetting.md)).
     A `run` that passed `read: true` is the same in every mode: a word other than `safe` keeps the
     output back with no prompt drawn, and the person is asked when the planner calls `read_output`.

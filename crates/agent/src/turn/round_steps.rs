@@ -1151,7 +1151,19 @@ pub(super) fn start_delegates<'scope, 'env, S, C, R>(
                 premium_key,
                 shared,
             );
-            (ended, reporter.last_spent(), reporter.take_inference())
+            (
+                ended,
+                reporter.last_spent(),
+                reporter.take_inference(),
+                // Every span this delegate (and the delegates it joined) was blocked at the
+                // boundary, as two instants each, for the parent to clip to its join windows.
+                seeded
+                    .file_authority
+                    .all_waits()
+                    .into_iter()
+                    .map(crate::timing::Interval::from)
+                    .collect::<Vec<_>>(),
+            )
         });
         delegates.push(Working {
             #[cfg(test)]
@@ -1709,6 +1721,7 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     call: &ToolCall,
     took: std::time::Duration,
     stalled: std::time::Duration,
+    file_wait: std::time::Duration,
     output: &mut tools::Output,
 ) where
     S: Sink + ?Sized + Send,
@@ -1784,6 +1797,11 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
         state.effort,
     );
     state.spent.stalled += stalled;
+    // Blocked at the file-authority boundary, which is neither the call's work nor a person's
+    // answer: a call is held there while another effect, or a delegate's, finishes. Clamped to
+    // what is left of the call so the parts cannot exceed it.
+    let file_wait = file_wait.min(took.saturating_sub(stalled));
+    state.spent.file_wait += file_wait;
     // What the model waited for inside the call, which is not what the call spent working:
     // a processor is a request, and its seconds belong with the other requests'.
     let waited = match output.inference_interval {
@@ -1797,7 +1815,10 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // Both taken off, so the four figures partition the turn rather than double-count the
     // parts of it that nest. Saturating because they are separate clocks: a measure of the
     // inside cannot be allowed to make the outside negative.
-    state.spent.tools += took.saturating_sub(stalled).saturating_sub(waited);
+    state.spent.tools += took
+        .saturating_sub(stalled)
+        .saturating_sub(file_wait)
+        .saturating_sub(waited);
     // A processor is a model call of its own, so what it spent belongs in the turn's
     // total. Left out, a turn that did most of its work in processors would report
     // having cost almost nothing.

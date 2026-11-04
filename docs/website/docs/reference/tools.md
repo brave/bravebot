@@ -107,6 +107,15 @@ vouched for, and a processor reads them. A stream, an error and a result's plain
 picture or other data is replaced by a line giving its type and size, and the result is cut at
 20,000 characters.
 
+A `path` that names no file is tried with its last component's spaces written as U+202F, U+00A0
+or an ordinary space, because macOS puts U+202F before `AM` and `PM` in a screenshot's name and it
+looks like a typed space. The first of those that is a file is read, under the same rules as a name
+typed exactly, and the result says another spelling was read without giving either name. If no
+spelling is a file, the error says the file may be named with another kind of space than the one
+given. Other Unicode spaces are not tried, and `path_ref` is not respelled. Only `read_file`
+respells: `edit_file` and `write_file` may name a file that does not exist yet, and the directory
+tools take directories.
+
 Long files come back one page at a time, at most 500 lines and 100,000 characters, with each line
 shortened to 2,000 characters. A page of long lines ends at the last whole line that fits under the
 character cap. The result says so and gives the offset to continue from. A

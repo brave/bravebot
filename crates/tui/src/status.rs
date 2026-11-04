@@ -988,6 +988,7 @@ fn usage_lines(facts: &Facts<'_>) -> Vec<Line> {
             (facts.timing.inference_ms, t!(status_time_inference)),
             (facts.timing.tools_ms, t!(status_time_tools)),
             (facts.timing.stalled_ms, t!(status_time_stalled)),
+            (facts.timing.file_wait_ms, t!(status_time_file_wait)),
             (facts.timing.overhead_ms(), t!(status_time_overhead)),
         ] {
             if millis >= 1_000 {
@@ -3856,6 +3857,7 @@ mod tests {
             inference_ms: 20_000,
             tools_ms: 5_000,
             stalled_ms: 0,
+            file_wait_ms: 0,
         };
 
         let lines = report(&mixed).lines;
@@ -3910,6 +3912,7 @@ mod tests {
             inference_ms: 120_000,
             tools_ms: 60_000,
             stalled_ms: 400_000,
+            file_wait_ms: 0,
         };
 
         let shown = rendered(&report(&spent));
@@ -3924,6 +3927,35 @@ mod tests {
         assert!(
             shown.contains("6m 40s"),
             "the stall was not reported: {shown}"
+        );
+    }
+
+    /// Time a call spent queued at the file-authority boundary is its own row, and the remainder
+    /// does not hold it. Rejects an implementation that leaves it in "unaccounted for".
+    #[test]
+    fn the_panel_says_how_long_the_session_waited_for_file_access() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let mut waited = facts(&config, &trust);
+        waited.timing = bravebot_agent::timing::Timing {
+            wall_ms: 100_000,
+            inference_ms: 10_000,
+            tools_ms: 10_000,
+            stalled_ms: 0,
+            file_wait_ms: 70_000,
+        };
+
+        let shown = rendered(&report(&waited));
+        assert!(shown.contains("waiting on file access"), "{shown}");
+        assert!(shown.contains("1m 10s"), "{shown}");
+        // 100 - 10 - 10 - 70 leaves 10 s, so the remainder row is the 10 s one, not 80 s.
+        assert!(!shown.contains("1m 20s"), "{shown}");
+
+        waited.timing.file_wait_ms = 0;
+        let shown = rendered(&report(&waited));
+        assert!(
+            !shown.contains("waiting on file access"),
+            "a wait that never happened was reported: {shown}"
         );
     }
 
@@ -3951,6 +3983,7 @@ mod tests {
             inference_ms: 30_000,
             tools_ms: 0,
             stalled_ms: 0,
+            file_wait_ms: 0,
         };
 
         let shown = rendered(&report(&quiet));

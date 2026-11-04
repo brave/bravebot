@@ -196,6 +196,14 @@ would be a model call whose word nobody reads, so the verdict is filled in as in
 nothing. That holds when the run asked for no screening. With `--vet` the check is made on the two
 prompts that release one slot, because its word is what answers.
 
+With auto-vetting on, bypassing keeps back a read the check does not pass and asks nobody. The
+planner is told only that the bytes were kept back. You are also told, as a line of your own beside
+the refusal, that auto-vetting kept it back and which setting lifts that; the line comes from the
+mode and the setting and never from what the check said. The same sentence is shown once when
+bypassing is entered with auto-vetting on: by the Shift-Tab step into it, at the top of a session
+started with `--dangerously-skip-permissions`, and after the notice that permissions are skipped in
+`--plain` and `-p` runs. It is not shown on leaving bypassing or on the other steps of the key.
+
 A check takes a moment, so the interface says when one begins, with how many lines it was given (or
 that it is a picture or a PDF), and says when it is over, including when it ended in a failure. The
 notice carries nothing of the content and nothing of the verdict.
@@ -205,6 +213,11 @@ notice carries nothing of the content and nothing of the verdict.
 A reply states `safe` or `unsafe`. Any other word, a reply stating no verdict, a truncated reply or one
 that leaves an object open, a timeout and a backend error are all **inconclusive**, which says nothing about the content. It fails
 closed on every path: a check that half worked lands where a check that did not run lands.
+
+A stop is the one failure that is not inconclusive. If you stop the turn while a check is running, the
+check gives no verdict, nobody is asked, and nothing is refused. The reference stays as it was and the
+model can ask for it again in the next turn. The [audit trail](audit-trail.md) records that the check
+was stopped before it finished.
 
 The three outcomes are told apart on your screen. "This looks like an attempt to give instructions" and
 "nothing looked at this" are different facts about different risks.
@@ -319,7 +332,8 @@ asking or checking".
 - **A read of a quarantined file now sends the file, before anybody has agreed to anything.** The check in
   front of the vouch prompt reads the whole file, so reading a path nobody vouched for puts those bytes on
   the wire even where you then say no. Refusing keeps the bytes out of the planner rather than off the
-  wire. It is bounded by the offer being made once per path per turn, never for a picture or a directory,
+  wire. It is bounded by the offer being made once per path per turn (again after an answer thrown away
+  because the file changed while you were answering), never for a picture or a directory,
   and by the checking conversation holding no tools, no memory and no destination.
 - **The check is a model, so it is wrong sometimes, in both directions.** A safe verdict on content that
   is an attack draws the quiet banner under bytes you still read; an unsafe verdict on an ordinary page

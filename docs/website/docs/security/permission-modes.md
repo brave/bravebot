@@ -26,7 +26,8 @@ screen does not have its question withdrawn from under you.
 **A session started with `--dangerously-skip-permissions` says so when it stops bypassing.** The line
 under the input box and `/status` name asking there, where a session started without the flag draws
 nothing for it, including one that reached bypassing with the key. Nothing is printed in the
-transcript when you press the key.
+transcript when you press the key, except the one line about auto-vetting when the press enters
+bypassing with it on ([Vetting](vetting.md)).
 
 **Accepting edits stops at writes on purpose.** A write lands in a tree you can read afterwards and
 `git diff` shows you all of it; a program runs with everything your own shell has, leaves no diff,
@@ -120,7 +121,9 @@ bravebot --dangerously-skip-permissions
 
 The flag opens the session in that mode. Without it a session opens asking, and Shift-Tab reaches the
 mode on the fourth press, after plan mode and auto. Nothing is asked when it gets there: the line under the
-input box names it in colour, and one more press is back to asking. A settings file that sets
+input box names it in colour, and one more press is back to asking. With auto-vetting on, the press
+that enters it also prints one line in the transcript saying that a read a check does not pass is
+refused and not asked about ([Vetting](vetting.md)); no other press prints anything. A settings file that sets
 `permissions.bypassUnreachable` takes the mode off the key and refuses the flag.
 
 The flag may go anywhere in the command line and composes with `-p`, `--resume`, `--continue`,

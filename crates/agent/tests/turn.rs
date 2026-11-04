@@ -3843,6 +3843,66 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
     );
 }
 
+/// A tool call that has to wait for someone else to leave the file-authority boundary is charged
+/// to the file-wait figure and not to the tool, and the parts still come to no more than the whole.
+/// The boundary is held from outside the turn for a known time while a read waits to enter it.
+#[test]
+fn time_blocked_at_the_file_boundary_is_charged_to_file_wait_and_not_to_the_tool() {
+    let scratch = Scratch::new("timing-file-wait");
+    std::fs::write(scratch.path.join("present.md"), "THERE").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request_2("read_file", r#"{"path":"present.md"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let authority = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let holder = {
+        let authority = authority.clone();
+        std::thread::spawn(move || {
+            let guard = authority.capture();
+            held_tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            drop(guard);
+        })
+    };
+    held_rx.recv().unwrap();
+
+    let task = Task::new("read present.md").with_file_authority(authority);
+    let outcome = turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut sink,
+    )
+    .expect("turn runs");
+    holder.join().unwrap();
+
+    let timing = outcome.timing;
+    assert!(
+        timing.file_wait_ms >= 100,
+        "the wait at the boundary was not counted: {timing:?}"
+    );
+    assert!(
+        timing.tools_ms < timing.file_wait_ms,
+        "the wait was charged to the tool as well: {timing:?}"
+    );
+    assert!(
+        timing.inference_ms + timing.tools_ms + timing.stalled_ms + timing.file_wait_ms
+            <= timing.wall_ms,
+        "the parts came to more than the whole: {timing:?}"
+    );
+}
+
 /// The property that matters: a refused write does not touch the disk.
 #[test]
 fn a_refused_write_does_not_happen() {
@@ -38867,6 +38927,325 @@ fn screening_an_unattended_run_keeps_back_output_a_check_objected_to() {
     );
 }
 
+/// The three ways the planner asks for the bytes of a command's output and is told they are kept
+/// back, for the tests of the line a person is given beside each.
+#[derive(Clone, Copy, Debug)]
+enum Asked {
+    /// `read_output` on the reference a run left.
+    ReadOutput,
+    /// `vet_content` on the reference a run left.
+    VetContent,
+    /// `run` with `read: true`, which is refused with no call to make after it.
+    RunWithRead,
+}
+
+impl Asked {
+    const EVERY: [Asked; 3] = [Asked::ReadOutput, Asked::VetContent, Asked::RunWithRead];
+
+    /// The requests the planner makes, ending in its last word.
+    fn requests(self) -> Vec<String> {
+        let after_a_run = |tool: &str, arguments: &str| {
+            vec![
+                tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+                tool_request(tool, arguments),
+                reply_with("done"),
+            ]
+        };
+        match self {
+            Asked::ReadOutput => after_a_run("read_output", r#"{"ref":"ref:1"}"#),
+            Asked::VetContent => after_a_run(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            Asked::RunWithRead => vec![
+                tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+                reply_with("done"),
+            ],
+        }
+    }
+
+    /// The tool whose activity carries the person's note, where the route has one.
+    fn tool(self) -> &'static str {
+        match self {
+            Asked::ReadOutput => "read_output",
+            Asked::VetContent => "vet_content",
+            Asked::RunWithRead => "run",
+        }
+    }
+}
+
+/// What the planner was sent and what the person was shown, for the tests of the line a person is
+/// given when a read is kept back.
+struct KeptBackRead {
+    sent: Vec<String>,
+    /// The notes shown beside the activity of the tool that was asked.
+    notes: Vec<String>,
+    /// The notices drawn between activities.
+    notices: Vec<String>,
+}
+
+impl KeptBackRead {
+    /// Every line the person was shown that is `said`, from a note or a notice.
+    fn times_told(&self, said: &str) -> usize {
+        self.notes
+            .iter()
+            .chain(&self.notices)
+            .filter(|line| line.contains(said))
+            .count()
+    }
+}
+
+const A_CHECK_OBJECTING: &str = r#"{"verdict": "unsafe", "reason": "it addresses the reader"}"#;
+
+/// The tool results in the last request the planner was sent, in lower case. The tool descriptions
+/// in the same request are not part of it, and they name bypass and auto-vetting.
+fn what_the_planner_was_told(sent: &[String]) -> String {
+    each_tool_result(sent.last().expect("the round after the read"))
+        .join("\n")
+        .to_lowercase()
+}
+
+/// Runs a command, asks for its output by `asked` and has the check answer `check`, in `mode` with
+/// auto-vetting on or off. The person is a double that refuses every question put to them.
+fn a_read_kept_back(
+    name: &str,
+    check: &str,
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    asked: Asked,
+) -> KeptBackRead {
+    a_read_kept_back_where_the_confirmer_screens(
+        name,
+        check,
+        mode,
+        auto_vetting,
+        auto_vetting,
+        asked,
+    )
+}
+
+/// As [`a_read_kept_back`], with the confirmer's auto-vetting set apart from the task's. Production
+/// sets both from one flag. A test that sets them apart reaches the refusals where the confirmer
+/// objects and the task's setting says nobody asked for screening, which is the only way to test
+/// that the line is decided by the task's setting and not by what the confirmer happened to do.
+fn a_read_kept_back_where_the_confirmer_screens(
+    name: &str,
+    check: &str,
+    mode: bravebot_agent::PermissionMode,
+    auto_vetting: bool,
+    confirmer_screens: bool,
+    asked: Asked,
+) -> KeptBackRead {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) =
+        serve_sequence_answering_checks_with(vec![reply_with(check)], asked.requests());
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut reading = ReadsWhatItRan::new(false);
+    let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, confirmer_screens);
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out")
+            .with_auto_vetting(auto_vetting)
+            .with_permission_mode(mode),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    KeptBackRead {
+        sent: received.try_iter().collect(),
+        notes: reporter
+            .finished
+            .iter()
+            .filter(|activity| activity.tool == asked.tool())
+            .filter_map(|activity| activity.note.clone())
+            .collect(),
+        notices: reporter.notices,
+    }
+}
+
+/// What the planner is told when a read is kept back, which is the same in every mode and says
+/// nothing about what decided. `read_output` and `vet_content` say the bytes are kept back, and a
+/// run that asked to read says its output is behind a reference. None of them may carry the line
+/// meant for the person, a setting's name or the mode's.
+fn assert_the_planner_was_told_only_that_it_was_kept_back(asked: Asked, kept: &KeptBackRead) {
+    let told = what_the_planner_was_told(&kept.sent);
+    let said = bravebot_agent::report::vetting_kept_back().to_lowercase();
+    assert!(
+        !told.contains("sentinel-xyzzy"),
+        "{asked:?}: the bytes reached the planner: {told}"
+    );
+    let how = match asked {
+        Asked::ReadOutput | Asked::VetContent => "was kept back from you",
+        Asked::RunWithRead => "could not be shown to you",
+    };
+    assert!(
+        told.contains(how),
+        "{asked:?}: the planner was not told the bytes are not coming: {told}"
+    );
+    for leak in [
+        said.as_str(),
+        "auto-vetting",
+        "~/.bravebot/vetting",
+        "bypass",
+    ] {
+        assert!(
+            !told.contains(leak),
+            "{asked:?}: the planner was given {leak:?}, which is for the person: {told}"
+        );
+    }
+}
+
+/// Under bypass with auto-vetting on nobody is asked, so a read the check objected to is refused on
+/// the check's word. The person is told that once, and how to turn it off, beside each of the three
+/// ways the planner can ask: `read_output`, `vet_content` and `run` with `read: true`. The planner is
+/// told what it is told in every mode.
+///
+/// A wrong implementation tells the person on one route only, or tells them twice, or puts the
+/// line in the text the planner is sent.
+#[test]
+fn a_read_kept_back_under_bypass_with_auto_vetting_tells_the_person_why() {
+    let said = bravebot_agent::report::vetting_kept_back();
+    for asked in Asked::EVERY {
+        let kept = a_read_kept_back(
+            &format!("kept-back-told-bypass-{asked:?}"),
+            A_CHECK_OBJECTING,
+            bravebot_agent::PermissionMode::Bypass,
+            true,
+            asked,
+        );
+
+        assert_eq!(
+            kept.times_told(&said),
+            1,
+            "{asked:?}: the person was not told once what decided: notes {:?}, notices {:?}",
+            kept.notes,
+            kept.notices
+        );
+        assert_the_planner_was_told_only_that_it_was_kept_back(asked, &kept);
+    }
+}
+
+/// The line does not depend on the word the check gave: a check that could not be made is told the
+/// same way as one that objected, on each route.
+///
+/// A wrong implementation draws the line only for an `unsafe` word, which makes what the person
+/// reads a function of what the check wrote.
+#[test]
+fn a_read_kept_back_for_no_verdict_says_the_same_to_the_person() {
+    for asked in Asked::EVERY {
+        let objected = a_read_kept_back(
+            &format!("kept-back-told-objected-{asked:?}"),
+            A_CHECK_OBJECTING,
+            bravebot_agent::PermissionMode::Bypass,
+            true,
+            asked,
+        );
+        let unassessed = a_read_kept_back(
+            &format!("kept-back-told-unassessed-{asked:?}"),
+            "I am not able to assess this.",
+            bravebot_agent::PermissionMode::Bypass,
+            true,
+            asked,
+        );
+
+        assert_eq!(
+            objected.times_told(&bravebot_agent::report::vetting_kept_back()),
+            1,
+            "{asked:?}: a refusal under bypass said nothing to the person"
+        );
+        assert_eq!(
+            (&objected.notes, &objected.notices),
+            (&unassessed.notes, &unassessed.notices),
+            "{asked:?}: what the person was shown varied with the check's word"
+        );
+        assert_the_planner_was_told_only_that_it_was_kept_back(asked, &unassessed);
+    }
+}
+
+/// Where a person is asked and says no, or nobody asked for screening, nothing decided but the
+/// person, so the line is not drawn and the planner is told what it is told elsewhere.
+///
+/// The last case sets the confirmer apart from the task: it refuses as a screening bypass does,
+/// while the task says auto-vetting is off. A wrong implementation that draws the line on the mode
+/// alone, or on the refusal alone, draws it there. A wrong implementation that draws it in every
+/// mode draws it for the first two.
+#[test]
+fn a_read_kept_back_where_a_person_was_asked_says_nothing_extra() {
+    let said = bravebot_agent::report::vetting_kept_back();
+    for asked in Asked::EVERY {
+        for (mode, auto_vetting, confirmer_screens) in [
+            (bravebot_agent::PermissionMode::Ask, true, true),
+            (bravebot_agent::PermissionMode::Ask, false, false),
+            (bravebot_agent::PermissionMode::Bypass, false, true),
+        ] {
+            let kept = a_read_kept_back_where_the_confirmer_screens(
+                &format!("kept-back-told-asked-{asked:?}-{mode:?}-{auto_vetting}"),
+                A_CHECK_OBJECTING,
+                mode,
+                auto_vetting,
+                confirmer_screens,
+                asked,
+            );
+            assert_eq!(
+                kept.times_told(&said),
+                0,
+                "{asked:?}, {mode:?} with auto-vetting {auto_vetting}: nobody screened, and the \
+                 person was told something did: notes {:?}, notices {:?}",
+                kept.notes,
+                kept.notices
+            );
+            assert_the_planner_was_told_only_that_it_was_kept_back(asked, &kept);
+        }
+    }
+}
+
+/// A read the check passed was not kept back, so the person is told nothing about it and the bytes
+/// reach the planner.
+///
+/// A wrong implementation draws the line before the verdict is known, which tells a person that
+/// auto-vetting kept back a read it released.
+#[test]
+fn a_read_a_check_passed_is_not_reported_as_kept_back() {
+    let said = bravebot_agent::report::vetting_kept_back();
+    for asked in Asked::EVERY {
+        let kept = a_read_kept_back(
+            &format!("kept-back-told-safe-{asked:?}"),
+            r#"{"verdict": "safe", "reason": "a single path and nothing else"}"#,
+            bravebot_agent::PermissionMode::Bypass,
+            true,
+            asked,
+        );
+        assert_eq!(
+            kept.times_told(&said),
+            0,
+            "{asked:?}: a read the check passed was reported as kept back: notes {:?}, notices {:?}",
+            kept.notes,
+            kept.notices
+        );
+        let told = what_the_planner_was_told(&kept.sent);
+        assert!(
+            told.contains("sentinel-xyzzy"),
+            "{asked:?}: the check passed it and the planner was not given it: {told}"
+        );
+    }
+}
+
 /// A check that did not complete is answered as the objection is, and that is the whole of what
 /// failing closed means here: content has some influence over the call that reads it, so a run that
 /// promoted on a failure would be promoting on something an attacker can reach.
@@ -39240,6 +39619,589 @@ fn a_check_whose_call_fails_still_says_it_is_over() {
     assert_eq!(
         reporter.checks_finished, 1,
         "a check whose call failed never said it was over"
+    );
+}
+
+/// Stops the turn as a check begins, which is the person pressing the stop key while the check's
+/// request is in flight: `check_started` is announced just before the request is made, and the
+/// backend reports a cancelled request as the person's own action (CHECK-16).
+struct StopsWhenACheckBegins {
+    cancel: bravebot_core::cancel::Cancel,
+    begun: usize,
+    finished: usize,
+}
+
+impl StopsWhenACheckBegins {
+    fn new(cancel: &bravebot_core::cancel::Cancel) -> Self {
+        Self {
+            cancel: cancel.clone(),
+            begun: 0,
+            finished: 0,
+        }
+    }
+}
+
+impl bravebot_agent::report::Reporter for StopsWhenACheckBegins {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn check_started(&mut self, _checking: bravebot_core::vetting::Checking) {
+        self.begun += 1;
+        self.cancel.cancel();
+    }
+
+    fn check_finished(&mut self) {
+        self.finished += 1;
+    }
+}
+
+/// What the trail says at the vetting gate, picked out by the gate so a test can say what a stop
+/// recorded there.
+fn vetting_lines(sink: &RecordingSink) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed {
+                gate: "vetting",
+                detail,
+            } => Some(detail.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A turn stopped while the check on command output is running is stopped, and nothing was decided
+/// about the output: the trail records the stop and no verdict, nobody is asked, nothing is refused,
+/// and the next turn can ask for the same reference and be given it (CHECK-16, OUTPUT-3).
+///
+/// A wrong implementation reads the cancelled request as a check that could not be made, which
+/// shows as an inconclusive line in the trail, a prompt to the person, and the "kept back from you.
+/// Do not ask for it again" refusal in the history the next turn is given.
+#[test]
+fn a_stop_during_the_check_on_command_output_is_not_a_refusal() {
+    let scratch = Scratch::new("read-output-stopped-check");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(false);
+    let shown = confirmer.shown.clone();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopsWhenACheckBegins::new(&cancel);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let error = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out").with_auto_vetting(true),
+        &mut conversation,
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .unwrap_err();
+
+    assert!(
+        matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+        "the turn did not end as stopped: {:?}",
+        error.ending()
+    );
+    assert_eq!(
+        reporter.begun, 1,
+        "no check was made, so nothing was stopped"
+    );
+    assert_eq!(
+        reporter.finished, 1,
+        "the stopped check never said it was over"
+    );
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "the person was asked about output nobody decided anything about"
+    );
+    let lines = vetting_lines(&sink);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("the check was stopped before it finished")),
+        "the trail does not record the stop: {lines:?}"
+    );
+    let trail = format!("{:?}", sink.events());
+    assert!(
+        !trail.contains("inconclusive") && !trail.contains("could not be made"),
+        "the stop was recorded as a check that could not be made: {trail}"
+    );
+    assert!(
+        !trail.contains("was not approved"),
+        "the stop was recorded as a refusal: {trail}"
+    );
+    assert!(releases_of_output(&sink).is_empty());
+
+    // The next turn is given the stopped wording, and the same reference reads.
+    let (endpoint, received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![
+            tool_request("read_output", r#"{"ref":"ref:1"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(true);
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out again").with_auto_vetting(true),
+        &mut conversation,
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the next turn runs");
+
+    let sent: Vec<String> = received.try_iter().collect();
+    let first = sent.first().expect("the next turn's first round");
+    assert!(
+        first.contains("can be asked for again"),
+        "the next turn was not told the reference can be asked for again: {first}"
+    );
+    assert!(
+        !first.contains("ref:1 was kept back from you"),
+        "the next turn was told the reference was refused: {first}"
+    );
+    assert!(
+        !first.contains("SENTINEL-XYZZY"),
+        "the stopped wording carried content before the read: {first}"
+    );
+    let last = sent.last().expect("the round after the second read");
+    assert!(
+        last.contains("SENTINEL-XYZZY"),
+        "the same reference could not be read in the next turn: {last}"
+    );
+}
+
+/// A check that fails for a reason other than the person stopping the turn is still inconclusive
+/// and still fails closed: the trail has the inconclusive line, the person is asked, and a no is
+/// the refusal the planner is told not to ask past (CHECK-4). Pairs with the stop test above, which
+/// would pass for a driver that stopped treating every failed check as inconclusive only if this
+/// one did too.
+#[test]
+fn a_check_that_fails_for_a_reason_other_than_a_stop_is_still_inconclusive_and_refused() {
+    let scratch = Scratch::new("read-output-failed-check-refused");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, received) = serve_sequence_losing_every_check(vec![
+        tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+        tool_request("read_output", r#"{"ref":"ref:1"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ReadsWhatItRan::new(false);
+    let shown = confirmer.shown.clone();
+
+    turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("find out").with_auto_vetting(true),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    assert!(
+        !shown.lock().unwrap().is_empty(),
+        "a failed check did not fall back to the question"
+    );
+    let lines = vetting_lines(&sink);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("the check said inconclusive: the check could not be made")),
+        "the failed check is not recorded as inconclusive: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("was stopped")),
+        "a failed check was recorded as a stop: {lines:?}"
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    let last = sent.last().expect("the round after the read");
+    assert!(
+        last.contains("was kept back from you"),
+        "the refusal the planner is given is not the one a declined output gets: {last}"
+    );
+    assert!(
+        !last.contains("the turn was stopped") && !last.contains("SENTINEL-XYZZY"),
+        "the refusal read as a stop or carried content: {last}"
+    );
+}
+
+/// The same for `vet_content`: the slot is not refused and the person is not asked (CHECK-16,
+/// VET-3).
+#[test]
+fn a_stop_during_the_check_on_content_is_not_a_refusal() {
+    let scratch = Scratch::new("vet-content-stopped-check");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![
+            tool_request("run", r#"{"command":"sed -n p where.txt"}"#),
+            tool_request(
+                "vet_content",
+                r#"{"ref":"ref:1","expects":"the path the file records"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let shown = confirmer.shown.clone();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopsWhenACheckBegins::new(&cancel);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let error = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find out"),
+        &mut conversation,
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .unwrap_err();
+
+    assert!(
+        matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+        "the turn did not end as stopped: {:?}",
+        error.ending()
+    );
+    assert_eq!(
+        reporter.begun, 1,
+        "no check was made, so nothing was stopped"
+    );
+    assert_eq!(
+        reporter.finished, 1,
+        "the stopped check never said it was over"
+    );
+    assert!(
+        shown.lock().unwrap().is_empty(),
+        "the person was asked about content nobody decided anything about"
+    );
+    let lines = vetting_lines(&sink);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("the check was stopped before it finished")),
+        "the trail does not record the stop: {lines:?}"
+    );
+    let trail = format!("{:?}", sink.events());
+    assert!(
+        !trail.contains("inconclusive") && !trail.contains("could not be made"),
+        "the stop was recorded as a check that could not be made: {trail}"
+    );
+    assert!(
+        !trail.contains("was not approved"),
+        "the stop was recorded as a refusal: {trail}"
+    );
+}
+
+/// A run that asks to read, stopped while its screening check is running, ends the turn stopped.
+/// The output stays quarantined and nobody is asked, in every mode that screens (CHECK-16, RUN-22).
+#[test]
+fn a_stop_during_the_check_on_a_run_that_asks_to_read_ends_the_turn_stopped() {
+    for mode in EVERY_MODE {
+        let scratch = Scratch::new(&format!("run-read-stopped-check-{mode:?}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+
+        let (endpoint, _received) = serve_sequence_answering_checks_with(
+            vec![a_check_finding_nothing()],
+            vec![
+                tool_request("run", r#"{"command":"sed -n p where.txt","read":true}"#),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut reading = ReadsWhatItRan::new(true);
+        let asked = std::sync::Arc::clone(&reading.shown);
+        let mut confirmer = bravebot_agent::Confining::new(&mut reading, mode, true);
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut reporter = StopsWhenACheckBegins::new(&cancel);
+
+        let error = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("find out")
+                .with_permission_mode(mode)
+                .with_auto_vetting(true),
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut reporter,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &cancel,
+        )
+        .outcome
+        .unwrap_err();
+
+        assert!(
+            matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+            "{mode:?}: the turn did not end as stopped: {:?}",
+            error.ending()
+        );
+        assert_eq!(reporter.begun, 1, "{mode:?}: no check was made");
+        assert_eq!(
+            reporter.finished, 1,
+            "{mode:?}: the check never said it was over"
+        );
+        assert!(
+            asked.lock().unwrap().is_empty(),
+            "{mode:?}: a person was asked after a stop"
+        );
+        assert!(
+            releases_of_output(&sink).is_empty(),
+            "{mode:?}: the trail records a release: {:?}",
+            releases_of_output(&sink)
+        );
+        let trail = format!("{:?}", sink.events());
+        assert!(
+            trail.contains("the check was stopped before it finished")
+                && !trail.contains("inconclusive")
+                && !trail.contains("could not be made"),
+            "{mode:?}: the trail does not record a stop and no verdict: {trail}"
+        );
+    }
+}
+
+/// A read of a respelled name whose vouch check is stopped still tells the planner that another
+/// spelling was read (READ-11), on the result the stopped turn leaves in the conversation. The
+/// planner sees it on the next turn's request.
+#[test]
+fn a_stop_during_the_vouch_check_of_a_respelled_read_keeps_the_respelling_note() {
+    let scratch = Scratch::new("vouch-stopped-respelled");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(
+        scratch.path.join(format!("{NARROW}.md")),
+        "SENTINEL-XYZZY\n",
+    )
+    .unwrap();
+    let typed = format!("{}.md", NARROW.replace('\u{202f}', " "));
+    let arguments = serde_json::json!({ "path": typed }).to_string();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![tool_request("read_file", &arguments), reply_with("done")],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopsWhenACheckBegins::new(&cancel);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let error = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("read the screenshot notes"),
+        &mut conversation,
+        &mut confirmer,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .unwrap_err();
+    assert!(
+        matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+        "the turn did not end as stopped: {:?}",
+        error.ending()
+    );
+    assert_eq!(reporter.begun, 1, "no check was made");
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("done")]);
+    turn::resume(
+        &config_for(&endpoint),
+        &egress,
+        &workspace,
+        &Task::new("and now"),
+        &mut conversation,
+        &mut ShownAfterAVet::new(true),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the next turn runs");
+    let request = received
+        .try_iter()
+        .last()
+        .expect("the planner was sent a request");
+    assert!(
+        request.contains("stopped: the turn was stopped before the check"),
+        "the stop is not in the conversation: {request}"
+    );
+    assert!(
+        request.contains("differs only in the kind of space"),
+        "the stopped read lost the note that another spelling was read: {request}"
+    );
+}
+
+/// A turn stopped while the check before a vouch prompt is running asks nobody to vouch. The file
+/// stays quarantined and is asked about again by the next turn's read (CHECK-16).
+///
+/// A wrong implementation reads the stop as a check that could not be made and puts the question
+/// with an inconclusive verdict, which the double records.
+#[test]
+fn a_stop_during_a_vouch_check_asks_nobody() {
+    let scratch = Scratch::new("vouch-stopped-check");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("notes.md"), "SENTINEL-XYZZY\n").unwrap();
+
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![
+            tool_request("read_file", r#"{"path":"notes.md"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = ShownAfterAVet::new(true);
+    let vouched = confirmer.vouched.clone();
+    let cancel = bravebot_core::cancel::Cancel::new();
+    let mut reporter = StopsWhenACheckBegins::new(&cancel);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let error = turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("summarise notes.md"),
+        &mut conversation,
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &cancel,
+    )
+    .outcome
+    .unwrap_err();
+
+    assert!(
+        matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+        "the turn did not end as stopped: {:?}",
+        error.ending()
+    );
+    assert_eq!(
+        reporter.begun, 1,
+        "no check was made, so nothing was stopped"
+    );
+    assert_eq!(
+        reporter.finished, 1,
+        "the stopped check never said it was over"
+    );
+    assert!(
+        vouched.lock().unwrap().is_empty(),
+        "the person was asked to vouch for a file whose check was stopped"
+    );
+    let lines = vetting_lines(&sink);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("the check was stopped before it finished")),
+        "the trail does not record the stop: {lines:?}"
+    );
+    let trail = format!("{:?}", sink.events());
+    assert!(
+        !trail.contains("inconclusive") && !trail.contains("could not be made"),
+        "the stop was recorded as a check that could not be made: {trail}"
+    );
+
+    // The next turn's read of the same file is asked about.
+    let (endpoint, _received) = serve_sequence_answering_checks_with(
+        vec![a_check_finding_nothing()],
+        vec![
+            tool_request("read_file", r#"{"path":"notes.md"}"#),
+            reply_with("done"),
+        ],
+    );
+    let config = config_for(&endpoint);
+    let mut confirmer = ShownAfterAVet::new(true);
+    let vouched = confirmer.vouched.clone();
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("summarise notes.md again"),
+        &mut conversation,
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        bravebot_core::trust::TrustStore::new(workspace.root()),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the next turn runs");
+    assert_eq!(
+        vouched.lock().unwrap().len(),
+        1,
+        "the file was not asked about again after the stop"
     );
 }
 
@@ -72023,6 +72985,215 @@ fn a_flagged_read_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer() {
     assert!(questions.lock().unwrap().is_empty());
 }
 
+/// The `gate` entries of the trail whose text holds `needle`, in order.
+fn trail_entries(sink: &RecordingSink, wanted: &str, needle: &str) -> Vec<String> {
+    sink.events()
+        .iter()
+        .filter_map(|event| match event {
+            Event::GatePassed { gate, detail } if *gate == wanted && detail.contains(needle) => {
+                Some(detail.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// One turn in which the planner reads `note.txt`, a file the trust map says nothing about, with
+/// `confirmer` answering the offer to vouch for it. Returns the trail.
+fn a_turn_reading_an_unvouched_note<C: bravebot_agent::confirm::Confirmer + Send>(
+    name: &str,
+    mode: bravebot_agent::PermissionMode,
+    confirmer: &mut C,
+) -> RecordingSink {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("note.txt"), "SENTINEL-NOTE: hello\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"note.txt"}"#),
+        reply_with("done"),
+    ]);
+    let mut sink = RecordingSink::new();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("read the note").with_permission_mode(mode),
+        &mut bravebot_agent::Conversation::new(),
+        confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("turn runs");
+    sink
+}
+
+const OFFERED_LINE: &str =
+    "note.txt: quarantined, so the user is offered the chance to vouch for it";
+const BYPASS_APPROVAL_LINE: &str = "note.txt: answered by bypass mode, nobody was asked";
+const BYPASS_TRUST_LINE: &str =
+    "note.txt trusted: bypass mode answered the offer to vouch for it, the user did not name it";
+const USER_NAMED_LINE: &str = "note.txt trusted: the user named it in their own line";
+
+/// TRACE-7, MODE-4. Bypass mode answers the offer to vouch for a file, so nobody was offered
+/// anything, nothing was shown and nobody named the file. The trail has the mode's approval line
+/// and a trust line naming the mode, and none of the three lines a person's yes writes. The inner
+/// confirmer refuses, so the vouch in the trail can only be the mode's.
+#[test]
+fn a_vouch_bypass_mode_answered_is_recorded_as_the_modes_answer() {
+    let mut inner = VouchesForFiles::new(false);
+    let offered = inner.offered.clone();
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut inner, bravebot_agent::PermissionMode::Bypass, false);
+    let sink = a_turn_reading_an_unvouched_note(
+        "vouch-bypass-trail",
+        bravebot_agent::PermissionMode::Bypass,
+        &mut confirmer,
+    );
+
+    assert_eq!(
+        trail_entries(&sink, "approval", "note.txt"),
+        [BYPASS_APPROVAL_LINE]
+    );
+    assert_eq!(
+        trail_entries(&sink, "trust", "note.txt trusted:"),
+        [BYPASS_TRUST_LINE]
+    );
+    assert!(
+        trail_entries(&sink, "display", "quarantined file").is_empty(),
+        "the trail says a head was shown to a user in the mode that shows nobody anything: {:#?}",
+        sink.events()
+    );
+    assert!(
+        offered.lock().unwrap().is_empty(),
+        "bypass mode put the question to the confirmer"
+    );
+}
+
+/// TRACE-7. A person's yes keeps the three lines it always wrote, under a bare confirmer and under
+/// each mode that leaves the question to them. A trail naming a mode for a person's answer would be
+/// the opposite defect, and a record that said "bypass" for every yes would pass the test above and
+/// fail this.
+#[test]
+fn a_vouch_a_person_agrees_to_is_recorded_as_the_user_naming_the_file() {
+    for mode in [
+        None,
+        Some(bravebot_agent::PermissionMode::Ask),
+        Some(bravebot_agent::PermissionMode::AcceptEdits),
+        Some(bravebot_agent::PermissionMode::Plan),
+    ] {
+        let mut person = VouchesForFiles::new(true);
+        let offered = person.offered.clone();
+        let sink = match mode {
+            None => a_turn_reading_an_unvouched_note(
+                "vouch-person-trail",
+                bravebot_agent::PermissionMode::Ask,
+                &mut person,
+            ),
+            Some(mode) => a_turn_reading_an_unvouched_note(
+                "vouch-person-trail-mode",
+                mode,
+                &mut bravebot_agent::Confining::new(&mut person, mode, false),
+            ),
+        };
+
+        assert_eq!(
+            trail_entries(&sink, "approval", "note.txt"),
+            [OFFERED_LINE],
+            "mode {mode:?}"
+        );
+        assert_eq!(
+            trail_entries(&sink, "trust", "note.txt trusted:"),
+            [USER_NAMED_LINE],
+            "mode {mode:?}"
+        );
+        assert_eq!(
+            trail_entries(&sink, "display", "head of a quarantined file").len(),
+            1,
+            "mode {mode:?}: the head shown to the user is not in the trail"
+        );
+        assert_eq!(
+            offered.lock().unwrap().len(),
+            1,
+            "mode {mode:?}: asked once"
+        );
+    }
+}
+
+/// A person's no writes the offered and display lines and no trust line, and no line crediting a
+/// mode: the lines are written for the question having been put, whatever the answer.
+#[test]
+fn a_vouch_a_person_declines_leaves_the_offer_and_no_trust_line() {
+    let mut person = VouchesForFiles::new(false);
+    let sink = a_turn_reading_an_unvouched_note(
+        "vouch-person-declined-trail",
+        bravebot_agent::PermissionMode::Ask,
+        &mut person,
+    );
+    assert_eq!(trail_entries(&sink, "approval", "note.txt"), [OFFERED_LINE]);
+    assert!(trail_entries(&sink, "trust", "note.txt trusted:").is_empty());
+}
+
+/// MODE-9. A delegate is lent the turn's confirmer, so its offer to vouch is answered by the same
+/// mode and recorded the same way. A wrapper between the delegate and the mode that did not forward
+/// the mode's name would fall back to the default and record a person naming the file.
+#[test]
+fn a_vouch_in_a_delegate_under_bypass_is_recorded_as_the_modes_answer() {
+    let scratch = Scratch::new("vouch-bypass-delegate");
+    std::fs::write(scratch.path.join("note.txt"), "SENTINEL-NOTE: hello\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "DELEGATE-THE-READ",
+            vec![
+                tool_request("spawn_agent", r#"{"kind":"reader","task":"READ-THE-NOTE"}"#),
+                reply_with("waiting"),
+                reply_with("done"),
+            ],
+        ),
+        (
+            "READ-THE-NOTE",
+            vec![
+                tool_request("read_file", r#"{"path":"note.txt"}"#),
+                reply_with("read it"),
+            ],
+        ),
+    ]);
+    let mut inner = VouchesForFiles::new(false);
+    let offered = inner.offered.clone();
+    let mut confirmer =
+        bravebot_agent::Confining::new(&mut inner, bravebot_agent::PermissionMode::Bypass, false);
+    let mut sink = RecordingSink::new();
+    turns::run_cancellable(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("DELEGATE-THE-READ")
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(
+        trail_entries(&sink, "approval", "note.txt"),
+        [BYPASS_APPROVAL_LINE]
+    );
+    assert_eq!(
+        trail_entries(&sink, "trust", "note.txt trusted:"),
+        [BYPASS_TRUST_LINE]
+    );
+    assert!(trail_entries(&sink, "display", "quarantined file").is_empty());
+    assert!(offered.lock().unwrap().is_empty());
+}
+
 /// The other end of the same round trip. A caller carrying the answer in puts no question at all,
 /// which is what makes the field on the outcome worth having: a turn that took the list and
 /// ignored it would pass the test above and still ask on every message.
@@ -89504,6 +90675,98 @@ fn a_screened_fetch_that_asks_to_read_keeps_the_page_back_where_the_check_cannot
     assert_the_page_was_kept_back(&fetched, "check lost");
 }
 
+/// CHECK-16 for `fetch_url`. A stop during the check that a fetch asking to read makes ends the
+/// turn stopped. The page stays behind its reference, nobody is asked, the trail records the stop
+/// and no verdict, and the page is not refused.
+///
+/// A wrong implementation reads the cancelled request as a check that could not be made, which
+/// keeps the page back with an inconclusive line in the trail and lets the turn go on to a next
+/// round instead of ending it.
+#[test]
+fn a_stop_during_the_check_on_a_fetch_that_asks_to_read_ends_the_turn_stopped() {
+    for mode in [
+        bravebot_agent::PermissionMode::Ask,
+        bravebot_agent::PermissionMode::Bypass,
+    ] {
+        let scratch = Scratch::new(&format!("fetch-read-stopped-check-{mode:?}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (site, _count) = serve_raw(a_text_page("SENTINEL-PAGE-TEXT"));
+        let (endpoint, received) = serve_sequence_answering_checks_with(
+            a_safe_check(),
+            vec![
+                tool_request_2(
+                    "fetch_url",
+                    &format!(r#"{{"url":"{site}/docs","read":true}}"#),
+                ),
+                reply_with("done"),
+            ],
+        );
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut inner = ApprovesFetchesAndWrites::default();
+        let cancel = bravebot_core::cancel::Cancel::new();
+        let mut reporter = StopsWhenACheckBegins::new(&cancel);
+        let error = {
+            let mut confirmer = bravebot_agent::Confining::new(&mut inner, mode, true);
+            turn::resume(
+                &config,
+                &egress,
+                &workspace,
+                &Task::new("read the page")
+                    .with_permission_mode(mode)
+                    .with_auto_vetting(true),
+                &mut bravebot_agent::Conversation::new(),
+                &mut confirmer,
+                &mut reporter,
+                &mut sink,
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &cancel,
+            )
+            .outcome
+            .unwrap_err()
+        };
+
+        assert!(
+            matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+            "{mode:?}: the turn did not end as stopped: {:?}",
+            error.ending()
+        );
+        assert_eq!(reporter.begun, 1, "{mode:?}: no check was made");
+        assert_eq!(
+            reporter.finished, 1,
+            "{mode:?}: the check never said it was over"
+        );
+        assert!(
+            inner.vets.is_empty(),
+            "{mode:?}: a person was asked after a stop"
+        );
+        assert!(
+            releases_by_vet_content(&sink).is_empty(),
+            "{mode:?}: the trail records a release: {:?}",
+            releases_by_vet_content(&sink)
+        );
+        let planner_rounds = received
+            .try_iter()
+            .filter(|body| !body.contains(A_CHECK_ASKING))
+            .count();
+        assert_eq!(
+            planner_rounds, 1,
+            "{mode:?}: the planner was asked again after the stop"
+        );
+        let trail = format!("{:?}", sink.events());
+        assert!(
+            trail.contains("the check was stopped before it finished")
+                && !trail.contains("inconclusive")
+                && !trail.contains("could not be made")
+                && !trail.contains("was not approved"),
+            "{mode:?}: the trail does not record a stop and no verdict: {trail}"
+        );
+    }
+}
+
 /// RUN-22 for `fetch_url`. Where a person still answers for the page (no screening, not bypass),
 /// the flag changes nothing: no check, nobody asked at the call, the reference kept, and no
 /// sentence about a flag that has nothing to answer.
@@ -90485,4 +91748,313 @@ fn a_mode_change_to_off_names_request_path_only_where_the_turn_was_offered_it() 
              {notice}"
         );
     }
+}
+
+/// The spaces a macOS screenshot name holds: U+202F before `PM`.
+const NARROW: &str = "Screenshot 2026-10-27 at 12.10.54\u{202f}PM";
+
+/// One `read_file` of `path` against `scratch`, returning the text the planner was sent for it
+/// and the trail. `trust` is the trust map the turn starts from, `None` for the default (nothing
+/// vouched for).
+fn read_respelled<C: bravebot_agent::Confirmer + Send>(
+    scratch: &Scratch,
+    path: &str,
+    task: Task,
+    trust: Option<bravebot_core::trust::TrustStore>,
+    confirmer: &mut C,
+) -> (String, RecordingSink) {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    read_respelled_in(&workspace, path, task, trust, confirmer)
+}
+
+/// [`read_respelled`] against a workspace the caller has prepared.
+fn read_respelled_in<C: bravebot_agent::Confirmer + Send>(
+    workspace: &Workspace,
+    path: &str,
+    task: Task,
+    trust: Option<bravebot_core::trust::TrustStore>,
+    confirmer: &mut C,
+) -> (String, RecordingSink) {
+    let arguments = serde_json::json!({ "path": path }).to_string();
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("read_file", &arguments),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    match trust {
+        Some(trust) => {
+            turns::run_with_trust(
+                &config, &egress, workspace, &task, confirmer, &mut sink, trust,
+            )
+            .expect("turn runs");
+        }
+        None => {
+            turns::run(&config, &egress, workspace, &task, confirmer, &mut sink)
+                .expect("turn runs");
+        }
+    }
+    // The last request is the one that carries the result; a vouch offer sends a check before it.
+    let last = received
+        .try_iter()
+        .last()
+        .expect("the planner was sent a result");
+    (newest_tool_result_text(&last), sink)
+}
+
+/// READ-11. A name typed with an ordinary space reads the file whose name holds U+202F there, in
+/// the text the planner may see, and the result says another spelling was read without naming it.
+#[test]
+fn a_text_read_finds_the_file_whose_space_is_another_kind() {
+    let scratch = Scratch::new("respell-text");
+    std::fs::write(scratch.path.join(format!("{NARROW}.txt")), "the body of it").unwrap();
+    let typed = format!("{}.txt", NARROW.replace('\u{202f}', " "));
+
+    let (told, sink) = read_respelled(
+        &scratch,
+        &typed,
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(told.contains("the body of it"), "not read: {told}");
+    assert!(
+        told.contains("differs only in the kind of space"),
+        "the planner was not told another spelling was read: {told}"
+    );
+    assert!(
+        !told.contains('\u{202f}') && !told.contains("Screenshot"),
+        "the result names the file: {told}"
+    );
+    let promotions = sink
+        .events()
+        .iter()
+        .filter(|event| matches!(event, Event::GatePassed { gate: "promote", detail } if detail.contains("read_file.path")))
+        .count();
+    assert_eq!(
+        promotions,
+        1,
+        "the trail repeats a line: {:#?}",
+        sink.events()
+    );
+}
+
+/// READ-11. Typed with U+202F where the file has an ordinary space is the same case reversed, and
+/// a U+00A0 file is found too.
+#[test]
+fn a_respelling_goes_both_ways_and_covers_the_no_break_space() {
+    let scratch = Scratch::new("respell-reverse");
+    std::fs::write(scratch.path.join("a b.txt"), "plain space body").unwrap();
+    let (told, _) = read_respelled(
+        &scratch,
+        "a\u{202f}b.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(told.contains("plain space body"), "not read: {told}");
+    assert!(told.contains("differs only in the kind of space"), "{told}");
+
+    let scratch = Scratch::new("respell-nbsp");
+    std::fs::write(scratch.path.join("c\u{a0}d.txt"), "no break body").unwrap();
+    let (told, _) = read_respelled(
+        &scratch,
+        "c d.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(told.contains("no break body"), "not read: {told}");
+}
+
+/// READ-11. A name that is there is read as it is, and a name with no such file under any
+/// spelling still says so, without a note about another spelling.
+#[test]
+fn a_name_that_is_there_or_matches_nothing_is_not_respelled() {
+    let scratch = Scratch::new("respell-none");
+    std::fs::write(scratch.path.join("a b.txt"), "exact body").unwrap();
+    std::fs::write(scratch.path.join("a\u{202f}b.txt"), "other body").unwrap();
+    let (told, _) = read_respelled(
+        &scratch,
+        "a b.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(
+        told.contains("exact body") && !told.contains("other body"),
+        "{told}"
+    );
+    assert!(
+        !told.contains("differs only in the kind of space"),
+        "{told}"
+    );
+
+    let (told, _) = read_respelled(
+        &scratch,
+        "no such name.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(told.contains("No such file or directory"), "{told}");
+    assert!(
+        !told.contains("differs only in the kind of space"),
+        "{told}"
+    );
+    assert!(
+        told.contains("another kind of space than the one given"),
+        "a name with a space that matches nothing does not say the space may differ: {told}"
+    );
+}
+
+/// READ-11. A picture read through another spelling is quarantined as any picture is, and an
+/// absolute path into an opened directory is respelled in its last component too.
+#[test]
+fn a_picture_and_an_absolute_path_are_respelled() {
+    let scratch = Scratch::new("respell-picture");
+    let outside = Scratch::new("respell-picture-opened");
+    std::fs::write(scratch.path.join(format!("{NARROW}.png")), a_png()).unwrap();
+    std::fs::write(outside.path.join(format!("{NARROW}.png")), a_png()).unwrap();
+    let typed = format!("{}.png", NARROW.replace('\u{202f}', " "));
+
+    let mut workspace = Workspace::new(&scratch.path).expect("workspace");
+    let added = workspace
+        .add_directory(outside.path.to_str().expect("utf-8 path"))
+        .expect("the directory is added");
+    let mut trust = trusting_the_workspace();
+    trust.trust(&added.display().to_string());
+    let absolute = added.join(&typed).to_string_lossy().into_owned();
+
+    for path in [typed.clone(), absolute] {
+        let (told, _) = read_respelled_in(
+            &workspace,
+            &path,
+            Task::new("look at the screenshot"),
+            Some(trust.clone()),
+            &mut bravebot_agent::confirm::ApproveWrites,
+        );
+        assert!(told.contains("ref:"), "{path}: no reference: {told}");
+        assert!(
+            told.contains("differs only in the kind of space"),
+            "{path}: {told}"
+        );
+        assert!(!told.contains('\u{202f}'), "{path}: names the file: {told}");
+    }
+}
+
+/// READ-11. The spelling opened is gated as itself: a deny rule on it refuses the read, the file
+/// is not shown, and the refusal does not name the file's own spelling.
+#[test]
+fn a_deny_rule_on_the_spelling_opened_refuses_the_read() {
+    let scratch = Scratch::new("respell-denied");
+    std::fs::write(
+        scratch.path.join("secret\u{202f}file.txt"),
+        "SECRET_TOKEN=hunter2",
+    )
+    .unwrap();
+    let (told, _) = read_respelled(
+        &scratch,
+        "secret file.txt",
+        Task::new("read it").with_permissions(rules(&["Read(./secret\u{202f}file.txt)"], &[], &[])),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(!told.contains("hunter2"), "a denied file was read: {told}");
+    assert!(told.contains("deny rule"), "no refusal: {told}");
+    assert!(
+        !told.contains('\u{202f}'),
+        "the refusal names the file: {told}"
+    );
+}
+
+/// READ-11. A respelling that leads out of the workspace through a link is not chosen: the name
+/// stays missing, as it would with no respelling, and the same link under its own name is refused
+/// for leaving the workspace. A respelling that read the target would hand back `OUTSIDE_BODY`.
+#[cfg(unix)]
+#[test]
+fn a_respelled_name_cannot_leave_the_workspace() {
+    let outside = Scratch::new("respell-outside");
+    std::fs::write(outside.path.join("out.txt"), "OUTSIDE_BODY").unwrap();
+    let scratch = Scratch::new("respell-confined");
+    std::os::unix::fs::symlink(
+        outside.path.join("out.txt"),
+        scratch.path.join("link\u{202f}name.txt"),
+    )
+    .unwrap();
+    let (told, _) = read_respelled(
+        &scratch,
+        "link name.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(!told.contains("OUTSIDE_BODY"), "left the workspace: {told}");
+    assert!(
+        !told.contains("differs only in the kind of space"),
+        "a link out of the workspace was read as a respelling: {told}"
+    );
+    assert!(
+        told.contains("No such file or directory"),
+        "the name was not left missing: {told}"
+    );
+
+    let (told, _) = read_respelled(
+        &scratch,
+        "link\u{202f}name.txt",
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(!told.contains("OUTSIDE_BODY"), "left the workspace: {told}");
+    assert!(
+        told.contains("outside the workspace"),
+        "the link under its own name was not refused for leaving: {told}"
+    );
+}
+
+/// READ-11, INSTR-16. The touched-file list holds the spelling that was opened, which names the
+/// file, and not the spelling typed, which names none.
+#[test]
+fn a_respelled_read_records_the_spelling_opened_as_touched() {
+    let scratch = Scratch::new("respell-touched");
+    let on_disk = format!("{NARROW}.txt");
+    std::fs::write(scratch.path.join(&on_disk), "the body of it").unwrap();
+    let typed = format!("{}.txt", NARROW.replace('\u{202f}', " "));
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (told, _) = read_respelled_in(
+        &workspace,
+        &typed,
+        Task::new("read it"),
+        Some(trusting_the_workspace()),
+        &mut bravebot_agent::confirm::ApproveWrites,
+    );
+    assert!(told.contains("the body of it"), "not read: {told}");
+    assert_eq!(workspace.touched_files(), [on_disk]);
+}
+
+/// READ-11. The file opened is keyed and labelled as itself: with nothing vouched for it is a
+/// reference, and the person is offered a vouch for it.
+#[test]
+fn a_respelled_file_nobody_vouched_for_is_a_reference_and_is_offered_for_a_vouch() {
+    let scratch = Scratch::new("respell-vouch");
+    std::fs::write(scratch.path.join("n\u{202f}o.md"), "UNVOUCHED_BODY").unwrap();
+    let mut confirmer = VouchesForFiles::new(false);
+    let (told, _) = read_respelled(
+        &scratch,
+        "n o.md",
+        Task::new("read it"),
+        None,
+        &mut confirmer,
+    );
+    assert!(!told.contains("UNVOUCHED_BODY"), "{told}");
+    assert!(told.contains("ref:"), "no reference: {told}");
+    assert!(told.contains("differs only in the kind of space"), "{told}");
+    assert_eq!(
+        confirmer.offered.lock().unwrap().len(),
+        1,
+        "the vouch was not offered for the file opened"
+    );
 }

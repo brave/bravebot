@@ -15,17 +15,24 @@ use std::path::Path;
 /// Names the directory and not the path joined to it. [`WorkspaceError::describe`] passes the
 /// detail through as it is, and a read through a reference was made on a filename the planner is
 /// never told (LIST-2).
+///
+/// The only thing in the detail that depends on `named` is whether it is absolute or a home
+/// reference, so no byte of a filename picks a sentence. A hint about the name, such as READ-11's
+/// on the kind of space, is added by the one tool that has a name the planner typed, and not here,
+/// because every read, edit and write reaches this function, some of them on a filename out of a
+/// directory listing.
 pub(super) fn io_detail(error: &std::io::Error, named: &str, root: &Path) -> String {
-    if error.kind() == std::io::ErrorKind::NotFound
-        && !Path::new(named).is_absolute()
-        && !named_home(named)
-    {
-        return format!(
-            "{error}; a relative path is looked up under the working directory, {}",
+    let mut detail = error.to_string();
+    if error.kind() != std::io::ErrorKind::NotFound {
+        return detail;
+    }
+    if !Path::new(named).is_absolute() && !named_home(named) {
+        detail = format!(
+            "{detail}; a relative path is looked up under the working directory, {}",
             root.display()
         );
     }
-    error.to_string()
+    detail
 }
 
 /// The error of a read of `resolved`, which the caller reached by the name `named`.

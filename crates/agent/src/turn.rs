@@ -1248,6 +1248,7 @@ struct Working<'scope> {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         ),
     >,
 }
@@ -3945,6 +3946,7 @@ where
                 examined = index + reads.max(1);
                 if reads > 0 {
                     let started = Instant::now();
+                    let mark = policy.file_authority().wait_mark();
                     let together: Vec<&ToolCall> =
                         completion.calls[index..index + reads].iter().collect();
                     for (place, read) in tools::read_ahead(
@@ -3963,7 +3965,13 @@ where
                     {
                         ahead[index + place] = read;
                     }
-                    state.spent.tools += started.elapsed();
+                    let blocked = crate::timing::blocked_since(
+                        policy.file_authority().waits_after(mark),
+                        started,
+                    )
+                    .min(started.elapsed());
+                    state.spent.file_wait += blocked;
+                    state.spent.tools += started.elapsed().saturating_sub(blocked);
                 }
             }
 
@@ -3974,6 +3982,7 @@ where
             policy.call_began();
             let mut asking = crate::confirm::Timed::new(confirmer);
             let ran_at = Instant::now();
+            let wait_mark = policy.file_authority().wait_mark();
             let refused = if state.repeats.is_held(call) {
                 match crate::repeated_call::hold(
                     call,
@@ -4047,7 +4056,11 @@ where
             }
             policy.call_ended(&call.function.name);
             let took = ran_at.elapsed();
-            let cancellation = output.cancelled;
+            let file_wait = crate::timing::blocked_since(
+                policy.file_authority().waits_after(wait_mark),
+                ran_at,
+            );
+            let mut cancellation = output.cancelled;
             // The conversation holds it as it holds a write tool asked for, so a stopped turn's
             // next prompt still has it and a completed one does not (TURN-3).
             if output.run_may_change_files {
@@ -4067,6 +4080,7 @@ where
                 call,
                 took,
                 asking.waited(),
+                file_wait,
                 &mut output,
             );
             // As with a context file: what the turn has seen belongs to the conversation the
@@ -4437,6 +4451,12 @@ where
                             state.spent.inference += interval.duration();
                         }
                         state.account.add_usage(released.usage);
+                        // A stop during the check ends the turn once this run's result is
+                        // recorded. The slot stays quarantined and unrefused, so the next turn
+                        // can ask for it again.
+                        if released.stopped.is_some() {
+                            cancellation = released.stopped;
+                        }
                         reporter.spent(crate::outcome::Spent {
                             timing: state.spent.finish(),
                             ..state.account
@@ -4647,8 +4667,9 @@ where
                             }
                             _ => String::new(),
                         };
+                        let respelled = sentences::respelled_note(output.respelled);
                         format!(
-                            "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}",
+                            "{TOOL_RESULT_PREFIX}{}:\n\n{ended}{text}{rest}{beside}{respelled}",
                             output.tool
                         )
                     }
@@ -4788,6 +4809,7 @@ where
                             plan.beside,
                         );
                         let left_out = sentences::left_out_note(output.left_out);
+                        let respelled = sentences::respelled_note(output.respelled);
                         // Which lines of the job's whole output this reference holds and which
                         // references the earlier looks became: counts and names the driver minted.
                         let looked = match (&output.printed_by, &output.look) {
@@ -4797,7 +4819,7 @@ where
                             _ => String::new(),
                         };
                         format!(
-                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{looked}{capped}{linked}{left_out}{advice}{not_returned}{history}",
+                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{looked}{capped}{linked}{left_out}{respelled}{advice}{not_returned}{history}",
                             output.tool,
                             reference.describe()
                         )
@@ -5320,6 +5342,7 @@ mod tests {
                         ..Default::default()
                     },
                     vec![crate::timing::Interval::since(began)],
+                    Vec::new(),
                 )
             });
             ready_rx.recv_timeout(LIMIT).expect("request started");
@@ -5380,6 +5403,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = Routing::new();
@@ -5406,6 +5430,7 @@ mod tests {
                         worked: Default::default(),
                     },
                     Default::default(),
+                    Vec::new(),
                     Vec::new(),
                 )
             });
@@ -5487,6 +5512,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = Routing::new();
@@ -5530,6 +5556,7 @@ mod tests {
                         },
                     },
                     Default::default(),
+                    Vec::new(),
                     Vec::new(),
                 )
             });
@@ -5701,6 +5728,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = Routing::new();
@@ -5735,6 +5763,7 @@ mod tests {
                         worked: Default::default(),
                     },
                     Default::default(),
+                    Vec::new(),
                     Vec::new(),
                 )
             });
@@ -5790,6 +5819,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = Routing::new();
@@ -5828,6 +5858,7 @@ mod tests {
                         worked: Default::default(),
                     },
                     Default::default(),
+                    Vec::new(),
                     Vec::new(),
                 )
             });
@@ -5883,6 +5914,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut routing = Routing::new();
@@ -5924,6 +5956,7 @@ mod tests {
                                 worked: Default::default(),
                             },
                             Default::default(),
+                            Vec::new(),
                             Vec::new(),
                         )
                     });
@@ -5991,6 +6024,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         // Returns how many one wake collected and what the planner was told about each.
         let wake_once = |clean: Vec<bool>| -> (usize, Vec<String>) {
@@ -6039,6 +6073,7 @@ mod tests {
                                     worked: Default::default(),
                                 },
                                 Default::default(),
+                                Vec::new(),
                                 Vec::new(),
                             )
                         });
@@ -6162,6 +6197,7 @@ mod tests {
             crate::delegate::Ended,
             crate::outcome::Spent,
             Vec<crate::timing::Interval>,
+            Vec<crate::timing::Interval>,
         );
         let a_total = |tokens: u64| crate::outcome::Spent {
             tokens,
@@ -6220,6 +6256,7 @@ mod tests {
                             worked: Default::default(),
                         },
                         Default::default(),
+                        Vec::new(),
                         Vec::new(),
                     )
                 });

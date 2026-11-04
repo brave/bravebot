@@ -2160,6 +2160,101 @@ fn a_turn_stopped_at_the_list_leaves_it_to_be_asked_again() {
     );
 }
 
+/// A turn stopped while the check on a server's list is running has not answered the list: nobody
+/// is shown it, nothing is refused or recorded, and the next turn puts the list to the person with
+/// a check of its own (CHECK-16).
+///
+/// The wrong implementation reads the stop as a check that could not be made and shows the list
+/// with an inconclusive verdict, which the confirmer records, or takes the unanswered list for a no.
+#[test]
+fn a_turn_stopped_during_the_check_on_the_list_leaves_it_to_be_asked_again() {
+    /// Stops the turn as a check begins, which is the stop key pressed while its request is in
+    /// flight.
+    struct StopsWhenACheckBegins(Cancel);
+
+    impl bravebot_agent::report::Reporter for StopsWhenACheckBegins {
+        fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+        fn check_started(&mut self, _checking: bravebot_core::vetting::Checking) {
+            self.0.cancel();
+        }
+    }
+
+    let scratch = Scratch::new("stopped-during-check");
+    let (url, server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let _ = methods(&server);
+
+    let (endpoint, _chat) = serve_chat(vec![reply_with("asked again")]);
+    let cancel = Cancel::new();
+    let mut stopping = Answering::new(Decision::Approve, CallDecision::reject());
+    let workspace = Workspace::new(scratch.project()).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let stopped = turns::run_cancellable(
+        &config_for(&endpoint),
+        &Egress::new(),
+        &workspace,
+        &Task::new("what is the forecast").with_mcp(Some(session.clone())),
+        &mut stopping,
+        &mut StopsWhenACheckBegins(cancel.clone()),
+        &mut sink,
+        TrustStore::new(bravebot_agent::workspace::key_of(workspace.root())),
+        &cancel,
+    );
+    // The listing step returns the list unasked and carries no cancellation of its own, so the
+    // turn's own check of the flag is what ends it, and it ends as stopped (CHECK-16).
+    assert!(
+        matches!(
+            stopped.as_ref().map_err(|error| error.ending()),
+            Err(bravebot_agent::Ending::Stopped { .. })
+        ),
+        "the turn did not end as stopped: {:?}",
+        stopped.as_ref().map(|_| ()).map_err(|error| error.ending())
+    );
+    assert!(
+        stopping.lists.is_empty(),
+        "the list was shown to the person with the check stopped: {:?}",
+        stopping
+            .lists
+            .iter()
+            .map(|list| &list.verdict)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        session.offering(),
+        [("weather".to_string(), Offering::Unasked)],
+        "a stop during the check was taken as an answer to the list"
+    );
+    assert!(
+        !approvals_file(&scratch.state()).exists(),
+        "a stop during the check was recorded"
+    );
+    assert!(
+        !sink
+            .events()
+            .iter()
+            .any(|event| format!("{event:?}").contains("inconclusive")),
+        "the stop was recorded as an inconclusive check"
+    );
+
+    let mut asked = Answering::new(Decision::Approve, CallDecision::reject());
+    run_turn(
+        &endpoint,
+        &scratch.project(),
+        Task::new("and now").with_mcp(Some(session.clone())),
+        &mut asked,
+    );
+    assert_eq!(
+        asked.lists.len(),
+        1,
+        "a list whose check was stopped was not asked about again"
+    );
+    assert_eq!(
+        session.offering(),
+        [("weather".to_string(), Offering::Tools(1))]
+    );
+}
+
 /// A call the person refuses reaches no server, and the planner is told so in the driver's words.
 #[test]
 fn a_refused_call_reaches_no_server() {
@@ -7998,6 +8093,160 @@ fn a_turn_stopped_at_the_first_of_several_lists_leaves_the_others_to_be_asked_ag
             ("c".to_string(), Offering::Unasked),
         ],
         "a list the stopped turn did not get an answer to was not left to be asked again"
+    );
+}
+
+/// Stops the turn when the check numbered `at` (from 1) is announced as begun, which is the stop key
+/// pressed while that check's request is in flight (CHECK-16).
+struct StopsAtCheck {
+    cancel: Cancel,
+    at: usize,
+    begun: usize,
+}
+
+impl bravebot_agent::report::Reporter for StopsAtCheck {
+    fn todos(&mut self, _rows: Vec<bravebot_core::todo::Row>) {}
+
+    fn check_started(&mut self, _checking: bravebot_core::vetting::Checking) {
+        self.begun += 1;
+        if self.begun == self.at {
+            self.cancel.cancel();
+        }
+    }
+}
+
+/// A turn stopped while the checks of several lists are running together has answered none of
+/// them: nobody is shown a list, nothing is recorded as inconclusive or refused, every list is
+/// left to be asked again, and the trail records the stop and no verdict (CHECK-16, SERVERS-8).
+///
+/// A wrong implementation of the concurrent path reads the stop as a check that could not be made
+/// and puts the lists to the person with an inconclusive verdict, or marks them as asked.
+#[test]
+fn a_stop_during_the_checks_made_together_leaves_every_list_to_be_asked_again() {
+    let scratch = Scratch::new("checks-together-stopped-check");
+    let session = three_servers(&scratch);
+    let (endpoint, _chat) = serve_slow_checks();
+    let workspace = Workspace::new(scratch.project()).expect("workspace");
+    let cancel = Cancel::new();
+    let mut reporter = StopsAtCheck {
+        cancel: cancel.clone(),
+        at: 1,
+        begun: 0,
+    };
+    let mut trail = RecordingSink::new();
+    let mut confirmer = Answering::new(Decision::Approve, CallDecision::reject());
+
+    let _ = turns::run_cancellable(
+        &config_for(&endpoint),
+        &Egress::new(),
+        &workspace,
+        &Task::new("what is the forecast").with_mcp(Some(session.clone())),
+        &mut confirmer,
+        &mut reporter,
+        &mut trail,
+        bravebot_agent::workspace::trust_store(workspace.root()),
+        &cancel,
+    );
+
+    assert!(
+        confirmer.lists.is_empty(),
+        "a list was shown to the person with its check stopped: {:?}",
+        confirmer
+            .lists
+            .iter()
+            .map(|list| &list.verdict)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        session.offering(),
+        vec![
+            ("a".to_string(), Offering::Unasked),
+            ("b".to_string(), Offering::Unasked),
+            ("c".to_string(), Offering::Unasked),
+        ],
+        "a stop during the checks was taken as an answer to a list"
+    );
+    assert!(
+        !approvals_file(&scratch.state()).exists(),
+        "a stop during the checks was recorded"
+    );
+    let events = format!("{:?}", trail.events());
+    assert!(
+        events.contains("the check was stopped before it finished"),
+        "the trail does not record the stop: {events}"
+    );
+    assert!(
+        !events.contains("inconclusive"),
+        "the stop was recorded as an inconclusive check: {events}"
+    );
+}
+
+/// A turn stopped while the check on a server tool's answer is running, for a call that asked to
+/// read, ends stopped. The answer stays behind its reference, nobody is asked, the planner is not
+/// asked again, and the trail records the stop and no verdict (CHECK-16, MCP-16).
+///
+/// A wrong implementation reads the stop as a check that could not be made: the turn goes on to
+/// another round and the trail holds an inconclusive line.
+#[test]
+fn a_stop_during_the_check_on_a_servers_answer_that_asks_to_read_ends_the_turn_stopped() {
+    let scratch = Scratch::new("mcp-read-stopped-check");
+    let (url, _server) = serve_weather();
+    let session = session(&url, &scratch, true);
+    let (endpoint, chat) = serve_chat(vec![
+        tool_request(FORECAST, r#"{"city":"Paris","read":true}"#),
+        reply_with("done"),
+    ]);
+    let workspace = Workspace::new(scratch.project()).expect("workspace");
+    let cancel = Cancel::new();
+    // The first check is the one on the server's list; the second is the one on the answer.
+    let mut reporter = StopsAtCheck {
+        cancel: cancel.clone(),
+        at: 2,
+        begun: 0,
+    };
+    let mut trail = RecordingSink::new();
+    let mut inner = Answering::new(Decision::Approve, CallDecision::approve());
+    let error = {
+        let mut confirmer = bravebot_agent::Confining::new(&mut inner, PermissionMode::Ask, false);
+        turns::run_cancellable(
+            &config_for(&endpoint),
+            &Egress::new(),
+            &workspace,
+            &Task::new("show me the forecast")
+                .with_auto_vetting(true)
+                .with_mcp(Some(session)),
+            &mut confirmer,
+            &mut reporter,
+            &mut trail,
+            bravebot_agent::workspace::trust_store(workspace.root()),
+            &cancel,
+        )
+        .unwrap_err()
+    };
+
+    assert!(
+        matches!(error.ending(), bravebot_agent::Ending::Stopped { .. }),
+        "the turn did not end as stopped: {:?}",
+        error.ending()
+    );
+    assert_eq!(reporter.begun, 2, "the answer was not checked");
+    assert_eq!(inner.vets, 0, "a person was asked about the answer");
+    let all: Vec<String> = chat.try_iter().collect();
+    assert_eq!(
+        all.iter()
+            .filter(|body| !body.contains(A_CHECK_ASKING))
+            .count(),
+        1,
+        "the planner was asked again after the stop"
+    );
+    let events = format!("{:?}", trail.events());
+    assert!(
+        events.contains("the check was stopped before it finished"),
+        "the trail does not record the stop: {events}"
+    );
+    assert!(
+        !events.contains("inconclusive") && !events.contains("was not approved"),
+        "the stop was recorded as a check that could not be made or as a refusal: {events}"
     );
 }
 

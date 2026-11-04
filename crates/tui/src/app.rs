@@ -2650,9 +2650,7 @@ fn begin_session(
     // And for the same reason again: a mode that stops a prompt appearing has to be said before
     // the first slot reaches it, since the one thing a person cannot read off the transcript is a
     // question that was never put. `/status` says it too, for the rest of the session.
-    if session.auto_vetting() {
-        session.note(t!(session_vetting_in_force));
-    }
+    session.say_vetting_in_force();
     // After the startup question, and put rather than applied: naming a directory in a settings
     // file asks for it instead of granting it, so one the person accepts is opened on the same
     // terms as one typed at `/add-dir`, and one they decline is not opened at all.

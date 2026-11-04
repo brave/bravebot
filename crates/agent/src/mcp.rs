@@ -706,7 +706,10 @@ impl Session {
                             .join()
                             .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
                         policy.rejoin(record);
-                        settled.usage.add(checked.usage);
+                        settled.usage.add(match checked {
+                            Ok(checked) => checked.usage,
+                            Err(stopped) => stopped.usage,
+                        });
                     }
                     *held(&server.state) = State::Unasked(listing);
                     continue;
@@ -736,6 +739,16 @@ impl Session {
                                 checked
                             }
                             None => crate::vet::run(policy, chat, &mut *reporter, spec),
+                        };
+                        // A stop is not a verdict: nobody is asked about the list, it stays
+                        // unasked so the next turn asks, and what the attempts cost is charged.
+                        let checked = match checked {
+                            Ok(checked) => checked,
+                            Err(stopped) => {
+                                settled.usage.add(stopped.usage);
+                                *held(&server.state) = State::Unasked(listing);
+                                continue;
+                            }
                         };
                         let reason = checked.reason.map(|reason| {
                             let proof =

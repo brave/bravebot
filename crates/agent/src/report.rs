@@ -198,6 +198,22 @@ pub fn processor_model_refusal(refusal: &crate::compact::SideModelRefusal) -> St
     }
 }
 
+/// What a person is told beside a read that bypass kept back because auto-vetting is on and a
+/// check did not pass it.
+///
+/// Beside [`processor_model_refusal`] for the same reason: the planner-facing module that refuses
+/// the read may not look a message up, and this sentence is for the screen only. It names no
+/// verdict and carries nothing the check wrote.
+pub fn vetting_kept_back() -> String {
+    bravebot_i18n::t!(vetting_kept_back).to_string()
+}
+
+/// What a person is told when the session is in bypass with auto-vetting on, which is when a read
+/// can be refused with nobody asked.
+pub fn vetting_in_bypass() -> String {
+    bravebot_i18n::t!(session_vetting_in_bypass).to_string()
+}
+
 use crate::diff::Change;
 use bravebot_core::todo::Row;
 use bravebot_core::vetting::Checking;

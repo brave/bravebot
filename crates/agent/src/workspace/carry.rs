@@ -307,6 +307,8 @@ impl Workspace {
         policy: &mut Policy<'_, S>,
     ) -> Result<crate::git::Listing, crate::git::Declined> {
         use crate::git::Declined;
+        // Exclusive: `observe_repository` emits the observation and a trail line inside this
+        // closure, and a shared capture must emit nothing while it is held.
         policy.capture_files(|policy, _capture| {
             let deadline = Instant::now() + self.search_time;
             let query = crate::git::Query::Status;
