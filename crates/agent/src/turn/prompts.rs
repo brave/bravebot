@@ -329,6 +329,8 @@ person can already see on the screen, and stays in the conversation being re-sen
 mod tests {
     use super::reading_a_reference;
 
+    /// A turn offered `vet_content` is sent to it first, since it can read a reference there. A
+    /// regression that names the person's flags instead sends a run to steps it does not need.
     #[test]
     fn a_run_offered_vet_content_is_sent_to_it() {
         let said = reading_a_reference(true, false, false);
@@ -336,6 +338,8 @@ mod tests {
         assert!(!said.contains("--trust-workspace"), "{said}");
     }
 
+    /// A delegate is never offered `vet_content` (VET-2), so pointing it at that tool sends it to
+    /// a tool it lacks. A regression that names the tool without checking the list does that.
     #[test]
     fn a_run_not_offered_vet_content_is_not_sent_to_it() {
         let said = reading_a_reference(false, false, true);
@@ -347,6 +351,9 @@ mod tests {
         assert!(!said.contains("--vet"), "{said}");
     }
 
+    /// Only a run with nobody to ask has to say how the person can lift the quarantine, because
+    /// anywhere else a question reaches somebody. A regression that gives the paragraph to every run
+    /// tells a person who is there to run a flag they have no use for.
     #[test]
     fn only_a_run_nobody_answers_is_told_to_say_how_to_lift_the_quarantine() {
         assert!(!reading_a_reference(true, false, false).is_empty());
@@ -356,6 +363,9 @@ mod tests {
         assert!(said.contains("Nobody is available"), "{said}");
     }
 
+    /// `--vet` is not worth naming where a check already answers for `vet_content`, since the
+    /// person would be sent to a flag that changes nothing. A regression that names it anyway
+    /// misleads them.
     #[test]
     fn a_run_a_check_already_answers_for_is_not_pointed_at_the_vet_flag() {
         let said = reading_a_reference(true, true, true);
