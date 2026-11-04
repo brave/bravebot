@@ -488,9 +488,22 @@ answers is untrusted and private ([MCP-1](mcp.md#MCP-1)). It is drawn in the mar
 byte is drawn in and goes to no model and to no step. Pictures and other parts of the answer are not
 shown and are counted.
 
+The step `mcp_read` makes the same call to a tool the list the person vouched for marks read-only,
+which is the server's own `readOnlyHint` annotation, drawn with the tool when the person was asked
+about the list. Its alias, tool and arguments are what a call's are, routed, fixed and checked the
+same way, and it is asked about at its step as a call is. It is a read: it comes before every action
+and names the slot its reply fills, quarantined as anything a read fetched is
+([MANIFEST-8](#MANIFEST-8)), so a transform can read that slot and an answer can show what the
+transform made. It names no slot it takes from, so its arguments are still the plan's literals. A
+read that gets no reply to fill its slot with, because the tool reported a failure or the reply could
+not be used, ends the run as a failed read does, and a failure the tool reported is drawn in the
+margin first. A plan naming a tool the list does not mark read-only in an `mcp_read` is refused
+before it is put to anybody and asked for once more.
+
 The planner is offered the step only where the session holds a list a person vouched for and a grant
 for its server, and is shown the names on that list: each `alias:tool` and each argument by name, its
-type and whether it is required, and no description. Those names are trusted and public
+type and whether it is required, whether the list marks it read-only, and no description. It is
+offered `mcp_read` only where some offered tool is marked read-only. Those names are trusted and public
 ([LABEL-8](labels.md#LABEL-8)), so the planner's context is still the one
 [MANIFEST-1](#MANIFEST-1) admits. A list that was declined, a server the run holds no grant for, and
 `--tools` offer the planner no call.
@@ -565,7 +578,13 @@ action and it is approved by what a person can decide alone, the alias and the t
 arguments shown beside them. A plan has read nothing, so every argument is the planner's literal,
 and giving the step no slot is what makes that structural and not a promise. Sending the call
 through the one function that decides a turn's call keeps a `deny` rule and a declaration asking
-every call in force in a plan without a copy of either here.
+every call in force in a plan without a copy of either here. A read is a fetch from a program
+too, but one its server says changes nothing, so it can stand where reads stand. Its reply is held
+as a fetched file is, so the planner still reads none of it, and its arguments are still fixed
+before anything is read. The server's word that a tool only reads is trusted no further than the
+order of the plan: the call is still asked about at its step, and a server that marks an acting
+tool read-only gains an earlier place in the plan for a call the person approves, never a call
+nobody asked about.
 
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_calls_a_vouched_tool_with_the_arguments_it_fixed`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_started_in_a_fresh_session_puts_the_lists_to_the_person_before_it_plans`
@@ -588,6 +607,10 @@ every call in force in a plan without a copy of either here.
 `verified-by: bravebot_agent::manifest_server_calls::a_call_that_gets_no_reply_ends_a_plan_run`
 `verified-by: bravebot_agent::manifest_server_calls::a_deny_rule_refuses_a_planned_call_in_every_mode_and_asks_nobody`
 `verified-by: bravebot_agent::manifest_server_calls::a_plan_cannot_name_a_choice`
+`verified-by: bravebot_agent::manifest_server_calls::a_plan_reads_a_tool_marked_read_only_into_a_slot_and_answers_from_it`
+`verified-by: bravebot_agent::manifest_server_calls::a_read_whose_tool_reports_a_failure_ends_the_run_and_draws_its_words`
+`verified-by: bravebot_core::manifest::a_server_read_fills_a_slot_a_later_step_uses`
+`verified-by: bravebot_core::manifest::a_server_read_comes_before_every_action_and_takes_from_no_slot`
 `verified-by: bravebot_agent::manifest::a_calls_arguments_object_is_carried_as_its_text`
 `verified-by: bravebot_core::manifest::a_server_call_locks_its_alias_and_tool_and_not_its_arguments`
 `verified-by: bravebot_core::manifest::a_server_call_names_no_slot_so_no_argument_comes_from_a_result`
@@ -632,10 +655,12 @@ every call in force in a plan without a copy of either here.
   sent, which is the person's check; nothing earlier refuses it. Requiring such an act's fetch to
   narrow, as an act on every match must, would close it, at the cost of definitions that list
   narrowing terms for every act that takes a value from its item (MANIFEST-14).
-- **A call's answer cannot be used by a later step.** A call fills no slot, so nothing a tool
-  returned can be transformed, written or answered with, and no argument can depend on it. The
-  person reads it in the margin as the run goes (MANIFEST-15). A plan that needs a page summarised
-  is two runs, with the person's own words between them.
+- **A call's answer cannot be used by a later step unless its tool is marked read-only.** A call
+  fills no slot, so nothing a tool that may act returned can be transformed, written or answered
+  with. The person reads it in the margin as the run goes. A tool its server marks read-only can be
+  read into a slot instead, and no argument can depend on what any tool returned (MANIFEST-15). A
+  plan that needs to act on what a tool returned is two runs, with the person's own words between
+  them.
 - **A plan run starts servers and asks about lists whether or not the plan calls a server.** The
   questions come before the plan is made, so a person who runs a plan that calls nothing is asked
   once about each server that nothing has started, in the desktop application, and about each list
