@@ -89320,145 +89320,6 @@ fn fetch_script_turn(
             &mut confirmer,
             &mut bravebot_agent::report::RecordingReporter::default(),
             &mut sink,
-/// TOOL-6. The note that starts a background job, and the reminder the next turn of a session gives
-/// of a job it kept, name `job_output` only where the turn's list holds it. A definition whose
-/// tools line is `run` alone is offered no way to look at a job, so neither text sends the planner
-/// to one. The reminder still says not to start a job again that is already running.
-///
-/// The control is the same turns with no definition, which are offered every tool and read the
-/// text they always did.
-#[cfg(unix)]
-#[test]
-fn the_notes_of_a_kept_job_name_job_output_only_where_the_turn_is_offered_it() {
-    for (tag, definition, offered) in [
-        ("every", None, true),
-        ("run-only", Some("kind: worker\ntools: run\n"), false),
-    ] {
-        let scratch = Scratch::new(&format!("background-notes-{tag}"));
-        let home = Scratch::new(&format!("background-notes-{tag}-home"));
-        if let Some(fields) = definition {
-            define(&home, "runner", fields, "RUN-IT");
-        }
-        write_serve(&scratch.path);
-        write_wait_for(&scratch.path);
-        let workspace = Workspace::new(&scratch.path).expect("workspace");
-        let pid = scratch.path.join("pid");
-
-        let (endpoint, received) = serve_sequence(vec![
-            tool_request("run", r#"{"command":"./serve","background":true}"#),
-            tool_request("run", r#"{"command":"./wait-for pid"}"#),
-            reply_with("started"),
-            reply_with("still going"),
-        ]);
-        let config = config_for(&endpoint);
-        let jobs = bravebot_agent::tools::SessionJobs::new();
-        let mut conversation = bravebot_agent::Conversation::new();
-        for prompt in ["start it", "is it still up"] {
-            let task = match definition {
-                Some(_) => addressed(prompt, &home, "runner"),
-                None => Task::new(prompt),
-            }
-            .keeping_jobs(jobs.clone());
-            turn::resume(
-                &config,
-                &bravebot_net::Egress::new(),
-                &workspace,
-                &task,
-                &mut conversation,
-                &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
-                &mut bravebot_agent::report::RecordingReporter::default(),
-                &mut RecordingSink::new(),
-                trusting_the_workspace(),
-                bravebot_core::programs::TrustedPrograms::new(),
-                None,
-                &bravebot_core::cancel::Cancel::new(),
-            )
-            .outcome
-            .expect("the turn runs");
-        }
-        assert!(
-            process_is_alive(&pid),
-            "{tag}: the job did not outlive the turn"
-        );
-
-        let bodies = every_request(&received);
-        assert_eq!(
-            bodies[0].contains(r#""name":"job_output""#),
-            offered,
-            "{tag}: the list this turn was offered is not the one the test is about"
-        );
-        let started = bodies
-            .iter()
-            .find(|body| body.contains("started in the background as job:1"))
-            .expect("the planner was never told the job started");
-        let started = message_from(started, "started in the background as job:1");
-        assert_eq!(
-            started.contains("job_output"),
-            offered,
-            "{tag}: the note that starts a job and the tools the turn was offered disagree \
-             about job_output: {started}"
-        );
-        assert!(
-            started.contains("without having to ask"),
-            "{tag}: the note no longer says the end of the job is reported: {started}"
-        );
-
-        let last = bodies.last().expect("the second turn sent a request");
-        let reminder = message_from(last, "Background jobs from earlier in this session");
-        assert_eq!(
-            reminder.contains("job_output"),
-            offered,
-            "{tag}: the reminder of a kept job and the tools the turn was offered disagree about \
-             job_output: {reminder}"
-        );
-        assert!(
-            reminder.contains("Do not start one again that is already running."),
-            "{tag}: the reminder no longer says not to start a running job again: {reminder}"
-        );
-        drop(jobs);
-    }
-}
-
-/// TOOL-6. The note for a line the person moved to the background names `job_output` only where
-/// the turn's list holds it, and still tells the planner not to run the line again.
-#[test]
-fn the_note_of_a_moved_line_names_job_output_only_where_the_turn_is_offered_it() {
-    for (tag, definition, offered) in [
-        ("every", None, true),
-        ("run-only", Some("kind: worker\ntools: run\n"), false),
-    ] {
-        let scratch = Scratch::new(&format!("moved-notes-{tag}"));
-        let home = Scratch::new(&format!("moved-notes-{tag}-home"));
-        if let Some(fields) = definition {
-            define(&home, "runner", fields, "RUN-IT");
-        }
-        let workspace = Workspace::new(&scratch.path).expect("workspace");
-        let script = scratch.path.join("build");
-        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-
-        let (endpoint, received) = serve_sequence(vec![
-            tool_request("run", r#"{"command":"./build","read":true}"#),
-            reply_with("done"),
-        ]);
-        let config = config_for(&endpoint);
-        let task = match definition {
-            Some(_) => addressed("build it", &home, "runner"),
-            None => Task::new("build it"),
-        };
-        turn::resume(
-            &config,
-            &bravebot_net::Egress::new(),
-            &workspace,
-            &task,
-            &mut bravebot_agent::Conversation::new(),
-            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
-            &mut MovesWhenOffered::default(),
-            &mut RecordingSink::new(),
             trusting_the_workspace(),
             bravebot_core::programs::TrustedPrograms::new(),
             None,
@@ -90074,6 +89935,153 @@ fn a_delegate_is_not_told_to_call_vet_content_or_to_name_the_flags() {
     assert!(!names(&system, "vet_content"), "{system}");
     assert!(!system.contains("--trust-workspace"), "{system}");
 }
+
+/// TOOL-6. The note that starts a background job, and the reminder the next turn of a session gives
+/// of a job it kept, name `job_output` only where the turn's list holds it. A definition whose
+/// tools line is `run` alone is offered no way to look at a job, so neither text sends the planner
+/// to one. The reminder still says not to start a job again that is already running.
+///
+/// The control is the same turns with no definition, which are offered every tool and read the
+/// text they always did.
+#[cfg(unix)]
+#[test]
+fn the_notes_of_a_kept_job_name_job_output_only_where_the_turn_is_offered_it() {
+    for (tag, definition, offered) in [
+        ("every", None, true),
+        ("run-only", Some("kind: worker\ntools: run\n"), false),
+    ] {
+        let scratch = Scratch::new(&format!("background-notes-{tag}"));
+        let home = Scratch::new(&format!("background-notes-{tag}-home"));
+        if let Some(fields) = definition {
+            define(&home, "runner", fields, "RUN-IT");
+        }
+        write_serve(&scratch.path);
+        write_wait_for(&scratch.path);
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let pid = scratch.path.join("pid");
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("run", r#"{"command":"./serve","background":true}"#),
+            tool_request("run", r#"{"command":"./wait-for pid"}"#),
+            reply_with("started"),
+            reply_with("still going"),
+        ]);
+        let config = config_for(&endpoint);
+        let jobs = bravebot_agent::tools::SessionJobs::new();
+        let mut conversation = bravebot_agent::Conversation::new();
+        for prompt in ["start it", "is it still up"] {
+            let task = match definition {
+                Some(_) => addressed(prompt, &home, "runner"),
+                None => Task::new(prompt),
+            }
+            .keeping_jobs(jobs.clone());
+            turn::resume(
+                &config,
+                &bravebot_net::Egress::new(),
+                &workspace,
+                &task,
+                &mut conversation,
+                &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+                &mut bravebot_agent::report::RecordingReporter::default(),
+                &mut RecordingSink::new(),
+                trusting_the_workspace(),
+                bravebot_core::programs::TrustedPrograms::new(),
+                None,
+                &bravebot_core::cancel::Cancel::new(),
+            )
+            .outcome
+            .expect("the turn runs");
+        }
+        assert!(
+            process_is_alive(&pid),
+            "{tag}: the job did not outlive the turn"
+        );
+
+        let bodies = every_request(&received);
+        assert_eq!(
+            bodies[0].contains(r#""name":"job_output""#),
+            offered,
+            "{tag}: the list this turn was offered is not the one the test is about"
+        );
+        let started = bodies
+            .iter()
+            .find(|body| body.contains("started in the background as job:1"))
+            .expect("the planner was never told the job started");
+        let started = message_from(started, "started in the background as job:1");
+        assert_eq!(
+            started.contains("job_output"),
+            offered,
+            "{tag}: the note that starts a job and the tools the turn was offered disagree \
+             about job_output: {started}"
+        );
+        assert!(
+            started.contains("without having to ask"),
+            "{tag}: the note no longer says the end of the job is reported: {started}"
+        );
+
+        let last = bodies.last().expect("the second turn sent a request");
+        let reminder = message_from(last, "Background jobs from earlier in this session");
+        assert_eq!(
+            reminder.contains("job_output"),
+            offered,
+            "{tag}: the reminder of a kept job and the tools the turn was offered disagree about \
+             job_output: {reminder}"
+        );
+        assert!(
+            reminder.contains("Do not start one again that is already running."),
+            "{tag}: the reminder no longer says not to start a running job again: {reminder}"
+        );
+        drop(jobs);
+    }
+}
+
+/// TOOL-6. The note for a line the person moved to the background names `job_output` only where
+/// the turn's list holds it, and still tells the planner not to run the line again.
+#[test]
+fn the_note_of_a_moved_line_names_job_output_only_where_the_turn_is_offered_it() {
+    for (tag, definition, offered) in [
+        ("every", None, true),
+        ("run-only", Some("kind: worker\ntools: run\n"), false),
+    ] {
+        let scratch = Scratch::new(&format!("moved-notes-{tag}"));
+        let home = Scratch::new(&format!("moved-notes-{tag}-home"));
+        if let Some(fields) = definition {
+            define(&home, "runner", fields, "RUN-IT");
+        }
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let script = scratch.path.join("build");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let (endpoint, received) = serve_sequence(vec![
+            tool_request("run", r#"{"command":"./build","read":true}"#),
+            reply_with("done"),
+        ]);
+        let config = config_for(&endpoint);
+        let task = match definition {
+            Some(_) => addressed("build it", &home, "runner"),
+            None => Task::new("build it"),
+        };
+        turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &task,
+            &mut bravebot_agent::Conversation::new(),
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve_always()),
+            &mut MovesWhenOffered::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
 
         let bodies = every_request(&received);
         assert_eq!(
