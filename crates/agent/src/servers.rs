@@ -6877,6 +6877,53 @@ for line in sys.stdin:
         }
     }
 
+    /// A server whose sandbox cannot be recorded is refused as a confinement that failed, and is
+    /// not started at all, OpenShell or not: the record is written before `openshell` is run, and
+    /// a directory where the record goes makes writing it fail on any machine.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_whose_sandbox_cannot_be_recorded_is_refused_and_not_started() {
+        let root = scratch(&format!(
+            "cli-servers-openshell-unrecorded-{}",
+            std::process::id()
+        ));
+        let (home, project) = (root.join("home"), root.join("project"));
+        std::fs::create_dir_all(home.join(OPENSHELL_LEDGER)).expect("a directory at the record");
+        std::fs::create_dir_all(&project).expect("project");
+        let declarations = serde_json::json!({"servers": {"boxed": {
+            "transport": "stdio",
+            "argv": ["python3", "server.py"],
+            "backend": "openshell",
+            "image": PINNED_IMAGE,
+        }}});
+        std::fs::write(home.join("mcp.json"), declarations.to_string()).expect("mcp.json");
+        let requested = vec![(project.join(".bravebot/settings.json"), "boxed".to_string())];
+        let reached = reach(
+            &requested,
+            &project,
+            &Home {
+                directory: Some(home.clone()),
+                writable: true,
+            },
+            &Managed::default(),
+            Asking::Bypass,
+            &mut nobody(),
+            Stream::Null,
+        );
+        assert!(
+            !reached.aliases().contains(&"boxed".to_string()),
+            "a server whose sandbox was not recorded was started"
+        );
+        assert!(
+            reached
+                .notes
+                .iter()
+                .any(|note| note.contains("boxed") && note.contains("could not be recorded")),
+            "{:?}",
+            reached.notes
+        );
+    }
+
     /// A server whose image names no digest, a tag a hand-written declaration gave or a path, is not
     /// started, since its approval would cover whatever the reference names later.
     #[test]
